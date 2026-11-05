@@ -77,8 +77,10 @@ export type AgentDatabaseNativeGeneration = {
   /** Established worker loss permits later native replacement; fatal opening failure does not. */
   failure(): "open-refused" | "native" | "lost" | undefined;
   isPrepared(): boolean;
+  /** Settle a canceled caller's initial open before a successor can replace its generation. */
+  getPendingNativeOpen(): Promise<void> | undefined;
   getPendingPreparation(): Promise<void> | undefined;
-  captureClaim(): AgentDatabaseGenerationClaim;
+  captureClaim(assertBorrowed: () => void): AgentDatabaseGenerationClaim;
   run<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
@@ -109,4 +111,5 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations &
   RegisteredAgentWorkerOperations & {
     "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
     "database.prepareWrite": { input: undefined; output: void };
+    "database.integrityVerified": { input: { verifiedAt: number }; output: void };
   };

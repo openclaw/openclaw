@@ -21,7 +21,11 @@ import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src
 import { createInitialSubagentSession } from "../agents/subagents/spawn/subagent-spawn-session-patch.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  loadSessionEntryReadOnly,
+  replaceSessionEntrySync,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { setUserPreferences } from "../state/user-preferences.test-support.js";
@@ -77,6 +81,48 @@ const creditRejected = {
   code: "identity_changed",
   nextAction: expect.stringMatching(/credit/i),
 };
+
+type RecordEffect = NonNullable<
+  Parameters<typeof publicationExecutor.executeGitHubPublication>[0]["recordEffect"]
+>;
+
+function afterEffect(
+  surface: "local" | "repository",
+  observe: (...args: Parameters<RecordEffect>) => void,
+) {
+  const wrap =
+    (
+      record: (...args: Parameters<RecordEffect>) => void | Promise<void>,
+    ): ((...args: Parameters<RecordEffect>) => Promise<void>) =>
+    async (effect, observed) => {
+      await record(effect, observed);
+      observe(effect, observed);
+    };
+  const executeLocal = publicationExecutor.executeGitHubPublication;
+  const executeRepository = repositoryPublicationExecutor.executeRepositoryGitHubPublication;
+  const intercepted =
+    surface === "local"
+      ? vi.spyOn(publicationExecutor, "executeGitHubPublication").mockImplementation((params) =>
+          executeLocal({
+            ...params,
+            recordEffect: wrap((effect, observed) => params.recordEffect?.(effect, observed)),
+          }),
+        )
+      : vi
+          .spyOn(repositoryPublicationExecutor, "executeRepositoryGitHubPublication")
+          .mockImplementation((params) =>
+            executeRepository({
+              ...params,
+              execution: {
+                ...params.execution,
+                recordEffect: wrap((effect, observed) =>
+                  params.execution.recordEffect(effect, observed),
+                ),
+              },
+            }),
+          );
+  onTestFinished(() => intercepted.mockRestore());
+}
 
 describe("Gateway GitHub publication attribution", () => {
   installGitHubPublicationTestHarness();
@@ -150,45 +196,11 @@ describe("Gateway GitHub publication attribution", () => {
         return result;
       });
       if (boundary !== "preparation") {
-        type RecordEffect = NonNullable<
-          Parameters<typeof publicationExecutor.executeGitHubPublication>[0]["recordEffect"]
-        >;
-        const revokeAfter =
-          (record: RecordEffect) =>
-          async (effect: Parameters<RecordEffect>[0], observed?: Parameters<RecordEffect>[1]) => {
-            await record(effect, observed);
-            if (effect === boundary && observed === undefined) {
-              revokeCredit();
-            }
-          };
-        const executeLocal = publicationExecutor.executeGitHubPublication;
-        const executeRepository = repositoryPublicationExecutor.executeRepositoryGitHubPublication;
-        const intercepted =
-          surface === "local"
-            ? vi
-                .spyOn(publicationExecutor, "executeGitHubPublication")
-                .mockImplementation((params) =>
-                  executeLocal({
-                    ...params,
-                    recordEffect: revokeAfter((effect, observed) =>
-                      params.recordEffect?.(effect, observed),
-                    ),
-                  }),
-                )
-            : vi
-                .spyOn(repositoryPublicationExecutor, "executeRepositoryGitHubPublication")
-                .mockImplementation((params) =>
-                  executeRepository({
-                    ...params,
-                    execution: {
-                      ...params.execution,
-                      recordEffect: revokeAfter((effect, observed) =>
-                        params.execution.recordEffect(effect, observed),
-                      ),
-                    },
-                  }),
-                );
-        onTestFinished(() => intercepted.mockRestore());
+        afterEffect(surface, (effect, observed) => {
+          if (effect === boundary && observed === undefined) {
+            revokeCredit();
+          }
+        });
       }
       const coordinator = repository?.coordinator ?? createGitHubPublicationCoordinator();
       const result = await coordinator.requestForSessionV2(
@@ -313,7 +325,14 @@ describe("Gateway GitHub publication attribution", () => {
     });
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: childKey },
-      { worktree: { id: worktree.id, branch: BRANCH, repoRoot: "/repo" } },
+      {
+        worktree: { id: worktree.id, branch: BRANCH, repoRoot: "/repo" },
+        publicShare: {
+          id: "a".repeat(48),
+          sessionId: loadSessionEntryReadOnly({ agentId: "main", sessionKey: childKey })!.sessionId,
+          createdAt: 1,
+        },
+      },
     );
     participate(people[0]!.id, childKey, 2);
     optOut(people[2]!);
@@ -348,11 +367,94 @@ describe("Gateway GitHub publication attribution", () => {
       body: `Detailed proof\n\n### Verification notes\n\nKeep this paragraph.\n\n## Worked on by\n\n- @alice\n- @grace\n\n<!-- openclaw-publication:${result.requestId} -->\n\n---\n[View the OpenClaw team session](https://team.example/control/chat/main/subagent/delegated-publication)`,
       head: `openclaw:${BRANCH}`,
       base: "main",
-      draft: true,
+      draft: false,
     });
   });
 
+  it.each(
+    (["local", "repository"] as const).flatMap((surface) =>
+      ["private", "public", "revoked", "newly-public", "replaced", "revoked-before-run"].map(
+        (state) => ({ surface, state }),
+      ),
+    ),
+  )("publishes $surface with $state session disclosure", async ({ surface, state }) => {
+    const repository =
+      surface === "repository" ? await createRepositoryPublicationFixture(checkpoint) : undefined;
+    if (!repository) {
+      await persistPublicationTestSession();
+    }
+    const scope = { agentId: "main", sessionKey: SESSION_KEY };
+    const read = () => loadSessionEntryReadOnly(scope)!;
+    const grant = { id: "a".repeat(48), sessionId: read().sessionId, createdAt: 1 };
+    if (state !== "private" && state !== "newly-public") {
+      await upsertSessionEntryCore(scope, { publicShare: grant });
+    }
+    const config = { gateway: { publicOrigin: "https://team.example" } };
+    mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
+    let changed = false;
+    let beforeRun = false;
+    const change = () => {
+      changed = true;
+      replaceSessionEntrySync(scope, {
+        ...read(),
+        publicShare:
+          state === "newly-public"
+            ? grant
+            : state === "replaced"
+              ? { ...grant, id: "b".repeat(48) }
+              : undefined,
+      });
+    };
+    mocks.matchesIdentity.mockImplementation(() => {
+      if (beforeRun) {
+        beforeRun = false;
+        change();
+      }
+      return true;
+    });
+    const onEffect = () => {
+      if (state === "revoked-before-run") {
+        beforeRun = true;
+      } else if (["revoked", "newly-public", "replaced"].includes(state)) {
+        change();
+      }
+    };
+    afterEffect(surface, (effect, observed) => {
+      if (effect === "pull_request" && observed === undefined) {
+        onEffect();
+      }
+    });
+    const coordinator = repository?.coordinator ?? createGitHubPublicationCoordinator();
+    const result = await coordinator.requestForSessionV2({
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+      idempotencyKey: `share-${surface}-${state}`,
+      body: "Keep the review evidence.\n\n---\n[View the OpenClaw team session](https://stale.example/chat)",
+    });
+    expect(result.status).toBe("published");
+    expect(changed).toBe(!["private", "public"].includes(state));
+    const body = repository
+      ? repository.runtime.pr?.body
+      : JSON.parse(commandCalls.find(({ argv }) => argv.includes("POST"))!.input!).body;
+    expect(body).toContain("Keep the review evidence.");
+    expect(body).toContain(`<!-- openclaw-publication:${result.requestId} -->`);
+    expect(body).not.toContain("stale.example");
+    expect(body.includes("[View the OpenClaw team session]")).toBe(state === "public");
+    if (state === "public") {
+      expect(body).toContain("https://team.example/chat/");
+    }
+  });
+
   it("publishes without a session footer when the configured URL is not external HTTPS", async () => {
+    await persistPublicationTestSession();
+    const scope = { agentId: "main", sessionKey: SESSION_KEY };
+    await upsertSessionEntryCore(scope, {
+      publicShare: {
+        id: "a".repeat(48),
+        sessionId: loadSessionEntryReadOnly(scope)!.sessionId,
+        createdAt: 1,
+      },
+    });
     const config = { gateway: { publicOrigin: "http://127.0.0.1:18789" } };
     mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
     const coordinator = createGitHubPublicationCoordinator();

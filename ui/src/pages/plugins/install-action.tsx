@@ -1,20 +1,29 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onSettled, For } from "solid-js";
+import { createMemo, createSignal, onSettled, For } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUnit } from "../../lib/format.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { readVisibleTime } from "../../lib/reactive/visible-clock.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import "./install-action.css";
 import type { PluginInstallProgress } from "./install-progress.ts";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
 
+export type PluginInstallActionHandle = {
+  readonly open: boolean;
+  dismiss(): void;
+};
+
 export type PluginInstallActionProps = {
+  registerInstallAction?: (action: PluginInstallActionHandle) => () => void;
+  onButtonRef?: (button: HTMLButtonElement) => void;
   progress?: PluginInstallProgress;
   busy?: boolean;
   disabled?: boolean;
+  title?: string;
   pluginName?: string;
   buttonClass?: string;
   primary?: boolean;
@@ -30,7 +39,6 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
   const [button, setButton] = createSignal<HTMLButtonElement>();
   const [open, setOpen] = createSignal(false);
   let popover: PopoverHandle | undefined;
-  const [now, setNow] = createSignal(Date.now());
   const idle = createMemo(() => !props.progress && !props.busy);
   // An idle action retires pinning; progress updates preserve the operator's choice.
   const [pinned, setPinned] = createSignal<boolean>((previous) => !idle() && Boolean(previous));
@@ -40,17 +48,17 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
     setPinned(false);
     popover?.overlay.request(false, "return");
   };
-  onSettled(() => () => {
-    popover = undefined;
-  });
-  const running = createMemo(() => props.progress && props.progress.finishedAt === undefined);
-  // The timer supplies elapsed wall-clock time while the installer is running.
-  createEffect(running, (active) => {
-    if (!active) {
-      return undefined;
-    }
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
+  onSettled(() => {
+    const unregister = props.registerInstallAction?.({
+      get open() {
+        return open() && Boolean(props.progress);
+      },
+      dismiss,
+    });
+    return () => {
+      unregister?.();
+      popover = undefined;
+    };
   });
   const progress = () => props.progress;
   const failed = () => props.progress?.finishedAt !== undefined;
@@ -60,7 +68,10 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
     props.progress
       ? Math.max(
           0,
-          Math.floor(((props.progress.finishedAt ?? now()) - props.progress.startedAt) / 1000),
+          Math.floor(
+            ((props.progress.finishedAt ?? readVisibleTime(1_000)) - props.progress.startedAt) /
+              1000,
+          ),
         )
       : 0;
   return (
@@ -102,19 +113,19 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
         }}
       >
         <button
-          ref={setButton}
+          ref={[setButton, props.onButtonRef]}
           type="button"
           class={[
             props.buttonClass,
             "plugin-install-action__button",
             {
               primary: props.primary && !failed(),
-              "oc-action-primary": props.primary && !failed(),
               "oc-action-secondary": !props.primary || failed(),
               "plugin-install-action__button--failed": failed(),
             },
           ]}
           disabled={props.disabled && canInstall()}
+          title={props.title}
           aria-label={
             props.pluginName && (canInstall() || failed())
               ? t(

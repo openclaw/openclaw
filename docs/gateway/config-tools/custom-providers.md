@@ -99,9 +99,12 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `models.providers.*.models.*.contextTokens`: optional active-input cap for that model; use it when you want an effective budget distinct from the model's native `contextWindow`; `openclaw models list` shows both when they differ.
     - `models.providers.*.models.*.responseModelEquivalent`: optional boolean for a user-authored custom-provider row in config. Set `true` when a router or broker resolves this model id itself and reports the concrete model it served. OpenClaw then treats any response model from that endpoint as the requested route, including endpoint-internal substitutions. The served model id and usage remain visible in metadata, but no model route change is announced to parent agents. OpenClaw fallbacks and overrides to another configured model or provider still produce a notice. Bundled and official provider policy remains authoritative; this key cannot override it, even if the provider has no equivalence hook. Plugin/catalog rows, agent `models.json` rows, and rows marked `metadataSource: "models-add"` cannot grant equivalence. Omitted or `false` preserves normal route detection. This optional key requires no Doctor migration.
 
+    OpenAI-compatible stream response ids and served-model metadata ignore empty
+    keepalives and role-only placeholders; those frames do not establish a model route change.
+
     #### Custom provider capability declarations
 
-    Provider catalogs own `compat` for bundled and catalog-known model routes. Do not copy those flags into config: OpenClaw uses the catalog row when the configured `api` and `baseUrl` still identify that route. `openclaw doctor --fix` removes matching legacy overrides and reports divergent values for review.
+    Provider catalogs own `compat` defaults for bundled and catalog-known model routes. Explicit `supportsReasoningEffort`, `supportedReasoningEfforts`, and `reasoningEffortMap` declarations override catalog reasoning metadata on the same route. Other flags still use the catalog row when the configured `api` and `baseUrl` identify that route. `openclaw doctor --fix` removes matching legacy overrides and reports divergent values for review.
 
     A `compat` block remains supported for a genuinely custom provider, custom model, or catalog model routed to a different endpoint. Set only capabilities verified against that endpoint:
 
@@ -120,7 +123,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `strictMessageKeys` | Requires outgoing messages to contain only accepted keys. |
     | `visibleReasoningDetailTypes` | Names reasoning detail block types safe to show in transcripts. |
     | `supportedReasoningEfforts` | Lists the endpoint's accepted reasoning labels. Requests are clamped to this ladder. Unknown models default to `low`, `medium`, and `high`. |
-    | `reasoningEffortMap` | Maps OpenClaw thinking labels to endpoint-specific labels. Custom Completions routes omit effort for `off` by default; an explicit off mapping can send the endpoint's accepted disable value. |
+    | `reasoningEffortMap` | Maps OpenClaw thinking labels to endpoint-specific labels. Unknown Completions and Responses routes omit effort for `off` by default; an explicit off mapping can send the endpoint's accepted disable value. |
     | `maxTokensField` | Selects `max_tokens` or `max_completion_tokens`. |
     | `thinkingFormat` | Selects the endpoint's reasoning payload dialect. |
     | `requiresToolResultName` | Requires a tool name on tool-result messages. |

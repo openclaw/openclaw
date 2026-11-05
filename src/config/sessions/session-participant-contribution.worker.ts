@@ -1,11 +1,7 @@
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
-import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
-import {
-  deferOpenClawAgentPostCommitPublication,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { sessionEntryCaches } from "./session-accessor.sqlite-entry-cache-state.js";
 import {
@@ -94,8 +90,6 @@ export function prepareSessionParticipantContribution(
     stage() {
       publishActor.publish(updated);
       stageSqliteTransactionState(database.db, {
-        stage() {},
-        rollback() {},
         commit() {
           publishSessionEntryCacheParticipantUpdate(database, resolved.sessionKey, {
             writeGeneration: completeCacheWrite(),
@@ -104,14 +98,6 @@ export function prepareSessionParticipantContribution(
         },
         invalidate: () => sessionEntryCaches.delete(database.db),
       });
-      deferOpenClawAgentPostCommitPublication(database, () =>
-        emitSessionLifecycleEvent({
-          agentId: resolved.agentId,
-          sessionKey: resolved.sessionKey,
-          reason: "participants",
-          scope: "session-entry",
-        }),
-      );
     },
     statement: () =>
       withSqliteDatabaseWriteScope(database.db, [resolved.sessionKey], () =>

@@ -22,6 +22,23 @@ struct RootSidebarTypographyTests {
 }
 
 struct OpenClawTypographyTests {
+    @Test func `ESP setup controls and secret prompts use branded typography`() throws {
+        let source = try String(contentsOf: Self.sourceURL("Settings/ESPDeviceSetupScreen.swift"), encoding: .utf8)
+        #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: "ESPDeviceSetupScreen.swift").isEmpty)
+        #expect(source.contains("prompt: Text(title).font(OpenClawType.subhead)"))
+        #expect(source.contains(".accessibilityLabel(Text(title))"))
+        #expect(!source.contains("SecureField(\""))
+    }
+
+    @Test func `About support links use the branded shared row`() throws {
+        let settings = try String(contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"), encoding: .utf8)
+        let supportRow = try Self.extract(settings, from: "title: \"Support\"", to: "!)")
+        #expect(supportRow.contains("https://community.openclaw.ai/"))
+        let linkRow = try Self.extract(settings, from: "func aboutLinkRow(", to: "\n    }")
+        #expect(linkRow.filter { !$0.isWhitespace }.contains(
+            "Text(title).font(OpenClawType.subheadSemiBold)"))
+    }
+
     @Test func `Access actions use native branded controls`() throws {
         let settings = try String(contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"), encoding: .utf8)
         for label in ["Cancel sign-in", "Sign in to Cloudflare Access", "Sign out of Cloudflare Access"] {
@@ -31,9 +48,11 @@ struct OpenClawTypographyTests {
         #expect(settings.contains("Text(verbatim: target.origin.url.absoluteString)"))
         #expect(settings.contains(".fixedSize(horizontal: false, vertical: true)"))
         #expect(settings.contains(".textSelection(.enabled)"))
-        let dashboard = try String(contentsOf: Self.sourceURL("Settings/DashboardPageScreen.swift"), encoding: .utf8)
-        #expect(dashboard.contains("Text(\"Open Gateway settings\")"))
-        #expect(dashboard.contains(".font(OpenClawType.body)"))
+        let embeddedDashboard = try String(
+            contentsOf: Self.sourceURL("Settings/SettingsHubScreen.swift"),
+            encoding: .utf8)
+        #expect(embeddedDashboard.contains("Text(\"Open Gateway settings\")"))
+        #expect(embeddedDashboard.contains(".font(OpenClawType.subheadSemiBold)"))
     }
 
     @Test(arguments: ["ChatFileAttachment.swift", "ChatMessageReactions.swift"])
@@ -187,7 +206,8 @@ struct OpenClawTypographyTests {
         #expect(typographySource.contains("maximumPointSize: 16"))
         #expect(typographySource.contains("maximumPointSize: 22"))
         #expect(typographySource.contains("maximumPointSize: 44"))
-        #expect(typographySource.contains("scaledFont(for: base, maximumPointSize: maximumPointSize)"))
+        #expect(typographySource
+            .contains("for: base, maximumPointSize: maximumPointSize, compatibleWith: UITraitCollection.current"))
         #expect(typographySource.contains("case let searchTextField as UISearchTextField"))
         #expect(!typographySource.contains("case let textField as UITextField"))
         #expect(!typographySource.contains("case let textView as UITextView"))

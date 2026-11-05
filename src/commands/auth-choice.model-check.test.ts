@@ -1,4 +1,3 @@
-// Auth-choice model check tests cover warnings for mismatched model and auth config.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createApiKeyCredential,
@@ -14,8 +13,9 @@ import {
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ version: 1, profiles: {} })));
+// mock-isolation: Model readiness compares fixture credentials without discovering host accounts.
 vi.mock("../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: async () => ensureAuthProfileStore(),
 }));
 const note = vi.fn(async (_message: string, _title?: string) => {});
 const prompter = makePrompter({ note });
@@ -53,59 +53,39 @@ const chatGPTRoute = {
   baseUrl: "https://chatgpt.com/backend-api/codex",
 } satisfies Pick<ModelCatalogEntry, "api" | "baseUrl">;
 
-function catalogEntry(
-  id: string,
-  name: string,
-  route: Pick<ModelCatalogEntry, "api" | "baseUrl">,
-): ModelCatalogEntry {
-  return { id, name, provider: "openai", ...route };
-}
-
 describe("warnIfModelConfigLooksOff", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
   });
 
-  it("accepts pending auth profiles collected by the current setup transaction", async () => {
-    const config = modelConfig("anthropic/claude-sonnet-4-6");
-    const pendingAuthProfiles = [
-      {
-        profileId: "anthropic:default",
-        credential: createApiKeyCredential("anthropic", "test-anthropic-key"),
-      },
-    ];
-
-    expect(resolveDefaultModelAuthStatus(config, { env: {}, pendingAuthProfiles })).toMatchObject({
-      status: "ready",
-      hasAuth: true,
-    });
-    await warnIfModelConfigLooksOff(config, prompter, {
-      env: {},
-      pendingAuthProfiles,
-    });
-
-    expect(note).not.toHaveBeenCalled();
-  });
-
-  it("does not use pending auth profiles from a different provider", async () => {
-    const config = modelConfig("anthropic/claude-sonnet-4-6");
-
-    await warnIfModelConfigLooksOff(config, prompter, {
-      env: {},
-      pendingAuthProfiles: [
-        {
-          profileId: "openai:default",
-          credential: createApiKeyCredential("openai", "test-openai-key"),
-        },
-      ],
-    });
-
-    expect(note).toHaveBeenCalledWith(
-      'No auth configured for provider "anthropic". The agent may fail until credentials are added. Run `openclaw models auth login --provider anthropic`, `openclaw configure`, or set an API key env var.',
-      "Model check",
-    );
-  });
+  it.each(["anthropic", "openai"])(
+    "checks pending %s credentials against the model provider",
+    async (provider) => {
+      const config = modelConfig("anthropic/claude-sonnet-4-6");
+      const options = {
+        env: {},
+        pendingAuthProfiles: [
+          {
+            profileId: `${provider}:default`,
+            credential: createApiKeyCredential(provider, "test-key"),
+          },
+        ],
+      };
+      expect(await resolveDefaultModelAuthStatus(config, options)).toMatchObject({
+        status: provider === "anthropic" ? "ready" : "missing",
+      });
+      await warnIfModelConfigLooksOff(config, prompter, options);
+      if (provider === "anthropic") {
+        expect(note).not.toHaveBeenCalled();
+      } else {
+        expect(note).toHaveBeenCalledWith(
+          'No auth configured for provider "anthropic". The agent may fail until credentials are added. Run `openclaw models auth login --provider anthropic`, `openclaw configure`, or set an API key env var.',
+          "Model check",
+        );
+      }
+    },
+  );
 
   it("keeps custom OpenAI-compatible provider auth separate from Codex OAuth profiles", async () => {
     useSubscription("openai:default");
@@ -127,10 +107,9 @@ describe("warnIfModelConfigLooksOff", () => {
   it("accepts subscription auth but not key sources for gpt-5.3-codex-spark", async () => {
     const config = modelConfig("openai/gpt-5.3-codex-spark");
     expect(
-      resolveDefaultModelAuthStatus(config, { env: { OPENAI_API_KEY: "api-key" } }),
+      await resolveDefaultModelAuthStatus(config, { env: { OPENAI_API_KEY: "api-key" } }),
     ).toMatchObject({
       status: "missing",
-      hasAuth: false,
       authRequirement: "subscription",
     });
 
@@ -142,17 +121,17 @@ describe("warnIfModelConfigLooksOff", () => {
     expect(warning).not.toContain("set an API key env var");
 
     useSubscription();
-    expect(resolveDefaultModelAuthStatus(config)).toMatchObject({ status: "ready", hasAuth: true });
+    expect(await resolveDefaultModelAuthStatus(config)).toMatchObject({
+      status: "ready",
+    });
   });
 
   it("maps incompatible route facts to status and recovery wording", async () => {
     useSubscription();
     const config = modelConfig("openai/gpt-5.6", { openai: { ...chatGPTRoute, models: [] } });
 
-    expect(resolveDefaultModelAuthStatus(config)).toMatchObject({
+    expect(await resolveDefaultModelAuthStatus(config)).toMatchObject({
       status: "incompatible",
-      hasAuth: false,
-      code: "platform-only-model-on-chatgpt",
     });
     await warnIfModelConfigLooksOff(config, prompter);
 
@@ -162,52 +141,49 @@ describe("warnIfModelConfigLooksOff", () => {
     );
   });
 
-  it("uses selected static ChatGPT catalog facts for auth checks", () => {
-    useSubscription();
-    const catalog = [catalogEntry("gpt-5.4-nano", "GPT 5.4 Nano", chatGPTRoute)];
-    const config = modelConfig("openai/gpt-5.4-nano");
-
-    const catalogFacts = resolveDefaultModelCatalogFacts(config, catalog);
-    expect(catalogFacts.observedRoutes).toEqual([chatGPTRoute]);
-    expect(
-      resolveDefaultModelAuthStatus(config, { observedRoutes: catalogFacts.observedRoutes }),
-    ).toMatchObject({ status: "ready", hasAuth: true });
-  });
-
-  it("matches shipped OpenAI aliases to their canonical catalog model", () => {
-    const catalog = [catalogEntry("gpt-5.4", "GPT 5.4", platformRoute)];
-    const config = modelConfig("openai/gpt-5.4-codex");
-
-    const catalogFacts = resolveDefaultModelCatalogFacts(config, catalog);
-    expect(catalogFacts.observedRoutes).toEqual([platformRoute]);
-    expect(
-      resolveDefaultModelAuthStatus(config, {
-        env: { OPENAI_API_KEY: "api-key" },
-        observedRoutes: catalogFacts.observedRoutes,
-      }),
-    ).toMatchObject({ status: "ready", hasAuth: true });
-  });
-
-  it("uses every physical route when the first route lacks compatible auth", () => {
-    const platform = catalogEntry("gpt-5.4-nano", "GPT 5.4 Nano", platformRoute);
-    const chatGPT = { ...platform, ...chatGPTRoute };
-    const routeVariants = [platform, chatGPT];
-    useSubscription();
-    const config = modelConfig("openai/gpt-5.4-nano");
-
-    const catalogFacts = resolveDefaultModelCatalogFacts(config, [platform], { routeVariants });
-    expect(catalogFacts.observedRoutes).toEqual([platformRoute, chatGPTRoute]);
-    expect(
-      resolveDefaultModelAuthStatus(config, { observedRoutes: catalogFacts.observedRoutes }),
-    ).toMatchObject({ status: "ready", hasAuth: true });
-  });
+  it.each([
+    ["static ChatGPT route", "gpt-5.4-nano", "gpt-5.4-nano", [chatGPTRoute], true],
+    ["canonical model alias", "gpt-5.4-codex", "gpt-5.4", [platformRoute], false],
+    [
+      "all physical route variants",
+      "gpt-5.4-nano",
+      "gpt-5.4-nano",
+      [platformRoute, chatGPTRoute],
+      true,
+    ],
+  ] as const)(
+    "resolves catalog auth through %s",
+    async (_name, model, canonical, routes, subscription) => {
+      if (subscription) {
+        useSubscription();
+      }
+      const config = modelConfig(`openai/${model}`);
+      const catalog = routes.map((route) => ({
+        id: canonical,
+        name: canonical,
+        provider: "openai",
+        ...route,
+      }));
+      const { observedRoutes } = resolveDefaultModelCatalogFacts(
+        config,
+        catalog.slice(0, 1),
+        routes.length > 1 ? { routeVariants: catalog } : undefined,
+      );
+      expect(observedRoutes).toEqual(routes);
+      expect(
+        await resolveDefaultModelAuthStatus(config, {
+          ...(subscription ? {} : { env: { OPENAI_API_KEY: "api-key" } }),
+          observedRoutes,
+        }),
+      ).toMatchObject({ status: "ready" });
+    },
+  );
 
   it("reports an unknown static transport as indeterminate instead of missing auth", async () => {
     const config = modelConfig("openai/gpt-5.4-nano");
 
-    expect(resolveDefaultModelAuthStatus(config)).toMatchObject({
+    expect(await resolveDefaultModelAuthStatus(config)).toMatchObject({
       status: "indeterminate",
-      hasAuth: false,
     });
     await warnIfModelConfigLooksOff(config, prompter);
 

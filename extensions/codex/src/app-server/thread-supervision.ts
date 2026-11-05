@@ -467,6 +467,7 @@ function buildPendingSupervisionProbeForkParams(
       params.developerInstructions ??
       buildDeveloperInstructions(params.attempt, {
         dynamicTools: params.dynamicTools,
+        nativeCodeModeEnabled: params.nativeCodeModeEnabled !== false,
         nativeCodeModeOnlyEnabled: runtimeConfig["features.code_mode_only"] === true,
       }),
     ephemeral: true,

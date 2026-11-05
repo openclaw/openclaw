@@ -7,12 +7,12 @@ import {
   type ManagedHandoffSentinelIdentity,
 } from "./restart-sentinel-store.js";
 import type { EngineConnection } from "./sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import { readUpdateFailureReportReceiptRowSync } from "./update-failure-report-receipt-store.js";
 
 export const restartSentinelReadOperations = {
   "restartSentinel.managedHandoffInspect": (input: ManagedHandoffSentinelIdentity, db) =>
-    runSqliteDeferredTransactionSync(db, () => ({
+    runSqliteReadSnapshotSync(db, () => ({
       type: "restartSentinel.managedHandoffInspect" as const,
       snapshot: inspectManagedHandoffSentinelRowSync(db, input),
     })),
@@ -24,14 +24,13 @@ export const restartSentinelReadOperations = {
     type: "restartSentinel.current" as const,
     state: readRestartSentinelRowSync(db),
   }),
-  "restartSentinel.snapshot": (_input: undefined, db) =>
-    runSqliteDeferredTransactionSync(db, () => {
-      const { state, revision } = readRestartSentinelSnapshotSync(db);
-      return {
-        type: "restartSentinel.snapshot" as const,
-        snapshot: { sentinel: state.kind === "valid" ? state.sentinel : null, revision },
-      };
-    }),
+  "restartSentinel.snapshot": (_input: undefined, db) => {
+    const { state, revision } = readRestartSentinelSnapshotSync(db);
+    return {
+      type: "restartSentinel.snapshot" as const,
+      snapshot: { sentinel: state.kind === "valid" ? state.sentinel : null, revision },
+    };
+  },
   "restartSentinel.installReceipt": (_input: undefined, db) => ({
     type: "restartSentinel.installReceipt" as const,
     sentinel: readUpdateInstallReceiptRowSync(db),

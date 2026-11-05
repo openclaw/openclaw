@@ -1,7 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
+import {
+  expectExit,
+  pendingGates,
+  readLocal,
+  writeLocal,
+} from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
 
@@ -10,33 +17,17 @@ const { fixture, outcomeRef, describePosix, scripts, nodeExecutable, gitEnv } =
 
 type Fixture = ReturnType<typeof fixture>;
 const localPath = (f: Fixture, name: string) => join(f.worktree, ".local", name);
-const readLocal = (f: Fixture, name: string) => readFileSync(localPath(f, name), "utf8");
-const writeLocal = (f: Fixture, name: string, contents: string) =>
-  writeFileSync(localPath(f, name), contents);
 function changeReviewHead(f: Fixture, head: string) {
   const review = JSON.parse(readLocal(f, "correction-review.json"));
   review.pr.headSha = head;
   writeLocal(f, "correction-review.json", JSON.stringify(review));
-}
-function pendingGates(f: Fixture, head = f.head) {
-  writeLocal(
-    f,
-    "gates.env",
-    `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${head}\n`,
-  );
 }
 function publish(f: Fixture, head: string) {
   const refs = [`${head}:refs/pull/123/head`, `${head}:refs/heads/topic`];
   f.git(["push", "-q", "--force", "origin", ...refs]);
 }
 
-function incomingHead(f: Fixture) {
-  const incoming = f.sourceCommits[0];
-  if (!incoming) {
-    throw new Error("Missing incoming fixture commit");
-  }
-  return incoming;
-}
+const incomingHead = (f: Fixture) => expectDefined(f.sourceCommits[0], "incoming fixture commit");
 function configureCorrection(f: Fixture) {
   const incoming = incomingHead(f);
   const candidate = f.git(["rev-parse", "HEAD"], undefined, f.worktree);
@@ -226,13 +217,11 @@ describePosix("correction authority through native merge admission", () => {
   it("reconciles an accepted correction merge without disposable review files", () => {
     const f = correctionFixture();
     f.save({ ...f.state(), mode: "applied-merged" });
-    const result = f.run();
-    expect(result.status, result.output).toBe(0);
+    expectExit(f.run());
     for (const name of ["correction-review.json", "review.json", "review.md"]) {
       rmSync(localPath(f, name), { force: true });
     }
-    const again = f.run();
-    expect(again.status, again.output).toBe(0);
+    expectExit(f.run());
     expect(f.state().mutations).toBe(1);
   });
 });

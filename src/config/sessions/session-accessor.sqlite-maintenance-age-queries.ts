@@ -1,4 +1,4 @@
-import { sql } from "kysely";
+import { sql, type InferResult } from "kysely";
 import { engineIndexHint } from "../../infra/database-engine/index-hint.js";
 import {
   createSqliteQueryCache,
@@ -9,9 +9,10 @@ import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 
 export const readSessionMaintenanceAgeQueries = createSqliteQueryCache((database) => {
+  const postgres = isPostgresSqlConnection(database);
   const position =
     /* kysely-allow-raw: Closed engine choice of equivalent substring-position functions. */ sql.raw(
-      isPostgresSqlConnection(database) ? "strpos" : "instr",
+      postgres ? "strpos" : "instr",
     );
   const db =
     getNodeSqliteKysely<Pick<DB, "session_nodes" | "session_canonical_validation_pending">>(
@@ -27,6 +28,7 @@ export const readSessionMaintenanceAgeQueries = createSqliteQueryCache((database
       "last_interaction_at",
       "session_started_at",
     ]);
+  type ActivityRow = InferResult<typeof projection>[number];
   const ordered = db
     .selectFrom(
       projection
@@ -92,20 +94,70 @@ export const readSessionMaintenanceAgeQueries = createSqliteQueryCache((database
     .whereRef("pending.session_key", "=", "age_rows.session_key")
     .where("archived_at", "is", null)
     .selectAll("age_rows");
+  type AgeRow = Pick<ActivityRow, "session_key" | "updated_at">;
+  const pageSize = 64;
+  const after = prepareSqliteQueryIterator<{ minimum: number; previous?: AgeRow }, AgeRow>(
+    database,
+    (parameter) => {
+      const query = ordered.select(["session_key", "updated_at"]).where(
+        "updated_at",
+        ">",
+        parameter(({ minimum }) => minimum),
+      );
+      if (!postgres) {
+        return query;
+      }
+      const timestamp = parameter(({ minimum, previous }) => previous?.updated_at ?? minimum);
+      return query
+        .where("updated_at", ">=", timestamp)
+        .where((eb) =>
+          eb.or([
+            eb("updated_at", ">", timestamp),
+            eb(
+              "session_key",
+              "<",
+              parameter(({ previous }) => previous?.session_key ?? null),
+            ),
+          ]),
+        )
+        .limit(pageSize);
+    },
+  );
 
   return {
-    after: prepareSqliteQueryIterator<number, { session_key: string; updated_at: number }>(
-      database,
-      (parameter) =>
-        ordered.select(["session_key", "updated_at"]).where(
-          "updated_at",
-          ">",
-          parameter((minimum) => minimum),
-        ),
-    ),
+    // PostgreSQL buffers replies; page lazily past protected keys without reading the tail.
+    // Its admitted UTF-8 keys round-trip exactly. SQLite keeps native streaming/text semantics.
+    after: postgres
+      ? function* (minimum: number) {
+          let previous: AgeRow | undefined;
+          while (true) {
+            let count = 0;
+            for (const row of after({ minimum, previous })) {
+              previous = row;
+              count++;
+              yield row;
+            }
+            if (count < pageSize) {
+              return;
+            }
+          }
+        }
+      : (minimum: number) => after({ minimum }),
     activity: prepareSqliteQueryIterator(database, () => ordered.selectAll("age_rows")),
-    dashboards: prepareSqliteQueryIterator(database, () => dashboards),
+    activityBefore: prepareSqliteQueryIterator<number, ActivityRow>(database, (parameter) =>
+      ordered.selectAll("age_rows").where(
+        "updated_at",
+        "<",
+        parameter((maximum) => maximum),
+      ),
+    ),
     // Raw edits remain marked until the canonical owner validates their key/row shape.
-    uncertified: prepareSqliteQueryIterator(database, () => uncertified),
+    dashboards: prepareSqliteQueryIterator(database, () => dashboards.unionAll(uncertified)),
+    dashboardsBefore: prepareSqliteQueryIterator<number, ActivityRow>(database, (parameter) => {
+      const maximum = parameter((value) => value);
+      return dashboards
+        .where("age_rows.updated_at", "<", maximum)
+        .unionAll(uncertified.where("age_rows.updated_at", "<", maximum));
+    }),
   };
 });

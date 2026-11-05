@@ -1,61 +1,64 @@
-import "./account-usage.tsx";
-import { createMemo, For, onCleanup, Show } from "solid-js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { JSX } from "@solidjs/web";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { createPointerDrag } from "../../lib/reactive/pointer-drag.ts";
 import { showToast } from "../../lib/toast.ts";
-import type { ModelAccountUsageElement } from "./account-usage.tsx";
+import { AccountLimits, type AccountUsageScope } from "./account-usage.tsx";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
 import type { ModelProviderCard, ModelProviderPendingLogout } from "./data.ts";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-model-account-usage": HTMLAttributes<ModelAccountUsageElement> & {
-        "prop:client": GatewayBrowserClient | null;
-        "prop:agentId": string;
-        "prop:profileId": string;
-      };
-    }
-  }
-}
+import {
+  isAccessTokenExpiry,
+  profileAuthProblem,
+  providerStatusCoversAccount,
+} from "./view-status.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
 export function showProfileActionError(error: unknown): void {
   showToast({
-    placement: "bottom",
     message: modelProviderErrorMessage(error),
-    icon: "alertTriangle",
+    severity: "error",
+    durationMs: 12_000,
+  });
+}
+
+export function showProfileActionWarning(warning: string): void {
+  showToast({
+    message: formatUiExternalText(warning),
+    severity: "warning",
     durationMs: 12_000,
   });
 }
 
 export function showProfileLogoutSuccess(warning?: string): void {
+  // The account disappearing already confirms success; warnings still need attention.
+  if (!warning) {
+    return;
+  }
   showToast({
-    placement: "bottom",
-    message: [t("modelProviders.logout.done"), warning].filter(Boolean).join(" "),
-    icon: "check",
+    message: warning,
+    severity: "warning",
   });
 }
 
 type ProviderProfile = ModelProviderCard["profiles"][number];
 
 export type ProviderProfilesViewProps = {
-  usageClient?: GatewayBrowserClient | null;
-  usageAgentId?: string;
-  registerAccountUsage?: (element: ModelAccountUsageElement) => () => void;
+  /** Present when this operator may read per-account Codex limits. */
+  accountUsage?: AccountUsageScope | null;
   busy: Record<string, boolean>;
+  logoutSaving?: Record<string, boolean>;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   profileOrders: Record<string, string[]>;
-  onAddAccount: (() => void) | undefined;
-  addAccountDisabled: boolean;
   onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) => void;
   onRequestLogout: (pending: ModelProviderPendingLogout) => void;
 };
@@ -95,6 +98,18 @@ function profileMeta(profile: ProviderProfile): string {
   if (profile.email && profile.displayName && profile.displayName !== source) {
     parts.push(profile.displayName);
   }
+  if (profile.expiry) {
+    parts.push(
+      t(
+        profile.type === "oauth"
+          ? profile.status === "expired"
+            ? "modelProviders.accessTokenExpired"
+            : "modelProviders.accessTokenExpiresIn"
+          : "modelProviders.expiresIn",
+        { time: profile.expiry.label },
+      ),
+    );
+  }
   if (profile.lastUsedAt) {
     parts.push(
       t("modelProviders.profiles.lastUsed", {
@@ -115,13 +130,32 @@ function profileInitials(identity: string): string {
   return initials.toLocaleUpperCase() || "?";
 }
 
-function profileStatus(profile: ProviderProfile, providerAuthRejected: boolean) {
-  const status =
-    profile.externallyManaged && (profile.status === "expired" || profile.status === "expiring")
-      ? "ok"
-      : profile.status;
-  switch (status) {
+/** `quiet` keeps only an account's own problem; the provider row reports everything else. */
+function profileStatus(profile: ProviderProfile, providerAuthRejected: boolean, quiet = false) {
+  const problem = profileAuthProblem(profile);
+  if (problem) {
+    return <SettingsStatus kind="danger" label={t(problem)} />;
+  }
+  if (
+    isAccessTokenExpiry(profile) ||
+    (profile.externallyManaged && (profile.status === "expired" || profile.status === "expiring"))
+  ) {
+    return quiet ? undefined : (
+      <SettingsStatus
+        kind="muted"
+        label={t(
+          profile.externallyManaged
+            ? "modelProviders.status.managedExternally"
+            : "modelProviders.status.configured",
+        )}
+      />
+    );
+  }
+  switch (profile.status) {
     case "ok":
+      if (quiet) {
+        return undefined;
+      }
       return (
         <SettingsStatus
           kind={providerAuthRejected ? "muted" : "ok"}
@@ -131,9 +165,14 @@ function profileStatus(profile: ProviderProfile, providerAuthRejected: boolean) 
         />
       );
     case "static":
-      return <SettingsStatus kind={"ok"} label={t("modelProviders.status.configured")} />;
+      return quiet ? undefined : (
+        <SettingsStatus kind={"ok"} label={t("modelProviders.status.configured")} />
+      );
     case "expiring":
-      return <SettingsStatus kind={"warn"} label={t("modelProviders.status.expiring")} />;
+      // Its meta line already says when, and the provider row already says "Expiring".
+      return quiet && profile.expiry ? undefined : (
+        <SettingsStatus kind={"warn"} label={t("modelProviders.status.expiring")} />
+      );
     case "expired":
       return <SettingsStatus kind={"danger"} label={t("modelProviders.status.expired")} />;
     default:
@@ -191,29 +230,29 @@ function startPointerDrag(params: {
   event: PointerEvent;
   canMove: boolean;
   provider: string;
+  row: HTMLElement;
+  section: HTMLElement;
+  rows: HTMLElement[];
   move: (targetId: string, position: ArrayDropPosition) => void;
-}): (() => void) | undefined {
+  drag: ReturnType<typeof createPointerDrag>;
+}): void {
   if (!params.canMove || params.event.button !== 0) {
-    return undefined;
+    return;
   }
   const grip = params.event.currentTarget;
   if (!(grip instanceof HTMLElement)) {
-    return undefined;
+    return;
   }
-  const row = grip.closest<HTMLElement>(".model-providers__profile");
-  const section = grip.closest<HTMLElement>(".model-providers__profiles");
-  if (!row || !section) {
-    return undefined;
-  }
+  const { row, section } = params;
   const sectionTop = section.getBoundingClientRect().top;
   // Use the original slots for hit testing. Measuring animated neighbors would
   // make the insertion point oscillate as they move out from under the pointer.
-  const slots = [...section.querySelectorAll<HTMLElement>(".model-providers__profile")]
+  const slots = params.rows
     .filter((candidate) => candidate.dataset.profileProvider === params.provider)
     .map((element) => ({ element, bounds: element.getBoundingClientRect() }));
   const source = slots.find((slot) => slot.element === row);
   if (!source) {
-    return undefined;
+    return;
   }
   const others = slots.filter((slot) => slot !== source);
   let target: (typeof slots)[number] | undefined;
@@ -221,16 +260,7 @@ function startPointerDrag(params: {
   params.event.preventDefault();
   section.classList.add(SORTING_CLASS);
   row.classList.add(DRAGGING_CLASS);
-  try {
-    grip.setPointerCapture?.(params.event.pointerId);
-  } catch {
-    // Synthetic pointers can lack the active pointer required for capture.
-  }
-
   const update = (event: PointerEvent) => {
-    if (event.pointerId !== params.event.pointerId) {
-      return;
-    }
     const scrollOffset = sectionTop - section.getBoundingClientRect().top;
     const deltaY = event.clientY - params.event.clientY + scrollOffset;
     row.style.translate = `${event.clientX - params.event.clientX}px ${deltaY}px`;
@@ -270,134 +300,142 @@ function startPointerDrag(params: {
       top += slot.bounds.height;
     }
   };
-  let active = true;
   const cleanup = () => {
-    if (!active) {
-      return;
-    }
-    active = false;
-    stops.forEach((stop) => stop());
+    stopKeydown();
     section.classList.remove(SORTING_CLASS);
     for (const { element } of slots) {
       element.classList.remove(DRAGGING_CLASS);
       element.style.removeProperty("translate");
     }
-    try {
-      grip.releasePointerCapture?.(params.event.pointerId);
-    } catch {
-      // Pointer cancellation may release capture before this cleanup runs.
-    }
   };
-  const finish = (event: PointerEvent, apply: boolean) => {
-    if (!active || event.pointerId !== params.event.pointerId) {
-      return;
-    }
+  const finish = (event: PointerEvent) => {
     update(event);
     const targetId = target?.element.dataset.profileId;
     cleanup();
-    if (apply && targetId) {
+    if (targetId) {
       params.move(targetId, position);
     }
   };
-  const handleUp = (event: PointerEvent) => finish(event, true);
-  const handleCancel = (event: PointerEvent) => finish(event, false);
   const handleKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      finish(params.event, false);
+      params.drag.cancel();
     }
   };
-  const stops = [
-    listen(grip, "pointermove", { handleEvent: update }),
-    listen(grip, "pointerup", { handleEvent: handleUp }),
-    listen(grip, "pointercancel", { handleEvent: handleCancel }),
-    listen(grip, "lostpointercapture", { handleEvent: handleCancel }),
-    // A drag owns Escape before the Settings shell handles its back shortcut.
-    listen(document, "keydown", { handleEvent: handleKeyDown }, true),
-  ];
-  return cleanup;
+  // A drag owns Escape before the Settings shell handles its back shortcut.
+  const stopKeydown = listen(document, "keydown", { handleEvent: handleKeyDown }, true);
+  if (!params.drag.start(params.event, grip, { move: update, end: finish, cancel: cleanup })) {
+    cleanup();
+  }
 }
 
-function profileIdentity(profile: ProviderProfile, index: number): string {
-  return (
-    profile.email ||
-    profile.displayName ||
-    t("modelProviders.profiles.account", { number: String(index + 1) })
+const PROFILE_KIND_KEYS = {
+  api_key: "modelProviders.profiles.kindApiKey",
+  token: "modelProviders.profiles.kindToken",
+  oauth: "modelProviders.profiles.kindOauth",
+} as const;
+
+// Identities stay hidden from non-admin viewers; name the credential kind instead
+// of an opaque "Account N". Numbers follow saved inventory order within a kind.
+export function profileIdentity(
+  profile: ProviderProfile,
+  profiles: readonly ProviderProfile[],
+): string {
+  const named = profile.email || profile.displayName;
+  if (named) {
+    return named;
+  }
+  const kind = t(PROFILE_KIND_KEYS[profile.type]);
+  const sameKind = profiles.filter(
+    (candidate) => candidate.type === profile.type && !candidate.email && !candidate.displayName,
   );
+  return sameKind.length > 1
+    ? t("modelProviders.profiles.kindNumbered", {
+        kind,
+        number: String(sameKind.indexOf(profile) + 1),
+      })
+    : kind;
 }
 
-function ProfileIdentity(props: {
-  profile: ProviderProfile;
-  identity: string;
-  showDetails: boolean;
-}) {
+function ProfileIdentity(props: { profile: ProviderProfile; identity: string; avatar?: boolean }) {
   const meta = () => profileMeta(props.profile);
   return (
     <>
-      <span class="model-providers__profile-avatar" aria-hidden="true">
-        {profileInitials(props.identity)}
-      </span>
+      <Show when={props.avatar}>
+        <span class="model-providers__profile-avatar" aria-hidden="true">
+          {props.profile.type === "oauth" ? profileInitials(props.identity) : <Icon name="key" />}
+        </span>
+      </Show>
       <div class="model-providers__profile-copy">
-        <strong>{props.identity}</strong>
+        <strong title={props.profile.profileId}>{props.identity}</strong>
         {meta() ? <span>{meta()}</span> : undefined}
-        <Show when={props.showDetails}>
-          <details>
-            <summary>{t("modelProviders.profiles.details")}</summary>
-            <div>{props.profile.profileId}</div>
-            {props.profile.expiry ? (
-              <span>{t("modelProviders.expiresIn", { time: props.profile.expiry.label })}</span>
-            ) : undefined}
-          </details>
-        </Show>
+        {isAccessTokenExpiry(props.profile) ? (
+          <span>{t("modelProviders.accessTokenExpiryHelp")}</span>
+        ) : undefined}
       </div>
     </>
   );
 }
 
-export function renderProviderAccountSummary(
-  cards: ModelProviderCard[],
+/** Whether a provider has a saved account or key worth listing before the ways to add one. */
+export function hasProviderAccounts(cards: ModelProviderCard[]) {
+  return cards.some((card) => card.profiles.length > 0 || Boolean(apiKeySource(card)));
+}
+
+export function ProviderAccountSummary(props: {
+  cards: ModelProviderCard[];
   recovery?: {
     authProvider: string;
     disabled: boolean;
     onUse: (profileId: string) => void;
-  },
-) {
-  const profiles = cards.flatMap((card) =>
-    card.profiles.map((profile) => ({
-      profile,
-      authRejected: card.catalogStatus === "auth-rejected",
-      // A display card can combine providers whose credentials are not interchangeable.
-      canUse:
-        card.profileProviderIds[profile.profileId] === recovery?.authProvider &&
-        (profile.source === "saved" || profile.source === "inherited"),
-    })),
+  };
+}) {
+  const profiles = createMemo(() =>
+    props.cards.flatMap((card) =>
+      card.profiles.map((profile) => ({
+        key: JSON.stringify([
+          card.id,
+          card.profileProviderIds[profile.profileId],
+          profile.profileId,
+        ]),
+        profile,
+        authRejected: card.catalogStatus === "auth-rejected",
+        // A display card can combine providers whose credentials are not interchangeable.
+        canUse:
+          card.profileProviderIds[profile.profileId] === props.recovery?.authProvider &&
+          (profile.source === "saved" || profile.source === "inherited"),
+      })),
+    ),
   );
-  const sources = [...new Set(cards.map(apiKeySource).filter(Boolean))];
+  const sources = createMemo(() => [...new Set(props.cards.map(apiKeySource).filter(Boolean))]);
   return (
     <section class="model-provider-login__accounts" aria-label={t("modelProviders.login.accounts")}>
       <h3>{t("modelProviders.login.accounts")}</h3>
-      {profiles.length ? (
+      {profiles().length ? (
         <div role="list">
-          <For each={profiles}>
-            {(entry, index) => (
+          <For each={profiles()} keyed={(entry) => entry.key}>
+            {(entry) => (
               <div
                 class="model-provider-login__account"
                 role="listitem"
-                data-profile-id={entry.profile.profileId}
+                data-profile-id={entry().profile.profileId}
               >
                 <ProfileIdentity
-                  profile={entry.profile}
-                  identity={profileIdentity(entry.profile, index())}
-                  showDetails={false}
+                  avatar
+                  profile={entry().profile}
+                  identity={profileIdentity(
+                    entry().profile,
+                    profiles().map((candidate) => candidate.profile),
+                  )}
                 />
-                {profileStatus(entry.profile, entry.authRejected)}
-                {entry.canUse && recovery ? (
+                {profileStatus(entry().profile, entry().authRejected)}
+                {entry().canUse && props.recovery ? (
                   <button
                     class="btn"
                     data-models-use-account
-                    disabled={recovery.disabled}
-                    onClick={() => recovery.onUse(entry.profile.profileId)}
+                    disabled={props.recovery.disabled}
+                    onClick={() => props.recovery?.onUse(entry().profile.profileId)}
                   >
                     {t("modelProviders.login.useAccount")}
                   </button>
@@ -407,93 +445,82 @@ export function renderProviderAccountSummary(
           </For>
         </div>
       ) : undefined}
-      <For each={sources}>{(source) => <p class="muted">{source}</p>}</For>
-      {!profiles.length && !sources.length ? (
+      <For each={sources()}>{(source) => <p class="muted">{source}</p>}</For>
+      {!profiles().length && !sources().length ? (
         <p class="muted">{t("modelProviders.login.noAccounts")}</p>
       ) : undefined}
     </section>
   );
 }
 
-export function ProviderProfiles(props: ProviderProfilesViewProps & { card: ModelProviderCard }) {
+export function ProviderProfiles(
+  props: ProviderProfilesViewProps & {
+    card: ModelProviderCard;
+    /** Replaces the key on the provider's only key, when that key is a saved API-key row. */
+    keyAction?: () => JSX.Element;
+  },
+) {
+  let section!: HTMLElement;
+  const rowElements = new Map<string, HTMLElement>();
   const card = () => props.card;
   const groups = createMemo(() => profileGroups(card(), props.profileOrders));
   // Account numbers follow the saved inventory, not the editable priority order.
   const identities = createMemo(
     () =>
       new Map(
-        card().profiles.map((profile, index) => [
+        card().profiles.map((profile) => [
           profile.profileId,
-          profileIdentity(profile, index),
+          profileIdentity(profile, card().profiles),
         ]),
       ),
   );
   const rows = createMemo(() =>
     groups().flatMap((group) => group.profiles.map((profile) => ({ group, profile }))),
   );
-  const reorderOffered = () =>
-    groups().some((group) => !group.lock && group.complete && group.order.length > 1);
   const explanations = () => [
     ...new Set(groups().flatMap((group) => (group.explanation ? [group.explanation] : []))),
   ];
-  const additionalCredentialSource = () => apiKeySource(card());
   return (
     <Show when={card().profiles.length > 0}>
       <section
         class="model-providers__profiles"
+        ref={(element) => (section = element)}
         aria-label={`${t("modelProviders.profiles.title")}: ${card().displayName}`}
       >
-        <div class="model-providers__profiles-heading">
-          <div class="model-providers__profiles-heading-copy">
-            <strong>{t("modelProviders.profiles.title")}</strong>
-            <span>
-              {t(
-                rows().length === 1
-                  ? "modelProviders.profiles.accountOne"
-                  : "modelProviders.profiles.accounts",
-                { count: String(rows().length) },
-              )}
-              {additionalCredentialSource() ? ` · ${additionalCredentialSource()}` : ""}
-            </span>
-            {reorderOffered() ? <span>{t("modelProviders.profiles.reorderHint")}</span> : undefined}
-            <For each={explanations()}>{(explanation) => <span>{explanation}</span>}</For>
+        <Show when={explanations().length > 0 || card().profileOrderStoredProviders.length > 0}>
+          <div class="model-providers__profiles-heading">
+            <div class="model-providers__profiles-heading-copy">
+              <For each={explanations()}>{(explanation) => <span>{explanation}</span>}</For>
+            </div>
+            <div class="model-providers__profiles-heading-actions">
+              <For each={card().profileOrderStoredProviders}>
+                {(provider) => (
+                  <button
+                    type="button"
+                    class="btn btn--sm btn--ghost"
+                    disabled={!props.canMutate}
+                    title={
+                      !props.canMutate
+                        ? (props.mutationBlockedReason ?? "")
+                        : t("modelProviders.profiles.resetOrderHint")
+                    }
+                    onClick={() => props.onProfileOrderChange(card().id, provider, null)}
+                  >
+                    {t("modelProviders.profiles.resetOrder")}
+                  </button>
+                )}
+              </For>
+            </div>
           </div>
-          <div class="model-providers__profiles-heading-actions">
-            <For each={card().profileOrderStoredProviders}>
-              {(provider) => (
-                <button
-                  type="button"
-                  class="btn btn--sm btn--ghost"
-                  disabled={!props.canMutate}
-                  title={
-                    !props.canMutate
-                      ? (props.mutationBlockedReason ?? "")
-                      : t("modelProviders.profiles.resetOrderHint")
-                  }
-                  onClick={() => props.onProfileOrderChange(card().id, provider, null)}
-                >
-                  {t("modelProviders.profiles.resetOrder")}
-                </button>
-              )}
-            </For>
-            {props.onAddAccount ? (
-              <button
-                type="button"
-                class="btn btn--sm"
-                disabled={props.addAccountDisabled}
-                onClick={() => props.onAddAccount?.()}
-              >
-                {t("modelProviders.profiles.addAccount")}
-              </button>
-            ) : undefined}
-          </div>
-        </div>
+        </Show>
         <div class="model-providers__profile-list" role="list">
           <For each={rows()} keyed={(row) => row.profile.profileId}>
             {(row) => (
               <ProviderProfileRow
                 {...props}
                 row={row()}
+                section={() => section}
+                rowElements={rowElements}
                 identity={identities().get(row().profile.profileId)!}
               />
             )}
@@ -509,15 +536,20 @@ function ProviderProfileRow(
     row: { profile: ProviderProfile; group: ReturnType<typeof profileGroups>[number] };
     card: ModelProviderCard;
     identity: string;
+    section: () => HTMLElement;
+    rowElements: Map<string, HTMLElement>;
+    keyAction?: () => JSX.Element;
   },
 ) {
-  let cancelDrag: (() => void) | undefined;
-  let releaseUsage: (() => void) | undefined;
-  onCleanup(() => {
-    cancelDrag?.();
-    releaseUsage?.();
-  });
+  let rowElement!: HTMLElement;
+  const drag = createPointerDrag();
   const profile = () => props.row.profile;
+  onSettled(() => {
+    const initialProfileId = profile().profileId;
+    const rowElements = props.rowElements;
+    rowElements.set(initialProfileId, rowElement);
+    return () => rowElements.delete(initialProfileId);
+  });
   const group = () => props.row.group;
   const provider = () => group().provider;
   const order = () => group().order;
@@ -526,6 +558,10 @@ function ProviderProfileRow(
     props.canMutate && !group().lock && group().complete && order().length > 1 && index() >= 0;
   const showMoves = () =>
     !group().lock && (group().complete || group().stored) && order().length > 1;
+  const positioned = () => group().explicit && group().complete && index() >= 0;
+  const firstApiKey = () =>
+    profile().type === "api_key" &&
+    props.card.profiles.find((candidate) => candidate.type === "api_key") === profile();
   const logoutProvider = () =>
     props.card.logoutTargets.find((target) => target.profileIds.includes(profile().profileId))
       ?.provider;
@@ -564,77 +600,84 @@ function ProviderProfileRow(
   return (
     <div
       class="model-providers__profile"
+      ref={(element) => (rowElement = element)}
       role="listitem"
       data-profile-id={profile().profileId}
       data-profile-provider={provider()}
     >
-      <span class="model-providers__profile-order">
-        {showMoves() ? (
-          <button
-            type="button"
-            class="model-providers__profile-grip"
-            disabled={!canMove()}
-            aria-label={t("modelProviders.profiles.reorder", {
-              account: props.identity,
-              position: String(index() + 1),
-            })}
-            aria-keyshortcuts={canMove() ? "ArrowUp ArrowDown" : undefined}
-            title={reorderBlocked() || t("modelProviders.profiles.reorderHint")}
-            onPointerDown={(event: PointerEvent) => {
-              cancelDrag?.();
-              cancelDrag = startPointerDrag({
-                event,
-                canMove: canMove(),
-                provider: provider(),
-                move: reorder,
-              });
-            }}
-            onKeyDown={(event: KeyboardEvent) => {
-              if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-                event.preventDefault();
-                move(event, event.key === "ArrowUp" ? -1 : 1);
-              }
-            }}
-          >
-            <Icon name="gripVertical" />
-          </button>
-        ) : (
-          <span aria-hidden="true" />
-        )}
-        {group().explicit && group().complete && index() >= 0 ? (
-          <span
-            class="model-providers__profile-position"
-            aria-label={t("modelProviders.profiles.priority", {
-              position: String(index() + 1),
-            })}
-            title={t("modelProviders.profiles.priority", {
-              position: String(index() + 1),
-            })}
-          >
-            {index() + 1}
-          </span>
-        ) : undefined}
-      </span>
-      <ProfileIdentity profile={profile()} identity={props.identity} showDetails />
-      {provider() === "openai" && profile().type !== "api_key" ? (
-        <openclaw-model-account-usage
-          ref={(element) => (releaseUsage = props.registerAccountUsage?.(element))}
-          prop:client={props.usageClient ?? null}
-          prop:agentId={props.usageAgentId ?? ""}
-          prop:profileId={profile().profileId}
-        />
-      ) : undefined}
+      <Show when={showMoves() || positioned()}>
+        <span class="model-providers__profile-order">
+          {showMoves() ? (
+            <button
+              type="button"
+              class="model-providers__profile-grip"
+              disabled={!canMove()}
+              aria-label={t("modelProviders.profiles.reorder", {
+                account: props.identity,
+                position: String(index() + 1),
+              })}
+              aria-keyshortcuts={canMove() ? "ArrowUp ArrowDown" : undefined}
+              title={reorderBlocked() || t("modelProviders.profiles.reorderHint")}
+              onPointerDown={(event: PointerEvent) => {
+                drag.cancel();
+                startPointerDrag({
+                  event,
+                  canMove: canMove(),
+                  provider: provider(),
+                  row: rowElement,
+                  section: props.section(),
+                  rows: group().profiles.flatMap((entry) => {
+                    const element = props.rowElements.get(entry.profileId);
+                    return element ? [element] : [];
+                  }),
+                  move: reorder,
+                  drag,
+                });
+              }}
+              onKeyDown={(event: KeyboardEvent) => {
+                if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                  event.preventDefault();
+                  move(event, event.key === "ArrowUp" ? -1 : 1);
+                }
+              }}
+            >
+              <Icon name="gripVertical" />
+            </button>
+          ) : undefined}
+          {positioned() ? (
+            <span
+              class="model-providers__profile-position"
+              aria-label={t("modelProviders.profiles.priority", {
+                position: String(index() + 1),
+              })}
+              title={t("modelProviders.profiles.priority", {
+                position: String(index() + 1),
+              })}
+            >
+              {index() + 1}
+            </span>
+          ) : undefined}
+        </span>
+      </Show>
+      <ProfileIdentity profile={profile()} identity={props.identity} />
       <span class="model-providers__profile-status">
-        {profileStatus(profile(), props.card.catalogStatus === "auth-rejected")}
+        {providerStatusCoversAccount(props.card)
+          ? undefined
+          : profileStatus(profile(), props.card.catalogStatus === "auth-rejected", true)}
       </span>
       <span class="model-providers__profile-actions">
+        {firstApiKey() ? props.keyAction?.() : undefined}
         {profile().logoutSupported === true && logoutProvider() ? (
           <button
             type="button"
             class="model-providers__profile-logout"
             aria-label={logoutLabel()}
             title={logoutBlocked()}
-            disabled={!props.canMutate || props.busy[`logout:${props.card.id}`]}
+            disabled={
+              props.logoutSaving?.[props.card.id] ||
+              !props.canMutate ||
+              props.busy[`logout:${props.card.id}`]
+            }
             onClick={() => {
               const targetProvider = logoutProvider();
               if (targetProvider) {
@@ -646,21 +689,17 @@ function ProviderProfileRow(
               }
             }}
           >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
+            <StrokeIcon>
               <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
               <polyline points="16 17 21 12 16 7" />
               <line x1="21" x2="9" y1="12" y2="12" />
-            </svg>
+            </StrokeIcon>
           </button>
         ) : undefined}
       </span>
+      <Show when={provider() === "openai" && profile().type !== "api_key" && props.accountUsage}>
+        {(scope) => <AccountLimits scope={scope()} profileId={profile().profileId} />}
+      </Show>
     </div>
   );
 }

@@ -1,14 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { addAbortListener } from "node:events";
+import { clearCommittedSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
-import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
-import {
-  captureSessionActorStorageOwner,
-  readCapturedSessionActorEntry,
-} from "../config/sessions/session-actor-storage-binding.js";
-import { resolveSessionWorkStartBlock } from "../config/sessions/session-work-start.js";
-import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -17,11 +12,10 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, withoutRuntimeOutput } from "../runtime.js";
-import { isSubagentCoordinationInputProvenance } from "../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import { getCurrentSessionControllerOwner } from "../sessions/session-controller.lifecycle.js";
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { sessionDeliveryChannel, type DeliveryContext } from "../utils/delivery-context.read.js";
@@ -32,13 +26,12 @@ import {
   type AgentCommandAdmissionIngress,
 } from "./agent-command-execution-identity.js";
 import { runLocalAgentCommand } from "./agent-command-local.js";
-import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
-  bindCommandHarnessCompletionAssertion,
-  shouldPersistRestartRecoveryContextClaim,
-} from "./agent-command-restart-recovery.js";
+  beginAgentCommandSessionEffect,
+  repairAgentCommandSessionTranscript,
+} from "./agent-command-session-effect.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import { runAcpAgentCommand } from "./command/acp-execution.js";
-import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
 import { persistAgentSession } from "./command/attempt-execution.shared.js";
 import { finishAgentCommandCleanup } from "./command/cleanup.js";
 import { createCompactionSessionIdReporter } from "./command/compaction-accounting.js";
@@ -51,27 +44,25 @@ import {
   type PreparedAgentCommandRuntimeContext,
 } from "./command/prepare.js";
 import { runEmbeddedAgentAttempt } from "./command/run-embedded-attempt.js";
-import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runtime-loaders.js";
+import { resolveAgentCommandDeps } from "./command/runtime-loaders.js";
 import { prepareCurrentRunDelivery } from "./command/session-helpers.js";
 import {
   prepareCommandSessionDiffBaseline,
-  prepareCommandSessionRecoveryEntry,
   prepareEmbeddedSessionState,
 } from "./command/session-preparation.js";
-import { clearRotatedSessionMetadata } from "./command/session.js";
 import type {
   AgentCommandGatewayIngressOpts,
   AgentCommandIngressOpts,
   AgentCommandOpts,
 } from "./command/types.js";
 import { createInternalSessionEffectsCleanup } from "./internal-session-effects.js";
-import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery/main-session-recovery-store.js";
 import { withAgentPluginRegistry } from "./runtime-plugins.js";
 import { beginForegroundSessionMaintenance } from "./session-maintenance/coordinator.js";
 import {
   scheduleSessionMaintenance,
   type SessionMaintenanceRequest,
 } from "./session-maintenance/run.js";
+import { clearRotatedSessionMetadata } from "./session-reset-metadata.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -83,21 +74,43 @@ async function agentCommandInternal(
   deps?: CliDeps,
   watchSkills = false,
 ) {
-  const sessionSource = prepared.sessionKey
-    ? captureSessionActorStorageOwner(
-        {
-          agentId: prepared.sessionAgentId,
-          storePath: prepared.storePath,
-          sessionKey: prepared.sessionKey,
+  let maintenanceRequest: SessionMaintenanceRequest | undefined;
+  return await withSessionTurn(
+    {
+      sessionKey: prepared.sessionKey,
+      sessionId: prepared.sessionId,
+      agentId: prepared.sessionAgentId,
+      storePath: prepared.storePath,
+      abortSignal: prepared.opts.abortSignal,
+      detached: prepared.opts.sessionEffects === "internal",
+    },
+    async (_operation, abortSignal) => {
+      return await agentCommandInternalOwned(
+        { ...prepared, opts: { ...prepared.opts, abortSignal } },
+        admissionIngress,
+        runtime,
+        deps,
+        watchSkills,
+        (request) => {
+          maintenanceRequest = request;
         },
-        {
-          assertCurrent() {
-            prepared.opts.assertSourceCurrent?.();
-          },
-          authorize() {},
-        },
-      )
-    : undefined;
+      );
+    },
+  ).finally(() => {
+    if (maintenanceRequest) {
+      scheduleSessionMaintenance(maintenanceRequest);
+    }
+  });
+}
+
+async function agentCommandInternalOwned(
+  prepared: Awaited<ReturnType<typeof prepareAgentCommandExecution>>,
+  admissionIngress: AgentCommandAdmissionIngress,
+  runtime: RuntimeEnv = defaultRuntime,
+  deps?: CliDeps,
+  watchSkills = false,
+  retainMaintenanceRequest?: (request: SessionMaintenanceRequest) => void,
+) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
   const isRawModelRun = prepared.opts.modelRun === true || prepared.opts.promptMode === "none";
   const suppressVisibleSessionEffects = prepared.opts.sessionEffects === "internal";
@@ -120,9 +133,17 @@ async function agentCommandInternal(
     prepared.sessionId,
     preparedOpts.onSessionIdChanged,
   );
+  const turnOwner = getCurrentSessionControllerOwner();
+  const recordCompactionSessionId = (sessionId: string) => {
+    turnOwner?.updateSessionId(sessionId);
+    compactionSessionIdReporter.onCompactionCommitted(sessionId);
+  };
   let opts: AgentCommandOpts = {
     ...preparedOpts,
-    onSessionIdChanged: compactionSessionIdReporter.onSessionIdChanged,
+    onSessionIdChanged: (sessionId) => {
+      turnOwner?.updateSessionId(sessionId);
+      compactionSessionIdReporter.onSessionIdChanged(sessionId);
+    },
     abortSignal: lifecycleAbortController.signal,
   };
   const preparedContext = { ...prepared };
@@ -134,6 +155,7 @@ async function agentCommandInternal(
     sessionStore,
     storePath,
     isNewSession,
+    automaticReset,
     sessionAgentId,
     workspaceDir,
     cwd,
@@ -159,11 +181,7 @@ async function agentCommandInternal(
     sessionEffects: opts.sessionEffects,
   });
   let sessionReboundDuringRun = false;
-  let trackedRestartRecoveryDeliveryClaim = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
-  let restartRecoveryTerminalDeliveryEvidence:
-    | RestartRecoveryTerminalDeliveryEvidenceResult
-    | undefined;
   const preparedSessionId = sessionEntry?.sessionId;
   const { track: trackInternalModelRunTarget, cleanup: cleanupInternalModelRunTargets } =
     createInternalSessionEffectsCleanup({
@@ -176,7 +194,7 @@ async function agentCommandInternal(
       },
     });
 
-  let sessionWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+  let sessionWorkAdmission: Awaited<ReturnType<typeof beginAgentCommandSessionEffect>> | undefined;
   let releaseForeground: (() => void) | undefined;
   let maintenanceRequest: SessionMaintenanceRequest | undefined;
   let preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity> | undefined;
@@ -196,97 +214,30 @@ async function agentCommandInternal(
       sessionStateActor.actorType === "human" &&
       !isSubagentLane &&
       !opts.internalEvents?.length &&
-      opts.bootstrapContextRunKind !== "heartbeat" &&
       opts.bootstrapContextRunKind !== "cron"
     ) {
       releaseForeground = await beginForegroundSessionMaintenance(sessionKey ?? sessionId);
     }
     assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-    const sessionStoreRuntime =
-      storePath && sessionKey ? await loadSessionStoreRuntime() : undefined;
-    // Reset marks its mutation before interrupting work. An aborted run must not
-    // queue behind that mutation or reset would wait on the run holding the queue.
-    sessionWorkAdmission = await beginSessionWorkAdmission({
-      agentId: sessionAgentId,
-      scope: storePath ?? `agent:${sessionAgentId}`,
-      isSettling: opts.isTerminalOutcomeObserved,
-      identities: [sessionKey, sessionId],
-      run: {
-        runId,
-        sessionKey,
-        sessionId,
-        agentId: sessionAgentId,
-        controlUiVisible:
-          !suppressVisibleSessionEffects &&
-          !isSubagentCoordinationInputProvenance(opts.inputProvenance),
-      },
-      signal: opts.abortSignal,
-      onInterrupt: (reason) => {
-        if (opts.abortSignal?.aborted) {
-          return undefined;
-        }
-        lifecycleAbortController.abort(reason);
-        return { runId };
-      },
-      assertAllowed: async () => {
-        const scope = { agentId: sessionAgentId, storePath, sessionKey: sessionKey ?? "" };
-        const currentEntry =
-          sessionStoreRuntime && storePath && sessionKey
-            ? sessionSource
-              ? readCapturedSessionActorEntry(sessionSource, normalizeStoreSessionKey(sessionKey))
-              : await sessionStoreRuntime.readSessionEntryInWorker({
-                  ...scope,
-                  readConsistency: "latest",
-                })
-            : sessionEntry;
-        if (!currentEntry && preparedSessionId) {
-          throw createSessionWorkStartChangedError(sessionKey ?? sessionId);
-        }
-        const matchesIntentionalRollover =
-          isNewSession && currentEntry?.sessionId === preparedSessionId;
-        if (currentEntry && currentEntry.sessionId !== sessionId && !matchesIntentionalRollover) {
-          throw createSessionWorkStartChangedError(sessionKey ?? sessionId);
-        }
-        const workStartError = resolveSessionWorkStartBlock(sessionKey ?? sessionId, currentEntry);
-        if (workStartError) {
-          throw workStartError;
-        }
-        operatorSession?.assertAuthorized(currentEntry);
-        sessionEntry = currentEntry;
-        if (sessionStore && sessionKey) {
-          if (currentEntry) {
-            sessionStore[sessionKey] = currentEntry;
-          } else {
-            delete sessionStore[sessionKey];
-          }
-        }
+    sessionWorkAdmission = await beginAgentCommandSessionEffect({
+      prepared,
+      opts,
+      sessionEntry,
+      preparedSessionId,
+      operatorSession,
+      onInterrupt: (reason) => lifecycleAbortController.abort(reason),
+      onValidated: (entry) => {
+        sessionEntry = entry;
       },
     });
     return await sessionWorkAdmission.run(async () => {
-      if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
-        try {
-          await repairPendingAssistantTranscriptTurns({
-            context: {
-              sessionKey,
-              sessionEntry,
-              sessionStore,
-              storePath,
-              sessionAgentId,
-              config: cfg,
-            },
-          });
-          sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
-        } catch (error) {
-          if (!isNewSession) {
-            throw error;
-          }
-          // A reset starts a fresh transcript. Do not let predecessor repair
-          // state leak into it when the old transcript remains unavailable.
-          log.warn(
-            `Could not repair predecessor transcript before session reset for ${sessionKey}: ${diagnosticError(error)}`,
-          );
-        }
-      }
+      sessionEntry = await repairAgentCommandSessionTranscript({
+        prepared,
+        sessionEntry,
+        suppressVisibleSessionEffects,
+        diagnosticError,
+        warn: (message) => log.warn(message),
+      });
       if (opts.deliver === true) {
         const sendPolicy = resolveSendPolicy({
           cfg,
@@ -341,33 +292,38 @@ async function agentCommandInternal(
         }
       };
 
-      if (
-        sessionStore &&
-        sessionKey &&
-        !suppressVisibleSessionEffects &&
-        !isSubagentSessionKey(sessionKey)
-      ) {
+      if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
         const now = Date.now();
         const currentStoreEntry = sessionStore[sessionKey];
         const allowCreate = currentStoreEntry === undefined && sessionEntry === undefined;
+        // A local operator's own root records the direct chat type that
+        // operator-created Gateway roots receive, so memory audience resolves.
         const initialEntry = currentStoreEntry ??
-          sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
-        const isSessionRollover = isNewSession && initialEntry.sessionId !== sessionId;
-        const entry = isSessionRollover ? clearRotatedSessionMetadata(initialEntry) : initialEntry;
-        await prepareDeliveryForRun(entry);
-        const { nextEntry, guardedHarnessCompletion, isCompletionCurrent } =
-          prepareCommandSessionRecoveryEntry({
-            entry,
+          sessionEntry ?? {
             sessionId,
-            sessionKey,
-            runId,
-            agentId: sessionAgentId,
-            lifecycleGeneration,
-            opts,
-            deliveryContext: currentRunDeliveryContext,
-            now,
-            isSessionRollover,
-          });
+            updatedAt: now,
+            sessionStartedAt: now,
+            ...(opts.operatorDirectRoot ? { chatType: "direct" as const } : {}),
+          };
+        const isSessionRollover =
+          isNewSession && (initialEntry.sessionId !== sessionId || automaticReset !== undefined);
+        const entry = isSessionRollover ? clearRotatedSessionMetadata(initialEntry) : initialEntry;
+        if (automaticReset) {
+          entry.lifecycleRevision = randomUUID();
+          entry.agentHarnessId = undefined;
+        }
+        await prepareDeliveryForRun(entry);
+        const nextEntry = {
+          ...entry,
+          sessionId,
+          updatedAt: now,
+          status: undefined,
+          abortedLastRun: false,
+          endedAt: undefined,
+          lastRunError: undefined,
+          sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
+          lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
+        };
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         const persisted = await persistAgentSession({
           agentId: sessionAgentId,
@@ -376,30 +332,43 @@ async function agentCommandInternal(
           storePath,
           initialEntry,
           entry: nextEntry,
+          ...(automaticReset
+            ? {
+                resetBoundary: {
+                  context: "preserve-tail" as const,
+                  reason: automaticReset.reason,
+                  cwd: cwd ?? workspaceDir,
+                },
+              }
+            : {}),
           creation: operatorSession?.creation,
           assertCommitAllowed: operatorSession?.assertCurrent,
           shouldPersist: (current) => {
             operatorSession?.assertAuthorized(current);
             return (
-              isCompletionCurrent(current) &&
-              (isSessionRollover
-                ? current?.sessionId === initialEntry.sessionId
-                : shouldPersistRestartRecoveryContextClaim(current, sessionId, runId, allowCreate))
+              (!automaticReset ||
+                current?.lifecycleRevision === automaticReset.expectedLifecycleRevision) &&
+              (current === undefined
+                ? allowCreate
+                : current.sessionId === (isSessionRollover ? initialEntry.sessionId : sessionId) &&
+                  current.lifecycleRevision === initialEntry.lifecycleRevision)
             );
           },
         });
         // The commit already happened. Cleanup must retain ownership even if
         // cancellation invalidates the task during the awaited session write.
         sessionEntry = persisted;
-        trackedRestartRecoveryDeliveryClaim = persisted?.restartRecoveryDeliveryRunId === runId;
-        const completion = bindCommandHarnessCompletionAssertion({
-          claim: guardedHarnessCompletion,
-          persisted,
-          sessionKey,
-          storePath,
-          opts,
-        });
-        opts = completion.opts;
+        if (automaticReset && persisted) {
+          clearCommittedSessionResetRuntimeState({
+            previousSessionEntry: initialEntry,
+            agentId: sessionAgentId,
+            sessionKey,
+            storePath,
+            signal: opts.abortSignal,
+            onError: (error) =>
+              log.warn(`Failed to clear reset runtime state: ${diagnosticError(error)}`),
+          });
+        }
         if (operatorSession && (!persisted || persisted.sessionId !== sessionId)) {
           throw createSessionWorkStartChangedError(sessionKey);
         }
@@ -454,7 +423,8 @@ async function agentCommandInternal(
             watchSkills,
             isSubagentLaneTurn: isSubagentLane,
             suppressVisibleSessionEffects,
-            verboseDefault: agentCfg?.verboseDefault as VerboseLevel | undefined,
+            verboseDefault: (resolveAgentConfig(cfg, sessionAgentId)?.verboseDefault ??
+              agentCfg?.verboseDefault) as VerboseLevel | undefined,
             sessionStateActor,
             ...(manifestMetadataSnapshot
               ? { pluginMetadataSnapshot: manifestMetadataSnapshot }
@@ -490,14 +460,14 @@ async function agentCommandInternal(
         suppressVisibleSessionEffects,
         onCommittedSessionId: (committedSessionId) => {
           runOwnedSessionId = committedSessionId;
-          compactionSessionIdReporter.onCompactionCommitted(committedSessionId);
+          recordCompactionSessionId(committedSessionId);
         },
       });
       preparedRunAdmission = admission;
       sessionEntry = attemptPrepared.sessionEntry;
       if (attemptPrepared.sessionId !== runOwnedSessionId) {
         runOwnedSessionId = attemptPrepared.sessionId;
-        compactionSessionIdReporter.onCompactionCommitted(runOwnedSessionId);
+        recordCompactionSessionId(runOwnedSessionId);
       }
       const embeddedAttempt = await runEmbeddedAgentAttempt({
         prepared: attemptPrepared,
@@ -511,7 +481,7 @@ async function agentCommandInternal(
           if (fact.kind === "durable") {
             runOwnedSessionId = fact.target.sessionId;
             if (fact.previousSessionId !== undefined) {
-              compactionSessionIdReporter.onCompactionCommitted(fact.target.sessionId);
+              recordCompactionSessionId(fact.target.sessionId);
             }
           }
         },
@@ -528,7 +498,7 @@ async function agentCommandInternal(
       sessionEntry = embeddedAttempt.sessionEntry;
       lifecycleGeneration = embeddedAttempt.lifecycleGeneration;
       const finalized = await finalizeEmbeddedAgentCommand({
-        admittedRecoverySource: preparedRunAdmission.pendingFinalRecoverySource,
+        admittedDeliverySource: preparedRunAdmission.finalDeliverySource,
         prepared: attemptPrepared,
         opts,
         deps: resolvedDeps,
@@ -540,14 +510,12 @@ async function agentCommandInternal(
         preserveUserFacingSessionModelState,
         currentRunDeliveryContext,
         sessionOwnership: { runOwnedSessionId, sessionReboundDuringRun },
-        trackInternalModelRunTarget,
         onSessionOwnershipChanged: (ownership, committedCompactionSessionId) => {
           runOwnedSessionId = ownership.runOwnedSessionId;
           sessionReboundDuringRun = ownership.sessionReboundDuringRun;
-          compactionSessionIdReporter.onCompactionCommitted(committedCompactionSessionId);
-        },
-        onTerminalDeliveryEvidenceChanged: (evidence) => {
-          restartRecoveryTerminalDeliveryEvidence = evidence;
+          if (committedCompactionSessionId) {
+            recordCompactionSessionId(committedCompactionSessionId);
+          }
         },
       });
       sessionEntry = finalized.sessionEntry;
@@ -560,17 +528,12 @@ async function agentCommandInternal(
     commandError = error;
     throw error;
   } finally {
+    if (maintenanceRequest) {
+      retainMaintenanceRequest?.(maintenanceRequest);
+    }
     await finishAgentCommandCleanup({
       prepared,
-      sessionEntry,
-      runOwnedSessionId,
-      sessionReboundDuringRun,
-      trackedRestartRecoveryDeliveryClaim,
-      terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
-      terminalEvent: {
-        data: { phase: commandError === undefined ? "end" : "error", error: commandError },
-      },
-      abortSignal: opts.abortSignal,
+      terminalError: commandError,
       lifecycleGeneration,
       beforeTerminalDelivery: opts.beforeTerminalDelivery,
       reportCommitted: compactionSessionIdReporter.reportCommitted,
@@ -579,9 +542,6 @@ async function agentCommandInternal(
       cleanupInternalModelRunTargets,
       releaseForeground,
     });
-    if (maintenanceRequest) {
-      scheduleSessionMaintenance(maintenanceRequest);
-    }
   }
 }
 
@@ -612,11 +572,10 @@ export async function agentCommand(
 
 export async function agentCommandFromSystem(
   opts: AgentCommandOpts,
-  admission: { boundary: string },
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  const ingress = executionIdentity.systemIngress(admission.boundary);
+  const ingress = executionIdentity.systemIngress("gateway.boot");
   return await agentCommandWithAdmissionIngress(opts, ingress, runtime, deps);
 }
 
@@ -624,9 +583,6 @@ async function agentCommandFromIngressInternal(
   opts: AgentCommandGatewayIngressOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
-  recovery?: {
-    restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
-  },
   runtimeContext?: PreparedAgentCommandRuntimeContext,
 ) {
   if (typeof opts.allowModelOverride !== "boolean") {
@@ -638,42 +594,36 @@ async function agentCommandFromIngressInternal(
   const generation = runtimeContext?.pluginGeneration;
   const executeIngress = () =>
     withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
-      let preparedAgentDir: string | undefined;
-      const result = await runWithAgentCommandRecoveryOwner({
-        lifecycleGeneration,
-        mode: "claim",
-        opts: {
-          ...opts,
-          lifecycleGeneration,
-          senderIsOwner: opts.senderIsOwner === true,
-        },
-        prepare: async (preparedOpts) =>
-          await prepareAgentCommandExecution(preparedOpts, ingressRuntime, runtimeContext),
-        restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
-        run: async (prepared) => {
-          preparedAgentDir = prepared.agentDir;
-          const run = async () =>
-            await agentCommandInternal(
-              prepared,
-              { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
-              ingressRuntime,
-              deps,
-              true,
-            );
-          return generation
-            ? await run()
-            : await withAgentPluginRegistry({
-                config: prepared.cfg,
-                workspaceDir: prepared.workspaceDir,
-                run,
-              });
-        },
-      });
+      const prepared = await prepareAgentCommandExecution(
+        { ...opts, lifecycleGeneration, senderIsOwner: opts.senderIsOwner === true },
+        ingressRuntime,
+        runtimeContext,
+      );
+      try {
+        const preparedAgentDir = prepared.agentDir;
+        const run = async () =>
+          await agentCommandInternal(
+            prepared,
+            { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
+            ingressRuntime,
+            deps,
+            true,
+          );
+        const result = generation
+          ? await run()
+          : await withAgentPluginRegistry({
+              config: prepared.cfg,
+              workspaceDir: prepared.workspaceDir,
+              run,
+            });
 
-      if (result && preparedAgentDir) {
-        emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
+        if (result && preparedAgentDir) {
+          emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
+        }
+        return result;
+      } finally {
+        await prepared.runLease?.release();
       }
-      return result;
     });
   return generation && runtimeContext
     ? await withPluginRuntimeGenerationScope(
@@ -692,7 +642,7 @@ export async function agentCommandFromIngress(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  // Enforce the private recovery boundary for JavaScript Plugin SDK callers.
+  // Public callers cannot supply host-issued authority or execution identity.
   return await agentCommandFromIngressInternal(
     sanitizePublicAgentCommandIngressOpts(opts),
     runtime,
@@ -700,15 +650,12 @@ export async function agentCommandFromIngress(
   );
 }
 
-/** Internal Gateway entrypoint that restores a rejected restart-recovery admission. */
+/** Runs an ingress turn in the prepared Gateway runtime. */
 export async function agentCommandFromGatewayIngress(
   opts: AgentCommandGatewayIngressOpts,
   runtime: RuntimeEnv,
   deps: CliDeps | undefined,
-  recovery: {
-    restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
-  },
   runtimeContext?: PreparedAgentCommandRuntimeContext,
 ) {
-  return await agentCommandFromIngressInternal(opts, runtime, deps, recovery, runtimeContext);
+  return await agentCommandFromIngressInternal(opts, runtime, deps, runtimeContext);
 }

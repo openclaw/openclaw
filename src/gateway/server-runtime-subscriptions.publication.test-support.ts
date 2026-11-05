@@ -25,14 +25,19 @@ import {
   getActiveGatewayRootWorkCount,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { markReplyOperationExecutionStarted } from "../sessions/session-controller.state.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { registerCommittedTranscriptPublicationTests } from "./server-runtime-subscriptions.commit-publication.test-support.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { registerTerminalReservationPublicationTests } from "./server-runtime-subscriptions.terminal-reservation.test-support.js";
 import type { createSubscriptionTestFixture } from "./server-runtime-subscriptions.test-support.js";
 import { registerSubscriptionChatRun } from "./server-runtime-subscriptions.test-support.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import type { readSessionMessageByIdAsync } from "./session-transcript-readers.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 export function registerSessionPublicationTests(fixture: {
   createParams: ReturnType<typeof createSubscriptionTestFixture>["createParams"];
@@ -49,6 +54,64 @@ export function registerSessionPublicationTests(fixture: {
   warn: ReturnType<typeof createSubscriptionTestFixture>["warn"];
 }): void {
   const { createParams, start, transcriptBroadcastMocks, warn } = fixture;
+  it("publishes running at controller execution start without waiting for transcript activity", async () => {
+    const key = "agent:main:starting-turn";
+    const sessionId = "starting-turn-session";
+    const storePath = "/synthetic/starting-turn/sessions.db";
+    const projection = createSessionRowProjectionFixture({
+      cfg: { agents: { entries: { main: {} } } },
+      store: { [key]: { sessionId, updatedAt: 1 } },
+      storePath,
+    });
+    const params = createParams();
+    params.sessionEventSubscribers.subscribe("conn-start");
+    const registration = registerSubscriptionChatRun(params, {
+      runId: "starting-turn-run",
+      sessionKey: key,
+      sessionId,
+      agentId: "main",
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey: key,
+        incarnation: sessionId,
+        agentId: "main",
+      }),
+    });
+    const subscriptions = start({ ...params, getSessionRowProjection: () => projection });
+    try {
+      await claimRpcSourceForTest(registration.entry, { executionStarted: false });
+      expect(params.broadcastToConnIds).not.toHaveBeenCalled();
+      const operation = registration.entry.input.claim?.operation;
+      if (!operation) {
+        throw new Error("Expected the claimed controller turn");
+      }
+      markReplyOperationExecutionStarted(operation);
+      // Backend attachment and execution notification can observe the same boundary.
+      markReplyOperationExecutionStarted(operation);
+      await subscriptions.agentUnsub();
+      expect(params.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "sessions.changed",
+        expect.objectContaining({
+          sessionKey: key,
+          reason: "agent.run.started",
+          session: expect.objectContaining({
+            key,
+            sessionId,
+            status: "running",
+            hasActiveRun: true,
+          }),
+        }),
+        new Set(["conn-start"]),
+        expect.objectContaining({ dropIfSlow: true }),
+      );
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      await subscriptions.agentUnsub();
+      subscriptions.transcriptUnsub();
+      subscriptions.lifecycleUnsub();
+      projection.dispose();
+    }
+  });
   it("joins committed lifecycle publication before subscription shutdown", async ({ signal }) => {
     vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
     const key = "agent:main:finished-child";
@@ -539,82 +602,7 @@ export function registerSessionPublicationTests(fixture: {
       }
     },
   );
-  it("publishes committed transcripts after the producer drains and before Gateway shutdown", async ({
-    signal,
-  }) => {
-    transcriptBroadcastMocks.useActualHandler = true;
-    const readEntered = createDeferred();
-    const releaseRead = createDeferred();
-    const published = createDeferred();
-    const producer = new AsyncWorkScope();
-    const storedMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "committed completion" }],
-      __openclaw: { transcriptPosition: { source: "committed-generation", rawSeq: 1 } },
-    };
-    transcriptBroadcastMocks.readMessageById.mockImplementationOnce(async () => {
-      const readSignal = getAsyncWorkSignal();
-      readEntered.resolve();
-      await releaseRead.promise;
-      readSignal?.throwIfAborted();
-      return { found: true, oversized: false, seq: 1, message: storedMessage };
-    });
-    const params = createParams();
-    params.sessionEventSubscribers.subscribe("conn-transcript");
-    params.broadcastToConnIds = vi.fn(() => published.resolve());
-    const unsubs = start(params);
-    const admission = tryBeginGatewayRootWorkAdmission("test:committed-transcript-publisher");
-    if (!admission) {
-      throw new Error("Transcript publisher admission was closed");
-    }
-    let shutdown: Promise<void> | undefined;
-    try {
-      await admission.run(async () =>
-        producer.run(() =>
-          emitSessionTranscriptUpdate({
-            messageId: "committed-message",
-            message: storedMessage,
-            target: {
-              agentId: "main",
-              sessionId: "committed-session",
-              sessionKey: "agent:main:main",
-              storePath: "/tmp/openclaw-committed-transcript.sqlite",
-            },
-          }),
-        ),
-      );
-      await withinTest(readEntered.promise, signal);
-      admission.release();
-      await producer.drain();
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
-      shutdown = unsubs.agentUnsub();
-      const publicationBeforeShutdown = awaitGateBeforeSettlement(
-        published.promise,
-        shutdown,
-        "Gateway shutdown finished before the committed transcript was published",
-      );
-      releaseRead.resolve();
-      await withinTest(publicationBeforeShutdown, signal);
-      await shutdown;
-      expect(params.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-        "session.message",
-        expect.objectContaining({
-          sessionKey: "agent:main:main",
-          messageId: "committed-message",
-          message: expect.objectContaining({ content: storedMessage.content }),
-        }),
-        new Set(["conn-transcript"]),
-        undefined,
-      );
-      expect(warn).not.toHaveBeenCalled();
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    } finally {
-      releaseRead.resolve();
-      admission.release();
-      await producer.drain();
-      await shutdown;
-    }
-  });
+  registerCommittedTranscriptPublicationTests(fixture);
 
   it("logs real asynchronous transcript failures and recovers the broadcast queue", async ({
     signal,
@@ -693,7 +681,7 @@ export function registerSessionPublicationTests(fixture: {
           }),
         }),
         new Set(["conn-transcript"]),
-        undefined,
+        { sessionEventSubscriptionKeys: ["agent:main:main"] },
       );
       expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledTimes(2);
       expect(warn).toHaveBeenCalledOnce();
@@ -706,4 +694,6 @@ export function registerSessionPublicationTests(fixture: {
       await (shutdown ?? unsubs.agentUnsub());
     }
   });
+
+  registerTerminalReservationPublicationTests(fixture);
 }

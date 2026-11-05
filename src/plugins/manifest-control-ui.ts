@@ -19,6 +19,7 @@ export function controlUiSource(packageManifest: Record<string, unknown>): strin
 
 export function normalizeManifestControlUi(
   value: unknown,
+  channels: unknown = [],
 ): Result<PluginManifestControlUi | undefined, string> {
   if (value === undefined) {
     return ok(undefined);
@@ -26,7 +27,7 @@ export function normalizeManifestControlUi(
   if (
     !isRecord(value) ||
     Object.keys(value).some(
-      (key) => !["entry", "styles", "activation", "settingsViews"].includes(key),
+      (key) => !["entry", "styles", "panelIcon", "activation", "settingsViews"].includes(key),
     )
   ) {
     return err("controlUi contains an unknown field");
@@ -34,26 +35,46 @@ export function normalizeManifestControlUi(
   if (value.activation !== undefined && value.activation !== "settings-only") {
     return err("controlUi.activation must be settings-only when specified");
   }
+  const ownedChannels = new Set(Array.isArray(channels) ? channels : []);
   const settingsViews: ControlUiSettingsPlacement[] = [];
+  const placements = new Set<string>();
   if (value.settingsViews !== undefined) {
     if (
       !Array.isArray(value.settingsViews) ||
       value.settingsViews.length === 0 ||
-      value.settingsViews.length > 2
+      value.settingsViews.length > 2 + ownedChannels.size
     ) {
-      return err("controlUi.settingsViews must declare unique Memory Settings placements");
+      return err("controlUi.settingsViews must declare unique Settings placements");
     }
     for (const placement of value.settingsViews) {
-      if (
-        !isRecord(placement) ||
-        Object.keys(placement).length !== 2 ||
-        placement.section !== "memory" ||
-        (placement.panel !== "overview" && placement.panel !== "memories") ||
-        settingsViews.some((previous) => previous.panel === placement.panel)
-      ) {
-        return err("controlUi.settingsViews must declare unique Memory Settings placements");
+      if (!isRecord(placement)) {
+        return err("invalid Control UI Settings placement");
       }
-      settingsViews.push({ section: "memory", panel: placement.panel });
+      let normalized: ControlUiSettingsPlacement;
+      if (
+        Object.keys(placement).length === 2 &&
+        placement.section === "memory" &&
+        (placement.panel === "overview" || placement.panel === "memories")
+      ) {
+        normalized = { section: "memory", panel: placement.panel };
+      } else if (
+        Object.keys(placement).length === 3 &&
+        placement.section === "channels" &&
+        placement.panel === "detail" &&
+        typeof placement.channelId === "string" &&
+        /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(placement.channelId) &&
+        ownedChannels.has(placement.channelId)
+      ) {
+        normalized = { section: "channels", panel: "detail", channelId: placement.channelId };
+      } else {
+        return err("Control UI Settings placement must name Memory or an owned channel detail");
+      }
+      const key = JSON.stringify(normalized);
+      if (placements.has(key)) {
+        return err("controlUi.settingsViews must declare unique Settings placements");
+      }
+      placements.add(key);
+      settingsViews.push(normalized);
     }
   }
   if (value.activation === "settings-only" && !value.settingsViews) {
@@ -69,6 +90,16 @@ export function normalizeManifestControlUi(
     return err("controlUi.styles must be an array of at most 16 stylesheets");
   }
   const assetPrefix = entry.slice(0, entry.lastIndexOf("/") + 1);
+  const panelIcon =
+    typeof value.panelIcon === "string" ? value.panelIcon.replace(/^\.\//u, "") : undefined;
+  if (
+    value.panelIcon !== undefined &&
+    (!panelIcon ||
+      panelIcon.length > 512 ||
+      !/^(?:[\w-][\w.-]*\/)*[\w-][\w.-]*\.svg$/u.test(panelIcon))
+  ) {
+    return err("controlUi.panelIcon must be a plugin-relative SVG path");
+  }
   const styles: string[] = [];
   for (const rawStyle of value.styles ?? []) {
     const style = typeof rawStyle === "string" ? rawStyle.replace(/^\.\//u, "") : "";
@@ -85,6 +116,7 @@ export function normalizeManifestControlUi(
   }
   return ok({
     entry,
+    ...(panelIcon ? { panelIcon } : {}),
     ...(styles.length > 0 ? { styles } : {}),
     ...(value.activation === "settings-only" ? { activation: value.activation } : {}),
     ...(settingsViews.length > 0 ? { settingsViews } : {}),

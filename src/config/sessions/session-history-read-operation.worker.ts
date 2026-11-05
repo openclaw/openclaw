@@ -2,47 +2,9 @@ import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identi
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
+import type { SessionHistoryReadOperationRequest } from "./session-history-read-operation-kind.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import type {
-  SessionTranscriptWorkerInput,
-  SessionTranscriptWorkerValues,
-} from "./session-transcript-worker.types.js";
-
-const historyReadKinds = [
-  "trajectory-events",
-  "trajectory-retention",
-  "board-snapshot",
-  "board-widget-document",
-  "transcript-match",
-  "branch-summaries",
-  "session-title-fields",
-  "session-preview",
-  "model-context",
-  "context-messages",
-  "transcript-watermark",
-  "transcript-stats",
-  "transcript-message-presence",
-  "transcript-anchors",
-  "transcript-raw-delta",
-  "transcript-visible-delta",
-  "transcript-latest-assistant",
-  "session-memory-capture",
-  "session-pending-input-receipts",
-  "session-pending-input-source",
-  "session-harness-completion-source",
-] as const;
-const historyReadKindSet: ReadonlySet<string> = new Set(historyReadKinds);
-
-export type SessionHistoryReadOperationRequest = Extract<
-  SessionTranscriptWorkerInput,
-  { kind: (typeof historyReadKinds)[number] }
->;
-
-export function isSessionHistoryReadOperation(
-  request: SessionTranscriptWorkerInput,
-): request is SessionHistoryReadOperationRequest {
-  return historyReadKindSet.has(request.kind);
-}
+import type { SessionTranscriptWorkerValues } from "./session-transcript-worker.types.js";
 
 /** Load dependencies before the owner enters its synchronous, admitted read scope. */
 export function prepareSessionHistoryReadOperation<
@@ -124,11 +86,11 @@ async function prepareHistoryRead(
         }));
     }
     case "transcript-latest-assistant": {
-      const { readLatestAssistantTextFromDatabase } =
-        await import("./session-accessor.sqlite-transcript-metadata-read.js");
+      const { readLatestSessionTranscriptAssistantInWorker } =
+        await import("./session-cold-storage-read.worker.js");
       const read = await prepareDatabaseRead(
         { ...request.database, env: request.scope.env },
-        (database) => readLatestAssistantTextFromDatabase(database, request.resolved),
+        (database) => readLatestSessionTranscriptAssistantInWorker(database, request.resolved),
         () => undefined,
         { snapshot: true, admission: request.admission },
       );
@@ -161,7 +123,7 @@ async function prepareHistoryRead(
     case "board-widget-document": {
       const [
         { withScopedOpenClawAgentDatabaseReadOnly },
-        { runSqliteDeferredTransactionSync },
+        { runSqliteReadSnapshotSync },
         { readBoardSnapshotWithHtmlViewMetadata, readBoardWidgetDocument },
       ] = await Promise.all([
         import("../../state/openclaw-agent-db-readonly-scope.js"),
@@ -171,7 +133,7 @@ async function prepareHistoryRead(
       return () => {
         const read = withScopedOpenClawAgentDatabaseReadOnly(
           (database) =>
-            runSqliteDeferredTransactionSync(database.db, () =>
+            runSqliteReadSnapshotSync(database.db, () =>
               request.kind === "board-snapshot"
                 ? {
                     kind: request.kind,
@@ -220,24 +182,6 @@ async function prepareHistoryRead(
         return { kind: request.kind, facts: read() };
       };
     }
-    case "session-harness-completion-source": {
-      const [{ assertCapturedSessionEntryReadSource }, { readHarnessCompletionSourceInDatabase }] =
-        await Promise.all([
-          import("./session-entry-read-source.js"),
-          import("./session-harness-completion-source.kernel.js"),
-        ]);
-      const read = await prepareDatabaseRead(
-        { ...request.database, env: request.env },
-        (database) => {
-          assertCapturedSessionEntryReadSource(request.source, database);
-          return runWithSessionTranscriptReadFence(request.admission, () =>
-            readHarnessCompletionSourceInDatabase(database, request.claim, request.mode),
-          );
-        },
-        () => ({ validInput: false }),
-      );
-      return () => ({ kind: request.kind, snapshot: read() });
-    }
     case "session-pending-input-source": {
       const [{ assertCapturedSessionEntryReadSource }, { readPendingInputSourceInDatabase }] =
         await Promise.all([
@@ -255,20 +199,20 @@ async function prepareHistoryRead(
       return () => ({ kind: request.kind, snapshot: read() });
     }
     case "transcript-match": {
-      const [{ findTranscriptEventMatchingInDatabase }, { withOpenClawAgentDatabaseReadOnly }] =
+      const [{ findSessionTranscriptEventInWorker }, { withOpenClawAgentDatabaseReadOnly }] =
         await Promise.all([
-          import("./session-transcript-match.js"),
+          import("./session-cold-storage-read.worker.js"),
           import("../../state/openclaw-agent-db-readonly.js"),
         ]);
       return () => {
         if (retainedDatabase) {
           return {
             kind: request.kind,
-            result: findTranscriptEventMatchingInDatabase(retainedDatabase, request.request),
+            result: findSessionTranscriptEventInWorker(retainedDatabase, request.request),
           };
         }
         const opened = withOpenClawAgentDatabaseReadOnly(
-          (database) => findTranscriptEventMatchingInDatabase(database, request.request),
+          (database) => findSessionTranscriptEventInWorker(database, request.request),
           {
             ...request.database,
             env: cloneEnvWithPlatformSemantics(request.request.target.env ?? process.env),
@@ -306,7 +250,6 @@ async function prepareHistoryRead(
           fields: readSessionTitleFieldsFromTranscript(request.scope, {
             includeInterSession: request.includeInterSession,
             skillCommands: request.skillCommands,
-            readOnly: true,
           }),
         }));
     }
@@ -381,14 +324,23 @@ async function prepareHistoryRead(
       return () => ({ kind: request.kind, stats: read() });
     }
     case "transcript-message-presence": {
-      const { hasSessionTranscriptMessageInDatabase } =
-        await import("./session-accessor.sqlite-transcript-metadata-read.js");
+      const { readSessionTranscriptMessagePresenceInWorker } =
+        await import("./session-cold-storage-read.worker.js");
       const read = await prepareDatabaseRead(
         { ...request.database, env: request.scope.env },
-        (database) => hasSessionTranscriptMessageInDatabase(database, request.scope.sessionId),
+        (database) =>
+          readSessionTranscriptMessagePresenceInWorker(database, request.scope.sessionId),
         () => false,
       );
       return () => ({ kind: request.kind, present: read() });
+    }
+    case "session-pending-input-orphans": {
+      const { readOrphanedSessionPendingInputTargetsInWorker } =
+        await import("./session-pending-input-withdrawal.worker.js");
+      return () => ({
+        kind: request.kind,
+        targets: readOrphanedSessionPendingInputTargetsInWorker(request),
+      });
     }
     case "session-pending-input-receipts": {
       const { listSessionPendingInputReceipts } =

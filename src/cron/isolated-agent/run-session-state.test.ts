@@ -19,17 +19,9 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-
-const resetBoundaryMocks = vi.hoisted(() => ({
-  clearBootstrap: vi.fn(),
-}));
-
-vi.mock("../../agents/bootstrap-cache.js", () => ({
-  clearBootstrapSnapshotOnSessionBoundary: resetBoundaryMocks.clearBootstrap,
-}));
+import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import {
   adoptCronRunSessionMetadata,
-  CronSessionLifecycleClaimError,
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
   syncCronSessionLiveSelection,
@@ -137,11 +129,34 @@ describe("syncCronSessionLiveSelection", () => {
 });
 
 describe("createPersistCronSessionEntry", () => {
+  it("replaces intermediate request occupancy only when final accounting owns the write", async () => {
+    const sessionKey = "agent:main:cron:context";
+    const initial = makeSessionEntry({ totalTokens: 436_631, totalTokensFresh: true });
+    const cronSession = makeCronSession({ ...initial });
+    cronSession.initialSessionEntry = initial;
+    const rows = { [sessionKey]: { ...initial, totalTokens: 810_448 } };
+    const persist = createPersistCronSessionEntry({
+      cronSession,
+      agentSessionKey: sessionKey,
+      workspaceDir: "/tmp/workspace",
+      persistSessionEntry: makeGuardedPersistSessionEntry(rows),
+    });
+    await persist();
+    expect(rows[sessionKey]?.totalTokens).toBe(810_448);
+    rows[sessionKey]!.totalTokens = 900_000;
+    cronSession.sessionEntry.totalTokens = 20_015;
+    cronSession.contextTotalsAccounted = true;
+    await persist();
+    expect(rows[sessionKey]?.totalTokens).toBe(20_015);
+    rows[sessionKey]!.totalTokens = 30_000;
+    await persist();
+    expect(rows[sessionKey]?.totalTokens).toBe(30_000);
+  });
+
   // Regression (review P1): a stale cron reset landing on an empty prior
   // transcript used to create the header from process.cwd(), so the window
   // persisted the gateway process directory as its workspace.
   it("records the cron workspace in the header when a stale reset lands on an empty window", async () => {
-    resetBoundaryMocks.clearBootstrap.mockClear();
     const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.json");
     const agentSessionKey = "agent:main:cron:stale-empty-window";
@@ -221,10 +236,6 @@ describe("createPersistCronSessionEntry", () => {
     }
     expect(cronSession.store[agentSessionKey]?.sessionId).toBe("cron-next-window");
     expect(cronSession.resetBoundaryPending).toBeUndefined();
-    expect(resetBoundaryMocks.clearBootstrap).toHaveBeenCalledWith({
-      boundaryAppended: true,
-      sessionKey: agentSessionKey,
-    });
   });
 
   it("keeps a pending reset boundary when the guarded row commit fails", async () => {
@@ -269,12 +280,13 @@ describe("createPersistCronSessionEntry", () => {
       ),
       lifecycleRevision,
     } as MutableCronSession;
+    const toolsAllow = ["image_generate", "exec", "write"];
     const continuation = createCronRunContinuationSession({
       cronSession,
       runSessionKey,
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
       thinkingLevel: "high",
-      toolsAllow: ["image_generate", "exec", "write"],
+      toolsAllow,
       toolsAllowIsDefault: true,
       scheduledToolPolicy: {
         version: 1,
@@ -291,8 +303,15 @@ describe("createPersistCronSessionEntry", () => {
       },
     });
 
+    toolsAllow.push("browser");
     await continuation.initialize();
-    await continuation.sync();
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      await continuation.sync();
+      expect(clone).toHaveBeenCalledExactlyOnceWith(cronSession.sessionEntry);
+    } finally {
+      clone.mockRestore();
+    }
     let persisted = read();
     expect(persisted?.previousSessionId).toBeUndefined();
     expect(persisted?.forkSource).toBeUndefined();

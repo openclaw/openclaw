@@ -14,6 +14,10 @@ import { vi } from "vitest";
 import { createQaBusState } from "../src/bus-state.js";
 import { createQaChannelTransport } from "../src/qa-channel-transport.js";
 import { runRuntimeToolFixture } from "../src/runtime-tool-fixture.js";
+import * as suiteRuntimeAgentMedia from "../src/suite-runtime-agent-media.js";
+import * as suiteRuntimeAgentProcess from "../src/suite-runtime-agent-process.js";
+import * as suiteRuntimeAgentSession from "../src/suite-runtime-agent-session.js";
+import * as suiteRuntimeGateway from "../src/suite-runtime-gateway.js";
 import type { QaSuiteRuntimeEnv } from "../src/suite-runtime-types.js";
 
 let suiteRoot: string | undefined;
@@ -50,7 +54,37 @@ async function makeEnv(overrides: Partial<QaSuiteRuntimeEnv> = {}): Promise<QaSu
 }
 
 type RuntimeToolFixtureConfig = Parameters<typeof runRuntimeToolFixture>[1];
-type RuntimeToolFixtureDeps = Parameters<typeof runRuntimeToolFixture>[2];
+type RuntimeToolFixtureDeps = {
+  createSession: typeof suiteRuntimeAgentSession.createSession;
+  readEffectiveTools: typeof suiteRuntimeAgentSession.readEffectiveTools;
+  runAgentPrompt: (
+    ...args: Parameters<typeof suiteRuntimeAgentProcess.runAgentPrompt>
+  ) => Promise<unknown>;
+  fetchJson: (url: string) => Promise<unknown>;
+  ensureImageGenerationConfigured: (env: QaSuiteRuntimeEnv) => Promise<unknown>;
+};
+
+function runRuntimeToolFixtureWithDeps(
+  env: QaSuiteRuntimeEnv,
+  config: RuntimeToolFixtureConfig,
+  deps: RuntimeToolFixtureDeps,
+) {
+  vi.spyOn(suiteRuntimeAgentSession, "createSession").mockImplementation(deps.createSession);
+  vi.spyOn(suiteRuntimeAgentSession, "readEffectiveTools").mockImplementation(
+    deps.readEffectiveTools,
+  );
+  vi.spyOn(suiteRuntimeAgentProcess, "runAgentPrompt").mockImplementation(async (...args) => {
+    await deps.runAgentPrompt(...args);
+    return { started: {}, waited: {} };
+  });
+  vi.spyOn(suiteRuntimeGateway, "fetchJson").mockImplementation(deps.fetchJson);
+  vi.spyOn(suiteRuntimeAgentMedia, "ensureImageGenerationConfigured").mockImplementation(
+    async (envArg) => {
+      await deps.ensureImageGenerationConfigured(envArg);
+    },
+  );
+  return runRuntimeToolFixture(env, config);
+}
 
 function transcriptToolCall(
   toolName: string,
@@ -95,7 +129,7 @@ function runLiveRuntimeToolFixture(
   } = {},
 ) {
   const toolName = params.toolName ?? "read";
-  return runRuntimeToolFixture(
+  return runRuntimeToolFixtureWithDeps(
     env,
     params.config ?? runtimeToolFixtureConfig(toolName),
     runtimeToolFixtureDeps({
@@ -206,7 +240,7 @@ async function runMockRuntimeToolFixture(params: {
   if (params.forceCodex) {
     env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
   }
-  return runRuntimeToolFixture(
+  return runRuntimeToolFixtureWithDeps(
     env,
     runtimeToolFixtureConfig(toolName, {
       promptSnippet: `target=${toolName}`,
@@ -353,6 +387,7 @@ export {
   mockToolRequests,
   runLiveRuntimeToolFixture,
   runMockRuntimeToolFixture,
+  runRuntimeToolFixtureWithDeps,
   runtimePatchAddInput,
   runtimePatchUpdateInput,
   runtimeToolFixtureConfig,

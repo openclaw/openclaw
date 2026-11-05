@@ -1,7 +1,7 @@
 import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { racePromiseWithAbortSignal, raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
@@ -39,7 +39,7 @@ export function createChromeMcpSession(
       name: "openclaw-browser",
       version: "0.0.0",
     },
-    {},
+    { versionNegotiation: { mode: "legacy" } },
   );
   // Capture before connect starts the subprocess so failed handshakes retain stderr.
   const getStderr = drainStderr(transport);
@@ -66,7 +66,9 @@ export function createChromeMcpSession(
       await waitForChromeMcpOperation(
         (async () => {
           await client.connect(transport);
-          const tools = await client.listTools();
+          // V1 reads one page; v2's listTools() would aggregate every cursor.
+          const tools = await client.request({ method: "tools/list" });
+          session.tools = tools.tools;
           if (!tools.tools.some((tool) => tool.name === "list_pages")) {
             throw new Error("Chrome MCP server did not expose the expected navigation tools.");
           }

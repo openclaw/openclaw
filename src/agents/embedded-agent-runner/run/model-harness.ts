@@ -17,11 +17,12 @@ import {
   resolveAliasedParamValue,
   resolveModelExtraParamSources,
 } from "../../model-extra-params.js";
-import { resolveContextConfigProviderForRuntime } from "../../openai-routing.js";
 import { resolveProviderRequestCapabilities } from "../../provider-attribution.js";
 import { getModelProviderRequestRouteFacts } from "../../provider-request-config.js";
-import type { PreparedAgentRuntimeAuthAttempt } from "../../runtime-plan/prepare-auth.js";
-import type { AgentRuntimeAuthPlan } from "../../runtime-plan/types.js";
+import type {
+  PreparedAgentRuntimeAuthAttempt,
+  AgentRuntimeAuthPlan,
+} from "../../runtime-plan/types.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { resolveEmbeddedRuntimeModelPolicy } from "./setup.js";
 
@@ -41,15 +42,10 @@ export function resolveEmbeddedRunEffectiveModel(
     nativeModelOwned: boolean;
   },
 ) {
-  const contextConfigProvider = resolveContextConfigProviderForRuntime({
-    provider: params.modelConfigProvider,
-    runtimeId: params.agentHarnessId,
-    config: params.runParams.config,
-  });
   const { defaultParams, modelParams, agentModelParams, agentParams } =
     resolveModelExtraParamSources({
       config: params.runParams.config,
-      provider: contextConfigProvider,
+      provider: params.modelConfigProvider,
       modelId: params.modelId,
       agentId: params.runParams.agentId,
     });
@@ -100,13 +96,13 @@ export function resolveEmbeddedRunEffectiveModel(
       ? undefined
       : resolveAuthoredModelContextTokens({
           cfg: params.runParams.config,
-          provider: contextConfigProvider,
+          provider: params.modelConfigProvider,
           model: params.modelId,
         });
   const resolved = resolveEmbeddedRuntimeModelPolicy({
     cfg: params.runParams.config,
     provider: params.provider,
-    contextConfigProvider,
+    contextConfigProvider: params.modelConfigProvider,
     modelId: params.modelId,
     runtimeModel: params.runtimeModel,
     nativeModelOwned: params.nativeModelOwned,

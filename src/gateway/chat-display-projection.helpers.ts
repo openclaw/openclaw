@@ -4,9 +4,17 @@ import {
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { appendReplyMediaFailures, type ReplyMediaFailure } from "../auto-reply/reply-payload.js";
+import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
+import {
+  extractAssistantPhaseText,
+  isAssistantTextContentBlockType as isAssistantTextContentType,
+} from "../shared/chat-message-content.js";
+
+export { isAssistantTextContentType };
 
 export type RoleContentMessage = {
   role: string;
@@ -14,6 +22,41 @@ export type RoleContentMessage = {
 };
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
+
+export function projectReplyMediaFailureText(
+  message: Record<string, unknown>,
+): Record<string, unknown> {
+  if (message.role !== "assistant") {
+    return message;
+  }
+  const failures: ReplyMediaFailure[] = [];
+  for (const value of Array.isArray(message.content) ? message.content : []) {
+    const block = readRecord(value);
+    const attachment =
+      block?.type === "attachment_error" ? readRecord(block.attachment) : undefined;
+    const kind = attachment?.kind;
+    if (
+      attachment?.code === "file-too-large" &&
+      (kind === "image" || kind === "audio" || kind === "video" || kind === "document")
+    ) {
+      failures.push({
+        code: "file-too-large",
+        kind,
+        label: `${kind === "document" ? "file" : kind} attachment`,
+      });
+    }
+  }
+  if (failures.length === 0) {
+    return message;
+  }
+  // Older text clients ignore new attachment codes. Rich clients prefer content;
+  // retain their card and put the warning first so text bounds keep recovery guidance.
+  const caption = extractAssistantPhaseText({ content: message.content, phase: message.phase });
+  return {
+    ...message,
+    text: [appendReplyMediaFailures(undefined, failures), caption].filter(Boolean).join("\n"),
+  };
+}
 
 /** Removes private yield inputs from a display copy without changing the source argument objects. */
 export function stripPrivateToolCallContextForDisplay(entry: Record<string, unknown>): boolean {
@@ -84,7 +127,6 @@ export function stripAssistantMediaDirectivesForDisplay(
     .join("\n");
 }
 
-/** Resolve the text cap used when projecting chat history for display. */
 export function resolveEffectiveChatHistoryMaxChars(maxChars?: number): number {
   if (typeof maxChars === "number") {
     return maxChars;
@@ -111,7 +153,7 @@ export function truncateChatHistoryText(
   }
   const prefix = truncateUtf16Safe(text, limit);
   return {
-    text: preserveExactPrefix ? prefix : `${prefix}\n...(truncated)...`,
+    text: preserveExactPrefix || !prefix.trim() ? prefix : `${prefix}\n...(truncated)...`,
     truncated: true,
   };
 }
@@ -146,10 +188,6 @@ export function extractAssistantTextForSilentCheck(message: unknown): string | u
     texts.push(typed.text);
   }
   return texts.length > 0 ? texts.join("\n") : undefined;
-}
-
-export function isAssistantTextContentType(type: unknown): boolean {
-  return type === "text" || type === "input_text" || type === "output_text";
 }
 
 export function isAssistantInternalReasoningContentType(type: unknown): boolean {
@@ -246,6 +284,28 @@ export function isCronRunMessage(message: Record<string, unknown>): boolean {
 
 export function isForwardedUserMessage(message: Record<string, unknown>): boolean {
   return message.role === "user" && hasForwardedMessageProvenance(message);
+}
+
+const TOOL_MESSAGE_ENVELOPE_FIELDS = [
+  "toolCallId",
+  "tool_call_id",
+  "toolUseId",
+  "tool_use_id",
+  "toolName",
+  "tool_name",
+] as const;
+
+/** Tool-shaped user rows display as tool results, so they do not start a chat turn. */
+export function userMessageStartsDisplayTurn(message: Record<string, unknown>): boolean {
+  if (TOOL_MESSAGE_ENVELOPE_FIELDS.some((field) => typeof message[field] === "string")) {
+    return false;
+  }
+  return !Array.isArray(message.content)
+    ? true
+    : !message.content.some((block) => {
+        const type = readRecord(block)?.type;
+        return isToolCallContentType(type) || isToolResultContentType(type);
+      });
 }
 
 export function isProjectedForwardedMessage(message: Record<string, unknown>): boolean {

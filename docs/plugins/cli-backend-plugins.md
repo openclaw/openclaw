@@ -296,7 +296,10 @@ the ordinary `prompt`. Saved notes are quoted reference data and may repeat on
 resumed turns; they do not assert that a native turn previously consumed them. Transport
 them through the native runtime's private context mechanism; never record them as
 operator-authored input. OpenClaw's policy and observation hooks still receive the
-complete logical prompt. Native tool actions must use the provided, run-bound
+complete logical prompt. `promptOrigin: "host"` marks input OpenClaw generated
+or forwarded from another session, such as a command completion, cron run, restart
+recovery or subagent completion; mark it with the native runtime's non-user input
+marker, if it has one, so native history does not attribute it to the operator. Native tool actions must use the provided, run-bound
 `requestToolPermission` callback rather than creating independent approval
 authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
 grant ownership. Paired-node execution and
@@ -314,14 +317,42 @@ A runtime that can accept user input into a turn already in flight offers it
 through `ctx.registerMessageInjection`. Call it once the turn is ready to take
 input; the host then exposes same-turn steering for that run instead of queueing
 the message as a separate turn. The sink answers `isAvailable()` for admission
-and resolves `queueMessage(text, withCurrent)` only after the runtime has
+and resolves `queueMessage(text, withCurrent, options)` only after the runtime has
 acknowledged consumption, not merely after writing to stdin. Pass the synchronous
 native write to `await withCurrent(submit)`: the host prepares current source and
 tool authority before invoking it. Recheck native availability inside `submit`,
 so a turn that finalized during preparation refuses before writing. Reject when
 the input never started, so the host replays it as an ordinary queued turn rather
 than losing it; the host records a started input in the session transcript, so a
-runtime must not also write it there. The registration lives as long as the run.
+runtime must not also write it there. `options.promptOrigin` and
+`options.promptContext` belong to that queued input, with the same contracts as the
+initial prompt: deliver its context through the native private context mechanism,
+and never inherit the running turn's origin. The registration lives as long as the run.
+
+A runtime that can end its current turn without closing the session can offer
+`ctx.registerTurnInterrupt({ interrupt })`; `interrupt("yield")` requests a graceful
+turn end, after which the stream must finish normally and the session remain
+reusable. OpenClaw calls it after observing the completed `sessions_yield` tool
+result, suppresses subsequent reply text, and drops the registration when the run closes.
+
+A transport may optionally register `ctx.registerTurnStatus({ capture })` for a
+read-only assessment before the session watchdog recovers a silent model attempt.
+`capture()` returns an exact native input/generation-bound `{ isCurrent, assess }`
+or `undefined` when unavailable. `assess({ signal })` returns only content-free
+`closed` process/transport facts or `unknown` (`process_present`,
+`status_unsupported`, `busy`, or `transient_error`). Keep `isCurrent()` independent
+of the assessment signal and false after input replacement, completion, or authority
+revocation. Neither callback may submit a prompt, restart the backend, change hooks,
+or enter the ordinary prompt queue. Older plugins and hosts can omit the registration.
+
+The host permits one assessment per current target and silence episode, bounded
+by 10 seconds and the remaining hard execution budget. New semantic progress,
+Stop, and completion invalidate it. An unavailable or obsolete native capture under
+unchanged host ownership consumes that opportunity as unknown, without retrying
+the assessment or delaying ordinary recovery. A timeout, failure, or live process proves
+neither model progress nor death; the existing recovery policy still decides what
+to do. The native Claude adapter reports local transport facts only, not a fresh
+model-health response. This does not change the separate CLI no-output watchdog.
 
 For a bundled or official plugin's bidirectional process, use the shared
 [`createOwnedStdioProcess` owner](/plugins/sdk-overview/infrastructure#owned-stdio-processes)
@@ -431,6 +462,16 @@ for backend-owned lifecycle records instead.
 Tool events describe work the backend already performed. OpenClaw renders and
 summarizes them, but does not treat them as host tool execution, trusted
 diagnostics, loopback correlation, or message-delivery evidence.
+
+### `classifyErrorCode`: backend-native failure details
+
+Set `classifyErrorCode(message)` to attach a diagnostic code to a selected CLI
+failure. OpenClaw calls it for structured terminal errors and failed process
+exits, after extracting the error message. Return `undefined` for unrecognized
+errors. This hook does not select the failover reason or change retry policy;
+host-owned terminal-stop, context-overflow, and empty-exit codes take precedence.
+For example, `refresh_contention` selects the sign-in-in-progress message instead
+of treating a refresh lock as an expired login.
 
 ### `parseJsonlLifecycleEvent`: provider-native lifecycle records
 

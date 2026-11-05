@@ -1,33 +1,20 @@
-import { randomUUID } from "node:crypto";
-import { getEnvironmentData } from "node:worker_threads";
-import {
-  withDatabaseEngineSelection,
-  resolveDatabaseFamilyEngines,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { postgresProductScope } from "./postgres-product.test-support.js";
 import {
-  cancelStandingIntent,
+  cancelStandingIntent as cancel,
   createStandingIntent,
-  encodeStandingIntentChannelScope,
-  encodeStandingIntentSenderScope,
-  listStandingIntents,
+  encodeStandingIntentChannelScope as channelScope,
+  encodeStandingIntentSenderScope as senderScope,
+  listStandingIntents as list,
   matchStandingIntents,
 } from "./standing-intents.js";
 
-const configured = getEnvironmentData("openclaw.test.workboard.connection");
-const connection = typeof configured === "string" ? configured : undefined;
-const prefix = `intentsearch_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
-const selection = {
-  effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-  postgres: { connection: connection!, schemaPrefix: prefix },
-};
-const selected = <T>(run: () => T) => withDatabaseEngineSelection(selection, run);
+const database = postgresProductScope("intentsearch");
+const selected = database.select;
 
-describe.skipIf(!connection)("PostgreSQL standing intent product flow", () => {
+describe.skipIf(!database.connection)("PostgreSQL standing intent product flow", () => {
   let state: OpenClawTestState;
-  const client = new pg.Client({ connectionString: connection });
   const create = (
     description: string,
     options: Partial<Parameters<typeof createStandingIntent>[0]> = {},
@@ -40,7 +27,6 @@ describe.skipIf(!connection)("PostgreSQL standing intent product flow", () => {
         creatorSender: "creator",
         nowMs: 1_000,
         expiresAt: 1_000_000,
-        maxFires: 3,
         cooldownSeconds: 1,
         ...options,
       }),
@@ -59,71 +45,42 @@ describe.skipIf(!connection)("PostgreSQL standing intent product flow", () => {
     );
 
   beforeAll(async () => {
-    state = await createOpenClawTestState({
-      prefix: "standing-intents-postgres-",
-      layout: "state-only",
-    });
-    await client.connect();
+    state = await createOpenClawTestState({ prefix: "intents-pg-", layout: "state-only" });
+    await database.connect();
   });
 
   afterAll(async () => {
-    if (!connection) {
-      return;
-    }
     try {
       await state.cleanup();
-      const schemas = await client.query<{ nspname: string }>(
-        "SELECT nspname FROM pg_namespace WHERE left(nspname, $1) = $2",
-        [prefix.length + 1, `${prefix}_`],
-      );
-      for (const { nspname } of schemas.rows) {
-        await client.query(`DROP SCHEMA "${nspname}" CASCADE`);
-      }
     } finally {
-      await client.end();
+      await database.close();
     }
   });
 
   it("filters channel, sender, lifecycle and agent before bounded candidate selection", async () => {
-    const foreignChannel = encodeStandingIntentChannelScope({
-      scope: "conversation",
-      provider: "discord",
-      conversationId: "elsewhere",
-    });
-    const foreignSender = encodeStandingIntentSenderScope({
-      provider: "discord",
-      senderId: "other",
-    });
+    const channel = (conversationId: string) =>
+      channelScope({ scope: "conversation", provider: "discord", conversationId });
+    const sender = (senderId: string) => senderScope({ provider: "discord", senderId });
     for (let index = 0; index < 34; index++) {
       await create(
         `excluded ${index}`,
-        index % 2 ? { channelScope: foreignChannel } : { senderScope: foreignSender },
+        index % 2 ? { channelScope: channel("elsewhere") } : { senderScope: sender("other") },
       );
     }
     await create("expired", { expiresAt: 1_500 });
     await create("foreign agent", { agentId: "other" });
     const intended = await create("visible", {
-      channelScope: encodeStandingIntentChannelScope({
-        scope: "conversation",
-        provider: "discord",
-        conversationId: "room",
-      }),
-      senderScope: encodeStandingIntentSenderScope({ provider: "discord", senderId: "owner" }),
+      channelScope: channel("room"),
+      senderScope: sender("owner"),
     });
     expect((await match()).map((intent) => intent.id)).toEqual([intended.id]);
     expect(await match()).toEqual([]);
     expect((await match({ nowMs: 3_000 })).map((intent) => intent.id)).toEqual([intended.id]);
-    expect(
-      await selected(() => cancelStandingIntent({ agentId: "main", id: intended.id })),
-    ).toMatchObject({
-      status: "cancelled",
-    });
+    const cancelled = await selected(() => cancel({ agentId: "main", id: intended.id }));
+    expect(cancelled).toMatchObject({ status: "cancelled" });
     expect(await match({ nowMs: 4_000 })).toEqual([]);
-    expect(
-      (await selected(() => listStandingIntents({ agentId: "main", nowMs: 4_000 }))).find(
-        (intent) => intent.description === "expired",
-      ),
-    ).toMatchObject({ status: "expired" });
+    const listed = await selected(() => list({ agentId: "main", nowMs: 4_000 }));
+    expect(listed.find((intent) => intent.description === "expired")?.status).toBe("expired");
   });
 
   it("keeps exact keyword groups and injection bounds through the real matching API", async () => {

@@ -7,12 +7,8 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { isRetryableGhJsonErrorMessage } from "./ci-run-timings.mjs";
-import {
-  isCiTimingRuntimeTrial,
-  refitTestTimings,
-  type CiTimingRun,
-} from "./lib/ci-test-timings-refit.mts";
-import { ciTestTimingsSchema } from "./lib/ci-test-timings-schema.mts";
+import { refitTestTimings, type CiTimingRun } from "./lib/ci-test-timings-refit.mts";
+import { CI_TIMING_PROFILES, ciTestTimingsSchema } from "./lib/ci-test-timings-schema.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { execPlainGh } from "./lib/plain-gh.mjs";
 
@@ -229,12 +225,6 @@ async function main() {
           `repos/${repo}/actions/jobs/${job.id}/logs`,
           ...logFlags,
         ]);
-        if (isCiTimingRuntimeTrial(text)) {
-          console.error(
-            `Skipped ${source} run ${run.id}: runtime trial is excluded from timing learning.`,
-          );
-          return undefined;
-        }
         attemptLogs.push({
           kind: job.kind,
           labels: job.labels,
@@ -342,9 +332,6 @@ async function main() {
           continue;
         }
         const timingRun = await readRun(run, source);
-        if (timingRun === undefined) {
-          continue;
-        }
         if (timingRun === null) {
           console.error(
             `Skipped ${source} run ${run.id}: jobs completed after frozen UTC cutoff ${upper}.`,
@@ -352,14 +339,17 @@ async function main() {
           continue;
         }
         const { contributingRunIds } = refitTestTimings([timingRun]);
-        const compact = contributingRunIds.blacksmith.length + contributingRunIds.github.length > 0;
+        const compact = CI_TIMING_PROFILES.some(
+          (profile) => contributingRunIds[profile].length > 0,
+        );
         const contributes =
           source === "main" || source === "packed-release"
             ? compact
             : source === "pull-request"
               ? compact ||
                 contributingRunIds.toolingBlacksmith.length +
-                  contributingRunIds.toolingGithub.length >
+                  contributingRunIds.toolingGithub.length +
+                  contributingRunIds.toolingBoat.length >
                   0
               : contributingRunIds.repoE2e.length > 0;
         if (contributes) {
@@ -407,7 +397,9 @@ async function main() {
     }
     const { contributingRunIds } = refitTestTimings(runs, undefined, { seedTooling: true });
     if (
-      contributingRunIds.toolingBlacksmith.length + contributingRunIds.toolingGithub.length ===
+      contributingRunIds.toolingBlacksmith.length +
+        contributingRunIds.toolingGithub.length +
+        contributingRunIds.toolingBoat.length ===
       0
     ) {
       throw new Error(
@@ -418,8 +410,9 @@ async function main() {
     // Scheduled CI owns main validation even when per-push test work is disabled.
     await sampleWorkflow("ci.yml", "main");
     const fresh = refitTestTimings(runs);
-    const { blacksmith, github } = fresh.contributingRunIds;
-    const mainContributors = new Set([...blacksmith, ...github]);
+    const mainContributors = new Set(
+      CI_TIMING_PROFILES.flatMap((profile) => fresh.contributingRunIds[profile]),
+    );
     if (
       mainContributors.size < 2 ||
       (Object.values(fresh.timings.compactGroupSeconds).every(
@@ -457,7 +450,8 @@ async function main() {
       seedTooling,
     },
   );
-  const { blacksmith, github, toolingBlacksmith, toolingGithub } = contributingRunIds;
+  const { blacksmith, github, boat, toolingBlacksmith, toolingGithub, toolingBoat } =
+    contributingRunIds;
   const prRunIds = new Set(runs.filter((run) => run.pullRequestMergeRef).map((run) => run.id));
   const packedReleaseRunIds = new Set(
     runs
@@ -468,21 +462,22 @@ async function main() {
     (id) => !prRunIds.has(id) && !packedReleaseRunIds.has(id),
   );
   const mainGithub = github.filter((id) => !prRunIds.has(id) && !packedReleaseRunIds.has(id));
-  const mainContributors = new Set([...mainBlacksmith, ...mainGithub]);
+  const mainBoat = boat.filter((id) => !prRunIds.has(id) && !packedReleaseRunIds.has(id));
+  const mainContributors = new Set([...mainBlacksmith, ...mainGithub, ...mainBoat]);
   console.log(
-    `\nIndependent main compact contributors: ${mainContributors.size} (Blacksmith: ${mainBlacksmith.length}; GitHub: ${mainGithub.length}). Release Gateway contributors: ${contributingRunIds.repoE2e.length}.\n`,
+    `\nIndependent main compact contributors: ${mainContributors.size} (Blacksmith: ${mainBlacksmith.length}; GitHub: ${mainGithub.length}; Boat: ${mainBoat.length}). Release Gateway contributors: ${contributingRunIds.repoE2e.length}.\n`,
   );
   console.log(
-    `Independent PR compact contributors: ${new Set([...blacksmith, ...github].filter((id) => prRunIds.has(id))).size}; merge-ref samples never prune absent timings.\n`,
+    `Independent PR compact contributors: ${new Set([...blacksmith, ...github, ...boat].filter((id) => prRunIds.has(id))).size}; merge-ref samples never prune absent timings.\n`,
   );
   console.log(
     `Independent packed release contributors: ${github.filter((id) => packedReleaseRunIds.has(id)).length}; partial inventories never prune absent timings.\n`,
   );
   console.log(
-    `Independent PR tooling contributors: ${new Set([...toolingBlacksmith, ...toolingGithub]).size} (Blacksmith: ${toolingBlacksmith.length}; GitHub: ${toolingGithub.length}).${seedTooling ? " Explicit tooling seed; single-run measurements allowed." : ""}\n`,
+    `Independent PR tooling contributors: ${new Set([...toolingBlacksmith, ...toolingGithub, ...toolingBoat]).size} (Blacksmith: ${toolingBlacksmith.length}; GitHub: ${toolingGithub.length}; Boat: ${toolingBoat.length}).${seedTooling ? " Explicit tooling seed; single-run measurements allowed." : ""}\n`,
   );
   ciTestTimingsSchema.parse(timings);
-  for (const profile of ["blacksmith", "github"] as const) {
+  for (const profile of CI_TIMING_PROFILES) {
     for (const key of rejectedWorkerKeys[profile]) {
       console.error(`[ci-timings] retained ${profile} ${key}: ambiguous or mixed worker ceilings`);
     }

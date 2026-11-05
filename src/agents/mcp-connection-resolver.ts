@@ -176,8 +176,9 @@ export function partitionMcpServersByConnectionScope<T>(mcpServers: Record<strin
   for (const [serverName, rawServer] of Object.entries(mcpServers).toSorted(([a], [b]) =>
     a.localeCompare(b),
   )) {
-    const oauth = isRecord(rawServer) && isRecord(rawServer.oauth) ? rawServer.oauth : undefined;
-    if (isRecord(rawServer) && rawServer.auth === "oauth" && oauth?.identity === "per-requester") {
+    const server = isRecord(rawServer) ? rawServer : undefined;
+    const oauth = server && isRecord(server.oauth) ? server.oauth : undefined;
+    if (server?.auth === "oauth" && oauth?.identity === "per-requester") {
       // Config-declared requester OAuth must stay out of anonymous/static runs.
       // Resolver lookup here would erase OAuth and could expose a shared connection.
       requesterScopedServerNames.push(serverName);

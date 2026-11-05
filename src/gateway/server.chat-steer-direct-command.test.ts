@@ -1,19 +1,22 @@
 import path from "node:path";
 import { isGatewayResponseFrame } from "@openclaw/gateway-protocol/frame-guards";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { RawData } from "ws";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { ACTIVE_EMBEDDED_RUN_REGISTRATIONS } from "../agents/embedded-agent-runner/run-state.js";
-import { createAttemptNestedToolActivityState } from "../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
-import { prepareEmbeddedAttemptStream } from "../agents/embedded-agent-runner/run/attempt-stream-prepare.js";
+import { getEmbeddedRunAttachment } from "../agents/embedded-agent-runner/run-state.js";
+import { prepareCatalogExecutor } from "../agents/embedded-agent-runner/run/attempt-stream-prepare.test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../agents/embedded-agent-runner/run/types.js";
-import { clearActiveEmbeddedRun } from "../agents/embedded-agent-runner/runs.js";
+import { detachActiveEmbeddedRun } from "../agents/embedded-agent-runner/runs.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -22,14 +25,14 @@ import {
 } from "../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { runAnnounceAgentCall } from "../agents/subagents/announce/subagent-announce-completion-delivery.js";
 import { makeEmbeddedRunnerAttempt } from "../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { getRuntimeConfig, writeConfigFile } from "../config/config.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
-import { createDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { rawDataToString } from "../infra/ws.js";
 import { createDiagnosticEmbeddedRunOwner } from "../logging/diagnostic-run-activity.js";
-import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
+import * as messageInjection from "../sessions/session-controller.message-injection.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import {
   agentCommandMock,
   connectOk,
@@ -48,8 +51,8 @@ const runAttempt = vi.hoisted(() =>
   vi.fn<(params: EmbeddedRunAttemptParams) => Promise<EmbeddedRunAttemptResult>>(),
 );
 
-// The real harness selects the runtime and prepares its authority before this
-// model-execution boundary. The test never creates a reply operation or hash.
+// The real harness selects the runtime and binds its authority to the controller
+// operation before this model-execution boundary.
 vi.mock("../agents/embedded-agent-runner/run/attempt.js", () => ({
   runEmbeddedAttempt: runAttempt,
 }));
@@ -59,24 +62,10 @@ const gatewayToken = "synthetic-steering-gateway-token";
 let harness: Awaited<ReturnType<typeof startServerWithClient>>;
 let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
 
-type AgentResponse = {
-  type: string;
-  id: string;
-  ok: boolean;
-  payload?: { runId?: string; status?: string };
-  error?: { message?: string };
-};
-
 installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
-    const module = await import("./server-kernel.js");
-    const create = module.createGatewayKernel;
-    const capture = vi.spyOn(module, "createGatewayKernel").mockImplementation(async (...args) => {
-      kernel = await create(...args);
-      return kernel;
-    });
-    try {
+    kernel = await captureGatewayKernel(async () => {
       testState.gatewayControlUi = { allowedOrigins: [browserOrigin] };
       harness = await startServerWithClient(gatewayToken, {
         controlUiEnabled: true,
@@ -89,9 +78,7 @@ installGatewayTestHooks({
         client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
         scopes: ["operator.read", "operator.write", "operator.admin"],
       });
-    } finally {
-      capture.mockRestore();
-    }
+    });
   },
   cleanup: async () => {
     harness?.ws.close();
@@ -101,33 +88,28 @@ installGatewayTestHooks({
   },
 });
 
-it.for([
-  { source: "browser", disposition: "steered" },
-  { source: "system", disposition: "followup" },
-] as const)(
-  "routes browser corrections to a $source direct command as $disposition",
-  async ({ source, disposition: expectedDisposition }, { signal }) => {
+it.for(["browser", "system"] as const)(
+  "keeps caller custody for browser corrections to a %s direct command",
+  async (source, { signal }) => {
+    const steered = source === "browser";
+    const expectedReply = steered ? "result-required" : "optional";
+    const expectedAnswer = steered ? "Correction applied." : "Completed.";
     const sessionKey = `agent:main:direct-steering-${source}`;
     const sessionId = `direct-steering-session-${source}`;
     const runId = `announce:direct-steering-${source}`;
-    const model: Model = {
+    const correction = "Stop waiting and use the corrected approach.";
+    const model = makeProviderModelFixture<"openai-responses">({
       id: "mock-1",
       name: "Steering fixture",
       provider: "steering-fixture",
       api: "openai-responses",
       baseUrl: "https://steering.example.test",
-      reasoning: false,
-      input: ["text"],
-      contextWindow: 16_000,
       maxTokens: 2_048,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    };
+    });
+    const { provider, baseUrl, api, ...modelDefinition } = model;
     testState.sessionStorePath = path.join(
       process.env.OPENCLAW_STATE_DIR!,
-      "agents",
-      "main",
-      "sessions",
-      "sessions.json",
+      "agents/main/sessions/sessions.json",
     );
     testState.agentConfig = {
       model: { primary: `${model.provider}/${model.id}` },
@@ -142,21 +124,11 @@ it.for([
       plugins: { ...config.plugins, enabled: false },
       models: {
         providers: {
-          [model.provider]: {
-            api: "openai-responses",
+          [provider]: {
+            api,
             apiKey: "synthetic-steering-key",
-            baseUrl: model.baseUrl,
-            models: [
-              {
-                id: model.id,
-                name: model.name,
-                reasoning: model.reasoning,
-                input: model.input,
-                cost: model.cost,
-                contextWindow: model.contextWindow,
-                maxTokens: model.maxTokens,
-              },
-            ],
+            baseUrl,
+            models: [modelDefinition],
           },
         },
       },
@@ -177,7 +149,6 @@ it.for([
           updatedAt: Date.now(),
           agentHarnessId: "openclaw",
           permissionMode: "full",
-          restartRecoveryTerminalRunIds: ["unrelated-completed-source"],
         },
       },
     });
@@ -192,7 +163,7 @@ it.for([
     const modelStarted = createDeferred();
     const sessionLifecycleState = await import("./session-lifecycle-state.js");
     const startCommitted = createDeferred();
-    // Start persistence is detached from model readiness and can still change sharing facts.
+    // Persistence and model readiness must both settle before inspecting sharing facts.
     void startCommitted.promise.catch(() => undefined);
     const prepareLifecycle = sessionLifecycleState.prepareGatewaySessionLifecycleEvent;
     const lifecycleSpy = vi
@@ -206,33 +177,27 @@ it.for([
         ) {
           return persist;
         }
-        return async () => {
-          try {
-            await persist();
-            startCommitted.resolve();
-          } catch (error) {
-            startCommitted.reject(error);
-            throw error;
-          }
+        return () => {
+          const committed = persist();
+          void committed.then(startCommitted.resolve, startCommitted.reject);
+          return committed;
         };
       });
     onTestFinished(() => lifecycleSpy.mockRestore());
     const ownerReady = createDeferred<{
       attempt: EmbeddedRunAttemptParams;
-      handle: ReturnType<typeof prepareEmbeddedAttemptStream>["queueHandle"];
+      handle: ReturnType<typeof prepareCatalogExecutor>["queueHandle"];
     }>();
     const disposition = createDeferred<"steered" | "followup">();
     dispatchInboundMessageMock.mockImplementation(async () => {
       disposition.resolve("followup");
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
     });
-    runAttempt.mockImplementation(async (attempt) => {
+    runAttempt.mockReset().mockImplementation(async (attempt) => {
       const modelStream = createAssistantMessageEventStream();
       streamMocks.streamSimple
         .mockImplementation(() =>
-          createAssistantResultStream(
-            createAssistant(attempt.model, [{ type: "text", text: "Correction applied." }]),
-          ),
+          createAssistantResultStream(createAssistant(attempt.model, "Correction applied.")),
         )
         .mockImplementationOnce(() => {
           modelStarted.resolve();
@@ -246,38 +211,19 @@ it.for([
         return result;
       });
       const controller = new AbortController();
-      const prepared = prepareEmbeddedAttemptStream({
+      const prepared = prepareCatalogExecutor({
         attempt,
-        agentSession: {
-          activeSession: session,
-          hookRunner: null,
-          clientToolCallSlots: [],
-          hasDeliveredSourceReply: () => false,
-          markSourceReplyDelivered: vi.fn(),
-          builtinToolNames: new Set(),
-          coreBuiltinToolNames: new Set(),
-          replaySafeToolNames: new Set(),
-          codeModeExecToolNames: new Set(),
-          sourceReplyCapableToolNames: new Set(),
-          sideEffectToolOwners: new Map(),
-          trustedLocalMediaToolNames: new Set(),
-        },
-        hookAgentId: attempt.agentId ?? "main",
-        diagnosticTrace: createDiagnosticTraceContext(),
+        activeSession: session,
         diagnosticOwner: createDiagnosticEmbeddedRunOwner({ sessionId, runId }),
-        nestedToolActivityState: createAttemptNestedToolActivityState(),
-        isReplaySafeTool: () => false,
         runAbortController: controller,
         abortRun: (_timeout, reason) => controller.abort(reason),
-        markExternalAbort: vi.fn(),
         getRunState: () => ({
           aborted: controller.signal.aborted,
           promptError: undefined,
           timedOut: false,
           yieldDetected: false,
         }),
-        onBlockReply: undefined,
-        onBlockReplyFlush: undefined,
+        streamReplies: false,
       });
       embeddedRunMock.activeIds.add(sessionId);
       const prompt = session.prompt(attempt.prompt);
@@ -285,19 +231,26 @@ it.for([
         await modelStarted.promise;
         ownerReady.resolve({ attempt, handle: prepared.queueHandle });
         await releaseModel.promise;
-        const assistant = createAssistant(attempt.model, [{ type: "text", text: "Completed." }]);
+        const assistant = createAssistant(attempt.model, "Completed.");
         modelStream.push({ type: "done", reason: "stop", message: assistant });
         modelStream.end();
         await prompt;
+        const lastAssistant = session.messages.at(-1);
+        if (lastAssistant?.role !== "assistant") {
+          throw new Error("Steered command did not produce an assistant answer");
+        }
+        expect(JSON.stringify(session.messages).includes(correction)).toBe(steered);
+        expect(lastAssistant.content).toEqual([{ type: "text", text: expectedAnswer }]);
+        expect(session.getSteeringMessages()).toEqual([]);
         return makeEmbeddedRunnerAttempt({
           sessionIdUsed: sessionId,
-          lastAssistant: assistant,
-          assistantTexts: ["Completed."],
+          lastAssistant,
+          assistantTexts: [expectedAnswer],
           messagesSnapshot: session.messages,
         });
       } finally {
         prepared.subscription.unsubscribe();
-        clearActiveEmbeddedRun(sessionId, prepared.queueHandle, sessionKey, attempt.sessionFile);
+        detachActiveEmbeddedRun(sessionId, prepared.queueHandle, sessionKey, attempt.sessionFile);
         embeddedRunMock.activeIds.delete(sessionId);
         session.dispose();
       }
@@ -330,10 +283,7 @@ it.for([
     }
     const accepted =
       source === "browser"
-        ? onceMessage<AgentResponse>(
-            harness.ws,
-            (frame) => frame.type === "res" && frame.id === requestId,
-          )
+        ? onceMessage(harness.ws, (frame) => frame.type === "res" && frame.id === requestId)
         : undefined;
     const original =
       source === "browser"
@@ -371,77 +321,47 @@ it.for([
         }),
       );
     }
-    const capture = vi.spyOn(replyRunRegistry, "resolveCurrentMessageInjectionTarget");
+    const capture = vi.spyOn(messageInjection, "captureCurrentReplyMessageInjectionTarget");
     onTestFinished(() => capture.mockRestore());
-    const diagnostics = vi.spyOn(diagnosticLogger, "info");
-    onTestFinished(() => diagnostics.mockRestore());
     try {
       if (accepted) {
         expect(await accepted).toMatchObject({ ok: true, payload: { status: "accepted" } });
       }
       const { attempt, handle } = await withinTest(
-        Promise.race([
+        awaitGateBeforeSettlement(
           Promise.all([ownerReady.promise, startCommitted.promise]).then(([owner]) => owner),
-          original.then((response) => {
-            throw new Error(
-              `Direct command finished before its steering owner and lifecycle start were ready: ${JSON.stringify(response)}`,
-            );
-          }),
-        ]),
+          original,
+          "Direct command finished before steering ownership and lifecycle start",
+        ),
         signal,
       );
-      const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
-      const facts = {
-        hasReplyOperation: replyRunRegistry.get(sessionKey) !== undefined,
-        authoritySource: registration?.toolAuthority?.source,
-        hasOperatorAuthority:
-          readAdmittedRunOperatorAuthority(attempt.admittedRunContext) !== undefined,
-        ownsAdmittedInstance:
-          registration?.operationalRunInstance ===
-          attempt.admittedRunContext.operationalRunInstance,
-        hasDelegatedAuthority: registration?.delegatedAuthority !== undefined,
-        isControlUiVisible: getAgentRunContext(runId)?.isControlUiVisible,
-        terminalReplyExpectation: handle.terminalReplyExpectation,
-        injectionVersion: handle.messageInjectionV2?.version,
-        supportsTranscriptCommitWait: handle.supportsTranscriptCommitWait,
-      };
-      expect(facts).toEqual({
-        hasReplyOperation: false,
-        authoritySource: "attempt",
-        hasOperatorAuthority: source === "browser",
-        ownsAdmittedInstance: true,
-        hasDelegatedAuthority: true,
-        isControlUiVisible: true,
-        terminalReplyExpectation: "result-required",
-        injectionVersion: 2,
-        supportsTranscriptCommitWait: true,
-      });
+      const registration = getEmbeddedRunAttachment(handle);
+      expect(registration?.toolAuthority?.source).toBe("reply");
+      expect(readAdmittedRunOperatorAuthority(attempt.admittedRunContext) !== undefined).toBe(
+        source === "browser",
+      );
+      expect(registration?.operationalRunInstance).toBe(
+        attempt.admittedRunContext.operationalRunInstance,
+      );
+      expect(registration?.delegatedAuthority).toBeDefined();
+      expect(getAgentRunContext(runId)?.isControlUiVisible).toBe(true);
+      expect(handle.terminalReplyExpectation).toBe(expectedReply);
       const response = await rpcReq(harness.ws, "chat.send", {
         sessionKey,
         sessionId,
-        message: "Stop waiting and use the corrected approach.",
+        message: correction,
         idempotencyKey: `browser-direct-command-correction-${source}`,
         queueMode: "steer",
       });
-      expect(response.ok, JSON.stringify({ response, diagnostics: diagnostics.mock.calls })).toBe(
-        true,
-      );
-      const captured = capture.mock.results.find(
-        (result) => result.type === "return" && result.value?.runId === runId,
-      );
-      expect(captured?.value).toMatchObject({
-        runId,
-        sourceTurnId: runId,
-      });
+      expect(response.ok).toBe(true);
       expect(
-        await withinTest(disposition.promise, signal),
-        JSON.stringify(
-          diagnostics.mock.calls.filter(([message]) => message.startsWith("direct steering")),
-        ),
-      ).toBe(expectedDisposition);
-      if (expectedDisposition === "steered") {
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      }
+        capture.mock.results.find(
+          (result) => result.type === "return" && result.value?.runId === runId,
+        )?.value,
+      ).toMatchObject({ runId, sourceTurnId: runId });
+      expect(await withinTest(disposition.promise, signal)).toBe(steered ? "steered" : "followup");
+      expect(handle.terminalReplyExpectation).toBe(expectedReply);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(steered ? 0 : 1);
     } finally {
       // The fixture prevents completion until release; only then does its response budget begin.
       const settled =
@@ -450,13 +370,14 @@ it.for([
           : originalSettled;
       releaseModel.resolve();
       const outcomes = await settled;
-      expect
-        .soft(
-          outcomes.flatMap((outcome) =>
-            outcome.status === "rejected" ? [String(outcome.reason)] : [],
-          ),
-        )
-        .toEqual([]);
+      expect.soft(outcomes.filter((outcome) => outcome.status === "rejected")).toEqual([]);
     }
+    const terminal = await original;
+    expect(isGatewayResponseFrame(terminal) ? terminal.payload : terminal).toMatchObject({
+      status: "ok",
+    });
+    expect(JSON.stringify(terminal)).toContain(expectedAnswer);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(steered ? 0 : 1);
+    expect(runAttempt).toHaveBeenCalledOnce();
   },
 );

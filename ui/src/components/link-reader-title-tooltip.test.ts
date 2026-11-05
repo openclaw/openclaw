@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import type { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
@@ -10,10 +10,7 @@ import { installTitleTooltips } from "./tooltip-title.ts";
 import { settleTooltip } from "./tooltip.test-support.ts";
 
 const runtimeLoad = vi.hoisted(() => {
-  let release!: () => void;
-  const pending = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const { promise: pending, resolve: release } = Promise.withResolvers<void>();
   return { pending, release };
 });
 
@@ -54,7 +51,9 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
   const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
   const provider = document.createElement(tag) as LinkReaderHovercardProvider;
   provider.readers = [TEST_LINK_READER];
-  provider.client = createTestGatewayClient(request);
+  const client = createTestGatewayClient(request);
+  vi.spyOn(client, "connected", "get").mockReturnValue(true);
+  provider.client = client;
   const anchor = document.createElement("a");
   anchor.href = href;
   anchor.title = href;
@@ -203,7 +202,9 @@ it("keeps rendered GitHub links free of native titles across preview closure and
   document.body.append(base);
   const provider = document.createElement(tag) as LinkReaderHovercardProvider;
   provider.readers = [TEST_LINK_READER];
-  provider.client = createTestGatewayClient(async () => response);
+  const client = createTestGatewayClient(() => Promise.resolve(response));
+  vi.spyOn(client, "connected", "get").mockReturnValue(true);
+  provider.client = client;
   provider.innerHTML = toSanitizedMarkdownHtml(
     `${href}\n\n[the **related** issue](${href} "${href}")\n\n[![Issue icon](data:image/png;base64,x "Icon hint")](${href} "Issue details")\n\n[](${href} "Issue details")\n\n[<button>](${href} "Issue details")\n\n[\\*](${href} "Issue details")\n\n[Documentation](https://example.com "Read the documentation")`,
   );

@@ -319,6 +319,39 @@ describeTelegramDispatch("dispatchTelegramMessage transcript delivery", () => {
     }
   });
 
+  it("does not recover hidden transcript text into a truncated public final", async () => {
+    const { root, scope, entry, cleanup } = await transcriptFixture("hidden-recovery");
+    const prefix = "The visible answer starts with this sufficiently long shared introduction";
+    const publicText = `${prefix}...`;
+    try {
+      await patchSessionEntry({ ...scope, fallbackEntry: entry, update: () => entry });
+      const manager = SessionManager.open(scope, root);
+      const { context } = recoveryDraft();
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        manager.appendMessage(assistant(publicText));
+        const hiddenAssistant = {
+          ...assistant(`${prefix} followed by internal notes that must remain private.`),
+          display: false,
+        };
+        manager.appendMessage(hiddenAssistant);
+        await dispatcherOptions.deliver({ text: publicText }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+      await dispatchWithContext({
+        context,
+        streamMode: "off",
+        moduleMocks: {
+          ...telegramDepsForTest,
+          resolveStorePath: () => scope.storePath,
+          getSessionEntryAsync: async () => entry,
+        },
+      });
+      expectDeliveredReply(0, { text: publicText });
+    } finally {
+      await cleanup();
+    }
+  });
+
   it.each([
     "longer preview",
     "recovered current-message target",

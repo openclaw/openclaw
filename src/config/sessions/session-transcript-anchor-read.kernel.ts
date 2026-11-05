@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -260,16 +260,15 @@ export function readSessionTranscriptAnchorFactsInDatabase(
         : {};
       const anchors = new Map<string, TranscriptEntryAnchor | undefined>();
       const readAnchor = (entryId: string) => {
-        if (!anchors.has(entryId)) {
-          const anchor = currentProjection
-            ? readActiveTranscriptEntryAnchorFromProjection(currentProjection, entryId)
-            : readActiveTranscriptEntryAnchorInTransaction({ database, resolved, entryId });
-          anchors.set(
-            entryId,
-            fence && anchor && anchor.rawSeq >= fence.beforeRawSeq ? undefined : anchor,
-          );
+        if (anchors.has(entryId)) {
+          return anchors.get(entryId);
         }
-        return anchors.get(entryId);
+        const anchor = currentProjection
+          ? readActiveTranscriptEntryAnchorFromProjection(currentProjection, entryId)
+          : readActiveTranscriptEntryAnchorInTransaction({ database, resolved, entryId });
+        const value = fence && anchor && anchor.rawSeq >= fence.beforeRawSeq ? undefined : anchor;
+        anchors.set(entryId, value);
+        return value;
       };
       const selected = selection.entryIds.flatMap((entryId) => readAnchor(entryId) ?? []);
       const activePath =
@@ -351,9 +350,16 @@ export function readSessionTranscriptAnchorFactsInDatabase(
     }
     return readAnchors();
   };
-  return database.db.isTransaction
+  const singleStatement =
+    selection.entryIds.length === 0 &&
+    ((selection.contextValidation?.through !== undefined &&
+      selection.contextValidation.admission === undefined &&
+      Object.keys(selection).every((key) => key === "entryIds" || key === "contextValidation")) ||
+      (selection.includeWatermark === true &&
+        Object.keys(selection).every((key) => key === "entryIds" || key === "includeWatermark")));
+  return database.db.isTransaction || singleStatement
     ? read()
-    : runSqliteDeferredTransactionSync(database.db, read, {
+    : runSqliteReadSnapshotSync(database.db, read, {
         databaseLabel: database.path,
         operationLabel: "session transcript anchors read",
       });

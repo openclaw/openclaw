@@ -123,6 +123,7 @@ export function scopeControlUiHost(
       check();
       return keep(host.onEvent(name, bindCallback(listener)));
     },
+    // The SDK callback retains synchronous delivery and this view's live authority check.
     subscribe: (listener) => {
       check();
       return keep(host.subscribe(bindCallback(listener)));

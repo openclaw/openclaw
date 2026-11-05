@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../../infra/errno.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
+import { statIfExists } from "../../infra/path-existence.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { OpenClawConfig } from "../types.js";
 import { resolveSessionArtifactDirectory } from "./paths.js";
@@ -8,14 +9,7 @@ import { withSessionColdStorageInventory } from "./session-cold-storage-targets.
 import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-runtime.js";
 
 async function fileBytes(pathname: string): Promise<number> {
-  try {
-    return (await fs.stat(pathname)).size;
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return 0;
-    }
-    throw error;
-  }
+  return (await statIfExists(pathname))?.size ?? 0;
 }
 
 export async function getSessionColdStorageStatus(config: OpenClawConfig) {
@@ -44,14 +38,8 @@ export async function getSessionColdStorageStatus(config: OpenClawConfig) {
             assertCurrent();
             owner.assertCurrent();
             const directory = path.join(resolveSessionArtifactDirectory(storePath), "cold");
-            const files = await fs
-              .readdir(directory, { withFileTypes: true })
-              .catch((error: unknown) => {
-                if (hasErrnoCode(error, "ENOENT")) {
-                  return [];
-                }
-                throw error;
-              });
+            const files =
+              (await fs.readdir(directory, { withFileTypes: true }).catch(ignoreMissingPath)) ?? [];
             const archiveBytes = (
               await Promise.all(
                 files

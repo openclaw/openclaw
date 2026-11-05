@@ -135,8 +135,7 @@ async function compress(data: VideoCompressionRequest) {
       }
       if (size <= data.maxBytes) {
         const extension = mp4 ? "mp4" : "webm";
-        const name =
-          (data.file.name.replace(/\.[^.]+$/, "") || "video") + "-compressed." + extension;
+        const name = (data.file.name.replace(/\.[^.]+$/, "") || "video") + "." + extension;
         reply({
           type: "ready",
           file: new File([buffer.subarray(0, size)], name, { type: "video/" + extension }),
@@ -156,6 +155,10 @@ async function compress(data: VideoCompressionRequest) {
   }
 }
 
-globalThis.addEventListener("message", ({ data }: MessageEvent<VideoCompressionRequest>) => {
+function onMessage({ data }: MessageEvent<VideoCompressionRequest>) {
+  globalThis.removeEventListener("message", onMessage);
   void compress(data).catch(() => reply({ type: "error", reason: "failed" }));
-});
+}
+
+// The dedicated worker accepts one job; onMessage detaches before encoding it.
+globalThis.addEventListener("message", onMessage);

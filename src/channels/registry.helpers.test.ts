@@ -9,7 +9,6 @@ import {
 } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listChatChannels } from "./chat-meta.js";
-import { normalizeAnyChannelId as normalizeAnyChannelIdLight } from "./registry-normalize.js";
 import { formatChannelSelectionLine, normalizeAnyChannelId } from "./registry.js";
 
 describe("channel registry helpers", () => {
@@ -61,7 +60,6 @@ describe("channel registry helpers", () => {
     );
 
     expect(normalizeAnyChannelId("exact-id")).toBe("exact-id");
-    expect(normalizeAnyChannelIdLight("exact-id")).toBe("exact-id");
   });
 
   it("rebuilds registered channel lookups when the active registry changes", () => {
@@ -70,7 +68,6 @@ describe("channel registry helpers", () => {
 
     const channelVersion = getActivePluginChannelRegistryVersion();
     expect(normalizeAnyChannelId("a")).toBe("alpha");
-    expect(normalizeAnyChannelIdLight("a")).toBe("alpha");
 
     const betaRegistry = createRegistryWithRegisteredChannel("beta", ["b"]);
     setActivePluginRegistry(betaRegistry);
@@ -78,7 +75,5 @@ describe("channel registry helpers", () => {
     expect(getActivePluginChannelRegistryVersion()).not.toBe(channelVersion);
     expect(normalizeAnyChannelId("a")).toBeNull();
     expect(normalizeAnyChannelId("b")).toBe("beta");
-    expect(normalizeAnyChannelIdLight("a")).toBeNull();
-    expect(normalizeAnyChannelIdLight("b")).toBe("beta");
   });
 });

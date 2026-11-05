@@ -1,5 +1,6 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Worker } from "node:worker_threads";
@@ -22,9 +23,12 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (original) => {
   };
 });
 
-it("observes real file edits through one shared worker and joins its final exit", async ({
+it("restores shared subscriptions after a worker crash and joins its final exit", async ({
   signal,
 }) => {
+  const wait = <T>(work: Promise<T>) => withinTest(work, signal);
+  const waitForEdits = (edits: ReturnType<typeof createDeferred<void>>[]) =>
+    wait(Promise.all(edits.map((edit) => edit.promise)));
   const state = await createOpenClawTestState({ label: "local-memory-worker" });
   const owners: LocalMemoryFileWatcher[] = [];
   const unavailable = vi.fn();
@@ -36,9 +40,17 @@ it("observes real file edits through one shared worker and joins its final exit"
   try {
     const memory = path.join(state.workspaceDir, "memory");
     const note = path.join(memory, "note.md");
+    const extraRoot = state.path("extra");
+    const extraFiles = [path.join(extraRoot, "first.md"), path.join(extraRoot, "second.md")];
     await fs.mkdir(memory);
+    await fs.mkdir(extraRoot);
     await fs.writeFile(note, "initial memory");
+    await Promise.all(extraFiles.map((file) => fs.writeFile(file, "initial extra memory")));
     const firstEdits = [createDeferred<void>(), createDeferred<void>()];
+    const recovered = [createDeferred<void>(), createDeferred<void>()];
+    const gapEdits = [createDeferred<void>(), createDeferred<void>()];
+    const extraEdits = [createDeferred<void>(), createDeferred<void>()];
+    const sawFailure = [false, false];
     const survivingEdit = createDeferred<void>();
     const observed: string[][] = [[], []];
     const dirty = [vi.fn(), vi.fn()];
@@ -49,26 +61,47 @@ it("observes real file edits through one shared worker and joins its final exit"
           agentId: "main",
           runInBackgroundContext: AsyncLocalStorage.snapshot(),
           settings: {
-            extraPaths: [],
+            extraPaths: [extraFiles[index]!],
             multimodal: { enabled: false, modalities: [], maxFileBytes: 10485760 },
             sync: { watchDebounceMs: 0 },
           },
           onDirty: dirty[index],
           onUnavailable: unavailable,
+          onState: (facts) => {
+            sawFailure[index] ||= facts.health.some((entry) => entry.state === "unavailable");
+            if (
+              sawFailure[index] &&
+              !facts.capacityDegraded &&
+              facts.health.length > 0 &&
+              facts.health.every((entry) => entry.state === "ready")
+            ) {
+              recovered[index]!.resolve();
+            }
+          },
           onChange: async () => {
-            const contents = await fs.readFile(note, "utf8");
-            observed[index]!.push(contents);
-            if (contents === "first shared edit") {
+            const afterRecovery = sawFailure[index] && !owners[index]!.capacityDegraded;
+            const [contents, extra] = await Promise.all([
+              fs.readFile(note, "utf8"),
+              fs.readFile(extraFiles[index]!, "utf8"),
+            ]);
+            observed[index]!.push(contents, extra);
+            if (contents === "first") {
               firstEdits[index]!.resolve();
             }
-            if (index === 1 && contents === "surviving watcher edit") {
+            if (index === 1 && extra === "survivor") {
               survivingEdit.resolve();
+            }
+            if (afterRecovery && contents === "outage" && extra === `gap:${index}`) {
+              gapEdits[index]!.resolve();
+            }
+            if (extra === `restored:${index}`) {
+              extraEdits[index]!.resolve();
             }
           },
         }),
       );
     }
-    await withinTest(Promise.all(owners.map((owner) => owner.start())), signal);
+    await wait(Promise.all(owners.map((owner) => owner.start())));
     expect(workers).toHaveLength(1);
     expect(workers[0]!.threadId).toBeGreaterThan(0);
     for (const owner of owners) {
@@ -78,24 +111,49 @@ it("observes real file edits through one shared worker and joins its final exit"
       );
       expect(owner.capacityDegraded).toBe(false);
     }
-    await fs.writeFile(note, "first shared edit");
-    await withinTest(Promise.all(firstEdits.map((edit) => edit.promise)), signal);
+    await fs.writeFile(note, "first");
+    await waitForEdits(firstEdits);
     expect(dirty.every((callback) => callback.mock.calls.length > 0)).toBe(true);
 
-    await withinTest(owners[0]!.close(), signal);
+    const originalWorker = workers[0]!;
+    originalWorker.once("exit", () => {
+      // No replacement can start until this callback returns: these edits have no observer.
+      writeFileSync(note, "outage");
+      for (const [index, file] of extraFiles.entries()) {
+        writeFileSync(file, `gap:${index}`);
+      }
+    });
+    await wait(originalWorker.terminate());
+    expect(originalWorker.threadId).toBe(-1);
+    for (const owner of owners) {
+      expect(owner.capacityDegraded).toBe(true);
+      expect(owner.health().every((entry) => entry.state === "unavailable")).toBe(true);
+    }
+    expect(unavailable).toHaveBeenCalledTimes(2);
+    await waitForEdits([...recovered, ...gapEdits]);
+    expect(workers).toHaveLength(2);
+    const replacementWorker = workers[1]!;
+    expect(replacementWorker.threadId).toBeGreaterThan(0);
+    for (const [index, file] of extraFiles.entries()) {
+      await fs.writeFile(file, `restored:${index}`);
+      await wait(extraEdits[index]!.promise);
+    }
+
+    await wait(owners[0]!.close());
     const closedCallbacks = observed[0]!.length;
-    expect(workers[0]!.threadId).toBeGreaterThan(0);
-    await fs.writeFile(note, "surviving watcher edit");
-    await withinTest(survivingEdit.promise, signal);
+    expect(replacementWorker.threadId).toBeGreaterThan(0);
+    await fs.writeFile(extraFiles[1]!, "survivor");
+    await wait(survivingEdit.promise);
     expect(observed[0]).toHaveLength(closedCallbacks);
-    expect(observed[1]).toContain("surviving watcher edit");
-    await withinTest(owners[1]!.close(), signal);
-    expect(workers[0]!.threadId).toBe(-1);
-    expect(unavailable).not.toHaveBeenCalled();
+    expect(observed[1]).toContain("survivor");
+    await wait(owners[1]!.close());
+    expect(replacementWorker.threadId).toBe(-1);
+    expect(workers).toHaveLength(2);
+    expect(unavailable).toHaveBeenCalledTimes(2);
   } finally {
     const closing = Promise.allSettled(owners.map((owner) => owner.close()));
     try {
-      await withinTest(closing, signal);
+      await wait(closing);
     } finally {
       // Test cancellation must also retire workers if the lifecycle under test stalls.
       await Promise.all(workers.splice(0).map((worker) => worker.terminate()));

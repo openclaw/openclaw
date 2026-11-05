@@ -1,4 +1,8 @@
-import { MAX_SESSION_PARTICIPANTS } from "../config/sessions/session-entry-provenance.js";
+import {
+  MAX_SESSION_PARTICIPANTS,
+  isMainGitContributorScope,
+  inheritSessionGitContributorProfileIds,
+} from "../config/sessions/session-entry-provenance.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -28,6 +32,8 @@ type GitCoauthorAttributionParams = {
   agentId: string;
   config: OpenClawConfig;
   excludeAccountId?: number;
+  /** Host-verified requester; main is a routing hub, not a task contributor set. */
+  requesterProfileId?: string;
   host?: string;
   env?: NodeJS.ProcessEnv;
   sessionKey?: string;
@@ -88,7 +94,14 @@ async function resolveAttribution(
     ),
   );
   const inheritedProfileIds = entry.inheritedGitContributorProfileIds ?? [];
-  const profileIds = [...new Set([...profileRecords.keys(), ...inheritedProfileIds])];
+  const source = {
+    ...params,
+    sessionKey: params.sessionKey,
+    requesterProfileId: params.requesterProfileId,
+  };
+  const profileIds = isMainGitContributorScope(source)
+    ? (inheritSessionGitContributorProfileIds(entry, source) ?? [])
+    : [...new Set([...profileRecords.keys(), ...inheritedProfileIds])];
   if (profileIds.length === 0) {
     return empty;
   }
@@ -107,7 +120,7 @@ async function resolveAttribution(
     resolveConfiguredGitHubToolIdentity({ ...params, scope: "agent" }) ??
     resolveConfiguredGitHubToolIdentity({ ...params, scope: "system" });
   const primaryEmail = primaryIdentity?.gitAuthor?.email?.trim().toLowerCase();
-  const contributors = new Map<string, GitCoauthorContributor>();
+  const contributors = new Map<number, GitCoauthorContributor>();
   for (const profileId of profileIds) {
     const record = profileRecords.get(profileId);
     const identity = identities.get(profileId);
@@ -129,8 +142,7 @@ async function resolveAttribution(
     if (params.excludeAccountId === undefined && email.toLowerCase() === primaryEmail) {
       continue;
     }
-    const identityKey = `${issuer}:${identity.accountId}`;
-    const contributor = contributors.get(identityKey);
+    const contributor = contributors.get(identity.accountId);
     if (contributor) {
       if (record) {
         contributor.contributionCount += record.contributionCount;
@@ -141,7 +153,7 @@ async function resolveAttribution(
       }
       continue;
     }
-    contributors.set(identityKey, {
+    contributors.set(identity.accountId, {
       accountId: identity.accountId,
       email,
       contributionCount: record?.contributionCount ?? 0,

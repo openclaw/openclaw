@@ -1,16 +1,14 @@
 import { randomUUID } from "node:crypto";
-import type { IncomingHttpHeaders } from "node:http";
+import { CHANNEL_INGRESS_RETENTION_DEFAULTS } from "openclaw/plugin-sdk/channel-outbound";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { preflightCallbackOrigin, resolveMcpEventSourceOptions } from "./config.js";
-import { McpEventsIngress } from "./ingress.js";
 import {
   CALLBACK_PREFIX,
-  CallbackError,
-  MCP_EVENTS_PROFILE,
   createSigningSecret,
   parseEventCatalog,
   parseSubscriptionResult,
-  record,
 } from "./protocol.js";
 import {
   McpEventsSourceAuthority,
@@ -18,7 +16,12 @@ import {
   isAuthorityUnavailable,
   type SourceBinding,
 } from "./source-authority.js";
-import { createMcpEventsState, type McpEventsState, type SubscriptionBinding } from "./state.js";
+import {
+  createMcpEventsState,
+  type McpEventsState,
+  type QueuedEvent,
+  type SubscriptionBinding,
+} from "./state.js";
 import type { EventSourceSnapshot, McpEventsDependencies } from "./types.js";
 
 type LiveBinding = SourceBinding & {
@@ -29,68 +32,50 @@ const REQUEST_TTL_MS = 60 * 60_000;
 const ROTATION_WINDOW_MS = 5 * 60_000;
 const MAX_CLEANUP_RETRIES = 8;
 
+type Queue = ReturnType<McpEventsState["openQueue"]>;
+type Drain = ReturnType<OpenClawPluginApi["runtime"]["state"]["openChannelIngressDrain"]>;
+type AccountQueue = { queue: Queue; drain: Drain; admission: Promise<void>; lastPrunedAt?: number };
+const DRAIN_RETRY_MS = 1_000;
+
 export class McpEventsService {
+  private readonly accounts = new Map<string, AccountQueue>();
+  private drainWork?: Promise<void>;
+  private drainRetryMs = DRAIN_RETRY_MS;
   private readonly state: McpEventsState;
-  private readonly authority: McpEventsSourceAuthority;
-  private readonly bindings = new Map<string, LiveBinding>();
-  private readonly ingress: McpEventsIngress<LiveBinding>;
-  private readonly controller = new AbortController();
+  readonly authority: McpEventsSourceAuthority;
+  readonly bindings = new Map<string, LiveBinding>();
   private readonly signal: AbortSignal;
   private readonly scheduled = new Map<
     string,
     ReturnType<McpEventsDependencies["scheduler"]["schedule"]>
   >();
   private readonly work = new Set<Promise<unknown>>();
-  private stopped = false;
-  private initialization: "restoring" | "reconciling" | "ready" = "restoring";
+  initialization: "restoring" | "reconciling" | "ready" = "restoring";
   private reconcileWork?: Promise<void>;
   private reconcileRequested = false;
-  private readonly unavailable = new Map<
-    string,
-    { source: EventSourceSnapshot; attempts: number }
-  >();
+  readonly unavailable = new Map<string, { source: EventSourceSnapshot; attempts: number }>();
 
-  constructor(private readonly deps: McpEventsDependencies) {
+  constructor(readonly deps: McpEventsDependencies) {
     this.state = createMcpEventsState(deps.runtime);
     this.authority = new McpEventsSourceAuthority(deps.prepareSource, this.assertService);
-    this.signal = AbortSignal.any([this.controller.signal, deps.scheduler.signal]);
-    this.ingress = new McpEventsIngress(deps, this.state.openQueue, {
-      signal: this.signal,
-      assertService: this.assertService,
-      isStopped: () => this.stopped,
-      binding: (id) => this.bindings.get(id),
-      hasJob: (jobId) =>
-        [...this.bindings.values()].some((binding) => binding.facts.jobId === jobId),
-      refreshAuthority: (binding) => this.authority.refresh(binding),
-      guard: (binding) => this.authority.guard(binding),
-      revoke: (binding) => this.revoke(binding, "source_unavailable"),
-      persistCursor: (binding, cursor) =>
-        this.mutate(binding, (facts) => ({
-          ...facts,
-          cursor,
-          cursorRevision: facts.cursorRevision + 1,
-          updatedAt: this.now,
-        })),
-      track: (promise) => this.track(promise),
-      schedule: (id, atMs, run, earliest) => this.schedule(id, atMs, run, earliest),
-    });
+    this.signal = deps.scheduler.signal;
   }
 
-  private get now() {
+  get now() {
     return this.deps.scheduler.now();
   }
-  private assertService = () => {
-    if (this.stopped || this.signal.aborted) {
+  assertService = () => {
+    if (this.signal.aborted) {
       throw new SourceRevokedError("MCP Events service stopped");
     }
   };
-  private track<T>(promise: Promise<T>): Promise<T> {
+  track<T>(promise: Promise<T>): Promise<T> {
     this.work.add(promise);
     void promise.finally(() => this.work.delete(promise)).catch(() => {});
     return promise;
   }
   private schedule(id: string, atMs: number, run: () => Promise<unknown>, earliest = false) {
-    if (this.stopped || this.signal.aborted) {
+    if (this.signal.aborted) {
       return;
     }
     this.scheduled.set(
@@ -112,28 +97,17 @@ export class McpEventsService {
     this.scheduled.delete(id);
   }
 
-  /** Serializes facts, not network calls: callbacks can verify during subscribe. */
-  private mutate(
+  /** Draft facts commit only after serialized storage; callbacks can verify during subscribe. */
+  mutate(
     binding: LiveBinding,
-    update: (facts: SubscriptionBinding) => SubscriptionBinding,
+    update: (facts: SubscriptionBinding) => void,
     assertCurrent = this.authority.guard(binding),
   ) {
     const write = binding.writes.then(async () => {
       assertCurrent();
-      const next = update(binding.facts);
-      // The keyed store accepts plain JSON, so cleared optional facts must be absent.
-      for (const field of [
-        "remoteId",
-        "refreshBefore",
-        "previousSecret",
-        "pendingSecret",
-        "lastError",
-        "retiredAt",
-      ] as const) {
-        if (next[field] === undefined) {
-          delete next[field];
-        }
-      }
+      const next = { ...binding.facts };
+      update(next);
+      next.updatedAt = this.now;
       await this.state.withCurrent({ assertCurrent }).register(next.bindingId, next);
       // A committed update stays recorded even if authority was revoked after commit admission.
       binding.facts = next;
@@ -155,7 +129,7 @@ export class McpEventsService {
         live: facts.status !== "revoked",
         writes: Promise.resolve(),
       });
-      this.ingress.account(facts.accountId);
+      this.account(facts.accountId);
     }
     this.initialization = "reconciling";
     await this.reconcile();
@@ -163,11 +137,7 @@ export class McpEventsService {
   }
 
   async stop(): Promise<void> {
-    this.stopped = true;
-    this.controller.abort();
-    for (const job of this.scheduled.values()) {
-      job.cancel();
-    }
+    this.deps.scheduler.beginClose();
     this.scheduled.clear();
     // Ordinary restart retains subscriptions and cursors. It is not a user unsubscribe.
     for (const binding of this.bindings.values()) {
@@ -175,18 +145,18 @@ export class McpEventsService {
     }
     await Promise.allSettled(this.work);
     await Promise.all([...this.bindings.values()].map((binding) => binding.writes));
-    await this.ingress.stop();
+    for (const account of this.accounts.values()) {
+      await account.admission;
+      await account.drain.waitForIdle();
+      account.drain.dispose();
+    }
     for (const binding of this.bindings.values()) {
       binding.source?.dispose();
     }
   }
 
-  requestDrain(jobId?: string) {
-    this.ingress.requestDrain(jobId);
-  }
-
   requestReconcile() {
-    if (this.stopped) {
+    if (this.signal.aborted) {
       return;
     }
     if (this.initialization === "restoring" || this.reconcileWork) {
@@ -308,7 +278,7 @@ export class McpEventsService {
           // Reconciliation alone creates bindings; retries must not race it into a second subscription.
           await this.reconcile();
         } catch {
-          if (!this.stopped) {
+          if (!this.signal.aborted) {
             this.retrySource(source);
           }
         }
@@ -395,7 +365,7 @@ export class McpEventsService {
         .register(bindingId, facts);
       this.authority.guard(binding)();
       this.bindings.set(bindingId, binding);
-      this.ingress.account(facts.accountId);
+      this.account(facts.accountId);
       return binding;
     } catch (error) {
       source.dispose();
@@ -427,11 +397,9 @@ export class McpEventsService {
       const source = binding.source!;
       const guard = this.authority.guard(binding);
       if (binding.facts.status === "active" && !binding.facts.pendingSecret) {
-        await this.mutate(binding, (facts) => ({
-          ...facts,
-          pendingSecret: createSigningSecret(),
-          updatedAt: this.now,
-        }));
+        await this.mutate(binding, (facts) => {
+          facts.pendingSecret = createSigningSecret();
+        });
       }
       const secret = binding.facts.pendingSecret ?? binding.facts.secret;
       const cursorRevision = binding.facts.cursorRevision;
@@ -449,26 +417,24 @@ export class McpEventsService {
       );
       guard();
       const result = parseSubscriptionResult(response, this.now);
-      await this.mutate(binding, (facts) => ({
-        ...facts,
-        status: "active",
-        remoteId: result.id,
-        refreshBefore: result.refreshBefore,
-        secret,
-        pendingSecret: undefined,
-        previousSecret:
-          facts.secret !== secret
-            ? { value: facts.secret, until: this.now + ROTATION_WINDOW_MS }
-            : facts.previousSecret,
-        cursor: facts.cursorRevision === cursorRevision ? result.cursor : facts.cursor,
-        truncated: facts.truncated || result.truncated,
-        failures: 0,
-        lastError: undefined,
-        nextAttemptAt: this.now + Math.max(1, Math.floor((result.refreshBefore - this.now) * 0.8)),
-        updatedAt: this.now,
-      }));
+      await this.mutate(binding, (facts) => {
+        facts.status = "active";
+        facts.remoteId = result.id;
+        facts.refreshBefore = result.refreshBefore;
+        if (facts.secret !== secret) {
+          facts.previousSecret = { value: facts.secret, until: this.now + ROTATION_WINDOW_MS };
+        }
+        facts.secret = secret;
+        delete facts.pendingSecret;
+        facts.cursor = facts.cursorRevision === cursorRevision ? result.cursor : facts.cursor;
+        facts.truncated ||= result.truncated;
+        facts.failures = 0;
+        delete facts.lastError;
+        facts.nextAttemptAt =
+          this.now + Math.max(1, Math.floor((result.refreshBefore - this.now) * 0.8));
+      });
     } catch (error) {
-      if (!binding.live || this.stopped) {
+      if (!binding.live || this.signal.aborted) {
         return;
       }
       if (error instanceof SourceRevokedError) {
@@ -495,13 +461,11 @@ export class McpEventsService {
       retryAt = nextAttemptAt;
       await this.mutate(
         binding,
-        (facts) => ({
-          ...facts,
-          failures: facts.failures + 1,
-          lastError: "subscribe_failed",
-          nextAttemptAt,
-          updatedAt: this.now,
-        }),
+        (facts) => {
+          facts.failures++;
+          facts.lastError = "subscribe_failed";
+          facts.nextAttemptAt = nextAttemptAt;
+        },
         assertBindingCurrent,
       );
     } finally {
@@ -512,7 +476,7 @@ export class McpEventsService {
     }
   }
 
-  private async revoke(binding: LiveBinding, reason?: SubscriptionBinding["lastError"]) {
+  async revoke(binding: LiveBinding, reason?: SubscriptionBinding["lastError"]) {
     if (!binding.live && binding.facts.status === "revoked") {
       this.armCleanup(binding);
       return;
@@ -524,16 +488,18 @@ export class McpEventsService {
     try {
       await this.mutate(
         binding,
-        (facts) => ({
-          ...facts,
-          status: "revoked",
-          cleanupPending: true,
-          retiredAt: this.now,
-          failures: 0,
-          lastError: reason,
-          nextAttemptAt: this.now,
-          updatedAt: this.now,
-        }),
+        (facts) => {
+          facts.status = "revoked";
+          facts.cleanupPending = true;
+          facts.retiredAt = this.now;
+          facts.failures = 0;
+          if (reason === undefined) {
+            delete facts.lastError;
+          } else {
+            facts.lastError = reason;
+          }
+          facts.nextAttemptAt = this.now;
+        },
         this.assertService,
       );
     } catch (error) {
@@ -585,7 +551,7 @@ export class McpEventsService {
       // A refresh in flight may still activate remotely; join it before cleanup.
       await binding.pending?.catch(() => {});
       if (
-        !this.stopped &&
+        !this.signal.aborted &&
         !binding.live &&
         this.bindings.get(binding.facts.bindingId) === binding
       ) {
@@ -614,28 +580,24 @@ export class McpEventsService {
         await binding.source.unsubscribe(this.signal);
         await this.mutate(
           binding,
-          (facts) => ({
-            ...facts,
-            cleanupPending: false,
-            lastError: undefined,
-            updatedAt: this.now,
-          }),
+          (facts) => {
+            facts.cleanupPending = false;
+            delete facts.lastError;
+          },
           this.assertService,
         );
         await this.forgetBinding(binding);
       } catch {
-        if (this.stopped) {
+        if (this.signal.aborted) {
           return;
         }
         await this.mutate(
           binding,
-          (facts) => ({
-            ...facts,
-            lastError: "cleanup_failed",
-            failures: facts.failures + 1,
-            nextAttemptAt: retryAt,
-            updatedAt: this.now,
-          }),
+          (facts) => {
+            facts.lastError = "cleanup_failed";
+            facts.failures++;
+            facts.nextAttemptAt = retryAt;
+          },
           this.assertService,
         );
       } finally {
@@ -645,46 +607,123 @@ export class McpEventsService {
     });
   }
 
-  receive(bindingId: string, headers: IncomingHttpHeaders, body: Buffer) {
-    if (this.initialization !== "ready") {
-      throw new CallbackError(503, "Subscription state is loading; retry later");
+  account(accountId: string): AccountQueue {
+    const existing = this.accounts.get(accountId);
+    if (existing) {
+      return existing;
     }
-    return this.ingress.receive(bindingId, headers, body);
+    const queue = this.state.openQueue(accountId);
+    if (!queue.listUnsettled || !queue.enqueueAuthorized) {
+      throw new Error("MCP Events requires coherent durable ingress inspection; update OpenClaw");
+    }
+    const drain = this.deps.runtime.state.openChannelIngressDrain<QueuedEvent>({
+      queue,
+      abortSignal: this.signal,
+      now: () => this.now,
+      deriveLaneKey: (event) => event.payload.jobId,
+      startLimit: 8,
+      formatError: () => "MCP event admission failed; inspect source and automation diagnostics",
+      onLog: (message) => this.deps.logger.warn(message),
+      resolveNonRetryableFailure: (error) =>
+        error instanceof SourceRevokedError
+          ? {
+              reason: "source_revoked",
+              message: "The authored event source was removed, paused, or replaced",
+            }
+          : null,
+      dispatchClaimedEvent: async (claim) => {
+        const binding = this.bindings.get(claim.payload.payload.bindingId);
+        if (!binding?.live) {
+          throw new SourceRevokedError("MCP event source revoked");
+        }
+        try {
+          await this.authority.refresh(binding);
+          const assertCurrent = this.authority.guard(binding);
+          assertCurrent();
+          const { jobId, ...input } = claim.payload;
+          const result = await this.deps.cron.runEvent(jobId, {
+            ...input,
+            claim: { queueName: claim.queueName, id: claim.id, token: claim.claim.token },
+            assertCurrent,
+          });
+          if (result.kind === "invalidated") {
+            throw new SourceRevokedError("MCP event source changed");
+          }
+          if (result.kind === "pending") {
+            return { kind: "pending" };
+          }
+          // The Cron owner atomically consumed this exact claim with its receipt. No second completion.
+          return { kind: "transferred" };
+        } catch (error) {
+          if (isAuthorityUnavailable(error)) {
+            return { kind: "pending" };
+          }
+          if (error instanceof SourceRevokedError) {
+            await this.revoke(binding, "source_unavailable");
+          }
+          throw error;
+        }
+      },
+    });
+    const account = { queue, drain, admission: Promise.resolve() };
+    this.accounts.set(accountId, account);
+    return account;
   }
 
-  diagnostics() {
-    return [
-      ...[...this.bindings.values()].map(({ facts, live }) => ({
-        bindingId: facts.bindingId,
-        jobId: facts.jobId,
-        sourceIdentity: facts.sourceIdentity,
-        serverName: facts.serverName,
-        name: facts.definition.name,
-        profile: MCP_EVENTS_PROFILE,
-        status: !live
-          ? "revoked"
-          : facts.refreshBefore && facts.refreshBefore <= this.now
-            ? "expired"
-            : facts.status,
-        refreshBefore: facts.refreshBefore,
-        replayAvailable: facts.cursor !== null,
-        truncated: facts.truncated,
-        failures: facts.failures,
-        nextAttemptAt: facts.nextAttemptAt,
-        cleanupPending: facts.cleanupPending,
-        lastError: facts.lastError,
-        updatedAt: facts.updatedAt,
-      })),
-      ...[...this.unavailable.values()].map(({ source, attempts }) => ({
-        jobId: source.jobId,
-        sourceIdentity: source.sourceIdentity,
-        serverName: typeof source.options.server === "string" ? source.options.server : undefined,
-        name: typeof source.options.name === "string" ? source.options.name : undefined,
-        profile: MCP_EVENTS_PROFILE,
-        status: "unavailable",
-        lastError: "source_unavailable",
-        failures: attempts,
-      })),
-    ];
+  /** Hooks and durable enqueue wake the existing host scheduler; empty queues have no timer. */
+  requestDrain(jobId?: string) {
+    if (
+      this.signal.aborted ||
+      (jobId && ![...this.bindings.values()].some((binding) => binding.facts.jobId === jobId))
+    ) {
+      return;
+    }
+    this.drainRetryMs = DRAIN_RETRY_MS;
+    this.schedule("drain", this.now, () => this.drain(), true);
+  }
+
+  private drain(): Promise<void> {
+    if (this.drainWork) {
+      return this.drainWork;
+    }
+    const operation = (async () => {
+      let backlog = false;
+      try {
+        for (const account of this.accounts.values()) {
+          this.assertService();
+          await account.drain.recoverStaleClaims();
+          await account.drain.drainOnce();
+          await account.drain.waitForIdle();
+          if (
+            account.lastPrunedAt === undefined ||
+            this.now - account.lastPrunedAt >= CHANNEL_INGRESS_RETENTION_DEFAULTS.pruneIntervalMs
+          ) {
+            const { pruneIntervalMs: _interval, ...retention } = CHANNEL_INGRESS_RETENTION_DEFAULTS;
+            // Pending and claimed rows have no retention eviction.
+            await account.queue.prune({ ...retention, now: this.now });
+            account.lastPrunedAt = this.now;
+          }
+          const unsettled = await account.queue.listUnsettled!();
+          backlog ||= unsettled.pending.length > 0 || unsettled.claims.length > 0;
+        }
+      } catch {
+        backlog = true;
+        this.deps.logger.warn(
+          "mcp-events: ingress inspection/admission unavailable; retained work will retry",
+        );
+      } finally {
+        if (backlog && !this.signal.aborted) {
+          this.schedule("drain", this.now + this.drainRetryMs, () => this.drain(), true);
+          this.drainRetryMs = Math.min(30_000, this.drainRetryMs * 2);
+        }
+      }
+    })();
+    this.drainWork = operation;
+    void operation
+      .finally(() => {
+        this.drainWork = undefined;
+      })
+      .catch(() => {});
+    return this.track(operation);
   }
 }

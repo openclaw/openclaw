@@ -55,6 +55,7 @@ const schema = z.discriminatedUnion("operation", [
       operation: z.literal("diff"),
       scope: z.enum(["all", "uncommitted", "commit"]),
       commit: text.optional(),
+      summaryOnly: z.boolean().optional(),
       baseCommit: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u),
     })
     .strict(),

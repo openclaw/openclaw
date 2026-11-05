@@ -46,9 +46,7 @@ export default definePluginEntry({
       },
     });
     api.registerEmbeddingProvider(openAiMemoryEmbeddingProviderAdapter);
-    api.registerDecisionProvider(
-      buildOpenAIDecisionProvider(() => api.runtime.config.current({ clone: true })),
-    );
+    api.registerDecisionProvider(buildOpenAIDecisionProvider());
     api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider(api.runtime.modelAuth));
     api.registerRealtimeTranscriptionProvider(buildOpenAIRealtimeTranscriptionProvider);
     api.registerRealtimeVoiceProvider((context) => {

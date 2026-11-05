@@ -118,6 +118,7 @@ function expectCmdWrappedInvocation(call: ExecaCall, commandFragment = "pnpm.cmd
 let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
 let runCommandBuffered: typeof import("./exec.js").runCommandBuffered;
 let runCommandBuffersWithTimeout: typeof import("./exec-runner.js").runCommandBuffersWithTimeout;
+let runUtf8CommandBuffersWithTimeout: typeof import("./exec-runner.js").runUtf8CommandBuffersWithTimeout;
 let runExec: typeof import("./exec.js").runExec;
 let spawnCommand: typeof import("./exec.js").spawnCommand;
 let withCommandProcessScope: typeof import("./exec-spawn.js").withCommandProcessScope;
@@ -158,7 +159,8 @@ describe("Windows command execution", () => {
     ({ getWindowsInstallRoots } = await import("../infra/windows-install-roots.js"));
     ({ runCommandBuffered, runCommandWithTimeout, runExec, spawnCommand } =
       await import("./exec.js"));
-    ({ runCommandBuffersWithTimeout } = await import("./exec-runner.js"));
+    ({ runCommandBuffersWithTimeout, runUtf8CommandBuffersWithTimeout } =
+      await import("./exec-runner.js"));
     ({ withCommandProcessScope } = await import("./exec-spawn.js"));
     execaMock.mockReset().mockImplementation(() => createMockSubprocess());
     isRegularFileMock.mockReset().mockReturnValue(true);
@@ -224,21 +226,52 @@ describe("Windows command execution", () => {
     expect(execaMock).not.toHaveBeenCalled();
   });
 
-  it("spawns node plus npm-cli.js instead of npm.cmd when available", async () => {
-    vi.spyOn(fs, "existsSync").mockReturnValue(true);
-    vi.spyOn(process, "execPath", "get").mockReturnValue("C:\\Program Files\\nodejs\\node.exe");
-    void spawnCommand(["npm", "--version"]);
-    const [command, args, options] = requireExecaCall(0);
-    expect(path.win32.basename(command).toLowerCase()).toBe("node.exe");
-    expect(args[0]).toContain(path.join("node_modules", "npm", "bin", "npm-cli.js"));
-    expect(args[1]).toBe("--version");
-    expect(options).toMatchObject({ shell: false, windowsHide: true });
-  });
+  it.each([
+    ["npm", "npm-cli.js"],
+    ["npx", "npx-cli.js"],
+  ] as const)(
+    "spawns node plus %s's declared CLI instead of a command shim",
+    async (manager, entry) => {
+      vi.spyOn(fs, "existsSync").mockReturnValue(true);
+      vi.spyOn(process, "execPath", "get").mockReturnValue("C:\\Program Files\\nodejs\\node.exe");
+      void spawnCommand([manager, "--version"]);
+      const [command, args, options] = requireExecaCall(0);
+      expect(path.win32.basename(command).toLowerCase()).toBe("node.exe");
+      expect(args[0]).toContain(path.join("node_modules", "npm", "bin", entry));
+      expect(args[1]).toBe("--version");
+      expect(options).toMatchObject({ shell: false, windowsHide: true });
+    },
+  );
 
   it("falls back to a trusted npm.cmd wrapper when npm-cli.js is unavailable", async () => {
     vi.spyOn(fs, "existsSync").mockReturnValue(false);
     void spawnCommand(["npm", "--version"]);
     expectCmdWrappedInvocation(requireExecaCall(0), "npm.cmd");
+  });
+
+  it.each([
+    "npm.exe",
+    "npx.exe",
+    "C:/selected/npm.exe",
+    "C:\\selected\\npx.exe",
+    "C:/selected/npm.cmd",
+    "C:\\selected\\npx.bat",
+  ])("honors the caller-selected %s even when bundled npm exists", async (selected) => {
+    vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    vi.spyOn(process, "execPath", "get").mockReturnValue("C:\\Program Files\\nodejs\\node.exe");
+    await runCommandWithTimeout([selected, "--version"], { timeoutMs: 1_000 });
+    const call = requireExecaCall(0);
+    if (/\.(cmd|bat)$/.test(selected)) {
+      expectCmdWrappedInvocation(call, selected);
+    } else {
+      expect(call[0]).toBe(
+        selected.includes("/") || selected.includes("\\")
+          ? selected
+          : `C:\\openclaw-test-bin\\${selected}`,
+      );
+      expect(call[1]).toEqual(["--version"]);
+      expect(call[2]).toMatchObject({ shell: false, windowsHide: true });
+    }
   });
 
   it("infers success when a spawned Windows shim has no exit state", async () => {
@@ -415,6 +448,26 @@ describe("Windows command execution", () => {
       stderr,
       windowsEncoding: "gbk",
     });
+  });
+
+  it("retains UTF-8 bytes and trims only the bounded capture edge regardless of console page", async () => {
+    changingCodepageOutput({
+      stdoutChunks: [Buffer.from("a🦊z")],
+      stderrChunks: [Buffer.from([0xf0, 0x9f])],
+    });
+    await expect(
+      runUtf8CommandBuffersWithTimeout(["node", "utf8-output.js"], {
+        maxOutputBytes: { stdout: 4, stderr: 4 },
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toMatchObject({
+      code: 0,
+      stdout: Buffer.from("z"),
+      stdoutTruncatedBytes: 5,
+      stderr: Buffer.from([0xf0, 0x9f]),
+      windowsEncoding: null,
+    });
+    expect(spawnSyncMock).not.toHaveBeenCalled();
   });
 
   it("decodes truncated, split output with the code page captured before spawn", async () => {

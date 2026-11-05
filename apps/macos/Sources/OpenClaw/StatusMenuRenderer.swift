@@ -282,7 +282,6 @@ final class StatusMenuRenderer: NSObject {
         }
 
         self.configureNative(item, title: title, symbol: symbol, action: #selector(self.performAction(_:)))
-        item.isEnabled = action != .talkMode || voiceWakeSupported
         item.keyEquivalent = ""
 
         switch action {

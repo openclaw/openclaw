@@ -1,13 +1,4 @@
-import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
-import type { DecisionProviderContextV2 } from "./provider-context.js";
-import type {
-  DecisionEntry,
-  DecisionOutcome,
-  DecisionQuestion,
-  DecisionRuntimeV1,
-  JsonValue,
-  ProviderDecisionOutcome,
-} from "./types.js";
+import type { DecisionEntry, DecisionQuestion, JsonValue } from "./input-types.js";
 
 /** Explicit evidence supplied by the caller; the host collects no additional context. */
 export type DecisionContentV2 =
@@ -22,6 +13,7 @@ export type DecisionContentV2 =
 export type DecisionQuestionV2 =
   | DecisionQuestion
   | { readonly type: "sort"; readonly instructions?: DecisionEntry }
+  | { readonly type: "box"; readonly instructions: Exclude<DecisionEntry, null> }
   | {
       readonly type: "tags";
       readonly instructions?: DecisionEntry;
@@ -66,6 +58,17 @@ export type DecisionAnswerV2 =
           readonly confidence?: number | null;
         }
       | {
+          readonly type: "box";
+          /** Edges normalized to image width/height, measured from the top-left corner. */
+          readonly box: {
+            readonly top: number;
+            readonly bottom: number;
+            readonly left: number;
+            readonly right: number;
+          };
+          readonly confidence?: number | null;
+        }
+      | {
           readonly type: "sort";
           readonly order: readonly string[];
           readonly confidence?: number | null;
@@ -100,39 +103,3 @@ export type DecisionBatchResultV2 = {
   };
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 };
-
-export type ProviderDecisionOutcomeV2 =
-  | { readonly status: "ok"; readonly result: DecisionBatchResultV2 }
-  | Extract<ProviderDecisionOutcome, { status: "unavailable" }>;
-
-export type DecisionOutcomeV2 =
-  | {
-      readonly status: "ok";
-      readonly result: DecisionBatchResultV2;
-      readonly provenance: Extract<DecisionOutcome, { status: "ok" }>["provenance"];
-    }
-  | Extract<DecisionOutcome, { status: "unavailable" }>;
-
-/** Execution options add only provider-declared reasoning to the established caller contract. */
-export type DecisionEvaluateOptionsV2 = Parameters<DecisionRuntimeV1["evaluate"]>[1] & {
-  readonly reasoning?: DecisionProviderContextV2["reasoning"];
-};
-
-/** Shares normal model catalog, route and credential ownership with conversational inference. */
-export interface DecisionProviderV2 {
-  readonly id: string;
-  readonly contractVersion: 2;
-  /** Omit when this plugin has already registered the same normal provider. */
-  readonly provider?: Omit<ProviderPlugin, "id">;
-  evaluate(
-    batch: DecisionBatchV2,
-    context: DecisionProviderContextV2,
-  ): Promise<ProviderDecisionOutcomeV2>;
-}
-
-export interface DecisionRuntimeV2 extends DecisionRuntimeV1 {
-  evaluateV2(
-    batch: DecisionBatchV2,
-    options: DecisionEvaluateOptionsV2,
-  ): Promise<DecisionOutcomeV2>;
-}

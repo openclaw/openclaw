@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqliteRuntime from "../infra/bun-sqlite-library.js";
 import {
@@ -37,6 +37,7 @@ const readResult: OpenClawStateReadOutcome = {
 
 const mocks = vi.hoisted(() => ({
   cleanupKey: Symbol("signal-custody snapshot cleanup"),
+  exitCleanup: undefined as (() => void) | undefined,
   source: "",
   sourceIdentity: { key: "", canonicalPath: "" },
   directory: "/synthetic/state/snapshot",
@@ -100,6 +101,13 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 vi.mock("../cli/signal-exit-barrier.js", () => ({ registerSignalExitFinalizer: vi.fn() }));
+// mock-isolation: invoke the real snapshot callback without retiring unrelated process owners.
+vi.mock("../infra/process-exit-cleanup.js", () => ({
+  registerProcessExitCleanup: (cleanup: () => void) => {
+    mocks.exitCleanup = cleanup;
+    return () => {};
+  },
+}));
 vi.mock("../logging/logger.js", () => ({ getChildLogger: () => ({ warn: vi.fn() }) }));
 // mock-isolation: admit only the synthetic source without opening the real SQLite cache.
 vi.mock("./openclaw-state-db-cache.js", () => ({
@@ -163,27 +171,10 @@ vi.mock("./openclaw-state-read-worker.js", async () => {
   return createReadWorkerFixture(mocks.read, mocks.close);
 });
 
-let exitCleanup: (() => void) | undefined;
-let restoreExitSpy: () => void;
-beforeAll(() => {
-  const original = process.once.bind(process);
-  const spy = vi.spyOn(process, "once").mockImplementation(function (event, listener) {
-    if (event === "exit") {
-      exitCleanup = () => listener(0);
-      return process;
-    }
-    return original(event, listener);
-  });
-  restoreExitSpy = () => spy.mockRestore();
-});
 afterAll(async () => {
-  try {
-    await cleanupSnapshotOperations();
-    expect(mocks.resources.size).toBe(0);
-    Reflect.deleteProperty(globalThis, mocks.cleanupKey);
-  } finally {
-    restoreExitSpy();
-  }
+  await cleanupSnapshotOperations();
+  expect(mocks.resources.size).toBe(0);
+  Reflect.deleteProperty(globalThis, mocks.cleanupKey);
 });
 
 beforeEach(() => {
@@ -263,8 +254,8 @@ function captureOutcome(operation: Promise<unknown>) {
 
 function assertFilesRetained() {
   expect(mocks.removed).toEqual([]);
-  expect(exitCleanup).toBeTypeOf("function");
-  exitCleanup?.();
+  expect(mocks.exitCleanup).toBeTypeOf("function");
+  mocks.exitCleanup?.();
   expect(mocks.removed).toEqual([]);
 }
 
@@ -456,67 +447,79 @@ it.each(["registered", "not-yet-registered"] as const)(
   },
 );
 
-it("forwards caller cancellation while retaining descendants and transport close", async () => {
-  const caller = new AsyncWorkScope();
-  const reason = new Error("Controlled caller cancellation");
-  const callback = stage(undefined);
-  const reading = hold(mocks.read, readResult);
-  const closing = hold(mocks.close, undefined, "close-settled");
-  const child = stage(undefined, "descendant-settled");
-  let observedSignal: AbortSignal | undefined;
-  let abortListenerSignal: AbortSignal | undefined;
-  let descendant: Promise<void> | undefined;
-  let reader: ReturnType<typeof captureOutcome> | undefined;
-  let draining: Promise<void> | undefined;
-  let callerDrained = false;
-  const operation = captureOutcome(
-    caller.track(() =>
-      snapshot(async () => {
-        observedSignal = getAsyncWorkSignal();
-        observedSignal?.addEventListener(
-          "abort",
-          () => {
-            abortListenerSignal = getAsyncWorkSignal();
-          },
-          { once: true },
-        );
-        descendant = trackAsyncWork(child.run);
-        reader = captureOutcome(read());
-        await callback.run();
-      }),
-    ),
-  );
-  try {
-    await expectEntered(callback.entered, operation);
-    await expectEntered(reading.entered, reader ?? operation);
-    caller.beginClose(reason);
-    draining = caller.drain().then(() => {
-      callerDrained = true;
-      mocks.events.push("caller-drained");
-    });
-    expect(observedSignal?.aborted).toBe(true);
-    expect(observedSignal?.reason).toBe(reason);
-    expect(abortListenerSignal).toBe(observedSignal);
-    callback.release();
-    reading.release();
-    await expectEntered(closing.entered, reader ?? operation);
-    expectCallerPending(caller, callerDrained);
-    closing.release();
-    expect(await reader).toEqual({ error: reason });
-    expectCallerPending(caller, callerDrained);
-  } finally {
-    callback.release();
-    child.release();
-    reading.release();
-    closing.release();
-    await descendant;
-    await reader;
-    await operation;
-    await (draining ?? caller.drain());
-  }
-  expect(mocks.events).toEqual(["close-settled", "descendant-settled", "remove", "caller-drained"]);
-  expect(mocks.removed).toEqual([mocks.directory]);
-});
+it.each(["query", "cleanup"] as const)(
+  "forwards caller cancellation during %s while retaining descendants and transport close",
+  async (phase) => {
+    const caller = new AsyncWorkScope();
+    const reason = new Error("Controlled caller cancellation");
+    const callback = stage(undefined);
+    const reading = hold(mocks.read, readResult);
+    const closing = hold(mocks.close, undefined, "close-settled");
+    const child = stage(undefined, "descendant-settled");
+    let observedSignal: AbortSignal | undefined;
+    let abortListenerSignal: AbortSignal | undefined;
+    let descendant: Promise<void> | undefined;
+    let reader: ReturnType<typeof captureOutcome> | undefined;
+    let draining: Promise<void> | undefined;
+    let callerDrained = false;
+    const operation = captureOutcome(
+      caller.track(() =>
+        snapshot(async () => {
+          observedSignal = getAsyncWorkSignal();
+          observedSignal?.addEventListener(
+            "abort",
+            () => {
+              abortListenerSignal = getAsyncWorkSignal();
+            },
+            { once: true },
+          );
+          descendant = trackAsyncWork(child.run);
+          reader = captureOutcome(read());
+          await callback.run();
+        }),
+      ),
+    );
+    try {
+      await expectEntered(callback.entered, operation);
+      await expectEntered(reading.entered, reader ?? operation);
+      if (phase === "cleanup") {
+        reading.release();
+        await expectEntered(closing.entered, reader ?? operation);
+      }
+      caller.beginClose(reason);
+      draining = caller.drain().then(() => {
+        callerDrained = true;
+        mocks.events.push("caller-drained");
+      });
+      expect(observedSignal?.aborted).toBe(true);
+      expect(observedSignal?.reason).toBe(reason);
+      expect(abortListenerSignal).toBe(observedSignal);
+      callback.release();
+      reading.release();
+      await expectEntered(closing.entered, reader ?? operation);
+      expectCallerPending(caller, callerDrained);
+      closing.release();
+      expect(await reader).toEqual({ error: reason });
+      expectCallerPending(caller, callerDrained);
+    } finally {
+      callback.release();
+      child.release();
+      reading.release();
+      closing.release();
+      await descendant;
+      await reader;
+      await operation;
+      await (draining ?? caller.drain());
+    }
+    expect(mocks.events).toEqual([
+      "close-settled",
+      "descendant-settled",
+      "remove",
+      "caller-drained",
+    ]);
+    expect(mocks.removed).toEqual([mocks.directory]);
+  },
+);
 
 it("preserves caller cancellation that precedes snapshot callback admission", async () => {
   const caller = new AsyncWorkScope();

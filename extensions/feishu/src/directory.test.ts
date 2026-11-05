@@ -173,6 +173,37 @@ describe("feishu directory (config-backed)", () => {
     await expect(livePeers({ query: "a" })).resolves.toEqual(users("alice", "carla"));
   });
 
+  it.each([
+    ["peer", 0],
+    ["peer", -1],
+    ["group", 0],
+    ["group", -1],
+  ] as const)("treats a nonpositive %s limit (%i) as unlimited", async (kind, limit) => {
+    const items = ["first", "second"].map((suffix) =>
+      kind === "peer" ? { open_id: `ou_${suffix}` } : { chat_id: `chat-${suffix}` },
+    );
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce(page(items, "next/page+2="))
+      .mockResolvedValueOnce(page(items));
+    (kind === "peer" ? mockPeerList : mockGroupList)(list);
+    const directory =
+      kind === "peer" ? listFeishuDirectoryPeersLive : listFeishuDirectoryGroupsLive;
+
+    const result = await directory({ cfg: makeConfiguredCfg(), limit, fallbackToStatic: false });
+    expect(result.map((entry) => entry.id)).toEqual(
+      kind === "peer"
+        ? ["ou_first", "ou_second", "ou_first", "ou_second"]
+        : ["chat-first", "chat-second", "chat-first", "chat-second"],
+    );
+    expect(list).toHaveBeenNthCalledWith(1, {
+      params: { page_size: kind === "peer" ? 50 : 100, page_token: undefined },
+    });
+    expect(list).toHaveBeenNthCalledWith(2, {
+      params: { page_size: kind === "peer" ? 50 : 100, page_token: "next/page+2=" },
+    });
+  });
+
   it("paginates live groups until the filtered result limit is reached", async () => {
     const list = vi
       .fn()
@@ -198,15 +229,15 @@ describe("feishu directory (config-backed)", () => {
       .mockResolvedValueOnce(page([{ open_id: "ou_bob", name: "Bob" }], "next/page+2="))
       .mockResolvedValueOnce(
         page([
-          { open_id: "ou_alice", name: "Alice" },
-          { open_id: "ou_alice_2", name: "Alice Two" },
+          { open_id: "ou_alice", name: "Mu\u0308ller" },
+          { open_id: "ou_alice_2", name: "Mu\u0308ller Two" },
         ]),
       );
     mockPeerList(list);
 
-    await expect(livePeers({ query: "ALICE", limit: 1, fallbackToStatic: false })).resolves.toEqual(
-      [{ kind: "user", id: "ou_alice", name: "Alice" }],
-    );
+    await expect(
+      livePeers({ query: "MÜLLER", limit: 1, fallbackToStatic: false }),
+    ).resolves.toEqual([{ kind: "user", id: "ou_alice", name: "Mu\u0308ller" }]);
     expect(list).toHaveBeenCalledTimes(2);
     expect(list).toHaveBeenLastCalledWith({
       params: { page_size: 50, page_token: "next/page+2=" },
@@ -241,12 +272,19 @@ describe("feishu directory (config-backed)", () => {
     expect(list).toHaveBeenCalledTimes(2);
   });
 
-  it.each([undefined, ""])("rejects missing continuation tokens (%j)", async (pageToken) => {
+  it.each([
+    ["peer", undefined],
+    ["peer", ""],
+    ["group", undefined],
+    ["group", ""],
+  ] as const)("rejects missing %s continuation tokens (%j)", async (kind, pageToken) => {
     const list = vi.fn().mockResolvedValue(page([], pageToken, true));
-    mockPeerList(list);
+    (kind === "peer" ? mockPeerList : mockGroupList)(list);
+    const directory =
+      kind === "peer" ? listFeishuDirectoryPeersLive : listFeishuDirectoryGroupsLive;
 
-    await expect(livePeers({ fallbackToStatic: false })).rejects.toThrow(
-      "Feishu live peer directory returned an empty page token",
+    await expect(directory({ cfg: makeConfiguredCfg(), fallbackToStatic: false })).rejects.toThrow(
+      `Feishu live ${kind} directory returned an empty page token`,
     );
     expect(list).toHaveBeenCalledOnce();
   });

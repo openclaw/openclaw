@@ -1,4 +1,5 @@
 import { isPromise } from "node:util/types";
+import type { Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SearchSchema } from "../infra/database-engine/contract.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -23,6 +24,7 @@ export type AgentDatabaseAdmissionRestriction = (
 export function requestRestrictedAgentDatabaseAdmission(
   request: SqliteWorkerAdmissionRequest,
   restriction?: AgentDatabaseAdmissionRestriction,
+  transferList?: Transferable[],
 ): void {
   const { stage } = request;
   let admitted = false;
@@ -30,7 +32,7 @@ export function requestRestrictedAgentDatabaseAdmission(
     if (admitted || restricted.stage !== stage) {
       throw new Error("Agent admission restriction changed its native stage");
     }
-    requestSqliteWorkerOperationAdmission(restricted);
+    requestSqliteWorkerOperationAdmission(restricted, transferList);
     admitted = true;
   };
   if (restriction) {
@@ -70,8 +72,9 @@ export function createAgentDatabaseDomainOwner(context: {
   assertCurrent(): EngineConnection;
   assertCleanupCurrent(): void;
   admit(
-    stage: "transaction" | "commit",
+    stage: "prepare" | "transaction" | "commit",
     requestAdmission?: AgentDatabaseAdmissionRestriction,
+    transferList?: Transferable[],
   ): void;
 }) {
   let binding:
@@ -114,13 +117,14 @@ export function createAgentDatabaseDomainOwner(context: {
           });
         },
         admit: (
-          stage: "transaction" | "commit",
+          stage: "prepare" | "transaction" | "commit",
           requestAdmission?: AgentDatabaseAdmissionRestriction,
+          transferList?: Transferable[],
         ) => {
           if (!authority.active) {
             throw new Error("Agent publication cleanup cannot admit a transaction");
           }
-          context.admit(stage, requestAdmission);
+          context.admit(stage, requestAdmission, transferList);
         },
       });
       if (isPromise(backend)) {
@@ -160,9 +164,6 @@ export function createAgentDatabaseDomainOwner(context: {
       await loading;
     }
     await current.backend.prepare?.(input.command);
-    if (requireBinding(input.id) !== current) {
-      throw new Error("Agent publication changed during command preparation");
-    }
   };
   const closeBinding = () => {
     if (!binding) {

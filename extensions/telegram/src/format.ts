@@ -94,7 +94,7 @@ function renderTelegramHtml(ir: MarkdownIR, wrapFileRefs = true): string {
 
 function shouldPreserveTelegramListBoundarySpacing(previous: string, next: string): boolean {
   const previousIndent = /^([ \t]*)[•*+-][ \t]+\S/.exec(previous)?.[1];
-  const nextIndent = /^([ \t]*)(?:\d+\.|#{1,6})[ \t]+\S/.exec(next)?.[1];
+  const nextIndent = /^([ \t]*)(?:\d+[.)]|#{1,6})[ \t]+\S/.exec(next)?.[1];
   return (
     previousIndent !== undefined &&
     nextIndent !== undefined &&

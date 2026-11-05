@@ -1,14 +1,12 @@
-/* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import {
-  resolveChatSnapshotKey,
-  type ChatMessageCache,
-  type ChatSessionSnapshot,
-} from "./session-message-cache.ts";
+import { registerChatPane } from "./chat-pane-elements.ts";
+import { resolveChatSnapshotKey, type ChatSessionSnapshot } from "./session-message-cache.ts";
 import {
   createSessionPrefetchFixture,
+  prefetchHistoryRequest as historyRequest,
+  advanceSessionPrefetch as advance,
+  prefetchState,
   PREFETCH_TEST_NOW as NOW,
   prefetchSnapshotHost as snapshotHost,
   prefetchSessionRow as row,
@@ -16,191 +14,145 @@ import {
   prefetchSessionKeyFromCall as sessionKeyFromCall,
   settleSessionPrefetch as settlePromises,
 } from "./session-prefetch.test-support.ts";
+/* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
-describe("session prefetch pane and navigation ownership", () => {
-  let fixture: ReturnType<typeof createSessionPrefetchFixture>;
-  let cache: ChatMessageCache;
-  let shell: HTMLElement;
-  let updatePrefetch: ReturnType<typeof createSessionPrefetchFixture>["updatePrefetch"];
-  beforeEach(() => {
-    fixture = createSessionPrefetchFixture();
-    ({ cache, shell, updatePrefetch } = fixture);
+let fixture: ReturnType<typeof createSessionPrefetchFixture>;
+let shell: HTMLElement;
+let request: ReturnType<typeof historyRequest>;
+let intend: ReturnType<typeof createSessionPrefetchFixture>["intend"];
+let updatePrefetch: ReturnType<typeof createSessionPrefetchFixture>["updatePrefetch"];
+beforeEach(() => {
+  fixture = createSessionPrefetchFixture();
+  ({ shell, updatePrefetch, intend } = fixture);
+  request = historyRequest();
+});
+afterEach(async () => fixture.dispose());
+
+function mountPane(
+  parent: Element = shell,
+  sessionKey = "agent:main:main",
+  transcriptLoading = false,
+) {
+  const pane = Object.assign(document.createElement("openclaw-chat-pane"), {
+    sessionKey,
+    transcriptLoading,
   });
-  afterEach(async () => fixture.dispose());
-
-  function intend(sessionKey: string): void {
-    const target = document.createElement("a");
-    target.dataset.sessionKey = sessionKey;
-    shell.append(target);
-    target.dispatchEvent(new Event("pointerover", { bubbles: true }));
+  onTestFinished(registerChatPane(pane));
+  parent.append(pane);
+  if (parent === shell) {
+    updatePrefetch(
+      prefetchState(request, [row(sessionKey, NOW), row("agent:main:recent", NOW - 1)]),
+    );
   }
+  return pane;
+}
 
-  it.each(["pointerover", "focusin"] as const)(
-    "observes sidebar %s intent after a detached host joins the shell",
-    async (eventType) => {
-      const intended = "agent:main:warm-after-attachment";
-      fixture.unmountPrefetch();
-      fixture.host.remove();
-      fixture.mountPrefetch();
-      shell.append(fixture.host);
-      const request = vi.fn(async (_method: string, params: unknown) =>
-        historyResult((params as { sessionKey: string }).sessionKey),
-      );
-      updatePrefetch({
-        client: createTestGatewayClient(request),
-        listRevision: 1,
-        openSessionKeys: ["agent:main:selected"],
-        rows: [row(intended, NOW - 1)],
-      });
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
-      expect(request).not.toHaveBeenCalled();
+it.each(["pointerover", "focusin"] as const)(
+  "observes sidebar %s intent after a detached host joins the shell",
+  async (eventType) => {
+    const intended = "agent:main:warm-after-attachment";
+    fixture.unmountPrefetch();
+    fixture.host.remove();
+    fixture.mountPrefetch();
+    shell.append(fixture.host);
+    updatePrefetch(prefetchState(request, [row(intended, NOW - 1)]));
+    await advance();
+    expect(request).not.toHaveBeenCalled();
+    const sidebar = document.createElement("openclaw-app-sidebar");
+    shell.append(sidebar);
+    intend(intended, sidebar, eventType);
+    await advance();
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([intended]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
+  },
+);
 
-      const sidebar = document.createElement("openclaw-app-sidebar");
-      const target = document.createElement("a");
-      target.dataset.sessionKey = intended;
-      sidebar.append(target);
-      shell.append(sidebar);
-      target.dispatchEvent(new Event(eventType, { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
-
-      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([intended]);
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
-    },
-  );
-
-  it.each(["stored read", "cursor reset"])(
-    "rechecks dashboard intent after %s before another history request",
-    async (phase) => {
-      const dashboard = "agent:main:dashboard";
-      const first = "agent:main:first";
-      const next = "agent:main:next";
-      const stored: ChatSessionSnapshot = {
-        deltaCursor: "stored-cursor",
-        messages: [],
-        pagination: { hasMore: false, completeSnapshot: true },
-        sessionId: "stored-first",
-      };
-      fixture.store.write(resolveChatSnapshotKey(snapshotHost, { sessionKey: first }), stored);
-      await fixture.store.flush();
-      cache.clear();
-      const read = createDeferred<ChatSessionSnapshot | null>();
-      const reset = createDeferred<{ kind: "reset"; reason: string }>();
-      if (phase === "stored read") {
-        vi.spyOn(fixture.store, "read").mockReturnValueOnce(read.promise);
-      }
-      const request = vi.fn(async (_method: string, params: unknown) =>
-        (params as { sessionKey: string }).sessionKey === first
-          ? reset.promise
-          : historyResult(next),
-      );
-      updatePrefetch({
-        client: createTestGatewayClient(request),
-        listRevision: 1,
+it.each(["stored read", "cursor reset"])(
+  "rechecks dashboard intent after %s before another history request",
+  async (phase) => {
+    const dashboard = "agent:main:dashboard";
+    const first = "agent:main:first";
+    const next = "agent:main:next";
+    const stored: ChatSessionSnapshot = {
+      deltaCursor: "stored-cursor",
+      messages: [],
+      pagination: { hasMore: false, completeSnapshot: true },
+      sessionId: "stored-first",
+    };
+    writeSnapshotFixture(
+      fixture.store,
+      resolveChatSnapshotKey(snapshotHost, { sessionKey: first }),
+      stored,
+    );
+    await fixture.store.flush();
+    fixture.cache.clear();
+    const read = createDeferred<ChatSessionSnapshot | null>();
+    const reset = createDeferred<{ kind: "reset"; reason: string }>();
+    if (phase === "stored read") {
+      vi.spyOn(fixture.store, "read").mockReturnValueOnce(read.promise);
+    }
+    const cursorRequest = vi.fn(async (_method: string, params: unknown) =>
+      (params as { sessionKey: string }).sessionKey === first ? reset.promise : historyResult(next),
+    );
+    updatePrefetch(
+      prefetchState(cursorRequest, [row(first, NOW + 1), row(next, NOW)], {
         openSessionKeys: [dashboard],
         hiddenConversationSessionKeys: [dashboard],
-        rows: [row(first, NOW + 1), row(next, NOW)],
-      });
-      const target = document.createElement("a");
-      target.dataset.sessionKey = first;
-      shell.append(target);
-      target.dispatchEvent(new Event("pointerover", { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
-      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(
-        phase === "cursor reset" ? [first] : [],
-      );
-
-      target.dataset.sessionKey = next;
-      target.dispatchEvent(new Event("pointerover", { bubbles: true }));
-      if (phase === "stored read") {
-        read.resolve(stored);
-      } else {
-        reset.resolve({ kind: "reset", reason: "stale-cursor" });
-      }
-      await settlePromises();
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
-      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(
-        phase === "cursor reset" ? [first, next] : [next],
-      );
-    },
-  );
-
-  it("excludes the Home pane beside the page without borrowing another app's panes", async () => {
-    const home = Object.assign(document.createElement("openclaw-chat-pane"), {
-      sessionKey: "agent:main:main",
-      transcriptLoading: false,
-    });
-    shell.append(home);
-    const otherShell = document.createElement("openclaw-app-shell");
-    otherShell.append(
-      Object.assign(document.createElement("openclaw-chat-pane"), {
-        sessionKey: "agent:main:recent",
-        transcriptLoading: true,
       }),
     );
-    document.body.append(otherShell);
-    onTestFinished(() => otherShell.remove());
-    const request = vi.fn(async (_method: string, params: unknown) =>
-      historyResult((params as { sessionKey: string }).sessionKey),
+    const target = intend(first);
+    await advance();
+    expect(cursorRequest.mock.calls.map(sessionKeyFromCall)).toEqual(
+      phase === "cursor reset" ? [first] : [],
     );
-    updatePrefetch({
-      client: createTestGatewayClient(request),
-      listRevision: 1,
-      openSessionKeys: ["agent:main:selected"],
-      rows: [row(home.sessionKey, NOW), row("agent:main:recent", NOW - 1)],
-    });
-    intend(home.sessionKey);
-    await vi.advanceTimersByTimeAsync(300);
+    target.dataset.sessionKey = next;
+    target.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    if (phase === "stored read") {
+      read.resolve(stored);
+    } else {
+      reset.resolve({ kind: "reset", reason: "stale-cursor" });
+    }
     await settlePromises();
-    expect(request).not.toHaveBeenCalled();
-    intend("agent:main:recent");
+    await advance();
+    expect(cursorRequest.mock.calls.map(sessionKeyFromCall)).toEqual(
+      phase === "cursor reset" ? [first, next] : [next],
+    );
+  },
+);
 
-    await vi.advanceTimersByTimeAsync(300);
-    await settlePromises();
-
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent"]);
-  });
-
-  it.each(["commit", "remove"])(
-    "waits for the sibling Home transcript and resumes on %s",
-    async (completion) => {
-      const home = Object.assign(document.createElement("openclaw-chat-pane"), {
-        sessionKey: "agent:main:main",
-        transcriptLoading: false,
-      });
-      shell.append(home);
-      const request = vi.fn(async (_method: string, params: unknown) =>
-        historyResult((params as { sessionKey: string }).sessionKey),
-      );
-      updatePrefetch({
-        client: createTestGatewayClient(request),
-        listRevision: 1,
-        openSessionKeys: ["agent:main:selected"],
-        rows: [row(home.sessionKey, NOW), row("agent:main:recent", NOW - 1)],
-      });
-      intend("agent:main:recent");
-      // Home hydrates in its own update, without re-rendering the chat page.
-      home.transcriptLoading = true;
-      home.dispatchEvent(new Event("openclaw-chat-transcript-loading-changed", { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
-      expect(request).not.toHaveBeenCalled();
-
-      if (completion === "commit") {
-        home.transcriptLoading = false;
-        home.dispatchEvent(
-          new Event("openclaw-chat-transcript-loading-changed", { bubbles: true }),
-        );
-      } else {
-        home.remove();
-        shell.dispatchEvent(new Event("openclaw-chat-pane-lifecycle-changed"));
-      }
-      await vi.advanceTimersByTimeAsync(300);
-      await settlePromises();
-      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent"]);
-    },
-  );
+it("excludes the Home pane beside the page without borrowing another app's panes", async () => {
+  const home = mountPane();
+  const otherShell = document.createElement("openclaw-app-shell");
+  mountPane(otherShell, "agent:main:recent", true);
+  document.body.append(otherShell);
+  onTestFinished(() => otherShell.remove());
+  intend(home.sessionKey);
+  await advance();
+  expect(request).not.toHaveBeenCalled();
+  intend("agent:main:recent");
+  await advance();
+  expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent"]);
 });
+
+it.each(["commit", "remove"])(
+  "waits for the sibling Home transcript and resumes on %s",
+  async (completion) => {
+    const home = mountPane();
+    intend("agent:main:recent");
+    // Home hydrates in its own update, without re-rendering the chat page.
+    home.transcriptLoading = true;
+    home.dispatchEvent(new Event("openclaw-chat-transcript-loading-changed", { bubbles: true }));
+    await advance();
+    expect(request).not.toHaveBeenCalled();
+    if (completion === "commit") {
+      home.transcriptLoading = false;
+      home.dispatchEvent(new Event("openclaw-chat-transcript-loading-changed", { bubbles: true }));
+    } else {
+      home.remove();
+      shell.dispatchEvent(new Event("openclaw-chat-pane-lifecycle-changed"));
+    }
+    await advance();
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent"]);
+  },
+);

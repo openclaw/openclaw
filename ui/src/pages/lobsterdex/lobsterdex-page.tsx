@@ -1,17 +1,36 @@
-import { createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import "../../styles/settings.css";
 import { pathForRoute } from "../../app-route-paths.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import type { getLobsterdexEntries } from "../../components/lobster-dex.ts";
+import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
+import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
+import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
+import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
+import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsPage, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t, getLocale } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+// Page stars must override the shared mini-star rules loaded by lobster-pet-look.
+import "../../styles/lobsterdex.css";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { LobsterdexView, type LobsterdexCopyFeedback } from "./view.tsx";
-import "../../styles/settings.css";
+
+registerRouteSubtitlesEnglish();
+
+registerEnglishCatalog(registerPreferencesEnglish);
+
+type LobsterdexCopyFeedback = { paletteId: LobsterPetPaletteId; status: "copied" | "error" };
+
+function formatLobsterdexDate(timestamp: number): string {
+  return new Date(timestamp).toLocaleDateString(getLocale());
+}
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -29,11 +48,19 @@ export function LobsterdexPage() {
     projectOwner(context.theme, (theme) => theme.branding, Object.is),
   );
   const entries = projectLobsterdex();
+  const seenCount = createMemo(
+    () => LOBSTER_PET_PALETTES.filter((palette) => entries.read().has(palette.id)).length,
+  );
+  const countLabel = () =>
+    t("quickSettings.appearance.lobsterdexSeen", {
+      seen: String(seenCount()),
+      total: String(LOBSTER_PET_PALETTES.length),
+    });
   const [copyFeedback, setCopyFeedback] = createSignal<LobsterdexCopyFeedback | null>(null);
   let disposed = false;
   let copyAttempt = 0;
   let copyResetTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
     copyAttempt += 1;
     globalThis.clearTimeout(copyResetTimer);
@@ -80,38 +107,141 @@ export function LobsterdexPage() {
     }, 1_500);
   }
 
+  function LobsterdexView(props: { entries: ReturnType<typeof getLobsterdexEntries> }) {
+    return (
+      <section class="lobsterdex-page">
+        <span class="sr-only" role="status">
+          {copyFeedback()?.status === "copied" ? t("common.copied") : undefined}
+        </span>
+        {copyFeedback()?.status === "error" && (
+          <div class="callout danger" role="alert">
+            {t("common.copyFailed")}
+          </div>
+        )}
+        <section class="lobsterdex-page__grid" aria-label={countLabel()}>
+          <For each={LOBSTER_PET_PALETTES}>
+            {(palette) => {
+              const look = canonicalLobsterLook(palette);
+              const entry = createMemo(() => props.entries.get(palette.id));
+              const firstSeen = createMemo(() => {
+                const timestamp = entry()?.firstSeenAt;
+                return timestamp != null
+                  ? t("quickSettings.appearance.lobsterdexCardFirstVisited", {
+                      date: formatLobsterdexDate(timestamp),
+                    })
+                  : null;
+              });
+              const shinySeen = createMemo(() => {
+                const timestamp = entry()?.shinySeenAt;
+                return timestamp != null
+                  ? t("quickSettings.appearance.lobsterdexCardShinySeen", {
+                      date: formatLobsterdexDate(timestamp),
+                    })
+                  : null;
+              });
+              return (
+                <article
+                  id={`lobsterdex-${palette.id}`}
+                  ref={(element) => cards.set(`#lobsterdex-${palette.id}`, element)}
+                  class={["lobsterdex-page__card", { "lobsterdex-page__card--unseen": !entry() }]}
+                >
+                  <button
+                    type="button"
+                    class="lobsterdex-page__copy-link"
+                    aria-label={t("quickSettings.appearance.lobsterdexCardCopyLink")}
+                    onClick={() => void copyLink(palette.id)}
+                  >
+                    <span aria-hidden="true">
+                      <Icon
+                        name={
+                          copyFeedback()?.status === "copied" &&
+                          copyFeedback()?.paletteId === palette.id
+                            ? "check"
+                            : "link"
+                        }
+                      />
+                    </span>
+                  </button>
+                  <div
+                    class={[
+                      "lobsterdex-page__sprite",
+                      "lobster-pet",
+                      `lobster-pet--palette-${palette.id}`,
+                      { "lobsterdex__mini--unseen": !entry() },
+                    ]}
+                    style={lobsterLookStyle(look)}
+                  >
+                    <LobsterSvg look={look} standalone />
+                    {entry()?.shinySeenAt != null && (
+                      <span class="lobsterdex__mini-star lobsterdex-page__star" aria-hidden="true">
+                        ✦
+                      </span>
+                    )}
+                  </div>
+                  <h3>{entry() ? (entry()?.name ?? lobsterPaletteName(palette.id)) : "?"}</h3>
+                  <p class="lobsterdex-page__lore">
+                    {entry()
+                      ? LOBSTER_PALETTE_LORE[palette.id].flavor
+                      : LOBSTER_PALETTE_LORE[palette.id].hint}
+                  </p>
+                  <div class="lobsterdex-page__dates">
+                    {firstSeen() && (
+                      <p class="lobsterdex-page__date">
+                        <time>{firstSeen()}</time>
+                      </p>
+                    )}
+                    {shinySeen() && (
+                      <p class="lobsterdex-page__date">
+                        <time>{shinySeen()}</time>
+                      </p>
+                    )}
+                  </div>
+                </article>
+              );
+            }}
+          </For>
+        </section>
+      </section>
+    );
+  }
+
   return (
     <openclaw-lobsterdex-page ref={(element) => (host = element)}>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <h1 class="page-title">{t("tabs.lobsterdex")}</h1>
-        </section>
-      </ShellLayoutBoundary>
-      <SettingsWorkspace>
-        {branding().read().lobsterdex ? (
-          <LobsterdexView
-            entries={entries.read()}
-            copyFeedback={copyFeedback()}
-            onCardRef={(id, element) => cards.set(`#lobsterdex-${id}`, element)}
-            onCopyLink={(paletteId) => void copyLink(paletteId)}
-          />
-        ) : (
-          <section class="settings-section" role="status">
-            <p>{t("quickSettings.appearance.lobsterdexThemeHidden")}</p>
-            <a
-              class="btn btn--sm"
-              href={pathForRoute("appearance", context.basePath)}
-              onClick={(event) => {
-                if (shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
-                  context.navigate("appearance");
-                }
-              }}
+      <SettingsPageHeader
+        title={t("tabs.lobsterdex")}
+        subtitle={branding().read().lobsterdex ? t("subtitles.lobsterdex") : undefined}
+        actions={
+          <Show when={branding().read().lobsterdex}>
+            <span
+              class={[
+                "lobsterdex-page__count",
+                { "lobsterdex-page__count--complete": seenCount() === LOBSTER_PET_PALETTES.length },
+              ]}
             >
-              {t("tabs.appearance")}
-            </a>
-          </section>
-        )}
+              {countLabel()}
+            </span>
+          </Show>
+        }
+      />
+      <SettingsWorkspace>
+        <SettingsPage wide>
+          {branding().read().lobsterdex ? (
+            <LobsterdexView entries={entries.read()} />
+          ) : (
+            <section class="settings-section" role="status">
+              <p>{t("quickSettings.appearance.lobsterdexThemeHidden")}</p>
+              <a
+                class="btn btn--sm"
+                href={pathForRoute("appearance", context.basePath)}
+                onClick={(event) =>
+                  handleNavigationClick(event, () => context.navigate("appearance"))
+                }
+              >
+                {t("tabs.appearance")}
+              </a>
+            </section>
+          )}
+        </SettingsPage>
       </SettingsWorkspace>
     </openclaw-lobsterdex-page>
   );

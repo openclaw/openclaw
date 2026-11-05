@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { readActivitySummarySource } from "../../gateway/session-activity-summary-source.js";
 import { readActivitySummaryBatch } from "../../gateway/session-activity-summary-source.worker.js";
 import { readSessionTranscriptAccountingAsync } from "../../gateway/session-transcript-readers.js";
@@ -7,21 +7,23 @@ import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-tur
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
-import type { SessionActivitySummaryBatchResult } from "./activity-summary-source.types.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { rewriteTranscriptEventRowsExact } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
-import type { SessionActorAuthority } from "./session-actor-contract.js";
-import { createDurableSessionActorFactory } from "./session-actor-durable.js";
+import type { SessionTranscriptTurnMessageAppend } from "./session-accessor.types.js";
+import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
+import { createSessionActorFactory } from "./session-actor-durable.js";
+import { summaryFacts, transcriptTurnCommand } from "./session-actor-transcript.test-support.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
 import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { historyLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
 // mock-isolation: this transport proof does not schedule unrelated maintenance.
@@ -33,34 +35,53 @@ vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMa
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 
-function summaryFacts(source: SessionActivitySummaryBatchResult) {
-  if (!source) {
-    throw new Error("Expected an activity summary source");
-  }
-  return {
-    previous: source.previous,
-    watermark: source.watermark,
-    covered: source.covered,
-    omitted: source.omitted,
-    totalMessages: source.snapshot.totalMessages,
-    activeLeafEntryId: source.snapshot.activeLeafEntryId,
-    generation: source.snapshot.snapshot.generation,
-    events: source.page.events.map(({ event }) => event),
-    scannedMessages: source.page.scannedMessages,
-  };
+async function acquireActor(
+  fixture: ReturnType<typeof createSessionCompoundWorkerFixture>,
+  env: NodeJS.ProcessEnv,
+) {
+  const identity = readOpenClawAgentDatabaseIdentity(fixture.database);
+  assert(typeof identity.identity === "string", "Fixture requires durable storage");
+  const database = { agentId: "main", path: fixture.database.path, env };
+  const actor = await createSessionActorFactory(database).acquire(
+    {
+      sessionKey: fixture.scope.sessionKey,
+      database: {
+        kind: "file",
+        physicalIdentity: identity.identity,
+        birthtime: identity.birthtime,
+        nativeLocation: fixture.database.path,
+      },
+    },
+    { assertCurrent() {}, assertReadable() {} },
+  );
+  assert(!("kind" in actor), "Durable session must be actor-owned");
+  return { actor, database };
 }
 
-it("reuses durable summaries and accounting while refreshing transcript writes and resets", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+function appendMessage(
+  actor: SessionActor,
+  scope: { agentId: string; sessionKey: string; sessionId: string },
+  eventId: string,
+  message: SessionTranscriptTurnMessageAppend["message"],
+  now: number,
+  commandId = eventId,
+) {
+  return actor.appendToolResult(
+    transcriptTurnCommand(scope, commandId, [{ eventId, message, now }]),
+    authority,
+  );
+}
+
+it("reuses durable summaries and accounting while refreshing transcript writes and resets", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     await captureRuntimeConfigAsyncReader()();
     const fixture = createSessionCompoundWorkerFixture();
     const scope = { ...fixture.scope, env };
-    const answer = {
-      type: "message",
-      id: "answer",
-      parentId: "initial-runtime",
-      message: { role: "assistant", content: "Original answer", usage: { input: 200, output: 7 } },
-    };
+    const answer = messageEvent("answer", "initial-runtime", {
+      role: "assistant",
+      content: "Original answer",
+      usage: { input: 200, output: 7 },
+    });
     const events = [
       { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" },
       {
@@ -70,12 +91,7 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
         customType: "model-snapshot",
         data: { provider: "synthetic", modelApi: "test-api", modelId: "first-model", timestamp: 1 },
       },
-      {
-        type: "message",
-        id: "question",
-        parentId: "initial-model",
-        message: { role: "user", content: "Original question" },
-      },
+      messageEvent("question", "initial-model", { role: "user", content: "Original question" }),
       {
         type: "custom_message",
         id: "initial-runtime",
@@ -88,28 +104,17 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
       answer,
     ];
     await replaceTranscriptEvents(scope, events);
-    const identity = readOpenClawAgentDatabaseIdentity(fixture.database);
-    if (typeof identity.identity !== "string") {
-      throw new Error("Fixture requires durable storage");
-    }
-    const database = { agentId: "main", path: fixture.database.path, env };
-    const actor = await createDurableSessionActorFactory(database).acquire(
-      {
-        sessionKey: scope.sessionKey,
-        database: {
-          kind: "file",
-          physicalIdentity: identity.identity,
-          birthtime: identity.birthtime,
-          nativeLocation: fixture.database.path,
-        },
-      },
-      { assertCurrent() {}, assertReadable() {} },
-    );
-    if ("kind" in actor) {
-      throw new Error("Durable session must be actor-owned");
-    }
+    const { actor, database } = await acquireActor(fixture, env);
     const historyReads = vi.spyOn(historyLane.pool, "run");
     const discoveryReads = vi.spyOn(targetDiscoveryLane.pool, "run");
+    const clearReads = () => {
+      historyReads.mockClear();
+      discoveryReads.mockClear();
+    };
+    const expectResident = () => {
+      expect(historyReads).not.toHaveBeenCalled();
+      expect(discoveryReads).not.toHaveBeenCalled();
+    };
     const accountingOptions = { includeByteSize: true, includeUsage: true, includeTurnTaint: true };
     const initialAccounting = {
       byteSize: events
@@ -140,44 +145,36 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
             maxBytes: 1024 * 1024,
             maxEvents: 100,
           });
-          if (!hydration.readCohort) {
-            throw new Error("Expected bounded transcript cohort reader");
-          }
+          assert(hydration.readCohort, "Expected bounded transcript cohort reader");
           await hydration.readCohort(
             { sessionKey: scope.sessionKey, entryIds: ["question"] },
             (prepared) => {
-              if (prepared.kind !== "bounded") {
-                throw new Error("Expected bounded transcript hydration");
-              }
+              assert(prepared.kind === "bounded", "Expected bounded transcript hydration");
               expect(prepared.snapshot.events).toEqual(events);
               expect(prepared.transcript?.anchors.map((anchor) => anchor.entryId)).toEqual([
                 "question",
               ]);
             },
           );
-          historyReads.mockClear();
-          discoveryReads.mockClear();
+          clearReads();
           const seeded = await readSessionTranscriptAnchorsAsync(scope, {
             entryIds: ["question"],
           });
           expect(seeded.anchors.map((anchor) => anchor.entryId)).toEqual(["question"]);
-          expect(historyReads).not.toHaveBeenCalled();
-          expect(discoveryReads).not.toHaveBeenCalled();
+          expectResident();
           const uncovered = await readSessionTranscriptAnchorsAsync(scope, {
             entryIds: ["answer"],
           });
           expect(uncovered.anchors.map((anchor) => anchor.entryId)).toEqual(["answer"]);
           expect(historyReads).toHaveBeenCalled();
-          historyReads.mockClear();
-          discoveryReads.mockClear();
+          clearReads();
           const initial = await readActivitySummarySource({ scope, assertCurrent() {} });
           expect(summaryFacts(initial)).toEqual(summaryFacts(cold));
           expect(initial?.notes).toEqual(cold?.notes);
           expect(await readSessionTranscriptAccountingAsync(scope, accountingOptions)).toEqual(
             initialAccounting,
           );
-          expect(historyReads).not.toHaveBeenCalled();
-          expect(discoveryReads).not.toHaveBeenCalled();
+          expectResident();
           const previousSeq = actor.snapshot(authority)!.transcript.version.rawSeq!;
           const metadata = [
             {
@@ -216,46 +213,26 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
             expect(appendedMetadata.kind).toBe("committed");
           }
           const userMessage = { role: "user" as const, content: "Next question", timestamp: 4 };
-          const appended = await actor.appendToolResult(
-            {
-              commandId: "next-turn",
-              phaseId: "turn",
-              turn: {
-                agentId: scope.agentId,
-                sessionKey: scope.sessionKey,
-                options: {
-                  expectedSessionId: scope.sessionId,
-                  sessionFile: "synthetic.jsonl",
-                  messages: [
-                    {
-                      eventId: "next-question",
-                      message: userMessage,
-                      now: 4,
-                    },
-                  ],
-                },
-              },
-            },
-            authority,
+          const appended = await appendMessage(
+            actor,
+            scope,
+            "next-question",
+            userMessage,
+            4,
+            "next-turn",
           );
           expect(appended.kind).toBe("committed");
-          if (appended.kind !== "committed") {
-            throw new Error("Expected a committed user append");
-          }
+          assert(appended.kind === "committed", "Expected a committed user append");
           const userAnchor = appended.receipt.transcript.appendedMessages.find(
             (message) => message.messageId === "next-question",
           )?.anchor;
-          if (!userAnchor) {
-            throw new Error("User append omitted its committed anchor");
-          }
-          historyReads.mockClear();
-          discoveryReads.mockClear();
+          assert(userAnchor, "User append omitted its committed anchor");
+          clearReads();
           expect(
             (await readSessionTranscriptAnchorsAsync(scope, { entryIds: ["next-question"] }))
               .anchors,
           ).toContainEqual(userAnchor);
-          expect(historyReads).not.toHaveBeenCalled();
-          expect(discoveryReads).not.toHaveBeenCalled();
+          expectResident();
           const accounting = await readSessionTranscriptAccountingAsync(scope, accountingOptions);
           expect(accounting.usage).toEqual({
             promptTokens: 200,
@@ -274,9 +251,9 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
             await readSessionTranscriptAccountingAsync(scope, {
               ...accountingOptions,
               includeByteSize: false,
-              usageEventLimit: 0,
+              includeUsage: false,
             }),
-          ).toEqual({ usage: undefined, turnTainted: false });
+          ).toEqual({ turnTainted: false });
           expect(historyReads).not.toHaveBeenCalled();
           const committed = vi.fn();
           const captured = await capturePersistedModelPromptProjection({
@@ -293,47 +270,29 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
               __openclaw: { modelPromptProjection: { version: 1, text: "Next question" } },
             }),
           );
-          historyReads.mockClear();
-          discoveryReads.mockClear();
+          clearReads();
           expect(
             (await readSessionTranscriptAnchorsAsync(scope, { entryIds: ["next-question"] }))
               .anchors,
           ).toContainEqual(userAnchor);
-          expect(historyReads).not.toHaveBeenCalled();
-          expect(discoveryReads).not.toHaveBeenCalled();
+          expectResident();
           expect(
             (
-              await actor.appendToolResult(
+              await appendMessage(
+                actor,
+                scope,
+                "next-answer",
                 {
-                  commandId: "next-answer",
-                  phaseId: "turn",
-                  turn: {
-                    agentId: scope.agentId,
-                    sessionKey: scope.sessionKey,
-                    options: {
-                      expectedSessionId: scope.sessionId,
-                      sessionFile: "synthetic.jsonl",
-                      messages: [
-                        {
-                          eventId: "next-answer",
-                          message: {
-                            role: "assistant",
-                            content: "Next answer",
-                            usage: { input: 500, output: 11 },
-                            __openclaw: { turnTainted: true },
-                          },
-                          now: 5,
-                        },
-                      ],
-                    },
-                  },
+                  role: "assistant",
+                  content: "Next answer",
+                  usage: { input: 500, output: 11 },
+                  __openclaw: { turnTainted: true },
                 },
-                authority,
+                5,
               )
             ).kind,
           ).toBe("committed");
-          historyReads.mockClear();
-          discoveryReads.mockClear();
+          clearReads();
           const anchors = await readSessionTranscriptAnchorsAsync(scope, {
             entryIds: ["next-question", "next-answer"],
             afterSeq: previousSeq,
@@ -347,10 +306,8 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
             "next-question",
             "next-answer",
           ]);
-          expect(historyReads).not.toHaveBeenCalled();
-          expect(discoveryReads).not.toHaveBeenCalled();
-          historyReads.mockClear();
-          discoveryReads.mockClear();
+          expectResident();
+          clearReads();
           const summary = await readActivitySummarySource({ scope, assertCurrent() {} });
           expect(summaryFacts(summary)).toEqual(summaryFacts(readActivitySummaryBatch({ scope })));
           expect(summary?.snapshot.totalMessages).toBe(4);
@@ -380,8 +337,7 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
             turnTainted: true,
             usage: { promptTokens: 500, outputTokens: 11, trailingMessages: [] },
           });
-          expect(historyReads).not.toHaveBeenCalled();
-          expect(discoveryReads).not.toHaveBeenCalled();
+          expectResident();
           expect(
             await runWithSessionTranscriptReadFence(
               { ...userAnchor, logicalTurnId: "next-turn", role: "user" },
@@ -413,7 +369,7 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
           ]);
           expect(historyReads).not.toHaveBeenCalled();
 
-          const expectedState = buildRestartRecoveryExpectedState(
+          const expectedState = buildSessionTranscriptTurnExpectedState(
             actor.snapshot(authority)!.entry!,
           );
           const recordAndAdopt = async (contributionCount: number) => {
@@ -525,45 +481,25 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
       discoveryReads.mockRestore();
       await actor.release();
     }
-  });
-});
+  }));
 
-it("slides durable context within its bounds and reloads only when an admission outlives resident coverage", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+it("slides durable context within its bounds and reloads only when an admission outlives resident coverage", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const fixture = createSessionCompoundWorkerFixture();
     const scope = { ...fixture.scope, env };
     const limits = { maxBytes: 4096, maxEvents: 3 };
     const header = { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" };
     const events = [
       header,
-      ...Array.from({ length: 5 }, (_, index) => ({
-        type: "message",
-        id: `old-${index}`,
-        parentId: index === 0 ? null : `old-${index - 1}`,
-        message: { role: index % 2 === 0 ? "assistant" : "user", content: `Old message ${index}` },
-      })),
+      ...Array.from({ length: 5 }, (_, index) =>
+        messageEvent(`old-${index}`, index === 0 ? null : `old-${index - 1}`, {
+          role: index % 2 === 0 ? "assistant" : "user",
+          content: `Old message ${index}`,
+        }),
+      ),
     ];
     await replaceTranscriptEvents(scope, events);
-    const identity = readOpenClawAgentDatabaseIdentity(fixture.database);
-    if (typeof identity.identity !== "string") {
-      throw new Error("Fixture requires durable storage");
-    }
-    const database = { agentId: "main", path: fixture.database.path, env };
-    const actor = await createDurableSessionActorFactory(database).acquire(
-      {
-        sessionKey: scope.sessionKey,
-        database: {
-          kind: "file",
-          physicalIdentity: identity.identity,
-          birthtime: identity.birthtime,
-          nativeLocation: fixture.database.path,
-        },
-      },
-      { assertCurrent() {}, assertReadable() {} },
-    );
-    if ("kind" in actor) {
-      throw new Error("Durable session must be actor-owned");
-    }
+    const { actor, database } = await acquireActor(fixture, env);
     const historyReads = vi.spyOn(historyLane.pool, "run");
     try {
       await actor.read(authority);
@@ -575,31 +511,12 @@ it("slides durable context within its bounds and reloads only when an admission 
         },
         async () => {
           const append = async (id: string, role: "user" | "assistant", content: string) => {
-            const result = await actor.appendToolResult(
-              {
-                commandId: id,
-                phaseId: "turn",
-                turn: {
-                  agentId: scope.agentId,
-                  sessionKey: scope.sessionKey,
-                  options: {
-                    expectedSessionId: scope.sessionId,
-                    sessionFile: "synthetic.jsonl",
-                    messages: [{ eventId: id, message: { role, content }, now: 10 }],
-                  },
-                },
-              },
-              authority,
-            );
-            if (result.kind !== "committed") {
-              throw new Error("Expected a committed transcript append");
-            }
+            const result = await appendMessage(actor, scope, id, { role, content }, 10);
+            assert(result.kind === "committed", "Expected a committed transcript append");
             const anchor = result.receipt.transcript.appendedMessages.find(
               (message) => message.messageId === id,
             )?.anchor;
-            if (!anchor) {
-              throw new Error("Expected the committed message anchor");
-            }
+            assert(anchor, "Expected the committed message anchor");
             return anchor;
           };
           const admit = async (
@@ -710,5 +627,4 @@ it("slides durable context within its bounds and reloads only when an admission 
       historyReads.mockRestore();
       await actor.release();
     }
-  });
-});
+  }));

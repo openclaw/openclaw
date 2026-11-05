@@ -1,5 +1,6 @@
-import { createComponent, createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { createSignal, Errored, lazy, Loading, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 
@@ -17,29 +18,26 @@ type DiscoveryOptions = {
 };
 
 export function createModelProviderDiscovery(options: DiscoveryOptions) {
-  const [phase, setPhase] = createSignal<
-    "closed" | "loading" | typeof import("../model-setup/model-setup-page.tsx").ModelSetupPage
-  >("closed");
+  const [opened, setOpened] = createSignal<DiscoveryOwner | null>(null);
   let owner: DiscoveryOwner | null = null;
+  // Connection replacement cancels only the import; mounted setup owns recovery.
   let loading = false;
 
   function reset() {
     owner = null;
     loading = false;
-    setPhase("closed");
+    setOpened(null);
   }
 
-  // Retire the lazy setup request when its selected-agent owner changes.
-  createEffect(
-    () => options.getOwner().agentId,
-    (agentId) => {
-      // Reconnect can temporarily clear selection; the mounted setup owns recovery.
-      if (owner && agentId !== null && agentId !== owner.agentId) {
-        reset();
-      }
-    },
-  );
-  onCleanup(() => {
+  // Selection receipts retire a lazy setup request owned by another agent.
+  function synchronize() {
+    const { agentId } = options.getOwner();
+    // Reconnect can temporarily clear selection; the mounted setup owns recovery.
+    if (owner && agentId !== null && agentId !== owner.agentId) {
+      reset();
+    }
+  }
+  onSettled(() => () => {
     owner = null;
     loading = false;
   });
@@ -50,7 +48,7 @@ export function createModelProviderDiscovery(options: DiscoveryOptions) {
     }
   }
 
-  async function open() {
+  function open() {
     if (!options.canOpen() || owner) {
       return;
     }
@@ -60,26 +58,10 @@ export function createModelProviderDiscovery(options: DiscoveryOptions) {
     }
     owner = nextOwner;
     loading = true;
-    setPhase("loading");
-    try {
-      const { ModelSetupPage } = await import("../model-setup/model-setup-page.tsx");
-      if (owner === nextOwner) {
-        loading = false;
-        setPhase(() => ModelSetupPage);
-      }
-    } catch (error) {
-      if (owner === nextOwner) {
-        reset();
-        options.onError(error);
-      }
-    }
+    setOpened(nextOwner);
   }
 
   function render(getData: () => { agentLabel: string; credentialChoices: readonly string[] }) {
-    const content = () => {
-      const current = phase();
-      return current === "closed" ? undefined : current;
-    };
     const close = (refresh = false) => {
       reset();
       if (refresh) {
@@ -87,47 +69,77 @@ export function createModelProviderDiscovery(options: DiscoveryOptions) {
       }
     };
     return (
-      <Show when={content()} keyed>
-        {(current) =>
-          current === "loading" ? (
-            <openclaw-modal-dialog
-              label={t("modelSetup.discovery.title")}
-              onModal-cancel={() => close()}
+      <Show when={opened()} keyed>
+        {(target) => {
+          // Each opening can retry a failed import without retaining the retired view.
+          const ModelSetup = lazy(
+            async () => {
+              const module = await import("../model-setup/model-setup-page.tsx");
+              if (owner === target) {
+                loading = false;
+              }
+              return module;
+            },
+            { export: "ModelSetupPage" },
+          );
+          return (
+            <Errored
+              fallback={(error) => {
+                onSettled(() => {
+                  if (owner === target) {
+                    reset();
+                    options.onError(error());
+                  }
+                });
+                return undefined;
+              }}
             >
-              <div class="model-setup-wizard">
-                <div class="model-setup-wizard__body" role="status">
-                  {t("common.loading")}
-                </div>
-                <openclaw-modal-actions class="model-setup-wizard__footer">
-                  <button class="btn" onClick={() => close()}>
-                    {t("common.cancel")}
-                  </button>
-                </openclaw-modal-actions>
-              </div>
-            </openclaw-modal-dialog>
-          ) : (
-            createComponent(current, {
-              routeData: { firstRun: false },
-              embedded: true,
-              get credentialChoices() {
-                return getData().credentialChoices;
-              },
-              get agentLabel() {
-                return getData().agentLabel;
-              },
-              onClose: () => close(true),
-            })
-          )
-        }
+              <Loading
+                fallback={
+                  <openclaw-modal-dialog
+                    label={t("modelSetup.discovery.title")}
+                    onModal-cancel={() => close()}
+                  >
+                    <div class="oc-dialog model-setup-wizard">
+                      <div class="oc-dialog__header">
+                        <h2 class="oc-dialog__title">{t("modelSetup.discovery.title")}</h2>
+                        <button
+                          type="button"
+                          class="oc-dialog__close"
+                          aria-label={t("common.cancel")}
+                          onClick={() => close()}
+                        >
+                          <Icon name="x" />
+                        </button>
+                      </div>
+                      <div class="oc-dialog__body model-setup-wizard__body" role="status">
+                        {t("common.loading")}
+                      </div>
+                    </div>
+                  </openclaw-modal-dialog>
+                }
+              >
+                <ModelSetup
+                  routeData={{ firstRun: false }}
+                  embedded
+                  credentialChoices={getData().credentialChoices}
+                  agentLabel={getData().agentLabel}
+                  onClose={() => close(true)}
+                />
+              </Loading>
+            </Errored>
+          );
+        }}
       </Show>
     );
   }
 
   return {
     get busy() {
-      return phase() !== "closed";
+      return opened() !== null;
     },
     cancelLoading,
+    synchronize,
     open,
     render,
   };

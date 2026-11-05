@@ -22,6 +22,7 @@ import {
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
   hasGatewayServiceDefinitionOverrides,
+  resolveManagedGatewayServiceCommand,
   type GatewayServiceCommandConfig,
   type GatewayServiceState,
   type GatewayServiceUnitInspection,
@@ -49,6 +50,7 @@ import {
 } from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { formatCliCommand } from "../command-format.js";
 import { resolveNodeRunner } from "./shared.js";
 import type {
   ManagedGatewayUpdateVerdict,
@@ -65,26 +67,32 @@ export class GatewayServiceUpdateOwnershipError extends Error {
     inspectionReason?: ServiceInspectionReason,
     code?: keyof typeof UPDATE_PREFLIGHT_DETAILS,
   ) {
-    super(
-      typeof message === "string"
-        ? inspectionReason
-          ? formatServiceInspectionReason(inspectionReason)
-          : message
-        : message.message,
-      { cause },
-    );
+    super(typeof message === "string" ? message : message.message, { cause });
     this.name = "GatewayServiceUpdateOwnershipError";
     this.failureFacts =
       typeof message !== "string"
         ? message.failureFacts
-        : [
-            createUpdateFailureFact({
-              check: "managed-service",
-              code: inspectionReason ?? code ?? "service-ownership-unverified",
-              message: this.message,
-            }),
-          ];
+        : serviceFailureFacts(message, inspectionReason ?? code ?? "service-ownership-unverified");
   }
+}
+
+function serviceFailureFacts(message: string, code: string): UpdateFailureFact[] {
+  return message
+    .split("\n")
+    .filter((line, index) => index === 0 || !line.startsWith(GATEWAY_SERVICE_INSPECTION_WARNING))
+    .slice(0, 5)
+    .map((line) => createUpdateFailureFact({ check: "managed-service", code, message: line }));
+}
+
+export function collectServiceInspectionFailureFacts(
+  verdict: ManagedGatewayUpdateVerdict | undefined,
+): UpdateFailureFact[] | undefined {
+  return verdict?.kind === "unavailable"
+    ? serviceFailureFacts(
+        verdict.message,
+        verdict.inspectionReason ?? "service-inspection-unavailable",
+      )
+    : undefined;
 }
 
 export function assertGatewayServiceAdmissionUnchanged(
@@ -95,7 +103,7 @@ export function assertGatewayServiceAdmissionUnchanged(
   if (expectedVerdict && expectedVerdict.kind !== serviceUpdateVerdict.kind) {
     throw new GatewayServiceUpdateOwnershipError(
       serviceUpdateVerdict.kind === "unavailable"
-        ? "Gateway service ownership could not be verified because inspection is unavailable. Run `openclaw gateway status --deep` and retry."
+        ? `Gateway service inspection is unavailable. Run \`systemctl --user status openclaw-gateway\` and \`openclaw gateway status --deep\` before retrying.\n${serviceUpdateVerdict.message}`
         : "Gateway service ownership changed after database admission; run `openclaw gateway status --deep` and retry.",
       undefined,
       serviceUpdateVerdict.kind === "unavailable"
@@ -153,16 +161,34 @@ export function isGatewayServiceManagementAllowedForUpdate(
 }
 
 export const GATEWAY_SERVICE_INSPECTION_WARNING =
-  "Gateway service inspection is unavailable; automatic service restart was skipped. Restart the Gateway you launched manually after the update. Any recorded service definition was left unchanged; inspect it with `openclaw gateway status --deep`.";
+  "Gateway service inspection is unavailable; automatic service restart was skipped. Any recorded service definition was left unchanged; inspect it with `openclaw gateway status --deep`.";
 
-function serviceInspectionWarningMessage(state: GatewayServiceState): string {
-  if (state.inspectionReason) {
-    return `${GATEWAY_SERVICE_INSPECTION_WARNING} ${formatServiceInspectionReason(state.inspectionReason)}`;
+export async function serviceInspectionWarningMessage(
+  state?: GatewayServiceState,
+  env: NodeJS.ProcessEnv = state?.env ?? process.env,
+): Promise<string> {
+  const owner = await readActiveGatewayLockIdentity({ env, timeoutMs: 1_000 }).catch(
+    () => undefined,
+  );
+  const runtime = state?.runtime;
+  const warning = [
+    GATEWAY_SERVICE_INSPECTION_WARNING,
+    owner
+      ? `A Gateway (pid ${owner.pid}, state owner since ${owner.createdAt}) holds the state.`
+      : "",
+    state?.installed || state?.command?.sourcePath
+      ? "A service definition is present and was left unchanged."
+      : "",
+    `Stop the Gateway through its owner (\`${formatCliCommand("openclaw gateway stop")}\` for the managed service), then run \`${formatCliCommand("openclaw update repair")}\`.`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  if (state?.inspectionReason) {
+    return `${state.runtime?.inspectionFailure?.detail ?? formatServiceInspectionReason(state.inspectionReason)}\n${warning}`;
   }
   if (process.platform === "freebsd") {
-    return `${GATEWAY_SERVICE_INSPECTION_WARNING} On FreeBSD, use the Gateway's rc.d or foreground process owner for service management.`;
+    return `${warning} On FreeBSD, use the Gateway's rc.d or foreground process owner for service management.`;
   }
-  const runtime = state.runtime;
   const tasksCurrent = runtime?.systemd?.tasksCurrent;
   if (
     process.platform === "linux" &&
@@ -172,10 +198,12 @@ function serviceInspectionWarningMessage(state: GatewayServiceState): string {
     tasksCurrent !== undefined &&
     tasksCurrent > 0
   ) {
-    return `${GATEWAY_SERVICE_INSPECTION_WARNING} Processes remain in the systemd service cgroup (${tasksCurrent} tasks). Have their owner stop them before state maintenance.`;
+    return `${warning} Processes remain in the systemd service cgroup (${tasksCurrent} tasks). Have their owner stop them before state maintenance.`;
   }
   const detail = runtime?.inspectionFailure?.detail;
-  return GATEWAY_SERVICE_INSPECTION_WARNING + (detail ? ` ${detail}` : "");
+  return detail && (process.platform !== "linux" || /^(?:systemctl|busctl) --/.test(detail))
+    ? `${detail}\n${warning}`
+    : warning;
 }
 
 export function observedSystemdManagerUid(state: GatewayServiceState): number | undefined {
@@ -203,9 +231,9 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
     );
   }
   const { command } = state;
-  const unavailable = (): ManagedGatewayUpdateVerdict => ({
+  const unavailable = async (): Promise<ManagedGatewayUpdateVerdict> => ({
     kind: "unavailable",
-    message: serviceInspectionWarningMessage(state),
+    message: await serviceInspectionWarningMessage(state),
     ...(state.inspectionReason ? { inspectionReason: state.inspectionReason } : {}),
   });
   if (!command) {
@@ -422,7 +450,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   const command = inspected?.command ?? null;
   const layout = await summarizeGatewayServiceLayout(command);
   plan.serviceUnitTarget = layout?.entrypoint ?? "no service entrypoint found";
-  if (!layout?.packageRootReal) {
+  if (!inspected || !layout?.packageRootReal) {
     return plan;
   }
   const serviceRoot = layout?.packageRoot;
@@ -434,8 +462,15 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   const executable = command?.programArguments[0];
   const serviceBun = executable && isBunRuntime(executable);
   const serviceNode = serviceBun
-    ? await resolvePinnedDaemonRuntimePath(executable, "bun", inspected?.env ?? process.env)
+    ? await resolvePinnedDaemonRuntimePath(executable, "bun", inspected.env)
     : resolveManagedServiceNodeRunner(command);
+  plan.service = {
+    running: inspected.running,
+    serviceUpdateVerdict: inspected.verdict,
+    serviceEnv: inspected.env,
+    serviceDefinitionEnv: resolveManagedGatewayServiceCommand(command)?.environment ?? {},
+    serviceNodeRunner: serviceNode,
+  };
   if (
     serviceNode &&
     (differentRoot ||
@@ -453,7 +488,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
       params.rebind !== false &&
       process.platform !== "win32" &&
       !hasGatewayServiceDefinitionOverrides(command) &&
-      inspected?.verdict.refreshDefinition === true
+      inspected.verdict.refreshDefinition
     ) {
       plan.serviceRoot = serviceRoot;
     } else {

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { en } from "../../i18n/locales/en.ts";
+import { loadControlUiSourceCatalog } from "../../../../scripts/lib/control-ui-i18n-catalog.ts";
+import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import {
   channelDetailPresentations,
   type ChannelDetailPresentation,
@@ -13,6 +14,7 @@ const declarations = import.meta.glob<ChannelDetailPresentation>(
 
 describe("bundled channel detail presentation", () => {
   it("binds valid display facts and English keys to each owning plugin", () => {
+    const english = flattenTranslations(loadControlUiSourceCatalog());
     const ids = new Set<string>();
     for (const [path, declaration] of Object.entries(declarations)) {
       const manifest = JSON.parse(
@@ -41,13 +43,7 @@ describe("bundled channel detail presentation", () => {
         ),
       ).toBe(true);
       for (const key of [declaration.titleKey, declaration.subtitleKey]) {
-        const value = key
-          .split(".")
-          .reduce<unknown>(
-            (current, segment) =>
-              current && typeof current === "object" ? Reflect.get(current, segment) : undefined,
-            en,
-          );
+        const value = english.get(key);
         expect(typeof value).toBe("string");
         expect(value).not.toBe("");
       }

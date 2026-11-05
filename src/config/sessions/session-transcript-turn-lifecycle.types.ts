@@ -1,4 +1,3 @@
-import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type { InternalSessionEntry as SessionEntry, PersistedSessionRunStatus } from "./types.js";
 
 /** `null` requires a revision-less row; omitting the field skips the revision fence. */
@@ -11,22 +10,6 @@ export type SessionTranscriptTurnExpectedState = {
   /** Rejects a run-owned turn after another admitted run takes writer ownership. */
   expectedWriterRunId?: string;
   abortedLastRun: boolean | undefined;
-  /** Fences recovery-only transcript writes against concurrent ownership changes. */
-  mainRestartRecoveryCycleId: string | undefined;
-  mainRestartRecoveryRevision: number | undefined;
-  restartRecoveryBeforeAgentReplyState: SessionRestartRecoveryState["restartRecoveryBeforeAgentReplyState"];
-  restartRecoveryDeliveryReceiptState: SessionRestartRecoveryState["restartRecoveryDeliveryReceiptState"];
-  restartRecoveryDeliveryToolCallId: SessionRestartRecoveryState["restartRecoveryDeliveryToolCallId"];
-  restartRecoveryDeliveryRequestFingerprint: SessionRestartRecoveryState["restartRecoveryDeliveryRequestFingerprint"];
-  restartRecoveryDeliveryRunId: SessionRestartRecoveryState["restartRecoveryDeliveryRunId"];
-  restartRecoveryDeliverySourceRunId: SessionRestartRecoveryState["restartRecoveryDeliverySourceRunId"];
-  restartRecoveryRequesterAccountId: SessionRestartRecoveryState["restartRecoveryRequesterAccountId"];
-  restartRecoveryRequesterSenderId: SessionRestartRecoveryState["restartRecoveryRequesterSenderId"];
-  restartRecoverySameChannelThreadRequired: SessionRestartRecoveryState["restartRecoverySameChannelThreadRequired"];
-  restartRecoveryOperatorSource: SessionEntry["restartRecoveryOperatorSource"];
-  restartRecoverySourceIngress: SessionRestartRecoveryState["restartRecoverySourceIngress"];
-  restartRecoverySourceReplyDeliveryMode: SessionRestartRecoveryState["restartRecoverySourceReplyDeliveryMode"];
-  restartRecoveryTerminalRunIds: SessionRestartRecoveryState["restartRecoveryTerminalRunIds"];
   status: PersistedSessionRunStatus | undefined;
 };
 
@@ -39,24 +22,6 @@ export type SessionTranscriptTurnLifecyclePatch = {
   lastRunError?: SessionEntry["lastRunError"];
   lastInteractionAt?: number;
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
-  mainRestartRecovery?: SessionEntry["mainRestartRecovery"];
-  restartRecoveryBeforeAgentReplyState?: SessionRestartRecoveryState["restartRecoveryBeforeAgentReplyState"];
-  restartRecoveryDeliveryReceiptState?: SessionRestartRecoveryState["restartRecoveryDeliveryReceiptState"];
-  restartRecoveryDeliveryToolCallId?: SessionRestartRecoveryState["restartRecoveryDeliveryToolCallId"];
-  restartRecoveryDeliveryContext?: SessionRestartRecoveryState["restartRecoveryDeliveryContext"];
-  restartRecoveryDeliveryRequestFingerprint?: SessionRestartRecoveryState["restartRecoveryDeliveryRequestFingerprint"];
-  restartRecoveryDeliveryRunId?: SessionRestartRecoveryState["restartRecoveryDeliveryRunId"];
-  restartRecoveryDeliverySourceRunId?: SessionRestartRecoveryState["restartRecoveryDeliverySourceRunId"];
-  restartRecoveryRequesterAccountId?: SessionRestartRecoveryState["restartRecoveryRequesterAccountId"];
-  restartRecoveryRequesterSenderId?: SessionRestartRecoveryState["restartRecoveryRequesterSenderId"];
-  restartRecoverySameChannelThreadRequired?: SessionRestartRecoveryState["restartRecoverySameChannelThreadRequired"];
-  restartRecoveryOperatorSource?: SessionEntry["restartRecoveryOperatorSource"];
-  restartRecoverySourceIngress?: SessionRestartRecoveryState["restartRecoverySourceIngress"];
-  restartRecoverySourceReplyDeliveryMode?: SessionRestartRecoveryState["restartRecoverySourceReplyDeliveryMode"];
-  restartRecoveryForceSafeTools?: SessionEntry["restartRecoveryForceSafeTools"];
-  restartRecoveryRuns?: SessionEntry["restartRecoveryRuns"];
-  /** Durable tombstones merged with the fresh row inside the SQLite write transaction. */
-  restartRecoveryTerminalRunIds?: SessionRestartRecoveryState["restartRecoveryTerminalRunIds"];
   runtimeMs?: number;
   startedAt?: number;
   status?: PersistedSessionRunStatus;

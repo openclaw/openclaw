@@ -1,4 +1,5 @@
 import { defaultRangeExtractor, type Range, Virtualizer } from "@tanstack/virtual-core";
+import { findMcpAppUnmountTargets } from "../../../components/mcp-app-unmount.ts";
 
 export function extractTranscriptRange(
   range: Range,
@@ -35,9 +36,9 @@ export function previewTranscriptRowKeys(
   preview.setOptions({
     ...preview.options,
     count: nextKeys.length,
-    getItemKey: (index) => nextKeys[index] ?? `missing:${index}`,
+    getItemKey: (index) => nextKeys[index]!,
   });
-  return new Set(preview.getVirtualIndexes().flatMap((index) => nextKeys[index] ?? []));
+  return new Set(preview.getVirtualIndexes().map((index) => nextKeys[index]!));
 }
 
 export function leavingTranscriptMcpAppRows(
@@ -45,7 +46,7 @@ export function leavingTranscriptMcpAppRows(
   readRenderedKeys: () => ReadonlySet<string>,
 ): HTMLElement[] {
   const appRows = new Set(
-    [...(root?.querySelectorAll<HTMLElement>("mcp-app-view") ?? [])].flatMap(
+    (root ? findMcpAppUnmountTargets([root]) : []).flatMap(
       (app) => app.closest<HTMLElement>(".chat-virtual-row") ?? [],
     ),
   );

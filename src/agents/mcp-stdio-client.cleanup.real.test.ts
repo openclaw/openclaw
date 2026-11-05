@@ -182,9 +182,10 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
       cause: {
         message: expect.stringContaining('"relayExit":true'),
         cause: {
-          durationMs: expect.any(Number),
-          escalationAfterMs: expect.any(Number),
-          signalError: expect.any(Error),
+          message: expect.stringMatching(
+            /service child cleanup owner: .*"durationMs":\d+.*"escalationAfterMs":\d+/,
+          ),
+          cause: expect.any(Error),
         },
       },
     });
@@ -246,7 +247,12 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
     try {
       await expect(client.stop()).rejects.toMatchObject({
         cause: {
-          cause: { escalationAfterMs: expect.any(Number), signalError: expect.any(Error) },
+          cause: {
+            message: expect.stringMatching(
+              /service child cleanup owner: .*"escalationAfterMs":\d+/,
+            ),
+            cause: expect.any(Error),
+          },
         },
       });
       expect(relay.connected).toBe(false);

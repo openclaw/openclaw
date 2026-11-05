@@ -20,34 +20,24 @@ export type SidebarPresenceScope = {
   selfInstanceId?: string;
 };
 
-type SidebarPresenceHost = Pick<HTMLElement, "querySelectorAll"> & {
+type SidebarPresenceHost = {
   navigationView: "sessions" | "online" | "pages";
   contextualSidebar?: ContextualSidebar;
   sessionDataContext?: { gateway: { snapshot: { selfUser?: AuthenticatedUser | null } } };
   sessionData: { presenceInstanceId?: string; presencePayload: PresencePayload | undefined };
   reconciledSidebarZone(): { entries: readonly SidebarZoneEntry[] };
+  mountedPresence(): {
+    sessionKeys: ReadonlySet<string>;
+    activityProfileIds: ReadonlySet<string>;
+  };
 };
 
 export function sidebarPresenceScope(host: SidebarPresenceHost): SidebarPresenceScope {
   const sessionsVisible = host.navigationView === "sessions" && !host.contextualSidebar;
-  // The rendered facepiles include main cards, pins, and the expanded child window.
-  // Reading their inputs avoids a second owner for sidebar membership.
-  const sessionKeys = new Set(
-    sessionsVisible
-      ? Array.from(
-          host.querySelectorAll("openclaw-viewer-facepile"),
-          (facepile) => facepile.sessionKey ?? "",
-        )
-      : [],
-  );
-  const activityProfileIds = new Set(
-    sessionsVisible
-      ? Array.from(
-          host.querySelectorAll<HTMLElement>(".sidebar-session-group-person"),
-          (header) => header.dataset.personCardKey?.slice("profile:".length) ?? "",
-        )
-      : [],
-  );
+  // Mounted refs include plugin-delegated lists while excluding collapsed or paged-out rows.
+  const { sessionKeys, activityProfileIds } = sessionsVisible
+    ? host.mountedPresence()
+    : { sessionKeys: new Set<string>(), activityProfileIds: new Set<string>() };
   const profileIds = new Set(activityProfileIds);
   for (const entry of host.reconciledSidebarZone().entries) {
     if (entry.type === "person") {

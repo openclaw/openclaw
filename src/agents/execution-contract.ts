@@ -1,6 +1,3 @@
-/**
- * Resolves strict agentic execution contracts for provider/model pairs.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentExecutionContract, resolveSessionAgentIds } from "./agent-scope.js";
@@ -43,9 +40,6 @@ export function isStrictAgenticExecutionContractActive(params: {
     agentId: params.agentId ?? undefined,
   });
   const explicit = resolveAgentExecutionContract(params.config, sessionAgentId);
-  const supported = isStrictAgenticSupportedProviderModel({
-    provider: params.provider,
-    modelId: params.modelId,
-  });
+  const supported = isStrictAgenticSupportedProviderModel(params);
   return supported && explicit !== "default";
 }

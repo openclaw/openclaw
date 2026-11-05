@@ -1,3 +1,4 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   createPluginRegistryFixture,
@@ -9,18 +10,21 @@ import {
   buildGatewayConnectAuth,
   selectGatewayConnectAuth,
 } from "../../packages/gateway-client/src/connect-auth.js";
-import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
+import type { HelloOk, ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 import {
   GATEWAY_OWNER_PROFILE_ID,
   type UsersSelfResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { writeConfigFile } from "../config/config.js";
 import type { GatewayAuthConfig, GatewayOperatorRolesConfig } from "../config/types.gateway.js";
-import { loadOriginDeviceToken } from "../infra/device-auth-store.js";
-import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
+import {
+  loadOriginDeviceToken,
+  storeOriginDeviceToken as seedOriginDeviceToken,
+} from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
 import {
   linkEmail,
@@ -28,36 +32,41 @@ import {
   setUserProfileRole,
 } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { gitHubPublicApi } from "./github-public-api.js";
+import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { OperatorScope } from "./operator-scopes.js";
+import { retainGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
+import type { GatewayRequestHandler } from "./server-methods/types.js";
 import type { GatewayServer } from "./server-public.js";
 import {
   connectReq,
+  BROWSER_ORIGIN,
+  TRUSTED_BROWSER_HEADERS as TRUSTED_PROXY_HEADERS,
+  browserProxyAuth,
+  configureBrowserAuth,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
   NODE_CLIENT,
   openTailscaleWs,
   openWs,
+  onceMessage,
   rpcReq,
   testState,
   testTailscaleWhois,
   waitForWsClose,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
+import { onGatewayPolicyClientInvalidated } from "./server/ws-policy-close.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { getTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const BROWSER_ORIGIN = "https://control.example.com";
-const TRUSTED_PROXY_HEADERS = {
-  origin: BROWSER_ORIGIN,
-  "x-forwarded-for": "203.0.113.50",
-  "x-forwarded-proto": "https",
-  "x-forwarded-user": "admin@example.com",
-};
 const NARROW_SCOPES: OperatorScope[] = ["operator.read", "operator.write", "operator.talk"];
 const READ_WRITE: OperatorScope[] = ["operator.read", "operator.write"];
 const ADMIN_GRANT = { "admin@example.com": ["operator.admin"] } satisfies NonNullable<
@@ -73,19 +82,16 @@ const UPGRADE_SCOPES = [
 ];
 
 function deviceIdentityPath(label: string): string {
-  return path.join(tempDirs.make("openclaw-identity-scopes-"), `${label}.sqlite`);
+  return path.join(
+    tempDirs.make("openclaw-identity-scopes-"),
+    label,
+    "client",
+    "credentials.sqlite",
+  );
 }
 
 function proxyAuth(identityScopes?: GatewayAuthConfig["identityScopes"]): GatewayAuthConfig {
-  return {
-    mode: "trusted-proxy",
-    identityScopes,
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-      allowLoopback: true,
-    },
-  };
+  return browserProxyAuth({ identityScopes });
 }
 
 async function configureGatewayAuth(
@@ -93,16 +99,9 @@ async function configureGatewayAuth(
   roles?: GatewayOperatorRolesConfig,
   tailscale = false,
 ): Promise<void> {
-  testState.gatewayAuth = auth;
-  testState.gatewayControlUi = { allowedOrigins: [BROWSER_ORIGIN] };
-  await writeConfigFile({
-    gateway: {
-      auth,
-      trustedProxies: ["127.0.0.1"],
-      ...(tailscale ? { tailscale: { mode: "serve" } } : {}),
-      ...(roles ? { roles } : {}),
-      controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
-    },
+  await configureBrowserAuth(auth, {
+    ...(tailscale ? { tailscale: { mode: "serve" } } : {}),
+    ...(roles ? { roles } : {}),
   });
 }
 
@@ -229,6 +228,192 @@ const GITHUB_RATE_LIMITED_ERROR = {
   message: expect.stringContaining("GitHub is rate limiting profile verification"),
   retryAfterMs: expect.toSatisfy((ms: number) => ms > 60_000),
 };
+
+test.each(["config", "config-revocation", "profile", "profile-revocation"] as const)(
+  "renews the current person-timeline claim after committed %s changes",
+  async (publication) => {
+    const configPublication = publication === "config" || publication === "config-revocation";
+    const revokeAcceptedWork =
+      publication === "config-revocation" || publication === "profile-revocation";
+    const roles: GatewayOperatorRolesConfig = {
+      default: "member",
+      definitions: {
+        member: role(["operator.read", "operator.sessions.write"]),
+        guest: role(["operator.sessions.write"]),
+        staff: role(["operator.admin"], "write"),
+        denied: role([], "none"),
+      },
+    };
+    await configureGatewayAuth(proxyAuth(ADMIN_GRANT), roles);
+    setUserProfileRole(ensureProfileForEmail("admin@example.com").id, "staff");
+    const person = ensureProfileForEmail("member@example.test");
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const completed = createDeferredCore<{ ok: true } | { ok: false; error: unknown }>();
+    const effectPath = path.join(tempDirs.make("openclaw-timeline-effect-"), "committed");
+    let accepted = false;
+    let revoked = false;
+    const handler: GatewayRequestHandler = async (options) => {
+      let authority: ReturnType<typeof retainGatewayRequestMutationAuthority> | undefined;
+      let unbind = () => {};
+      try {
+        if (!options.client) {
+          throw new Error("expected the authenticated WebSocket caller and owned effect");
+        }
+        // Preserve the dispatcher's bound options; plugin adapters clone their input.
+        authority = retainGatewayRequestMutationAuthority(options);
+        unbind = onGatewayPolicyClientInvalidated(options.client as GatewayWsClient, () => {
+          revoked = true;
+        });
+        accepted = true;
+        entered.resolve();
+        await release.promise;
+        authority.assertCurrent();
+        writeFileSync(effectPath, "committed", { flag: "wx", mode: 0o600 });
+        options.respond(true, { completed: true });
+        completed.resolve({ ok: true });
+      } catch (error) {
+        entered.reject(error);
+        completed.resolve({ ok: false, error });
+        throw error;
+      } finally {
+        unbind();
+        authority?.release();
+      }
+    };
+    const descriptor = createPluginGatewayMethodDescriptor({
+      pluginId: "timeline-proof",
+      name: "timeline-proof.accepted",
+      handler,
+      scope: "operator.sessions.write",
+    });
+    let restoreStartupPlugins = () => {};
+    if (configPublication) {
+      const startup = await import("./server-startup-plugins.js");
+      const loadStartupPlugins = startup.loadGatewayStartupPluginRuntime;
+      const startupSpy = vi
+        .spyOn(startup, "loadGatewayStartupPluginRuntime")
+        .mockImplementation(async (params) => {
+          const loaded = await loadStartupPlugins(params);
+          // Full mode keeps its real startup owners; only register the owned proof method
+          // before the existing attachment callback publishes this actual registry.
+          loaded.pluginRegistry.gatewayHandlers["timeline-proof.accepted"] = handler;
+          loaded.pluginRegistry.gatewayMethodDescriptors.push(descriptor);
+          return {
+            ...loaded,
+            gatewayMethods: [...loaded.gatewayMethods, "timeline-proof.accepted"],
+          };
+        });
+      restoreStartupPlugins = () => startupSpy.mockRestore();
+    } else {
+      const registry = createEmptyPluginRegistry();
+      registry.gatewayHandlers["timeline-proof.accepted"] = handler;
+      registry.gatewayMethodDescriptors.push(descriptor);
+      setTestPluginRegistry(registry);
+    }
+    // Profile publications use minimal fixtures; committed config reloads keep full mode.
+    try {
+      await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: configPublication ? "0" : "1" }, () =>
+        withIdentityServer(async ({ connect }) => {
+          const headers = { ...TRUSTED_PROXY_HEADERS, "x-forwarded-user": "member@example.test" };
+          const { ws, connected } = await connect({ scopes: ["operator.sessions.write"] }, headers);
+          const admin = configPublication
+            ? await connect({ scopes: ["operator.admin"] })
+            : undefined;
+          expectScopes(connected, ["operator.sessions.write"]);
+          expect((connected.payload as HelloOk).features.methods).toContain(
+            "timeline-proof.accepted",
+          );
+          expect(responseAuth(connected)).not.toHaveProperty("profileActivityViewerId");
+          const patchRoles = async (next: GatewayOperatorRolesConfig) => {
+            if (!admin) {
+              throw new Error("expected the managed config publication owner");
+            }
+            const before = await rpcReq<{ hash: string }>(admin.ws, "config.get");
+            expect(before.ok).toBe(true);
+            const patched = await rpcReq(admin.ws, "config.patch", {
+              baseHash: before.payload?.hash,
+              raw: JSON.stringify({ gateway: { roles: next } }),
+              replacePaths: ["gateway.roles.definitions.member.scopes"],
+            });
+            expect(patched.ok, JSON.stringify(patched.error)).toBe(true);
+          };
+          try {
+            setDisplayName(person.id, "Renamed member");
+            if (configPublication) {
+              await patchRoles({
+                ...roles,
+                definitions: { ...roles.definitions, unrelated: role([]) },
+              });
+            }
+            await expectProfile(ws, person.id);
+            const prematureReply = onceMessage<Pick<ResponseFrame, "type" | "id" | "error">>(
+              ws,
+              (frame) => frame.type === "res" && frame.id === "accepted-timeline-work",
+            ).then((frame) => {
+              throw new Error(
+                `Timeline work returned before handler admission: ${frame.error?.code ?? "success"}`,
+              );
+            });
+            ws.send(
+              JSON.stringify({
+                type: "req",
+                id: "accepted-timeline-work",
+                method: "timeline-proof.accepted",
+                params: {},
+              }),
+            );
+            await Promise.race([entered.promise, prematureReply]);
+            if (configPublication) {
+              await patchRoles({
+                ...roles,
+                definitions: { ...roles.definitions, member: roles.definitions.guest! },
+              });
+            } else {
+              setUserProfileRole(person.id, "guest");
+            }
+            expect(await waitForWsClose(ws, 1_000)).toBe(true);
+            expect(revoked).toBe(false);
+            const replacement = await connect({ scopes: ["operator.sessions.write"] }, headers);
+            expectScopes(replacement.connected, ["operator.sessions.write"]);
+            expect(responseAuth(replacement.connected)?.profileActivityViewerId).toBe(person.id);
+            if (revokeAcceptedWork) {
+              // A later real authority loss must still reach the request retained after transport close.
+              if (configPublication) {
+                await patchRoles({
+                  ...roles,
+                  definitions: { ...roles.definitions, member: roles.definitions.denied! },
+                });
+              } else {
+                setUserProfileRole(person.id, "denied");
+              }
+              expect(revoked).toBe(true);
+            }
+            release.resolve();
+            const outcome = await completed.promise;
+            if (revokeAcceptedWork) {
+              expect(outcome).toMatchObject({
+                ok: false,
+                error: expect.any(SessionMutationAuthorizationChangedError),
+              });
+              expect(existsSync(effectPath)).toBe(false);
+            } else {
+              expect(outcome).toEqual({ ok: true });
+              expect(readFileSync(effectPath, "utf8")).toBe("committed");
+            }
+          } finally {
+            release.resolve();
+            if (accepted) {
+              await completed.promise;
+            }
+          }
+        }),
+      );
+    } finally {
+      restoreStartupPlugins();
+    }
+  },
+);
 
 /** Stubs only api.github.com user lookups; `quotaExhausted` switches to GitHub's real 403. */
 function stubGitHubUserLookups(users: Record<string, { id: number; login: string }>) {
@@ -385,12 +570,15 @@ test.each([
     const { ws, connected } = await connect({ scopes: scenario.deviceScopes });
     try {
       expectScopes(connected, scenario.expectedScopes);
+      expect(responseAuth(connected)).toMatchObject({
+        roleAllowsAdmin: scenario.assignedRole === "admin-only",
+      });
       expect((await rpcReq(ws, "status")).ok).toBe(scenario.expectedScopes.length > 0);
       if (scenario.assignedRole === "read-only") {
         await expectWriteDenied(ws, "agent:main:denied");
       }
       expect(responseAuth(connected)?.deviceToken).toBe(undefined);
-      expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(false);
+      expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(false);
       if (!scenario.assignedRole) {
         const upgrade = await rpcReq(ws, "device.scopes.requestUpgrade", {
           scopes: ["operator.read", "operator.write", "operator.admin"],
@@ -426,7 +614,7 @@ test.each([
           payload: { status: "approved", scopes: [...UPGRADE_SCOPES, "operator.talk"].toSorted() },
         });
         expect(result.payload?.deviceToken).toBeTypeOf("string");
-        expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(false);
+        expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(false);
       }
     } finally {
       invalidateOperatorRolePolicy(profile.id);
@@ -530,7 +718,7 @@ test("adds a case-insensitive trusted-proxy email grant without changing pairing
         { ...TRUSTED_PROXY_HEADERS, "x-forwarded-user": "Admin@Example.com" },
       );
       expectScopes(connected, ["operator.write", "operator.admin"]);
-      expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(true);
+      expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(true);
       const browse = await rpcReq<{ path?: string }>(ws, "fs.listDir", {
         path: outsideWorkspace,
       });
@@ -588,7 +776,7 @@ test.each<[string, string | undefined, boolean]>([
     if (!initialAuth.deviceToken) {
       throw new Error("expected a Gateway-issued device token");
     }
-    seedOriginDeviceToken({
+    await seedOriginDeviceToken({
       ...cacheKey,
       token: initialAuth.deviceToken,
       scopes: initialAuth.scopes,
@@ -723,6 +911,38 @@ test("caps a broader reconnect before device scope-upgrade comparison", async ()
   });
 
   await expectUnchangedPairing(identity.deviceId, ["operator.read"]);
+});
+
+test("keeps equivalent identity grants within both proxy scope ceilings", async () => {
+  await configureGatewayAuth(
+    proxyAuth({
+      "explicit@example.com": READ_WRITE,
+      "implied@example.com": ["operator.write"],
+      "admin@example.com": ["operator.admin"],
+      "read-only@example.com": ["operator.read"],
+      "pairing-only@example.com": ["operator.pairing"],
+    }),
+  );
+  const cases: Array<[string, string, OperatorScope[]]> = [
+    ["explicit@example.com", "operator.read", ["operator.read"]],
+    ["implied@example.com", "operator.read", ["operator.read"]],
+    ["admin@example.com", "operator.read", ["operator.read"]],
+    ["read-only@example.com", "operator.write", ["operator.read"]],
+    ["pairing-only@example.com", "operator.read", []],
+    ["implied@example.com", "", []],
+  ];
+  await withIdentityServer(async ({ connect }) => {
+    for (const [identity, cap, expected] of cases) {
+      const { ws, connected } = await connect(
+        { device: null },
+        { ...TRUSTED_PROXY_HEADERS, "x-forwarded-user": identity, "x-openclaw-scopes": cap },
+      );
+      expectScopes(connected, expected);
+      expect((await rpcReq(ws, "sessions.list", {})).ok).toBe(expected.length > 0);
+      await expectWriteDenied(ws, "agent:main:scope-cap");
+      ws.close();
+    }
+  });
 });
 
 test.each<[string, GatewayAuthConfig, ConnectOptions, string[]]>([

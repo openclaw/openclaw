@@ -1,6 +1,7 @@
 import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
 
 export type WorkboardDatabasePortApi<Database, Input> = {
+  postgres: string;
   inspectWorkboardPortSource(db: Database): {
     version: number;
     migrationRequired: boolean;
@@ -410,9 +411,16 @@ export type WorkboardCard = {
   metadata?: WorkboardMetadata;
 };
 
+export type WorkboardCardCursor = {
+  position: number;
+  createdAt: number;
+  id: string;
+};
+
 export type WorkboardListResult = {
   cards: WorkboardCard[];
   statuses: readonly WorkboardStatus[];
+  nextCursor?: WorkboardCardCursor;
 };
 export {
   createDefaultWorkboardSessionsBoardSpec,

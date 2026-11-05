@@ -1,8 +1,7 @@
-// Memory Host SDK tests cover error formatting and secret redaction.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { withEnv } from "../../../../src/test-utils/env.js";
 import { formatErrorMessage } from "./error-utils.js";
 
@@ -13,22 +12,13 @@ const TOKEN_CASES = [
   ["intact trailing pair", "abcdefghijklmn😀xy"],
 ] as const;
 
-let tempDirs: string[] = [];
-
 function writeConfig(source: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-redact-config-"));
-  tempDirs.push(dir);
+  onTestFinished(() => fs.rmSync(dir, { force: true, recursive: true }));
   const configPath = path.join(dir, "openclaw.json");
   fs.writeFileSync(configPath, source);
   return configPath;
 }
-
-afterEach(() => {
-  for (const dir of tempDirs) {
-    fs.rmSync(dir, { force: true, recursive: true });
-  }
-  tempDirs = [];
-});
 
 describe("formatErrorMessage", () => {
   it.each(TOKEN_CASES)("fully masks token assignments at a %s", (_label, token) => {
@@ -83,11 +73,9 @@ describe("formatErrorMessage", () => {
   });
 
   it("merges operator redact patterns with provider-token coverage", () => {
-    const configPath = writeConfig(`{
-      logging: {
-        redactPatterns: ["/internal-ticket-([A-Za-z0-9]+)/g"],
-      },
-    }`);
+    const configPath = writeConfig(
+      `{ logging: { redactPatterns: ["/internal-ticket-([A-Za-z0-9]+)/g"] } }`,
+    );
     const providerToken = `ghp_${"a".repeat(20)}`;
     const customSecret = "internal-ticket-12345";
 

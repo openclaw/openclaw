@@ -11,17 +11,23 @@ import {
   LOGBOOK_SCHEMA_VERSION,
   SCHEMA as LOGBOOK_SCHEMA_SQL,
 } from "../extensions/logbook/src/store-schema.ts";
-import { TEAM_REPORTS_SCHEMA_SQL } from "../extensions/team-reports/src/store-schema.ts";
+import {
+  TEAM_REPORTS_SCHEMA_SQL,
+  TEAM_REPORTS_SCHEMA_VERSION,
+} from "../extensions/team-reports/src/store-schema.ts";
 import {
   SCHEMA_VERSION,
   WORKBOARD_SCHEMA_SQL,
 } from "../extensions/workboard/src/workboard-schema.ts";
+import { MEMORY_PATH_POSTGRES_INDEXES } from "../packages/memory-host-sdk/src/host/memory-path-postgres.ts";
+import { CLIENT_CREDENTIAL_LEGACY_TABLES_SQL } from "../src/infra/client-credential-schema.ts";
 import {
   assertPostgresCatalog,
   expectedPostgresCatalog,
   postgresCatalogQuery,
   readPostgresCatalog,
 } from "../src/infra/database-engine/postgres-catalog.ts";
+import { withLegacyPostgresIndexOrdering } from "../src/infra/database-engine/postgres-index-ordering.ts";
 import { extractSqliteTableSchema } from "../src/infra/sqlite-schema-sql.ts";
 import { AGENT_TRANSCRIPT_SEARCH_POSTGRES_SQL } from "../src/state/openclaw-agent-search-schema.ts";
 import { DOCTOR_OWNED_STATE_TABLES } from "../src/state/openclaw-state-db-contract.ts";
@@ -29,6 +35,14 @@ import {
   TASK_RUN_INDEX_RETIREMENT_V24_SQL,
   TASK_RUN_INDEX_REPLACEMENTS_V24,
 } from "../src/state/openclaw-state-db-schema-v24-indexes.ts";
+import {
+  STATE_WRITE_INDEX_RETIREMENT_V27_SQL,
+  withLegacyStateWriteIndexes,
+} from "../src/state/openclaw-state-db-schema-v27-indexes.ts";
+import {
+  WORKSPACE_CAS_COLUMNS,
+  WORKSPACE_CAS_TABLES,
+} from "../src/state/openclaw-state-db-schema-v35-workspace-cas.ts";
 import { listOpenClawStateFeatureSchemas } from "../src/state/openclaw-state-feature-schema.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { formatGeneratedModule } from "./lib/format-generated-module.mts";
@@ -83,6 +97,29 @@ function postgresPortDataRanges(data: Catalog, postgres: string) {
   const split = postData ? postgres.indexOf(postData) : postgres.length;
   assert.ok(split >= 0, "Generated PostgreSQL port DDL differs from its catalog");
   return { preData: [0, split], postData: [split, postgres.length] };
+}
+
+async function generateClientCredentialSource() {
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(CLIENT_CREDENTIAL_LEGACY_TABLES_SQL);
+    const data = catalog(db, "");
+    for (const item of data.objects) {
+      if (item.kind === "index" && item.sql) {
+        item.sql = withLegacyPostgresIndexOrdering(item.sql);
+      }
+    }
+    const sql = tableStatements(data).join("\n\n");
+    return {
+      sql,
+      ...postgresPortDataRanges(data, sql),
+      tables: portTables(data).map(({ name, identities }) => ({ name, identities })),
+      expectedCatalog: expectedPostgresCatalog(data),
+    };
+  } finally {
+    db.close();
+  }
 }
 
 /** Shared metadata recipe; family owners supply canonical SQLite and generated PostgreSQL DDL. */
@@ -229,6 +266,19 @@ export async function generatePostgresSchemas(
     const data = catalogs[name]!;
     if (name === "agent") {
       translatePostgresTriggers(data);
+      const sources = data.tables.find((table) => table.name === "memory_index_sources");
+      if (sources) {
+        sources.indexes += MEMORY_PATH_POSTGRES_INDEXES.length;
+        for (const index of MEMORY_PATH_POSTGRES_INDEXES) {
+          data.objects.push({
+            kind: "index",
+            table: sources.name,
+            name: index.name,
+            source: "PostgreSQL-only derived exact-path identity",
+            sql: index.sql,
+          });
+        }
+      }
       data.notes.push(
         "Voice indexes: the sole writer (src/talk/client-voice-session-store.ts) uses JSON.stringify; agentId/sessionKey are strings, origin is client/relay, status is open/closed. src/talk/client-voice-session-lookup.worker.ts compares strings only. Non-string members cannot match; no boolean/numeric coercion is needed. Duplicate-key JSON is unreachable from writers: SQLite resolves first-wins, PostgreSQL last-wins. P3-6 preflight must refuse duplicate-key voice rows before copying, with row evidence. Canonical JSON remains text.",
       );
@@ -261,6 +311,35 @@ export async function generatePostgresSchemas(
       }
     }
     if (name === "state") {
+      const preWriteIndexesV27Sql: Record<string, string> = {};
+      let writeIndexesV27Sql = "";
+      if (root === ROOT) {
+        using historical = new DatabaseSync(":memory:");
+        historical.exec(
+          withLegacyStateWriteIndexes(
+            fs.readFileSync(path.join(root, "src/state/openclaw-state-schema.sql"), "utf8"),
+          ),
+        );
+        for (const item of catalog(historical, "").objects) {
+          if (
+            item.kind === "index" &&
+            item.sql &&
+            [
+              "idx_acp_replay_events_session_seq",
+              "idx_skill_usage_key",
+              "idx_state_leases_owner",
+            ].includes(item.name)
+          ) {
+            preWriteIndexesV27Sql[item.table] = withLegacyPostgresIndexOrdering(item.sql);
+          }
+        }
+        assert.equal(Object.keys(preWriteIndexesV27Sql).length, 3);
+        const leaseIndex = data.objects.find(
+          (item) => item.kind === "index" && item.name === "idx_state_leases_owner",
+        );
+        assert.ok(leaseIndex?.sql);
+        writeIndexesV27Sql = `${STATE_WRITE_INDEX_RETIREMENT_V27_SQL}\n${withLegacyPostgresIndexOrdering(leaseIndex.sql)}`;
+      }
       if (root === ROOT) {
         for (const pending of pendingPromotion) {
           assert.ok(
@@ -296,10 +375,10 @@ export async function generatePostgresSchemas(
               item.kind === "index" && item.table === "task_runs" && item.name === indexName,
           );
           assert.ok(
-            index && index.sql?.startsWith("CREATE INDEX "),
+            index?.sql && index.sql.startsWith("CREATE INDEX "),
             `Missing translated shared-state v24 index: ${indexName}`,
           );
-          return index.sql;
+          return withLegacyPostgresIndexOrdering(index.sql);
         });
         files["state-v23-v24.postgres.sql"] = `${[
           "-- Generated v23-to-v24 forward DDL; the owner supplies search_path, transaction, and version publication.",
@@ -312,12 +391,45 @@ export async function generatePostgresSchemas(
           "UPDATE schema_meta SET schema_version = 25 WHERE meta_key = 'primary' AND schema_version = 24;\n" +
           "UPDATE config_machine_state SET value_json = '25' WHERE state_key = 'state.schema.contentVersion' AND value_json = '24';\n";
       }
+      if (root === ROOT) {
+        files["state-v28-v29.postgres.sql"] =
+          "-- Generated v28-to-v29 publication after the local credential owner has verified and retired source rows.\n" +
+          "UPDATE schema_meta SET schema_version = 29 WHERE meta_key = 'primary' AND schema_version = 28;\n";
+        const additions = WORKSPACE_CAS_COLUMNS.map((column) => {
+          const definition = data.objects.find(
+            (item) =>
+              item.kind === "column" &&
+              item.table === "local_workspace_projections" &&
+              item.name === column,
+          );
+          assert.ok(definition?.sql, `Missing workspace CAS column: ${column}`);
+          return `ALTER TABLE "local_workspace_projections" ADD COLUMN ${definition.sql};`;
+        });
+        files["state-v34-v35.postgres.sql"] = [
+          "-- Generated DDL-only v34-to-v35 transition; reconciliation converts retained rows online.",
+          "DO $workspace_cas$ BEGIN",
+          "IF to_regclass('local_workspace_projections') IS NOT NULL THEN",
+          ...additions,
+          ...tableStatements({
+            ...data,
+            objects: data.objects.filter((item) =>
+              WORKSPACE_CAS_TABLES.some((table) => table === item.table),
+            ),
+          }),
+          "END IF; END $workspace_cas$;\n",
+        ].join("\n");
+      }
       if (!options.reportOnly) {
         files["runtime.ts"] = formatGeneratedModule(
           `// Generated by pnpm db:postgres:gen. Do not edit.\nexport const statePostgresRuntime = ${JSON.stringify(
             {
               eagerSql: files["state.postgres.sql"],
               operatorRecoveryV25Sql: files["state-v24-v25.postgres.sql"],
+              preWriteIndexesV27Sql,
+              writeIndexesV27Sql,
+              clientCredentialV29Sql: files["state-v28-v29.postgres.sql"],
+              workspaceCasV35Sql: files["state-v34-v35.postgres.sql"],
+              clientCredentialSource: await generateClientCredentialSource(),
               fragments: manifest.map(({ file, ...fragment }) => ({
                 ...fragment,
                 sql: files[file],
@@ -526,9 +638,10 @@ async function checkPostgresCatalog(connection: string): Promise<void> {
     );
     await client.query(`SET search_path = ${quote(`${prefix}_agent`)}`);
     await client.query("BEGIN");
-    await client.query(`CREATE OR REPLACE FUNCTION openclaw_memory_index_sources_trigger()
+    await client.query(`CREATE OR REPLACE FUNCTION openclaw_session_entry_snapshots_trigger()
       RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $broken$
-      BEGIN UPDATE memory_index_state SET revision = revision + 2 WHERE id = 1; RETURN NULL; END;
+      BEGIN UPDATE session_nodes SET snapshot_revision = snapshot_revision + 2
+      WHERE session_key IN (OLD.session_key, NEW.session_key); RETURN NULL; END;
       $broken$`);
     await assert.rejects(
       () =>
@@ -564,7 +677,7 @@ async function generateTeamReportsPostgresSchema(verify: boolean) {
   ].join("\n\n")}\n`;
   const metadata = generateDatabasePortMetadata(db, data, {
     id: "team-reports",
-    version: 1,
+    version: TEAM_REPORTS_SCHEMA_VERSION,
     sqlite: TEAM_REPORTS_SCHEMA_SQL,
     postgres,
   });

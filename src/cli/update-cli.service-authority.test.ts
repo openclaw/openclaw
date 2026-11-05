@@ -52,7 +52,6 @@ import {
   runDaemonInstall,
   runDaemonRestart,
 } from "./update-cli-modules.test-support.js";
-import { recoveryVerificationStep } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import { writeOpenClawPackageFixture } from "./update-cli/update-cli-package.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
@@ -364,16 +363,13 @@ describe("update-cli", () => {
         expect.objectContaining({
           stderrTail: expect.stringContaining("would kill this command"),
         }),
-        recoveryVerificationStep(
-          [
-            {
-              check: "versionMatch",
-              code: "build-id-mismatch",
-              message: "Expected Gateway build fixture-original-build; observed unavailable.",
-            },
+        expect.objectContaining({
+          name: "gateway recovery observation",
+          exitCode: 0,
+          diagnostics: [
+            "No recovery needed; still serving 1.0.0. No service was stopped or started.",
           ],
-          root,
-        ),
+        }),
       ],
     });
     expect(mutationAdmitted).not.toHaveBeenCalled();
@@ -452,7 +448,7 @@ describe("update-cli", () => {
             ]),
             advisory: {
               kind: "recoverable-maintenance",
-              message: expect.stringContaining("Restart the Gateway you launched manually"),
+              message: expect.stringContaining("Stop the Gateway through its owner"),
             },
           }),
         ]),
@@ -468,7 +464,7 @@ describe("update-cli", () => {
         listUpdateRuns({ limit: 1 })[0]?.steps.some(
           (step) =>
             step.step === "warning:managed-service" &&
-            step.detail?.includes("Restart the Gateway you launched manually"),
+            step.detail?.includes("Stop the Gateway through its owner"),
         ),
       ).toBe(true);
       expect(fsSync.existsSync(staleState)).toBe(false);

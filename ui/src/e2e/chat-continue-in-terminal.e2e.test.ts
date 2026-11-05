@@ -1,14 +1,16 @@
-import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { decodeResumeHandoff } from "../../../src/shared/resume-handoff.js";
-import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { closeChatDetails } from "./chat-details.test-support.ts";
+import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import { exactButton, polledAttribute, polledClipboard } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { openSessionMenuSubmenu } from "./session-management.test-support.ts";
 
@@ -23,45 +25,44 @@ const basePath = new URL("/nested/$&;=()+,![]{}'`/%25PATH%25", "http://localhost
 const agentId = "runner";
 const sessionKey = `agent:${agentId}:main-'"$&;|<>^()%![]{}\\\`-%PATH%`;
 
-function sessionsListResponse() {
+const sessionsListResponse = () =>
+  chatSessionListResponse([
+    {
+      agentId,
+      key: sessionKey,
+      kind: "direct",
+      label: "Terminal continuation",
+      sessionId: "session-terminal-continuation",
+      updatedAt: Date.now(),
+    },
+  ]);
+
+async function openTerminalSession(page: Page) {
+  const gateway = await installMockGateway(page, {
+    basePath,
+    featureMethods: ["chat.startup"],
+    historyMessages: [],
+    methodResponses: { "sessions.list": sessionsListResponse() },
+    operatorScopes: ["operator.read", "operator.write"],
+    sessionKey,
+  });
+  await page.goto(
+    controlUiSessionUrl(new URL(`${basePath}/`, suite.server.baseUrl).href, sessionKey),
+  );
+  const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+  // A retained boot pane may render the same history: bind to this session first.
+  await expect
+    .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
+    .toBe(sessionKey);
   return {
-    count: 1,
-    owners: [
-      { type: "human" as const, id: "profile-ada", label: "Ada" },
-      { type: "human" as const, id: "profile-bob", label: "Bob" },
-    ],
-    defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-    path: "",
-    sessions: [
-      {
-        agentId,
-        key: sessionKey,
-        kind: "direct",
-        label: "Terminal continuation",
-        sessionId: "session-terminal-continuation",
-        owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
-        updatedAt: Date.now(),
-      },
-    ],
-    ts: Date.now(),
+    gateway,
+    menuTrigger: activePane.getByRole("button", { name: "Actions for Terminal continuation" }),
+    dropdown: activePane.locator("openclaw-chat-header-session-menu"),
   };
 }
 
-const sharedManagementActions = [
-  "Pin session",
-  "Mark as unread",
-  "Rename…",
-  "Advanced",
-  "Copy link",
-  "Assign to…",
-  "Move to group",
-  "Archive session",
-] as const;
-const compactManagementActions = sharedManagementActions;
-
 suite.define(() => {
   it("shows, copies, and retires a credential-free exact continuation command", async () => {
-    const artifactDir = createControlUiE2eArtifactDir("header-session-menu");
     await suite.withPage(
       {
         locale: "en-US",
@@ -69,38 +70,12 @@ suite.define(() => {
         viewport: { width: 1440, height: 900 },
       },
       async ({ context, page }) => {
-        const gateway = await installMockGateway(page, {
-          basePath,
-          featureMethods: [
-            "chat.startup",
-            "sessions.assignOwner",
-            "sessions.groups.put",
-            "sessions.patch",
-          ],
-          historyMessages: [
-            {
-              content: [{ type: "text", text: "Ready for terminal continuation." }],
-              role: "assistant",
-              timestamp: Date.now(),
-            },
-          ],
-          methodResponses: { "sessions.list": sessionsListResponse() },
-          operatorScopes: ["operator.read", "operator.write"],
-          presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
-          sessionKey,
-        });
         const pageUrl = new URL(suite.server.baseUrl);
         const gatewayUrl = `ws://${pageUrl.host}${basePath}`;
         await context.grantPermissions(["clipboard-read", "clipboard-write"], {
           origin: pageUrl.origin,
         });
-        await page.goto(
-          controlUiSessionUrl(new URL(`${basePath}/`, suite.server.baseUrl).href, sessionKey),
-        );
-        const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
-        await expect
-          .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
-          .toBe(sessionKey);
+        const { gateway, menuTrigger, dropdown } = await openTerminalSession(page);
         await waitForControlUiRoute(page, {
           routeId: "chat",
           pathname: controlUiSessionPath(sessionKey, basePath),
@@ -108,31 +83,13 @@ suite.define(() => {
           search: "",
           hash: "",
         });
-        await activePane.getByText("Ready for terminal continuation.").waitFor({ timeout: 10_000 });
 
-        const menuTrigger = activePane.getByRole("button", {
-          name: "Actions for Terminal continuation",
-        });
-        await expect.poll(() => menuTrigger.getAttribute("aria-expanded")).toBe("false");
+        await polledAttribute(menuTrigger, "aria-expanded").toBe("false");
         await menuTrigger.press("Enter");
-        const dropdown = activePane.locator("openclaw-chat-header-session-menu");
-        for (const label of sharedManagementActions) {
-          await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
-        }
         await openSessionMenuSubmenu(page, "Advanced");
-        for (const label of [
-          "Fork conversation",
-          "Icon & color",
-          "Copy details",
-          "Open in",
-          "Delete…",
-        ]) {
-          await dropdown.getByRole("menuitem", { name: label, exact: true }).waitFor();
-        }
         await openSessionMenuSubmenu(page, "Open in");
         const action = dropdown.getByText("Continue in terminal…", { exact: true });
         await action.waitFor({ state: "visible" });
-        await page.screenshot({ path: path.join(artifactDir, "01-menu.png"), fullPage: true });
         await action.click();
 
         const dialog = page.locator("openclaw-modal-dialog.continue-in-terminal-dialog");
@@ -147,9 +104,8 @@ suite.define(() => {
           gatewayUrl,
         });
         expect(await dialog.textContent()).not.toMatch(/--token|--password|bootstrap/i);
-        await page.screenshot({ path: path.join(artifactDir, "02-modal.png"), fullPage: true });
-        await dialog.getByRole("button", { name: "Copy command", exact: true }).click();
-        await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(command);
+        await exactButton(dialog, "Copy command").click();
+        await polledClipboard(page).toBe(command);
 
         await dialog.getByRole("button", { name: "Close" }).click();
         await menuTrigger.press("Enter");
@@ -167,8 +123,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps the canonical session actions reachable in the mobile header menu", async () => {
-    const artifactDir = createControlUiE2eArtifactDir("header-session-menu");
+  it("opens terminal continuation after returning to the mobile Advanced page", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -176,70 +131,29 @@ suite.define(() => {
         viewport: { width: 390, height: 844 },
       },
       async ({ page }) => {
-        await installMockGateway(page, {
-          basePath,
-          featureMethods: [
-            "chat.startup",
-            "sessions.assignOwner",
-            "sessions.groups.put",
-            "sessions.patch",
-          ],
-          historyMessages: [
-            {
-              content: [{ type: "text", text: "Mobile session menu proof." }],
-              role: "assistant",
-              timestamp: Date.now(),
-            },
-          ],
-          methodResponses: { "sessions.list": sessionsListResponse() },
-          operatorScopes: ["operator.read", "operator.write"],
-          presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
-          sessionKey,
-        });
-        await page.goto(
-          controlUiSessionUrl(new URL(`${basePath}/`, suite.server.baseUrl).href, sessionKey),
-        );
-        const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
-        // Mock history also renders in the retained boot pane. Wait for this session's pane
-        // before Playwright resolves a control that can stay mounted beneath its replacement.
-        await expect
-          .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
-          .toBe(sessionKey);
-        await waitForControlUiRoute(page, { routeId: "chat" });
-        await activePane
-          .getByRole("paragraph")
-          .filter({ hasText: /^Mobile session menu proof\.$/ })
-          .waitFor();
+        const { menuTrigger, dropdown } = await openTerminalSession(page);
 
-        const menuTrigger = activePane.getByRole("button", {
-          name: "Actions for Terminal continuation",
-        });
+        await waitForControlUiRoute(page, { routeId: "chat" });
+
         await menuTrigger.click();
-        await expect.poll(() => menuTrigger.getAttribute("aria-expanded")).toBe("true");
-        const dropdown = activePane.locator("openclaw-chat-header-session-menu");
-        for (const label of compactManagementActions) {
-          await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
-        }
+        await polledAttribute(menuTrigger, "aria-expanded").toBe("true");
         await dropdown.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-        for (const label of [
-          "Fork conversation",
-          "Icon & color",
-          "Copy details",
-          "Open in",
-          "Delete…",
-        ]) {
-          await dropdown.getByRole("menuitem", { name: label, exact: true }).waitFor();
-        }
-        await dropdown.getByRole("menuitem", { name: "Back", exact: true }).click();
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(artifactDir, "03-mobile-menu.png"),
-        });
+        const advanced = page.locator(
+          '.chat-mobile-host__page[data-mobile-page="session-advanced"]',
+        );
+        await advanced.waitFor();
+        const host = page.locator(".chat-mobile-host");
+        await host
+          .locator(".chat-mobile-host__header")
+          .getByRole("button", { name: "Back", exact: true })
+          .click();
+        await host.locator('.chat-mobile-details-page[data-details-page="root"]').waitFor();
+        await closeChatDetails(page);
+        await menuTrigger.click();
         await dropdown.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-        await dropdown.getByRole("menuitem", { name: "Open in", exact: true }).click();
-        await dropdown
-          .getByText("Continue in terminal…", { exact: true })
+        await advanced.getByRole("button", { name: "Continue in terminal", exact: true }).click();
+        await page
+          .locator("openclaw-modal-dialog.continue-in-terminal-dialog")
           .waitFor({ state: "visible" });
       },
     );

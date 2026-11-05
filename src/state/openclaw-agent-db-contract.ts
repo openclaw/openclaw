@@ -6,7 +6,15 @@ import type {
 } from "../infra/sqlite-worker-identity.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 28;
+export { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
+export const AGENT_COLD_NAVIGATION_SCHEMA_VERSION = 39;
+export const AGENT_TEXT_SEARCH_SCHEMA_VERSION = 38;
+export const AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION = 37;
+export const AGENT_VECTOR_SEARCH_SCHEMA_VERSION = 33;
+export const AGENT_VECTOR_DECODER_SCHEMA_VERSION = 32;
+export const AGENT_MEMORY_REVISION_SCHEMA_VERSION = 31;
+export const AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION = 30;
+export const AGENT_INDEX_RETIREMENT_SCHEMA_VERSION = 29;
 export const AGENT_WRITE_LAYOUT_SCHEMA_VERSION = 28;
 export const AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION = 27;
 export const AGENT_JSON_PREDICATE_SCHEMA_VERSION = 26;
@@ -34,6 +42,10 @@ export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {
 
 /** Internal Doctor custody; never part of the plugin-facing database options. */
 export type OpenClawAgentDatabaseRepairAdmission = {
+  /** Doctor's requested SQLite coverage; ordinary runtime admission retains FULL. */
+  integrityCheck?: "quick" | "full";
+  /** Tables this repair callback mutates; pending schema migrations retain their own coverage. */
+  integrityTables?: readonly string[];
   /** Bind repair admission to the physical database inspected and backed up by its owner. */
   expectedIdentity?: DatabaseFileIdentity;
   /** Live caller authority for native open and schema/registry admission mutations. */

@@ -187,6 +187,31 @@ try {
     const { withConsoleLogsRoutedToStderrForJson } = await import("./json-output-mode.js");
     const { runCliWithExitFinalization } = await import("./one-shot-exit.js");
     const runCommand = async () => {
+      if (process.argv[2] === "config-only-denial") {
+        const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+        await runWithLocalStateOwner({
+          method: "config set",
+          params: {},
+          target: "database",
+          databaseAccess: "none",
+          runLocal: async ({ env }) => {
+            openOpenClawStateDatabase({ env });
+          },
+        });
+        return;
+      }
+      if (process.argv[2] === "config-validation-only") {
+        const [{ ensureConfigReady }, { defaultRuntime }] = await Promise.all([
+          import("./program/config-guard.js"),
+          import("../runtime.js"),
+        ]);
+        await ensureConfigReady({
+          runtime: defaultRuntime,
+          commandPath: ["config", "validate"],
+          validateConfigOnly: true,
+        });
+        return;
+      }
       if (process.argv[2] === "config-unset-route") {
         const { tryRouteCli } = await import("./route.js");
         const routed = await tryRouteCli([

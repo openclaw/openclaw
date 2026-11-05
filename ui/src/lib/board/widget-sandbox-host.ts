@@ -16,6 +16,7 @@ type BoardWidgetSandboxHostOptions = {
   widget: BoardWidget;
   bridgeEnabled?: boolean;
   connected?: boolean;
+  documentActive: boolean;
   sandboxOrigin: string;
   sandboxUrl: string;
   sourceOrigin: string;
@@ -31,7 +32,10 @@ type BoardWidgetSandboxHostOptions = {
   onLoaded: () => void;
   onRendered?: () => void;
   onError: (error: unknown) => void;
+  onLinkResult?: (ok: boolean) => void;
 };
+
+const ACTIVATION_QUERY_TIMEOUT_MS = 250;
 
 class WidgetDocumentError extends Error {
   constructor(
@@ -62,10 +66,11 @@ export class BoardWidgetSandboxHost {
   private readonly documentHost: WidgetSandboxHost;
   private requestGeneration = 0;
   private readonly pendingRequests = new Set<string>();
+  private readonly activationQueries = new Map<string, (active: boolean) => void>();
 
   constructor(private options: BoardWidgetSandboxHostOptions) {
     this.documentHost = new WidgetSandboxHost(this.documentOptions());
-    this.documentHost.setActive(options.connected !== false);
+    this.documentHost.setActive(options.documentActive);
   }
 
   get frame(): HTMLIFrameElement {
@@ -77,10 +82,11 @@ export class BoardWidgetSandboxHost {
       return;
     }
     this.active = active;
-    this.documentHost.setActive(active && this.options.connected !== false);
+    this.documentHost.setActive(active && this.options.documentActive);
     if (!active) {
       this.cancelPendingRequests("Widget inactive");
       this.requestGeneration += 1;
+      this.cancelActivationQueries();
       return;
     }
     this.postHostInit();
@@ -108,6 +114,7 @@ export class BoardWidgetSandboxHost {
       this.retiredTicket = this.adoptedTicket || options.widget.viewTicket || "";
       this.cancelPendingRequests("Gateway connection changed");
       this.requestGeneration += 1;
+      this.cancelActivationQueries();
       this.bridgeOwner = null;
       this.bridgeClient = undefined;
       // A pending HTTP response also belongs to its initiating connection.
@@ -116,7 +123,7 @@ export class BoardWidgetSandboxHost {
         this.documentHost.reset();
       }
     }
-    const active = this.active && options.connected !== false;
+    const active = this.active && options.documentActive;
     if (!active) {
       this.documentHost.setActive(false);
     }
@@ -137,6 +144,7 @@ export class BoardWidgetSandboxHost {
     this.documentHost.reset();
     this.requestGeneration += 1;
     this.pendingRequests.clear();
+    this.cancelActivationQueries();
     this.bridgePort?.close();
     this.bridgePort = null;
     this.adoptedTicket = "";
@@ -161,6 +169,11 @@ export class BoardWidgetSandboxHost {
       event.source !== this.options.frame.contentWindow ||
       event.origin !== this.options.sandboxOrigin
     ) {
+      return;
+    }
+    if (event.data?.method === "ui/notifications/sandbox-activation") {
+      const params = event.data.params;
+      this.activationQueries.get(params?.id)?.(params?.active === true);
       return;
     }
     this.documentHost.handleMessage(event);
@@ -249,6 +262,7 @@ export class BoardWidgetSandboxHost {
         // routine ticket renewals into fresh prompt budgets.
         rateKey: this.documentKey(),
         confirmPrompt: this.options.confirmPrompt,
+        widgetActivated: () => this.queryFrameActivation(),
       });
     } else {
       this.bridgeOwner.updateIdentity(this.options.frame, ticket);
@@ -264,24 +278,29 @@ export class BoardWidgetSandboxHost {
         isCurrent: () => generation === this.requestGeneration && frame === this.options.frame,
       })
       .then((result) => {
-        this.completeRequest(data.id, generation, true, result);
+        this.completeRequest(data, generation, true, result);
       })
       .catch((error: unknown) => {
-        this.completeRequest(data.id, generation, false, undefined, formatUiError(error));
+        this.completeRequest(data, generation, false, undefined, formatUiError(error));
       });
   }
 
   private completeRequest(
-    id: string,
+    request: { id: string; method: string },
     generation: number,
     ok: boolean,
     result?: unknown,
     error?: string,
   ): void {
+    const { id } = request;
     if (generation !== this.requestGeneration || !this.pendingRequests.has(id)) {
       return;
     }
     this.pendingRequests.delete(id);
+    // Stored wrappers may swallow failures; the trusted host owns feedback.
+    if (request.method === "host.open") {
+      this.options.onLinkResult?.(ok);
+    }
     this.postResponse(id, ok, result, error);
   }
 
@@ -305,6 +324,39 @@ export class BoardWidgetSandboxHost {
     // the wrapper document so no previously adopted bridge port crosses modes.
     const bridgeMode = this.options.bridgeEnabled === false ? "passive" : "interactive";
     return `${sourceIdentity}\0${this.options.widget.revision}\0${generation}\0${bridgeMode}`;
+  }
+
+  // Retired requests answer their pending queries as inactive, after the
+  // generation bump, and drop the ids so a late proxy answer finds nothing.
+  private cancelActivationQueries(): void {
+    for (const settle of this.activationQueries.values()) {
+      settle(false);
+    }
+  }
+
+  // Asks the trusted outer proxy whether it holds live user activation. Only
+  // that frame's own window, at the sandbox origin, can answer this query id.
+  private queryFrameActivation(): Promise<boolean> {
+    const target = this.options.frame.contentWindow;
+    if (!target) {
+      return Promise.resolve(false);
+    }
+    const id = Array.from(crypto.getRandomValues(new Uint32Array(4)), (part) =>
+      part.toString(36),
+    ).join("-");
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => settle(false), ACTIVATION_QUERY_TIMEOUT_MS);
+      const settle = (active: boolean) => {
+        clearTimeout(timer);
+        this.activationQueries.delete(id);
+        resolve(active);
+      };
+      this.activationQueries.set(id, settle);
+      target.postMessage(
+        { jsonrpc: "2.0", method: "ui/notifications/sandbox-activation-query", params: { id } },
+        this.options.sandboxOrigin,
+      );
+    });
   }
 
   private postHostInit(): void {

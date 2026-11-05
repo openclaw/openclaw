@@ -1,6 +1,6 @@
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { OpenClawStateDatabaseReadAdmission } from "../../state/openclaw-state-db-async-lifecycle.js";
-import { registerOpenClawStateDatabaseLifecycleListener } from "../../state/openclaw-state-db-cache.js";
+import { registerOpenClawStatePathCacheInvalidation } from "../../state/openclaw-state-db-cache.js";
 import { readUserProfileVersion } from "../../state/user-profile-events.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import type { SkillLibraryReadOutput } from "./read.contract.js";
@@ -21,15 +21,7 @@ const stores = resolveGlobalMap<string, Store>(
   Symbol.for("openclaw.skillLibraryAuthority"),
   "close-and-restart",
 );
-registerOpenClawStateDatabaseLifecycleListener((event) => {
-  if (event.kind !== "opened") {
-    for (const [key, store] of stores) {
-      if (store.path === (event.identity?.canonicalPath ?? event.path)) {
-        stores.delete(key);
-      }
-    }
-  }
-});
+registerOpenClawStatePathCacheInvalidation(stores);
 function owner(admission: OpenClawStateDatabaseReadAdmission) {
   admission.assertCurrent();
   let store = stores.get(admission.coordinationKey);

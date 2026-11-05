@@ -4,6 +4,7 @@
  */
 import type { Server } from "node:http";
 import { BrowserProfileUnavailableError } from "./browser/errors.js";
+import { getExtensionRelayModule } from "./browser/extension-relay.runtime.js";
 import { createBrowserRuntimeState, stopBrowserRuntime } from "./browser/runtime-lifecycle.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./browser/server-context.js";
 import { isBrowserRuntimeRunning } from "./browser/server-context.lifecycle.js";
@@ -65,7 +66,14 @@ export async function ensureBrowserControlRuntime(params: {
   port: number;
   resolved: BrowserServerState["resolved"];
 }): Promise<BrowserServerState> {
-  if (state && isBrowserRuntimeRunning(state)) {
+  if (state && !isBrowserRuntimeRunning(state)) {
+    throw new BrowserProfileUnavailableError("Browser runtime cleanup must finish before restart.");
+  }
+  // Load before publishing state or adopting the HTTP listener so startup can roll back.
+  const relay = Object.values(params.resolved.profiles).some((p) => p.driver === "extension")
+    ? await getExtensionRelayModule()
+    : null;
+  if (state) {
     if (params.server) {
       // A foreground server takes ownership of the already-started service
       // runtime so shutdown and port reporting follow the visible server.
@@ -73,17 +81,14 @@ export async function ensureBrowserControlRuntime(params: {
       state.port = params.port;
       state.resolved = { ...params.resolved, controlPort: params.port };
     }
-    return state;
+  } else {
+    state = await createBrowserRuntimeState({
+      server: params.server ?? null,
+      port: params.port,
+      resolved: params.resolved,
+    });
   }
-  if (state) {
-    throw new BrowserProfileUnavailableError("Browser runtime cleanup must finish before restart.");
-  }
-
-  state = await createBrowserRuntimeState({
-    server: params.server ?? null,
-    port: params.port,
-    resolved: params.resolved,
-  });
+  await relay?.startConfiguredExtensionRelays(state);
   return state;
 }
 

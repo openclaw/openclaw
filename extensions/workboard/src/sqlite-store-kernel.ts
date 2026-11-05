@@ -9,11 +9,14 @@ import {
   type DatabaseEngineInput,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
+  assertTransactionUsable,
   executeSqliteQueryTakeFirstSync,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   runSqliteImmediateTransactionSync,
+  type SqliteWorkerTransactionOptions,
+  type SynchronousSqliteCallback,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { definedFields } from "../record-fields.js";
@@ -61,10 +64,11 @@ type SyncStore<T> = {
 export type WorkboardSqliteKernel = {
   [K in keyof WorkboardPersistence]: SyncStore<WorkboardPersistence[K]>;
 } & {
+  assertSettled(this: void): void;
   close(this: void): void;
-  withWriteTransaction<T>(
-    operation: () => T,
-    options?: Parameters<typeof runSqliteImmediateTransactionSync>[2],
+  withWriteTransaction<T, CommitResult = void>(
+    operation: SynchronousSqliteCallback<T>,
+    options?: SqliteWorkerTransactionOptions<CommitResult>,
   ): T;
 };
 
@@ -94,13 +98,9 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
   }
 
   registerIfAbsent(key: string, value: PersistedWorkboardCard): boolean {
-    return runSqliteImmediateTransactionSync(this.db, () => {
-      if (this.db.prepare("SELECT 1 FROM workboard_cards WHERE id = ?").get(key)) {
-        return false;
-      }
-      insertCard(this.db, value.card);
-      return true;
-    });
+    return runSqliteImmediateTransactionSync(this.db, () =>
+      insertCard(this.db, value.card, { mode: "absent", key }),
+    );
   }
 
   registerIfUpdatedAt(
@@ -108,13 +108,9 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
     value: PersistedWorkboardCard,
     expectedUpdatedAt: number,
   ): boolean {
-    return runSqliteImmediateTransactionSync(this.db, () => {
-      if (!this.matchesUpdatedAt(key, expectedUpdatedAt)) {
-        return false;
-      }
-      insertCard(this.db, value.card);
-      return true;
-    });
+    return runSqliteImmediateTransactionSync(this.db, () =>
+      insertCard(this.db, value.card, { mode: "updated", key, updatedAt: expectedUpdatedAt }),
+    );
   }
 
   claimIfOwnerAvailable(
@@ -256,7 +252,9 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
 
   entries(scope?: WorkboardCardReadScope): Array<{ key: string; value: PersistedWorkboardCard }> {
     // Keep lightweight selection and full hydration in one consistent snapshot.
-    return scope?.kind === "worker-context" || scope?.kind === "session-links"
+    return scope?.kind === "worker-context" ||
+      scope?.kind === "session-links" ||
+      (scope?.kind === "page" && scope.sessionKey !== undefined)
       ? runEngineStoreReadSnapshot(this.db, () => this.readEntries(scope))
       : this.readEntries(scope);
   }
@@ -269,7 +267,42 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
       .selectAll()
       .orderBy("created_at", "asc")
       .orderBy("id", "asc");
-    if (scope?.kind === "board") {
+    if (scope?.kind === "page") {
+      if (scope.boardId !== undefined) {
+        query = query.where("board_id", "=", scope.boardId);
+      }
+      if (scope.sessionKey !== undefined) {
+        const ids = readSessionLinkedCardIds(this.db, {
+          kind: "session-links",
+          sessionKey: scope.sessionKey,
+          boardId: scope.boardId,
+        });
+        if (ids.length === 0) {
+          return [];
+        }
+        query = query.where("id", "in", sqliteStringSet(ids));
+      }
+      const after = scope.after;
+      if (after) {
+        query = query.where((eb) =>
+          eb.or([
+            eb("position", ">", after.position),
+            eb.and([eb("position", "=", after.position), eb("created_at", ">", after.createdAt)]),
+            eb.and([
+              eb("position", "=", after.position),
+              eb("created_at", "=", after.createdAt),
+              eb("id", ">", after.id),
+            ]),
+          ]),
+        );
+      }
+      query = query
+        .clearOrderBy()
+        .orderBy("position", "asc")
+        .orderBy("created_at", "asc")
+        .orderBy("id", "asc")
+        .limit(scope.limit);
+    } else if (scope?.kind === "board") {
       query = query.where("board_id", "=", scope.boardId);
     } else if (scope?.kind === "session") {
       // Empty direct keys decode as absent; execution keys require an execution record.
@@ -690,6 +723,16 @@ export function createWorkboardSqliteKernel(
     sessionsBoard: new WorkboardSqliteSessionsBoardStore(db, boards),
     subscriptions: new WorkboardSqliteSubscriptionStore(db),
     attachments: new WorkboardSqliteAttachmentStore(db),
+    assertSettled() {
+      // Handled operation errors must not leave a dead connection available for reuse.
+      assertTransactionUsable(db);
+      if (!db.isOpen) {
+        throw new Error("Workboard database is closed");
+      }
+      if (db.isTransaction) {
+        throw new Error("Workboard database left an unsettled transaction");
+      }
+    },
     close,
     withWriteTransaction: (operation, options) =>
       runSqliteImmediateTransactionSync(db, operation, options),

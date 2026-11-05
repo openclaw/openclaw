@@ -8,11 +8,15 @@ import {
 import { transcriptEventJsonSql } from "../../config/sessions/transcript-payload.js";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { withSessionState } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
+import { toolResult } from "./session-message-fixtures.test-support.js";
 
 async function withHistory(
   label: string,
@@ -59,14 +63,7 @@ function appendCalls(source: SessionManager, ...ids: string[]) {
 }
 
 function appendResult(source: SessionManager, id: string, text = `result ${id}`) {
-  return source.appendMessage({
-    role: "toolResult",
-    toolCallId: id,
-    toolName: "read",
-    content: [{ type: "text", text }],
-    isError: false,
-    timestamp: 1,
-  });
+  return source.appendMessage(toolResult(text, id, 1));
 }
 
 it("returns empty context within a one-byte budget", async () => {
@@ -568,6 +565,18 @@ it.each(["sync", "async"])(
           .get(scope.sessionId, largeResultId),
       ).toEqual({ event_json: null, compressed: 1 });
       const full = source.buildSessionContext();
+      runOpenClawAgentWriteTransaction(
+        (writeDatabase) => {
+          writeDatabase.db
+            .prepare(`UPDATE transcript_events
+          SET navigation_type = NULL, navigation_custom_type = NULL,
+              navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+              navigation_last_custom_type = NULL, navigation_valid = 1
+          WHERE session_id = ?`)
+            .run(scope.sessionId);
+        },
+        { agentId: database.agentId, path: database.path },
+      );
       await verifyRead(async () => {
         const limits = { maxBytes: 4096, maxEvents: 8 };
         expect(() => SessionManager.openModelContext(scope, { limits })).toThrow(
@@ -605,15 +614,17 @@ it.each(["sync", "async"])(
           "toolResult",
           "toolResult",
         ]);
-        expect(messages.slice(0, 3)).toEqual(full.messages.slice(0, 3));
-        expect(messages[3]).toMatchObject({
-          role: "toolResult",
-          toolCallId: "large",
-          toolName: "read",
-          isError: false,
-          content: [{ type: "text", text: expect.stringMatching(/omitted.*\d+ bytes/u) }],
-        });
-        expect(messages[4]).toEqual(full.messages[4]);
+        expect(messages).toEqual([
+          ...full.messages.slice(0, 3),
+          expect.objectContaining({
+            role: "toolResult",
+            toolCallId: "large",
+            toolName: "read",
+            isError: false,
+            content: [{ type: "text", text: expect.stringMatching(/omitted.*\d+ bytes/u) }],
+          }),
+          full.messages[4],
+        ]);
         expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(limits.maxBytes);
         expect(oversizedPayloadReads).toBe(0);
         expect(selected.isPersisted()).toBe(false);

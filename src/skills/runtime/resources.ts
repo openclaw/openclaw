@@ -9,6 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import {
   SkillResourceDeliverySchema,
+  SKILL_RESOURCE_MAX_SKILLS,
   type SkillResourceDelivery,
 } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import {
@@ -144,6 +145,7 @@ export async function prepareSkillResourceDelivery(
   assertCurrent();
   if (
     !inputSnapshot.resolvedSkills?.length &&
+    !inputSnapshot.discoverySkills?.length &&
     !inputSnapshot.librarySelections?.length &&
     !inputExplicitSelections.length
   ) {
@@ -336,7 +338,17 @@ export async function prepareSkillResourceDelivery(
       files,
     });
   }
-  const delivery = { version: 1 as const, skills };
+  // Discovery is optional; prompted, explicit, and pinned resources keep their slots.
+  const required = new Set(
+    skills.filter(
+      (skill) => skill.modelVisible || pins.some((selection) => selection.name === skill.name),
+    ),
+  );
+  let discoverySlots = Math.max(0, SKILL_RESOURCE_MAX_SKILLS - required.size);
+  const delivery = {
+    version: 1 as const,
+    skills: skills.filter((skill) => required.has(skill) || discoverySlots-- > 0),
+  };
   if (!Value.Check(SkillResourceDeliverySchema, delivery)) {
     throw new Error("Selected skill catalog exceeds the worker resource contract.");
   }

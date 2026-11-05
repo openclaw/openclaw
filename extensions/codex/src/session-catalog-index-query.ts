@@ -25,7 +25,7 @@ export function prepareCodexCatalogQuery(
 ) {
   const limit = Math.min(normalizeLimit(params.limit, "limit"), 64);
   const cwd = params.cwd?.trim();
-  const search = params.searchTerm?.trim().toLocaleLowerCase();
+  const search = params.searchTerm?.trim().toLocaleLowerCase().normalize("NFC");
   const { queryId, anchor } = prepared;
   const cursor = (row: CodexCatalogOrderKey, backwards: boolean) =>
     encodeCodexResidentCursor(queryId, row, backwards);

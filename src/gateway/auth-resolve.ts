@@ -1,4 +1,3 @@
-// Gateway auth resolver.
 // Combines configured auth, overrides, environment credentials, and Tailscale policy.
 import { copyConfigResolutionFactsExcept } from "../config/resolution-facts.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";

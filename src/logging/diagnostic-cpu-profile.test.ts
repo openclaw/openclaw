@@ -137,6 +137,40 @@ afterEach(() => {
 });
 
 describe("diagnostic CPU profile owner", () => {
+  it("preserves a large native graph while repairing names, URLs and signed script IDs", async () => {
+    const { parseNativeCpuProfile } = await import("./diagnostic-profile.js");
+    const nodes: Profiler.ProfileNode[] = Array.from({ length: 4_096 }, (_, index) => ({
+      id: index + 1,
+      hitCount: index % 3,
+      callFrame: {
+        functionName: `work${index}"\\\nlabel`,
+        lineNumber: index - 2,
+        columnNumber: -1,
+        scriptId: String(index - 2),
+        url: `file:///fixture/quoted"\\\nmodule${index}.js`,
+      },
+      ...(index < 4_095 ? { children: [index + 2] } : {}),
+      ...(index % 2 === 0
+        ? { deoptReason: "not optimized", positionTicks: [{ line: index, ticks: 2 }] }
+        : {}),
+    }));
+    const expected: Profiler.Profile = {
+      nodes,
+      startTime: 10_000,
+      endTime: 5_510_000,
+      samples: [4_096, 2, 4_096],
+      timeDeltas: [10_000, -500, 10_500],
+    };
+    // Match native field order and verbatim names/URLs, not JSON.stringify escaping.
+    const json = JSON.stringify(expected)
+      .replace(/"scriptId":"(-?\d+)"/g, '"scriptId":$1')
+      .replace(
+        /"(functionName|url)":("(?:\\.|[^"\\])*")/g,
+        (_match, key, value) => `"${key}":"${JSON.parse(value)}"`,
+      );
+    expect(parseNativeCpuProfile(json)).toStrictEqual(expected);
+  });
+
   it("reports disposal failure and allows a later native capture", async () => {
     Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
     native.dispose.mockImplementationOnce(() => {
@@ -492,6 +526,68 @@ describe("diagnostic CPU profile owner", () => {
     expect(Buffer.byteLength(JSON.stringify(outcome))).toBeLessThan(1024 * 1024);
     expect(native.disconnect).toHaveBeenCalledOnce();
   });
+
+  it.each([8, 12])(
+    "attributes identical %i-frame dependency stacks to their nearest application callers",
+    async (dependencyDepth) => {
+      const value = profile();
+      const nodes: Profiler.ProfileNode[] = [{ ...value.nodes[0], children: [] }];
+      const samples: number[] = [];
+      for (const [index, url] of ["src/first.ts", "dist/second.js"].entries()) {
+        let parent = nodes[0]!;
+        const frames = [
+          { ...value.nodes[1].callFrame, functionName: "runBoot" },
+          {
+            ...value.nodes[1].callFrame,
+            functionName: "parseInput",
+            url: `/fixture/openclaw/${url}`,
+          },
+          value.nodes[2].callFrame,
+          ...Array.from({ length: dependencyDepth }, () => ({
+            ...value.nodes[1].callFrame,
+            functionName: "parse",
+            url: "/fixture/openclaw/node_modules/@babel/parser/lib/index.js",
+          })),
+        ];
+        for (const callFrame of frames) {
+          const node: Profiler.ProfileNode = { id: nodes.length + 1, callFrame };
+          (parent.children ??= []).push(node.id);
+          nodes.push(node);
+          parent = node;
+        }
+        samples.push(...Array<number>(index + 1).fill(parent.id));
+      }
+      // Unsampled code can make the native graph exceed the response limit.
+      for (let index = 0; index < 3_000; index++) {
+        const id = nodes.length + 1;
+        nodes[0]!.children!.push(id);
+        nodes.push({
+          id,
+          callFrame: { ...value.nodes[1].callFrame, functionName: "x".repeat(256) },
+        });
+      }
+      returnProfile({ ...value, nodes, samples, timeDeltas: samples.map(() => 10_000) });
+      const outcome = await capture();
+      if (outcome.status !== "complete" || !("summary" in outcome.result)) {
+        throw new Error("expected a bounded summary");
+      }
+      expect(outcome.result.summary).toEqual(
+        ["dist/second.js", "src/first.ts"].map((url, index) => ({
+          sampleCount: 2 - index,
+          elidedFrameCount: dependencyDepth - 8 + 1,
+          stack: [
+            ...Array.from({ length: 8 }, () =>
+              expect.objectContaining({ functionName: "[dep:@babel/parser]" }),
+            ),
+            expect.objectContaining({ functionName: "parseInput", url: `openclaw:${url}` }),
+          ],
+        })),
+      );
+      expect(outcome.result.omittedSampleCount).toBe(0);
+      expect(JSON.stringify(outcome)).not.toMatch(/fixture|private|runBoot/);
+      expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(1024 * 1024);
+    },
+  );
 
   it.each([
     { pathLength: 120, stackDepth: 30 },

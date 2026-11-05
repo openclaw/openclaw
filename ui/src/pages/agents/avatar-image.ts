@@ -1,5 +1,6 @@
 import { AVATAR_MAX_BYTES } from "../../../../src/shared/avatar-limits.js";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
+import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
 
 /** Uploaded avatars also mirror into prompt-injected IDENTITY.md. Keep their
@@ -31,14 +32,7 @@ function readFileAsDataUrl(
   config?: ApplicationConfigCapability,
 ): Promise<AvatarDataUrlResult> {
   assertUploadsEnabled(config);
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () =>
-      resolve(boundAvatarDataUrl(typeof reader.result === "string" ? reader.result : null)),
-    );
-    reader.addEventListener("error", () => resolve(UNUSABLE));
-    reader.readAsDataURL(file);
-  });
+  return readBlobAsDataUrl(file).then(boundAvatarDataUrl, () => UNUSABLE);
 }
 
 function fitsEditorBudget(value: string, mime: "image/jpeg" | "image/png"): boolean {

@@ -4,7 +4,10 @@ import {
   readGeneratedSqliteFingerprint,
 } from "../state/postgres-schema.generated/sqlite-catalogs.js";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
-import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
+import {
+  getSqlitePinnedReadSnapshot,
+  runSqliteSchemaReadSnapshotSync,
+} from "./sqlite-pinned-read-snapshot.js";
 import type {
   SqliteColumnCatalog,
   SqliteForeignKeyCatalog,
@@ -84,17 +87,11 @@ export function collectSqliteSchemaIssues(
   compatibility: SqliteSchemaCompatibility = {},
   readTable?: SqliteTableContractReader,
 ): SqliteSchemaIssue[] {
-  return runSqliteSchemaReadSnapshotSync(database, () =>
-    collectSqliteSchemaIssuesInSnapshot(database, schemaSql, compatibility, readTable),
-  );
-}
-
-function collectSqliteSchemaIssuesInSnapshot(
-  database: DatabaseSync,
-  schemaSql: SqliteSchemaSource,
-  compatibility: SqliteSchemaCompatibility,
-  readTable: SqliteTableContractReader | undefined,
-): SqliteSchemaIssue[] {
+  if (!getSqlitePinnedReadSnapshot(database)) {
+    return runSqliteSchemaReadSnapshotSync(database, () =>
+      collectSqliteSchemaIssues(database, schemaSql, compatibility, readTable),
+    );
+  }
   const descriptor =
     typeof schemaSql === "string" ? readGeneratedSqliteFingerprint(schemaSql) : undefined;
   const expectedViewNames =
@@ -644,6 +641,11 @@ function compareTableDefinitions(
   const allowedMissingColumns = new Set(compatibility.allowedMissingColumns ?? []);
   for (const [columnName, definition] of actual.columns) {
     if (!expected.columns.has(columnName)) {
+      const objectName = `${tableName}.${columnName}`;
+      const allowedDefinitions = compatibility.allowedColumnDefinitions?.[objectName] ?? [];
+      if (allowedDefinitions.some((allowed) => normalizeSqlWhitespace(allowed) === definition)) {
+        continue;
+      }
       if (
         allowCompatibleAdditiveColumns &&
         compatibility.allowCompatibleAdditiveColumns &&
@@ -651,7 +653,6 @@ function compareTableDefinitions(
       ) {
         continue;
       }
-      const objectName = `${tableName}.${columnName}`;
       add("unexpected-column", objectName);
     }
   }

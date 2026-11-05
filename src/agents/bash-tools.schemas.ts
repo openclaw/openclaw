@@ -1,12 +1,11 @@
 /**
- * TypeBox schemas for shell/process tools exposed to model providers.
- *
  * Keep these schemas provider-friendly: flat fields, string enums, and explicit
  * descriptions that match runtime validation.
  */
 import { Type } from "typebox";
 import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import { createCachedToolSchema } from "./schema/cached-schema.js";
 import { executionTitleSchema, optionalStringEnum } from "./schema/typebox.js";
 
 const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
@@ -23,7 +22,6 @@ const PROCESS_TOOL_ACTIONS = [
   "remove",
 ] as const;
 
-/** Parameters accepted by the exec tool. */
 export const execSchema = Type.Object({
   title: executionTitleSchema(),
   command: Type.String({ description: "Shell command." }),
@@ -52,6 +50,12 @@ export const execSchema = Type.Object({
     Type.Boolean({
       description:
         "Start an independent service now; survives request Stop. Use yieldMs for ordinary work. timeoutSeconds applies.",
+    }),
+  ),
+  durable: Type.Optional(
+    Type.Boolean({
+      description:
+        "Survive Gateway restart using Linux systemd user services; requires background or yieldMs. No interactive input or proxy-backed secrets.",
     }),
   ),
   timeoutSeconds: Type.Optional(
@@ -89,6 +93,25 @@ export const execSchema = Type.Object({
 export function createExecSchema(
   defaults?: Pick<ExecToolDefaults, "host" | "sandbox" | "sandboxRequired">,
 ) {
+  return execSchemas(defaults).standard;
+}
+
+/** Exec parameters when no process-control continuation is authorized. */
+export function createExecCompletionSchema(
+  defaults?: Pick<ExecToolDefaults, "host" | "sandbox" | "sandboxRequired">,
+) {
+  return execSchemas(defaults).completion;
+}
+
+const execSchemas = createCachedToolSchema({
+  key: (defaults?: Pick<ExecToolDefaults, "host" | "sandbox" | "sandboxRequired">) =>
+    `${defaults?.sandboxRequired ? "sandbox" : (defaults?.host ?? "auto")}:${Boolean(defaults?.sandbox)}`,
+  build: buildExecSchemas,
+});
+
+function buildExecSchemas(
+  defaults?: Pick<ExecToolDefaults, "host" | "sandbox" | "sandboxRequired">,
+) {
   const sandboxAvailable = Boolean(defaults?.sandbox);
   const configuredTarget = defaults?.sandboxRequired ? "sandbox" : (defaults?.host ?? "auto");
   const hosts = EXEC_TOOL_HOST_VALUES.filter(
@@ -97,12 +120,13 @@ export function createExecSchema(
       ((requestedTarget !== "sandbox" || sandboxAvailable) &&
         isRequestedExecTargetAllowed({ configuredTarget, requestedTarget, sandboxAvailable })),
   );
-  return Type.Object({
+  const standard = Type.Object({
     ...execSchema.properties,
     host: optionalStringEnum(hosts, {
       description: `Omit: named node or configured host (${configuredTarget === "auto" ? (sandboxAvailable ? "sandbox" : "gateway") : configuredTarget}). auto: configured host.`,
     }),
   });
+  return { standard, completion: Type.Omit(standard, ["yieldMs", "background", "durable"]) };
 }
 
 /** Parameters exposed by node-only exec surfaces. */
@@ -118,7 +142,6 @@ export const nodeExecSchema = Type.Object({
   node: execSchema.properties.node,
 });
 
-/** Parameters accepted by the process-control tool. */
 export const processSchema = Type.Object({
   action: Type.String({
     enum: [...PROCESS_TOOL_ACTIONS],

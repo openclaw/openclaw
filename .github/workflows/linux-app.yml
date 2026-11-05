@@ -7,7 +7,6 @@ on:
       - "apps/linux/**"
       - "scripts/lib/openclaw-bun.json"
       - "scripts/stage-openclaw-bun.sh"
-      - "test/scripts/stage-openclaw-bun.test.ts"
       - ".github/workflows/linux-app.yml"
       - ".github/workflows/linux-app-release.yml"
       - "!apps/linux/README.md"
@@ -18,6 +17,19 @@ on:
         description: "Run only Windows desktop validation and installer packaging"
         type: boolean
         default: false
+      desktop_runtime:
+        description: "Runtime for the Linux bundles; AOT requires a prebuilt standalone artifact"
+        type: choice
+        options: [jit, aot]
+        default: jit
+      aot_run_id:
+        description: "Successful same-repository push or manual workflow run containing the AOT artifact"
+        type: string
+        default: ""
+      aot_artifact_name:
+        description: "Artifact with the Linux x64 standalone manifest, executable, and runtime at its root"
+        type: string
+        default: ""
 
 concurrency:
   # Passive draft events must not cancel useful validation; conversion intentionally does.
@@ -41,6 +53,9 @@ jobs:
     runs-on: ubuntu-22.04
     # Leave room for cold source packaging and the native desktop proof afterward.
     timeout-minutes: 105
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,9 +116,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             apps/linux/src-tauri/target
-          key: linux-app-${{ runner.os }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
+          key: linux-app-v2-${{ runner.os }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
           restore-keys: |
-            linux-app-${{ runner.os }}-
+            linux-app-v2-${{ runner.os }}-
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -149,11 +164,8 @@ jobs:
 
       - name: Build native inline browser candidate
         working-directory: apps/linux/src-tauri
-        env:
-          # Cold Linux declarations also exceed the package builder's 45-minute default.
-          OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS: "3600000"
         run: |
-          node ../scripts/stage-runtime.mjs
+          node ../scripts/stage-runtime.mjs --runtime-only
           # The native fixture supplies its CLI at the same build-time boundary.
           python3 ../tests/stage_onboarding_runtime.py target/desktop-runtime
           cargo +stable build --locked
@@ -261,6 +273,42 @@ jobs:
             | tee "${RUNNER_TEMP}/openclaw-gstreamer-elements.tsv"
           echo "GSTREAMER_PLUGINS_DIR=$plugins" >> "$GITHUB_ENV"
 
+      - name: Validate prebuilt AOT artifact source
+        if: github.event_name == 'workflow_dispatch' && inputs.desktop_runtime == 'aot'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AOT_RUN_ID: ${{ inputs.aot_run_id }}
+          AOT_ARTIFACT_NAME: ${{ inputs.aot_artifact_name }}
+        run: |
+          set -euo pipefail
+          [[ "$AOT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "::error::aot_run_id must be a workflow run ID"
+            exit 1
+          }
+          [[ "$AOT_ARTIFACT_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
+            echo "::error::aot_artifact_name must be a plain artifact name"
+            exit 1
+          }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$AOT_RUN_ID" |
+            jq -e --arg repository "$GITHUB_REPOSITORY" '
+              .status == "completed" and .conclusion == "success" and
+              .head_repository.full_name == $repository and
+              (.event == "push" or .event == "workflow_dispatch")
+            ' > /dev/null || {
+              echo "::error::AOT artifacts must come from a successful push or manual workflow in this repository"
+              exit 1
+            }
+
+      - name: Download prebuilt AOT runtime
+        if: github.event_name == 'workflow_dispatch' && inputs.desktop_runtime == 'aot'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.aot_run_id }}
+          name: ${{ inputs.aot_artifact_name }}
+          path: ${{ runner.temp }}/desktop-aot
+
       - name: Prepare pinned AppImage tools
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -279,6 +327,8 @@ jobs:
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
           NO_STRIP: "true"
           XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
+          OPENCLAW_DESKTOP_RUNTIME: ${{ inputs.desktop_runtime || 'jit' }}
+          OPENCLAW_DESKTOP_AOT_ARTIFACT: ${{ runner.temp }}/desktop-aot
         # Validation builds have no TAURI_SIGNING_PRIVATE_KEY, and the configured updater
         # pubkey makes the bundler hard-require it. Skip updater artifacts here;
         # linux-app-release.yml builds the signed updater bundles.
@@ -348,6 +398,12 @@ jobs:
             apps/linux/src-tauri/target/release/bundle/deb/*.deb
             apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage
 
+      - name: Remove uploaded Linux bundles before caching
+        working-directory: apps/linux/src-tauri
+        # Bundles are outputs; keep staged manifests and resources that Cargo watches.
+        run: >-
+          node -e "require('node:fs').rmSync('target/release/bundle', { recursive: true, force: true });"
+
   test-macos:
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || !inputs.windows_only) }}
     name: Test macOS companion
@@ -356,12 +412,10 @@ jobs:
     # dispatch input. Without a per-PR check, a macOS-gated Tauri API can break
     # the macOS target for weeks unnoticed - `WebviewWindowBuilder::transparent`
     # did exactly that.
-    #
-    # macos-15, not macos-14: tauri-plugin-notifications' Swift sources use
-    # typed throws (`throws(FFIResult)`), which needs Swift 6. The macos-14
-    # image still ships Swift 5.x and fails to parse them.
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 30
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -374,11 +428,13 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          install-bun: "false"
+      - name: Setup Node.js
+        shell: /bin/bash -e {0}
+        run: |
+          set -euo pipefail
+          # Rust tests run inline Node scripts without workspace packages.
+          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "24.22.1"
 
       - name: Cache Cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -398,10 +454,6 @@ jobs:
         # Swift runtime rpath, say) shows up at all. `--all-targets` keeps the
         # compile coverage `check --all-targets` used to give.
         run: cargo +stable test --locked --all-targets
-
-      - name: Verify native macOS power lifecycle
-        working-directory: apps/linux/src-tauri
-        run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
 
   test-windows-power:
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
@@ -441,12 +493,19 @@ jobs:
 
       - name: Verify native Windows power lifecycle
         working-directory: apps/linux/src-tauri
-        run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
+        shell: pwsh
+        # This fixture needs only std and kernel32; Cargo also builds an unused app binary.
+        run: |
+          $nativePowerTest = Join-Path $env:RUNNER_TEMP "native-keep-awake.exe"
+          rustc +stable --edition=2021 --test tests/native_keep_awake.rs -o $nativePowerTest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $nativePowerTest native_power_lifecycle --nocapture
 
       - name: Verify Windows runtime, installer, and desktop boundaries
         working-directory: apps/linux/src-tauri
         run: |
           node --test ../scripts/test-stage-runtime.mjs ../scripts/test-stage-package.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo +stable test --locked --bin openclaw-desktop
 
       - name: Build Windows installer without publishing
@@ -455,7 +514,8 @@ jobs:
           npm_config_cache: ${{ runner.temp }}/openclaw-desktop-npm-cache
           # Cold Windows declarations can exceed the package builder's 45-minute default.
           OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS: "3600000"
-        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        # Favor packaging speed for validation; release installers keep the default compression.
+        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false,"windows":{"nsis":{"compression":"zlib"}}}}'
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

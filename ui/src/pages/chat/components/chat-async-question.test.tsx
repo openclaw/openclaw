@@ -1,17 +1,19 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
+import { projectSource } from "../../../lib/reactive/projection.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
+import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import {
   createAsyncQuestionPresentation,
-  createAsyncQuestionPanelProps,
-  readAsyncQuestions,
+  createAsyncQuestionPanelProps as panelProps,
+  subscribeAsyncQuestionState,
 } from "./chat-async-question.ts";
 import type {
   AsyncQuestionDraft,
@@ -44,16 +46,25 @@ function drawSummary(questions: AsyncQuestions, presentation: AsyncQuestionPrese
   flush();
 }
 
+function historicalQuestion(
+  itemId = "old-question",
+  questions: AsyncQuestions["questions"] = [
+    { title: "Which audience?", options: ["Engineers", "Everyone"] },
+  ],
+) {
+  return { role: "assistant", openclawAsyncDelivery: { itemId, questions } };
+}
+
+function persisted<T>(message: T, id: string, seq: number, replyToId?: string) {
+  return { ...message, __openclaw: { id, seq, replyToId } };
+}
+
 function question(itemId = "question-1", runId?: string) {
   return {
-    role: "assistant",
+    ...historicalQuestion(itemId),
     runId,
     content: "Which audience?",
     phase: "final_answer",
-    openclawAsyncDelivery: {
-      itemId,
-      questions: [{ title: "Which audience?", options: ["Engineers", "Everyone"] }],
-    },
   };
 }
 
@@ -76,11 +87,18 @@ function presentationState() {
   };
 }
 
-function present(messages: unknown[], state = presentationState()) {
+type QuestionState = Parameters<typeof createAsyncQuestionPresentation>[0];
+type PresentationOptions = Parameters<typeof createAsyncQuestionPresentation>[1];
+function present(
+  messages: unknown[] = [],
+  state: QuestionState = presentationState(),
+  options: Partial<PresentationOptions> = {},
+) {
   return createAsyncQuestionPresentation(state, {
     sessionKey: "agent:main:main",
     messages,
     onAsyncQuestionSubmit: state.transcriptRenderContext.onAsyncQuestionSubmit,
+    ...options,
   });
 }
 
@@ -96,25 +114,31 @@ it("retires old reminders after a later run completes and reconstructs that outc
   }
 });
 
-it("retires a recovered run's older reminder without treating restart input as a human answer", () => {
-  const recovery = {
-    role: "user",
-    runId: "recovered-run",
-    provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
-    content: "Resume the interrupted work.",
-  };
-  expect(
-    present([
-      question("old", "interrupted-run"),
-      { ...terminal("interrupted-run"), stopReason: "aborted" },
-      recovery,
-      terminal("recovered-run"),
-    ]).pending,
-  ).toEqual([]);
-  expect(present([question(), { ...recovery, runId: undefined }, terminal()]).pending).toHaveLength(
-    1,
-  );
-});
+function expectPending(messages: unknown[], count: number, state = presentationState()) {
+  expect(present(messages, state).pending).toHaveLength(count);
+}
+
+const expectText = () => expect(container.textContent);
+function expectSummary(included: string[], excluded: string[] = []) {
+  for (const text of included) {
+    expectText().toContain(text);
+  }
+  for (const text of excluded) {
+    expectText().not.toContain(text);
+  }
+}
+const pendingIds = (presentation: AsyncQuestionPresentation) =>
+  presentation.pending.map((entry) => entry.itemId);
+const panelButton = (name: string) =>
+  container.querySelector<HTMLButtonElement>(`.chat-question-panel__${name}`)!;
+const user = (content: string, runId?: string) => ({ role: "user", content, runId });
+function expectTimeline(initial: unknown[], ...steps: [unknown[], number][]) {
+  let messages = initial;
+  for (const [appended, pending] of steps) {
+    messages = messages.concat(appended);
+    expectPending(messages, pending);
+  }
+}
 
 it("keeps questions from overlapping runs when either run's terminal arrives last", () => {
   const messages = [question("first", "run-1"), question("second", "run-2")];
@@ -122,18 +146,18 @@ it("keeps questions from overlapping runs when either run's terminal arrives las
     ["run-1", "run-2"],
     ["run-2", "run-1"],
   ]) {
-    expect(present([...messages, terminal(order[0])]).pending).toHaveLength(2);
-    expect(present([...messages, ...order.map(terminal)]).pending).toHaveLength(2);
+    expectPending([...messages, terminal(order[0])], 2);
+    expectPending([...messages, ...order.map(terminal)], 2);
   }
 });
 
 it("waits for recorded origin settlement before treating another run as a successor", () => {
-  let messages = [question("old", "run-1"), terminal("run-2")];
-  expect(present(messages).pending).toHaveLength(1);
-  messages = [...messages, terminal("run-1")];
-  expect(present(messages).pending).toHaveLength(1);
-  messages = [...messages, terminal("run-3")];
-  expect(present(messages).pending).toHaveLength(0);
+  expectTimeline(
+    [question("old", "run-1")],
+    [[terminal("run-2")], 1],
+    [[terminal("run-1")], 1],
+    [[terminal("run-3")], 0],
+  );
 });
 
 it.each([
@@ -147,10 +171,10 @@ it.each([
   },
   { __openclaw: { mirrorOrigin: "codex-app-server" } },
 ])("does not retire reminders on an unsuccessful or nonterminal reply: %j", (overrides) => {
-  expect(
-    present([question("old", "run-1"), terminal("run-1"), { ...terminal("run-2"), ...overrides }])
-      .pending,
-  ).toHaveLength(1);
+  expectPending(
+    [question("old", "run-1"), terminal("run-1"), { ...terminal("run-2"), ...overrides }],
+    1,
+  );
 });
 
 it("does not mistake an async final-answer item for a later run completion", () => {
@@ -165,96 +189,25 @@ it("does not mistake an async final-answer item for a later run completion", () 
 
 it("requires a completed later human turn when old questions lack run identity", () => {
   const initial = [question(), terminal()];
-  expect(present(initial).pending).toHaveLength(1);
-  expect(present([...initial, { role: "user", content: "Continue." }]).pending).toHaveLength(1);
-  expect(
-    present([...initial, { role: "user", content: "Continue." }, terminal()]).pending,
-  ).toHaveLength(0);
-  expect(
-    present([
+  expectPending(initial, 1);
+  expectTimeline(initial, [[user("Continue.")], 1], [[terminal()], 0]);
+  expectPending(
+    [
       ...initial,
-      { role: "user", content: "One more constraint.", __openclaw: { steerTargetRunId: "run-1" } },
+      { ...user("One more constraint."), __openclaw: { steerTargetRunId: "run-1" } },
       terminal(),
-    ]).pending,
-  ).toHaveLength(1);
+    ],
+    1,
+  );
 });
 
 it("does not credit a late earlier-run terminal to a newer user turn for an unowned question", () => {
-  let messages: unknown[] = [
-    { role: "user", runId: "run-1", content: "First task" },
-    question(),
-    { role: "user", runId: "run-2", content: "Next task" },
-    terminal("run-1"),
-  ];
-  expect(present(messages).pending).toHaveLength(1);
-  messages = [...messages, terminal("run-2")];
-  expect(present(messages).pending).toHaveLength(1);
-  messages = [
-    ...messages,
-    { role: "user", runId: "run-3", content: "Another task" },
-    terminal("run-3"),
-  ];
-  expect(present(messages).pending).toHaveLength(0);
-});
-
-it("retires the unowned mirrored prompt only after its canonical restart recovery succeeds", async () => {
-  const old = {
-    ...question("old"),
-    phase: undefined,
-    __openclaw: { mirrorOrigin: "codex-app-server", mirrorIdentity: "native-turn:async:old" },
-  };
-  const recovery = {
-    role: "user",
-    provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
-    __openclaw: { runId: "recovery-run", idempotencyKey: "recovery-run:user" },
-    content: "Resume the interrupted work.",
-  };
-  const recovered = {
-    role: "assistant",
-    content: "The requested work is complete.",
-    __openclaw: { mirrorOrigin: "codex-app-server", runId: "recovery-run", runTerminal: true },
-  };
-  const messages = [
-    { role: "user", content: "Complete the work.", __openclaw: { runId: "original-run" } },
-    old,
-    {
-      role: "user",
-      content: "The connection is already available.",
-      __openclaw: { runId: "reply-run", steerTargetRunId: "original-run" },
-    },
-    recovery,
-  ];
-  const state = presentationState();
-  expect(present(messages, state).pending).toHaveLength(1);
-  expect(
-    present([...messages, { ...recovered, stopReason: "aborted" }], state).pending,
-  ).toHaveLength(1);
-  const completed = [...messages, recovered];
-  const archived = present(completed, state);
-  expect(archived.pending).toHaveLength(0);
-  expect(present(completed).pending).toHaveLength(0);
-  expect(
-    present([...messages, question("fresh", "recovery-run"), recovered]).pending.map(
-      (entry) => entry.itemId,
-    ),
-  ).toEqual(["fresh"]);
-  await archived.reopen("old");
-  expect(present(completed, state).pending).toHaveLength(1);
-  expect(present([...completed, terminal("next-run")], state).pending).toHaveLength(0);
-  expect(present([...messages.slice(0, -1), recovered]).pending).toHaveLength(1);
-  expect(
-    present([
-      ...messages.slice(0, -1),
-      { ...recovery, provenance: { kind: "internal_system", sourceTool: "cron" } },
-      recovered,
-    ]).pending,
-  ).toHaveLength(1);
-  expect(
-    present([
-      ...messages,
-      { ...recovered, __openclaw: { ...recovered["__openclaw"], runId: "other-run" } },
-    ]).pending,
-  ).toHaveLength(1);
+  expectTimeline(
+    [user("First task", "run-1"), question(), user("Next task", "run-2")],
+    [[terminal("run-1")], 1],
+    [[terminal("run-2")], 1],
+    [[user("Another task", "run-3"), terminal("run-3")], 0],
+  );
 });
 
 it("reopens the archived question with its draft until another later completion", () => {
@@ -267,17 +220,15 @@ it("reopens the archived question with its draft until another later completion"
   const messages = [old, terminal("run-1"), terminal("run-2")];
   let presentation = present(messages, state);
   drawSummary(readAsyncQuestions(old)!, presentation);
-  expect(container.textContent).toContain("Which audience?");
-  expect(container.textContent).toContain("No longer pending");
-  expect(container.textContent).not.toContain("Answer above the message box.");
+  expectSummary(["Which audience?", "No longer pending"], ["Answer above the message box."]);
   const answer = container.querySelector<HTMLButtonElement>("button")!;
   expect(answer.textContent?.trim()).toBe("Answer");
   answer.click();
   presentation = present(messages, state);
-  expect(presentation.pending.map((entry) => entry.itemId)).toEqual(["old"]);
+  expect(pendingIds(presentation)).toEqual(["old"]);
   expect(state.asyncQuestionDrafts.get("old")).toBe(draft);
   expect(state.asyncQuestionDrafts.get("old")?.answers.get("0")?.freeText).toBe("My team");
-  expect(present([...messages, terminal("run-3")], state).pending).toEqual([]);
+  expectPending([...messages, terminal("run-3")], 0, state);
 });
 
 it("keeps a rejected in-flight answer and its retry error visible after a later completion", async () => {
@@ -286,22 +237,18 @@ it("keeps a rejected in-flight answer and its retry error visible after a later 
   const send = createDeferred<boolean>();
   state.transcriptRenderContext.onAsyncQuestionSubmit.mockImplementation(() => send.promise);
   let messages = [old, terminal("run-1")];
-  const panel = createAsyncQuestionPanelProps(
-    readAsyncQuestions(old)!,
-    present(messages, state),
-    {},
-  );
+  const questions = readAsyncQuestions(old)!;
+  const panel = panelProps(questions, present(messages, state), {});
   const submitting = panel.onSubmit!({ "0": ["Everyone"] });
   messages = [...messages, terminal("run-2")];
-  expect(present(messages, state).pending).toHaveLength(1);
+  expectPending(messages, 1, state);
   send.reject(new Error("Send rejected before admission"));
   await expect(submitting).rejects.toThrow("Send rejected before admission");
   const presentation = present(messages, state);
   expect(presentation.pending).toHaveLength(1);
   expect(presentation.archived.size).toBe(0);
-  expect(
-    createAsyncQuestionPanelProps(readAsyncQuestions(old)!, presentation, {}).model.error,
-  ).toBe("Send rejected before admission");
+  const { model } = panelProps(questions, presentation, {});
+  expect(model.error).toBe("Send rejected before admission");
 });
 
 it.each(["answered", "failed"] as const)(
@@ -310,54 +257,37 @@ it.each(["answered", "failed"] as const)(
     document.body.append(container);
     const pending = createDeferred<boolean>();
     const submit = vi.fn(() => pending.promise);
-    const state = {
-      asyncQuestionDrafts: new Map<string, AsyncQuestionDraft>(),
-      asyncQuestionRevision: 0,
-      transcriptRenderContext: { onAsyncQuestionSubmit: submit },
-    };
-    const questions = {
-      itemId: "question-1",
-      questions: [{ title: "Which audience?", options: ["Engineers", "Everyone"] }],
-    };
-    let updateView: ((value: ReturnType<typeof viewState>) => void) | undefined;
-    const viewState = () => {
-      const presentation = createAsyncQuestionPresentation(state, {
-        sessionKey: "agent:main:main",
-        onAsyncQuestionSubmit: submit,
-        onRequestUpdate: draw,
-      });
-      return {
-        presentation,
-        submitted: state.asyncQuestionDrafts.get(questions.itemId)?.status === "submitted",
-        panel: createAsyncQuestionPanelProps(questions, presentation, {}),
-      };
-    };
+    const state = presentationState();
+    state.transcriptRenderContext.onAsyncQuestionSubmit = submit;
+    const questions = question().openclawAsyncDelivery;
     const draw = () => {
-      const next = viewState();
-      if (mounted) {
-        updateView!(next);
-      } else {
-        const [current, update] = createSignal(next);
-        updateView = update;
-        mounted = mountSolid(
-          () => (
+      mounted = mountSolid(
+        () => {
+          const questionState = projectSource(state, {
+            read: (source) => source.asyncQuestionRevision,
+            subscribe: subscribeAsyncQuestionState,
+            equality: "revision",
+          });
+          const current = createMemo(() => {
+            questionState.read();
+            return present([], state);
+          });
+          return (
             <Show
-              when={current().submitted}
-              fallback={<ChatQuestionPanel props={current().panel} />}
+              when={current().drafts.get(questions.itemId)?.status === "submitted"}
+              fallback={<ChatQuestionPanel props={panelProps(questions, current(), {})} />}
             >
-              <AsyncQuestionSummary questions={questions} presentation={current().presentation} />
+              <AsyncQuestionSummary questions={questions} presentation={current()} />
             </Show>
-          ),
-          { container },
-        );
-      }
+          );
+        },
+        { container },
+      );
       flush();
     };
     draw();
-    await waitForSolid(() =>
-      expect(container.querySelector(".chat-question-panel__advance")).not.toBeNull(),
-    );
-    container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
+    await waitForSolid(() => expect(panelButton("advance")).not.toBeNull());
+    panelButton("advance").click();
     expect(submit).toHaveBeenCalledExactlyOnceWith(
       "> Which audience?\n\nEngineers",
       "question-1",
@@ -367,15 +297,8 @@ it.each(["answered", "failed"] as const)(
     mounted?.unmount();
     mounted = undefined;
     draw();
-    await waitForSolid(() =>
-      expect(container.querySelector(".chat-question-panel__advance")).not.toBeNull(),
-    );
-    expect(
-      container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.disabled,
-    ).toBe(true);
-    expect(container.querySelector<HTMLButtonElement>(".chat-question-panel__skip")!.disabled).toBe(
-      true,
-    );
+    await waitForSolid(() => expect(panelButton("advance")).not.toBeNull());
+    expect([panelButton("advance").disabled, panelButton("skip").disabled]).toEqual([true, true]);
 
     if (outcome === "answered") {
       pending.resolve(true);
@@ -384,10 +307,8 @@ it.each(["answered", "failed"] as const)(
       );
     } else {
       pending.reject(new Error("Synthetic send failure"));
-      await waitForSolid(() => expect(container.textContent).toContain("Synthetic send failure"));
-      expect(
-        container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.disabled,
-      ).toBe(false);
+      await waitForSolid(() => expectText().toContain("Synthetic send failure"));
+      expect(panelButton("advance").disabled).toBe(false);
     }
     expect(submit).toHaveBeenCalledTimes(1);
   },
@@ -402,33 +323,19 @@ it("does not retire reminders on an aborted live terminal projection", () => {
 it("reconsiders reminders when a message-less terminal settles a published partial", () => {
   const partial = { role: "assistant", runId: "run-1", content: "Partial work" };
   const messages = [question("old", "run-1"), partial, terminal("run-2")];
-  expect(present(messages).pending).toHaveLength(1);
-  // The outcome is recorded beside the already published history array.
+  expectPending(messages, 1);
+  // Settlement changes beside, not inside, the cached history array.
   rememberLiveTerminalRun(partial, "run-1", "error");
-  expect(present(messages).pending).toHaveLength(0);
+  expectPending(messages, 0);
 });
 
-const historicalQuestion = (itemId = "old-question") => ({
-  role: "assistant",
-  openclawAsyncDelivery: {
-    itemId,
-    questions: [{ title: "Which audience?", options: ["Engineers", "Everyone"] }],
-  },
-});
-const historicalAnswer = {
-  role: "user",
-  content: "> Which audience?\n\nEveryone",
-  __openclaw: { id: "saved-answer", seq: 2 },
-};
-function historyPresentation(messages: unknown[], connectionEpoch = 1) {
-  return createAsyncQuestionPresentation(
-    {
-      asyncQuestionDrafts: new Map(),
-      asyncQuestionRevision: 0,
-      transcriptRenderContext: {},
-    },
-    { sessionKey: "agent:main:main", connectionEpoch, messages },
-  );
+const historicalAnswer = persisted(user("> Which audience?\n\nEveryone"), "saved-answer", 2);
+function historyPresentation(
+  messages: unknown[],
+  connectionEpoch = 1,
+  state: QuestionState = { ...presentationState(), transcriptRenderContext: {} },
+) {
+  return present(messages, state, { connectionEpoch, onAsyncQuestionSubmit: undefined });
 }
 
 it("keeps a persisted answer resolved across remount and reconnect and displays the answer", () => {
@@ -441,60 +348,41 @@ it("keeps a persisted answer resolved across remount and reconnect and displays 
 });
 
 it.each([
-  { role: "user", content: historicalAnswer.content },
-  { ...historicalAnswer, content: "Everyone" },
-  { ...historicalAnswer, provenance: { kind: "internal_system" } },
-  { ...historicalAnswer, content: "> Which audience?\n\n" },
-])("does not treat an unsaved or unrelated reply as an answer: %j", (reply) => {
-  expect(historyPresentation([historicalQuestion(), reply]).pending).toHaveLength(1);
-});
-
-it("keeps a new same-title question pending after an earlier question was answered", () => {
-  expect(
-    historyPresentation([
-      historicalQuestion(),
-      historicalAnswer,
-      historicalQuestion("new-question"),
-    ]).pending.map((entry) => entry.itemId),
-  ).toEqual(["new-question"]);
-});
-
-it("does not guess which duplicate question an ambiguous answer belongs to", () => {
-  expect(
-    historyPresentation([historicalQuestion(), historicalQuestion("duplicate"), historicalAnswer])
-      .pending,
-  ).toHaveLength(2);
-});
+  ["unsaved answer", [{ role: "user", content: historicalAnswer.content }], 1],
+  ["unrelated text", [{ ...historicalAnswer, content: "Everyone" }], 1],
+  ["internal input", [{ ...historicalAnswer, provenance: { kind: "internal_system" } }], 1],
+  ["empty answer", [{ ...historicalAnswer, content: "> Which audience?\n\n" }], 1],
+  [
+    "new same-title question",
+    [historicalAnswer, historicalQuestion("new-question")],
+    ["new-question"],
+  ],
+  ["ambiguous duplicate", [historicalQuestion("duplicate"), historicalAnswer], 2],
+] satisfies [string, unknown[], number | string[]][])(
+  "resolves only the matching historical question: %s",
+  (_name, replies, expected) => {
+    const presentation = historyPresentation([historicalQuestion(), ...replies]);
+    if (typeof expected === "number") {
+      expect(presentation.pending).toHaveLength(expected);
+    } else {
+      expect(pendingIds(presentation)).toEqual(expected);
+    }
+  },
+);
 
 it("does not retain derived completion after authoritative history replaces the answer", () => {
-  const state = {
-    asyncQuestionDrafts: new Map<string, AsyncQuestionDraft>(),
-    asyncQuestionRevision: 0,
-    transcriptRenderContext: {},
-  };
-  const props = { sessionKey: "agent:main:main" };
+  const state: QuestionState = { ...presentationState(), transcriptRenderContext: {} };
   expect(
-    createAsyncQuestionPresentation(state, {
-      ...props,
-      messages: [historicalQuestion(), historicalAnswer],
-    }).pending,
+    historyPresentation([historicalQuestion(), historicalAnswer], 1, state).pending,
   ).toHaveLength(0);
-  expect(
-    createAsyncQuestionPresentation(state, { ...props, messages: [historicalQuestion()] }).pending,
-  ).toHaveLength(1);
+  expect(historyPresentation([historicalQuestion()], 1, state).pending).toHaveLength(1);
 });
 
 it("restores every answer in a multi-question submission with UTF-8-bounded quoted titles", () => {
-  const promptMessage = {
-    role: "assistant",
-    openclawAsyncDelivery: {
-      itemId: "multiple-questions",
-      questions: [
-        { title: "界".repeat(180), options: ["One", "Two"] },
-        { title: "Any\nother details?" },
-      ],
-    },
-  };
+  const promptMessage = historicalQuestion("multiple-questions", [
+    { title: "界".repeat(180), options: ["One", "Two"] },
+    { title: "Any\nother details?" },
+  ]);
   const answer = {
     ...historicalAnswer,
     content: [
@@ -507,8 +395,7 @@ it("restores every answer in a multi-question submission with UTF-8-bounded quot
   const presentation = historyPresentation([promptMessage, answer]);
   expect(presentation.pending).toHaveLength(0);
   drawSummary(promptMessage.openclawAsyncDelivery, presentation);
-  expect(container.textContent).toContain("Two");
-  expect(container.textContent).toContain("First line\nSecond line");
+  expectSummary(["Two", "First line\nSecond line"]);
   expect(
     historyPresentation([
       promptMessage,
@@ -525,12 +412,8 @@ it.each([
   "confirms unparsed saved answers only by their canonical reply: %j",
   ({ replyToId, edited, confirmed }) => {
     const promptMessage = {
-      role: "assistant",
+      ...historicalQuestion("ambiguous-multiline", [{ title: "First?" }, { title: "Second?" }]),
       __openclaw: { id: "question-source", seq: 1 },
-      openclawAsyncDelivery: {
-        itemId: "ambiguous-multiline",
-        questions: [{ title: "First?" }, { title: "Second?" }],
-      },
     };
     const answer = {
       ...historicalAnswer,
@@ -545,44 +428,41 @@ it.each([
       drawSummary(promptMessage.openclawAsyncDelivery, presentation);
       expect(container.textContent?.includes("Answer sent")).toBe(confirmed);
       if (confirmed) {
-        expect(container.textContent).toContain(answer.content);
-        expect(container.textContent).not.toContain("Awaiting delivery confirmation");
+        expectSummary([answer.content], ["Awaiting delivery confirmation"]);
       }
     }
   },
 );
 
 it("projects answer delivery from the outbox, retries its payload, and waits for canonical confirmation", () => {
-  const state: Parameters<typeof createAsyncQuestionPresentation>[0] = presentationState();
+  const state: QuestionState = presentationState();
   const retry = vi.fn();
   const queue: ChatQueueItem[] = [
     {
       id: "answer-row",
       asyncQuestionItemId: "question-1",
-      text: "> Which audience?\n\nEveryone",
+      text: historicalAnswer.content,
       createdAt: 1,
       sendState: "waiting-idle",
     },
   ];
   const messages: unknown[] = [historicalQuestion("question-1")];
-  const props = {
-    sessionKey: "agent:main:main",
-    messages,
-    queue,
-    onAsyncQuestionSubmit: state.transcriptRenderContext.onAsyncQuestionSubmit,
-    onQueueRetry: retry,
-  };
+  const props = { queue, onQueueRetry: retry, messages };
   const draw = () => {
-    const presentation = createAsyncQuestionPresentation(state, props);
+    const presentation = present(props.messages, state, props);
     drawSummary(readAsyncQuestions(messages[0])!, presentation);
     return presentation;
+  };
+  const showDelivery = (sendState: ChatQueueItem["sendState"], label: string) => {
+    queue[0] = { ...queue[0]!, sendState };
+    draw();
+    expectSummary([label]);
   };
   const pending = draw();
   const admitted = queue[0]!;
   queue.length = 0;
   expect(draw().pending).toEqual([]);
-  expect(container.textContent).toContain("Awaiting delivery confirmation");
-  expect(container.textContent).not.toContain("Answer sent");
+  expectSummary(["Awaiting delivery confirmation"], ["Answer sent"]);
   queue.push(admitted);
   state.asyncQuestionDrafts.set("question-1", {
     status: "submitted",
@@ -595,62 +475,36 @@ it("projects answer delivery from the outbox, retries its payload, and waits for
   queue[0] = { ...queue[0]!, sendState: "failed", sendError: "Synthetic rejection" };
   const failed = draw();
   expect(failed.historyKey).not.toBe(pending.historyKey);
-  expect(container.textContent).toContain("Everyone");
-  expect(container.textContent).not.toContain("A newer draft");
-  expect(container.textContent).toContain("Answer not sent");
-  expect(container.textContent).toContain("Synthetic rejection");
+  expectSummary(["Everyone", "Answer not sent", "Synthetic rejection"], ["A newer draft"]);
   container.querySelector<HTMLButtonElement>("button")!.click();
   expect(retry).toHaveBeenCalledExactlyOnceWith("answer-row");
   expect(state.transcriptRenderContext.onAsyncQuestionSubmit).not.toHaveBeenCalled();
-  queue[0] = { ...queue[0]!, sendState: "unconfirmed" };
-  draw();
-  expect(container.textContent).toContain("Delivery unconfirmed");
+  showDelivery("failed", "Answer not sent");
   const retainedRetry = container.querySelector<HTMLButtonElement>("button")!;
   state.asyncQuestionScope = "another-context";
   retainedRetry.click();
   expect(retry).toHaveBeenCalledTimes(1);
   state.asyncQuestionScope = failed.scope;
-  queue[0] = { ...queue[0]!, sendState: "waiting-reconnect" };
-  draw();
-  expect(container.textContent).toContain("Waiting for reconnect");
+  showDelivery("waiting-reconnect", "Waiting for reconnect");
   expect(container.querySelector("button")).toBeNull();
-  queue[0] = { ...queue[0]!, sendState: "sending" };
-  draw();
-  expect(container.textContent).toContain("Sending answer");
+  showDelivery("sending", "Sending answer");
   queue.length = 0;
   draw();
-  expect(container.textContent).toContain("Awaiting delivery confirmation");
-  expect(container.textContent).not.toContain("Answer sent");
+  expectSummary(["Awaiting delivery confirmation"], ["Answer sent"]);
   props.messages = [...messages, historicalAnswer];
   draw();
-  expect(container.textContent).toContain("Answer sent");
-  expect(container.textContent).toContain("Everyone");
-  expect(container.textContent).not.toContain("A newer draft");
+  expectSummary(["Answer sent", "Everyone"], ["A newer draft"]);
 });
 
 it.each(["old", "new"])(
   "uses canonical reply identity for the %s repeated-title question",
   (target) => {
-    const old = {
-      ...historicalQuestion("old"),
-      runId: "old-run",
-      __openclaw: { id: "old-source", seq: 1 },
-    };
-    const newest = {
-      ...historicalQuestion("new"),
-      runId: "new-run",
-      __openclaw: { id: "new-source", seq: 3 },
-    };
-    const answer = {
-      ...historicalAnswer,
-      __openclaw: { id: "saved-answer", seq: 5, replyToId: `${target}-source` },
-    };
     const presentation = historyPresentation([
-      old,
+      persisted({ ...historicalQuestion("old"), runId: "old-run" }, "old-source", 1),
       terminal("old-run"),
-      newest,
+      persisted({ ...historicalQuestion("new"), runId: "new-run" }, "new-source", 3),
       terminal("new-run"),
-      answer,
+      persisted(historicalAnswer, "saved-answer", 5, `${target}-source`),
     ]);
     expect([...presentation.resolved.keys()]).toEqual([target]);
     expect(presentation.resolved.get(target)?.answers.get("0")?.selected).toEqual(
@@ -664,12 +518,12 @@ it.each(["old", "new"])(
 );
 
 it("does not use quoted text to override a canonical reply to an unrelated message", () => {
-  const promptMessage = { ...historicalQuestion(), __openclaw: { id: "question-source", seq: 1 } };
-  const answer = {
-    ...historicalAnswer,
-    __openclaw: { id: "answer", seq: 2, replyToId: "unrelated-source" },
-  };
-  expect(historyPresentation([promptMessage, answer]).pending).toHaveLength(1);
+  expect(
+    historyPresentation([
+      persisted(historicalQuestion(), "question-source", 1),
+      persisted(historicalAnswer, "answer", 2, "unrelated-source"),
+    ]).pending,
+  ).toHaveLength(1);
 });
 
 it.each([

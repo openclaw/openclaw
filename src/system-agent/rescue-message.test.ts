@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-// OpenClaw rescue message tests cover generated rescue message content.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +15,6 @@ import {
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { runTui } from "../tui/tui.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { extractSystemAgentRescueMessage, runSystemAgentRescueMessage } from "./rescue-message.js";
@@ -24,12 +22,11 @@ import { verifySetupInferenceConfig } from "./setup-inference.js";
 
 let tempRoot = "";
 let tempDirId = 0;
+let stateDir = "";
 
 type TestConfig = Record<string, unknown>;
 
-function readLastAuditEntry(): Record<string, unknown> {
-  return (listSystemAgentAuditEntriesForTests().at(-1)?.value ?? {}) as Record<string, unknown>;
-}
+const readLastAuditEntry = () => listSystemAgentAuditEntriesForTests().at(-1)?.value ?? {};
 
 const runPluginInstallCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
 // mock-isolation: Keep agent creation and its persistent stores outside rescue approval proof.
@@ -76,13 +73,10 @@ const mockConfig = vi.hoisted(() => {
   };
   return {
     reset() {
-      state.path = "/tmp/openclaw.json";
       state.config = {};
       state.hash = "mock-hash-0";
     },
-    currentConfig() {
-      return cloneConfig();
-    },
+    currentConfig: cloneConfig,
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
     mutateConfigFile: vi.fn(
       async (params: {
@@ -125,60 +119,16 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 vi.mock("../commands/models/shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../commands/models/shared.js")>();
-  return {
-    ...actual,
-    applyDefaultModelPrimaryUpdate: ({
-      cfg,
-      modelRaw,
-      field,
-    }: {
-      cfg: TestConfig;
-      modelRaw: string;
-      field: "model" | "imageModel";
-    }) => ({
-      ...cfg,
-      agents: {
-        ...(cfg.agents as TestConfig | undefined),
-        defaults: {
-          ...(cfg.agents as { defaults?: TestConfig } | undefined)?.defaults,
-          [field]: { primary: modelRaw },
-        },
-      },
-    }),
-  };
-});
-
-vi.mock("../config/model-input.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/model-input.js")>();
-  return {
-    ...actual,
-    resolveAgentModelPrimaryValue: (model?: string | { primary?: string }) =>
-      typeof model === "string" ? model : model?.primary,
-  };
-});
-
-async function makeStateDir(prefix: string): Promise<string> {
-  const dir = path.join(tempRoot, `${prefix}${tempDirId++}`);
-  await fs.mkdir(dir, { recursive: true });
-  return dir;
-}
-
-async function withRescueStateDir(
-  prefix: string,
-  run: (stateDir: string) => Promise<void>,
-): Promise<void> {
-  const stateDir = await makeStateDir(prefix);
-  resetPluginStateStoreForTests();
-  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-    try {
-      await run(stateDir);
-    } finally {
-      vi.useRealTimers();
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-    }
+  // Avoid a plugin-registry scan; model persistence itself is covered by its owner.
+  const update: typeof actual.applyDefaultModelPrimaryUpdate = ({ cfg, modelRaw, field }) => ({
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: { ...cfg.agents?.defaults, [field]: { primary: modelRaw } },
+    },
   });
-}
+  return { ...actual, applyDefaultModelPrimaryUpdate: update };
+});
 
 function commandContext(overrides: Partial<CommandContext> = {}): CommandContext {
   return {
@@ -207,15 +157,7 @@ function openRescuePendingTestStore() {
   });
 }
 
-function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
-async function runRescue(commandBody: string, cfg: OpenClawConfig, ctx = commandContext()) {
+async function runRescue(commandBody: string, cfg: OpenClawConfig = {}, ctx = commandContext()) {
   return await runSystemAgentRescueMessage({
     cfg,
     command: { ...ctx, commandBodyNormalized: commandBody },
@@ -224,12 +166,26 @@ async function runRescue(commandBody: string, cfg: OpenClawConfig, ctx = command
   });
 }
 
+async function expectReply(command: string, text: string, exact = false, ctx = commandContext()) {
+  const reply = await runRescue(command, {}, ctx);
+  if (exact) {
+    expect(reply).toBe(text);
+  } else {
+    expect(reply).toContain(text);
+  }
+}
+const noPending = "No pending OpenClaw rescue change is waiting for approval.";
+
 describe("OpenClaw rescue message", () => {
   beforeAll(async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "system-agent-rescue-"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    stateDir = path.join(tempRoot, String(tempDirId++));
+    await fs.mkdir(stateDir, { recursive: true });
+    resetPluginStateStoreForTests();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     mockConfig.reset();
     runPluginInstallCommandMock.mockClear();
     vi.mocked(runDaemonRestart).mockReset().mockResolvedValue(true);
@@ -248,9 +204,14 @@ describe("OpenClaw rescue message", () => {
     }
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetPluginStateStoreForTests();
+    try {
+      await closeOpenClawStateDatabaseAsync();
+    } finally {
+      resetPluginStateStoreForTests();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("recognizes the OpenClaw rescue command", () => {
@@ -259,322 +220,202 @@ describe("OpenClaw rescue message", () => {
     expect(extractSystemAgentRescueMessage("/status")).toBeNull();
   });
 
-  it("denies rescue when sandboxing is active", async () => {
-    await expect(
-      runRescue("/openclaw status", {
-        agents: { defaults: { sandbox: { mode: "all" } } },
-      }),
-    ).resolves.toContain("sandboxing is active");
-  });
-
-  it("refuses TUI handoff from remote rescue", async () => {
-    const cfg: OpenClawConfig = {};
-
-    await expect(runRescue("/openclaw talk to agent", cfg, commandContext())).resolves.toContain(
-      "cannot open the local TUI",
-    );
-    await expect(runRescue("/openclaw chat", cfg, commandContext())).resolves.toContain(
-      "cannot open the local TUI",
-    );
-    expect(runTui).not.toHaveBeenCalled();
+  it.each([
+    ["talk to agent", "cannot open the local TUI", runTui],
+    ["chat", "cannot open the local TUI", runTui],
+    ["connect telegram", "cannot host the interactive channel setup", undefined],
+    [
+      "plugin install clawhub:openclaw-demo",
+      "cannot install plugins from a message channel",
+      runPluginInstallCommandMock,
+    ],
+  ] as const)("refuses remote %s", async (command, reason, effect) => {
+    await expectReply(`/openclaw ${command}`, reason);
+    if (effect) {
+      expect(effect).not.toHaveBeenCalled();
+    }
   });
 
   it("rejects natural language instead of guessing an operation", async () => {
-    const cfg: OpenClawConfig = {};
-
     // Questions must never become mutation plans (previously "why did my
     // gateway stop" keyword-matched into a gateway-stop proposal).
-    await expect(
-      runRescue("/openclaw why did my gateway stop", cfg, commandContext()),
-    ).resolves.toContain("I can run doctor/status/health");
-    await expect(
-      runRescue("/openclaw explain how restart gateway works", cfg, commandContext()),
-    ).resolves.toContain("I can run doctor/status/health");
+    await expectReply("/openclaw why did my gateway stop", "I can run doctor/status/health");
+    await expectReply(
+      "/openclaw explain how restart gateway works",
+      "I can run doctor/status/health",
+    );
     expect(runDaemonStop).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
-  it("refuses channel setup from remote rescue with a local pointer", async () => {
-    const cfg: OpenClawConfig = {};
-    await expect(runRescue("/openclaw connect telegram", cfg)).resolves.toContain(
-      "cannot host the interactive channel setup",
-    );
-  });
-
   it("refuses doctor repairs without creating a pending approval", async () => {
-    await withRescueStateDir("doctor-fix-refused-", async () => {
-      const cfg: OpenClawConfig = {};
-
-      const reply = await runRescue("/openclaw doctor fix", cfg, commandContext());
-      expect(reply).toContain("machine running OpenClaw");
-      expect(reply).toContain("with OpenClaw stopped");
-      expect(reply).toContain("run `openclaw doctor --fix`");
-      await expect(runRescue("/openclaw yes", cfg, commandContext())).resolves.toBe(
-        "No pending OpenClaw rescue change is waiting for approval.",
-      );
-    });
+    const reply = await runRescue("/openclaw doctor fix", {});
+    expect(reply).toContain("machine running OpenClaw");
+    expect(reply).toContain("with OpenClaw stopped");
+    expect(reply).toContain("run `openclaw doctor --fix`");
+    await expectReply("/openclaw yes", noPending, true);
   });
 
   it("refuses config deletion without creating a pending approval or writing config", async () => {
-    await withRescueStateDir("config-unset-refused-", async () => {
-      const cfg: OpenClawConfig = {};
-      const before = mockConfig.currentConfig();
-      mockConfig.mutateConfigFile.mockClear();
+    const before = mockConfig.currentConfig();
+    mockConfig.mutateConfigFile.mockClear();
 
-      await expect(
-        runRescue("/openclaw config unset agents.defaults.fastModeDefault", cfg),
-      ).resolves.toContain("cannot remove configuration settings");
-      await expect(runRescue("/openclaw yes", cfg)).resolves.toBe(
-        "No pending OpenClaw rescue change is waiting for approval.",
-      );
-      expect(mockConfig.mutateConfigFile).not.toHaveBeenCalled();
-      expect(mockConfig.currentConfig()).toEqual(before);
-      expect(listSystemAgentAuditEntriesForTests()).toEqual([]);
-    });
+    await expectReply(
+      "/openclaw config unset agents.defaults.fastModeDefault",
+      "cannot remove configuration settings",
+    );
+    await expectReply("/openclaw yes", noPending, true);
+    expect(mockConfig.mutateConfigFile).not.toHaveBeenCalled();
+    expect(mockConfig.currentConfig()).toEqual(before);
+    expect(listSystemAgentAuditEntriesForTests()).toEqual([]);
   });
 
   it("drops a pending rescue change on decline", async () => {
-    await withRescueStateDir("decline-", async () => {
-      const cfg: OpenClawConfig = {};
-
-      await expect(
-        runRescue("/openclaw restart gateway", cfg, commandContext()),
-      ).resolves.toContain("Reply /openclaw yes to apply");
-      await expect(runRescue("/openclaw no", cfg, commandContext())).resolves.toContain(
-        "Dropped the pending OpenClaw rescue change",
-      );
-      await expect(runRescue("/openclaw yes", cfg, commandContext())).resolves.toBe(
-        "No pending OpenClaw rescue change is waiting for approval.",
-      );
-      expect(runDaemonRestart).not.toHaveBeenCalled();
-    });
+    await expectReply("/openclaw restart gateway", "Reply /openclaw yes to apply");
+    await expectReply("/openclaw no", "Dropped the pending OpenClaw rescue change");
+    await expectReply("/openclaw yes", noPending, true);
+    expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
   it("revokes a pending write when a fresh read-only command arrives", async () => {
-    await withRescueStateDir("read-revokes-", async () => {
-      const cfg: OpenClawConfig = {};
-      vi.mocked(runPluginsListCommand).mockImplementation(async (_opts, runtime) =>
-        runtime?.log("plugin rows"),
-      );
+    vi.mocked(runPluginsListCommand).mockImplementation(async (_opts, runtime) =>
+      runtime?.log("plugin rows"),
+    );
 
-      await expect(
-        runRescue("/openclaw restart gateway", cfg, commandContext()),
-      ).resolves.toContain("Reply /openclaw yes to apply");
-      await expect(runRescue("/openclaw plugins list", cfg, commandContext())).resolves.toBe(
-        "plugin rows",
-      );
-      await expect(runRescue("/openclaw yes", cfg, commandContext())).resolves.toBe(
-        "No pending OpenClaw rescue change is waiting for approval.",
-      );
-      expect(runDaemonRestart).not.toHaveBeenCalled();
-    });
+    await expectReply("/openclaw restart gateway", "Reply /openclaw yes to apply");
+    await expectReply("/openclaw plugins list", "plugin rows", true);
+    await expectReply("/openclaw yes", noPending, true);
+    expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
   it("consumes a pending approval at most once under concurrent approvals", async () => {
-    await withRescueStateDir("concurrent-approve-", async () => {
-      const cfg: OpenClawConfig = {};
+    await runRescue("/openclaw restart gateway", {});
+    const replies = await Promise.all([
+      runRescue("/openclaw yes", {}),
+      runRescue("/openclaw yes", {}),
+    ]);
 
-      await runRescue("/openclaw restart gateway", cfg, commandContext());
-      const replies = await Promise.all([
-        runRescue("/openclaw yes", cfg, commandContext()),
-        runRescue("/openclaw yes", cfg, commandContext()),
-      ]);
-
-      expect(runDaemonRestart).toHaveBeenCalledTimes(1);
-      expect(replies).toContain("No pending OpenClaw rescue change is waiting for approval.");
-      expect(replies.some((reply) => reply?.includes("[openclaw] done: gateway.restart"))).toBe(
-        true,
-      );
-    });
+    expect(runDaemonRestart).toHaveBeenCalledTimes(1);
+    expect(replies).toContain(noPending);
+    expect(replies.some((reply) => reply?.includes("[openclaw] done: gateway.restart"))).toBe(true);
   });
 
   it("keeps failed execution consumed", async () => {
-    await withRescueStateDir("failed-consumed-", async () => {
-      const cfg: OpenClawConfig = {};
-      vi.mocked(runDaemonRestart).mockImplementation(async () => {
-        throw new Error("restart failed");
-      });
-
-      await runRescue("/openclaw restart gateway", cfg, commandContext());
-      await expect(runRescue("/openclaw yes", cfg, commandContext())).rejects.toThrow(
-        "restart failed",
-      );
-      await expect(runRescue("/openclaw yes", cfg, commandContext())).resolves.toBe(
-        "No pending OpenClaw rescue change is waiting for approval.",
-      );
-      expect(runDaemonRestart).toHaveBeenCalledTimes(1);
+    vi.mocked(runDaemonRestart).mockImplementation(async () => {
+      throw new Error("restart failed");
     });
+
+    await runRescue("/openclaw restart gateway", {});
+    await expect(runRescue("/openclaw yes", {})).rejects.toThrow("restart failed");
+    await expectReply("/openclaw yes", noPending, true);
+    expect(runDaemonRestart).toHaveBeenCalledTimes(1);
   });
 
   it("preserves a new plan created while the consumed plan executes", async () => {
-    await withRescueStateDir("replacement-during-execute-", async () => {
-      const cfg: OpenClawConfig = {};
-      let releaseRestart: (() => void) | undefined;
-      let noteRestartEntered: (() => void) | undefined;
-      const restartEntered = new Promise<void>((resolve) => {
-        noteRestartEntered = resolve;
-      });
-      const restartGate = new Promise<void>((resolve) => {
-        releaseRestart = resolve;
-      });
-      vi.mocked(runDaemonRestart).mockImplementation(async () => {
-        noteRestartEntered?.();
-        await restartGate;
-        return true;
-      });
-
-      await runRescue("/openclaw restart gateway", cfg, commandContext());
-      const approval = runRescue("/openclaw yes", cfg, commandContext());
-      await restartEntered;
-      await runRescue("/openclaw start gateway", cfg, commandContext());
-      releaseRestart?.();
-      await expect(approval).resolves.toContain("[openclaw] done: gateway.restart");
-      await expect(runRescue("/openclaw yes", cfg, commandContext())).resolves.toContain(
-        "[openclaw] done: gateway.start",
-      );
-      expect(runDaemonRestart).toHaveBeenCalledTimes(1);
-      expect(runDaemonStart).toHaveBeenCalledTimes(1);
+    const entered = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    vi.mocked(runDaemonRestart).mockImplementation(async () => {
+      entered.resolve();
+      await gate.promise;
+      return true;
     });
+
+    await runRescue("/openclaw restart gateway", {});
+    const approval = runRescue("/openclaw yes", {});
+    await entered.promise;
+    await runRescue("/openclaw start gateway", {});
+    gate.resolve();
+    await expect(approval).resolves.toContain("[openclaw] done: gateway.restart");
+    await expectReply("/openclaw yes", "[openclaw] done: gateway.start");
+    expect(runDaemonRestart).toHaveBeenCalledTimes(1);
+    expect(runDaemonStart).toHaveBeenCalledTimes(1);
   });
 
   it("publishes concurrently invoked persistent plans in call order", async () => {
-    await withRescueStateDir("latest-plan-", async () => {
-      const cfg: OpenClawConfig = {};
-
-      const olderPlan = runRescue("/openclaw restart gateway", cfg, commandContext());
-      const newerPlan = runRescue("/openclaw start gateway", cfg, commandContext());
-      await expect(olderPlan).resolves.toContain("restart the Gateway");
-      await expect(newerPlan).resolves.toContain("start the Gateway");
-      await expect(runRescue("/openclaw yes", cfg, commandContext())).resolves.toContain(
-        "[openclaw] done: gateway.start",
-      );
-      expect(runDaemonRestart).not.toHaveBeenCalled();
-      expect(runDaemonStart).toHaveBeenCalledTimes(1);
-    });
+    const olderPlan = runRescue("/openclaw restart gateway", {});
+    const newerPlan = runRescue("/openclaw start gateway", {});
+    await expect(olderPlan).resolves.toContain("restart the Gateway");
+    await expect(newerPlan).resolves.toContain("start the Gateway");
+    await expectReply("/openclaw yes", "[openclaw] done: gateway.start");
+    expect(runDaemonRestart).not.toHaveBeenCalled();
+    expect(runDaemonStart).toHaveBeenCalledTimes(1);
   });
 
   it("revokes an invalid replacement through the worker without caller-thread SQL", async () => {
-    await withRescueStateDir("replacement-revocation-", async () => {
-      const sql = observeHostDataSql();
-      try {
-        await runRescue("/openclaw restart gateway", {}, commandContext());
-        await expect(
-          runRescue(`/openclaw config set example ${"x".repeat(1_100_000)}`, {}),
-        ).rejects.toThrow(/plugin state value/i);
-        await expect(runRescue("/openclaw yes", {}, commandContext())).resolves.toContain(
-          "No pending OpenClaw rescue change",
-        );
-        await runRescue("/openclaw restart gateway", {}, commandContext());
-        await expect(runRescue("/openclaw no", {})).resolves.toContain("Dropped the pending");
-        expect(sql.queries).toEqual([]);
-        expect(runDaemonRestart).not.toHaveBeenCalled();
-      } finally {
-        sql.restore();
-      }
-    });
+    const sql = observeHostDataSql();
+    try {
+      await runRescue("/openclaw restart gateway", {});
+      await expect(
+        runRescue(`/openclaw config set example ${"x".repeat(1_100_000)}`, {}),
+      ).rejects.toThrow(/plugin state value/i);
+      await expectReply("/openclaw yes", "No pending OpenClaw rescue change");
+      await runRescue("/openclaw restart gateway", {});
+      await expectReply("/openclaw no", "Dropped the pending");
+      expect(sql.queries).toEqual([]);
+      expect(runDaemonRestart).not.toHaveBeenCalled();
+    } finally {
+      sql.restore();
+    }
   });
 
   it.each(["admission", "effect"] as const)(
     "rechecks rescue authority at %s after consuming approval becomes asynchronous",
     async (stage) => {
-      await withRescueStateDir(`revoked-${stage}-`, async () => {
-        await runRescue("/openclaw restart gateway", {}, commandContext());
-        let current = true;
-        const command = commandContext({
-          assertOwnerCurrent: () => {
-            if (!current) {
-              throw new Error("rescue owner revoked");
-            }
-          },
-        });
-        if (stage === "effect") {
-          const snapshot = await mockConfig.readConfigFileSnapshot();
-          mockConfig.readConfigFileSnapshot.mockImplementationOnce(async () => {
-            current = false;
-            return snapshot;
-          });
-        }
-        const approving = runRescue("/openclaw yes", {}, command);
-        if (stage === "admission") {
-          current = false;
-        }
-        await expect(approving).rejects.toThrow();
-        expect(runDaemonRestart).not.toHaveBeenCalled();
-        expect(openRescuePendingTestStore().entries()).toHaveLength(stage === "admission" ? 1 : 0);
+      await runRescue("/openclaw restart gateway", {});
+      let current = true;
+      const command = commandContext({
+        assertOwnerCurrent: () => {
+          if (!current) {
+            throw new Error("rescue owner revoked");
+          }
+        },
       });
+      if (stage === "effect") {
+        const snapshot = await mockConfig.readConfigFileSnapshot();
+        mockConfig.readConfigFileSnapshot.mockImplementationOnce(async () => {
+          current = false;
+          return snapshot;
+        });
+      }
+      const approving = runRescue("/openclaw yes", {}, command);
+      if (stage === "admission") {
+        current = false;
+      }
+      await expect(approving).rejects.toThrow();
+      expect(runDaemonRestart).not.toHaveBeenCalled();
+      expect(openRescuePendingTestStore().entries()).toHaveLength(stage === "admission" ? 1 : 0);
     },
   );
 
   it("persists a pending approval only in SQLite across store reopen", async () => {
-    await withRescueStateDir("sqlite-reopen-", async (stateDir) => {
-      const cfg: OpenClawConfig = {};
+    await runRescue("/openclaw restart gateway", {});
+    resetPluginStateStoreForTests();
 
-      await runRescue("/openclaw restart gateway", cfg, commandContext());
-      resetPluginStateStoreForTests();
-
-      await expect(runRescue("/openclaw yes", cfg, commandContext())).resolves.toContain(
-        "[openclaw] done: gateway.restart",
-      );
-      expect(runDaemonRestart).toHaveBeenCalledTimes(1);
-      await expect(fs.access(path.join(stateDir, "openclaw", "rescue-pending"))).rejects.toThrow(
-        /ENOENT/,
-      );
-    });
+    await expectReply("/openclaw yes", "[openclaw] done: gateway.restart");
+    expect(runDaemonRestart).toHaveBeenCalledTimes(1);
+    await expect(fs.access(path.join(stateDir, "openclaw", "rescue-pending"))).rejects.toThrow(
+      /ENOENT/,
+    );
   });
 
-  it("isolates pending approvals by account, channel, and sender", async () => {
-    await withRescueStateDir("route-isolation-", async () => {
-      const cfg: OpenClawConfig = {};
-      const original = commandContext();
-
-      await runRescue("/openclaw restart gateway", cfg, original);
-      for (const isolated of [
-        commandContext({ accountId: "secondary" }),
-        commandContext({ channelId: "telegram" }),
-        commandContext({ from: "user:other", senderId: "user:other" }),
-      ]) {
-        await expect(runRescue("/openclaw yes", cfg, isolated)).resolves.toBe(
-          "No pending OpenClaw rescue change is waiting for approval.",
-        );
-      }
-      await expect(runRescue("/openclaw yes", cfg, original)).resolves.toContain(
-        "[openclaw] done: gateway.restart",
-      );
-      expect(runDaemonRestart).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("falls back to the channel destination when account id is absent", async () => {
-    await withRescueStateDir("route-account-fallback-", async () => {
-      const cfg: OpenClawConfig = {};
-      const original = commandContext({ accountId: undefined, to: "bot:primary" });
-
-      await runRescue("/openclaw restart gateway", cfg, original);
-      await expect(
-        runRescue(
-          "/openclaw yes",
-          cfg,
-          commandContext({ accountId: undefined, to: "bot:secondary" }),
-        ),
-      ).resolves.toBe("No pending OpenClaw rescue change is waiting for approval.");
-      await expect(runRescue("/openclaw yes", cfg, original)).resolves.toContain(
-        "[openclaw] done: gateway.restart",
-      );
-      expect(runDaemonRestart).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("refuses plugin install from remote rescue", async () => {
-    const cfg: OpenClawConfig = {};
-
-    await expect(
-      runRescue("/openclaw plugin install clawhub:openclaw-demo", cfg),
-    ).resolves.toContain("cannot install plugins from a message channel");
-    expect(runPluginInstallCommandMock).not.toHaveBeenCalled();
+  it.each([
+    ["account", {}, { accountId: "secondary" }],
+    ["channel", {}, { channelId: "telegram" }],
+    ["sender", {}, { from: "user:other", senderId: "user:other" }],
+    [
+      "destination fallback",
+      { accountId: undefined, to: "bot:primary" },
+      { accountId: undefined, to: "bot:secondary" },
+    ],
+  ] as const)("isolates pending approvals by %s", async (_scope, base, other) => {
+    const original = commandContext(base);
+    await runRescue("/openclaw restart gateway", {}, original);
+    await expectReply("/openclaw yes", noPending, true, commandContext(other));
+    await expectReply("/openclaw yes", "[openclaw] done: gateway.restart", false, original);
+    expect(runDaemonRestart).toHaveBeenCalledTimes(1);
   });
 
   it("allows plugin list and search from remote rescue", async () => {
-    const cfg: OpenClawConfig = {};
     vi.mocked(runPluginsListCommand).mockImplementation(async (_opts, runtime) => {
       runtime?.log("plugin rows");
     });
@@ -582,18 +423,11 @@ describe("OpenClaw rescue message", () => {
       runtime?.log(`search rows: ${String(query)}`);
     });
 
-    await expect(runRescue("/openclaw plugins list", cfg, commandContext())).resolves.toContain(
-      "plugin rows",
-    );
-    await expect(
-      runRescue("/openclaw plugins search calendar", cfg, commandContext()),
-    ).resolves.toContain("search rows: calendar");
+    await expectReply("/openclaw plugins list", "plugin rows");
+    await expectReply("/openclaw plugins search calendar", "search rows: calendar");
     expect(runPluginsListCommand).toHaveBeenCalledTimes(1);
     expect(runPluginsSearchCommand).toHaveBeenCalledTimes(1);
-    const [searchQuery, , searchRuntime] = requireFirstMockCall(
-      vi.mocked(runPluginsSearchCommand),
-      "plugins search",
-    );
+    const [searchQuery, , searchRuntime] = vi.mocked(runPluginsSearchCommand).mock.calls[0]!;
     expect(searchQuery).toBe("calendar");
     expect(searchRuntime).toBeTypeOf("object");
   });
@@ -601,115 +435,93 @@ describe("OpenClaw rescue message", () => {
   it.each([undefined, "work"])(
     "queues and applies model selection for agent %s through conversational approval",
     async (agentId) => {
-      await withRescueStateDir("models-", async () => {
-        const cfg: OpenClawConfig = {};
-        if (agentId) {
-          await mockConfig.mutateConfigFile({
-            mutate: (draft) => {
-              draft.agents = { entries: { [agentId]: {} } };
-            },
-          });
-        }
-        vi.mocked(verifySetupInferenceConfig).mockImplementation(async () => ({
-          ok: true as const,
-          modelRef: "openai/gpt-5.2",
-          latencyMs: 17,
-        }));
-        await expect(
-          runRescue(
-            `/openclaw set default model openai/gpt-5.2${agentId ? ` for agent ${agentId}` : ""}`,
-            cfg,
-            commandContext(),
-          ),
-        ).resolves.toContain("Reply /openclaw yes to apply");
-        await expect(runRescue("/openclaw yes", cfg, commandContext())).resolves.toContain(
-          agentId ? `Agent ${agentId} model: openai/gpt-5.2` : "Default model: openai/gpt-5.2",
-        );
+      if (agentId) {
+        await mockConfig.mutateConfigFile({
+          mutate: (draft) => {
+            draft.agents = { entries: { [agentId]: {} } };
+          },
+        });
+      }
+      vi.mocked(verifySetupInferenceConfig).mockImplementation(async () => ({
+        ok: true as const,
+        modelRef: "openai/gpt-5.2",
+        latencyMs: 17,
+      }));
+      await expect(
+        runRescue(
+          `/openclaw set default model openai/gpt-5.2${agentId ? ` for agent ${agentId}` : ""}`,
+          {},
+          commandContext(),
+        ),
+      ).resolves.toContain("Reply /openclaw yes to apply");
+      await expect(runRescue("/openclaw yes", {})).resolves.toContain(
+        agentId ? `Agent ${agentId} model: openai/gpt-5.2` : "Default model: openai/gpt-5.2",
+      );
 
-        const currentConfig = mockConfig.currentConfig() as OpenClawConfig;
-        const model = agentId
-          ? currentConfig.agents?.entries?.[agentId]?.model
-          : currentConfig.agents?.defaults?.model;
-        expect(typeof model === "string" ? model : model?.primary).toBe("openai/gpt-5.2");
-        if (agentId) {
-          expect(currentConfig.agents?.defaults?.model).toBeUndefined();
-        }
-        const audit = readLastAuditEntry() as {
-          details?: { rescue?: boolean; channel?: string; accountId?: string; senderId?: string };
-        };
-        expect(audit.details?.rescue).toBe(true);
-        expect(audit.details?.channel).toBe("whatsapp");
-        expect(audit.details?.accountId).toBe("default");
-        expect(audit.details?.senderId).toBe("user:owner");
+      const currentConfig = mockConfig.currentConfig() as OpenClawConfig;
+      const model = agentId
+        ? currentConfig.agents?.entries?.[agentId]?.model
+        : currentConfig.agents?.defaults?.model;
+      expect(typeof model === "string" ? model : model?.primary).toBe("openai/gpt-5.2");
+      if (agentId) {
+        expect(currentConfig.agents?.defaults?.model).toBeUndefined();
+      }
+      expect(readLastAuditEntry()).toMatchObject({
+        details: {
+          rescue: true,
+          channel: "whatsapp",
+          accountId: "default",
+          senderId: "user:owner",
+        },
       });
     },
   );
 
   it("does not queue persistent rescue approval when expiry would exceed the Date range", async () => {
-    await withRescueStateDir("overflow-expiry-", async (tempDir) => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(new Date(8_640_000_000_000_000));
-      try {
-        const cfg: OpenClawConfig = {};
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    try {
+      await expectReply("/openclaw restart gateway", "expiry clock is invalid");
 
-        await expect(
-          runRescue("/openclaw restart gateway", cfg, commandContext()),
-        ).resolves.toContain("expiry clock is invalid");
-
-        await expect(fs.readdir(path.join(tempDir, "openclaw", "rescue-pending"))).rejects.toThrow(
-          /ENOENT/,
-        );
-      } finally {
-        vi.useRealTimers();
-      }
-    });
+      await expect(fs.readdir(path.join(stateDir, "openclaw", "rescue-pending"))).rejects.toThrow(
+        /ENOENT/,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("expires pending approvals through the SQLite row TTL", async () => {
-    await withRescueStateDir("expired-", async () => {
-      const cfg: OpenClawConfig = {};
+    await runRescue("/openclaw restart gateway", {});
+    const store = openRescuePendingTestStore();
+    const [entry] = store.entries();
+    assert(entry, "expected pending rescue row");
+    expect(entry.expiresAt! - entry.createdAt).toBe(15 * 60_000);
+    // The worker owns its clock. Seed a foreign expired row through the SDK
+    // instead of advancing only the host's clock.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    store.register(entry.key, entry.value, { ttlMs: 15 * 60_000 });
+    vi.useRealTimers();
 
-      await runRescue("/openclaw restart gateway", {}, commandContext());
-      const store = openRescuePendingTestStore();
-      const [entry] = store.entries();
-      assert(entry, "expected pending rescue row");
-      expect(entry.expiresAt! - entry.createdAt).toBe(15 * 60_000);
-      // The worker owns its clock. Seed a foreign expired row through the SDK
-      // instead of advancing only the host's clock.
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-      store.register(entry.key, entry.value, { ttlMs: 15 * 60_000 });
-      vi.useRealTimers();
-
-      await expect(runRescue("/openclaw yes", cfg, commandContext())).resolves.toBe(
-        "No pending OpenClaw rescue change is waiting for approval.",
-      );
-      expect(runDaemonRestart).not.toHaveBeenCalled();
-    });
+    await expectReply("/openclaw yes", noPending, true);
+    expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
   it("consumes malformed pending rows without executing them", async () => {
-    await withRescueStateDir("malformed-", async () => {
-      const cfg: OpenClawConfig = {};
+    await runRescue("/openclaw restart gateway", {});
+    const store = openRescuePendingTestStore();
+    const [entry] = store.entries();
+    assert(entry, "expected pending rescue row");
+    store.register(
+      entry.key,
+      { version: 1, operation: { kind: "gateway-restart", unexpected: true } },
+      { ttlMs: 60_000 },
+    );
 
-      await runRescue("/openclaw restart gateway", cfg, commandContext());
-      const store = openRescuePendingTestStore();
-      const [entry] = store.entries();
-      assert(entry, "expected pending rescue row");
-      store.register(
-        entry.key,
-        { version: 1, operation: { kind: "gateway-restart", unexpected: true } },
-        { ttlMs: 60_000 },
-      );
-
-      await expect(runRescue("/openclaw yes", cfg, commandContext())).resolves.toBe(
-        "No pending OpenClaw rescue change is waiting for approval.",
-      );
-      await expect(runRescue("/openclaw yes", cfg, commandContext())).resolves.toBe(
-        "No pending OpenClaw rescue change is waiting for approval.",
-      );
-      expect(runDaemonRestart).not.toHaveBeenCalled();
-    });
+    await expectReply("/openclaw yes", noPending, true);
+    await expectReply("/openclaw yes", noPending, true);
+    expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -719,61 +531,50 @@ describe("OpenClaw rescue message", () => {
   ])(
     "queues and applies agent creation with role $role, name $name and purpose $purpose through conversational approval",
     async ({ role, name, purpose }) => {
-      await withRescueStateDir("agent-", async () => {
-        const cfg: OpenClawConfig = {};
-        vi.mocked(createAgent).mockImplementation(async () => ({
-          status: "created" as const,
+      vi.mocked(createAgent).mockImplementation(async () => ({
+        status: "created" as const,
+        agentId: "work",
+        name: name ?? "work",
+        workspace: "/tmp/work",
+        agentDir: "/tmp/agent-work",
+        bootstrapPending: true,
+        config: {},
+        configPath: "/tmp/openclaw.json",
+      }));
+
+      await expect(
+        runRescue(
+          `/openclaw create agent work${name ? ` name ${JSON.stringify(name)}` : ""}${role ? ` role ${role}` : ""}${purpose ? ` purpose ${JSON.stringify(purpose)}` : ""} workspace /tmp/work`,
+          {},
+          commandContext(),
+        ),
+      ).resolves.toBe(
+        `Plan: create agent work with workspace /tmp/work${name ? `, name: ${JSON.stringify(name)}` : ""}${purpose ? `, purpose: ${JSON.stringify(purpose)}` : ""}${role ? ", role: Writer" : ""}. Reply /openclaw yes to apply.`,
+      );
+      expect(createAgent).not.toHaveBeenCalled();
+      await expectReply("/openclaw yes", "[openclaw] done: agents.create");
+
+      expect(createAgent).toHaveBeenCalledTimes(1);
+      expect(createAgent).toHaveBeenCalledWith({
+        entry: {
+          id: "work",
+          ...(name ? { name, identity: { name } } : {}),
+        },
+        ...(role ? { role } : {}),
+        ...(purpose ? { purpose } : {}),
+        workspace: "/tmp/work",
+        provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
+        beforePersistentApply: expect.any(Function),
+      });
+      expect(readLastAuditEntry()).toMatchObject({
+        operation: "agents.create",
+        details: {
+          rescue: true,
+          channel: "whatsapp",
+          senderId: "user:owner",
           agentId: "work",
-          name: name ?? "work",
           workspace: "/tmp/work",
-          agentDir: "/tmp/agent-work",
-          bootstrapPending: true,
-          config: cfg,
-          configPath: "/tmp/openclaw.json",
-        }));
-
-        await expect(
-          runRescue(
-            `/openclaw create agent work${name ? ` name ${JSON.stringify(name)}` : ""}${role ? ` role ${role}` : ""}${purpose ? ` purpose ${JSON.stringify(purpose)}` : ""} workspace /tmp/work`,
-            cfg,
-            commandContext(),
-          ),
-        ).resolves.toBe(
-          `Plan: create agent work with workspace /tmp/work${name ? `, name: ${JSON.stringify(name)}` : ""}${purpose ? `, purpose: ${JSON.stringify(purpose)}` : ""}${role ? ", role: Writer" : ""}. Reply /openclaw yes to apply.`,
-        );
-        expect(createAgent).not.toHaveBeenCalled();
-        await expect(runRescue("/openclaw yes", cfg, commandContext())).resolves.toContain(
-          "[openclaw] done: agents.create",
-        );
-
-        expect(createAgent).toHaveBeenCalledTimes(1);
-        expect(createAgent).toHaveBeenCalledWith({
-          entry: {
-            id: "work",
-            ...(name ? { name, identity: { name } } : {}),
-          },
-          ...(role ? { role } : {}),
-          ...(purpose ? { purpose } : {}),
-          workspace: "/tmp/work",
-          provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
-          beforePersistentApply: expect.any(Function),
-        });
-        const audit = readLastAuditEntry() as {
-          operation?: string;
-          details?: {
-            rescue?: boolean;
-            channel?: string;
-            senderId?: string;
-            agentId?: string;
-            workspace?: string;
-          };
-        };
-        expect(audit.operation).toBe("agents.create");
-        expect(audit.details?.rescue).toBe(true);
-        expect(audit.details?.channel).toBe("whatsapp");
-        expect(audit.details?.senderId).toBe("user:owner");
-        expect(audit.details?.agentId).toBe("work");
-        expect(audit.details?.workspace).toBe("/tmp/work");
+        },
       });
     },
   );

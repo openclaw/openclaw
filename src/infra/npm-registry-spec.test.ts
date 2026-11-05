@@ -2,15 +2,30 @@
 import { describe, expect, it } from "vitest";
 import {
   compareOpenClawReleaseVersions,
+  compareSemverStrings,
   formatPrereleaseResolutionError,
   isExactSemverVersion,
   isPrereleaseSemverVersion,
   isPrereleaseResolutionAllowed,
   parseRegistryNpmSpec,
   resolveOpenClawReleaseCohortVersion,
-  resolveNpmJsonEntries,
   validateRegistryNpmSpec,
 } from "./npm-registry-spec.js";
+
+it.each([
+  ["2026.6.5", "2026.6.6-beta.1", -1],
+  ["2026.6.6", "2026.6.6-beta.1", 1],
+  ["2026.6.6-beta.2", "2026.6.6-beta.1", 1],
+  ["v2026.6.6", "2026.6.6", 0],
+  ["2026.6.6.beta.2", "2026.6.6-beta.1", 1],
+  ["2026.5.3", "2026.5.3-1", -1],
+  ["2026.5.3-1", "2026.5.3", 1],
+  ["2026.5.3-2", "2026.5.3-1", 1],
+  ["1.0", "1.0.0", null],
+  ["latest", "1.0.0", null],
+] as const)("compares %s against %s as %s", (a, b, expected) => {
+  expect(compareSemverStrings(a, b)).toBe(expected);
+});
 
 function parseSpecOrThrow(spec: string) {
   const parsed = parseRegistryNpmSpec(spec);
@@ -91,12 +106,5 @@ describe("npm prerelease resolution policy", () => {
         resolvedVersion,
       }),
     ).toContain(expected);
-  });
-});
-
-describe("resolveNpmJsonEntries", () => {
-  it("unwraps scoped name keys in the npm 12 pack object", () => {
-    const entry = { id: "@openclaw/voice-call@1.2.3", name: "@openclaw/voice-call" };
-    expect(resolveNpmJsonEntries({ "@openclaw/voice-call": entry })).toEqual([entry]);
   });
 });

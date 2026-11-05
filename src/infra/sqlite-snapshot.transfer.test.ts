@@ -1,13 +1,17 @@
 import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
-import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
+import { assert, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import {
+  readMigrationArtifactIdentity,
+  type MigrationArtifactVerification,
+} from "./session-sqlite-migration-artifact.js";
 import {
   exclusiveCopyPublication,
   snapshotContent,
+  useSnapshotFixture,
   type PublicationFixture,
 } from "./sqlite-snapshot.test-support.js";
 
@@ -37,22 +41,15 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
   };
 });
 
-import { createVerifiedSqliteSnapshot, publishVerifiedSqliteFile } from "./sqlite-snapshot.js";
+import { publishVerifiedSqliteFile } from "./sqlite-snapshot.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let sourcePath: string;
 let targetPath: string;
 let tempDir: string;
-
-beforeEach(async () => {
-  tempDir = tempDirs.make("openclaw-sqlite-transfer-");
-  if (process.platform === "win32") {
-    tempDir = path.join(tempDir, "private");
-    await createPrivateSqliteDirectory(tempDir);
-  }
-  sourcePath = path.join(tempDir, "source.sqlite");
-  targetPath = path.join(tempDir, "snapshot.sqlite");
-  execSource("VACUUM;");
+const fixture = useSnapshotFixture({ preserveRowIds: true });
+const { execSource, query, snapshot, expectSnapshotFailureWithoutTarget } = fixture;
+beforeEach(() => {
+  ({ tempDir, sourcePath, targetPath } = fixture);
 });
 
 afterEach(() => {
@@ -60,27 +57,6 @@ afterEach(() => {
   durabilityTestState.hashedBytes = 0;
   vi.restoreAllMocks();
 });
-
-type SnapshotOptions = Parameters<typeof createVerifiedSqliteSnapshot>[0];
-
-async function expectSnapshotFailureWithoutTarget(pattern: RegExp): Promise<void> {
-  await expect(snapshot()).rejects.toThrow(pattern);
-  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-}
-
-function execSource(sql: string) {
-  using source = new (requireNodeSqlite().DatabaseSync)(sourcePath);
-  source.exec(sql);
-}
-
-function query(sql: string, file = targetPath) {
-  using database = new (requireNodeSqlite().DatabaseSync)(file, { readOnly: true });
-  return database.prepare(sql).all();
-}
-
-function snapshot(options: Partial<SnapshotOptions> = {}) {
-  return createVerifiedSqliteSnapshot({ sourcePath, targetPath, preserveRowIds: true, ...options });
-}
 
 function mockExclusiveCopyTransfer() {
   const transfer = exclusiveCopyPublication();
@@ -157,7 +133,9 @@ it.each(["native", "isolated", "copy", "zero", "ctime"] as const)(
         mode === "isolated" ? { mode: "isolated-process", stagingRoot: tempDir } : undefined,
       beforePublish: async () => {
         const images: string[] = [];
-        for (const entry of await fs.readdir(tempDir, { recursive: true, withFileTypes: true })) {
+        for (const entry of (await listDirectoryTreeStrict(tempDir)).map(
+          (walkEntry) => walkEntry.dirent,
+        )) {
           const file = path.join(entry.parentPath, entry.name);
           if (
             entry.isFile() &&
@@ -177,14 +155,14 @@ it.each(["native", "isolated", "copy", "zero", "ctime"] as const)(
       userVersion: 0,
       ...snapshotContent(published),
     });
-    // Bound digest IO to capture, staged admission, and final publication.
-    expect(durabilityTestState.hashedBytes).toBeLessThanOrEqual(3 * receipt.sizeBytes);
+    // Only a distinct staged copy adds a digest pass to capture and final publication.
+    expect(durabilityTestState.hashedBytes).toBe((copy ? 3 : 2) * receipt.sizeBytes);
     if (copy) {
       expect(copy).toHaveBeenCalledOnce();
     }
     expect((await fs.readdir(tempDir)).toSorted()).toEqual(["snapshot.sqlite", "source.sqlite"]);
-    expect(await fs.readFile(targetPath)).toEqual(preparedBytes);
-    expect(await fs.readFile(sourcePath)).toEqual(original);
+    assert(preparedBytes?.equals(await fs.readFile(targetPath)), targetPath);
+    assert(original.equals(await fs.readFile(sourcePath)), sourcePath);
     expect(query("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(query("SELECT rowid,value,length(payload) AS bytes FROM records")).toEqual([
       { rowid: 71, value: "retained", bytes: 131072 },
@@ -204,6 +182,36 @@ it("keeps a caller-owned source independent of its published image", async () =>
   });
   expect(await fs.readFile(targetPath)).toEqual(original);
   expect(query("SELECT value FROM records", sourcePath)).toEqual([{ value: "after" }]);
+});
+
+it("does not bind an earlier publication hash to metadata changed by its final callback", async () => {
+  const original = await fs.readFile(sourcePath);
+  const verification: MigrationArtifactVerification = new Map();
+  await publishVerifiedSqliteFile({
+    sourcePath,
+    sourceIdentity: await fs.stat(sourcePath, { bigint: true }),
+    targetPath,
+    expectedContent: snapshotContent(original),
+    afterPublish: (guard) => {
+      const verified = guard.assertTargetUnchanged(() => {
+        fsSync.utimesSync(targetPath, 1_700_000_000, 1_700_000_000);
+      });
+      verification.set(`${verified.stat.dev}:${verified.stat.ino}`, verified);
+    },
+  });
+  let readBytes = 0;
+  const read = fsSync.readSync;
+  using _ = vi.spyOn(fsSync, "readSync").mockImplementation((...args: Parameters<typeof read>) => {
+    const count = read(...args);
+    readBytes += count;
+    return count;
+  });
+  const identity = readMigrationArtifactIdentity(targetPath, 1n, undefined, verification);
+  expect(identity).toMatchObject({
+    sha256: snapshotContent(original).sha256,
+    size: original.length,
+  });
+  expect(readBytes).toBe(original.length);
 });
 
 it("rejects same-size byte changes during a ctime-fallback transfer", async () => {

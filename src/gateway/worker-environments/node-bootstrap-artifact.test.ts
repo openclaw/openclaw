@@ -1,34 +1,134 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
+import * as packageDistImports from "../../../scripts/lib/package-dist-imports.mjs";
 import { collectPackageDistInventory } from "../../infra/package-dist-inventory.js";
+import * as packageRootImports from "../../infra/package-root-imports.js";
 import * as tmpDirs from "../../infra/tmp-openclaw-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { NodeBootstrapArtifactWorkerTasks } from "./node-bootstrap-artifact-contract.js";
+import * as artifactWorker from "./node-bootstrap-artifact-worker.js";
 import {
   buildId,
+  expectFiles,
+  expectMissing,
+  extract,
   longEntryPath,
   longEntryPayload,
+  readText,
   useNodeBootstrapArtifactFixtures,
   version,
   write,
   writeBundledBrowser,
+  writeFiles,
   writeOwnedChunks,
   type OwnedRuntimeChunk,
 } from "./node-bootstrap-artifact.test-support.js";
 
-// Keep byte/race fault injection beside the real builder. The worker suite covers transport.
+// mock-isolation: keep byte/race fault injection beside the builder; the worker suite covers transport.
 vi.mock("./node-bootstrap-artifact-worker.js", async () => {
   const { prepareNodeBootstrapArtifact } = await import("./node-bootstrap-artifact-build.js");
-  return { prepareNodeBootstrapArtifactInWorker: prepareNodeBootstrapArtifact };
+  return {
+    prepareNodeArtifactInWorker: (
+      _kind: "bootstrap",
+      { options, temporaryRoot }: NodeBootstrapArtifactWorkerTasks["bootstrap"]["input"],
+    ) => prepareNodeBootstrapArtifact(options, temporaryRoot),
+  };
 });
 
 const { fixture, createProvider, tempDirs } = useNodeBootstrapArtifactFixtures();
 
+async function runNode(root: string, entry = "openclaw.mjs") {
+  const { stdout } = await promisify(execFile)(process.execPath, [path.join(root, entry)]);
+  return stdout.trim();
+}
+
 describe("node bootstrap distribution", () => {
+  it("streams binary runtime files through bounded archive writes", async () => {
+    const { root, packageRoot, provider } = await fixture();
+    const contents = randomBytes(2 * 1024 * 1024);
+    await fs.writeFile(path.join(packageRoot, "dist/runtime.wasm"), contents);
+    let largestWrite = 0;
+    // oxlint-disable-next-line typescript/unbound-method -- The spy calls this with the original entry receiver.
+    const writeEntry = tar.ReadEntry.prototype.write;
+    using writes = vi.spyOn(tar.ReadEntry.prototype, "write").mockImplementation(function (
+      this: tar.ReadEntry,
+      chunk,
+    ) {
+      if (this.path === "package/dist/runtime.wasm") {
+        largestWrite = Math.max(largestWrite, chunk.byteLength);
+      }
+      return writeEntry.call(this, chunk);
+    });
+    const artifact = await provider.prepare();
+    writes.mockRestore();
+    const installed = await extract(root, artifact);
+    const installedBytes = await fs.readFile(path.join(installed, "dist/runtime.wasm"));
+    expect(createHash("sha256").update(installedBytes).digest("hex")).toBe(
+      createHash("sha256").update(contents).digest("hex"),
+    );
+    expect(largestWrite).toBeGreaterThan(0);
+    expect(largestWrite).toBeLessThanOrEqual(64 * 1024);
+  });
+
+  it("shares an artifact containing newly declared root runtime helpers", async () => {
+    const { root, packageRoot, provider, sourcePackage } = await fixture();
+    await write(packageRoot, "package.json", {
+      ...sourcePackage,
+      files: [
+        ...sourcePackage.files,
+        "runtime-process-scripts.generated.mjs",
+        "src/published-runtime.ts",
+        "!dist/extensions/omitted-plugin/**",
+      ],
+    });
+    await writeFiles(packageRoot, {
+      "runtime-process-scripts.generated.mjs":
+        'export { recovery } from "./src/published-runtime.ts";\n',
+      "src/published-runtime.ts":
+        'import { value } from "../dist/recovery-owned.mjs"; export const recovery: string = value;\n',
+      "node-runtime-recovery.mjs":
+        'import { recovery } from "./runtime-process-scripts.generated.mjs"; console.log(recovery);\n',
+    });
+    await writeOwnedChunks(packageRoot, {
+      "recovery-owned.mjs": {
+        source: 'export const value = "ready-to-recover";\n',
+        extensions: ["omitted-plugin"],
+      },
+    });
+    using preparation = vi.spyOn(artifactWorker, "prepareNodeArtifactInWorker");
+    const artifact = await provider.prepare();
+    for (let request = 0; request < 3; request++) {
+      expect(await provider.prepare()).toBe(artifact);
+    }
+    expect(preparation).toHaveBeenCalledOnce();
+    const target = await extract(root, artifact);
+    await expectFiles(target, {
+      "src/published-runtime.ts":
+        'import { value } from "../dist/recovery-owned.mjs"; export const recovery: string = value;\n',
+    });
+    await expectMissing(target, ["src/private.ts"]);
+    expect(await runNode(target, "node-runtime-recovery.mjs")).toBe("ready-to-recover");
+  });
+
+  it("rejects a missing dependency of a declared TypeScript runtime helper", async () => {
+    const { packageRoot, provider, sourcePackage } = await fixture();
+    await write(packageRoot, "package.json", {
+      ...sourcePackage,
+      files: [...sourcePackage.files, "src/published-runtime.ts"],
+    });
+    await write(
+      packageRoot,
+      "src/published-runtime.ts",
+      'import { value } from "./missing.mjs"; export const recovery: string = value;\n',
+    );
+    await expect(provider.prepare()).rejects.toThrow("incomplete built import closure");
+  });
+
   it.each([false, true])(
     "omits unselected plugin chunks while preserving selected imports (selected: %s)",
     async (selected) => {
@@ -66,6 +166,8 @@ describe("node bootstrap distribution", () => {
       } else {
         await write(packageRoot, "dist/entry.js", "export {};\n");
       }
+      using imports = vi.spyOn(packageDistImports, "collectPackageDistImports");
+      using nativeImports = vi.spyOn(packageRootImports, "collectPackageRootImports");
       const provider = createProvider({ ...options, plugins: selected ? options.plugins : [] });
       const artifact = await provider.prepare();
       const entries: string[] = [];
@@ -79,6 +181,14 @@ describe("node bootstrap distribution", () => {
       expect(entries.includes("package/dist/selected-owned.mjs")).toBe(selected);
       expect(entries.includes("package/dist/selected-import.mjs")).toBe(selected);
       expect(entries).toContain("package/dist/unowned.mjs");
+      const parsed = imports.mock.calls.flatMap(([params]) => params.files);
+      expect(parsed).not.toContain("dist/omitted-owned.mjs");
+      expect(parsed.filter((file) => file === "dist/selected-import.mjs")).toHaveLength(
+        selected ? 1 : 0,
+      );
+      expect(nativeImports.mock.calls.map(([source]) => source)).not.toContain(
+        "export const unowned = true;\n",
+      );
     },
   );
 
@@ -123,9 +233,7 @@ describe("node bootstrap distribution", () => {
       "lib/proxy/runtime/index.js": 'module.exports = "proxy";',
       "lib/options.json": { mode: "ready" },
     };
-    for (const [relative, contents] of Object.entries(bundledFiles)) {
-      await write(bundledRoot, relative, contents);
-    }
+    await writeFiles(bundledRoot, bundledFiles);
     await write(
       packageRoot,
       "dist/entry.js",
@@ -133,13 +241,8 @@ describe("node bootstrap distribution", () => {
     );
 
     const artifact = await provider.prepare();
-    const installed = path.join(root, "node");
-    await fs.mkdir(installed);
-    await tar.extract({ file: artifact.tarballPath, cwd: installed });
-    const { stdout } = await promisify(execFile)(process.execPath, [
-      path.join(installed, "package/openclaw.mjs"),
-    ]);
-    expect(stdout.trim()).toBe("commonjs:proxy:ready");
+    const target = await extract(root, artifact);
+    expect(await runNode(target)).toBe("commonjs:proxy:ready");
   });
 
   it("preserves an installed bundled dependency's runtime layout and assets", async () => {
@@ -158,81 +261,46 @@ describe("node bootstrap distribution", () => {
       'import { notice } from "@fixture/browser"; console.log(notice);',
     );
     const artifact = await provider.prepare();
-    const installed = path.join(root, "node");
-    await fs.mkdir(installed);
-    await tar.extract({ file: artifact.tarballPath, cwd: installed });
-    const target = path.join(installed, "package");
-    for (const relative of [".env", "node_modules"]) {
-      await expect(
-        fs.access(path.join(target, "node_modules/@fixture/browser", relative)),
-      ).rejects.toHaveProperty("code", "ENOENT");
-    }
+    const target = await extract(root, artifact);
+    const installedBrowser = path.join(target, "node_modules/@fixture/browser");
+    await expectMissing(installedBrowser, [".env", "node_modules"]);
     for (const entry of [
       "openclaw.mjs",
       "node_modules/@fixture/browser/build/src/bin/browser.js",
     ]) {
-      const { stdout } = await promisify(execFile)(process.execPath, [path.join(target, entry)]);
-      expect(stdout.trim()).toBe("bundled-notice");
+      expect(await runNode(target, entry)).toBe("bundled-notice");
     }
-    for (const [relative, contents] of [
-      ["build/src/OPENCLAW_PATCH_NOTICE.md", "patched-runtime"],
-      ["skills/browser/SKILL.md", "browser-skill"],
-      ["LICENSE", "fixture-license"],
-    ]) {
-      expect(
-        await fs.readFile(path.join(target, "node_modules/@fixture/browser", relative!), "utf8"),
-      ).toBe(contents);
-    }
+    await expectFiles(installedBrowser, {
+      "build/src/OPENCLAW_PATCH_NOTICE.md": "patched-runtime",
+      "skills/browser/SKILL.md": "browser-skill",
+      LICENSE: "fixture-license",
+    });
   });
 
   it("retains an external plugin's hidden runtime chunks under its dist directory", async () => {
     const { root, pluginRoot, provider } = await fixture("external-plugin");
-    await write(
-      pluginRoot,
-      "dist/index.js",
-      'export { answer } from "./.setup/chunk-Q1w2E3.mjs";\n',
-    );
-    await write(
-      pluginRoot,
-      "dist/.setup/chunk-Q1w2E3.mjs",
-      'export const answer = "cloud-ready";\n',
-    );
-    await write(pluginRoot, "dist/.cache/credentials.json", {
-      token: "do-not-transfer-host-private-metadata",
+    await writeFiles(pluginRoot, {
+      "dist/index.js": 'export { answer } from "./.setup/chunk-Q1w2E3.mjs";\n',
+      "dist/.setup/chunk-Q1w2E3.mjs": 'export const answer = "cloud-ready";\n',
+      "dist/.cache/credentials.json": { token: "do-not-transfer-host-private-metadata" },
+      "dist/.setup/.cache/credentials.json": {
+        token: "do-not-transfer-nested-host-private-metadata",
+      },
+      "dist/.setup/node_modules/private-dependency/index.js": "export const unused = true;\n",
     });
-    await write(pluginRoot, "dist/.setup/.cache/credentials.json", {
-      token: "do-not-transfer-nested-host-private-metadata",
-    });
-    await write(
-      pluginRoot,
-      "dist/.setup/node_modules/private-dependency/index.js",
-      "export const unused = true;\n",
-    );
     const artifact = await provider.prepare();
-    const installed = path.join(root, "node");
-    await fs.mkdir(installed);
-    await tar.extract({ file: artifact.tarballPath, cwd: installed });
-    const target = path.join(installed, "package");
-    expect(
-      await fs.readFile(
-        path.join(target, "dist/extensions/remote-runtime/dist/.setup/chunk-Q1w2E3.mjs"),
-        "utf8",
-      ),
-    ).toBe('export const answer = "cloud-ready";\n');
-    for (const excluded of [
+    const target = await extract(root, artifact);
+    const installedPlugin = path.join(target, "dist/extensions/remote-runtime");
+    await expectFiles(installedPlugin, {
+      "dist/.setup/chunk-Q1w2E3.mjs": 'export const answer = "cloud-ready";\n',
+    });
+    await expectMissing(installedPlugin, [
       ".env",
       "dist/.cache/credentials.json",
       "dist/.setup/.cache/credentials.json",
       "dist/.setup/node_modules/private-dependency/index.js",
-    ]) {
-      await expect(
-        fs.access(path.join(target, "dist/extensions/remote-runtime", excluded)),
-      ).rejects.toHaveProperty("code", "ENOENT");
-    }
-    const { stdout } = await promisify(execFile)(process.execPath, [
-      path.join(target, "openclaw.mjs"),
     ]);
-    expect(stdout.trim()).toBe("local-ai:cloud-ready");
+    expect(await runNode(target)).toBe("local-ai:cloud-ready");
   });
 
   it.each(["source", "package", "external-plugin", "linked-package"] as const)(
@@ -258,10 +326,7 @@ describe("node bootstrap distribution", () => {
       }
       const sourceOwnership =
         mode === "source"
-          ? await fs.readFile(
-              path.join(packageRoot, "dist/runtime-dependency-ownership.json"),
-              "utf8",
-            )
+          ? await readText(packageRoot, "dist/runtime-dependency-ownership.json")
           : undefined;
       // Node's getter temporarily changes the process mask and races parallel file creation.
       const readUmask = vi.spyOn(process, "umask").mockImplementation(() => {
@@ -305,19 +370,14 @@ describe("node bootstrap distribution", () => {
       expect(entries.some((entry) => entry.startsWith("package/dist/control-ui/"))).toBe(false);
       for (const [file, chunk] of Object.entries(privateChunks)) {
         expect(entries).not.toContain(`package/dist/${file}`);
-        expect(await fs.readFile(path.join(packageRoot, "dist", file), "utf8")).toBe(chunk.source);
+        await expectFiles(packageRoot, { [`dist/${file}`]: chunk.source });
       }
       if (mode === "source") {
         expect(entries).not.toContain("package/dist/qa-runtime-private.mjs");
-        expect(
-          await fs.readFile(path.join(packageRoot, "dist/qa-runtime-private.mjs"), "utf8"),
-        ).toBe("export {};\n");
-        expect(
-          await fs.readFile(
-            path.join(packageRoot, "dist/runtime-dependency-ownership.json"),
-            "utf8",
-          ),
-        ).toBe(sourceOwnership);
+        await expectFiles(packageRoot, { "dist/qa-runtime-private.mjs": "export {};\n" });
+        expect(await readText(packageRoot, "dist/runtime-dependency-ownership.json")).toBe(
+          sourceOwnership,
+        );
       }
       expect(await collectPackageDistInventory(packageRoot)).toEqual(
         expect.arrayContaining(["dist/control-ui/index.html", "dist/control-ui/assets/app.js"]),
@@ -335,17 +395,16 @@ describe("node bootstrap distribution", () => {
         expect(entries).not.toContain("package/dist/extensions/remote-runtime/index.js");
       }
       const target = path.join(installed, "package");
-      expect(await fs.readFile(path.join(target, "dist/empty.js"), "utf8")).toBe("");
-      expect(JSON.parse(await fs.readFile(path.join(target, longEntryPath), "utf8"))).toEqual({
+      await expectFiles(target, { "dist/empty.js": "" });
+      expect(JSON.parse(await readText(target, longEntryPath))).toEqual({
         payload: longEntryPayload,
       });
-      const manifest = JSON.parse(await fs.readFile(path.join(target, "package.json"), "utf8"));
-      expect(manifest.dependencies).toEqual({ "@fixture/ai": version, "native-runtime": "1.2.3" });
-      expect(manifest.bundleDependencies).toEqual(["@fixture/ai"]);
-      expect(manifest.scripts).toEqual({
-        preinstall: "node scripts/preinstall.mjs",
-        postinstall: "node scripts/postinstall.mjs",
-      });
+      const manifest = JSON.parse(await readText(target, "package.json"));
+      expect([manifest.dependencies, manifest.bundleDependencies, manifest.scripts]).toEqual([
+        { "@fixture/ai": version, "native-runtime": "1.2.3" },
+        ["@fixture/ai"],
+        { preinstall: "node scripts/preinstall.mjs", postinstall: "node scripts/postinstall.mjs" },
+      ]);
       expect(manifest.devDependencies).toBeUndefined();
       const lifecycleMarker = path.join(target, ".openclaw-lifecycle-pending");
       await expect(fs.readFile(lifecycleMarker, "utf8")).resolves.toBe("pending\n");
@@ -353,22 +412,12 @@ describe("node bootstrap distribution", () => {
       await expect(fs.readFile(lifecycleMarker, "utf8")).resolves.toBe("pending\n");
       await promisify(execFile)(process.execPath, [path.join(target, "scripts/postinstall.mjs")]);
       await expect(fs.access(lifecycleMarker)).rejects.toHaveProperty("code", "ENOENT");
-      const { stdout } = await promisify(execFile)(process.execPath, [
-        path.join(target, "openclaw.mjs"),
-      ]);
-      expect(stdout.trim()).toBe("local-ai:cloud-ready");
-      expect(JSON.parse(await fs.readFile(path.join(packageRoot, "package.json"), "utf8"))).toEqual(
-        sourcePackage,
-      );
-      expect(
-        await fs.readFile(
-          path.join(
-            packageRoot,
-            "dist/extensions/remote-runtime/node_modules/native-runtime/vendor/host-native",
-          ),
-          "utf8",
-        ),
-      ).toBe("do-not-transfer-native");
+      expect(await runNode(target)).toBe("local-ai:cloud-ready");
+      expect(JSON.parse(await readText(packageRoot, "package.json"))).toEqual(sourcePackage);
+      await expectFiles(packageRoot, {
+        "dist/extensions/remote-runtime/node_modules/native-runtime/vendor/host-native":
+          "do-not-transfer-native",
+      });
       await provider.close();
       await expect(fs.access(artifact.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(provider.prepare()).rejects.toThrow("closed");
@@ -384,6 +433,11 @@ describe("node bootstrap distribution", () => {
     { name: "public plugin ownership", extensions: ["remote-runtime"], entry: "ownership" },
     { name: "a current root import", extensions: ["qa-lab"], entry: "root" },
     { name: "a current root createRequire", extensions: ["qa-lab"], entry: "require" },
+    {
+      name: "an optional literal-template loader",
+      extensions: ["qa-lab"],
+      entry: "optional-require",
+    },
     { name: "a transitive current root import", extensions: ["qa-lab"], entry: "transitive" },
     { name: "the CLI launcher", extensions: ["qa-lab"], entry: "launcher" },
     { name: "a declared install script", extensions: ["qa-lab"], entry: "install" },
@@ -403,41 +457,44 @@ describe("node bootstrap distribution", () => {
         : entry === "install"
           ? "scripts/preinstall.mjs"
           : "dist/entry.js";
-    const original = await fs.readFile(path.join(packageRoot, importer), "utf8");
+    const original = await readText(packageRoot, importer);
     const importSource =
       entry === "ownership"
         ? ""
         : entry === "require"
           ? 'import { createRequire } from "node:module"; const load = createRequire(import.meta.url); load("./opaque-A1b2C3.mjs");\n'
-          : entry === "transitive"
-            ? 'import "./bridge.js";\n'
-            : entry === "launcher"
-              ? 'await import(new URL("./dist/opaque-A1b2C3.mjs", import.meta.url));\n'
-              : entry === "install"
-                ? 'await import(new URL("../dist/opaque-A1b2C3.mjs", import.meta.url));\n'
-                : 'import "./opaque-A1b2C3.mjs";\n';
+          : entry === "optional-require"
+            ? 'import { createRequire } from "node:module"; const load = createRequire(import.meta.url); load?.(`./opaque-A1b2C3.mjs`);\n'
+            : entry === "transitive"
+              ? 'import "./bridge.js";\n'
+              : entry === "launcher"
+                ? 'await import(new URL("./dist/opaque-A1b2C3.mjs", import.meta.url));\n'
+                : entry === "install"
+                  ? 'await import(new URL("../dist/opaque-A1b2C3.mjs", import.meta.url));\n'
+                  : 'import "./opaque-A1b2C3.mjs";\n';
     await write(packageRoot, importer, importSource + original);
     if (entry === "transitive") {
       await write(packageRoot, "dist/bridge.js", 'import "./opaque-A1b2C3.mjs";\n');
     }
     const artifact = await provider.prepare();
-    const installed = path.join(root, "node");
-    await fs.mkdir(installed);
-    await tar.extract({ file: artifact.tarballPath, cwd: installed });
+    const target = await extract(root, artifact);
     if (entry === "install") {
-      await promisify(execFile)(process.execPath, [
-        path.join(installed, "package/scripts/preinstall.mjs"),
-      ]);
+      await promisify(execFile)(process.execPath, [path.join(target, "scripts/preinstall.mjs")]);
     }
-    const { stdout } = await promisify(execFile)(process.execPath, [
-      path.join(installed, "package/openclaw.mjs"),
-    ]);
-    expect(stdout.trim()).toBe("local-ai:cloud-ready");
+    expect(await runNode(target)).toBe("local-ai:cloud-ready");
     for (const [file, chunk] of Object.entries(chunks)) {
-      expect(await fs.readFile(path.join(installed, "package/dist", file), "utf8")).toBe(
-        chunk.source,
-      );
+      await expectFiles(target, { [`dist/${file}`]: chunk.source });
     }
+  });
+
+  it("does not treat ordinary literal path arguments as required imports", async () => {
+    const { packageRoot, provider } = await fixture();
+    await writeOwnedChunks(packageRoot, {
+      "opaque-A1b2C3.mjs": { source: "export {};\n", extensions: ["qa-lab"] },
+    });
+    const entry = await readText(packageRoot, "dist/entry.js");
+    await write(packageRoot, "dist/entry.js", `String("./absent-user-directory");\n${entry}`);
+    await expect(provider.prepare()).resolves.toMatchObject({ buildId });
   });
 
   it.each([
@@ -586,7 +643,7 @@ describe("node bootstrap distribution", () => {
   );
 
   it("rejects source/built plugin dependency drift and nonexact native pins", async () => {
-    const { packageRoot, provider, pluginPackage } = await fixture();
+    const { packageRoot, provider, pluginPackage } = await fixture("package");
     const changed = { ...pluginPackage, dependencies: { "native-runtime": "^1.3.0" } };
     await write(packageRoot, "extensions/remote-runtime/package.json", changed);
     await expect(provider.prepare()).rejects.toThrow("does not match source metadata");
@@ -609,29 +666,4 @@ describe("node bootstrap distribution", () => {
       );
     },
   );
-
-  it("rejects streamed bytes that differ from the verified source", async () => {
-    const { provider } = await fixture();
-    // oxlint-disable-next-line typescript/unbound-method -- Fault injection reapplies the original ReadEntry receiver below.
-    const writeEntry = tar.ReadEntry.prototype.write;
-    let substituted = false;
-    const writer = vi.spyOn(tar.ReadEntry.prototype, "write").mockImplementation(function (
-      this: tar.ReadEntry,
-      chunk,
-    ) {
-      if (this.path === "package/dist/shared.js") {
-        substituted = true;
-        return writeEntry.call(this, Buffer.alloc(chunk.length, 0x20));
-      }
-      return writeEntry.call(this, chunk);
-    });
-    try {
-      await expect(provider.prepare()).rejects.toThrow(
-        "Node bootstrap archive does not match the verified distribution",
-      );
-      expect(substituted).toBe(true);
-    } finally {
-      writer.mockRestore();
-    }
-  });
 });

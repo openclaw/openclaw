@@ -12,31 +12,23 @@ import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import type { GatewayServer } from "./server.js";
 
-/** Claim a Gateway E2E port block; release it only after the Gateway bound to it has closed. */
-export async function acquireGatewayE2ePortBlock(): Promise<TestPortClaim> {
-  return await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-}
+const offsets = [0, 1, 2, 3, 4];
+const isCleanupError = (cause: unknown) => cause instanceof GatewayStartupCleanupError;
 
-export async function getGatewayTestPort(): Promise<number> {
-  return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
-}
+/** Claim a Gateway E2E port block; release it only after the Gateway bound to it has closed. */
+export const acquireGatewayE2ePortBlock = () => acquireTestPortBlock({ offsets });
+export const getGatewayTestPort = () => getDeterministicFreePortBlock({ offsets });
 
 export function canRetryPort(error: unknown): boolean {
   const causes = collectNestedErrorCandidates(error);
-  return (
-    !causes.some((cause) => cause instanceof GatewayStartupCleanupError) &&
-    causes.some((cause) => hasErrnoCode(cause, "EADDRINUSE"))
-  );
+  return !causes.some(isCleanupError) && causes.some((cause) => hasErrnoCode(cause, "EADDRINUSE"));
 }
 
 export async function startClaimedGateway(
   port: number | TestPortClaim,
   start: () => Promise<GatewayServer>,
 ) {
-  const claim =
-    typeof port === "number"
-      ? await acquireTestPortBlock({ port, offsets: [0, 1, 2, 3, 4] })
-      : port;
+  const claim = typeof port === "number" ? await acquireTestPortBlock({ port, offsets }) : port;
   try {
     const server = await start();
     const close = server.close.bind(server);
@@ -48,11 +40,7 @@ export async function startClaimedGateway(
       })());
     return server;
   } catch (error) {
-    if (
-      !collectNestedErrorCandidates(error).some(
-        (cause) => cause instanceof GatewayStartupCleanupError,
-      )
-    ) {
+    if (!collectNestedErrorCandidates(error).some(isCleanupError)) {
       await claim.release();
     }
     throw error;
@@ -61,7 +49,7 @@ export async function startClaimedGateway(
 
 type ListenerReservation = {
   listener: ReturnType<typeof createServer>;
-  adopt: () => void;
+  adopted: boolean;
 };
 
 async function createListenerDispatcher() {
@@ -76,7 +64,9 @@ async function createListenerDispatcher() {
       const runtime = await createTransport(
         reservation ? { ...params, testListener: reservation.listener } : params,
       );
-      reservation?.adopt();
+      if (reservation) {
+        reservation.adopted = true;
+      }
       return runtime;
     });
   return { listeners, restore: () => spy.mockRestore() };
@@ -92,59 +82,48 @@ let activeDispatcher:
 export async function reserveGatewayTestListener(port: number | TestPortClaim = 0) {
   const rejectEarlyConnection = (socket: Socket) => socket.destroy();
   const { claim, listener, releaseListener } = await reserveTestPortListener({
-    offsets: [0, 1, 2, 3, 4],
+    offsets,
     ...(port ? { port } : {}),
     createListener: () => createServer().on("connection", rejectEarlyConnection),
   });
-  let adopted = false;
+  const reservation = { listener, adopted: false };
   const closeUnadopted = async () => {
-    if (!adopted && listener.listening) {
+    if (!reservation.adopted && listener.listening) {
       await releaseListener();
     }
     if (!listener.listening) {
       await claim.release();
     }
   };
-  try {
-    const address = listener.address();
-    assert(address && typeof address !== "string");
-    return {
-      port: address.port,
-      listener,
-      closeUnadopted,
-      async start<T>(run: () => Promise<T>): Promise<T> {
-        const owner = (activeDispatcher ??= { ready: createListenerDispatcher(), pending: 0 });
-        owner.pending++;
-        let dispatcher: Awaited<typeof owner.ready> | undefined;
+  // The reservation owner returns only after binding this exact claimed port.
+  return {
+    port: claim.port,
+    listener,
+    closeUnadopted,
+    async start<T>(run: () => Promise<T>): Promise<T> {
+      const owner = (activeDispatcher ??= { ready: createListenerDispatcher(), pending: 0 });
+      owner.pending++;
+      let dispatcher: Awaited<typeof owner.ready> | undefined;
+      try {
+        dispatcher = await owner.ready;
+        assert(
+          !dispatcher.listeners.has(claim.port),
+          "Reserved Gateway listener is already starting",
+        );
+        dispatcher.listeners.set(claim.port, reservation);
         try {
-          dispatcher = await owner.ready;
-          assert(
-            !dispatcher.listeners.has(address.port),
-            "Reserved Gateway listener is already starting",
-          );
-          dispatcher.listeners.set(address.port, {
-            listener,
-            adopt: () => {
-              adopted = true;
-            },
-          });
-          try {
-            const result = await run();
-            listener.off("connection", rejectEarlyConnection);
-            return result;
-          } finally {
-            dispatcher.listeners.delete(address.port);
-          }
+          const result = await run();
+          listener.off("connection", rejectEarlyConnection);
+          return result;
         } finally {
-          if (--owner.pending === 0) {
-            activeDispatcher = undefined;
-            dispatcher?.restore();
-          }
+          dispatcher.listeners.delete(claim.port);
         }
-      },
-    };
-  } catch (error) {
-    await closeUnadopted();
-    throw error;
-  }
+      } finally {
+        if (--owner.pending === 0) {
+          activeDispatcher = undefined;
+          dispatcher?.restore();
+        }
+      }
+    },
+  };
 }

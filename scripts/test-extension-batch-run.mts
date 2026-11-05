@@ -1,5 +1,4 @@
 import path from "node:path";
-import pMap from "p-map";
 import { waitForever } from "../src/cli/wait.ts";
 import { assertTestHomeSelection, combineTestHomeSelections } from "../test/test-home-policy.mts";
 import {
@@ -33,6 +32,7 @@ import { resolveVitestCacheRoot, resolveVitestCacheSlotPath } from "./lib/vitest
 import { collectVitestFileFilters, resolveExplicitVitestMode } from "./lib/vitest-cli-mode.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { mergeVitestExitCodes, vitestInfrastructureExitCode } from "./lib/vitest-outcome.mts";
+import { runVitestPlans } from "./lib/vitest-plan-scheduling.mts";
 import {
   createVitestReportOwner,
   type VitestReportOwner,
@@ -302,10 +302,7 @@ export async function runExtensionBatchPlan(
   const suppliedEnv = params.env ?? process.env;
   const runtimePolicy = resolveCiTestRuntimePolicy(suppliedEnv);
   const allRuntimes = runtimePolicy === "bun-all" || runtimePolicy === "dual-all";
-  const env =
-    runtimePolicy === "dual" || allRuntimes
-      ? { ...suppliedEnv, OPENCLAW_VITEST_RUNTIME: "node" }
-      : suppliedEnv;
+  const env = allRuntimes ? { ...suppliedEnv, OPENCLAW_VITEST_RUNTIME: "node" } : suppliedEnv;
   const vitestArgs = params.vitestArgs ?? [];
   // Single-plugin CLI historically leaves exact exclusions to Vitest.
   const exactExcludePaths =
@@ -336,7 +333,7 @@ export async function runExtensionBatchPlan(
   );
   // Admit the whole selection before report or runtime preparation can import code.
   assertTestHomeSelection(env, homeMode);
-  if (runtimePolicy === "dual" || allRuntimes) {
+  if (allRuntimes) {
     for (const leaf of leafGroups) {
       const selections = leaf.invocations.flatMap((invocation) =>
         resolveCiTestRuntimeSelections(
@@ -418,7 +415,6 @@ export async function runExtensionBatchPlan(
   let reportFailure: string | undefined;
   let exitCode = 0;
   let stopScheduling = false;
-  const started: Promise<unknown>[] = [];
   const runInvocation = async (
     invocation: ReturnType<typeof preparePlanGroup>["invocations"][number],
   ) => {
@@ -466,34 +462,23 @@ export async function runExtensionBatchPlan(
       reportFailure = "Runtime preparation failed; invocations unstarted";
       return exitCode;
     }
-    try {
-      for (const groups of phases) {
-        await pMap(
-          groups,
-          async (group) => {
-            if (
-              stopScheduling ||
-              (exitCode !== 0 && batchPlan.extensionCount > 1 && runtimePolicy !== "dual-all") ||
-              termination.signal
-            ) {
-              return;
-            }
-            const running = runPlanGroup(
-              group,
-              runInvocation,
-              allowEmptyAfterExclude,
-              () => stopScheduling || termination.signal !== null,
-            ).then((groupExitCode) => {
-              exitCode = mergeVitestExitCodes(exitCode, groupExitCode);
-            });
-            started.push(running);
-            await running;
-          },
-          { concurrency: parallelism, stopOnError: false },
-        );
-      }
-    } finally {
-      await Promise.allSettled(started);
+    for (const groups of phases) {
+      await runVitestPlans(groups, {
+        concurrency: parallelism,
+        shouldStop: () =>
+          stopScheduling ||
+          (exitCode !== 0 && batchPlan.extensionCount > 1 && runtimePolicy !== "dual-all") ||
+          termination.signal !== null,
+        run: async (group) => {
+          const code = await runPlanGroup(
+            group,
+            runInvocation,
+            allowEmptyAfterExclude,
+            () => stopScheduling || termination.signal !== null,
+          );
+          exitCode = mergeVitestExitCodes(exitCode, code);
+        },
+      });
     }
   } catch (error) {
     reportFailure = String(error);

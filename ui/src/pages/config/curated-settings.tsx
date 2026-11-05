@@ -1,27 +1,30 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, For, Match, onCleanup, Switch, untrack } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createMemo, createSignal, For, Match, onSettled, Switch, untrack } from "solid-js";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
-import "../../components/select-picker.ts";
-import type { PickerParams } from "../../components/select-picker.ts";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
+import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   LearnMoreLink,
-  SettingsDefaultDescription,
   SettingsRow,
   SettingsSection,
   SettingsSegmented,
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import {
   curatedSettingsConfigPath,
   type CuratedSettingsDefault,
+  type CuratedSettingsDisclosure,
   type CuratedSettingsField,
   type CuratedSettingsPresentation,
 } from "./curated-settings-presentation.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
+registerEnglishCatalog(registerCronEnglish);
 
 type CuratedSettingsProps = {
   document: Record<string, unknown> | null;
@@ -70,7 +73,12 @@ function parseCuratedNumber(
   return bounds.max !== undefined && parsed > bounds.max ? null : parsed;
 }
 
-function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSettingsField }) {
+function CuratedField(props: {
+  settings: CuratedSettingsProps;
+  spec: CuratedSettingsField;
+  /** A disclosure's switch speaks for the whole row instead of its own field. */
+  row?: { titleKey: string; descriptionKey: string; actions: JSX.Element };
+}) {
   const field = () => fieldAtPath(props.settings.values, props.spec.path);
   const fallbackValue = () => displayDefault(props.spec.displayDefault, props.settings);
   const defaultValue = () => {
@@ -83,15 +91,9 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
       ? t(value ? "common.enabled" : "common.disabled")
       : String(value);
   };
-  const description = (
-    <>
-      {t(props.spec.helpKey)}{" "}
-      <SettingsDefaultDescription value={defaultValue()} overridden={field().overridden} />
-    </>
-  );
   const row = {
-    title: <>{t(props.spec.labelKey)}</>,
-    description,
+    title: <>{t(props.row?.titleKey ?? props.spec.labelKey)}</>,
+    description: <>{t(props.row?.descriptionKey ?? props.spec.helpKey)}</>,
   };
   const checked = () => {
     const value = field().value;
@@ -99,7 +101,7 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
       ? value
       : props.spec.kind === "toggle" && props.spec.displayDefault;
   };
-  const text = () => {
+  const text = createMemo(() => {
     const value = field().value;
     return props.spec.kind === "number"
       ? typeof value === "number"
@@ -108,7 +110,7 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
       : typeof value === "string"
         ? value
         : "";
-  };
+  });
   const bounds = () => (props.spec.kind === "number" ? props.spec.bounds : null);
   return (
     <Switch>
@@ -117,6 +119,7 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
           {...row}
           checked={checked()}
           disabled={props.settings.disabled}
+          actions={props.row?.actions}
           onChange={(enabled) => props.settings.onPatch(props.spec.path, enabled)}
         />
       </Match>
@@ -124,17 +127,25 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
         <SettingsRow
           {...row}
           control={
-            <CuratedModelPicker
+            <ModelPicker
               label={t(props.spec.labelKey)}
-              customLabel={props.spec.kind === "model" ? t(props.spec.customLabelKey) : ""}
               value={text()}
-              defaultValue={defaultValue()}
               disabled={props.settings.disabled}
-              placeholder={
-                props.spec.kind === "model" && props.spec.placeholderKey
-                  ? t(props.spec.placeholderKey)
-                  : ""
-              }
+              options={[
+                {
+                  value: "",
+                  label: defaultValue(),
+                  provider: providerIdFromModelRef(defaultValue()) ?? undefined,
+                },
+              ]}
+              custom={{
+                label: props.spec.kind === "model" ? t(props.spec.customLabelKey) : "",
+                placeholder:
+                  props.spec.kind === "model" && props.spec.placeholderKey
+                    ? t(props.spec.placeholderKey)
+                    : "",
+                commit: "change",
+              }}
               onChange={(model) =>
                 props.settings.onPatch(props.spec.path, model.trim() || undefined)
               }
@@ -182,10 +193,15 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
               spellcheck="false"
               aria-label={t(props.spec.labelKey)}
               disabled={props.settings.disabled}
-              value={text()}
+              ref={liveValue(text)}
               placeholder={defaultValue()}
               onChange={(event) => {
                 const input = event.currentTarget;
+                if (input.validity.badInput) {
+                  // Browsers sanitize unfinished numbers to empty, not a deliberate clear.
+                  input.value = text();
+                  return;
+                }
                 const next = input.value.trim();
                 if (!next) {
                   props.settings.onPatch(props.spec.path, undefined);
@@ -212,80 +228,45 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
   );
 }
 
-type CuratedModelOption = { value: string; label: string; provider?: string };
-type CuratedModelPickerProps = {
-  label: string;
-  customLabel: string;
-  value: string;
-  defaultValue: string;
-  disabled: boolean;
-  placeholder: string;
-  onChange: (value: string) => void;
-};
-
-function CuratedModelPicker(props: CuratedModelPickerProps) {
-  let input!: HTMLInputElement;
-  const customValue = () =>
-    props.value === "__openclaw_custom_model__"
-      ? "__openclaw_custom_model___"
-      : "__openclaw_custom_model__";
-  const params = (): PickerParams<CuratedModelOption> => ({
-    label: props.label,
-    value: props.value,
-    options: [
-      {
-        value: "",
-        label: props.defaultValue,
-        provider: providerIdFromModelRef(props.defaultValue) ?? undefined,
-      },
-      { value: customValue(), label: props.customLabel },
-    ],
-    get disabled() {
-      return props.disabled;
-    },
-    searchable: true,
-    showOptionTooltips: false,
-    className: "model-picker__select ",
-    renderLeading: (option) =>
-      option.provider ? (
-        <ProviderBrandIcon provider={option.provider} class="model-picker__provider-icon" />
-      ) : undefined,
-    onChange: props.onChange,
-    onChangeTarget: (value) => {
-      if (value === customValue()) {
-        input.hidden = false;
-        queueMicrotask(() => input.focus());
-        return;
-      }
-      input.hidden = true;
-      props.onChange(value);
-    },
-  });
+function CuratedDisclosureRow(props: {
+  settings: CuratedSettingsProps;
+  spec: CuratedSettingsDisclosure;
+}) {
+  const [open, setOpen] = createSignal(false);
+  const fields = () => props.spec.fields.slice(1);
   return (
-    <div class="model-picker">
-      <openclaw-select-picker
-        class="settings-select picker-select model-picker__select "
-        style={{ width: "100%", "min-width": "min(138px,100%)" }}
-        prop:params={params()}
-      />
-      <input
-        ref={(element) => {
-          input = element;
+    <>
+      <CuratedField
+        settings={props.settings}
+        spec={props.spec.fields[0]!}
+        row={{
+          titleKey: props.spec.titleKey,
+          descriptionKey: props.spec.descriptionKey,
+          actions: (
+            <button
+              type="button"
+              class="btn btn--icon btn--ghost curated-settings__disclosure"
+              aria-expanded={open() ? "true" : "false"}
+              aria-label={t(props.spec.titleKey)}
+              onClick={() => setOpen((value) => !value)}
+            >
+              <Icon name="chevronRight" />
+            </button>
+          ),
         }}
-        class="settings-input model-picker__custom"
-        aria-label={props.customLabel}
-        aria-invalid="false"
-        placeholder={props.placeholder}
-        value={props.value}
-        hidden={!props.value || props.value === customValue()}
-        disabled={props.disabled}
-        onChange={(event) => props.onChange(event.currentTarget.value)}
       />
-    </div>
+      {/* Stays mounted while closed so an unsaved draft survives closing the row. */}
+      <div class="curated-settings__details" hidden={!open()}>
+        <For each={fields()} keyed={(field) => field.path.join(".")}>
+          {(field) => <CuratedField settings={props.settings} spec={field()} />}
+        </For>
+      </div>
+    </>
   );
 }
 
 function CuratedSections(props: {
+  intro: JSX.Element;
   presentation: CuratedSettingsPresentation;
   config: Record<string, unknown> | null;
   path: readonly string[];
@@ -293,33 +274,48 @@ function CuratedSections(props: {
   onPatch: (sectionPath: readonly string[], path: readonly string[], value: unknown) => void;
 }) {
   // A retained handler belongs to this mounted config target, not a later owner.
-  const sectionPath = untrack(() => props.path);
-  let active = true;
-  onCleanup(() => {
-    active = false;
+  const initialSectionPath = untrack(() => props.path);
+  let active = false;
+  onSettled(() => {
+    active = true;
+    return () => {
+      active = false;
+    };
   });
   const settings: CuratedSettingsProps = {
     get document() {
       return props.config;
     },
     get values() {
-      return asConfigRecord(fieldAtPath(props.config, sectionPath).value);
+      return asConfigRecord(fieldAtPath(props.config, initialSectionPath).value);
     },
     get disabled() {
       return props.disabled;
     },
     onPatch: (path, value) => {
       if (active && !props.disabled) {
-        props.onPatch(sectionPath, path, value);
+        props.onPatch(initialSectionPath, path, value);
       }
     },
   };
   return (
     <For each={props.presentation.sections} keyed={(section) => section.titleKey}>
       {(section) => (
-        <SettingsSection title={t(section().titleKey)} description={t(section().descriptionKey)}>
-          <For each={section().fields} keyed={(field) => field.path.join(".")}>
+        <SettingsSection
+          title={t(section().titleKey)}
+          description={
+            section() === props.presentation.sections[0]
+              ? props.intro
+              : section().descriptionKey
+                ? t(section().descriptionKey!)
+                : undefined
+          }
+        >
+          <For each={section().fields ?? []} keyed={(field) => field.path.join(".")}>
             {(field) => <CuratedField settings={settings} spec={field()} />}
+          </For>
+          <For each={section().disclosures ?? []} keyed={(spec) => spec.titleKey}>
+            {(spec) => <CuratedDisclosureRow settings={settings} spec={spec()} />}
           </For>
         </SettingsSection>
       )}
@@ -337,15 +333,17 @@ export function CuratedSettingsPanel(props: {
   disabled: boolean;
   onPatch: (sectionPath: readonly string[], path: readonly string[], value: unknown) => void;
 }) {
-  const path = createMemo(() => curatedSettingsConfigPath(props.presentation, props.parameters));
+  const path = () => curatedSettingsConfigPath(props.presentation, props.parameters);
+  const intro = (
+    <>
+      {t(props.presentation.intro.messageKey, props.messageParameters)}{" "}
+      <LearnMoreLink url={props.presentation.intro.url} />
+    </>
+  );
   return (
     <>
-      <p class="settings-page__intro">
-        {t(props.presentation.intro.messageKey, props.messageParameters)}{" "}
-        <LearnMoreLink url={props.presentation.intro.url} />
-      </p>
       {props.support === "unsupported" ? (
-        <SettingsSection title={t(props.presentation.unsupported.titleKey)}>
+        <SettingsSection title={t(props.presentation.unsupported.titleKey)} description={intro}>
           <SettingsRow
             title={t(props.presentation.unsupported.rowTitleKey)}
             description={t(props.presentation.unsupported.descriptionKey, props.messageParameters)}
@@ -355,6 +353,7 @@ export function CuratedSettingsPanel(props: {
         <For each={[path()]} keyed={(item) => item.join("\0")}>
           {(item) => (
             <CuratedSections
+              intro={intro}
               presentation={props.presentation}
               config={props.config}
               path={item()}

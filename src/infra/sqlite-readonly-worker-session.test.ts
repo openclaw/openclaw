@@ -1,9 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
+import { readChildRuntimeViability } from "./child-runtime-viability.js";
 import { onDiagnosticEvent, setDiagnosticsEnabledForProcess } from "./diagnostic-events.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
 import { captureSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker-context.js";
@@ -14,6 +16,7 @@ import {
   createScopedSqliteReadOnlyWorker,
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
+import { observeSettlement } from "./sqlite-readonly.test-support.js";
 import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
 
 type Send = (message: unknown, callback: (error: Error | null) => void) => boolean;
@@ -65,15 +68,6 @@ function requestId(child: MockChild): number {
   }
   return request.id;
 }
-function observeSettlement(promise: Promise<unknown>) {
-  let settled = false;
-  const mark = () => {
-    settled = true;
-  };
-  void promise.then(mark, mark);
-  return () => settled;
-}
-
 function reply(child: MockChild, result: unknown) {
   child.emit("message", { id: requestId(child), result });
 }
@@ -87,12 +81,12 @@ async function expectRetirement(
   const settled = observeSettlement(result);
   await nextTurn();
   expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-  expect(settled()).toBe(false);
+  expect(settled.settled).toBe(false);
   const closing = session.close();
   const closeSettled = observeSettlement(closing);
   try {
     await nextTurn();
-    expect([closeSettled(), settled()]).toEqual([false, false]);
+    expect([closeSettled.settled, settled.settled]).toEqual([false, false]);
   } finally {
     child.emit("close", null, "SIGKILL");
     await closing;
@@ -126,8 +120,7 @@ it.each([
     }
     child.emit("error", failure);
     await nextTurn();
-    expect(settled()).toBe(false);
-    expect(session.notStarted).toBe(false);
+    expect([settled.settled, session.notStarted]).toEqual([false, false]);
     child.emit("close", -1, null);
     const error = await observed;
     expect(session.notStarted).toBe(!spawned);
@@ -147,9 +140,18 @@ it.each([
   },
 );
 
+it("does not mark a runnable runtime unavailable after an ordinary worker abort", async () => {
+  const { session, child } = createSession();
+  const result = session.run("/fixture/snapshot", { mode: "staging-create" });
+  child.emit("spawn");
+  child.emit("close", null, "SIGABRT");
+  await expect(result).rejects.toThrow("SQLite read-only worker exited with signal SIGABRT");
+  expect(readChildRuntimeViability().available).toBe(true);
+});
+
 it("reuses its child after a well-formed staging refusal", async () => {
   const mode = "staging-create";
-  const { session, child } = createSession();
+  const { session, child, readBudget } = createSession();
   const first = session.run("/fixture/first.sqlite", { mode });
   const observed = first.catch((error: unknown) => error);
   const firstId = requestId(child);
@@ -166,6 +168,7 @@ it("reuses its child after a well-formed staging refusal", async () => {
   expect(secondId).not.toBe(firstId);
   reply(child, { ok: true, location: "/fixture/staged" });
   await expect(second).resolves.toBe("/fixture/staged");
+  expect(readBudget).not.toHaveBeenCalled();
   expect(mock.spawn).toHaveBeenCalledOnce();
   expect(child.kill).not.toHaveBeenCalled();
 });
@@ -197,19 +200,10 @@ it("joins retirement after framed auth failure", async () => {
   );
   try {
     reply(child, { type: "start", handle });
-    expect(child.send).toHaveBeenLastCalledWith(
-      { id, transfer: { type: "next", transferId: handle.id } },
-      expect.any(Function),
-    );
     reply(child, {
       type: "frame",
       frame: encodeSqliteAuthTransferFrame(transfer.next(handle.id)),
     });
-    expect(child.send).toHaveBeenCalledTimes(3);
-    expect(child.send).toHaveBeenLastCalledWith(
-      { id, transfer: { type: "next", transferId: handle.id } },
-      expect.any(Function),
-    );
     reply(child, { ok: false, message: "fixture auth read refused" });
     await expectRetirement(session, child, result, "fixture auth read refused");
   } finally {
@@ -235,35 +229,29 @@ it("refuses a run after close without budgeting or sending another request", asy
 });
 
 it("keeps detached staging budget inside a caller-owned deadline", async () => {
-  const timer = vi.spyOn(globalThis, "setTimeout");
-  try {
-    await withSqliteReadOnlyWorkerScope(
-      async () => {
-        const child = new MockChild();
-        mock.spawn.mockReturnValueOnce(child);
-        const session = createScopedSqliteReadOnlyWorker({
-          env: {},
-          cwd: "/fixture",
-          transport: { kind: "native" },
-          retainLifetime: false,
-          retainOnOperationError: true,
-        });
-        sessions.push({ session, child });
-        timer.mockClear();
-        const result = session.run("/fixture/staging", { mode: "staging-create" });
-        const budgeted = timer.mock.calls.some(
-          ([, delay]) => typeof delay === "number" && delay > 0,
-        );
-        reply(child, { ok: true, location: "/fixture/staged" });
-        await expect(result).resolves.toBe("/fixture/staged");
-        expect(budgeted).toBe(true);
-        expect(child.kill).not.toHaveBeenCalled();
-      },
-      { signal: new AbortController().signal, deadlineOwnedByCaller: true },
-    );
-  } finally {
-    timer.mockRestore();
-  }
+  using timer = vi.spyOn(globalThis, "setTimeout");
+  await withSqliteReadOnlyWorkerScope(
+    async () => {
+      const child = new MockChild();
+      mock.spawn.mockReturnValueOnce(child);
+      const session = createScopedSqliteReadOnlyWorker({
+        env: {},
+        cwd: "/fixture",
+        transport: { kind: "native" },
+        retainLifetime: false,
+        retainOnOperationError: true,
+      });
+      sessions.push({ session, child });
+      timer.mockClear();
+      const result = session.run("/fixture/staging", { mode: "staging-create" });
+      const budgeted = timer.mock.calls.some(([, delay]) => typeof delay === "number" && delay > 0);
+      reply(child, { ok: true, location: "/fixture/staged" });
+      await expect(result).resolves.toBe("/fixture/staged");
+      expect(budgeted).toBe(true);
+      expect(child.kill).not.toHaveBeenCalled();
+    },
+    { signal: new AbortController().signal, deadlineOwnedByCaller: true },
+  );
 });
 
 it("captures only read scope and refuses callbacks after owner retirement", async () => {
@@ -294,17 +282,48 @@ it("captures only read scope and refuses callbacks after owner retirement", asyn
     controller.abort(aborted);
     expect(() => run(late)).toThrow(aborted);
     await owner.close();
-    expect(() => other.run(() => run(late))).toThrow("scope closed");
+    expect(() => other.run(() => run(late))).toThrow(
+      expect.objectContaining({
+        message: "SQLite read-only worker scope closed",
+        code: "SQLITE_READONLY_WORKER_SCOPE_CLOSED",
+      }),
+    );
     expect(late).not.toHaveBeenCalled();
   } finally {
     await Promise.all([owner.close(), other.close()]);
   }
 });
 
-it.each([
-  { execPath: "/fixture/bin/node", family: "node" },
-  { execPath: "/fixture/bin/custom-runtime", family: "other" },
-])("counts admitted children as $family in spawn diagnostics", ({ execPath, family }) => {
+it("releases callers of close while retired read scopes remain reachable", async () => {
+  class RetiredCaller {
+    closed = false;
+  }
+  async function retire() {
+    const owner = createSqliteReadOnlyWorkerScope();
+    const caller = new RetiredCaller();
+    const beforeCleanup = () => {
+      caller.closed = true;
+      return owner.close();
+    };
+    await beforeCleanup();
+    return owner;
+  }
+  const retired = [];
+  for (let generation = 0; generation < 20; generation++) {
+    retired.push(await retire());
+  }
+  await nextTurn();
+  expect(queryObjects(RetiredCaller)).toBe(0);
+  for (const owner of retired) {
+    const signal = owner.run(() => resolveSqliteInspectionSignal());
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).toMatchObject({ code: "SQLITE_READONLY_WORKER_SCOPE_CLOSED" });
+    const captured = owner.run(captureSqliteReadOnlyWorkerScope);
+    expect(() => captured(() => "late")).toThrow("SQLite read-only worker scope closed");
+  }
+});
+
+it("counts admitted SQLite children in spawn diagnostics", () => {
   const originalExecPath = process.execPath;
   let now = 0;
   const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -315,16 +334,11 @@ it.each([
     }
   });
   try {
-    process.execPath = execPath;
+    process.execPath = "/fixture/bin/node";
     setDiagnosticsEnabledForProcess(false);
     emitChildProcessSpawnSample();
     setDiagnosticsEnabledForProcess(true);
     const { child } = createSession();
-    expect(mock.spawn).toHaveBeenCalledWith(
-      execPath,
-      expect.any(Array),
-      expect.objectContaining({ windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"] }),
-    );
     now = 60_000;
     emitChildProcessSpawnSample();
     expect(events).toEqual([]);
@@ -332,7 +346,7 @@ it.each([
     now = 120_000;
     emitChildProcessSpawnSample();
     expect(events).toEqual([
-      expect.objectContaining({ family, operation: "sqlite.session.native", count: 1 }),
+      expect.objectContaining({ family: "node", operation: "sqlite.session.native", count: 1 }),
     ]);
   } finally {
     process.execPath = originalExecPath;

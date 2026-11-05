@@ -4,7 +4,7 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   startDiscordPacingReceiver,
   type DiscordPacingFact,
@@ -86,16 +86,14 @@ async function measure(workerOwned: boolean) {
   }
 }
 
-describe("Discord worker packet preparation under Gateway starvation", () => {
-  it("keeps continuous source audio flowing over the direct port while main is blocked", async () => {
-    const before = await measure(false);
-    const after = await measure(true);
-    for (const result of [before, after]) {
-      expect(result.acknowledged).toHaveLength(SOURCE_FRAMES);
-      expect(result.samples).toHaveLength(result.acknowledged.length);
-    }
-    expect(before.samples.some((fact) => fact.mainBlocked)).toBe(false);
-    expect(after.samples.some((fact) => fact.mainBlocked)).toBe(true);
-    expect(after.acknowledged.some((fact) => fact.mainBlocked)).toBe(true);
-  }, 20_000);
-});
+it("keeps continuous source audio flowing over the direct port while main is blocked", async () => {
+  const before = await measure(false);
+  const after = await measure(true);
+  for (const result of [before, after]) {
+    expect(result.acknowledged).toHaveLength(SOURCE_FRAMES);
+    expect(result.samples).toHaveLength(result.acknowledged.length);
+  }
+  expect(before.samples.some((fact) => fact.mainBlocked)).toBe(false);
+  expect(after.samples.some((fact) => fact.mainBlocked)).toBe(true);
+  expect(after.acknowledged.some((fact) => fact.mainBlocked)).toBe(true);
+}, 20_000);

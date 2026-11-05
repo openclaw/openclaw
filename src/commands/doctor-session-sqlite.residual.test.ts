@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
@@ -9,6 +9,12 @@ import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrati
 import { createTranscriptEventReader } from "../infra/session-sqlite-migration-readers.js";
 import * as pluginDoctor from "../infra/state-migrations.plugin-doctor.js";
 import {
+  jsonl,
+  messageEvent,
+  sessionScope,
+  writeJson,
+} from "./doctor-session-sqlite.fixtures.test-support.js";
+import {
   RECOVERY_TRANSCRIPT_LINES,
   readMigrationManifest,
   useDoctorSessionSqliteTestFixture,
@@ -16,7 +22,6 @@ import {
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
 const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
-afterEach(() => vi.restoreAllMocks());
 
 it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
   "continues Doctor and later plugin repairs with %s residual history and an unreadable receipt",
@@ -36,19 +41,13 @@ it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
         ],
       });
     }
-    const scope = {
-      agentId: "main",
-      env: store.env,
-      sessionKey: "agent:main:main",
-      storePath: store.storePath,
-    };
+    const scope = sessionScope(store);
     await importSqliteSessionRows({
       ...scope,
       entry: { sessionId: "session-1", label: "Current metadata", updatedAt: 5000 },
       readTranscriptEvents: createTranscriptEventReader(store.transcriptPath, "session-1"),
     });
-    const transcriptScope = { ...scope, sessionId: "session-1" };
-    const currentHistory = loadTranscriptEventsSync(transcriptScope);
+    const currentHistory = loadTranscriptEventsSync(scope);
     const runsDir = path.join(store.stateDir, "session-sqlite-migration-runs");
     fs.mkdirSync(runsDir, { recursive: true });
     const unreadableManifest = path.join(runsDir, "unreadable.json");
@@ -65,10 +64,7 @@ it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
     const siblingDir = path.join(store.stateDir, "agents", "other", "sessions");
     fs.mkdirSync(siblingDir, { recursive: true });
     const siblingStore = path.join(siblingDir, "sessions.json");
-    fs.writeFileSync(
-      siblingStore,
-      JSON.stringify({ "agent:other:main": { sessionId: "new-session", updatedAt: 1000 } }),
-    );
+    writeJson(siblingStore, { "agent:other:main": { sessionId: "new-session", updatedAt: 1000 } });
     const newEvents = [
       {
         type: "session",
@@ -77,21 +73,16 @@ it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
         cwd: "/fixture",
         timestamp: "2026-08-30T00:00:00Z",
       },
-      { type: "message", id: "new", parentId: null, message: { role: "user", content: "new" } },
+      messageEvent("new", "user", "new"),
     ];
     const index = JSON.parse(fs.readFileSync(store.storePath, "utf8"));
     index["agent:main:new"] = { sessionId: "new-session", updatedAt: 1000 };
-    fs.writeFileSync(store.storePath, JSON.stringify(index));
-    fs.writeFileSync(
-      path.join(store.sessionDir, "new-session.jsonl"),
-      newEvents.map((event) => JSON.stringify(event)).join("\n") + "\n",
-    );
-    fs.writeFileSync(
-      path.join(siblingDir, "new-session.jsonl"),
-      newEvents.map((event) => JSON.stringify(event)).join("\n") + "\n",
-    );
+    writeJson(store.storePath, index);
+    for (const dir of [store.sessionDir, siblingDir]) {
+      fs.writeFileSync(path.join(dir, "new-session.jsonl"), jsonl(...newEvents));
+    }
     // Observe the real session gate without running unrelated plugin discovery and hooks.
-    const laterRepair = vi
+    using laterRepair = vi
       .spyOn(pluginDoctor, "runPostSessionPluginDoctorStateRepairs")
       .mockResolvedValue({ changes: [], warnings: [] });
     const warnings: string[] = [];
@@ -112,7 +103,7 @@ it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
       label: "Current metadata",
       sessionId: "session-1",
     });
-    expect(loadTranscriptEventsSync(transcriptScope)).toEqual(currentHistory);
+    expect(loadTranscriptEventsSync(scope)).toEqual(currentHistory);
     expect(loadTranscriptEventsSync({ ...scope, sessionId: "new-session" })).toEqual(newEvents);
     expect(
       loadTranscriptEventsSync({ agentId: "other", env: store.env, sessionId: "new-session" }),
@@ -132,13 +123,11 @@ it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
       expect(warnings).toContainEqual(expect.stringContaining("plugin_migration_source_retained"));
       return;
     }
-    const manifests = fs
+    const move = fs
       .readdirSync(runsDir)
-      .filter((name) => name.endsWith(".json"))
       .map((name) => path.join(runsDir, name))
-      .filter((name) => name !== unreadableManifest)
-      .map(readMigrationManifest);
-    const move = manifests
+      .filter((name) => name.endsWith(".json") && name !== unreadableManifest)
+      .map(readMigrationManifest)
       .flatMap((manifest) => manifest.targets.flatMap((target) => target.completedMoves))
       .find((candidate) => candidate.sourcePath === store.transcriptPath);
     expect(move).toBeDefined();

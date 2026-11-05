@@ -113,7 +113,7 @@ function runCommand(
   });
 }
 
-export function resolveReleaseTag({
+function resolveReleaseTag({
   releaseRef,
   packageVersion,
 }: Required<Pick<ManifestParams, "packageVersion" | "releaseRef">>) {
@@ -208,7 +208,7 @@ async function readJson<T>(filePath: string): Promise<T> {
   return JSON.parse(await readFile(filePath, "utf8")) as T;
 }
 
-export async function collectDependencyEvidenceSummaryCounts(evidenceDir: string) {
+async function collectDependencyEvidenceSummaryCounts(evidenceDir: string) {
   const [vulnerability, transitiveRisk, ownershipSurface, dependencyChanges, npmLocks] =
     await Promise.all([
       readJson<Awaited<ReturnType<typeof runDependencyVulnerabilityGate>>>(
@@ -309,7 +309,7 @@ function renderNonBlockingAdvisories(heading: string, { advisories }: EvidenceSu
   ];
 }
 
-export function renderDependencyEvidenceSummary({
+function renderDependencyEvidenceSummary({
   releaseTag,
   releaseSha,
   baseRef,
@@ -342,7 +342,7 @@ export function renderDependencyEvidenceSummary({
   ].join("\n")}\n`;
 }
 
-export function renderDependencyEvidenceStepSummary({
+function renderDependencyEvidenceStepSummary({
   evidenceArtifactName,
   baseRef,
   counts,
@@ -498,7 +498,7 @@ Options:
 `;
 }
 
-export function parseArgs(argv: string[]): EvidenceCliOptions {
+function parseArgs(argv: string[]): EvidenceCliOptions {
   const options: EvidenceCliOptions = {
     rootDir: process.cwd(),
     outputDir: null,

@@ -5,7 +5,7 @@ import { requesterProfileSchema } from "../schema/typebox.js";
 /** Destination choices only; identity, adoption, and execution lineage remain host-owned. */
 export const SessionsCreateToolSchema = Type.Object(
   {
-    user: requesterProfileSchema(),
+    user: requesterProfileSchema({ defaultToTurnOwner: true }),
     message: Type.Optional(
       Type.String({
         minLength: 1,
@@ -29,7 +29,6 @@ export const SessionsCreateToolSchema = Type.Object(
     ),
     group: SessionsCreateParamsSchema.properties.category,
     model: SessionsCreateParamsSchema.properties.model,
-    permissionMode: SessionsCreateParamsSchema.properties.permissionMode,
   },
   { additionalProperties: false },
 );

@@ -9,6 +9,7 @@ import {
   hasCanonicalAuditEventsSchema,
 } from "./openclaw-state-db-audit-migration.js";
 import {
+  CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
   MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION,
   type OpenClawStateDatabaseSchemaMigration,
@@ -23,6 +24,8 @@ import {
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v12-foldin.js";
 import { STATE_CURSOR_TABLES_V22 } from "./openclaw-state-db-schema-v22-columns.js";
+import { needsPublicationDraftMigration } from "./openclaw-state-db-schema-v28-publication.js";
+import { TEMPLATE_STATE_TABLE_RENAMES } from "./openclaw-state-db-schema-v36-template-names.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
@@ -73,10 +76,38 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
   "task-run-indexes-v24": [],
   "subagent-operator-recovery-v25": [],
   "session-state-head-layout-v26": [],
+  "state-write-indexes-v27": [],
+  "github-publication-draft-v28": [
+    "github_publication_requests",
+    "github_personal_publication_requests",
+    "github_repository_publication_requests",
+  ],
+  "local-client-credentials-v29": [
+    "device_identities",
+    "device_auth_tokens",
+    "gateway_origin_device_tokens",
+    "exec_approvals_config",
+  ],
   "predicate-columns-v21": [
     "meeting_transcript_sessions",
     "meeting_transcript_summaries",
     "delivery_queue_entries",
+  ],
+  "automation-policy-fence-v30": ["cron_jobs"],
+  "local-workspace-manifests-v31": [
+    "local_workspace_projections",
+    "local_workspace_manifest_nodes",
+  ],
+  "local-workspace-cas-v35": [
+    "local_workspace_projections",
+    "local_workspace_tree_packs",
+    "local_workspace_source_path_sets",
+  ],
+  "template-names-v36": [...TEMPLATE_STATE_TABLE_RENAMES.flat(), "agent_provenance"],
+  "worker-resource-receipts-v37": ["worker_environments"],
+  "repository-disk-authority-v38": [
+    "session_repository_workspaces",
+    "worker_workspace_pending_results",
   ],
   "operator-approvals-system-agent": ["operator_approvals"],
   "session-watch-cursor-provenance-v4": ["session_watch_cursors"],
@@ -153,7 +184,8 @@ export function migrateWorkerPlacementExecutionModeSchema(
           AND sql IS NOT NULL
           AND name NOT IN (
             'idx_worker_session_placements_session_key',
-            'idx_worker_session_placements_reconcile'
+            'idx_worker_session_placements_reconcile',
+            'idx_worker_session_placements_environment'
           )`,
     )
     .all();
@@ -450,6 +482,33 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   }
   if (userVersion < 26 && tableExists(db, "session_state_heads")) {
     migrations.push({ kind: "session-state-head-layout-v26", path: pathname });
+  }
+  if (userVersion < 27) {
+    migrations.push({ kind: "state-write-indexes-v27", path: pathname });
+  }
+  if (userVersion < 28 || needsPublicationDraftMigration(db)) {
+    migrations.push({ kind: "github-publication-draft-v28", path: pathname });
+  }
+  if (userVersion < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION) {
+    migrations.push({ kind: "local-client-credentials-v29", path: pathname });
+  }
+  if (userVersion < 30) {
+    migrations.push({ kind: "automation-policy-fence-v30", path: pathname });
+  }
+  if (userVersion < 31) {
+    migrations.push({ kind: "local-workspace-manifests-v31", path: pathname });
+  }
+  if (userVersion < 35) {
+    migrations.push({ kind: "local-workspace-cas-v35", path: pathname });
+  }
+  if (userVersion < 36) {
+    migrations.push({ kind: "template-names-v36", path: pathname });
+  }
+  if (userVersion < 37) {
+    migrations.push({ kind: "worker-resource-receipts-v37", path: pathname });
+  }
+  if (userVersion < 38) {
+    migrations.push({ kind: "repository-disk-authority-v38", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

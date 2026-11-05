@@ -71,6 +71,30 @@ function rewritePackageEntry(entry: unknown, extension: string): string | undefi
   return `./${rewritten}`;
 }
 
+function rewritePackageExportTargets(value: unknown, extension: string, types = false): unknown {
+  if (typeof value === "string") {
+    return !types && /(?<!\.d)\.[cm]?tsx?$/u.test(value)
+      ? rewritePackageEntry(value, extension)
+      : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((target) => rewritePackageExportTargets(target, extension, types));
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([condition, target]) => [
+        condition,
+        rewritePackageExportTargets(
+          target,
+          extension,
+          types || condition === "types" || condition.startsWith("types@"),
+        ),
+      ]),
+    );
+  }
+  return value;
+}
+
 function ensurePathInsideRoot(rootDir: string, rawPath: string): string {
   const resolved = path.resolve(rootDir, rawPath);
   const relative = path.relative(rootDir, resolved);
@@ -351,6 +375,7 @@ function copyMetadata(params: CopyMetadataParams): void {
       const controlUi = loadPluginControlUiDeclaration({
         rootDir: pluginDir,
         controlUi: manifest.controlUi,
+        channels: manifest.channels,
         rejectHardlinks: false,
       });
       if (!controlUi.ok) {
@@ -437,6 +462,12 @@ function copyMetadata(params: CopyMetadataParams): void {
       };
     }
 
+    if (packageJson && packageJson.exports !== undefined) {
+      packageJson.exports = rewritePackageExportTargets(
+        packageJson.exports,
+        buildEntry.runtimeExtension,
+      );
+    }
     writeTextFileIfChanged(distPackageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
     if (buildEntry.isolated) {
       linkSourcePluginDependencies(pluginDir, distNodeModules);

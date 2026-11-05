@@ -4,8 +4,10 @@ import type { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts
 export class ChatMessageReveal {
   private highlight: { element: HTMLElement; timer: number } | null = null;
 
+  constructor(private readonly messageElements: ReadonlyMap<string, HTMLElement>) {}
+
   complete(
-    root: ParentNode | null,
+    root: Node | null,
     state: Pick<TranscriptOffsetState, "scrollCommand">,
     virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
     messageRowKeysById: ReadonlyMap<string, string>,
@@ -30,12 +32,14 @@ export class ChatMessageReveal {
   }
 
   private reveal(
-    root: ParentNode | null,
+    root: Node | null,
     { messageId, behavior }: { messageId: string; behavior: ScrollBehavior },
     virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
   ): boolean {
-    const bubble = [...(root?.querySelectorAll<HTMLElement>(".chat-bubble") ?? [])].find(
-      (candidate) => (candidate.dataset.entryId ?? candidate.dataset.messageId) === messageId,
+    const bubble = [...this.messageElements.values()].find(
+      (candidate) =>
+        root?.contains(candidate) &&
+        (candidate.dataset.entryId ?? candidate.dataset.messageId) === messageId,
     );
     const element = virtualizer.scrollElement;
     if (!bubble || !element) {

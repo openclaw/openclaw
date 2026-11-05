@@ -1,3 +1,4 @@
+import { asNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isOffsetInProtectedRanges,
@@ -21,6 +22,7 @@ import {
   findPotentialCallStart,
   findTrailingCallPrefix,
   nextAtLineStart,
+  orderByContentIndex,
   scanHasNamedCandidate,
   type StandalonePlainTextToolCallCandidate,
   type TextRange,
@@ -60,7 +62,6 @@ export type PlainTextToolCallStreamNormalizerOptions = {
     allowPromotion: boolean;
     message: unknown;
     preserveEmptyTextBlocks?: boolean;
-    reason: unknown;
   }): PlainTextToolCallMessageNormalization;
   /** Stop after the first normalized done event when the wrapped provider has completed. */
   stopAfterDone?: boolean;
@@ -97,8 +98,7 @@ type SuppressingPendingState = {
 type PendingState = CandidatePendingState | SuppressingPendingState;
 
 function eventContentIndex(event: Record<string, unknown>): number {
-  const index = event.contentIndex;
-  return typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : 0;
+  return asNonNegativeInteger(event.contentIndex) ?? 0;
 }
 
 function isTextStreamEvent(event: Record<string, unknown>): boolean {
@@ -107,34 +107,6 @@ function isTextStreamEvent(event: Record<string, unknown>): boolean {
 
 /** A confirmed preceding-context verdict, keyed by the partial's own reported length. */
 type PrecedingContextVerdict = { precedingLength: number; trusted: boolean };
-
-/**
- * Event order can differ from content-index order when providers interleave blocks
- * or omit earlier deltas. Trust the carried scan only when the partial's preceding
- * text agrees. Missing partials reuse the verdict, or trust the scan when uncached.
- * A changed preceding length invalidates the cache; fresh nonempty comparisons
- * check actual text, materializing only that bounded prefix.
- */
-function resolvePrecedingContextTrust(
-  partial: unknown,
-  contentIndex: number,
-  trackedLength: number,
-  trackedPrefix: () => string,
-  cached: PrecedingContextVerdict | undefined,
-): { cache: PrecedingContextVerdict | undefined; trusted: boolean } {
-  const candidate = extractStandaloneCandidate(partial);
-  const part = candidate?.parts.find((entry) => entry.contentIndex === contentIndex);
-  if (!candidate || !part) {
-    return { cache: cached, trusted: cached?.trusted ?? true };
-  }
-  if (cached && cached.precedingLength === part.start) {
-    return { cache: cached, trusted: cached.trusted };
-  }
-  const trusted =
-    part.start === trackedLength &&
-    (part.start === 0 || candidate.text.slice(0, part.start) === trackedPrefix());
-  return { cache: { precedingLength: part.start, trusted }, trusted };
-}
 
 function resolvePartialProtectionCheck(params: {
   authoritative: boolean;
@@ -214,39 +186,6 @@ function pendingQueueOverCap(pending: PendingState): boolean {
   );
 }
 
-function createPendingState(
-  record: Record<string, unknown>,
-  text: string,
-  heldStart?: Record<string, unknown>,
-  sequenceOverCap = false,
-  snapshotOffset = 0,
-): CandidatePendingState {
-  const entries = [...(heldStart ? [{ ...heldStart }] : []), { ...record }];
-  const pending: CandidatePendingState = {
-    buffer: text,
-    bufferBytes: cappedUtf8ByteLength(text),
-    entries,
-    entryBytes: entries.reduce((total, entry) => {
-      return Math.min(MAX_PAYLOAD_BYTES + 1, total + pendingEventBytes(entry));
-    }, 0),
-    kind: "candidate",
-    nextScanChars: 256,
-    parts: [
-      {
-        contentIndex: eventContentIndex(record),
-        start: 0,
-        end: text.length,
-      },
-    ],
-    sequenceOverCap,
-    snapshotOffset,
-    template: eventTemplate(record),
-    templates: new Map([[eventContentIndex(record), eventTemplate(record)]]),
-  };
-  rememberPendingEntryOffsets(pending, entries, 0);
-  return pending;
-}
-
 function rememberPendingEntryOffsets(
   pending: CandidatePendingState,
   entries: readonly Record<string, unknown>[],
@@ -263,23 +202,23 @@ function queuePendingEvent(pending: PendingState, record: Record<string, unknown
   if (!pending.entries) {
     return;
   }
-  const event = { ...record };
   pending.entryBytes = Math.min(
     MAX_PAYLOAD_BYTES + 1,
-    pending.entryBytes + pendingEventBytes(event),
+    pending.entryBytes + pendingEventBytes(record),
   );
   const previous = pending.entries.at(-1);
   if (
     typeof previous?.delta === "string" &&
-    typeof event.delta === "string" &&
-    previous.type === event.type &&
-    eventContentIndex(previous) === eventContentIndex(event)
+    typeof record.delta === "string" &&
+    previous.type === record.type &&
+    eventContentIndex(previous) === eventContentIndex(record)
   ) {
-    previous.delta += event.delta;
-    if (Object.hasOwn(event, "partial")) {
-      previous.partial = event.partial;
+    previous.delta += record.delta;
+    if (Object.hasOwn(record, "partial")) {
+      previous.partial = record.partial;
     }
   } else {
+    const event = { ...record };
     pending.entries.push(event);
     if (pending.kind === "candidate") {
       rememberPendingEntryOffsets(pending, [event], pending.buffer.length);
@@ -492,23 +431,6 @@ function classifyPending(
     : { kind: "false-positive" };
 }
 
-function orderByContentIndex(
-  events: readonly unknown[],
-  message: Record<string, unknown>,
-): unknown[] {
-  const contentLength = Array.isArray(message.content) ? message.content.length : 0;
-  const order = (event: unknown) => {
-    const index = asOptionalObjectRecord(event)?.contentIndex;
-    return typeof index === "number" &&
-      Number.isInteger(index) &&
-      index >= 0 &&
-      index < contentLength
-      ? index
-      : contentLength;
-  };
-  return events.toSorted((left, right) => order(left) - order(right));
-}
-
 /** Coordinates bounded candidate buffering; terminal snapshots remain the source of truth. */
 export async function* normalizePlainTextToolCallStreamEvents(
   source: AsyncIterable<unknown>,
@@ -617,7 +539,6 @@ export async function* normalizePlainTextToolCallStreamEvents(
       allowPromotion: false,
       message: value,
       preserveEmptyTextBlocks,
-      reason: "error",
     });
     return normalized?.kind === "scrubbed" ? normalized : undefined;
   };
@@ -810,625 +731,658 @@ export async function* normalizePlainTextToolCallStreamEvents(
     return output;
   };
 
-  async function* normalizeEvents() {
-    for await (const sourceEvent of source) {
-      let record = asOptionalObjectRecord(sourceEvent);
-      if (!record) {
-        yield sourceEvent;
+  // Count at emission without a second async iterator hop for every provider event.
+  const emit = (event: unknown): unknown => {
+    const record = asOptionalObjectRecord(event);
+    if (record?.type === "text_delta" && typeof record.delta === "string") {
+      const key = eventContentIndex(record);
+      emittedTextUnits.set(key, (emittedTextUnits.get(key) ?? 0) + record.delta.length);
+    }
+    return event;
+  };
+  function* emitAll(events: Iterable<unknown>) {
+    for (const event of events) {
+      yield emit(event);
+    }
+  }
+
+  for await (const sourceEvent of source) {
+    let record = asOptionalObjectRecord(sourceEvent);
+    if (!record) {
+      yield emit(sourceEvent);
+      continue;
+    }
+    const type = typeof record.type === "string" ? record.type : "";
+    sawStreamStart ||= type === "start";
+    if (
+      scrubFuturePartials &&
+      !pending &&
+      type !== "done" &&
+      type !== "error" &&
+      record.partial !== undefined
+    ) {
+      const sanitized = sanitizeEventPartial(record);
+      if (!sanitized) {
         continue;
       }
-      const type = typeof record.type === "string" ? record.type : "";
-      sawStreamStart ||= type === "start";
-      if (
-        scrubFuturePartials &&
-        !pending &&
-        type !== "done" &&
-        type !== "error" &&
-        record.partial !== undefined
-      ) {
-        const sanitized = sanitizeEventPartial(record);
-        if (!sanitized) {
-          continue;
+      record = sanitized;
+    }
+
+    if (isTextStreamEvent(record)) {
+      const text =
+        typeof record.delta === "string"
+          ? record.delta
+          : typeof record.content === "string"
+            ? record.content
+            : undefined;
+      const key = eventContentIndex(record);
+      const blockLengthBefore = blockTextUnits.get(key) ?? 0;
+      if (text !== undefined) {
+        blockTextUnits.set(
+          key,
+          type === "text_delta" ? blockLengthBefore + text.length : text.length,
+        );
+      }
+      if (type === "text_start" && (text === undefined || text === "") && !pending) {
+        const previous = heldTextStarts.get(key);
+        if (previous) {
+          yield emit(previous);
         }
-        record = sanitized;
+        heldTextStarts.set(key, record);
+        continue;
       }
 
-      if (isTextStreamEvent(record)) {
-        const text =
-          typeof record.delta === "string"
-            ? record.delta
-            : typeof record.content === "string"
-              ? record.content
-              : undefined;
-        const key = eventContentIndex(record);
-        const blockLengthBefore = blockTextUnits.get(key) ?? 0;
-        if (text !== undefined) {
-          blockTextUnits.set(
-            key,
-            type === "text_delta" ? blockLengthBefore + text.length : text.length,
-          );
-        }
-        if (type === "text_start" && (text === undefined || text === "") && !pending) {
-          const previous = heldTextStarts.get(key);
-          if (previous) {
-            yield previous;
+      if (text === undefined) {
+        if (pending?.kind === "candidate") {
+          queuePendingEvent(pending, record);
+        } else if (!pending) {
+          const held = heldTextStarts.get(key);
+          if (held) {
+            yield emit(held);
+            heldTextStarts.delete(key);
           }
-          heldTextStarts.set(key, record);
-          continue;
+          yield emit(record);
         }
+        continue;
+      }
 
-        if (text === undefined) {
-          if (pending?.kind === "candidate") {
-            queuePendingEvent(pending, record);
-          } else if (!pending) {
-            const held = heldTextStarts.get(key);
-            if (held) {
-              yield held;
-              heldTextStarts.delete(key);
-            }
-            yield record;
-          }
-          continue;
-        }
-
-        let incoming = text;
-        let incomingRecord = record;
-        const closesText = type === "text_end";
-        let authoritative = closesText;
-        let sequenceOverCap = false;
-        beginProtectionBlock(eventContentIndex(record));
-        while (true) {
-          if (pending?.kind === "suppressing") {
-            if (closesText) {
-              const projection = scrubSnapshot(
-                record.partial ?? { role: "assistant", content: incoming },
-                true,
-                true,
-              );
-              yield* forceProjectPendingAux(pending, projection);
-              const projectedText = projection && projectedTextForEvent(record, projection);
-              const novelText = projectedText?.slice(emittedTextUnits.get(key) ?? 0);
-              if (novelText && projection) {
-                yield createSyntheticTextDelta(record, novelText, projection.message);
-              }
-              pending = undefined;
-              scrubFuturePartials = true;
-              break;
-            }
-            if (!pending.suppressor) {
-              const projection = scrubSnapshot(record.partial, true, true);
-              yield* forceProjectPendingAux(pending, projection);
-              pending = undefined;
-              continue;
-            }
-            const consumed = consumeOverCapSuppressor(pending.suppressor, incoming);
-            if (!consumed.complete) {
-              break;
-            }
-            scrubFuturePartials = true;
-            overCapSequenceOpen = true;
-            const partialProjection = scrubSnapshot(record.partial, true, true);
-            const partial = partialProjection?.message;
-            yield* forceProjectPendingAux(pending, partialProjection);
-            incoming = consumed.suffix;
-            sequenceOverCap = true;
-            if (!incoming) {
-              pending = { entryBytes: 0, kind: "suppressing" };
-              break;
+      let incoming = text;
+      let incomingRecord = record;
+      const closesText = type === "text_end";
+      let authoritative = closesText;
+      let sequenceOverCap = false;
+      beginProtectionBlock(eventContentIndex(record));
+      while (true) {
+        if (pending?.kind === "suppressing") {
+          if (closesText) {
+            const projection = scrubSnapshot(
+              record.partial ?? { role: "assistant", content: incoming },
+              true,
+              true,
+            );
+            yield* emitAll(forceProjectPendingAux(pending, projection));
+            const projectedText = projection && projectedTextForEvent(record, projection);
+            const novelText = projectedText?.slice(emittedTextUnits.get(key) ?? 0);
+            if (novelText && projection) {
+              yield emit(createSyntheticTextDelta(record, novelText, projection.message));
             }
             pending = undefined;
-            incomingRecord = {
-              ...eventTemplate(record),
-              type: "text_delta",
-              delta: incoming,
-              ...(partial ? { partial } : {}),
-            };
-            authoritative = false;
+            scrubFuturePartials = true;
+            break;
           }
+          if (!pending.suppressor) {
+            const projection = scrubSnapshot(record.partial, true, true);
+            yield* emitAll(forceProjectPendingAux(pending, projection));
+            pending = undefined;
+            continue;
+          }
+          const consumed = consumeOverCapSuppressor(pending.suppressor, incoming);
+          if (!consumed.complete) {
+            break;
+          }
+          scrubFuturePartials = true;
+          overCapSequenceOpen = true;
+          const partialProjection = scrubSnapshot(record.partial, true, true);
+          const partial = partialProjection?.message;
+          yield* emitAll(forceProjectPendingAux(pending, partialProjection));
+          incoming = consumed.suffix;
+          sequenceOverCap = true;
+          if (!incoming) {
+            pending = { entryBytes: 0, kind: "suppressing" };
+            break;
+          }
+          pending = undefined;
+          incomingRecord = {
+            ...eventTemplate(record),
+            type: "text_delta",
+            delta: incoming,
+            ...(partial ? { partial } : {}),
+          };
+          authoritative = false;
+        }
 
-          if (!pending) {
-            const atLineStart =
-              authoritative ||
-              sequenceOverCap ||
-              overCapSequenceOpen ||
-              (lineStarts.get(key) ?? true);
-            let callStart = findPotentialCallStart(incoming, atLineStart, options.matcher);
-            if (callStart !== null && options.resolveProtectedRanges) {
-              if (protectionContextOverflow) {
-                // Bounded live history no longer proves ownership. Preserve bytes and let the
-                // authoritative terminal snapshot decide instead of deleting literal content.
-                callStart = null;
-              } else {
-                // Only opted-in CommonMark resolvers can use carried fence state.
-                // Otherwise the caller's full parse remains authoritative.
-                const carriedScan = authoritative ? protectionScanAtBlockStart : protectionScan;
-                // Compare content-order context before trusting event-order fence state.
-                const precedingContextTrust = resolvePrecedingContextTrust(
-                  incomingRecord.partial,
-                  eventContentIndex(incomingRecord),
-                  protectionBlockStart,
-                  () => materializeBoundedPrefix(protectionBlockStart),
-                  protectionBlockPrefixVerdict,
-                );
-                protectionBlockPrefixVerdict = precedingContextTrust.cache;
-                const untrackedPrecedingContext = !precedingContextTrust.trusted;
-                let isProtectedAt: ((offset: number) => boolean) | undefined =
-                  !untrackedPrecedingContext && options.protectedRangesFenceCompatible
-                    ? resolveProtectionFastPath(carriedScan, incoming)
-                    : undefined;
-                if (!isProtectedAt) {
-                  // Prefer a matching provider snapshot when carried state cannot prove
-                  // protection. Parsing it before the fast path would be quadratic.
-                  isProtectedAt = resolvePartialProtectionCheck({
-                    authoritative,
-                    contentIndex: eventContentIndex(incomingRecord),
-                    incoming,
-                    partial: incomingRecord.partial,
-                    resolveProtectedRanges: options.resolveProtectedRanges,
-                  });
-                }
-                if (!isProtectedAt) {
-                  const protectionPrefix = materializeProtectionPrefix(authoritative);
-                  const protectedRanges = options.resolveProtectedRanges(
-                    `${protectionPrefix}${incoming}`,
-                  );
-                  isProtectedAt = (offset) =>
-                    isOffsetInProtectedRanges(protectionPrefix.length + offset, protectedRanges);
-                }
-                callStart = findPotentialCallStart(
+        if (!pending) {
+          const atLineStart =
+            authoritative ||
+            sequenceOverCap ||
+            overCapSequenceOpen ||
+            (lineStarts.get(key) ?? true);
+          let callStart = findPotentialCallStart(incoming, atLineStart, options.matcher);
+          if (callStart !== null && options.resolveProtectedRanges) {
+            if (protectionContextOverflow) {
+              // Bounded live history no longer proves ownership. Preserve bytes and let the
+              // authoritative terminal snapshot decide instead of deleting literal content.
+              callStart = null;
+            } else {
+              // Only opted-in CommonMark resolvers can use carried fence state.
+              // Otherwise the caller's full parse remains authoritative.
+              const carriedScan = authoritative ? protectionScanAtBlockStart : protectionScan;
+              // Event order can differ from content-index order when providers interleave
+              // blocks or omit earlier deltas. Trust carried state only when the partial's
+              // preceding text agrees. Missing partials reuse the verdict, or trust an
+              // uncached scan. Changed lengths need a fresh, bounded prefix comparison.
+              const partial = incomingRecord.partial;
+              const contentIndex = eventContentIndex(incomingRecord);
+              const trackedLength = protectionBlockStart;
+              const cached = protectionBlockPrefixVerdict;
+              const candidate = extractStandaloneCandidate(partial);
+              const part = candidate?.parts.find((entry) => entry.contentIndex === contentIndex);
+              if (candidate && part && (!cached || cached.precedingLength !== part.start)) {
+                const trusted =
+                  part.start === trackedLength &&
+                  (part.start === 0 ||
+                    candidate.text.slice(0, part.start) ===
+                      materializeBoundedPrefix(protectionBlockStart));
+                protectionBlockPrefixVerdict = { precedingLength: part.start, trusted };
+              }
+              const untrackedPrecedingContext = !(protectionBlockPrefixVerdict?.trusted ?? true);
+              let isProtectedAt: ((offset: number) => boolean) | undefined =
+                !untrackedPrecedingContext && options.protectedRangesFenceCompatible
+                  ? resolveProtectionFastPath(carriedScan, incoming)
+                  : undefined;
+              if (!isProtectedAt) {
+                // Prefer a matching provider snapshot when carried state cannot prove
+                // protection. Parsing it before the fast path would be quadratic.
+                isProtectedAt = resolvePartialProtectionCheck({
+                  authoritative,
+                  contentIndex: eventContentIndex(incomingRecord),
                   incoming,
-                  atLineStart,
-                  options.matcher,
-                  isProtectedAt,
+                  partial: incomingRecord.partial,
+                  resolveProtectedRanges: options.resolveProtectedRanges,
+                });
+              }
+              if (!isProtectedAt) {
+                const protectionPrefix = materializeProtectionPrefix(authoritative);
+                const protectedRanges = options.resolveProtectedRanges(
+                  `${protectionPrefix}${incoming}`,
                 );
+                isProtectedAt = (offset) =>
+                  isOffsetInProtectedRanges(protectionPrefix.length + offset, protectedRanges);
               }
+              callStart = findPotentialCallStart(
+                incoming,
+                atLineStart,
+                options.matcher,
+                isProtectedAt,
+              );
             }
-            if (callStart === null) {
-              const held = heldTextStarts.get(key);
-              if (held) {
-                yield held;
-                heldTextStarts.delete(key);
-              }
-              yield incomingRecord;
-              if (incoming) {
-                const continuesScrubbedSequence = overCapSequenceOpen;
-                overCapSequenceOpen = false;
-                const contentIndex = eventContentIndex(incomingRecord);
-                preserveTerminalContentIndexes ||=
-                  (sequenceOverCap || continuesScrubbedSequence) && contentIndex > 0;
-              }
-              lineStarts.set(key, nextAtLineStart(atLineStart, incoming));
-              advanceProtectionContext(incoming, authoritative);
-              break;
+          }
+          if (callStart === null) {
+            const held = heldTextStarts.get(key);
+            if (held) {
+              yield emit(held);
+              heldTextStarts.delete(key);
             }
-            const visiblePrefix = incoming.slice(0, callStart);
-            advanceProtectionContext(visiblePrefix, authoritative);
-            const emittedUnits = emittedTextUnits.get(key) ?? 0;
-            const emittedPrefixUnits = authoritative ? emittedUnits : 0;
-            const novelVisiblePrefix = visiblePrefix.slice(emittedPrefixUnits);
-            if (novelVisiblePrefix) {
-              const held = heldTextStarts.get(key);
-              if (held) {
-                yield held;
-                heldTextStarts.delete(key);
-              }
-              const visibleProjection = scrubSnapshot(incomingRecord.partial, true, true);
-              const visibleTemplate = visibleProjection
-                ? projectEventIndex(incomingRecord, visibleProjection)
-                : incomingRecord;
-              if (visibleTemplate) {
-                yield createSyntheticTextDelta(
+            yield emit(incomingRecord);
+            if (incoming) {
+              const continuesScrubbedSequence = overCapSequenceOpen;
+              overCapSequenceOpen = false;
+              const contentIndex = eventContentIndex(incomingRecord);
+              preserveTerminalContentIndexes ||=
+                (sequenceOverCap || continuesScrubbedSequence) && contentIndex > 0;
+            }
+            lineStarts.set(key, nextAtLineStart(atLineStart, incoming));
+            advanceProtectionContext(incoming, authoritative);
+            break;
+          }
+          const visiblePrefix = incoming.slice(0, callStart);
+          advanceProtectionContext(visiblePrefix, authoritative);
+          const emittedUnits = emittedTextUnits.get(key) ?? 0;
+          const emittedPrefixUnits = authoritative ? emittedUnits : 0;
+          const novelVisiblePrefix = visiblePrefix.slice(emittedPrefixUnits);
+          if (novelVisiblePrefix) {
+            const held = heldTextStarts.get(key);
+            if (held) {
+              yield emit(held);
+              heldTextStarts.delete(key);
+            }
+            const visibleProjection = scrubSnapshot(incomingRecord.partial, true, true);
+            const visibleTemplate = visibleProjection
+              ? projectEventIndex(incomingRecord, visibleProjection)
+              : incomingRecord;
+            if (visibleTemplate) {
+              yield emit(
+                createSyntheticTextDelta(
                   visibleTemplate,
                   novelVisiblePrefix,
                   asOptionalObjectRecord(visibleProjection?.message),
-                );
-              }
-            }
-            const candidateText = incoming.slice(callStart);
-            const candidateRecord =
-              typeof incomingRecord.delta === "string"
-                ? { ...incomingRecord, delta: candidateText }
-                : authoritative
-                  ? incomingRecord
-                  : { ...incomingRecord, content: candidateText };
-            const held = heldTextStarts.get(key);
-            heldTextStarts.delete(key);
-            pending = createPendingState(
-              candidateRecord,
-              candidateText,
-              held,
-              sequenceOverCap || overCapSequenceOpen,
-              authoritative ? callStart : blockLengthBefore + callStart,
-            );
-            overCapSequenceOpen = false;
-          } else if (pending.kind === "candidate") {
-            if (authoritative) {
-              const contentIndex = eventContentIndex(incomingRecord);
-              const partIndex = pending.parts.findLastIndex(
-                (part) => part.contentIndex === contentIndex,
+                ),
               );
-              const part = pending.parts[partIndex];
-              if (part) {
-                const blockOffset = part.start === 0 ? pending.snapshotOffset : 0;
-                const blockText = incoming.slice(blockOffset);
-                const previousLength = part.end - part.start;
-                const lengthDelta = blockText.length - previousLength;
-                const candidateText =
-                  pending.buffer.slice(0, part.start) + blockText + pending.buffer.slice(part.end);
-                const retained = pending.entries?.filter(
-                  (event) => !isTextStreamEvent(event) || event.type === "text_start",
-                );
-                pending.buffer = candidateText;
-                pending.bufferBytes = cappedUtf8ByteLength(candidateText);
-                const bufferedText = createSyntheticTextDelta(
-                  pending.template,
-                  candidateText,
-                  asOptionalObjectRecord(record.partial),
-                );
-                const snapshotText = { ...incomingRecord, content: incoming };
-                pending.entries = [...(retained ?? []), bufferedText, snapshotText];
-                rememberPendingEntryOffsets(pending, [bufferedText], 0);
-                rememberPendingEntryOffsets(pending, [snapshotText], candidateText.length);
-                pending.parts = pending.parts.map((entry, index) =>
-                  index < partIndex
-                    ? entry
-                    : index === partIndex
-                      ? { ...entry, end: entry.start + blockText.length }
-                      : {
-                          ...entry,
-                          start: entry.start + lengthDelta,
-                          end: entry.end + lengthDelta,
-                        },
-                );
-                // The extended buffer still starts where it did in the content block, so
-                // keep its block offset: replay slicing and later snapshots share that origin.
-                pending.template = eventTemplate(incomingRecord);
-                pending.templates?.set(contentIndex, pending.template);
-              } else {
-                // A text_end snapshot is authoritative for its own content block. Carry a
-                // newly observed block into classification or visible text can vanish at EOF.
-                appendPendingText(pending, incoming, incomingRecord);
-              }
+            }
+          }
+          const candidateText = incoming.slice(callStart);
+          const candidateRecord =
+            typeof incomingRecord.delta === "string"
+              ? { ...incomingRecord, delta: candidateText }
+              : authoritative
+                ? incomingRecord
+                : { ...incomingRecord, content: candidateText };
+          const held = heldTextStarts.get(key);
+          heldTextStarts.delete(key);
+          const entries = [...(held ? [{ ...held }] : []), { ...candidateRecord }];
+          pending = {
+            buffer: candidateText,
+            bufferBytes: cappedUtf8ByteLength(candidateText),
+            entries,
+            entryBytes: entries.reduce((total, entry) => {
+              return Math.min(MAX_PAYLOAD_BYTES + 1, total + pendingEventBytes(entry));
+            }, 0),
+            kind: "candidate",
+            nextScanChars: 256,
+            parts: [
+              {
+                contentIndex: eventContentIndex(candidateRecord),
+                start: 0,
+                end: candidateText.length,
+              },
+            ],
+            sequenceOverCap: sequenceOverCap || overCapSequenceOpen,
+            snapshotOffset: authoritative ? callStart : blockLengthBefore + callStart,
+            template: eventTemplate(candidateRecord),
+            templates: new Map([
+              [eventContentIndex(candidateRecord), eventTemplate(candidateRecord)],
+            ]),
+          };
+          rememberPendingEntryOffsets(pending, entries, 0);
+          overCapSequenceOpen = false;
+        } else if (pending.kind === "candidate") {
+          if (authoritative) {
+            const contentIndex = eventContentIndex(incomingRecord);
+            const partIndex = pending.parts.findLastIndex(
+              (part) => part.contentIndex === contentIndex,
+            );
+            const part = pending.parts[partIndex];
+            if (part) {
+              const blockOffset = part.start === 0 ? pending.snapshotOffset : 0;
+              const blockText = incoming.slice(blockOffset);
+              const previousLength = part.end - part.start;
+              const lengthDelta = blockText.length - previousLength;
+              const candidateText =
+                pending.buffer.slice(0, part.start) + blockText + pending.buffer.slice(part.end);
+              const retained = pending.entries?.filter(
+                (event) => !isTextStreamEvent(event) || event.type === "text_start",
+              );
+              pending.buffer = candidateText;
+              pending.bufferBytes = cappedUtf8ByteLength(candidateText);
+              const bufferedText = createSyntheticTextDelta(
+                pending.template,
+                candidateText,
+                asOptionalObjectRecord(record.partial),
+              );
+              const snapshotText = { ...incomingRecord, content: incoming };
+              pending.entries = [...(retained ?? []), bufferedText, snapshotText];
+              rememberPendingEntryOffsets(pending, [bufferedText], 0);
+              rememberPendingEntryOffsets(pending, [snapshotText], candidateText.length);
+              pending.parts = pending.parts.map((entry, index) =>
+                index < partIndex
+                  ? entry
+                  : index === partIndex
+                    ? { ...entry, end: entry.start + blockText.length }
+                    : {
+                        ...entry,
+                        start: entry.start + lengthDelta,
+                        end: entry.end + lengthDelta,
+                      },
+              );
+              // The extended buffer still starts where it did in the content block, so
+              // keep its block offset: replay slicing and later snapshots share that origin.
+              pending.template = eventTemplate(incomingRecord);
+              pending.templates?.set(contentIndex, pending.template);
             } else {
+              // A text_end snapshot is authoritative for its own content block. Carry a
+              // newly observed block into classification or visible text can vanish at EOF.
               appendPendingText(pending, incoming, incomingRecord);
             }
-            if (!incoming && !authoritative) {
-              break;
-            }
+          } else {
+            appendPendingText(pending, incoming, incomingRecord);
           }
+          if (!incoming && !authoritative) {
+            break;
+          }
+        }
 
-          if (pending.kind !== "candidate") {
-            break;
+        if (pending.kind !== "candidate") {
+          break;
+        }
+        const shouldClassify =
+          authoritative ||
+          pending.bufferBytes > MAX_PAYLOAD_BYTES ||
+          pending.buffer.length <= 256 ||
+          pending.buffer.length >= pending.nextScanChars;
+        if (!shouldClassify) {
+          break;
+        }
+        const classification = classifyPending(
+          pending,
+          options.matcher,
+          options.resolveProtectedRanges,
+          closesText,
+        );
+        pending.nextScanChars = Math.max(pending.buffer.length + 1, pending.nextScanChars * 2);
+        if (classification.kind === "pending") {
+          break;
+        }
+        if (classification.kind === "trim") {
+          scrubFuturePartials = true;
+          const partialProjection = scrubSnapshot(record.partial, true, true);
+          yield* emitAll(applyCandidateTrim(pending, classification, partialProjection));
+          break;
+        }
+        if (classification.kind === "suppress") {
+          const entries = pending.entries?.filter((event) => !isTextStreamEvent(event));
+          scrubFuturePartials = true;
+          pending = {
+            entries,
+            entryBytes:
+              entries?.reduce((total, entry) => {
+                return Math.min(MAX_PAYLOAD_BYTES + 1, total + pendingEventBytes(entry));
+              }, 0) ?? 0,
+            kind: "suppressing",
+            suppressor: classification.suppressor,
+          };
+          break;
+        }
+        if (classification.kind === "false-positive") {
+          yield* emitAll(replayFalsePositiveCandidate(pending));
+          const replayText = pending.buffer;
+          pending = undefined;
+          if (replayText) {
+            overCapSequenceOpen = false;
+            lineStarts.set(key, nextAtLineStart(lineStarts.get(key) ?? true, replayText));
+            advanceProtectionContext(replayText);
           }
-          const shouldClassify =
-            authoritative ||
-            pending.bufferBytes > MAX_PAYLOAD_BYTES ||
-            pending.buffer.length <= 256 ||
-            pending.buffer.length >= pending.nextScanChars;
-          if (!shouldClassify) {
-            break;
-          }
+          break;
+        }
+
+        scrubFuturePartials = true;
+        const partialProjection = scrubSnapshot(record.partial, true, true);
+        const authoritativeProjection: PlainTextToolCallMessageProjection | undefined =
+          partialProjection ??
+          (authoritative
+            ? scrubSnapshot({ role: "assistant", content: pending.buffer }, true, true)
+            : undefined);
+        const projectedText: string | undefined =
+          authoritativeProjection &&
+          projectedTextForEvent(pending.template, authoritativeProjection);
+        const sanitizedText: string = projectedText ?? classification.text;
+        overCapSequenceOpen = sanitizedText.length === 0;
+        const outputProjection = partialProjection;
+        const contentIndex = eventContentIndex(pending.template);
+        const partial =
+          outputProjection?.message ??
+          (contentIndex === 0
+            ? { role: "assistant", content: [{ type: "text", text: sanitizedText }] }
+            : undefined);
+        yield* emitAll(
+          forceProjectPendingAux(
+            pending,
+            outputProjection,
+            sanitizedText ? contentIndex : undefined,
+          ),
+        );
+        // Provider text deltas append to the cumulative text_end snapshot. Count UTF-16
+        // units so slicing uses the same offsets without retaining streamed text.
+        const emittedUnits = emittedTextUnits.get(key) ?? 0;
+        const novelOffset = projectedText
+          ? emittedUnits
+          : authoritative
+            ? Math.max(0, emittedUnits - pending.snapshotOffset)
+            : 0;
+        const novelText = sanitizedText.slice(novelOffset);
+        preserveTerminalContentIndexes ||= sanitizedText.length > 0 && contentIndex > 0;
+        if (novelText) {
+          yield emit(createSyntheticTextDelta(pending.template, novelText, partial));
+        }
+        lineStarts.set(key, nextAtLineStart(lineStarts.get(key) ?? true, sanitizedText));
+        advanceProtectionContext(sanitizedText);
+        pending = undefined;
+        break;
+      }
+      if (closesText) {
+        emittedTextUnits.delete(key);
+        blockTextUnits.delete(key);
+        protectionBlockContentIndex = undefined;
+        protectionBlockStart = protectionContextLength;
+      }
+      continue;
+    }
+
+    if (type === "done") {
+      // Keep a later visible suffix at the content index used by its streamed delta.
+      const requestedNormalization = options.normalizeTerminalMessage({
+        allowPromotion: record.reason === "stop" || record.reason === "toolUse",
+        message: record.message,
+        preserveEmptyTextBlocks: preserveTerminalContentIndexes,
+      });
+      const forcedProjection = forceScrubTerminal
+        ? scrubSnapshot(record.message, preserveTerminalContentIndexes, true)
+        : undefined;
+      const terminalCandidate = requestedNormalization
+        ? undefined
+        : extractStandaloneCandidate(record.message, false);
+      const terminalHasIncompleteCandidate =
+        terminalCandidate &&
+        findCandidateCallSequences(
+          terminalCandidate,
+          options.matcher,
+          options.resolveProtectedRanges,
+        ).some((sequence) => sequence.activeStart !== undefined);
+      const terminalCandidateProjection = terminalHasIncompleteCandidate
+        ? scrubSnapshot(record.message, preserveTerminalContentIndexes, true)
+        : undefined;
+      const normalized = forcedProjection
+        ? ({ kind: "scrubbed", ...forcedProjection } as const)
+        : forceScrubTerminal
+          ? undefined
+          : (requestedNormalization ??
+            (terminalCandidateProjection
+              ? ({ kind: "scrubbed", ...terminalCandidateProjection } as const)
+              : undefined));
+      if (normalized?.kind === "promoted") {
+        if (!sawStreamStart) {
+          yield emit({ type: "start", partial: { role: "assistant", content: [] } });
+        }
+        const promoted = [...options.createPromotedToolCallEvents(normalized.message)];
+        const auxiliary =
+          pending?.kind === "candidate" ? forceProjectPendingAux(pending, normalized) : [];
+        yield* emitAll(orderByContentIndex([...promoted, ...auxiliary], normalized.message));
+        yield emit({ ...record, reason: "toolUse", message: normalized.message });
+      } else if (normalized?.kind === "scrubbed") {
+        if (pending?.kind === "candidate") {
           const classification = classifyPending(
             pending,
             options.matcher,
             options.resolveProtectedRanges,
-            closesText,
+            true,
           );
-          pending.nextScanChars = Math.max(pending.buffer.length + 1, pending.nextScanChars * 2);
-          if (classification.kind === "pending") {
-            break;
-          }
           if (classification.kind === "trim") {
-            scrubFuturePartials = true;
-            const partialProjection = scrubSnapshot(record.partial, true, true);
-            yield* applyCandidateTrim(pending, classification, partialProjection);
-            break;
-          }
-          if (classification.kind === "suppress") {
-            const entries = pending.entries?.filter((event) => !isTextStreamEvent(event));
-            scrubFuturePartials = true;
-            pending = {
-              entries,
-              entryBytes:
-                entries?.reduce((total, entry) => {
-                  return Math.min(MAX_PAYLOAD_BYTES + 1, total + pendingEventBytes(entry));
-                }, 0) ?? 0,
-              kind: "suppressing",
-              suppressor: classification.suppressor,
-            };
-            break;
-          }
-          if (classification.kind === "false-positive") {
-            yield* replayFalsePositiveCandidate(pending);
-            const replayText = pending.buffer;
-            pending = undefined;
-            if (replayText) {
-              overCapSequenceOpen = false;
-              lineStarts.set(key, nextAtLineStart(lineStarts.get(key) ?? true, replayText));
-              advanceProtectionContext(replayText);
-            }
-            break;
-          }
-
-          scrubFuturePartials = true;
-          const partialProjection = scrubSnapshot(record.partial, true, true);
-          const authoritativeProjection =
-            partialProjection ??
-            (authoritative
-              ? scrubSnapshot({ role: "assistant", content: pending.buffer }, true, true)
-              : undefined);
-          const projectedText =
-            authoritativeProjection &&
-            projectedTextForEvent(pending.template, authoritativeProjection);
-          const sanitizedText = projectedText ?? classification.text;
-          overCapSequenceOpen = sanitizedText.length === 0;
-          const outputProjection = partialProjection;
-          const contentIndex = eventContentIndex(pending.template);
-          const partial =
-            outputProjection?.message ??
-            (contentIndex === 0
-              ? { role: "assistant", content: [{ type: "text", text: sanitizedText }] }
-              : undefined);
-          yield* forceProjectPendingAux(
-            pending,
-            outputProjection,
-            sanitizedText ? contentIndex : undefined,
-          );
-          // Provider text deltas append to the cumulative text_end snapshot. Count UTF-16
-          // units so slicing uses the same offsets without retaining streamed text.
-          const emittedUnits = emittedTextUnits.get(key) ?? 0;
-          const novelOffset = projectedText
-            ? emittedUnits
-            : authoritative
-              ? Math.max(0, emittedUnits - pending.snapshotOffset)
-              : 0;
-          const novelText = sanitizedText.slice(novelOffset);
-          preserveTerminalContentIndexes ||= sanitizedText.length > 0 && contentIndex > 0;
-          if (novelText) {
-            yield createSyntheticTextDelta(pending.template, novelText, partial);
-          }
-          lineStarts.set(key, nextAtLineStart(lineStarts.get(key) ?? true, sanitizedText));
-          advanceProtectionContext(sanitizedText);
-          pending = undefined;
-          break;
-        }
-        if (closesText) {
-          emittedTextUnits.delete(key);
-          blockTextUnits.delete(key);
-          protectionBlockContentIndex = undefined;
-          protectionBlockStart = protectionContextLength;
-        }
-        continue;
-      }
-
-      if (type === "done") {
-        // Keep a later visible suffix at the content index used by its streamed delta.
-        const requestedNormalization = options.normalizeTerminalMessage({
-          allowPromotion: record.reason === "stop" || record.reason === "toolUse",
-          message: record.message,
-          preserveEmptyTextBlocks: preserveTerminalContentIndexes,
-          reason: record.reason,
-        });
-        const forcedProjection = forceScrubTerminal
-          ? scrubSnapshot(record.message, preserveTerminalContentIndexes, true)
-          : undefined;
-        const terminalCandidate = requestedNormalization
-          ? undefined
-          : extractStandaloneCandidate(record.message, false);
-        const terminalHasIncompleteCandidate =
-          terminalCandidate &&
-          findCandidateCallSequences(
-            terminalCandidate,
-            options.matcher,
-            options.resolveProtectedRanges,
-          ).some((sequence) => sequence.activeStart !== undefined);
-        const terminalCandidateProjection = terminalHasIncompleteCandidate
-          ? scrubSnapshot(record.message, preserveTerminalContentIndexes, true)
-          : undefined;
-        const normalized = forcedProjection
-          ? ({ kind: "scrubbed", ...forcedProjection } as const)
-          : forceScrubTerminal
-            ? undefined
-            : (requestedNormalization ??
-              (terminalCandidateProjection
-                ? ({ kind: "scrubbed", ...terminalCandidateProjection } as const)
-                : undefined));
-        if (normalized?.kind === "promoted") {
-          if (!sawStreamStart) {
-            yield { type: "start", partial: { role: "assistant", content: [] } };
-            sawStreamStart = true;
-          }
-          const promoted = [...options.createPromotedToolCallEvents(normalized.message)];
-          const auxiliary =
-            pending?.kind === "candidate" ? forceProjectPendingAux(pending, normalized) : [];
-          yield* orderByContentIndex([...promoted, ...auxiliary], normalized.message);
-          yield { ...record, reason: "toolUse", message: normalized.message };
-        } else if (normalized?.kind === "scrubbed") {
-          if (pending?.kind === "candidate") {
-            const classification = classifyPending(
-              pending,
-              options.matcher,
-              options.resolveProtectedRanges,
-              true,
-            );
-            if (classification.kind === "trim") {
-              yield* applyCandidateTrim(pending, classification, normalized);
-            } else if (classification.kind === "stripped" && classification.text) {
-              const template = projectEventIndex(pending.template, normalized);
-              if (template) {
-                const projectedText = projectedTextForEvent(pending.template, normalized);
-                const sanitizedText = projectedText ?? classification.text;
-                const emittedUnits = emittedTextUnits.get(eventContentIndex(pending.template)) ?? 0;
-                const novelText = sanitizedText.slice(projectedText ? emittedUnits : 0);
-                if (novelText) {
-                  yield createSyntheticTextDelta(template, novelText, normalized.message);
-                }
+            yield* emitAll(applyCandidateTrim(pending, classification, normalized));
+          } else if (classification.kind === "stripped" && classification.text) {
+            const template = projectEventIndex(pending.template, normalized);
+            if (template) {
+              const projectedText = projectedTextForEvent(pending.template, normalized);
+              const sanitizedText = projectedText ?? classification.text;
+              const emittedUnits = emittedTextUnits.get(eventContentIndex(pending.template)) ?? 0;
+              const novelText = sanitizedText.slice(projectedText ? emittedUnits : 0);
+              if (novelText) {
+                yield emit(createSyntheticTextDelta(template, novelText, normalized.message));
               }
             }
           }
-          if (pending) {
-            yield* forceProjectPendingAux(pending, normalized);
-          }
-          yield { ...record, message: normalized.message };
-        } else {
-          let message = record.message;
-          const pendingClassification =
-            pending?.kind === "candidate"
-              ? classifyPending(pending, options.matcher, options.resolveProtectedRanges, true)
-              : undefined;
-          if (pending?.kind === "candidate" && pendingClassification?.kind === "false-positive") {
-            yield* replayFalsePositiveCandidate(pending);
-          } else if (pending) {
-            const projection = scrubSnapshot(record.message, true, true);
-            if (pending.kind === "candidate" && pendingClassification?.kind === "trim") {
-              yield* applyCandidateTrim(pending, pendingClassification, projection);
-            } else {
-              yield* forceProjectPendingAux(pending, projection);
-            }
-            message = projection?.message ?? message;
-          }
-          yield message === record.message ? record : { ...record, message };
         }
-        pending = undefined;
-        overCapSequenceOpen = false;
-        scrubFuturePartials = false;
-        forceScrubTerminal = false;
-        sawStreamStart = false;
-        preserveTerminalContentIndexes = false;
-        heldTextStarts.clear();
-        lineStarts.clear();
-        emittedTextUnits.clear();
-        blockTextUnits.clear();
-        protectionChunks.length = 0;
-        protectionContextLength = 0;
-        protectionContextOverflow = false;
-        protectionBlockContentIndex = undefined;
-        protectionBlockStart = 0;
-        // Carried block state belongs to the completion that just ended. Without this a
-        // following completion would start inside its fence while the materialized
-        // context is empty, and the fast path would call its first line protected.
-        protectionScan = createProtectionScanState();
-        protectionScanAtBlockStart = createProtectionScanState();
-        if (options.stopAfterDone) {
-          return;
+        if (pending) {
+          yield* emitAll(forceProjectPendingAux(pending, normalized));
         }
-        continue;
-      }
-
-      if (type === "error") {
+        yield emit({ ...record, message: normalized.message });
+      } else {
+        let message = record.message;
         const pendingClassification =
           pending?.kind === "candidate"
             ? classifyPending(pending, options.matcher, options.resolveProtectedRanges, true)
             : undefined;
-        const knownCandidate =
-          pending?.kind === "suppressing" ||
-          (pending?.kind === "candidate" && pendingClassification?.kind !== "false-positive");
-        const streamedPartial = scrubSnapshot(record.partial, true, knownCandidate);
-        const streamedError = scrubSnapshot(
-          record.error,
-          preserveTerminalContentIndexes,
-          knownCandidate,
-        );
-        const projection = streamedPartial ?? streamedError;
-        if (pending?.kind === "candidate" && pendingClassification?.kind === "trim") {
-          yield* applyCandidateTrim(pending, pendingClassification, projection);
-        } else {
-          if (pending?.kind === "candidate" && !knownCandidate) {
-            yield* replayFalsePositiveCandidate(pending);
+        if (pending?.kind === "candidate" && pendingClassification?.kind === "false-positive") {
+          yield* emitAll(replayFalsePositiveCandidate(pending));
+        } else if (pending) {
+          const projection = scrubSnapshot(record.message, true, true);
+          if (pending.kind === "candidate" && pendingClassification?.kind === "trim") {
+            yield* emitAll(applyCandidateTrim(pending, pendingClassification, projection));
+          } else {
+            yield* emitAll(forceProjectPendingAux(pending, projection));
           }
-          if (pending && knownCandidate) {
-            yield* forceProjectPendingAux(pending, projection);
-          }
+          message = projection?.message ?? message;
         }
-        yield {
-          ...record,
-          ...(streamedPartial ? { partial: streamedPartial.message } : {}),
-          ...(streamedError ? { error: streamedError.message } : {}),
-        };
+        yield emit(message === record.message ? record : { ...record, message });
+      }
+      pending = undefined;
+      overCapSequenceOpen = false;
+      scrubFuturePartials = false;
+      forceScrubTerminal = false;
+      sawStreamStart = false;
+      preserveTerminalContentIndexes = false;
+      heldTextStarts.clear();
+      lineStarts.clear();
+      emittedTextUnits.clear();
+      blockTextUnits.clear();
+      protectionChunks.length = 0;
+      protectionContextLength = 0;
+      protectionContextOverflow = false;
+      protectionBlockContentIndex = undefined;
+      protectionBlockStart = 0;
+      // Carried block state belongs to the completion that just ended. Without this a
+      // following completion would start inside its fence while the materialized
+      // context is empty, and the fast path would call its first line protected.
+      protectionScan = createProtectionScanState();
+      protectionScanAtBlockStart = createProtectionScanState();
+      if (options.stopAfterDone) {
         return;
       }
+      continue;
+    }
 
-      if (pending) {
-        if (!pending.entries) {
-          const sanitized = sanitizeEventPartial(record);
-          if (sanitized) {
-            yield sanitized;
-          }
+    if (type === "error") {
+      const pendingClassification =
+        pending?.kind === "candidate"
+          ? classifyPending(pending, options.matcher, options.resolveProtectedRanges, true)
+          : undefined;
+      const knownCandidate =
+        pending?.kind === "suppressing" ||
+        (pending?.kind === "candidate" && pendingClassification?.kind !== "false-positive");
+      const streamedPartial = scrubSnapshot(record.partial, true, knownCandidate);
+      const streamedError = scrubSnapshot(
+        record.error,
+        preserveTerminalContentIndexes,
+        knownCandidate,
+      );
+      const projection = streamedPartial ?? streamedError;
+      if (pending?.kind === "candidate" && pendingClassification?.kind === "trim") {
+        yield* emitAll(applyCandidateTrim(pending, pendingClassification, projection));
+      } else {
+        if (pending?.kind === "candidate" && !knownCandidate) {
+          yield* emitAll(replayFalsePositiveCandidate(pending));
+        }
+        if (pending && knownCandidate) {
+          yield* emitAll(forceProjectPendingAux(pending, projection));
+        }
+      }
+      yield emit({
+        ...record,
+        ...(streamedPartial ? { partial: streamedPartial.message } : {}),
+        ...(streamedError ? { error: streamedError.message } : {}),
+      });
+      return;
+    }
+
+    if (pending) {
+      if (!pending.entries) {
+        const sanitized = sanitizeEventPartial(record);
+        if (sanitized) {
+          yield emit(sanitized);
+        }
+        continue;
+      }
+      queuePendingEvent(pending, record);
+      if (pendingQueueOverCap(pending)) {
+        const classification =
+          pending.kind === "candidate"
+            ? classifyPending(pending, options.matcher, options.resolveProtectedRanges)
+            : undefined;
+        if (pending.kind === "candidate" && classification?.kind === "false-positive") {
+          yield* emitAll(replayFalsePositiveCandidate(pending));
+          // Replayed text can open a fence that protects later candidates.
+          advanceProtectionContext(pending.buffer);
+          pending = undefined;
           continue;
         }
-        queuePendingEvent(pending, record);
-        if (pendingQueueOverCap(pending)) {
-          const classification =
-            pending.kind === "candidate"
-              ? classifyPending(pending, options.matcher, options.resolveProtectedRanges)
-              : undefined;
-          if (pending.kind === "candidate" && classification?.kind === "false-positive") {
-            yield* replayFalsePositiveCandidate(pending);
-            // Replayed text can open a fence that protects later candidates.
-            advanceProtectionContext(pending.buffer);
-            pending = undefined;
-            continue;
-          }
-          if (pending.kind === "candidate" && classification?.kind === "trim") {
-            yield* applyCandidateTrim(pending, classification);
-          }
-          forceScrubTerminal = true;
-          if (pending.kind === "candidate") {
-            scrubFuturePartials = true;
-          }
-          if (!sawStreamStart) {
-            yield { type: "start", partial: { role: "assistant", content: [] } };
-            sawStreamStart = true;
-          }
-          yield* forceProjectPendingAux(pending);
-          pending.entries = undefined;
-          pending.entryBytes = 0;
-          if (classification?.kind === "suppress") {
-            pending = {
-              entryBytes: 0,
-              kind: "suppressing",
-              suppressor: classification.suppressor,
-            };
-          }
+        if (pending.kind === "candidate" && classification?.kind === "trim") {
+          yield* emitAll(applyCandidateTrim(pending, classification));
         }
-      } else {
-        for (const held of heldTextStarts.values()) {
-          yield held;
+        forceScrubTerminal = true;
+        if (pending.kind === "candidate") {
+          scrubFuturePartials = true;
         }
-        heldTextStarts.clear();
-        yield record;
+        if (!sawStreamStart) {
+          yield emit({ type: "start", partial: { role: "assistant", content: [] } });
+          sawStreamStart = true;
+        }
+        yield* emitAll(forceProjectPendingAux(pending));
+        pending.entries = undefined;
+        pending.entryBytes = 0;
+        if (classification?.kind === "suppress") {
+          pending = {
+            entryBytes: 0,
+            kind: "suppressing",
+            suppressor: classification.suppressor,
+          };
+        }
       }
-    }
-
-    if (pending?.kind === "candidate") {
-      const classification = classifyPending(
-        pending,
-        options.matcher,
-        options.resolveProtectedRanges,
-        true,
-      );
-      if (classification.kind === "false-positive") {
-        yield* replayFalsePositiveCandidate(pending);
-      } else if (classification.kind === "trim") {
-        yield* applyCandidateTrim(pending, classification);
-      } else {
-        yield* forceProjectPendingAux(pending);
+    } else {
+      for (const held of heldTextStarts.values()) {
+        yield emit(held);
       }
-    } else if (pending) {
-      yield* forceProjectPendingAux(pending);
-    }
-    for (const held of heldTextStarts.values()) {
-      yield held;
+      heldTextStarts.clear();
+      yield emit(record);
     }
   }
-  for await (const event of normalizeEvents()) {
-    const record = asOptionalObjectRecord(event);
-    if (record?.type === "text_delta" && typeof record.delta === "string") {
-      const key = eventContentIndex(record);
-      const previous = emittedTextUnits.get(key) ?? 0;
-      emittedTextUnits.set(key, previous + record.delta.length);
+
+  if (pending?.kind === "candidate") {
+    const classification = classifyPending(
+      pending,
+      options.matcher,
+      options.resolveProtectedRanges,
+      true,
+    );
+    if (classification.kind === "false-positive") {
+      yield* emitAll(replayFalsePositiveCandidate(pending));
+    } else if (classification.kind === "trim") {
+      yield* emitAll(applyCandidateTrim(pending, classification));
+    } else {
+      yield* emitAll(forceProjectPendingAux(pending));
     }
-    yield event;
+  } else if (pending) {
+    yield* emitAll(forceProjectPendingAux(pending));
+  }
+  for (const held of heldTextStarts.values()) {
+    yield emit(held);
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

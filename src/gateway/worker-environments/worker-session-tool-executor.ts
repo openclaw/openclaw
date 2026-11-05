@@ -29,6 +29,7 @@ import { sha256Base64Url, sha256HexPrefixCore } from "../../infra/crypto-digest.
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import {
   getWorkerTurnExecutionIdentityCapability,
@@ -73,8 +74,11 @@ type WorkerGatewayToolsDependencies = {
   placements: WorkerSessionPlacementStore;
   environments: Pick<WorkerEnvironmentService, "get">;
   dispatchChild: WorkerPlacementDispatchContract["dispatch"];
+  waitForInitialPlacement: ReturnType<
+    typeof coordinateWorkerPlacementDispatch
+  >["waitForInitialPlacement"];
   portals: WorkerPortalToolExecutorDependencies["portals"];
-  skillWorkshop?: AnyAgentTool;
+  skillLibrary?: AnyAgentTool;
   portalAvailable?: boolean;
   inheritedToolPolicySource?: "sender";
   inheritedToolDenylist?: string[];
@@ -186,12 +190,8 @@ export function createWorkerSessionToolExecutor(
       .filter((name) =>
         params.placements.isWorkerTurnToolAuthorized(operation.source.turnClaim, name),
       );
-    // The child has its own workspace; this private capture passed the same
-    // policies and prompt limits without granting the parent a callable tool.
-    const inheritedPublicationTool = toolRuntime.getInheritedPublicationToolName();
-    if (inheritedPublicationTool) {
-      authorizedTools.push(inheritedPublicationTool);
-    }
+    // Workspace-dependent capabilities inherit policy, not the parent's availability.
+    authorizedTools.push(...toolRuntime.getAdditionalInheritedToolNames());
     const gatewayCall: InProcessGatewayCaller = async <T = Record<string, unknown>>(
       method: string,
       requestParams: Record<string, unknown>,
@@ -314,21 +314,31 @@ export function createWorkerSessionToolExecutor(
             assertSource();
             if (childPlacement?.state !== "active") {
               try {
-                await params.dispatchChild(
-                  {
-                    sessionId: childSessionId,
-                    sessionKey: operation.childSessionKey,
-                    agentId: targetAgentId,
-                    profileId: sourceEnvironment.profileId,
-                    executionMode: "worker-turn",
-                    inheritedProfile: {
-                      providerId: sourceEnvironment.providerId,
-                      profileSnapshot: sourceEnvironment.profileSnapshot,
+                if (
+                  childPlacement &&
+                  ["requested", "provisioning", "syncing", "starting"].includes(
+                    childPlacement.state,
+                  )
+                ) {
+                  // Session creation may already own setup. Wait for it, then verify inheritance.
+                  await params.waitForInitialPlacement(childPlacement, operation.signal);
+                } else {
+                  await params.dispatchChild(
+                    {
+                      sessionId: childSessionId,
+                      sessionKey: operation.childSessionKey,
+                      agentId: targetAgentId,
+                      profileId: sourceEnvironment.profileId,
+                      executionMode: "worker-turn",
+                      inheritedProfile: {
+                        providerId: sourceEnvironment.providerId,
+                        profileSnapshot: sourceEnvironment.profileSnapshot,
+                      },
                     },
-                  },
-                  undefined,
-                  assertSource,
-                );
+                    undefined,
+                    assertSource,
+                  );
+                }
               } catch (error) {
                 try {
                   assertActiveChildPlacement();
@@ -605,6 +615,7 @@ export async function createWorkerGatewayTools(
   const source = capability.sessionTarget;
   const toolOptions = { agentSessionKey: source.sessionKey, workerPlacement: true };
   const portal = createAvailablePortalTools({
+    workerScoped: true,
     sessionPortalTarget: {
       agentId: source.agentId,
       sessionKey: source.sessionKey,
@@ -672,13 +683,14 @@ export async function createWorkerGatewayTools(
   const adapterNames = new Set(adapters.map((tool) => tool.name));
   const runWithSource = createWorkerSessionToolSourceRunner(params);
   const retainWorkshopCall = createWorkerWorkshopCallRetention();
-  const tools = [...adapters, presence, ...(params.skillWorkshop ? [params.skillWorkshop] : [])];
+  const tools = [...adapters, presence, ...(params.skillLibrary ? [params.skillLibrary] : [])];
   const preparedTools = await (params.prepareTools?.(tools) ?? tools);
   capability.receiptAuthority();
   return preparedTools.map((tool) => {
     if (getAgentToolExecutionLocation(tool).kind === "placement" || adapterNames.has(tool.name)) {
       return tool;
     }
+    const isSkillAuthoringTool = tool.name === "skill_workshop" || tool.name === "skill_library";
     return authorizeTool(tool, (toolCallId, args, signal, onUpdate) => {
       const invoke = () =>
         runWithSource({
@@ -686,7 +698,7 @@ export async function createWorkerGatewayTools(
           request: {
             tool,
             toolName: tool.name,
-            ...(tool.name === "presence" || tool.name === "skill_workshop"
+            ...(tool.name === "presence" || isSkillAuthoringTool
               ? { approvalMode: "deny" as const }
               : {}),
             identity: params.identity,
@@ -695,9 +707,7 @@ export async function createWorkerGatewayTools(
             request: { toolCallId, arguments: args },
           },
         });
-      return tool.name === "skill_workshop"
-        ? retainWorkshopCall(toolCallId, args, invoke)
-        : invoke();
+      return isSkillAuthoringTool ? retainWorkshopCall(toolCallId, args, invoke) : invoke();
     });
   });
 }

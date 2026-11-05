@@ -4,27 +4,20 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
-import {
-  controlUiSessionPath,
-  controlUiSessionUrl,
-  installMockGateway,
-  pauseVirtualClock,
-  type MockGatewayRequest,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 
+export { expectDefined, installMockGateway };
+export { exactButton } from "./chat-presentation.test-support.ts";
+export { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
 export {
-  expectDefined,
-  SESSION_DRAG_MIME,
   controlUiSessionPath,
   controlUiSessionUrl,
-  installMockGateway,
   pauseVirtualClock,
-};
+} from "../test-helpers/control-ui-e2e.ts";
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
@@ -110,22 +103,6 @@ export function createChatFlowE2eSuite(
   });
 }
 
-export async function buildLocalWebchatAudioMessage(source: string) {
-  const { buildWebchatAssistantMessageFromReplyPayloads } =
-    await import("../../../src/gateway/server-methods/chat-webchat-media.ts");
-  const audioPath = new URL(source).pathname;
-  const localRoot = path.dirname(audioPath);
-  await mkdir(localRoot, { recursive: true });
-  await writeFile(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
-  return expectDefined(
-    await buildWebchatAssistantMessageFromReplyPayloads(
-      [{ mediaUrl: source, trustedLocalMedia: true }],
-      { localRoots: [localRoot] },
-    ),
-    "Gateway-produced WebChat audio message",
-  );
-}
-
 export const requireRecord = createRequireRecord("record", "expected-object-value");
 
 export function requireString(value: unknown, label: string): string {
@@ -173,15 +150,14 @@ export async function expectRequestCountStable(
 export async function installPlainHttpClipboardCapture(page: Page): Promise<void> {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
-    (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec = [];
+    const capture = globalThis as unknown as { copiedViaExec: string[] };
+    capture.copiedViaExec = [];
     document.execCommand = ((command: string) => {
       if (command !== "copy") {
         return false;
       }
       const active = document.activeElement as HTMLTextAreaElement | null;
-      (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec.push(
-        active?.value ?? "",
-      );
+      capture.copiedViaExec.push(active?.value ?? "");
       return true;
     }) as typeof document.execCommand;
   });
@@ -204,11 +180,11 @@ export async function waitForChatScrollIdle(page: Page): Promise<void> {
       () =>
         page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate(async (element) => {
           const thread = element as HTMLElement;
-          const readGeometry = () => ({
-            clientHeight: thread.clientHeight,
-            scrollHeight: thread.scrollHeight,
-            scrollTop: Math.round(thread.scrollTop),
-          });
+          const readGeometry = () => [
+            thread.clientHeight,
+            thread.scrollHeight,
+            Math.round(thread.scrollTop),
+          ];
           // Returning to the same offset can still leave a virtualizer idle callback pending.
           let scrolled = false;
           const onScroll = () => {
@@ -220,18 +196,10 @@ export async function waitForChatScrollIdle(page: Page): Promise<void> {
             await new Promise<void>((resolve) => {
               globalThis.setTimeout(resolve, 180);
             });
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => {
-                requestAnimationFrame(() => resolve());
-              });
-            });
+            await new Promise(requestAnimationFrame);
+            await new Promise(requestAnimationFrame);
             const after = readGeometry();
-            return (
-              !scrolled &&
-              before.clientHeight === after.clientHeight &&
-              before.scrollHeight === after.scrollHeight &&
-              before.scrollTop === after.scrollTop
-            );
+            return !scrolled && before.every((value, index) => value === after[index]);
           } finally {
             thread.removeEventListener("scroll", onScroll);
           }
@@ -257,17 +225,13 @@ export async function captureSessionAccessibilityProof(
   if (!captureUiProofEnabled) {
     return;
   }
-  const sessionAccessibilityProofDir = path.join(owner.artifactDir, "session-accessibility");
+  const proofPath = path.join(owner.artifactDir, "session-accessibility", name);
   const sidebar = page.locator("openclaw-app-sidebar");
   await page.screenshot({
     fullPage: true,
-    path: path.join(sessionAccessibilityProofDir, `${name}.png`),
+    path: `${proofPath}.png`,
   });
-  await writeFile(
-    path.join(sessionAccessibilityProofDir, `${name}.yml`),
-    await sidebar.ariaSnapshot(),
-    "utf8",
-  );
+  await writeFile(`${proofPath}.yml`, await sidebar.ariaSnapshot(), "utf8");
 }
 
 export async function visibleChatBubbleTexts(page: Page): Promise<string[]> {
@@ -276,13 +240,8 @@ export async function visibleChatBubbleTexts(page: Page): Promise<string[]> {
     const viewport = thread.getBoundingClientRect();
     return Array.from(thread.querySelectorAll(".chat-bubble"))
       .filter((candidate) => {
-        const rect = candidate.getBoundingClientRect();
-        return (
-          rect.height > 0 &&
-          rect.width > 0 &&
-          rect.bottom > viewport.top &&
-          rect.top < viewport.bottom
-        );
+        const { height, width, bottom, top } = candidate.getBoundingClientRect();
+        return height > 0 && width > 0 && bottom > viewport.top && top < viewport.bottom;
       })
       .map((candidate) => candidate.textContent?.trim() ?? "")
       .filter(Boolean);
@@ -327,32 +286,19 @@ export async function readOutboxPayloadAttachments(page: Page, key: string) {
     type StoredPayload = {
       attachments: Array<{ blob: Blob; fileName?: string; mimeType: string }>;
     };
-    const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("openclaw-control-ui");
-      request.addEventListener("success", () => resolve(request.result), { once: true });
-      request.addEventListener(
-        "error",
-        () => reject(request.error ?? new Error("IDB open failed")),
-        { once: true },
-      );
-    });
-    try {
-      const payload = await new Promise<StoredPayload | undefined>((resolve, reject) => {
-        const request = database
-          .transaction("outboxPayloads")
-          .objectStore("outboxPayloads")
-          .get(payloadKey);
-        request.addEventListener(
-          "success",
-          () => resolve(request.result as StoredPayload | undefined),
-          { once: true },
-        );
-        request.addEventListener(
-          "error",
-          () => reject(request.error ?? new Error("IDB read failed")),
-          { once: true },
-        );
+    const result = <T>(request: IDBRequest<T>, message: string) =>
+      new Promise<T>((resolve, reject) => {
+        request.addEventListener("success", () => resolve(request.result), { once: true });
+        request.addEventListener("error", () => reject(request.error ?? new Error(message)), {
+          once: true,
+        });
       });
+    const database = await result(indexedDB.open("openclaw-control-ui"), "IDB open failed");
+    try {
+      const payload = await result<StoredPayload | undefined>(
+        database.transaction("outboxPayloads").objectStore("outboxPayloads").get(payloadKey),
+        "IDB read failed",
+      );
       return payload
         ? Promise.all(
             payload.attachments.map(async ({ blob, fileName, mimeType }) => {

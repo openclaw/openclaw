@@ -26,6 +26,7 @@ import { createVitestCacheSlots, resolveVitestCacheRoot } from "./lib/vitest-cac
 import {
   hasNonRunVitestSubcommand,
   collectVitestFileFilters,
+  replaceVitestFileFilters,
   resolveBooleanModeFlag,
   resolveExplicitVitestMode,
   vitestOptionConsumesNextArg,
@@ -54,6 +55,7 @@ import {
 import {
   resolveVitestRuntimeCliSelections,
   shouldPrepareVitestCoreWorkers,
+  shouldUseRuntimeOnlyVitestWorkers,
 } from "./lib/vitest-runtime-selection.mts";
 import {
   resolveNativeBunTestCommand,
@@ -213,8 +215,11 @@ export function resolveBoundedVitestInvocations(
       `--shard=${index + 1}/${E2E_TEST_PROCESS_COUNT}`,
     ]);
   }
-  const chunks = options.gatewayServerTargetChunks ?? createGatewayServerTestTargetChunks(cwd);
-  return chunks.length > 1 ? chunks.map((targets) => insertVitestTargets(argv, targets)) : [argv];
+  const chunks =
+    options.gatewayServerTargetChunks ?? createGatewayServerTestTargetChunks(cwd, argv, env);
+  return chunks.length > 1
+    ? chunks.map((targets) => replaceVitestFileFilters(argv, targets))
+    : [argv];
 }
 
 /**
@@ -881,6 +886,7 @@ export function spawnWatchedVitestProcess({
       0,
       path.join(resolveRepoRoot(import.meta.url), "scripts/lib/vitest-worker-bootstrap.mts"),
       workerRun.descriptor.directory,
+      ...(workerRun.descriptor.preset === "runtime" ? ["--worker-preset=runtime"] : []),
     );
   }
   const childSpawnParams: PnpmRunnerParams = workerRun
@@ -1028,7 +1034,7 @@ export async function runVitest(
     }
     return;
   }
-  if (argv.some((arg) => arg === "--isolated-image" || arg.startsWith("--isolated-image="))) {
+  if (argv.some((arg) => /^--isolated-(?:image|runtime)(?:=|$)/u.test(arg))) {
     const { parseIsolatedVitestArgs, runIsolatedVitest } =
       await import("./lib/vitest-isolated.mts");
     const isolated = parseIsolatedVitestArgs(argv);
@@ -1038,6 +1044,7 @@ export async function runVitest(
         isolated.image,
         isolated.args,
         env,
+        isolated.runtime,
       );
       return;
     }
@@ -1095,14 +1102,14 @@ export async function runVitest(
     : config === null && !sourceMode && process.cwd() === repoRoot
       ? "vitest.config.ts"
       : "";
-  // Canonical configs have known project scopes. Custom roots/projects keep
-  // their own setup; never infer their runtime selection from a config name.
-  const canonicalSelection =
+  // Custom roots/projects keep their own runtime preparation. Prebuilt UI
+  // projects below only partition the known real-Gateway fixture scope.
+  const canonicalRootRun =
     execution &&
     !hasAlternateVitestRootArg(vitestArgs) &&
-    !hasExplicitVitestProjectArg(vitestArgs) &&
     !hasNonRunVitestSubcommand(vitestArgs) &&
     !hasExplicitDisabledRunFlag(vitestArgs);
+  const canonicalSelection = canonicalRootRun && !hasExplicitVitestProjectArg(vitestArgs);
   // E2E global setup must precede shared asset preparation, including a single
   // invocation; otherwise it can replace dist after UI readiness was checked.
   const invocationEnv =
@@ -1123,7 +1130,22 @@ export async function runVitest(
   }
   const workers = sourceMode
     ? undefined
-    : createVitestWorkerRun(resolveVitestProcessEnv(invocationEnv), getVitestWorkerDescriptor());
+    : createVitestWorkerRun(
+        resolveVitestProcessEnv(invocationEnv),
+        getVitestWorkerDescriptor(),
+        (canonicalSelection &&
+          (relativeConfig === "test/vitest/vitest.ui-e2e.config.ts" ||
+            relativeConfig === "test/vitest/vitest.extension-browser.config.ts" ||
+            shouldUseRuntimeOnlyVitestWorkers(
+              relativeConfig,
+              vitestArgs,
+              invocationEnv,
+              execution?.options.testNamePattern,
+            ))) ||
+          (canonicalRootRun && relativeConfig === "test/vitest/vitest.ui-e2e-prebuilt.config.ts")
+          ? "runtime"
+          : "full",
+      );
   const withCacheSlot = createVitestCacheSlots();
   let interrupted: NodeJS.Signals | undefined;
   let preparingWorkers = false;

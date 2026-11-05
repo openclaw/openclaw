@@ -15,13 +15,18 @@ import { transcriptScope } from "./session-transcript-fixture.test-support.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
 
 function message(id: string, parentId: string | null, role: string, content: string) {
-  return {
-    type: "message",
-    id,
-    parentId,
-    message: { role, content },
-  };
+  return { type: "message", id, parentId, message: { role, content } };
 }
+async function withoutHostSql(run: () => Promise<void>) {
+  const sql = observeHostDataSql();
+  try {
+    await run();
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+}
+
 const events = [
   { type: "session", id: "raw-events", version: 3 },
   message("question", null, "user", "雪🦞"),
@@ -30,8 +35,8 @@ const events = [
   { type: "leaf", id: "selected-leaf", parentId: "first-branch" },
 ];
 
-it("appends entry-less raw events off-thread and resolves parents from current writes", async () => {
-  await withOpenClawTestState({ label: "transcript-events-append-worker" }, async (state) => {
+it("appends entry-less raw events off-thread and resolves parents from current writes", () =>
+  withOpenClawTestState({ label: "transcript-events-append-worker" }, async (state) => {
     const scope = transcriptScope(state.env, "raw-append", state.statePath("transcript.sqlite"));
     const header = { type: "session", id: scope.sessionId, version: 3 };
     const custom = (id: string, parentId: string | null) => ({
@@ -40,33 +45,28 @@ it("appends entry-less raw events off-thread and resolves parents from current w
       parentId,
       customType: "raw",
     });
-    const first = custom("first", null);
-    const second = custom("second", "first");
-    const sibling = custom("sibling", "first");
-    const hostSql = observeHostDataSql();
-    try {
-      for (const event of [header, first, second, sibling]) {
+    const written = [
+      header,
+      custom("first", null),
+      custom("second", "first"),
+      custom("sibling", "first"),
+    ];
+    await withoutHostSql(async () => {
+      for (const event of written) {
         await expect(appendTranscriptEvent(scope, event)).resolves.toBe(true);
       }
       await expect(
         appendTranscriptEvent(scope, custom("current", "first"), { appendIntent: "active-branch" }),
       ).resolves.toBe(true);
       await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-        header,
-        first,
-        second,
-        sibling,
+        ...written,
         custom("current", "sibling"),
       ]);
-      expect(hostSql.queries).toEqual([]);
-    } finally {
-      hostSql.restore();
-    }
-  });
-});
+    });
+  }));
 
-it("reads all ordered raw events and byte bounds without caller SQL, including cold target discovery", async () => {
-  await withOpenClawTestState({ label: "transcript-events-worker" }, async (state) => {
+it("reads all ordered raw events and byte bounds without caller SQL, including cold target discovery", () =>
+  withOpenClawTestState({ label: "transcript-events-worker" }, async (state) => {
     const scope = transcriptScope(state.env, "raw-events", state.statePath("transcript.sqlite"));
     await replaceTranscriptEvents(scope, events);
     await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
@@ -74,8 +74,7 @@ it("reads all ordered raw events and byte bounds without caller SQL, including c
       events.map((event) => JSON.stringify(event)).join("\n"),
     );
     const absentPath = state.statePath("absent.sqlite");
-    const hostSql = observeHostDataSql();
-    try {
+    await withoutHostSql(async () => {
       await expect(loadTranscriptEvents({ ...scope, maxEventBytes })).resolves.toEqual(events);
       await expect(
         loadTranscriptEvents({ ...scope, maxEventBytes: maxEventBytes - 1 }),
@@ -84,16 +83,12 @@ it("reads all ordered raw events and byte bounds without caller SQL, including c
         loadTranscriptEvents({ ...scope, sessionId: "missing-session" }),
       ).resolves.toEqual([]);
       await expect(loadTranscriptEvents({ ...scope, storePath: absentPath })).resolves.toEqual([]);
-      expect(hostSql.queries).toEqual([]);
-    } finally {
-      hostSql.restore();
-    }
+    });
     await expect(fs.stat(absentPath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-});
+  }));
 
-it("preserves SyntaxError across the worker boundary and releases the failed read", async () => {
-  await withOpenClawTestState({ label: "transcript-events-malformed" }, async (state) => {
+it("preserves SyntaxError across the worker boundary and releases the failed read", () =>
+  withOpenClawTestState({ label: "transcript-events-malformed" }, async (state) => {
     const scope = transcriptScope(state.env, "raw-events", state.statePath("transcript.sqlite"));
     await replaceTranscriptEvents(scope, events);
     const database = openOpenClawAgentDatabase({
@@ -105,22 +100,17 @@ it("preserves SyntaxError across the worker boundary and releases the failed rea
       "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 1",
     );
     update.run("{malformed", scope.sessionId);
-    const hostSql = observeHostDataSql();
-    try {
+    await withoutHostSql(async () => {
       await expect(loadTranscriptEvents(scope)).rejects.toBeInstanceOf(SyntaxError);
-      expect(hostSql.queries).toEqual([]);
-    } finally {
-      hostSql.restore();
-    }
+    });
     update.run(JSON.stringify(events[1]), scope.sessionId);
     await expect(loadTranscriptEvents(scope)).resolves.toEqual(events);
-  });
-});
+  }));
 
 it.each(["scope", "physical store"] as const)(
   "captures the %s before target discovery yields",
-  async (change) => {
-    await withOpenClawTestState({ label: "transcript-events-source" }, async (state) => {
+  (change) =>
+    withOpenClawTestState({ label: "transcript-events-source" }, async (state) => {
       const scope = transcriptScope(
         { ...state.env },
         "raw-events",
@@ -167,6 +157,5 @@ it.each(["scope", "physical store"] as const)(
         await pending.catch(() => undefined);
         observation.mockRestore();
       }
-    });
-  },
+    }),
 );

@@ -46,8 +46,8 @@ type CodexPluginsManagementRuntime = {
   workspaceDir: () => Promise<string>;
   list: CodexPluginMarketplaceListRequest;
   install: (params: v2.PluginInstallParams) => Promise<v2.PluginInstallResponse>;
-  refresh?: (workspaceDir: string) => Promise<{ diagnostics: { message: string }[] }>;
-  withContext?: <T>(run: (context: CodexPluginCommandContext) => Promise<T>) => Promise<T>;
+  refresh: (workspaceDir: string) => Promise<{ diagnostics: { message: string }[] }>;
+  withContext: <T>(run: (context: CodexPluginCommandContext) => Promise<T>) => Promise<T>;
 };
 
 // Plugin lifecycle changes (enable/disable) write to openclaw.json
@@ -61,7 +61,7 @@ export async function handleCodexPluginsSubcommand(
   input: PluginCommandContext,
   rest: string[],
   io: CodexPluginsManagementIO,
-  runtime?: CodexPluginsManagementRuntime,
+  runtime: CodexPluginsManagementRuntime,
 ): Promise<PluginCommandResult> {
   const ctx = { ...input, gatewayClientScopes: input.gatewayClientScopes?.slice() };
   const [verb = "list", ...args] = rest;
@@ -113,9 +113,6 @@ export async function handleCodexPluginsSubcommand(
     if (query.length > 100) {
       return { text: AVAILABLE_USAGE };
     }
-    if (!runtime) {
-      return { text: "Codex plugin discovery is unavailable for this command." };
-    }
     try {
       const discovered = await discoverCodexMarketplacePlugins({
         request: runtime.list,
@@ -146,11 +143,6 @@ export async function handleCodexPluginsSubcommand(
     if (!canMutateCodexHost(ctx)) {
       return {
         text: "Only an owner or operator.admin gateway client can run /codex plugins status.",
-      };
-    }
-    if (!runtime?.withContext) {
-      return {
-        text: "Codex plugin status is unavailable. Check the configured Codex app-server, then run this command again.",
       };
     }
     return await runtime.withContext(async (context) => {
@@ -184,9 +176,6 @@ export async function handleCodexPluginsSubcommand(
       return {
         text: "Only an owner or operator.admin gateway client can run /codex plugins install.",
       };
-    }
-    if (!runtime) {
-      return { text: "Codex plugin installation is unavailable for this command." };
     }
     return await installCodexPlugin(args[0], io, runtime, ctx);
   }
@@ -497,40 +486,36 @@ async function installCodexPlugin(
     };
   }
 
-  let refreshWarning = "";
-  if (runtime.refresh) {
-    try {
-      const refreshed = await runtime.refresh(workspaceDir);
-      refreshWarning = refreshed.diagnostics
-        .map((diagnostic) => ` ${formatCodexDisplayText(diagnostic.message)}`)
-        .join("");
-    } catch (error) {
-      refreshWarning = ` Runtime refresh requires a new conversation: ${formatCodexDisplayText(coerceErrorMessage(error))}`;
-    }
+  let refreshWarning: string;
+  try {
+    const refreshed = await runtime.refresh(workspaceDir);
+    refreshWarning = refreshed.diagnostics
+      .map((diagnostic) => ` ${formatCodexDisplayText(diagnostic.message)}`)
+      .join("");
+  } catch (error) {
+    refreshWarning = ` Runtime refresh requires a new conversation: ${formatCodexDisplayText(coerceErrorMessage(error))}`;
   }
 
   const appsNeedingAuth = result?.appsNeedingAuth ?? [];
   if (appsNeedingAuth.length > 0) {
     let appLinks: v2.AppSummary[] = [];
-    if (runtime.withContext) {
-      try {
-        appLinks = await runtime.withContext(async (context) => {
-          const configured = resolveConfiguredPluginKey(context.current.plugins ?? {}, requestedId);
-          if (configured.status !== "matched") {
-            return [];
-          }
-          const readiness = await readCodexPluginReadiness({
-            context,
-            current: context.current,
-            configKey: configured.configKey,
-          });
-          const pendingIds = new Set(appsNeedingAuth.map((app) => app.id));
-          return codexPluginAppPageLinks(readiness).filter((app) => pendingIds.has(app.id));
+    try {
+      appLinks = await runtime.withContext(async (context) => {
+        const configured = resolveConfiguredPluginKey(context.current.plugins ?? {}, requestedId);
+        if (configured.status !== "matched") {
+          return [];
+        }
+        const readiness = await readCodexPluginReadiness({
+          context,
+          current: context.current,
+          configKey: configured.configKey,
         });
-      } catch {
-        // Installation already completed. A changed account or unavailable status
-        // must not undo local intent or present setup links from the old scope.
-      }
+        const pendingIds = new Set(appsNeedingAuth.map((app) => app.id));
+        return codexPluginAppPageLinks(readiness).filter((app) => pendingIds.has(app.id));
+      });
+    } catch {
+      // Installation already completed. A changed account or unavailable status
+      // must not undo local intent or present setup links from the old scope.
     }
     const authRequirement =
       appsNeedingAuth.length === 1

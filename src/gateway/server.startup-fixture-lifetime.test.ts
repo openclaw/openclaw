@@ -4,7 +4,6 @@ import { afterAll, expect, test, type TestContext } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
-import { hasErrnoCode } from "../infra/errno.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   gatewayStartupFixtureSource,
@@ -23,21 +22,12 @@ try {
 const runGatewayFixtureFork = createGatewayFixtureFork(fixtureWorkers, afterAll);
 
 // Each retained failure needs its own fork: a later case must not reset the failed owner.
-for (const scenario of [
-  { id: "public clean cleanup", missingTls: false, failCleanup: false, requiredJoin: false },
-  {
-    id: "public required cleanup failure",
-    missingTls: false,
-    failCleanup: true,
-    requiredJoin: true,
-  },
-  {
-    id: "kernel required cleanup failure",
-    missingTls: true,
-    failCleanup: true,
-    requiredJoin: true,
-  },
-]) {
+for (const [id, missingTls, failCleanup] of [
+  ["public clean cleanup", false, false],
+  ["public required cleanup failure", false, true],
+  ["kernel required cleanup failure", true, true],
+] as const) {
+  const scenario = { id, missingTls, failCleanup, requiredJoin: failCleanup };
   test(`startup fixture ownership: ${scenario.id}`, (context) =>
     runGatewayFixtureFork(
       context,
@@ -58,8 +48,8 @@ for (const scenario of [
           cleanupFaultPreserved: retained,
           nativeCloseCalls: 1,
           nativeCloseStatus: retained ? "rejected" : "fulfilled",
-          kernelReturned: !scenario.missingTls,
-          listenCalls: scenario.missingTls ? 0 : 1,
+          kernelReturned: !missingTls,
+          listenCalls: missingTls ? 0 : 1,
           probeListening: retained,
           blockerListening: true,
           stopCalls: 1,
@@ -84,7 +74,7 @@ for (const scenario of [
             blockerListening: false,
           },
         });
-        if (!scenario.missingTls) {
+        if (!missingTls) {
           expect(journal, text).toMatchObject({ startupCode: "EADDRINUSE" });
         }
       },
@@ -132,15 +122,8 @@ test("finishes without publishing the required join receipt", () => {
     expect(caseRoot).toBeDefined();
     const pid = Number(await fs.readFile(path.join(caseRoot!, "probe-worker.pid"), "utf8"));
     expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if (!hasErrnoCode(error, "ESRCH")) {
-        throw error;
-      }
-      probeWorkerExited = true;
-    }
-    expect(probeWorkerExited).toBe(true);
+    expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+    probeWorkerExited = true;
     const sharedRoots = (await fs.readdir(root)).filter((name) =>
       name.startsWith("gateway-fixture-code-"),
     );
@@ -148,9 +131,7 @@ test("finishes without publishing the required join receipt", () => {
     const config = path.join(root, sharedRoots[0]!, "vitest.config.ts");
     expect(cleanups).toHaveLength(1);
     await expect(cleanups[0]!()).rejects.toThrow("Fixture cleanup unverified");
-    await fs.access(config);
-    await fs.access(caseRoot!);
-    await fs.access(codeRoot!);
+    await Promise.all([config, caseRoot!, codeRoot!].map((file) => fs.access(file)));
     expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
   } finally {
     await Promise.allSettled(completion ? [completion] : []);

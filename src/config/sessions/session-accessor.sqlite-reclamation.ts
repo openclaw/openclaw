@@ -238,7 +238,7 @@ function reclaimSqliteRowsInTransaction(
         return {
           archivedTranscripts,
           deleted: true,
-          deletedEntry: structuredClone(entry),
+          deletedEntry: entry,
           ...(plan.materializedPlans.length === 0 && transcriptInventoryUnchanged
             ? { transcriptInventoryUnchanged: true as const }
             : {}),

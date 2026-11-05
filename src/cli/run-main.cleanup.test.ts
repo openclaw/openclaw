@@ -26,7 +26,12 @@ const dispatch = vi.hoisted(() => ({
 }));
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const installUnhandledRejectionHandlerMock = vi.hoisted(() => vi.fn());
-// Only bootstrap/dispatch are replaced; process entry, registry scopes and cleanup are real.
+// Bootstrap/dispatch and process identity are replaced; entry, registry scopes and cleanup are real.
+// mock-isolation: One Vitest process simulates both CLI and Gateway entries; subprocess tests own role immutability.
+vi.mock("../infra/database-engine/admission-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/database-engine/admission-scope.js")>()),
+  installDatabaseProcessRole: vi.fn(),
+}));
 vi.mock("./route.js", () => ({
   tryRouteCli: async () => {
     await dispatch.run();
@@ -60,6 +65,8 @@ vi.mock("./dotenv.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./dotenv.js")>()),
   loadCliDotEnv() {},
 }));
+// mock-isolation: These lifecycle fixtures replace storage startup; PG CLI tests cover selection.
+vi.mock("./database-engine-selection.js", () => ({ prepareCliDatabaseEngine: async () => {} }));
 vi.mock("../config/io.js", () => ({ readBestEffortConfig: async () => ({}) }));
 // mock-isolation: Synthetic proxy handles exercise CLI custody without changing process-wide routing or starting Proxyline.
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
@@ -408,8 +415,7 @@ describe("CLI process harness cleanup", () => {
       const { withCliProcessScope, getCliPluginInvocationResources } =
         await import("./runtime-cleanup-scope.js");
       const { getAsyncWorkSignal, trackAsyncWork } = await import("../shared/async-work-scope.js");
-      const { exitAfterSignalExitBarriers, waitForCliSignalExit } =
-        await import("./signal-exit-barrier.js");
+      const { waitForCliSignalExit } = await import("./signal-exit-barrier.js");
       const { runCli } = await import("./run-main.js");
       const entered = createDeferredCore();
       const cancelled = createDeferredCore();
@@ -418,6 +424,8 @@ describe("CLI process harness cleanup", () => {
       const failure = new Error("command failed with an admitted proxy tail");
       const signalCode = mode === "SIGTERM" ? 143 : mode === "SIGINT" ? 130 : undefined;
       const previousExitCode = process.exitCode;
+      const signalListeners = vi.spyOn(process, "once");
+      let cancellation: unknown;
       let proxyAlive = true;
       let tailFinished = false;
       let tailObservedProxy: boolean | undefined;
@@ -442,7 +450,14 @@ describe("CLI process harness cleanup", () => {
         restoreSettlementObserver = () => observer.mockRestore();
         const signal = getAsyncWorkSignal()!;
         tail = trackAsyncWork(async () => {
-          signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+          signal.addEventListener(
+            "abort",
+            () => {
+              cancellation = signal.reason;
+              cancelled.resolve();
+            },
+            { once: true },
+          );
           await finish.promise;
           tailObservedProxy = proxyAlive;
           tailFinished = true;
@@ -463,7 +478,14 @@ describe("CLI process harness cleanup", () => {
       try {
         await awaitGateBeforeSettlement(entered.promise, outcome, "command never dispatched");
         if (signalCode !== undefined) {
-          exitAfterSignalExitBarriers(signalCode);
+          const listener = signalListeners.mock.calls.find(([event]) => event === mode)?.[1];
+          expect(listener).toBeTypeOf("function");
+          listener!();
+          expect(cancellation).toMatchObject({
+            name: "AbortError",
+            code: 20,
+            message: `CLI stopping (${mode})`,
+          });
         }
         await awaitGateBeforeSettlement(settling.promise, outcome, "command skipped its work join");
         expect(tailFinished).toBe(false);
@@ -490,6 +512,7 @@ describe("CLI process harness cleanup", () => {
         await tail;
         await waitForCliSignalExit();
         restoreSettlementObserver?.();
+        signalListeners.mockRestore();
         process.exitCode = previousExitCode;
       }
     },

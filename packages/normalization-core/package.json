@@ -69,6 +69,11 @@
       "import": "./dist/json-schema.mjs",
       "default": "./dist/json-schema.mjs"
     },
+    "./json-schema-validator": {
+      "types": "./dist/json-schema-validator.d.mts",
+      "import": "./dist/json-schema-validator.mjs",
+      "default": "./dist/json-schema-validator.mjs"
+    },
     "./markdown-plain-text": {
       "types": "./dist/markdown-plain-text.d.mts",
       "import": "./dist/markdown-plain-text.mjs",
@@ -150,6 +155,6 @@
   },
   "dependencies": {
     "libphonenumber-js": "1.13.15",
-    "typebox": "1.3.36"
+    "typebox": "1.4.3"
   }
 }

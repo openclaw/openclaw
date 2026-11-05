@@ -1,19 +1,18 @@
 import { Buffer } from "node:buffer";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import {
-  takeControlUiElementScreenshot,
-  takeControlUiViewportScreenshot,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
+  createControlUiE2eContextOptions,
+  tooltipTitleText,
+} from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
-  SESSION_LIST_DEFAULTS,
   LOCAL_GIT_WORKSPACE_RESPONSES,
-  captureUiProof,
-  captureUiProofEnabled,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
@@ -21,43 +20,58 @@ import {
   installMockGateway,
   navigateInApp,
   pastePng,
+  pollCount,
+  pollEnabled,
+  pollDisabled,
+  pollAttribute,
   pollLocatorText,
+  pollValue,
   waitForCommittedChatRoute,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
+import { sessionList } from "./new-session-shard.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const pngAttachment = { fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 };
+type QuotaProof = { rejectedWrites: number };
+
+function initialPromptResponses(sessionKey: string, runId: string, sessionId: string) {
+  return {
+    "sessions.create": { key: sessionKey, runId, runStarted: true, messageSeq: 1 },
+    "sessions.list": createdSessionListResult(sessionKey),
+    "chat.startup": {
+      messages: [],
+      sessionId,
+      sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
+    },
+  };
+}
+
+async function startPrompt(page: Page, message: string, sessionKey: string) {
+  await page.goto(`${suite.server.baseUrl}new`);
+  await page.locator(".new-session-page__message").fill(message);
+  await page.getByRole("button", { name: "Start session" }).click();
+  await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
+    timeout: 30_000,
+  });
+}
+
+async function expectRejectedTurn(page: Page, message: string, error: string) {
+  const group = page.locator(".chat-group.user", { hasText: message });
+  const status = group.locator(".chat-send-status");
+  await group.waitFor({ state: "visible", timeout: 30_000 });
+  expect(await status.textContent()).toContain("Not sent");
+  await expect.poll(() => tooltipTitleText(status)).toBe(error);
+}
 
 async function withNewSessionPage(run: (page: Page) => Promise<void>): Promise<void> {
-  const context = await suite.browser.newContext({
-    locale: "en-US",
-    ...(captureUiProofEnabled
-      ? { recordVideo: { dir: suite.artifactDir, size: { height: 900, width: 1280 } } }
-      : {}),
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1280 },
-  });
-  try {
-    await run(await context.newPage());
-  } finally {
-    await context.close();
-  }
+  await suite.withPage(createControlUiE2eContextOptions(), ({ page }) => run(page));
 }
 
 suite.define(() => {
-  it("restores a prompt and image in a fresh page, then clears them after creation", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
-      ? suite.artifactDir
-      : undefined;
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      ...(artifactDir
-        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
-        : {}),
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+  it("restores a prompt, image and permission choice, then clears them after creation", async () => {
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     try {
       const firstPage = await context.newPage();
       await installMockGateway(firstPage);
@@ -68,22 +82,31 @@ suite.define(() => {
       await firstPage.locator('.chat-attachment-thumb img[alt="pixel.png"]').waitFor();
       const incognito = firstPage.getByRole("switch", { name: "Incognito" });
       await incognito.click();
-      await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("true");
+      await pollAttribute(incognito, "aria-checked").toBe("true");
       await waitForCommittedNewSessionDraft(firstPage, null, 0);
       await incognito.click();
-      await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("false");
+      await pollAttribute(incognito, "aria-checked").toBe("false");
       await firstMessage.fill("restore this prompt after restart and incognito");
-      await expect.poll(() => firstPage.locator(".chat-attachment-thumb").count()).toBe(1);
+      await pollCount(firstPage.locator(".chat-attachment-thumb")).toBe(1);
       await waitForCommittedNewSessionDraft(
         firstPage,
         "restore this prompt after restart and incognito",
         1,
       );
+      const permission = firstPage.locator('[data-chat-permission-select="true"]');
+      await permission.click();
+      await firstPage.locator('[data-chat-permission-option="read-only"]').click();
+      await pollAttribute(permission, "data-chat-select-value").toBe("read-only");
+      await waitForCommittedNewSessionDraft(
+        firstPage,
+        "restore this prompt after restart and incognito",
+        1,
+        "read-only",
+      );
       await firstPage.reload();
-      await expect
-        .poll(() => firstMessage.inputValue())
-        .toBe("restore this prompt after restart and incognito");
-      await expect.poll(() => firstPage.locator(".chat-attachment-thumb").count()).toBe(1);
+      await pollAttribute(permission, "data-chat-select-value").toBe("read-only");
+      await pollValue(firstMessage).toBe("restore this prompt after restart and incognito");
+      await pollCount(firstPage.locator(".chat-attachment-thumb")).toBe(1);
       await firstPage.close();
 
       const restoredPage = await context.newPage();
@@ -94,29 +117,19 @@ suite.define(() => {
       });
       await restoredPage.goto(`${suite.server.baseUrl}new`);
       const restoredMessage = restoredPage.locator(".new-session-page__message");
-      await expect
-        .poll(() => restoredMessage.inputValue())
-        .toBe("restore this prompt after restart and incognito");
-      await expect.poll(() => restoredPage.locator(".chat-attachment-thumb").count()).toBe(1);
-      await captureUiProof(suite, restoredPage, "new-session-restart-draft-restored.png");
-      if (artifactDir) {
-        await restoredPage.screenshot({
-          path: path.join(artifactDir, "new-session-restart-draft-restored.png"),
-        });
-      }
+      await pollValue(restoredMessage).toBe("restore this prompt after restart and incognito");
+      await pollCount(restoredPage.locator(".chat-attachment-thumb")).toBe(1);
+      await pollAttribute(
+        restoredPage.locator('[data-chat-permission-select="true"]'),
+        "data-chat-select-value",
+      ).toBe("read-only");
       await restoredPage.getByRole("button", { name: "Start session" }).click();
 
       const create = await restoredGateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         message: "restore this prompt after restart and incognito",
-        attachments: [
-          {
-            type: "image",
-            mimeType: "image/png",
-            fileName: "pixel.png",
-            content: ONE_PIXEL_PNG_B64,
-          },
-        ],
+        permissionMode: "read-only",
+        attachments: [{ ...pngAttachment, type: "image", mimeType: "image/png" }],
       });
       await restoredPage.waitForURL(
         (url) => url.pathname === controlUiSessionPath("agent:main:restart-draft"),
@@ -128,22 +141,18 @@ suite.define(() => {
       const clearedPage = await context.newPage();
       await installMockGateway(clearedPage);
       await clearedPage.goto(`${suite.server.baseUrl}new`);
-      await expect
-        .poll(() => clearedPage.locator(".new-session-page__message").inputValue())
-        .toBe("");
-      await expect.poll(() => clearedPage.locator(".chat-attachment-thumb").count()).toBe(0);
-      await captureUiProof(suite, clearedPage, "new-session-restart-draft-cleared.png");
-      if (artifactDir) {
-        await clearedPage.screenshot({
-          path: path.join(artifactDir, "new-session-restart-draft-cleared.png"),
-        });
-      }
+      await pollValue(clearedPage.locator(".new-session-page__message")).toBe("");
+      await pollCount(clearedPage.locator(".chat-attachment-thumb")).toBe(0);
+      await pollAttribute(
+        clearedPage.locator('[data-chat-permission-select="true"]'),
+        "data-chat-select-value",
+      ).toBe("");
     } finally {
       await context.close();
     }
   });
 
-  it("grows the first prompt downward without moving the identity, then caps at ten lines", async () => {
+  it("grows the first prompt downward to twelve lines, then scrolls internally", async () => {
     await withNewSessionPage(async (page) => {
       const gateway = await installMockGateway(page);
       await page.emulateMedia({ reducedMotion: "reduce" });
@@ -161,9 +170,7 @@ suite.define(() => {
         triggers.boundingBox(),
         composer.boundingBox(),
       ]);
-      expect(identityBox).not.toBeNull();
-      expect(triggersBox).not.toBeNull();
-      expect(composerBox).not.toBeNull();
+      expect([identityBox, triggersBox, composerBox]).not.toContain(null);
 
       const initial = await message.evaluate((element) => ({
         height: element.clientHeight,
@@ -174,12 +181,11 @@ suite.define(() => {
         const style = getComputedStyle(element);
         return {
           height: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+          viewportHeight: element.ownerDocument.defaultView!.innerHeight,
           lineHeight: Number.parseFloat(style.lineHeight),
           overflowY: style.overflowY,
           padding: Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom),
-          scrollbarWidth: style.scrollbarWidth,
-          webkitScrollbarWidth: getComputedStyle(element, "::-webkit-scrollbar").width,
-          webkitThumbInset: getComputedStyle(element, "::-webkit-scrollbar-thumb").borderLeftWidth,
         };
       });
 
@@ -187,23 +193,22 @@ suite.define(() => {
       expect(tenLines.height).toBeGreaterThanOrEqual(
         Math.floor(tenLines.lineHeight * 10 + tenLines.padding) - 1,
       );
+      expect(tenLines.scrollHeight).toBe(tenLines.height);
       expect(tenLines.overflowY).toBe("hidden");
-      expect(tenLines.scrollbarWidth).toBe("thin");
-      // The composer used to buy thinness by shrinking its hit target to 6px.
-      // The canonical profile keeps the full 12px drag target and paints a 6px
-      // thumb inside it (transparent border + content-box clip), so this asserts
-      // the visible thumb stays as thin as before without a cramped grab area.
-      const composerScrollbar = Number.parseFloat(tenLines.webkitScrollbarWidth);
-      const composerThumbInset = Number.parseFloat(tenLines.webkitThumbInset);
-      expect(composerScrollbar).toBe(12);
-      expect(composerScrollbar - composerThumbInset * 2).toBe(6);
-      await captureUiProof(suite, page, "new-session-composer-ten-lines.png");
 
-      const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");
+      // More text than even the whole viewport can hold must exceed the pane budget.
+      const overflowLines = Math.ceil(tenLines.viewportHeight / tenLines.lineHeight) + 1;
+      const longPrompt = Array.from(
+        { length: overflowLines },
+        (_, index) => `line ${index + 1}`,
+      ).join("\n");
       await message.fill(longPrompt);
+      // Classic scrollbars retain their gutter at the cap to prevent draft-height oscillation.
+      await expect
+        .poll(() => message.evaluate((element) => getComputedStyle(element).overflowY))
+        .toBe("scroll");
       const capped = await message.evaluate((element) => ({
         clientHeight: element.clientHeight,
-        overflowY: getComputedStyle(element).overflowY,
         scrollHeight: element.scrollHeight,
       }));
       const [expandedIdentityBox, expandedTriggersBox, expandedComposerBox] = await Promise.all([
@@ -211,8 +216,9 @@ suite.define(() => {
         triggers.boundingBox(),
         composer.boundingBox(),
       ]);
+      expect(capped.clientHeight).toBeCloseTo(tenLines.lineHeight * 12 + tenLines.padding, 0);
+      expect(capped.clientHeight).toBeLessThan(tenLines.viewportHeight);
       expect(capped.clientHeight).toBeLessThan(capped.scrollHeight);
-      expect(capped.overflowY).toBe("auto");
       // Browser subpixel rounding may shift stable blocks by a pixel; larger movement is visible.
       for (const [before, after] of [
         [identityBox, expandedIdentityBox],
@@ -221,7 +227,6 @@ suite.define(() => {
       ]) {
         expect(Math.abs((after?.y ?? 0) - (before?.y ?? 0))).toBeLessThanOrEqual(2);
       }
-      await captureUiProof(suite, page, "new-session-composer-capped-scrollbar.png");
       const start = page.getByRole("button", { name: "Start session" });
       await expect(start.isVisible()).resolves.toBe(true);
       await expect(start.isEnabled()).resolves.toBe(true);
@@ -252,26 +257,20 @@ suite.define(() => {
       const preview = attachment.getByRole("img", { name: "favicon-32.png" });
       const previewButton = page.getByRole("button", { name: "Open image favicon-32.png" });
       await preview.waitFor({ state: "visible" });
-      await expect.poll(() => preview.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
-      await captureUiProof(suite, page, "new-session-picked-image-preview.png");
+      await pollAttribute(preview, "src").toMatch(/^data:image\/png;base64,/u);
       await previewButton.click();
       const lightbox = page.locator("openclaw-image-lightbox");
       const dialog = page.getByRole("dialog", { name: "Image preview: favicon-32.png" });
       await dialog.waitFor({ state: "visible" });
       await expect(lightbox.getAttribute("title")).resolves.toBeNull();
       await page.getByAltText("favicon-32.png").last().waitFor({ state: "visible" });
-      await captureUiProof(suite, page, "new-session-picked-image-lightbox.png", {
-        surface: lightbox.locator("dialog"),
-        content: [lightbox.locator("img.image")],
-      });
       await page.keyboard.press("Escape");
       await lightbox.waitFor({ state: "detached" });
       await previewButton.press("Enter");
       await dialog.waitFor({ state: "visible" });
       await page.keyboard.press("Escape");
       await page.getByRole("button", { name: "Remove favicon-32.png" }).click();
-      await expect.poll(() => attachment.count()).toBe(0);
-      await captureUiProof(suite, page, "new-session-picked-image-removed.png");
+      await pollCount(attachment).toBe(0);
     });
   });
 
@@ -289,15 +288,10 @@ suite.define(() => {
       });
 
       const previewButton = page.getByRole("button", { name: "Open image untrusted.svg" });
-      await expect.poll(() => previewButton.locator("img").getAttribute("src")).toMatch(/^blob:/u);
+      await pollAttribute(previewButton.locator("img"), "src").toMatch(/^blob:/u);
       await previewButton.click();
       await page.getByRole("dialog", { name: "Image preview: untrusted.svg" }).waitFor();
       await expect(page.getByRole("link", { name: "Open in new tab" }).count()).resolves.toBe(0);
-      const lightbox = page.locator("openclaw-image-lightbox");
-      await captureUiProof(suite, page, "new-session-svg-lightbox.png", {
-        surface: lightbox.locator("dialog"),
-        content: [lightbox.locator("img.image")],
-      });
     });
   });
 
@@ -306,16 +300,16 @@ suite.define(() => {
       const sessionKey = "agent:main:visible-initial-prompt";
       const message = "keep this prompt visible while the agent works";
       const activeOutputTimestamp = Date.now() + 60_000;
+      const responses = initialPromptResponses(
+        sessionKey,
+        "visible-initial-run",
+        "visible-initial-prompt",
+      );
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "sessions.create": {
-            key: sessionKey,
-            runId: "visible-initial-run",
-            runStarted: true,
-            messageSeq: 1,
-          },
-          "sessions.list": createdSessionListResult(sessionKey),
+          ...responses,
           "chat.startup": {
+            ...responses["chat.startup"],
             messages: [
               {
                 role: "assistant",
@@ -339,25 +333,16 @@ suite.define(() => {
                 __openclaw: { id: "active-tool-result", seq: 3 },
               },
             ],
-            sessionId: "visible-initial-prompt",
-            sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator(".new-session-page__message").fill(message);
-      await page.getByRole("button", { name: "Start session" }).click();
-      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
-        timeout: 30_000,
-      });
-      await gateway.waitForRequest("chat.startup");
+      await startPrompt(page, message, sessionKey);
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await page.getByText("SKILL.md", { exact: true }).waitFor();
 
       await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
       const userRow = await page.locator(".chat-group.user").boundingBox();
       const toolRow = await page.getByText("SKILL.md", { exact: true }).boundingBox();
-      expect(userRow).not.toBeNull();
-      expect(toolRow).not.toBeNull();
       if (!userRow || !toolRow) {
         throw new Error("expected visible prompt and tool rows");
       }
@@ -370,28 +355,14 @@ suite.define(() => {
       const sessionKey = "agent:main:reconnected-initial-prompt";
       const message = "keep this first prompt through reconnect";
       const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "sessions.create": {
-            key: sessionKey,
-            runId: "reconnected-initial-run",
-            runStarted: true,
-            messageSeq: 1,
-          },
-          "sessions.list": createdSessionListResult(sessionKey),
-          "chat.startup": {
-            messages: [],
-            sessionId: "reconnected-initial-prompt",
-            sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
-          },
-        },
+        methodResponses: initialPromptResponses(
+          sessionKey,
+          "reconnected-initial-run",
+          "reconnected-initial-prompt",
+        ),
       });
-      await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator(".new-session-page__message").fill(message);
-      await page.getByRole("button", { name: "Start session" }).click();
-      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
-        timeout: 30_000,
-      });
-      await gateway.waitForRequest("chat.startup");
+      await startPrompt(page, message, sessionKey);
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
 
       const socketsBeforeReconnect = await gateway.getSocketCount();
@@ -403,17 +374,8 @@ suite.define(() => {
       await expect
         .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
         .toBe("connected");
-      if (captureUiProofEnabled) {
-        await mkdir(path.join(suite.artifactDir, "initial-prompt-reconnect"), { recursive: true });
-        await writeFile(
-          path.join(suite.artifactDir, "initial-prompt-reconnect", "reconnected-session.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-            page.locator(".chat-group.user"),
-          ]),
-        );
-      }
       await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
-      await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
+      await pollCount(page.locator(".chat-group.user")).toBe(1);
     });
   });
 
@@ -424,10 +386,7 @@ suite.define(() => {
       const message = "testing if dual prompts show";
       const source = "media://inbound/initial-prompt.png";
       const imageBytes = await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
-      let releaseMedia!: () => void;
-      const mediaGate = new Promise<void>((resolve) => {
-        releaseMedia = resolve;
-      });
+      const { promise: mediaGate, resolve: releaseMedia } = createDeferred();
       let metadataRequested = false;
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         const url = new URL(route.request().url());
@@ -438,18 +397,12 @@ suite.define(() => {
         await route.fulfill(
           metadata
             ? {
-                json: {
-                  available: true,
-                  mediaTicket: "initial-prompt-ticket",
-                  mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-                },
+                json: mediaTicketPayload("initial-prompt-ticket", 5 * 60_000),
               }
             : { contentType: "image/png", body: imageBytes },
         );
       });
-      const authoritative = {
-        role: "user",
-        content: [{ type: "text", text: message }],
+      const authoritative = chatMessage("user", message, {
         timestamp: Date.now(),
         __openclaw: {
           id: "persisted-image-prompt",
@@ -458,26 +411,23 @@ suite.define(() => {
           media: [{ path: source, contentType: "image/png", fileName: "pixel.png" }],
           mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
         },
-      };
+      });
+      const responses = initialPromptResponses(sessionKey, runId, "single-image-prompt");
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         deferredMethods: ["chat.startup"],
         methodResponses: {
+          ...responses,
           "sessions.create": {
-            key: sessionKey,
-            runId,
+            ...responses["sessions.create"],
             entry: { sessionId: "single-image-prompt" },
-            runStarted: true,
-            messageSeq: 1,
           },
-          "sessions.list": createdSessionListResult(sessionKey),
           "chat.startup": {
+            ...responses["chat.startup"],
             messages: [authoritative],
-            sessionId: "single-image-prompt",
             sessionInfo: {
+              ...responses["chat.startup"].sessionInfo,
               activeRunIds: [runId],
-              hasActiveRun: true,
-              key: sessionKey,
-              status: "running",
             },
           },
         },
@@ -499,24 +449,25 @@ suite.define(() => {
 
         const userRow = page.locator(".chat-group.user");
         const userImage = userRow.locator("img.chat-message-image");
-        await expect.poll(() => userRow.count()).toBe(1);
-        await expect.poll(() => userImage.count()).toBe(1);
-        await expect.poll(() => userImage.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
+        await pollCount(userRow).toBe(1);
+        await pollCount(userImage).toBe(1);
+        await pollAttribute(userImage, "src").toMatch(/^data:image\/png;base64,/u);
         await expectDecodedThumbnail(userImage, 180);
         const initialImageSrc = await userImage.getAttribute("src");
         const initialImageAlt = await userImage.getAttribute("alt");
-        const captureThumbnail = () =>
-          page.video()
-            ? takeControlUiElementScreenshot(page, userImage, [userImage])
-            : userImage.screenshot({ animations: "disabled" });
+        const captureThumbnail = () => userImage.screenshot({ animations: "disabled" });
         const initialPixels = await captureThumbnail();
         await userImage.evaluate((image) => image.setAttribute("data-initial-image-node", "true"));
+        const expectStablePixels = async () => {
+          expect((await captureThumbnail()).equals(initialPixels)).toBe(true);
+          expect(await userRow.locator('[aria-busy="true"]').count()).toBe(0);
+        };
         await pollLocatorText(userRow).toContain(message);
         await pollLocatorText(userRow).not.toContain("Attached image");
 
         const promptBubbles = page.locator(".chat-bubble").filter({ hasText: message });
         const durableBubble = page.locator('.chat-bubble[data-entry-id="persisted-image-prompt"]');
-        await expect.poll(() => promptBubbles.count()).toBe(1);
+        await pollCount(promptBubbles).toBe(1);
         await gateway.emitGatewayEvent("session.message", {
           activeRunIds: [runId],
           clientRunId: runId,
@@ -535,14 +486,12 @@ suite.define(() => {
           sessionKey,
         });
         await durableBubble.waitFor({ timeout: 10_000 });
-        await expect.poll(() => durableBubble.count()).toBe(1);
-        await expect.poll(() => promptBubbles.count()).toBe(1);
+        await pollCount(durableBubble).toBe(1);
+        await pollCount(promptBubbles).toBe(1);
         await expect.poll(() => metadataRequested).toBe(true);
-        await expect.poll(() => userImage.getAttribute("data-initial-image-node")).toBe("true");
-        await expect.poll(() => userImage.getAttribute("src")).toBe(initialImageSrc);
-        expect((await captureThumbnail()).equals(initialPixels)).toBe(true);
-        expect(await userRow.locator('[aria-busy="true"]').count()).toBe(0);
-        await captureUiProof(suite, page, "initial-image-metadata-loading.png");
+        await pollAttribute(userImage, "data-initial-image-node").toBe("true");
+        await pollAttribute(userImage, "src").toBe(initialImageSrc);
+        await expectStablePixels();
 
         const worktreeSession = {
           key: sessionKey,
@@ -575,36 +524,29 @@ suite.define(() => {
         await pollLocatorText(page.locator(".chat-pane__session-title-text")).toBe(
           worktreeSession.displayName,
         );
-        await captureUiProof(suite, page, "initial-image-worktree-metadata-loading.png");
         expect(await userImage.getAttribute("data-initial-image-node")).toBe("true");
         expect(await userImage.getAttribute("src")).toBe(initialImageSrc);
-        expect((await captureThumbnail()).equals(initialPixels)).toBe(true);
-        expect(await userRow.locator('[aria-busy="true"]').count()).toBe(0);
+        await expectStablePixels();
 
         await gateway.resolveDeferred("chat.startup");
 
-        await expect.poll(() => userRow.count()).toBe(1);
-        await expect.poll(() => userImage.count()).toBe(1);
-        await expect.poll(() => userImage.getAttribute("data-initial-image-node")).toBe("true");
-        await expect.poll(() => userImage.getAttribute("src")).toBe(initialImageSrc);
-        await expect.poll(() => promptBubbles.count()).toBe(1);
-        await expect.poll(() => durableBubble.count()).toBe(1);
+        await pollCount(userRow).toBe(1);
+        await pollCount(userImage).toBe(1);
+        await pollAttribute(userImage, "data-initial-image-node").toBe("true");
+        await pollAttribute(userImage, "src").toBe(initialImageSrc);
+        await pollCount(promptBubbles).toBe(1);
+        await pollCount(durableBubble).toBe(1);
         await pollLocatorText(userRow).toContain(message);
         await pollLocatorText(userRow).not.toContain("Attached image");
         releaseMedia();
-        await expect.poll(() => userImage.getAttribute("src")).toContain("initial-prompt-ticket");
+        await pollAttribute(userImage, "src").toContain("initial-prompt-ticket");
         await expectDecodedThumbnail(userImage, 180);
         expect(await userImage.getAttribute("data-initial-image-node")).toBe("true");
         expect((await captureThumbnail()).equals(initialPixels)).toBe(true);
-        await captureUiProof(suite, page, "initial-image-canonical-ready.png");
         await userRow.locator(".chat-message-image-button").click();
         const lightbox = page.locator("openclaw-image-lightbox");
         const dialog = lightbox.getByRole("dialog");
         await dialog.waitFor({ state: "visible" });
-        await captureUiProof(suite, page, "initial-image-filename-preview.png", {
-          surface: dialog,
-          content: [lightbox.locator("img.image")],
-        });
         expect(initialImageAlt).toBe("pixel.png");
         expect(await userImage.getAttribute("alt")).toBe("pixel.png");
         expect(await dialog.getAttribute("aria-label")).toBe("Image preview: pixel.png");
@@ -635,7 +577,7 @@ suite.define(() => {
       await composer.fill("include the image that is still loading");
       await pastePng(composer);
 
-      await expect.poll(() => submit.isDisabled()).toBe(true);
+      await pollDisabled(submit).toBe(true);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       await page.evaluate(() => {
         const finish = (globalThis as unknown as { finishPastedImageRead?: () => void })
@@ -647,12 +589,12 @@ suite.define(() => {
       });
 
       await page.getByRole("img", { name: "pixel.png" }).waitFor();
-      await expect.poll(() => submit.isEnabled()).toBe(true);
+      await pollEnabled(submit).toBe(true);
       await submit.click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         message: "include the image that is still loading",
-        attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
+        attachments: [pngAttachment],
       });
     });
   });
@@ -748,131 +690,88 @@ suite.define(() => {
     });
   });
 
-  it("keeps a rejected first message visible and retryable after reload", async () => {
-    await withNewSessionPage(async (page) => {
-      const sessionKey = "agent:main:rejected-first-message";
-      const message = "keep this rejected first message";
-      const runError = "send blocked by session policy";
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          ...LOCAL_GIT_WORKSPACE_RESPONSES,
-          "sessions.list": {
-            count: 1,
-            defaults: SESSION_LIST_DEFAULTS,
-            path: "",
-            sessions: [
-              {
-                hasActiveRun: false,
-                key: sessionKey,
-                kind: "direct",
-                status: "done",
-                updatedAt: Date.now(),
-              },
-            ],
-            ts: Date.now(),
+  it.each(["reload", "quota"] as const)(
+    "keeps a rejected first message retryable after %s",
+    async (recovery) => {
+      await withNewSessionPage(async (page) => {
+        const quota = recovery === "quota";
+        if (quota) {
+          await page.addInitScript(() => {
+            const proof: QuotaProof = { rejectedWrites: 0 };
+            (globalThis as unknown as { quotaProof: QuotaProof }).quotaProof = proof;
+            const setItem = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")
+              ?.value as Storage["setItem"];
+            Storage.prototype.setItem = function (key: string, value: string) {
+              if (
+                this === window.sessionStorage &&
+                key.startsWith("openclaw.control.chatComposer.v4:")
+              ) {
+                proof.rejectedWrites += 1;
+                throw new DOMException("Quota exceeded", "QuotaExceededError");
+              }
+              return setItem.call(this, key, value);
+            };
+          });
+        }
+        const sessionId = quota ? "storage-failed-initial-turn" : "rejected-first-message";
+        const sessionKey = `agent:main:${sessionId}`;
+        const message = "Keep this rejected message";
+        const runError = "send blocked by session policy";
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            ...(quota ? {} : LOCAL_GIT_WORKSPACE_RESPONSES),
+            "sessions.list": quota
+              ? createdSessionListResult(sessionKey)
+              : sessionList({
+                  hasActiveRun: false,
+                  key: sessionKey,
+                  kind: "direct",
+                  status: "done",
+                  updatedAt: Date.now(),
+                }),
+            "sessions.create": {
+              key: sessionKey,
+              runStarted: false,
+              runError: { code: "INVALID_REQUEST", message: runError },
+            },
+            "chat.history": {
+              messages: [],
+              sessionId,
+              sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
+            },
+            "chat.send": { runId: "retry-run", status: "started" },
           },
-          "sessions.create": {
-            key: sessionKey,
-            runStarted: false,
-            runError: { code: "INVALID_REQUEST", message: runError },
-          },
-          "chat.history": {
-            messages: [],
-            sessionId: "rejected-first-message",
-            sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
-          },
-          "chat.send": { runId: "retry-run", status: "started" },
-        },
+        });
+        await page.goto(`${suite.server.baseUrl}new`);
+        const composer = page.locator(".new-session-page__message");
+        await composer.fill(message);
+        await pastePng(composer);
+        await page.getByRole("button", { name: "Start session" }).click();
+        const create = await gateway.waitForRequest("sessions.create");
+        expect(create.params).toMatchObject({ message, attachments: [pngAttachment] });
+        await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
+          timeout: 30_000,
+        });
+        await expectRejectedTurn(page, message, runError);
+        if (quota) {
+          expect(
+            await page.evaluate(
+              () => (globalThis as unknown as { quotaProof: QuotaProof }).quotaProof.rejectedWrites,
+            ),
+          ).toBeGreaterThan(0);
+        }
+        if (!quota) {
+          await page.reload();
+          await expectRejectedTurn(page, message, runError);
+        }
+        await page.getByRole("button", { name: "Retry queued message" }).click();
+        const retry = await gateway.waitForRequest("chat.send");
+        expect(retry.params).toMatchObject({ sessionKey, message, attachments: [pngAttachment] });
+        const retriedTurn = page.locator(".chat-group.user", { hasText: message });
+        await pollCount(retriedTurn.locator(".chat-send-status")).toBe(0);
+        await retriedTurn.locator("time.chat-group-timestamp").waitFor();
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(quota ? 1 : 0);
       });
-      await page.goto(`${suite.server.baseUrl}new`);
-      const composer = page.locator(".new-session-page__message");
-      await composer.fill(message);
-      await pastePng(composer);
-      await page.getByRole("button", { name: "Start session" }).click();
-      const create = await gateway.waitForRequest("sessions.create");
-      expect(create.params).toMatchObject({
-        message,
-        attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
-      });
-
-      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
-        timeout: 30_000,
-      });
-      const failedGroup = page.locator(".chat-group.user", { hasText: message });
-      const failedStatus = failedGroup.locator(".chat-send-status");
-      await failedGroup.waitFor({ state: "visible", timeout: 30_000 });
-      expect(await failedStatus.textContent()).toContain("Not sent");
-      await expect.poll(() => tooltipTitleText(failedStatus)).toBe(runError);
-
-      await page.reload();
-      await failedGroup.waitFor({ state: "visible", timeout: 30_000 });
-      expect(await failedStatus.textContent()).toContain("Not sent");
-      await expect.poll(() => tooltipTitleText(failedStatus)).toBe(runError);
-
-      await page.getByRole("button", { name: "Retry queued message" }).click();
-      const retry = await gateway.waitForRequest("chat.send");
-      expect(retry.params).toMatchObject({
-        sessionKey,
-        message,
-        attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
-      });
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-    });
-  });
-
-  it("adopts a created session when rejected-turn persistence exceeds browser storage", async () => {
-    await withNewSessionPage(async (page) => {
-      await page.addInitScript(() => {
-        const setItem = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")
-          ?.value as Storage["setItem"];
-        Storage.prototype.setItem = function (key: string, value: string) {
-          if (key.startsWith("openclaw.control.chatComposer.v2:")) {
-            throw new DOMException("Quota exceeded", "QuotaExceededError");
-          }
-          return setItem.call(this, key, value);
-        };
-      });
-      const sessionKey = "agent:main:storage-failed-initial-turn";
-      const message = "retry this in the session that already exists";
-      const runError = "initial send rejected";
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "sessions.create": {
-            key: sessionKey,
-            runStarted: false,
-            runError: { code: "INVALID_REQUEST", message: runError },
-          },
-          "sessions.list": createdSessionListResult(sessionKey),
-          "chat.history": {
-            messages: [],
-            sessionId: "storage-failed-initial-turn",
-            sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
-          },
-          "chat.send": { runId: "storage-failure-retry", status: "started" },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}new`);
-      const composer = page.locator(".new-session-page__message");
-      await composer.fill(message);
-      await pastePng(composer);
-      await page.getByRole("button", { name: "Start session" }).click();
-
-      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
-        timeout: 30_000,
-      });
-      const failedGroup = page.locator(".chat-group.user", { hasText: message });
-      const failedStatus = failedGroup.locator(".chat-send-status");
-      await failedGroup.waitFor({ state: "visible", timeout: 30_000 });
-      expect(await failedStatus.textContent()).toContain("Not sent");
-      await expect.poll(() => tooltipTitleText(failedStatus)).toBe(runError);
-      await page.getByRole("button", { name: "Retry queued message" }).click();
-      const retry = await gateway.waitForRequest("chat.send");
-      expect(retry.params).toMatchObject({
-        sessionKey,
-        message,
-        attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
-      });
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-    });
-  });
+    },
+  );
 });

@@ -6,7 +6,9 @@ import {
   parseStrictNonNegativeInteger,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sleepWithAbort } from "./backoff.js";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { isTruthyEnvValue } from "./env.js";
 import { isErrno } from "./errno.js";
@@ -15,6 +17,8 @@ import {
   readResponseTextSnippet,
   readResponseWithLimit,
 } from "./http-body.js";
+import { fetchWithSsrFGuard, withTrustedEnvProxyGuardedFetchMode } from "./net/fetch-guard.js";
+import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "./net/ssrf.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
@@ -23,13 +27,11 @@ const CLAWHUB_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
 
-export type ClawHubFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
-
 export type ClawHubFetchOptions = {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
+  signal?: AbortSignal;
 };
 
 export type ClawHubRequestParams = ClawHubFetchOptions & {
@@ -37,6 +39,7 @@ export type ClawHubRequestParams = ClawHubFetchOptions & {
   url?: string;
   method?: "GET" | "POST";
   json?: unknown;
+  form?: FormData;
   search?: Record<string, string | undefined>;
   skipAuth?: boolean;
   retryTransientReads?: boolean;
@@ -73,10 +76,13 @@ export class ClawHubRequestError extends Error {
 }
 
 /** Resolves the configured ClawHub base URL, falling back to the default public host. */
-export function resolveClawHubBaseUrl(baseUrl?: string): string {
+export function resolveClawHubBaseUrl(
+  baseUrl?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const envValue =
-    normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_URL) ||
-    normalizeOptionalString(process.env.CLAWHUB_URL) ||
+    normalizeOptionalString(env.OPENCLAW_CLAWHUB_URL) ||
+    normalizeOptionalString(env.CLAWHUB_URL) ||
     DEFAULT_CLAWHUB_URL;
   const value = (normalizeOptionalString(baseUrl) || envValue).replace(/\/+$/, "");
   return value || DEFAULT_CLAWHUB_URL;
@@ -170,6 +176,10 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
       return extractTokenFromClawHubConfig(JSON.parse(raw));
     } catch (error) {
       if (!isErrno(error) || error.code !== "ENOENT") {
+        // Parser errors can include token bytes; keep this warning content-free.
+        console.warn(
+          "ClawHub sign-in configuration could not be loaded; repair it or sign in again. Continuing without a saved token.",
+        );
         return undefined;
       }
     }
@@ -177,15 +187,22 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
   return undefined;
 }
 
-function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "search" | "url">): URL {
+type ClawHubResponse = Awaited<ReturnType<typeof requestClawHub>>;
+
+async function requestClawHub(params: ClawHubRequestParams) {
+  params.signal?.throwIfAborted();
+  if (params.json !== undefined && params.form !== undefined) {
+    throw new Error("ClawHub requests cannot contain both JSON and multipart bodies");
+  }
+  const baseUrl = resolveClawHubBaseUrl(params.baseUrl);
   let url: URL;
   if (params.url) {
-    url = new URL(params.url, `${resolveClawHubBaseUrl(params.baseUrl)}/`);
+    url = new URL(params.url, `${baseUrl}/`);
   } else {
     if (!params.path) {
       throw new Error("ClawHub request path is required");
     }
-    url = new URL(`${resolveClawHubBaseUrl(params.baseUrl)}/`);
+    url = new URL(`${baseUrl}/`);
     const basePath = url.pathname.replace(/\/+$/, "");
     const requestPath = params.path.startsWith("/") ? params.path : `/${params.path}`;
     url.pathname = `${basePath}${requestPath}`;
@@ -196,13 +213,6 @@ function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "searc
     }
     url.searchParams.set(key, value);
   }
-  return url;
-}
-
-type ClawHubResponse = Awaited<ReturnType<typeof requestClawHub>>;
-
-async function requestClawHub(params: ClawHubRequestParams) {
-  const url = buildUrl(params);
   const token = params.skipAuth
     ? undefined
     : normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
@@ -221,8 +231,11 @@ async function requestClawHub(params: ClawHubRequestParams) {
   }
   if (params.json !== undefined) {
     init.body = JSON.stringify(params.json);
+  } else if (params.form !== undefined) {
+    init.body = params.form;
   }
   const request = async () => {
+    params.signal?.throwIfAborted();
     const controller = new AbortController();
     // Fetch rejects with the abort reason; preserve timeout classification for read retries.
     const timeoutError = Object.assign(
@@ -235,17 +248,24 @@ async function requestClawHub(params: ClawHubRequestParams) {
     );
     // Successful archives keep only their chunk-idle timeout while streaming.
     const releaseDeadline = () => {
-      if (timeout !== undefined) {
-        clearTimeout(timeout);
-        timeout = undefined;
-      }
+      clearTimeout(timeout);
+      timeout = undefined;
     };
     try {
-      const response = await (params.fetchImpl ?? fetch)(url, {
-        ...init,
-        signal: controller.signal,
-      });
-      return { response, url, hasToken: Boolean(token), releaseDeadline };
+      // Only the operator-configured base origin may be private (self-hosted registries).
+      // Resolver URLs and every redirect hop elsewhere must reach public addresses.
+      const { response, release } = await fetchWithSsrFGuard(
+        withTrustedEnvProxyGuardedFetchMode({
+          url: url.toString(),
+          init,
+          signal: params.signal
+            ? AbortSignal.any([controller.signal, params.signal])
+            : controller.signal,
+          policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
+          auditContext: "clawhub",
+        }),
+      );
+      return { response, url, hasToken: Boolean(token), releaseDeadline, release };
     } catch (error) {
       releaseDeadline();
       throw error;
@@ -258,9 +278,11 @@ async function requestClawHub(params: ClawHubRequestParams) {
     return await request();
   }
   return await retryClawHubRead(request, {
-    disposeRetry: async ({ response, releaseDeadline }) => {
+    sleep: params.signal ? (ms) => sleepWithAbort(ms, params.signal) : undefined,
+    disposeRetry: async ({ response, releaseDeadline, release }) => {
       releaseDeadline();
       await cancelUnreadResponseBody(response);
+      await release();
     },
   });
 }
@@ -275,7 +297,9 @@ export async function withClawHubResponse<T>(
     return await consume(result);
   } finally {
     result.releaseDeadline();
+    // Cancel before release: the guard's release aborts, which would error the unread body.
     await cancelUnreadResponseBody(result.response);
+    await result.release();
   }
 }
 
@@ -300,7 +324,18 @@ export async function createClawHubError(
 ): Promise<ClawHubRequestError> {
   let body = await readErrorBody(response, timeoutMs);
   if (response.status === 429) {
-    const suffix = formatRateLimitSuffix(response.headers, hasToken);
+    const headers = response.headers;
+    const resetSeconds =
+      parseRateLimitDeltaSeconds(headers.get("RateLimit-Reset")) ??
+      parseRateLimitDeltaSeconds(headers.get("Retry-After"));
+    const segments: string[] = [];
+    if (resetSeconds !== undefined) {
+      segments.push(`(resets in ${resetSeconds}s)`);
+    }
+    if (!hasToken) {
+      segments.push("Sign in for higher rate limits.");
+    }
+    const suffix = segments.join(" ");
     if (suffix) {
       body = `${body} ${suffix}`;
     }
@@ -310,20 +345,6 @@ export async function createClawHubError(
     status: response.status,
     body,
   });
-}
-
-function formatRateLimitSuffix(headers: Headers, hasToken: boolean): string {
-  const resetSeconds =
-    parseRateLimitDeltaSeconds(headers.get("RateLimit-Reset")) ??
-    parseRateLimitDeltaSeconds(headers.get("Retry-After"));
-  const segments: string[] = [];
-  if (resetSeconds !== undefined) {
-    segments.push(`(resets in ${resetSeconds}s)`);
-  }
-  if (!hasToken) {
-    segments.push("Sign in for higher rate limits.");
-  }
-  return segments.join(" ");
 }
 
 function parseRateLimitDeltaSeconds(value: string | null): number | undefined {
@@ -458,7 +479,7 @@ export function readRequiredClawHubStringArrayField(
   context: string,
 ): string[] {
   const value = source[field];
-  if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+  if (isStringArray(value)) {
     return value;
   }
   throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a string array.`);

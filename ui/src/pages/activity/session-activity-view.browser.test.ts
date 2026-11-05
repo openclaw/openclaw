@@ -1,18 +1,22 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { createSessionActivity } from "./session-activity-owner.ts";
 import "../../styles/base.css";
 import "../../styles/components.css";
 import "../../styles/settings.css";
 import "../../styles/settings-controls.css";
 import "../../styles/activity.css";
-import { mountSolid } from "./session-activity-view.test-harness.ts";
+import { mountSolid, type SessionActivityTestProps } from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.tsx";
 
-const renderSessionActivityViewSolid = mountSolid(renderSessionActivityView);
+const renderSessionActivityViewSolid = mountSolid<SessionActivityTestProps>(
+  renderSessionActivityView,
+  (input) => createSolidApplicationContextProvider(input.context).wrapper,
+);
 
 let container: HTMLDivElement;
 
@@ -35,7 +39,7 @@ it.each([
   "keeps content stable through passive refresh and explicit Retry ($personId, $width px)",
   async ({ personId, width }) => {
     await page.viewport(width, 700);
-    const props: Parameters<typeof renderSessionActivityView>[0] = {
+    const props: SessionActivityTestProps = {
       context: {
         basePath: "",
         navigate: vi.fn(),
@@ -79,7 +83,7 @@ it.each([
       personId ? "[data-activity-identity]" : ".activity-pulse",
     )!;
     expect(getComputedStyle(container.querySelector(".activity-feed__feedback")!).minHeight).toBe(
-      "32px",
+      width <= 640 ? "38px" : "32px",
     );
     const top = content.getBoundingClientRect().top;
     expect(content.getBoundingClientRect().height).toBeGreaterThan(0);
@@ -130,11 +134,13 @@ it.each([
       expect(container.querySelector('[role="status"]')?.textContent).toContain("Refreshing");
       expect(retryButton()?.disabled).toBe(true);
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
-      pending.reject(new Error("Retry failed"));
+      const report = vi.spyOn(console, "error").mockImplementation(() => {});
+      onTestFinished(() => report.mockRestore());
+      pending.reject(new TypeError("Cannot read properties of undefined (reading 'map')"));
       await retryCompletion;
-      expect(controller.error).toBe("Retry failed");
+      expect(controller.error).toBe("Request failed");
       expect(retryButton()?.disabled).toBe(false);
-      expect(container.querySelector('[role="alert"]')?.textContent).toContain("Retry failed");
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain("Request failed");
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
       const recovered = createDeferred<NonNullable<typeof props.result>>();
       request.mockReturnValueOnce(recovered.promise);

@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -13,11 +12,12 @@ import {
 import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
 import { WORKTREE_MUTATION_LEASE_SCOPE } from "../agents/worktrees/capacity-contract.js";
+import { updateRegistryWorktree } from "../agents/worktrees/registry.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
 import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
 import {
@@ -33,7 +33,7 @@ import {
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
-import * as sessionLifecycle from "../sessions/session-lifecycle-admission.js";
+import * as sessionLifecycle from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
@@ -229,23 +229,23 @@ test("unarchive waits for cleanup and restores its finalized snapshot", async ({
     await release.promise;
     return await originalRemove(params);
   });
-  const originalMutation = sessionLifecycle.runExclusiveSessionLifecycleMutation;
-  const mutation = vi
-    .spyOn(sessionLifecycle, "runExclusiveSessionLifecycleMutation")
-    .mockImplementation((operation, params) => {
-      const pending = originalMutation(operation, params);
-      if (operation === "restore") {
-        submitted.resolve();
-      }
-      return pending;
-    });
   const cleanup = cleanupWorktrees();
+  let restoreMutation = () => {};
   let unarchive: ReturnType<typeof directSessionReq> | undefined;
   try {
     await withinTest(
       awaitGateBeforeSettlement(entered.promise, cleanup, "cleanup did not enter removal"),
       signal,
     );
+    const originalMutation = sessionLifecycle.runSessionMutation;
+    const mutation = vi
+      .spyOn(sessionLifecycle, "runSessionMutation")
+      .mockImplementation((params) => {
+        const pending = originalMutation(params);
+        submitted.resolve();
+        return pending;
+      });
+    restoreMutation = () => mutation.mockRestore();
     unarchive = fixture.patch({ archived: false });
     await withinTest(
       awaitGateBeforeSettlement(
@@ -265,7 +265,7 @@ test("unarchive waits for cleanup and restores its finalized snapshot", async ({
   } finally {
     release.resolve();
     await Promise.allSettled([cleanup, unarchive]);
-    mutation.mockRestore();
+    restoreMutation();
   }
 });
 
@@ -690,7 +690,8 @@ test("automatic archive snapshots the checkout and restores its conversation", a
   const transcript = await fixture.transcript();
   await fixture.write("draft.txt", "automatic archive keeps work\n");
 
-  const reads = observeMainThreadReads();
+  const readSql: string[] = [];
+  const reads = observeMainThreadReads((sql) => readSql.push(sql));
   const worktreeReads: string[] = [];
   let grants = 0;
   using _ = probe.admission(workerAdmission, (request, grant, admit) => {
@@ -711,12 +712,13 @@ test("automatic archive snapshots the checkout and restores its conversation", a
     }
     grants += 1;
     reads.clear();
+    readSql.length = 0;
     try {
       admit(request, grant);
     } finally {
-      for (const statement of reads.calls.flatMap((call) => call.mock.contexts)) {
-        if (statement instanceof StatementSync && /\bworktrees\b/u.test(statement.sourceSQL)) {
-          worktreeReads.push(statement.sourceSQL);
+      for (const sql of readSql) {
+        if (/\bworktrees\b/u.test(sql)) {
+          worktreeReads.push(sql);
         }
       }
     }
@@ -800,7 +802,10 @@ test.each(["expired", "source-missing"] as const)(
       skipMaintenance: true,
     });
     if (failure === "expired") {
-      await new ManagedWorktreeService({ now: () => Date.now() + 31 * 24 * 60 * 60 * 1000 }).gc();
+      await updateRegistryWorktree(process.env, worktree.id, {
+        removedAt: Date.now() - 31 * 24 * 60 * 60 * 1000 - 1,
+      });
+      await new ManagedWorktreeService().gc();
     } else if (failure === "source-missing") {
       await fs.rename(workspace, `${workspace}-offline`);
     }

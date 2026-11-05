@@ -54,6 +54,7 @@ type CloseFields = {
   sessionUnsubscribe: (() => void) | null;
   awaitManagerIdle: () => Promise<void>;
 };
+const observerFailure = new Error("observer retirement failed");
 
 describe("MemoryIndexManager observation close lifecycle", () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
@@ -76,14 +77,14 @@ describe("MemoryIndexManager observation close lifecycle", () => {
     vi.unstubAllEnvs();
   });
   afterAll(async () => {
-    // These boundary-injected physical failures are intentionally sticky. The
-    // file owns its managers until this isolated test process ends.
+    // Sticky physical failures keep these managers owned by the isolated process.
     await Promise.allSettled(managers.map((manager) => manager.close()));
     resetMemoryCoreDreamingStateForTests();
     await state.cleanup();
   });
 
-  async function open(agentId: string) {
+  async function open(beforeWorkerClose: (fields: CloseFields) => void | Promise<void>) {
+    const agentId = `observation-close-${managers.length}`;
     const cfg: OpenClawConfig = {
       plugins: { enabled: false },
       agents: { defaults: { workspace: state.workspaceDir }, entries: { [agentId]: {} } },
@@ -112,51 +113,49 @@ describe("MemoryIndexManager observation close lifecycle", () => {
     await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({ ok: true });
     expect(observer.observations).toHaveLength(1);
     expect(fields.sessionUnsubscribe).toBeTypeOf("function");
-    return { manager, fields, entry: observer.observations[0]! };
+    const entry = observer.observations[0]!;
+    entry.close.mockRejectedValue(observerFailure);
+    const db = fields.publishedDatabase;
+    const release = vi.spyOn(db, "release");
+    const closeWorker = db.closePublicationWorker.bind(db);
+    const worker = vi.spyOn(db, "closePublicationWorker").mockImplementation(async () => {
+      await beforeWorkerClose(fields);
+      await closeWorker();
+    });
+    return { manager, fields, entry, release, worker };
   }
 
   it.each([false, true])(
     "drains independent resources after observer close rejection (provider failure: %s)",
     async (failProvider) => {
-      const { manager, fields, entry } = await open("observation-close-" + failProvider);
-      const physicalFailure = new Error("observer retirement failed");
-      entry.close.mockRejectedValue(physicalFailure);
+      const workerEntered = createDeferred<void>();
+      const workerGate = createDeferred<void>();
+      const { manager, fields, entry, release, worker } = await open(async () => {
+        workerEntered.resolve();
+        await workerGate.promise;
+      });
       const providerFailure = new Error("provider retirement failed");
       if (failProvider) {
         embedding.close.mockRejectedValueOnce(providerFailure);
       }
       const unsubscribe = vi.fn(fields.sessionUnsubscribe!);
       fields.sessionUnsubscribe = unsubscribe;
-      const release = vi.spyOn(fields.publishedDatabase, "release");
-      const workerEntered = createDeferred<void>();
-      const workerGate = createDeferred<void>();
-      const closeWorker = fields.publishedDatabase.closePublicationWorker.bind(
-        fields.publishedDatabase,
-      );
-      const workerClose = vi
-        .spyOn(fields.publishedDatabase, "closePublicationWorker")
-        .mockImplementation(async () => {
-          workerEntered.resolve();
-          await workerGate.promise;
-          await closeWorker();
-        });
       const closing = manager.close();
       const concurrent = manager.close();
       const outcomes = Promise.allSettled([closing, concurrent]);
       try {
-        // A pre-fix rejection also wakes this wait, so the resource assertions
-        // fail directly instead of timing out waiting for unreachable cleanup.
+        // A pre-fix rejection wakes the wait instead of hanging on unreachable cleanup.
         await Promise.race([workerEntered.promise, outcomes]);
         expect(unsubscribe).toHaveBeenCalledOnce();
         expect(fields.sessionUnsubscribe).toBeNull();
         expect(embedding.close).toHaveBeenCalledOnce();
-        expect(workerClose).toHaveBeenCalledOnce();
+        expect(worker).toHaveBeenCalledOnce();
         expect(release).not.toHaveBeenCalled();
         expect(fields.publishedDatabase.db.isOpen).toBe(true);
         workerGate.resolve();
         const results = await outcomes;
         const watcherError = await fields.fileWatcher.close().catch((error: unknown) => error);
-        expect(watcherError).toMatchObject({ errors: [physicalFailure] });
+        expect(watcherError).toMatchObject({ errors: [observerFailure] });
         const expectedError = failProvider
           ? expect.objectContaining({ errors: [watcherError, providerFailure] })
           : watcherError;
@@ -166,13 +165,12 @@ describe("MemoryIndexManager observation close lifecycle", () => {
         ]);
         expect(release).toHaveBeenCalledOnce();
 
-        // Provider retirement remains retryable, but cannot erase the actual
-        // observation failure.
+        // Retrying the provider cannot erase the observer failure.
         await expect(manager.close()).rejects.toBe(watcherError);
         await expect(manager.close()).rejects.toBe(watcherError);
         expect(embedding.close).toHaveBeenCalledTimes(failProvider ? 2 : 1);
         expect(entry.close).toHaveBeenCalledOnce();
-        expect(workerClose).toHaveBeenCalledOnce();
+        expect(worker).toHaveBeenCalledOnce();
         expect(release).toHaveBeenCalledOnce();
       } finally {
         workerGate.resolve();
@@ -182,30 +180,21 @@ describe("MemoryIndexManager observation close lifecycle", () => {
   );
 
   it("joins accepted sync work and retains the database lease until its worker closes", async () => {
-    const { manager, fields, entry } = await open("sync-observation-close");
-    const physicalFailure = new Error("observer retirement failed");
-    entry.close.mockRejectedValue(physicalFailure);
+    const workerFailure = new Error("publication worker join failed");
+    let failWorker = true;
+    const { manager, fields, entry, release } = await open((closingFields) => {
+      // Fail the final join, not the accepted sync's own publication cleanup.
+      if (closingFields.closed && failWorker) {
+        failWorker = false;
+        throw workerFailure;
+      }
+    });
     const embeddingEntered = createDeferred<void>();
     const embeddingGate = createDeferred<void>();
     embedding.embedBatch.mockClear().mockImplementation(async (inputs) => {
       embeddingEntered.resolve();
       await embeddingGate.promise;
       return inputs.map(() => [1, 0]);
-    });
-    const release = vi.spyOn(fields.publishedDatabase, "release");
-    const workerFailure = new Error("publication worker join failed");
-    const closeWorker = fields.publishedDatabase.closePublicationWorker.bind(
-      fields.publishedDatabase,
-    );
-    let failWorker = true;
-    vi.spyOn(fields.publishedDatabase, "closePublicationWorker").mockImplementation(async () => {
-      // Allow the accepted sync's own publication cleanup, then reject the
-      // manager's final worker join. A failed join must retain the database lease.
-      if (fields.closed && failWorker) {
-        failWorker = false;
-        throw workerFailure;
-      }
-      await closeWorker();
     });
     const syncing = manager.sync({ reason: "test", force: true });
     let outcomes: Promise<PromiseSettledResult<void>[]> | undefined;
@@ -228,7 +217,7 @@ describe("MemoryIndexManager observation close lifecycle", () => {
           reason: expect.objectContaining({ errors: [watcherError, workerFailure] }),
         },
       ]);
-      expect(watcherError).toMatchObject({ errors: [physicalFailure] });
+      expect(watcherError).toMatchObject({ errors: [observerFailure] });
       expect(release).not.toHaveBeenCalled();
       expect(fields.publishedDatabase.db.isOpen).toBe(true);
       await expect(manager.close()).rejects.toBe(watcherError);

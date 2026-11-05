@@ -1,4 +1,7 @@
-import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
+import {
+  readClaimingHookAdmission,
+  withClaimingHookAdmission,
+} from "../../plugins/hook-claim-admission.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import {
@@ -17,7 +20,7 @@ import type { EmbeddedAgentRunResult } from "./types.js";
 export async function resolveRunEntryModelSelection(
   params: Pick<
     EmbeddedAgentRunEntryParams<EmbeddedAgentRunResult>,
-    "modelResolve" | "selection" | "identity"
+    "modelResolve" | "selection" | "identity" | "preparedRunAdmission" | "abortSignal"
   > & { workspaceDir: string; assertCurrent: () => void },
 ): Promise<ResolvedRunEntryModelSelection | undefined> {
   const input = params.modelResolve;
@@ -38,9 +41,15 @@ export async function resolveRunEntryModelSelection(
       cwd: input.cwd,
       sessionId: params.identity.sessionId,
     });
+    await readClaimingHookAdmission(input.context ?? {})?.prepare?.();
     params.assertCurrent();
     return resolveHookModelSelection({
+      runAuthority: {
+        preparedRunAdmission: params.preparedRunAdmission,
+        abortSignal: params.abortSignal,
+      },
       prompt: input.prompt,
+      onDispatch: input.onDispatch,
       awaitSessionDiffBaseline: input.awaitSessionDiffBaseline,
       attachments: buildBeforeModelResolveAttachments(input.images),
       provider: params.selection.provider,

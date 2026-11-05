@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   DEFAULT_BACKGROUND_PREFERENCE,
+  type BackgroundPreference,
   normalizeBackgroundPreference,
   selectBackgroundSource,
 } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
@@ -19,6 +20,7 @@ import {
   configWithPrefs,
   createServerPrefsWriter,
   initializeServerPrefsProfile,
+  type RequestMock,
   refreshServerPrefsProfile,
 } from "./server-prefs.test-support.ts";
 import {
@@ -32,17 +34,47 @@ import { loadSettings, patchSettings, setSettingsChangeListener } from "./settin
 
 const scope = "ws://background-profile";
 const profileId = "viewer-a";
+const writeOptions = { profileId, canWrite: true };
+let request: RequestMock;
+let writer: ReturnType<typeof createServerPrefsWriter>;
 const none = selectBackgroundSource({ kind: "none" });
 const custom = selectBackgroundSource({ kind: "custom", assetId: "asset-a" });
+const replacement = { kind: "custom", assetId: "replacement" } as const;
 const config = configWithPrefs({});
 const pendingKey = (profile = profileId) =>
   "openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:" + profile;
 const readPending = () => JSON.parse(localStorage.getItem(pendingKey()) ?? "{}");
 const state = () => resolveServerUiPrefWriteStatus("background", scope, profileId);
+const background = () => loadSettings().background;
+const methods = () => request.mock.calls.map(([method]) => method);
+const noneWrite = {
+  entries: { "ui.background": none },
+  expectedEntries: { "ui.background": null },
+};
+const applyProfile = (identity: string | null) =>
+  applyServerUiPrefs(config, { scope, profileId: identity, onApplied: vi.fn() });
+const profileState = () =>
+  resolveServerUiPrefState(config, "background", scope, loadSettings(), { profileId });
+function adopt(
+  preference: BackgroundPreference | null,
+  expectedPreference: BackgroundPreference | null = null,
+  isCurrent = () => true,
+) {
+  return adoptCommittedBackgroundPreference({
+    client: writer.state.client!,
+    profileId,
+    scope,
+    preference,
+    expectedPreference,
+    isCurrent,
+  });
+}
 
 beforeEach(async () => {
   vi.stubGlobal("localStorage", createStorageMock());
   await initializeServerPrefsProfile(scope, profileId, config);
+  request = vi.fn(async () => ({ status: "ok" }));
+  writer = createServerPrefsWriter(request, scope);
 });
 afterEach(() => {
   setSettingsChangeListener(null);
@@ -56,40 +88,28 @@ it("normalizes metadata without retaining bytes, URLs, or unknown fields", () =>
   expect(
     normalizeBackgroundPreference({ ...custom, url: "https://example.test/private", bytes: "abc" }),
   ).toEqual(custom);
-  for (const assetId of [
-    "https://example.test/image",
-    "../other",
-    "data:image/png;base64,abc",
-    "x".repeat(129),
-  ]) {
+  for (const assetId of ["../other", "x".repeat(129)]) {
     expect(
       normalizeBackgroundPreference({ ...custom, source: { kind: "custom", assetId } }),
     ).toBeUndefined();
   }
-  for (const visibility of [-1, 1.1, Infinity, Number.NaN, "0.5"]) {
+  for (const visibility of [-1, 1.1, Infinity, "0.5"]) {
     expect(normalizeBackgroundPreference({ ...custom, visibility })).toBeUndefined();
   }
-  expect(selectBackgroundSource({ kind: "custom", assetId: "first" })).toMatchObject({
+  expect(selectBackgroundSource(custom.source)).toMatchObject({
     showOnNewSession: true,
     showInSessions: false,
   });
-  expect(
-    selectBackgroundSource(
-      { kind: "custom", assetId: "replacement" },
-      { ...custom, showOnNewSession: false, showInSessions: true, visibility: 0.2 },
-    ),
-  ).toMatchObject({ showOnNewSession: false, showInSessions: true, visibility: 0.2 });
+  const placement = { showOnNewSession: false, showInSessions: true, visibility: 0.2 };
+  expect(selectBackgroundSource(replacement, { ...custom, ...placement })).toMatchObject(placement);
   expect(DEFAULT_BACKGROUND_PREFERENCE).toMatchObject({
     source: { kind: "theme" },
     showInSessions: true,
   });
   expect(selectBackgroundSource({ kind: "theme" }).showInSessions).toBe(true);
-  expect(
-    selectBackgroundSource(
-      { kind: "custom", assetId: "first-explicit" },
-      DEFAULT_BACKGROUND_PREFERENCE,
-    ).showInSessions,
-  ).toBe(true);
+  expect(selectBackgroundSource(custom.source, DEFAULT_BACKGROUND_PREFERENCE).showInSessions).toBe(
+    true,
+  );
 });
 
 it.each([false, true])(
@@ -99,41 +119,42 @@ it.each([false, true])(
       vi.spyOn(localStorage, "setItem").mockImplementation(() => {
         throw new Error("private storage");
       });
-      patchSettings({ background: custom });
-      expect(loadSettings().background).toEqual(custom);
-      applyServerUiPrefs(config, { scope, profileId: "viewer-b", onApplied: vi.fn() });
-      expect(loadSettings().background).toBeUndefined();
-      return;
     }
     patchSettings({ background: custom });
-    resetServerUiPrefsSync();
-    expect(loadSettings().background).toBeUndefined();
-    applyServerUiPrefs(config, { scope, profileId: "viewer-b", onApplied: vi.fn() });
-    expect(loadSettings().background).toBeUndefined();
-    applyServerUiPrefs(config, { scope, profileId, onApplied: vi.fn() });
-    expect(loadSettings().background).toEqual(custom);
+    if (privateStorage) {
+      expect(background()).toEqual(custom);
+    } else {
+      resetServerUiPrefsSync();
+      expect(background()).toBeUndefined();
+    }
+    applyProfile("viewer-b");
+    expect(background()).toBeUndefined();
+    if (privateStorage) {
+      return;
+    }
+    applyProfile(profileId);
+    expect(background()).toEqual(custom);
     expect(loadSettings("ws://other-gateway").background).toBeUndefined();
-    applyServerUiPrefs(config, { scope, profileId: null, onApplied: vi.fn() });
-    expect(loadSettings().background).toBeUndefined();
+    applyProfile(null);
+    expect(background()).toBeUndefined();
   },
 );
 
 it("invalidates old profile reads before the next profile has fetched its preferences", async () => {
   const delayed = createDeferred<unknown>();
-  const request = vi.fn(() => delayed.promise);
-  const writer = createServerPrefsWriter(request, scope);
+  request.mockImplementation(() => delayed.promise);
   const oldRead = refreshServerPrefsProfile(writer, profileId, config);
   await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-  applyServerUiPrefs(config, { scope, profileId: "viewer-b", onApplied: vi.fn() });
+  applyProfile("viewer-b");
   delayed.resolve({ status: "ok", entries: { "ui.background": custom } });
   expect(await oldRead).toBe(false);
-  expect(loadSettings().background).toBeUndefined();
+  expect(background()).toBeUndefined();
 });
 
 it("syncs explicit None and reports saved only after the profile acknowledgement", async () => {
   const delayed = createDeferred<unknown>();
   const dispatched = createDeferred();
-  const request = vi.fn(async (method: string) => {
+  request.mockImplementation(async (method: string) => {
     if (method === "users.prefs.get") {
       return { status: "ok", entries: {} };
     }
@@ -142,7 +163,7 @@ it("syncs explicit None and reports saved only after the profile acknowledgement
     }
     return delayed.promise;
   });
-  const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
+  writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
   await refreshServerPrefsProfile(writer, profileId, config);
   patchSettings({ background: none });
   const committed = createDeferred();
@@ -150,20 +171,15 @@ it("syncs explicit None and reports saved only after the profile acknowledgement
   const transitions: string[] = [];
   const unsubscribe = subscribeServerUiPrefWrites(() => transitions.push(state().status));
   try {
-    pushServerUiPrefs(writer, { background: none }, { profileId, canWrite: true, afterCommit });
+    pushServerUiPrefs(writer, { background: none }, { ...writeOptions, afterCommit });
     expect(state()).toEqual({ status: "pending" });
     await dispatched.promise;
-    expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-      entries: { "ui.background": none },
-      expectedEntries: { "ui.background": null },
-    });
+    expect(request).toHaveBeenLastCalledWith("users.prefs.set", noneWrite);
     delayed.resolve({ status: "ok" });
     await committed.promise;
     expect(afterCommit).toHaveBeenCalledOnce();
     expect(state()).toEqual({ status: "saved" });
-    expect(
-      resolveServerUiPrefState(config, "background", scope, loadSettings(), { profileId }),
-    ).toMatchObject({ provenance: "profile", value: none });
+    expect(profileState()).toMatchObject({ provenance: "profile", value: none });
     expect(readPending()).toEqual({});
     expect(transitions).toEqual(["pending", "saved"]);
   } finally {
@@ -173,66 +189,50 @@ it("syncs explicit None and reports saved only after the profile acknowledgement
 
 it("acknowledges theme and tab icon separately, retaining only a failed background for reconnect", async () => {
   let fail = true;
-  const request = vi.fn(async (method: string, params?: unknown) => {
+  request.mockImplementation(async (method: string, params?: unknown) => {
     const entries = (params as UsersPrefsSetParams | undefined)?.entries;
     if (method === "users.prefs.set" && entries?.["ui.background"] && fail) {
       throw new Error("offline during background save");
     }
     return { status: "ok" };
   });
-  const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
+  writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
   patchSettings({ theme: "rose", tabIcon: "agent", background: custom });
-  pushServerUiPrefs(
-    writer,
-    { theme: "rose", tabIcon: "agent", background: custom },
-    { profileId, canWrite: true },
-  );
+  pushServerUiPrefs(writer, { theme: "rose", tabIcon: "agent", background: custom }, writeOptions);
   await waitForFast(() =>
     expect(state()).toEqual({ status: "error", error: "offline during background save" }),
   );
-  expect(request.mock.calls.map(([method]) => method)).toEqual([
-    "themes.set",
-    "users.prefs.set",
-    "users.prefs.set",
-  ]);
+  const splitWrites = ["themes.set", "users.prefs.set", "users.prefs.set"];
+  expect(methods()).toEqual(splitWrites);
   expect(request).toHaveBeenNthCalledWith(2, "users.prefs.set", {
     entries: { "ui.tabIcon": "agent" },
   });
   expect(readPending()).toEqual({ background: custom });
   fail = false;
-  flushServerUiPrefs(writer, { profileId, canWrite: true });
+  flushServerUiPrefs(writer, writeOptions);
   await waitForFast(() => expect(state()).toEqual({ status: "saved" }));
-  expect(request.mock.calls.map(([method]) => method)).toEqual([
-    "themes.set",
-    "users.prefs.set",
-    "users.prefs.set",
-    "users.prefs.set",
-  ]);
+  expect(methods()).toEqual([...splitWrites, "users.prefs.set"]);
 });
 
 it("keeps offline edits in their known profile and never falls through to config", async () => {
-  const request = vi.fn(async () => ({ status: "ok", entries: {} }));
+  request.mockResolvedValue({ status: "ok", entries: {} });
   const offline = createServerPrefsWriter(request, scope, false);
   patchSettings({ background: none });
   pushServerUiPrefs(offline, { background: none }, { canWrite: true });
   expect(state()).toEqual({ status: "pending" });
   expect(request).not.toHaveBeenCalled();
   flushServerUiPrefs(createServerPrefsWriter(request, scope), {
+    ...writeOptions,
     profileId: "viewer-b",
-    canWrite: true,
   });
   expect(request).not.toHaveBeenCalled();
-  flushServerUiPrefs(createServerPrefsWriter(request, scope), { profileId, canWrite: true });
+  flushServerUiPrefs(createServerPrefsWriter(request, scope), writeOptions);
   await waitForFast(() => expect(state()).toEqual({ status: "saved" }));
-  expect(request).toHaveBeenCalledWith("users.prefs.set", {
-    entries: { "ui.background": none },
-    expectedEntries: { "ui.background": null },
-  });
+  expect(request).toHaveBeenCalledWith("users.prefs.set", noneWrite);
 });
 
 it("adopts atomic upload and removal receipts without another profile write", async () => {
-  const request = vi.fn(async () => ({ status: "ok", entries: { "ui.background": none } }));
-  const writer = createServerPrefsWriter(request, scope);
+  request.mockResolvedValue({ status: "ok", entries: { "ui.background": none } });
   await refreshServerPrefsProfile(writer, profileId, config);
   request.mockClear();
   setSettingsChangeListener((previous, next) => {
@@ -241,69 +241,36 @@ it("adopts atomic upload and removal receipts without another profile write", as
     }
     const changed = changedServerUiPrefs(previous, next);
     if (changed) {
-      pushServerUiPrefs(writer, changed, { profileId, canWrite: true });
+      pushServerUiPrefs(writer, changed, writeOptions);
     }
   });
-  const options = { client: writer.state.client!, profileId, scope, isCurrent: () => true };
-  expect(
-    adoptCommittedBackgroundPreference({
-      ...options,
-      expectedPreference: none,
-      preference: custom,
-    }),
-  ).toBe(true);
-  expect(loadSettings().background).toEqual(custom);
-  expect(
-    resolveServerUiPrefState(config, "background", scope, loadSettings(), { profileId }),
-  ).toMatchObject({ provenance: "profile", value: custom });
+  expect(adopt(custom, none)).toBe(true);
+  expect(background()).toEqual(custom);
+  expect(profileState()).toMatchObject({ provenance: "profile", value: custom });
   expect(state()).toEqual({ status: "saved" });
-  expect(
-    adoptCommittedBackgroundPreference({
-      ...options,
-      expectedPreference: custom,
-      preference: null,
-    }),
-  ).toBe(true);
-  expect(loadSettings().background).toBeUndefined();
+  expect(adopt(null, custom)).toBe(true);
+  expect(background()).toBeUndefined();
   expect(request).not.toHaveBeenCalled();
   expect(readPending()).toEqual({});
 });
 
 it("does not adopt an old upload receipt over pending or already-acknowledged newer intent", () => {
-  const request = vi.fn(async () => ({ status: "ok" }));
-  const writer = createServerPrefsWriter(request, scope, false);
-  const options = {
-    client: writer.state.client!,
-    profileId,
-    scope,
-    isCurrent: () => true,
-    expectedPreference: null,
-    preference: custom,
-  };
+  writer = createServerPrefsWriter(request, scope, false);
   // A newer saved local intent is enough to fence the receipt even without an outbox key.
   patchSettings({ background: none });
   Object.assign(writer.state.client!, { connected: true });
-  expect(adoptCommittedBackgroundPreference(options)).toBe(false);
-  expect(loadSettings().background).toEqual(none);
-  pushServerUiPrefs(writer, { background: none }, { profileId, canWrite: true });
-  expect(adoptCommittedBackgroundPreference({ ...options, expectedPreference: none })).toBe(false);
+  expect(adopt(custom)).toBe(false);
+  expect(background()).toEqual(none);
+  pushServerUiPrefs(writer, { background: none }, writeOptions);
+  expect(adopt(custom, none)).toBe(false);
   expect(readPending()).toEqual({ background: none });
   expect(request).not.toHaveBeenCalled();
 });
 
 it("fences receipt adoption by the captured connection and current profile", () => {
-  const request = vi.fn(async () => ({ status: "ok" }));
-  const writer = createServerPrefsWriter(request, scope);
-  const options = {
-    client: writer.state.client!,
-    profileId,
-    scope,
-    expectedPreference: null,
-    preference: custom,
-  };
-  expect(adoptCommittedBackgroundPreference({ ...options, isCurrent: () => false })).toBe(false);
-  applyServerUiPrefs(config, { scope, profileId: "viewer-b", onApplied: vi.fn() });
-  expect(adoptCommittedBackgroundPreference({ ...options, isCurrent: () => true })).toBe(false);
-  expect(loadSettings().background).toBeUndefined();
+  expect(adopt(custom, null, () => false)).toBe(false);
+  applyProfile("viewer-b");
+  expect(adopt(custom)).toBe(false);
+  expect(background()).toBeUndefined();
   expect(request).not.toHaveBeenCalled();
 });

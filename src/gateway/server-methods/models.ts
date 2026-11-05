@@ -165,6 +165,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
                             sessionModelRevision: sessionModelRevision(
                               scope.sessionEntry,
                               scope.workerInference,
+                              runtimeOwnership ?? null,
                             ),
                           }
                         : {}),

@@ -1,115 +1,70 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { createGatewaySessionStore } from "./session-utils-store-read.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
-it("prepares complete Gateway entries while preserving main aliases and exact-row isolation", async () => {
+it("keeps store keys as mutable ordered data without copying entries", () => {
+  const first = Object.freeze({ sessionId: "first", updatedAt: 1 });
+  const last = Object.freeze({ sessionId: "last", updatedAt: 2 });
+  const store = createGatewaySessionStore([
+    { sessionKey: "__proto__", entry: first },
+    { sessionKey: "agent:main:subagent:one", entry: first },
+    { sessionKey: "__proto__", entry: last },
+  ]);
+  expect(Object.getPrototypeOf(store)).toBeNull();
+  expect(Object.keys(store)).toEqual(["__proto__", "agent:main:subagent:one"]);
+  expect(Object.getOwnPropertyDescriptor(store, "__proto__")?.value).toBe(last);
+  expect(store["agent:main:subagent:one"]).toBe(first);
+  expect(JSON.stringify(store)).toBe(
+    '{"__proto__":{"sessionId":"last","updatedAt":2},"agent:main:subagent:one":{"sessionId":"first","updatedAt":1}}',
+  );
+  store["agent:main:subagent:two"] = last;
+  delete store["agent:main:subagent:one"];
+  expect(Object.keys(store)).toEqual(["__proto__", "agent:main:subagent:two"]);
+});
+
+it("preserves customized main aliases, saved instructions, and hidden-effect exclusion", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { main: {} } },
       session: { mainKey: "primary" },
     };
     const sessionKey = "agent:main:primary";
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey, env },
-      {
-        sessionId: "worker-projection",
-        updatedAt: 1,
-        skillsSnapshot: { prompt: "Complete saved skill instructions", skills: [] },
-      },
-    );
-    const childKey = "agent:main:child";
-    const childScope = { agentId: "main", sessionKey: childKey, env };
-    replaceSessionEntrySync(childScope, {
-      sessionId: "child",
-      updatedAt: 1,
-      parentSessionKey: sessionKey,
-      skillsSnapshot: { prompt: "Child payload stays out of discovery", skills: [] },
-    });
-    const input = { cfg, key: "main", agentId: "main", env, includeStoreChildEntries: true };
-    await loadGatewaySessionEntryReadOnlyInWorker(input);
+    const seed = (key: string, entry: SessionEntry) =>
+      replaceSessionEntrySync({ agentId: "main", sessionKey: key, env }, entry);
+    const skillsSnapshot = { prompt: "Complete saved skill instructions", skills: [] };
+    seed(sessionKey, { sessionId: "worker-projection", updatedAt: 1, skillsSnapshot });
+    const input = { cfg, key: "main", agentId: "main", env };
+    const read = (key = "main", excludeInternalEffects = false) =>
+      loadGatewaySessionEntryReadOnlyInWorker({ ...input, key, excludeInternalEffects });
+    await read();
     const internalKey = "agent:main:internal-session-effects:fixture";
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: internalKey, env },
-      { sessionId: "internal-effects", updatedAt: 1 },
-    );
-    const sibling = "agent:main:matrix:channel:!mixed:example.org";
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: sibling, env },
-      { sessionId: sibling, updatedAt: 1 },
-    );
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-      JSON.stringify({
-        sessionId: sibling,
-        updatedAt: 1,
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "matrix", to: "!Mixed:example.org" },
-        }),
-      }),
-      sibling,
-    );
-    database.db
-      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-      .run(sibling);
+    seed(internalKey, { sessionId: "internal-effects", updatedAt: 1 });
+    const sibling = "agent:main:unrelated";
+    seed(sibling, { sessionId: sibling, updatedAt: 1 });
     const sql = observeHostDataSql();
-    try {
-      const loaded = await loadGatewaySessionEntryReadOnlyInWorker(input);
+    {
+      using _ = { [Symbol.dispose]: sql.restore };
+      const loaded = await read();
       expect(loaded.canonicalKey).toBe(sessionKey);
-      expect(loaded.entry).toMatchObject({
-        sessionId: "worker-projection",
-        skillsSnapshot: { prompt: "Complete saved skill instructions", skills: [] },
-      });
-      expect(loaded.store[childKey]).toMatchObject({
-        sessionId: "child",
-        parentSessionKey: sessionKey,
-      });
-      expect(loaded.store[childKey]?.skillsSnapshot).toBeUndefined();
-      const internal = { ...input, key: internalKey };
-      const ordinary = await loadGatewaySessionEntryReadOnlyInWorker({
-        ...internal,
-        excludeInternalEffects: true,
-      });
-      expect(ordinary.entry).toBeUndefined();
-      expect(ordinary.store[internalKey]).toBeUndefined();
-      expect((await loadGatewaySessionEntryReadOnlyInWorker(internal)).entry?.sessionId).toBe(
-        "internal-effects",
-      );
+      expect(loaded.entry).toMatchObject({ sessionId: "worker-projection", skillsSnapshot });
+      expect(Object.getPrototypeOf(loaded.store)).toBeNull();
+      expect(loaded.store[sessionKey]).toBe(loaded.entry);
+      const ordinary = await read(internalKey, true);
+      expect([ordinary.entry, ordinary.store[internalKey]]).toEqual([undefined, undefined]);
+      expect((await read(internalKey)).entry?.sessionId).toBe("internal-effects");
       expect(
         sql.queries.filter((query) =>
           /\bfrom\s+"?session_(?:nodes|windows|participants)\b/i.test(query),
         ),
       ).toEqual([]);
-    } finally {
-      sql.restore();
     }
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey, env },
-      { sessionId: "updated-worker-projection", updatedAt: 2, label: "Updated in process" },
-    );
-    expect((await loadGatewaySessionEntryReadOnlyInWorker(input)).entry).toMatchObject({
-      sessionId: "updated-worker-projection",
-      label: "Updated in process",
-    });
-    replaceSessionEntrySync(childScope, {
-      sessionId: "child",
-      updatedAt: 2,
-      spawnedBy: sessionKey,
-      label: "Changed in process",
-    });
-    expect((await loadGatewaySessionEntryReadOnlyInWorker(input)).store[childKey]?.label).toBe(
-      "Changed in process",
-    );
-    replaceSessionEntrySync(childScope, {
-      sessionId: "child",
-      updatedAt: 3,
-      parentSessionKey: "agent:main:other",
-    });
-    expect((await loadGatewaySessionEntryReadOnlyInWorker(input)).store[childKey]).toBeUndefined();
+    seed(sessionKey, { sessionId: "updated-parent", updatedAt: 2, label: "Updated" });
+    expect((await read()).entry).toMatchObject({ sessionId: "updated-parent", label: "Updated" });
   });
 });
 
@@ -122,19 +77,17 @@ it("rechecks caller authority before returning prepared Gateway metadata", async
       { sessionId: "worker-authority", updatedAt: 1 },
     );
     const revoked = new Error("original caller revoked");
-    let current = true;
+    const assertActive = vi.fn();
     const read = loadGatewaySessionEntryReadOnlyInWorker({
       cfg,
       key: sessionKey,
       agentId: "main",
       env,
-      assertActive() {
-        if (!current) {
-          throw revoked;
-        }
-      },
+      assertActive,
     });
-    current = false;
+    assertActive.mockImplementation(() => {
+      throw revoked;
+    });
     await expect(read).rejects.toBe(revoked);
   });
 });

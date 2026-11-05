@@ -124,20 +124,22 @@ export async function noteSessionTranscriptHeaderHealth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
+  integrityCheck?: "quick" | "full";
 }): Promise<{ found: number; repaired: number }> {
   const env = params.env ?? process.env;
   let found = 0;
   let repaired = 0;
   const preserved = new Set<string>();
 
-  scanDoctorSessionTranscripts(
+  await scanDoctorSessionTranscripts(
     {
       cfg: params.cfg,
       env,
       title: NOTE_TITLE,
       failureLabel: "Failed to inspect transcript headers",
+      selectSessionIds: (reader, reportError) => reader.headerlessSessionIds(reportError),
     },
-    ({ reader, target, databaseOptions, reportError, sessionId }) => {
+    async ({ reader, target, databaseOptions, reportError, sessionId }) => {
       const sqlitePath = target.sqlitePath;
       const parser = createCanonicalHeaderlessEventParser(sessionId);
       const snapshot = reader.headerlessSnapshot(
@@ -167,6 +169,11 @@ export async function noteSessionTranscriptHeaderHealth(params: {
       const logicalAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId ?? target.agentId;
       const workspaceCwd = resolveAgentWorkspaceDir(params.cfg, logicalAgentId, env);
       try {
+        if (!preserved.has(sqlitePath)) {
+          const backup = await backupDoctorSqliteRepair(sqlitePath, "transcript-headers");
+          preserved.add(sqlitePath);
+          note(`- Saved pre-repair SQLite backup: ${backup}`, NOTE_TITLE);
+        }
         runOpenClawAgentWriteTransaction(
           (database) => {
             const currentRows = readTranscriptStorageRows(database, sessionId);
@@ -186,11 +193,6 @@ export async function noteSessionTranscriptHeaderHealth(params: {
               sessionId,
               timestamp: headerTimestamp,
             });
-            if (!preserved.has(sqlitePath)) {
-              const backup = backupDoctorSqliteRepair(sqlitePath, "transcript-headers");
-              preserved.add(sqlitePath);
-              note(`- Saved pre-repair SQLite backup: ${backup}`, NOTE_TITLE);
-            }
             replaceSqliteTranscriptEventsInTransaction(
               database,
               {
@@ -211,7 +213,24 @@ export async function noteSessionTranscriptHeaderHealth(params: {
             );
           },
           databaseOptions,
-          { operationLabel: "doctor.session-transcript-headers" },
+          {
+            operationLabel: "doctor.session-transcript-headers",
+            repairAdmission: {
+              integrityCheck: params.integrityCheck ?? "quick",
+              integrityTables: [
+                "transcript_events",
+                "transcript_rewrite_watermarks",
+                "session_windows",
+                "session_transcript_index_state",
+                "session_transcript_active_events",
+                "session_transcript_fts_rows",
+                "session_transcript_fts",
+                "transcript_event_identities",
+                "session_reactions",
+                "session_nodes",
+              ],
+            },
+          },
         );
         repaired += 1;
       } catch (error) {

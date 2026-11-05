@@ -5,7 +5,8 @@ import type {
   ControlUiLinkReaderDescriptor,
   ControlUiLinkReaderPreview,
 } from "../../../src/shared/control-ui-link-reader.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
 
@@ -65,7 +66,7 @@ function connect(
   provider: LinkReaderHovercardProvider,
   request = vi.fn().mockResolvedValue(preview()),
 ) {
-  provider.client = { request } as unknown as GatewayBrowserClient;
+  provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
   return request;
 }
 function card() {
@@ -261,7 +262,7 @@ describe("openclaw-link-reader-hovercard-provider", () => {
       vi.fn().mockRejectedValue(new GatewayRequestError({ code: "UNAVAILABLE", message })),
     );
     await hover(anchor);
-    expect(card()?.textContent).toContain("Could not load preview");
+    expect(card()?.textContent).toContain("Couldn’t load preview");
     expect(card()?.textContent).toContain(message);
     const source = card()?.querySelector(".link-reader-hovercard__error-source");
     expect(source?.textContent?.trim()).toBe(scenario.label);
@@ -293,7 +294,7 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     const { anchor, provider } = createLink();
     connect(provider, vi.fn().mockResolvedValue(value));
     await hover(anchor);
-    expect(card()?.textContent).toContain("Could not load preview");
+    expect(card()?.textContent).toContain("Couldn’t load preview");
     expect(card()?.textContent).not.toContain("Wrong");
   });
 
@@ -377,7 +378,6 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     leave(anchor);
     await vi.advanceTimersByTimeAsync(250);
     expect(card()).toBeNull();
-    Object.assign(provider.client!, { connected: true });
     const signal = new AbortController().signal;
     // Fill the same cache without creating 100 disposable hovercard portals.
     for (let index = 1; index <= 100; index++) {

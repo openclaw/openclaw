@@ -1,27 +1,35 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as retry from "../../../packages/retry/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as binaryDetection from "../../infra/detect-binary.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { BufferedCommandResult } from "../../process/exec.js";
-import type {
-  ManagedRun,
-  ProcessSupervisor,
-  RunExit,
-  SpawnInput,
-} from "../../process/supervisor/types.js";
+import * as processExec from "../../process/exec.js";
+import * as supervisorRuntime from "../../process/supervisor/index.js";
+import type { ProcessSupervisor } from "../../process/supervisor/types.js";
 import * as audioBridge from "./audio-bridge.js";
+import { createDesktopSupervisor } from "./audio.test-support.js";
 import { runExit } from "./computer.test-support.js";
 import { createHostDesktopService } from "./host-source.js";
 import { createManagedLinuxAudio } from "./managed-linux-audio.js";
+import * as managedAudio from "./managed-linux-audio.js";
 import { createManagedLinuxDesktop } from "./managed-linux.js";
+import * as managedLinux from "./managed-linux.js";
 import { releaseDesktopObserverToken } from "./observe-bridge.js";
 import * as observeBridge from "./observe-bridge.js";
 import * as rfbProbe from "./rfb-probe.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
 
+vi.mock("../../infra/ports-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/ports-probe.js")>()),
+  tryListenOnPort: async () => 45_999,
+}));
+
 const cleanups: Array<() => Promise<void>> = [];
+const createAudioOwner = createManagedLinuxAudio;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const inheritedAudio = {
   PULSE_SERVER: "unix:/operator/pulse/native",
@@ -38,10 +46,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function exited(stderr = ""): RunExit {
-  return runExit({ exitCode: 1, durationMs: 1, stderr });
-}
-
 function passwordResult(missing = false): BufferedCommandResult {
   return {
     stdout: missing ? Buffer.alloc(0) : Buffer.from("12345678", "hex"),
@@ -54,98 +58,20 @@ function passwordResult(missing = false): BufferedCommandResult {
 }
 
 function createFakeSupervisor() {
-  const inputs: SpawnInput[] = [];
-  const completedSpawns = new Map<number, ReturnType<typeof createDeferred<void>>>();
-  const spawnCompletion = (count: number) => {
-    let completion = completedSpawns.get(count);
-    if (!completion) {
-      completion = createDeferred();
-      completedSpawns.set(count, completion);
-    }
-    return completion;
-  };
-  const runs: Array<{
-    managed: ManagedRun;
-    settle: (exit: RunExit) => void;
-    settled: boolean;
-    scopeKey?: string;
-  }> = [];
-  const supervisor: ProcessSupervisor = {
-    acquireScopeCleanup(scopeKey) {
-      return async () => {
-        supervisor.cancelScope(scopeKey);
-        await Promise.all(
-          runs.filter((run) => run.scopeKey === scopeKey).map((run) => run.managed.wait()),
-        );
-      };
-    },
-    async spawn(input) {
-      input.assertCurrent?.();
-      inputs.push(input);
-      const { promise: wait, resolve: settle } = createDeferred<RunExit>();
-      const managed: ManagedRun = {
-        activity: {
-          get resultSettled() {
-            return record.settled;
-          },
-          lastOutputAtMs: 0,
-        },
-        runId: `run-${runs.length}`,
-        startedAtMs: 0,
-        wait: async () => await wait,
-        cancel: () => {
-          if (!record.settled) {
-            record.settled = true;
-            record.settle(exited());
-          }
-        },
-      };
-      const record = { managed, settle, settled: false, scopeKey: input.scopeKey };
-      runs.push(record);
-      if (input.mode === "child" && input.argv[0] === "dbus-daemon") {
+  return createDesktopSupervisor(
+    (input) => {
+      if (input.argv[0] === "dbus-daemon") {
         input.onStdout?.(`${input.env?.DBUS_SESSION_BUS_ADDRESS},guid=fixture\n`);
       }
-      if (input.mode === "child" && input.argv[0] === "pulseaudio") {
+      if (input.argv[0] === "pulseaudio") {
         input.onStderr?.("Daemon startup complete.\n");
       }
-      if (input.mode === "child" && input.argv[0] === "parec") {
+      if (input.argv[0] === "parec") {
         input.onStdoutRaw?.(Buffer.alloc(4));
       }
-      const completion = spawnCompletion(inputs.length);
-      // Notify after the spawn caller resumes; earlier native setup can await real filesystem work.
-      setImmediate(() => completion.resolve());
-      return managed;
     },
-    cancel(runId) {
-      runs.find((run) => run.managed.runId === runId)?.managed.cancel();
-    },
-    cancelScope(scopeKey) {
-      for (const run of runs) {
-        if (run.scopeKey === scopeKey) {
-          run.managed.cancel();
-        }
-      }
-    },
-  };
-  const exit = (index: number, stderr = "") => {
-    const run = runs[index];
-    if (!run || run.settled) {
-      throw new Error(`fake run ${index} is unavailable`);
-    }
-    run.settled = true;
-    run.settle(exited(stderr));
-  };
-  return {
-    inputs,
-    runs,
-    supervisor,
-    exit,
-    afterSpawn: (count: number) => spawnCompletion(count).promise,
-    async restart(index: number, count: number) {
-      exit(index);
-      await spawnCompletion(count).promise;
-    },
-  };
+    runExit({ exitCode: 1, durationMs: 1 }),
+  );
 }
 
 function audioResult(
@@ -168,18 +94,19 @@ function childInput(fake: ReturnType<typeof createFakeSupervisor>, index = 0) {
   return input;
 }
 
-const availableAudio: typeof createManagedLinuxAudio = (params) =>
-  createManagedLinuxAudio({ ...params, runtime: { detectBinary: async () => true } });
-
 function hostService(desktop: ReturnType<typeof createManagedLinuxDesktop>, connId: string) {
-  const probe = vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue({ kind: "unreachable" });
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  vi.spyOn(managedLinux, "createManagedLinuxDesktop").mockReturnValue(desktop);
+  const desktopProbe = vi.mocked(rfbProbe.probeRfbServer).getMockImplementation()!;
+  const probe = vi.fn<typeof rfbProbe.probeRfbServer>().mockResolvedValue({ kind: "unreachable" });
+  vi.spyOn(rfbProbe, "probeRfbServer").mockImplementation((params) =>
+    params.port === 45_999 ? desktopProbe(params) : probe(params),
+  );
   const registry = createDesktopSessionRegistry();
   cleanups.push(() => registry.stopAll());
   const service = createHostDesktopService({
     getConfig: () => ({ enabled: true, managed: true }),
     registry,
-    platform: "linux",
-    managedDesktop: desktop,
   });
   return { probe, registry, service, requester: { connId, isCurrent: () => true } };
 }
@@ -188,11 +115,11 @@ const onStop = async () => undefined;
 const signal = () => new AbortController().signal;
 
 function expectAppsRunning(fake: ReturnType<typeof createFakeSupervisor>) {
-  expect([0, 2, 3].every((index) => !fake.runs[index]!.settled)).toBe(true);
+  expect([0, 2, 3].every((index) => !fake.runs[index]!.activity.resultSettled)).toBe(true);
 }
 
 function expectStopped(fake: ReturnType<typeof createFakeSupervisor>) {
-  expect(fake.runs.every((run) => run.settled)).toBe(true);
+  expect(fake.runs.every((run) => run.activity.resultSettled)).toBe(true);
 }
 
 function heldAudioGeneration(generationToHold: number) {
@@ -201,18 +128,14 @@ function heldAudioGeneration(generationToHold: number) {
   let generation = 0;
   const createAudio: typeof createManagedLinuxAudio = (params) => {
     const held = ++generation === generationToHold;
-    return createManagedLinuxAudio({
-      ...params,
-      runtime: {
-        detectBinary: async () => {
-          if (held) {
-            entered.resolve();
-            await admission.promise;
-          }
-          return true;
-        },
-      },
+    vi.spyOn(binaryDetection, "detectBinary").mockImplementation(async () => {
+      if (held) {
+        entered.resolve();
+        await admission.promise;
+      }
+      return true;
     });
+    return createAudioOwner(params);
   };
   return { entered, admission, createAudio };
 }
@@ -224,31 +147,28 @@ async function createFixture(createAudio = noAudio, onFailed?: (error: string) =
   const unixSocketTable = path.join(root, "unix");
   const fake = createFakeSupervisor();
   let now = 0;
-  const runPasswordTool = vi.fn(async () => passwordResult());
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  vi.spyOn(supervisorRuntime, "getProcessSupervisor").mockReturnValue(fake.supervisor);
+  vi.spyOn(managedAudio, "createManagedLinuxAudio").mockImplementation(createAudio);
+  vi.spyOn(binaryDetection, "detectBinary").mockResolvedValue(true);
+  vi.spyOn(retry, "sleepWithAbort").mockImplementation(async (ms) => {
+    now += ms;
+  });
+  const runPasswordTool = vi
+    .spyOn(processExec, "runCommandBuffered")
+    .mockResolvedValue(passwordResult());
   const probeRfb = vi
-    .fn()
+    .fn<typeof rfbProbe.probeRfbServer>()
     .mockResolvedValueOnce({ kind: "unreachable" as const })
     .mockResolvedValue({ kind: "rfb" as const, securityTypes: [2] });
-  const makeDesktop = (overrides: Parameters<typeof createManagedLinuxDesktop>[0] = {}) =>
+  vi.spyOn(rfbProbe, "probeRfbServer").mockImplementation(probeRfb);
+  const makeDesktop = () =>
     createManagedLinuxDesktop({
-      supervisor: fake.supervisor,
       onFailed,
-      ...overrides,
       runtime: {
-        createAudio,
-        nowMs: () => now,
-        probeRfb,
-        readinessPollMs: 1,
-        readinessTimeoutMs: 100,
-        runPasswordTool,
-        sleep: async (ms) => {
-          now += ms;
-        },
         tempRoot: root,
-        tryListenOnPort: async () => 45_999,
         unixSocketTable,
         x11SocketDir,
-        ...overrides.runtime,
       },
     });
   const desktop = makeDesktop();
@@ -272,7 +192,7 @@ describe("managed Linux desktop", () => {
   it.each([0, 1])(
     "refreshes audio through the cached host acquisition after process %s exits",
     async (processIndex) => {
-      const { desktop, fake } = await createFixture(availableAudio);
+      const { desktop, fake } = await createFixture(createAudioOwner);
       const { probe, registry, service, requester } = hostService(desktop, "restart-viewer");
       const minted = vi.spyOn(audioBridge, "mintDesktopAudioObserver");
       const first = await service.observe({ control: true, requester });
@@ -328,10 +248,8 @@ describe("managed Linux desktop", () => {
     const recoveryFinished = createDeferred();
     let available = true;
     const createAudio: typeof createManagedLinuxAudio = (params) => {
-      const owner = createManagedLinuxAudio({
-        ...params,
-        runtime: { detectBinary: async () => available },
-      });
+      vi.spyOn(binaryDetection, "detectBinary").mockImplementation(async () => available);
+      const owner = createAudioOwner(params);
       if (!available) {
         void owner.ready.then(() => setImmediate(() => recoveryFinished.resolve()));
       }
@@ -347,10 +265,8 @@ describe("managed Linux desktop", () => {
     available = false;
     fake.exit(1);
     await recoveryFinished.promise;
-    expect(lease.isCurrent()).toBe(true);
-    expect(stopped).not.toHaveBeenCalled();
-    expect(onFailed).not.toHaveBeenCalled();
-    expect(desktop.status().state).toBe("running");
+    expect([desktop.status().state, lease.isCurrent()]).toEqual(["running", true]);
+    expect([stopped.mock.calls, onFailed.mock.calls]).toEqual([[], []]);
     expectAppsRunning(fake);
     expect(fake.inputs).toHaveLength(5);
     expect(capture.stream.destroyed).toBe(true);
@@ -403,7 +319,7 @@ describe("managed Linux desktop", () => {
     const onFailed = vi.fn(() => failed.resolve());
     let generation = 0;
     const createAudio: typeof createManagedLinuxAudio = (params) => {
-      const owner = availableAudio(params);
+      const owner = createAudioOwner(params);
       if (++generation === 4) {
         void owner.ready.then((audio) => {
           const stop = audio.stop.bind(audio);
@@ -428,10 +344,8 @@ describe("managed Linux desktop", () => {
     const capture = await lastSource.start(signal());
     fake.exit(6);
     await audioStopped.promise;
-    expect(desktop.status().state).toBe("running");
-    expect(lease.isCurrent()).toBe(true);
-    expect(stopped).not.toHaveBeenCalled();
-    expect(onFailed).not.toHaveBeenCalled();
+    expect([desktop.status().state, lease.isCurrent()]).toEqual(["running", true]);
+    expect([stopped.mock.calls, onFailed.mock.calls]).toEqual([[], []]);
     expectAppsRunning(fake);
     expect(fake.inputs).toHaveLength(8);
     expect(capture.stream.destroyed).toBe(true);
@@ -469,7 +383,7 @@ describe("managed Linux desktop", () => {
   });
 
   it("keeps audio retries independent of desktop failures and expires them after five minutes", async () => {
-    const { desktop, fake, advanceTime } = await createFixture(availableAudio);
+    const { desktop, fake, advanceTime } = await createFixture(createAudioOwner);
     const acquired = await desktop.acquire();
     for (const index of [0, 4, 8]) {
       await fake.restart(index, index + 8);
@@ -519,12 +433,10 @@ describe("managed Linux desktop", () => {
     "reports current %s setup failure through cached host observations",
     async (missing) => {
       let unavailable = true;
-      const createAudio: typeof createManagedLinuxAudio = (params) =>
-        createManagedLinuxAudio({
-          ...params,
-          runtime: { detectBinary: async (binary) => !unavailable || binary !== missing },
-        });
-      const { desktop, fake } = await createFixture(createAudio);
+      const { desktop, fake } = await createFixture(createAudioOwner);
+      vi.spyOn(binaryDetection, "detectBinary").mockImplementation(
+        async (binary) => !unavailable || binary !== missing,
+      );
       const { probe, service, requester } = hostService(desktop, "setup-viewer");
       const first = await service.observe({ control: false, requester });
       expect(first.audio).toBeUndefined();
@@ -695,17 +607,12 @@ describe("managed Linux desktop", () => {
           return await fixture.fake.supervisor.spawn(input);
         },
       };
-      const runPasswordTool =
-        missingBinary === "tigervncpasswd"
-          ? vi.fn(async () => passwordResult(true))
-          : fixture.runPasswordTool;
-      const desktop = fixture.makeDesktop({
-        supervisor,
-        runtime: {
-          probeRfb: async () => ({ kind: "rfb", securityTypes: [2] }),
-          runPasswordTool,
-        },
-      });
+      vi.spyOn(supervisorRuntime, "getProcessSupervisor").mockReturnValue(supervisor);
+      fixture.probeRfb.mockReset().mockResolvedValue({ kind: "rfb", securityTypes: [2] });
+      if (missingBinary === "tigervncpasswd") {
+        fixture.runPasswordTool.mockResolvedValue(passwordResult(true));
+      }
+      const desktop = fixture.makeDesktop();
 
       await expect(desktop.acquire()).rejects.toThrow(missingBinary);
       await expect(desktop.acquire()).rejects.toThrow(
@@ -740,9 +647,9 @@ describe("managed Linux desktop", () => {
       expect(stoppedComputer).toHaveBeenCalledOnce();
       expect(previous.isCurrent()).toBe(false);
       if (event === "stop") {
-        expect(fake.runs.every((run) => !run.settled)).toBe(true);
+        expect(fake.runs.every((run) => !run.activity.resultSettled)).toBe(true);
       } else {
-        expect(fake.runs.filter((run) => !run.settled)).toHaveLength(2);
+        expect(fake.runs.filter((run) => !run.activity.resultSettled)).toHaveLength(2);
       }
       expect(fake.inputs).toHaveLength(3);
       await expect(desktop.acquireComputer({ onStop: stoppedComputer })).rejects.toThrow(
@@ -765,24 +672,4 @@ describe("managed Linux desktop", () => {
       expect(next.isCurrent()).toBe(true);
     },
   );
-
-  it("stops and removes its session when the registry linger expires", async () => {
-    const { desktop } = await createFixture();
-    const registry = createDesktopSessionRegistry({ lingerMs: 1 });
-    cleanups.push(async () => registry.stopAll());
-    await registry.acquire({
-      sourceKey: "host",
-      ownerEpoch: 0,
-      start: () => desktop.acquire(),
-      teardown: () => desktop.stop(),
-    });
-    const observer = registry.attachObserver("host", {
-      control: false,
-      ownerEpoch: 0,
-      close: vi.fn(),
-    });
-    expect(observer).toBeDefined();
-    observer?.release();
-    await vi.waitFor(() => expect(desktop.status()).toEqual({ state: "not-started" }));
-  });
 });

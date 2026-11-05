@@ -1,7 +1,15 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
 import { serialize } from "node:v8";
+import { BrokerChild } from "../../process/spawn-broker/child.js";
+import { getSpawnBroker } from "../../process/spawn-broker/context.js";
+import { spawnProcess } from "../../process/spawn-utils.js";
 import { createPermitPool } from "../../shared/permit-pool.js";
 import { ensureSqliteLibrarySelected } from "../bun-sqlite-library.js";
+import {
+  assertChildRuntimeAvailable,
+  classifyChildRuntimeFailure,
+} from "../child-runtime-viability.js";
 import { runtimeProcessEntrypoints } from "../runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../sqlite-handle-lifecycle.js";
@@ -49,16 +57,24 @@ const databaseAdmissions = new Map<
 const children = new Map<
   string,
   {
-    child: ChildProcessWithoutNullStreams;
+    child: ChildProcess;
+    stdin: Writable;
+    stdout: Readable;
+    stderr: Readable;
+    broker: ReturnType<typeof getSpawnBroker>;
     idleTimer?: ReturnType<typeof setTimeout>;
+    started?: boolean;
     retire: () => void;
   }
 >();
 
-function setChildReferenced(child: ChildProcessWithoutNullStreams, referenced: boolean) {
+function setChildReferenced(child: ChildProcess, referenced: boolean) {
   const method = referenced ? "ref" : "unref";
   child[method]();
   for (const pipe of [child.stdin, child.stdout, child.stderr]) {
+    if (!pipe) {
+      continue;
+    }
     // Node and Bun expose different pipe classes and optional ref methods.
     if (referenced && "ref" in pipe && typeof pipe.ref === "function") {
       pipe.ref();
@@ -163,7 +179,12 @@ async function runAdmittedVectorKnn<Row>(
     throw new VectorKnnSubprocessError("memory vector KNN child input is too large", "protocol");
   }
 
+  const broker = getSpawnBroker();
   let worker = children.get(params.databasePath);
+  if (worker && worker.broker !== broker) {
+    worker.retire();
+    worker = undefined;
+  }
   if (!worker) {
     let permit = vectorKnnAdmission.tryAcquire();
     if (!permit) {
@@ -181,24 +202,51 @@ async function runAdmittedVectorKnn<Row>(
       releaseAdmission();
       throw toAbortError(params.signal);
     }
-    let child;
+    let child: ChildProcess;
     try {
+      assertChildRuntimeAvailable();
       const childUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteVector);
-      child = spawn(process.execPath, resolveRuntimeWorkerArgv(childUrl), {
+      child = spawnProcess(process.execPath, resolveRuntimeWorkerArgv(childUrl), {
         env: buildChildEnv(),
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });
+      const brokerChild = child instanceof BrokerChild ? child : undefined;
+      if (brokerChild) {
+        try {
+          await brokerChild.ready();
+        } catch (error) {
+          await brokerChild.waitForClose();
+          throw error;
+        }
+      }
     } catch (error) {
       releaseAdmission();
+      throw (
+        classifyChildRuntimeFailure({ error }) ??
+        new VectorKnnSubprocessError(
+          error instanceof Error ? error.message : String(error),
+          "unavailable",
+        )
+      );
+    }
+    const { stdin, stdout, stderr } = child;
+    if (!stdin || !stdout || !stderr) {
+      child.once("close", releaseAdmission);
+      child.once("error", () => {});
+      child.kill("SIGKILL");
       throw new VectorKnnSubprocessError(
-        error instanceof Error ? error.message : String(error),
+        "memory vector KNN child did not provide pipes",
         "unavailable",
       );
     }
     worker = {
       child,
+      stdin,
+      stdout,
+      stderr,
+      broker,
       retire: () => {
         if (children.get(params.databasePath) !== ownedWorker) {
           return;
@@ -207,7 +255,7 @@ async function runAdmittedVectorKnn<Row>(
         setChildReferenced(child, true);
         children.delete(params.databasePath);
         clearTimeout(ownedWorker.idleTimer);
-        child.stdin.destroy();
+        stdin.destroy();
         child.kill("SIGKILL");
       },
     };
@@ -220,20 +268,21 @@ async function runAdmittedVectorKnn<Row>(
       releaseAdmission();
     });
     child.on("error", ownedWorker.retire);
-    child.stdin.on("error", ownedWorker.retire);
+    stdin.on("error", ownedWorker.retire);
     children.set(params.databasePath, worker);
   }
-  const { child } = worker;
+  const { child, stdin, stdout, stderr } = worker;
   const ownedWorker = worker;
   clearTimeout(worker.idleTimer);
   worker.idleTimer = undefined;
-  child.stdout.removeAllListeners("data");
+  stdout.removeAllListeners("data");
   setChildReferenced(child, true);
   return await new Promise<VectorKnnResponse<Row>>((resolve, reject) => {
     const stderrChunks: Buffer[] = [];
     let closed = false;
     let callerSettled = false;
     let terminationReason: Error | undefined;
+    let nativeError: Error | undefined;
     let killExitTimer: ReturnType<typeof setTimeout> | undefined;
 
     const settleCaller = (action: () => void) => {
@@ -242,9 +291,9 @@ async function runAdmittedVectorKnn<Row>(
       }
       callerSettled = true;
       params.signal?.removeEventListener("abort", abort);
-      child.stdout.removeAllListeners("data");
-      child.stderr.removeAllListeners("data");
-      child.stdin.removeListener("error", onStdinError);
+      stdout.removeAllListeners("data");
+      stderr.removeAllListeners("data");
+      stdin.removeListener("error", onStdinError);
       child.removeListener("error", onError);
       child.removeListener("close", onClose);
       action();
@@ -262,9 +311,9 @@ async function runAdmittedVectorKnn<Row>(
           // The caller may return, but this child keeps its admission slot until
           // close. Destroying pipes and unref'ing prevents one unkillable OS task
           // from pinning the Gateway while the slot bounds future accumulation.
-          child.stdin.destroy();
-          child.stdout.destroy();
-          child.stderr.destroy();
+          stdin.destroy();
+          stdout.destroy();
+          stderr.destroy();
           child.unref();
           settleCaller(() =>
             reject(
@@ -289,7 +338,7 @@ async function runAdmittedVectorKnn<Row>(
       const chunks: Buffer[] = stream === "stderr" ? stderrChunks : [];
       const maxBytes = stream === "stdout" ? MAX_STDOUT_BYTES : MAX_STDERR_BYTES;
       let bytes = 0;
-      child[stream].on("data", (chunk: Buffer) => {
+      ownedWorker[stream].on("data", (chunk: Buffer) => {
         bytes += chunk.byteLength;
         const frameBytes = stream === "stdout" && chunk[chunk.length - 1] === 10 ? 1 : 0;
         if (bytes > maxBytes + frameBytes) {
@@ -319,6 +368,7 @@ async function runAdmittedVectorKnn<Row>(
               "protocol",
             );
           }
+          ownedWorker.started = true;
           const result = parseChildResult(
             Buffer.concat(chunks),
             params.request.limit,
@@ -328,7 +378,7 @@ async function runAdmittedVectorKnn<Row>(
             return;
           }
           settleCaller(() => resolve(result));
-          child.stdout.on("data", ownedWorker.retire);
+          stdout.on("data", ownedWorker.retire);
           ownedWorker.idleTimer = setTimeout(ownedWorker.retire, SQLITE_IDLE_HANDLE_TTL_MS);
           ownedWorker.idleTimer.unref();
           if (vectorKnnAdmission.pendingCount > 0) {
@@ -346,8 +396,9 @@ async function runAdmittedVectorKnn<Row>(
         requestTermination(new VectorKnnSubprocessError(error.message, "failed"));
       }
     };
-    child.stdin.on("error", onStdinError);
+    stdin.on("error", onStdinError);
     const onError = (error: Error) => {
+      nativeError = error;
       requestTermination(new VectorKnnSubprocessError(error.message, "unavailable"));
     };
     child.once("error", onError);
@@ -361,20 +412,30 @@ async function runAdmittedVectorKnn<Row>(
       }
       params.signal?.removeEventListener("abort", abort);
       settleCaller(() => {
+        const runtimeFailure = classifyChildRuntimeFailure({
+          error: nativeError ?? terminationReason,
+          stderr: Buffer.concat(stderrChunks).toString("utf8"),
+          signal,
+          started: ownedWorker.started,
+        });
+        if (runtimeFailure) {
+          reject(runtimeFailure);
+          return;
+        }
         if (terminationReason) {
           reject(terminationReason);
           return;
         }
-        const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+        const stderrText = Buffer.concat(stderrChunks).toString("utf8").trim();
         reject(
           new VectorKnnSubprocessError(
-            `memory vector KNN child exited before returning a result (code ${code}, signal ${signal ?? "none"})${stderr ? `: ${stderr}` : ""}`,
+            `memory vector KNN child exited before returning a result (code ${code}, signal ${signal ?? "none"})${stderrText ? `: ${stderrText}` : ""}`,
             "failed",
           ),
         );
       });
     };
     child.once("close", onClose);
-    child.stdin.write(Buffer.concat([inputPayload, Buffer.from("\n")]));
+    stdin.write(Buffer.concat([inputPayload, Buffer.from("\n")]));
   });
 }

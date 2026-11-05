@@ -358,6 +358,10 @@ export function registerQaLabCli(program: Command) {
     .option("--tools", "Print runtime tool fixture coverage instead of scenario coverage", false)
     .option("--summary <path>", "Runtime qa-suite-summary.json to overlay on --tools coverage")
     .option(
+      "--evidence <path>",
+      "Report scorecard gaps from an existing qa-evidence.json without running QA",
+    )
+    .option(
       "--match <query>",
       "Search scenario metadata and print matching scenario refs (repeatable)",
       collectString,

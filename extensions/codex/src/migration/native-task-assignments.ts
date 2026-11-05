@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { z } from "zod";
 import { readCodexNativeSubagentRunId } from "../app-server/native-subagent-assignment.js";
@@ -18,6 +19,28 @@ import {
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "../app-server/session-binding-meta.js";
 import type { StoredCodexAppServerBinding } from "../app-server/session-binding-record.js";
+
+const loadSessionBindingRecord = createLazyRuntimeModule(
+  () => import("../app-server/session-binding-record.js"),
+);
+const loadSqliteRuntime = createLazyRuntimeModule(async () => {
+  const {
+    withSqliteReadOnlyInspection,
+    executeSqliteQuerySync,
+    getNodeSqliteKysely,
+    openNodeSqliteDatabase,
+    resolveExistingSqliteFileUri,
+    runSqliteImmediateTransactionSync,
+  } = await import("openclaw/plugin-sdk/sqlite-runtime");
+  return {
+    withSqliteReadOnlyInspection,
+    executeSqliteQuerySync,
+    getNodeSqliteKysely,
+    openNodeSqliteDatabase,
+    resolveExistingSqliteFileUri,
+    runSqliteImmediateTransactionSync,
+  };
+});
 
 type Params = Parameters<PluginDoctorStateMigration["migrateLegacyState"]>[0];
 type AssignmentSessionStore = Pick<
@@ -112,82 +135,67 @@ async function inspect(params: Params) {
     }
     throw error;
   }
-  const { bindingStoreKey, readStoredCodexAppServerBinding } =
-    await import("../app-server/session-binding-record.js");
-  const {
-    executeSqliteQuerySync,
-    getNodeSqliteKysely,
-    openNodeSqliteDatabase,
-    prepareSqliteReadOnlyLocation,
-    tableExists,
-  } = await import("openclaw/plugin-sdk/sqlite-runtime");
-  const snapshot = await prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true });
-  try {
-    const db = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
-    try {
-      if (!tableExists(db, "task_runs") || !tableExists(db, "plugin_state_entries")) {
-        return [];
+  const { bindingStoreKey, readStoredCodexAppServerBinding } = await loadSessionBindingRecord();
+  const { withSqliteReadOnlyInspection } = await loadSqliteRuntime();
+  const { executeSqliteQuerySync, getNodeSqliteKysely, tableExists } =
+    await import("openclaw/plugin-sdk/sqlite-worker-runtime");
+  return await withSqliteReadOnlyInspection(source, (db) => {
+    if (!tableExists(db, "task_runs") || !tableExists(db, "plugin_state_entries")) {
+      return [];
+    }
+    const sql = getNodeSqliteKysely<LegacyDatabase>(db);
+    const rows = executeSqliteQuerySync(
+      db,
+      sql
+        .selectFrom("task_runs")
+        .select(taskColumns)
+        .select((eb) =>
+          eb
+            .selectFrom("task_runs as all_runs")
+            .select((count) => count.fn.countAll<number>().as("count"))
+            .whereRef("all_runs.run_id", "=", "task_runs.run_id")
+            .where("all_runs.runtime", "=", "subagent")
+            .where("all_runs.task_kind", "=", "codex-native")
+            .as("run_count"),
+        )
+        .where("runtime", "=", "subagent")
+        .where("task_kind", "=", "codex-native")
+        .where("delivery_status", "!=", "delivered")
+        .where((eb) =>
+          eb.or([
+            eb("status", "in", ["queued", "running"]),
+            eb("delivery_status", "=", "pending"),
+            eb.and([
+              eb("delivery_status", "=", "not_applicable"),
+              eb("ended_at", ">=", Date.now() - 60_000),
+            ]),
+          ]),
+        ),
+    ).rows;
+    return rows.filter((row) => {
+      const identity = taskIdentity(row);
+      if (!identity) {
+        return true;
       }
-      const sql = getNodeSqliteKysely<LegacyDatabase>(db);
-      const rows = executeSqliteQuerySync(
+      const binding = executeSqliteQuerySync(
         db,
         sql
-          .selectFrom("task_runs")
-          .select(taskColumns)
-          .select((eb) =>
-            eb
-              .selectFrom("task_runs as all_runs")
-              .select((count) => count.fn.countAll<number>().as("count"))
-              .whereRef("all_runs.run_id", "=", "task_runs.run_id")
-              .where("all_runs.runtime", "=", "subagent")
-              .where("all_runs.task_kind", "=", "codex-native")
-              .as("run_count"),
-          )
-          .where("runtime", "=", "subagent")
-          .where("task_kind", "=", "codex-native")
-          .where("delivery_status", "!=", "delivered")
-          .where((eb) =>
-            eb.or([
-              eb("status", "in", ["queued", "running"]),
-              eb("delivery_status", "=", "pending"),
-              eb.and([
-                eb("delivery_status", "=", "not_applicable"),
-                eb("ended_at", ">=", Date.now() - 60_000),
-              ]),
-            ]),
-          ),
-      ).rows;
-      return rows.filter((row) => {
-        const identity = taskIdentity(row);
-        if (!identity) {
-          return true;
-        }
-        const binding = executeSqliteQuerySync(
-          db,
-          sql
-            .selectFrom("plugin_state_entries")
-            .select("value_json")
-            .where("plugin_id", "=", "codex")
-            .where("namespace", "=", CODEX_APP_SERVER_BINDING_NAMESPACE)
-            .where("entry_key", "=", bindingStoreKey(identity))
-            .where((eb) =>
-              eb.or([eb("expires_at", "is", null), eb("expires_at", ">", Date.now())]),
-            ),
-        ).rows[0];
-        try {
-          const stored = binding && readStoredCodexAppServerBinding(JSON.parse(binding.value_json));
-          const imported = importSchema.safeParse(stored?.nativeSubagentTaskImport);
-          return !imported.success || !imported.data.taskIds.includes(row.task_id);
-        } catch {
-          return true;
-        }
-      });
-    } finally {
-      db.close();
-    }
-  } finally {
-    await snapshot.cleanupAsync();
-  }
+          .selectFrom("plugin_state_entries")
+          .select("value_json")
+          .where("plugin_id", "=", "codex")
+          .where("namespace", "=", CODEX_APP_SERVER_BINDING_NAMESPACE)
+          .where("entry_key", "=", bindingStoreKey(identity))
+          .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", Date.now())])),
+      ).rows[0];
+      try {
+        const stored = binding && readStoredCodexAppServerBinding(JSON.parse(binding.value_json));
+        const imported = importSchema.safeParse(stored?.nativeSubagentTaskImport);
+        return !imported.success || !imported.data.taskIds.includes(row.task_id);
+      } catch {
+        return true;
+      }
+    });
+  });
 }
 
 function prepareAssignment(
@@ -287,9 +295,8 @@ async function settleHistoricalDelivery(
     openNodeSqliteDatabase,
     resolveExistingSqliteFileUri,
     runSqliteImmediateTransactionSync,
-  } = await import("openclaw/plugin-sdk/sqlite-runtime");
-  const { readStoredCodexAppServerBinding } =
-    await import("../app-server/session-binding-record.js");
+  } = await loadSqliteRuntime();
+  const { readStoredCodexAppServerBinding } = await loadSessionBindingRecord();
   const db = openNodeSqliteDatabase(resolveExistingSqliteFileUri(databasePath(params)));
   try {
     const sql = getNodeSqliteKysely<LegacyDatabase>(db);
@@ -372,8 +379,7 @@ export const codexNativeTaskAssignmentMigration = {
     if (rows.length === 0) {
       return { changes: [], warnings };
     }
-    const { bindingStoreKey, readStoredCodexAppServerBinding } =
-      await import("../app-server/session-binding-record.js");
+    const { bindingStoreKey, readStoredCodexAppServerBinding } = await loadSessionBindingRecord();
     const { getSessionEntry, resolveStorePath } =
       await import("openclaw/plugin-sdk/session-store-runtime");
     const sessionStore: AssignmentSessionStore = { getSessionEntry, resolveStorePath };

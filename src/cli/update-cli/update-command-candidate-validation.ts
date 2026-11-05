@@ -4,6 +4,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tryReadJson } from "../../infra/json-files.js";
+import { withSqliteDatabaseAdmissionWait } from "../../infra/sqlite-worker-database-admission-relay.js";
 import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
 import { assertUpdateDatabaseEngineContexts } from "../../infra/update-database-engine-admission.js";
 import { createUpdateDoctorConfigWarningStep } from "../../infra/update-doctor-config.js";
@@ -12,6 +13,7 @@ import { recordUpdateRunStepAsync } from "../../infra/update-run-write.async.js"
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
+import { resolveCommandProcessSignal, withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   parsePackageOpenClawSchemaVersions,
@@ -58,7 +60,10 @@ export async function preflightUpdateCandidatePlugins(
 }
 
 export async function validateUpdateCandidateWithProgress(
-  params: Pick<Parameters<typeof validateUpdateCandidateCanary>[0], "root" | "config"> & {
+  params: Pick<
+    Parameters<typeof validateUpdateCandidateCanary>[0],
+    "root" | "config" | "gatewayStartupRuntime"
+  > & {
     sourcePackageRoot?: string;
     env: NodeJS.ProcessEnv;
     assertCurrent: () => void;
@@ -69,79 +74,108 @@ export async function validateUpdateCandidateWithProgress(
   execution: {
     packageUpdateNodeRunner?: string;
     timeoutMs?: number;
-    opts: Pick<UpdateCommandOptions, "json">;
+    opts: Pick<UpdateCommandOptions, "json" | "fullIntegrityCheck">;
     progress: UpdateStepProgress;
   },
   run: UpdateCommandOptions["run"],
 ) {
-  const assertCurrent = params.assertCurrent;
-  const writeOptions = run ? { ...params.writeOptions } : undefined;
-  const originalContext = writeOptions?.context;
-  const source = originalContext
-    ? prepareOpenClawStateReadSource({
-        path: originalContext.admission.databasePath,
-        env: writeOptions?.env,
-      })
-    : undefined;
-  if (originalContext && source) {
-    const initial = source.current();
-    originalContext.admission.assertCurrent();
-    if (
-      initial.admission.identity.key !== originalContext.admission.identity.key ||
-      initial.admission.identity.birthtime !== originalContext.admission.identity.birthtime ||
-      initial.maintenanceScope !== originalContext.maintenanceScope ||
-      initial.existingSchemaPath !== originalContext.existingSchemaPath
-    ) {
-      throw new Error("Candidate progress lost its original state source.");
-    }
-  }
-  const validate = () =>
-    validateUpdateCandidateCanary({
-      ...params,
-      sourceBundledPlugins: params.sourcePackageRoot
-        ? { packageRoot: params.sourcePackageRoot, directory: resolveBundledPluginsDir(params.env) }
-        : undefined,
-      assertCurrent,
-      stateDir: resolveStateDir(params.env),
-      nodeRunner: execution.packageUpdateNodeRunner,
-      timeoutMs: execution.timeoutMs,
-      onProgress: async (step) => {
-        assertCurrent();
-        if (run) {
-          await recordUpdateRunStepAsync(run.runId, step, {
-            ...writeOptions,
-            context: source?.workerContext(),
+  // Canary owns size-aware snapshot and per-check budgets. Only the admitted
+  // operator deadline may limit their combined duration; keep its cancellation
+  // and process settlement through the progress writer and raw canary children.
+  return withCommandProcessScope(async () => {
+    const signal = resolveCommandProcessSignal();
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      params.assertCurrent();
+      signal?.throwIfAborted();
+    };
+    return withSqliteDatabaseAdmissionWait(
+      {
+        get deadlineAtMs() {
+          return run?.deadline ? Date.now() + run.deadline.remainingMs() : undefined;
+        },
+        assertActive: assertCurrent,
+      },
+      async () => {
+        const writeOptions = run ? { ...params.writeOptions, signal } : undefined;
+        const originalContext = writeOptions?.context;
+        const source = originalContext
+          ? prepareOpenClawStateReadSource({
+              path: originalContext.admission.databasePath,
+              env: writeOptions?.env,
+            })
+          : undefined;
+        if (originalContext && source) {
+          const initial = source.current();
+          originalContext.admission.assertCurrent();
+          if (
+            initial.admission.identity.key !== originalContext.admission.identity.key ||
+            initial.admission.identity.birthtime !== originalContext.admission.identity.birthtime ||
+            initial.maintenanceScope !== originalContext.maintenanceScope ||
+            initial.existingSchemaPath !== originalContext.existingSchemaPath
+          ) {
+            throw new Error("Candidate progress lost its original state source.");
+          }
+        }
+        const validate = () =>
+          validateUpdateCandidateCanary({
+            ...params,
+            sourceBundledPlugins: params.sourcePackageRoot
+              ? {
+                  packageRoot: params.sourcePackageRoot,
+                  directory: resolveBundledPluginsDir(params.env),
+                }
+              : undefined,
+            assertCurrent,
+            stateDir: resolveStateDir(params.env),
+            nodeRunner: execution.packageUpdateNodeRunner,
+            timeoutMs: execution.timeoutMs,
+            signal,
+            fullIntegrityCheck: execution.opts.fullIntegrityCheck,
+            onProgress: async (step) => {
+              assertCurrent();
+              if (run) {
+                await recordUpdateRunStepAsync(run.runId, step, {
+                  ...writeOptions,
+                  context: source?.workerContext(),
+                });
+              }
+              assertCurrent();
+              defaultRuntime[execution.opts.json ? "error" : "log"](
+                `${step.step}: ${step.detail ?? step.status}`,
+              );
+            },
+            onStep: (step) =>
+              reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 }),
           });
+        const validation =
+          source && run
+            ? await runOpenClawStateWorkerOperation(
+                source.workerContext(),
+                // Keep the actual progress writer alive throughout even a silent copy.
+                validate,
+                { existingOnly: true, assertCurrent, signal },
+              )
+            : await validate();
+        if (!validation) {
+          throw new Error("Candidate progress database disappeared before snapshot admission.");
         }
         assertCurrent();
-        defaultRuntime[execution.opts.json ? "error" : "log"](
-          `${step.step}: ${step.detail ?? step.status}`,
-        );
+        const changes = validation.doctorConfigChanges ?? [];
+        if (
+          validation.status === "ok" &&
+          validation.doctorConfigWrites !== true &&
+          changes.length
+        ) {
+          const warning = createUpdateDoctorConfigWarningStep(params.root, changes);
+          validation.steps.push(warning);
+          await reportUpdateStepCompletion(execution.progress, { ...warning, index: 0, total: 0 });
+          assertCurrent();
+        }
+        return validation;
       },
-      onStep: (step) =>
-        reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 }),
-    });
-  const validation =
-    source && run
-      ? await runOpenClawStateWorkerOperation(
-          source.workerContext(),
-          // Keep the actual progress writer alive throughout even a silent copy.
-          validate,
-          { existingOnly: true, assertCurrent },
-        )
-      : await validate();
-  if (!validation) {
-    throw new Error("Candidate progress database disappeared before snapshot admission.");
-  }
-  assertCurrent();
-  const changes = validation.doctorConfigChanges ?? [];
-  if (validation.status === "ok" && validation.doctorConfigWrites !== true && changes.length) {
-    const warning = createUpdateDoctorConfigWarningStep(params.root, changes);
-    validation.steps.push(warning);
-    await reportUpdateStepCompletion(execution.progress, { ...warning, index: 0, total: 0 });
-    assertCurrent();
-  }
-  return validation;
+    );
+  }, run?.deadline?.signal);
 }
 
 export function assertUpdateCandidateSteps(steps: UpdateRunResult["steps"]): void {
@@ -176,6 +210,7 @@ export async function assertUpdateCandidateExecutor(params: {
       "Starting the update requires its original update process.",
     );
   }
+  let unsupported = "unreported";
   const supported = await isUpdatedInstallGatewayExecutorSupported({
     root: params.root,
     env: resolveUpdatedInstallCommandEnv({
@@ -185,12 +220,15 @@ export async function assertUpdateCandidateExecutor(params: {
     executor,
     timeoutMs: params.timeoutMs,
     nodeRunner: params.nodeRunner,
+    onUnsupported: (condition) => {
+      unsupported = condition;
+    },
   });
   params.assertCurrent();
   if (!supported) {
     throw new UpdatePreMutationError(
       "target-native-unsupported",
-      "Target runtime cannot fence update-owned native commands; refusing before Gateway stop or package activation.",
+      `Target runtime cannot fence update-owned native commands (executor check: ${unsupported}); refusing before Gateway stop or package activation.`,
     );
   }
 }
@@ -229,6 +267,7 @@ export function createUpdateDatabaseFamilyAdmission(
     | "packageInstallTarget"
     | "opts"
     | "shouldRestart"
+    | "executionGuards"
   >,
 ) {
   type Context = { config: OpenClawConfig; env: NodeJS.ProcessEnv };
@@ -269,6 +308,7 @@ export function createUpdateDatabaseFamilyAdmission(
       for (const { env } of pending) {
         const result = await runUpdateCandidateAdmission({
           candidateRoot,
+          assertCurrent: execution.executionGuards.assertCurrent,
           nodeRunner: execution.packageUpdateNodeRunner,
           timeoutMs: execution.updateStepTimeoutMs,
           env,
@@ -299,6 +339,7 @@ export function createUpdateDatabaseFamilyAdmission(
             supervisor: { version: VERSION, host: os.hostname(), pid: process.pid },
           },
         });
+        execution.executionGuards.assertCurrent();
         if (
           result.verdict?.verdict !== "admit" ||
           !result.verdict.facts.checks.some(

@@ -6,11 +6,11 @@ import {
   QA_PROVIDER_SECRET_ENV_VARS,
 } from "./providers/env.js";
 
-const QA_GATEWAY_DEBUG_SECRET_ENV_VARS = Object.freeze([
+const QA_GATEWAY_DEBUG_SECRET_ENV_VARS: readonly string[] = [
   ...QA_PROVIDER_SECRET_ENV_VARS,
   "OPENCLAW_GATEWAY_TOKEN",
-]);
-const QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS = Object.freeze([
+];
+const QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS: readonly string[] = [
   "accessToken",
   "access_token",
   "apiKey",
@@ -28,8 +28,8 @@ const QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS = Object.freeze([
   "refresh_token",
   "set-cookie",
   "x-api-key",
-]);
-const QA_GATEWAY_DEBUG_SECRET_QUERY_KEYS = Object.freeze([
+];
+const QA_GATEWAY_DEBUG_SECRET_QUERY_KEYS: readonly string[] = [
   "access_token",
   "api_key",
   "apiKey",
@@ -40,8 +40,8 @@ const QA_GATEWAY_DEBUG_SECRET_QUERY_KEYS = Object.freeze([
   "password",
   "refresh_token",
   "token",
-]);
-const QA_GATEWAY_DEBUG_SECRET_HEADER_KEYS = Object.freeze(["cookie", "set-cookie", "x-api-key"]);
+];
+const QA_GATEWAY_DEBUG_SECRET_HEADER_KEYS = ["cookie", "set-cookie", "x-api-key"] as const;
 const TELEGRAM_BOT_TOKEN_RE = /\d{6,}:[A-Za-z0-9_-]{20,}/gu;
 
 function redactTelegramBotTokens(text: string) {

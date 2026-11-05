@@ -21,8 +21,6 @@ export type GatewayReloadPlan = {
   refreshHooksPolicy?: boolean;
   restartGmailWatcher: boolean;
   restartCron: boolean;
-  restartHeartbeat: boolean;
-  reconcileSystemJobs?: boolean;
   reloadPlugins: boolean;
   /** Canonical config/install deltas that require a plugin replacement. */
   reloadPluginPaths?: string[];
@@ -35,7 +33,6 @@ export type GatewayReloadPlan = {
     waitForDrain?: boolean;
     drainSignal?: AbortSignal;
     expectedSourceDigests?: Readonly<Record<string, string>>;
-    expectedInstallHashes?: Readonly<Record<string, string>>;
   };
   restartChannels: Set<ChannelKind>;
   restartServices?: Set<string>;
@@ -51,8 +48,6 @@ const RELOAD_ACTIONS = [
   "refreshHooksPolicy",
   "restartGmailWatcher",
   "restartCron",
-  "restartHeartbeat",
-  "reconcileSystemJobs",
   "reloadPlugins",
   "disposeMcpRuntimes",
 ] as const;
@@ -143,8 +138,6 @@ function expandReloadPolicies(policies: ReloadPolicy[]): ReloadRule[] {
 }
 
 const AGENT_ROSTER_RELOAD_ACTIONS: readonly ReloadAction[] = [
-  "restartHeartbeat",
-  "reconcileSystemJobs",
   "refreshHooksPolicy",
   "reloadInternalHooks",
 ];
@@ -155,6 +148,8 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     prefixes: [...AUTH_CREDENTIAL_PATHS, "mcp.apps", "secrets.egressProxy", "gateway.portals"],
     kind: "restart",
   },
+  // Gateway tools capture this deployment policy when they are assembled.
+  { prefixes: ["tools.gatewayPolicy"], kind: "restart" },
   {
     // These policies use the published snapshot or an existing committed owner;
     // listener and service replacement requires an explicit action below.
@@ -174,7 +169,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.controlUi.allowExternalEmbedUrls",
       "gateway.controlUi.automaticallyFetchFavicons",
       "gateway.controlUi.experimental.customPlugins",
-      "gateway.controlUi.experimental.claws",
+      "gateway.controlUi.experimental.templates",
       "gateway.controlUi.experimental.chatBubbles",
       "gateway.controlUi.allowedOrigins",
       "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
@@ -196,6 +191,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "discovery.mdns.mode",
       "mcp.apps.sandboxOrigin",
       "agents.defaults",
+      "models",
       "desktop.host",
       "cloudWorkers",
     ],
@@ -208,18 +204,6 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     actions: ["reloadInternalHooks"],
   },
   { prefixes: ["hooks"], kind: "hot", actions: ["reloadHooks"] },
-  {
-    prefixes: [
-      "agents.defaults.heartbeat",
-      "agents.defaults.models",
-      "agents.defaults.modelPolicy",
-      "agents.defaults.model",
-      "models",
-      "agent.heartbeat",
-    ],
-    kind: "hot",
-    actions: ["restartHeartbeat", "reconcileSystemJobs"],
-  },
   {
     prefixes: ["agents.entries"],
     kind: "hot",
@@ -526,8 +510,6 @@ export function buildGatewayReloadPlan(
     reloadInternalHooks: false,
     restartGmailWatcher: false,
     restartCron: false,
-    restartHeartbeat: false,
-    reconcileSystemJobs: false,
     reloadPlugins: false,
     restartChannels: new Set(),
     restartServices: new Set(),

@@ -84,7 +84,7 @@ measurements keep their existing estimates.
 Source-only Telegram database-worker envelopes with at least two singleton
 processes can overlap two inner processes on current self-hosted Linux runners.
 Admission requires an explicit current target (`FROZEN_TARGET=false`), one unchanged
-Node invocation from the shared runtime selector (including `bun-compatible`),
+Node invocation from the shared runtime selector,
 two workers, one outer plan, scheduler-owned caches, at least two actual CPUs, and
 7.5 GiB of effective memory. Effective memory is the smaller
 of physical memory and a positive finite process constraint. Other selections or

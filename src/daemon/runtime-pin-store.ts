@@ -1,24 +1,28 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { createDirectorySync, createFileSync } from "@openclaw/fs-safe/advanced";
-import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { resolveStateDir } from "../config/paths.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
-import { applyPrivateModeSync } from "../infra/private-mode.js";
+import { preparePrivateStoreFileSync } from "../infra/private-store-file.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion, writeSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import {
+  runUpdateSqliteMigration,
+  runUpdateSqliteMigrationAsync,
+} from "../infra/update-doctor-migration-attribution.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { DAEMON_RUNTIME_PIN_SCHEMA_SQL } from "./runtime-pin-schema.js";
 
 export const DAEMON_RUNTIME_PIN_SCHEMA_VERSION = 1;
@@ -41,21 +45,7 @@ export function resolveDaemonRuntimePinStorePath(env: NodeJS.ProcessEnv): string
   return path.join(resolveStateDir(env), "control", "services.sqlite");
 }
 
-function createPrivateIfMissing(create: () => void): void {
-  try {
-    create();
-  } catch (error) {
-    if (!(error instanceof FsSafeError && error.code === "already-exists")) {
-      throw error;
-    }
-  }
-}
-
-function withDaemonRuntimePinDatabase<T>(
-  env: NodeJS.ProcessEnv,
-  writable: boolean,
-  operation: (db: DatabaseSync) => T,
-): T | undefined {
+function openDaemonRuntimePinDatabase(env: NodeJS.ProcessEnv, writable: boolean) {
   const pathname = resolveDaemonRuntimePinStorePath(env);
   const directory = path.dirname(pathname);
   const parent = fs.lstatSync(directory, { throwIfNoEntry: false });
@@ -65,15 +55,9 @@ function withDaemonRuntimePinDatabase<T>(
   if (!parent && !writable) {
     return undefined;
   }
+  let created = false;
   if (writable) {
-    if (!parent) {
-      fs.mkdirSync(path.dirname(directory), { recursive: true, mode: 0o700 });
-      createPrivateIfMissing(() => createDirectorySync(directory, { private: true }));
-    }
-    applyPrivateModeSync(directory, 0o700);
-    if (!fs.existsSync(pathname)) {
-      createPrivateIfMissing(() => createFileSync(pathname, { private: true }).close());
-    }
+    created = preparePrivateStoreFileSync(pathname, Boolean(parent));
   }
   const opened = openRootFileSync({
     absolutePath: pathname,
@@ -95,17 +79,44 @@ function withDaemonRuntimePinDatabase<T>(
     ) {
       throw new Error("Runtime pin store owner is unsafe.");
     }
-    using db = openNodeSqliteDatabase(
+    const db = openNodeSqliteDatabase(
       writable ? resolveExistingSqliteFileUri(pathname) : pathname,
       {
         readOnly: !writable,
         timeout: 5000,
       },
     );
-    return operation(db);
-  } finally {
+    return {
+      database: db,
+      path: pathname,
+      created,
+      [Symbol.dispose]() {
+        try {
+          db.close();
+        } finally {
+          fs.closeSync(opened.fd);
+        }
+      },
+    };
+  } catch (error) {
     fs.closeSync(opened.fd);
+    throw error;
   }
+}
+
+function withDaemonRuntimePinDatabase<T>(
+  env: NodeJS.ProcessEnv,
+  writable: boolean,
+  operation: (db: DatabaseSync) => T,
+): T | undefined {
+  using owner = openDaemonRuntimePinDatabase(env, writable);
+  return owner
+    ? writable
+      ? runUpdateSqliteMigration(owner.database, owner.path, () => operation(owner.database), {
+          created: owner.created,
+        })
+      : operation(owner.database)
+    : undefined;
 }
 
 export function withDaemonRuntimePinStore<T>(
@@ -113,34 +124,61 @@ export function withDaemonRuntimePinStore<T>(
   writable: boolean,
   operation: (db: DatabaseSync) => T,
 ): T | undefined {
-  return withDaemonRuntimePinDatabase(env, writable, (db) => {
-    if (!getSqliteDatabaseAdmission(db, schemaAdmission)) {
-      const version = readSqliteUserVersion(db);
-      if (
-        version === 0 &&
-        !db.prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").get()
-      ) {
-        if (!writable) {
-          return undefined;
-        }
-        db.exec("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL");
-        runSqliteImmediateTransactionSync(db, () => {
-          db.exec(DAEMON_RUNTIME_PIN_SCHEMA_SQL);
-          writeSqliteUserVersion(db, DAEMON_RUNTIME_PIN_SCHEMA_VERSION);
-        });
-      } else if (version !== DAEMON_RUNTIME_PIN_SCHEMA_VERSION) {
-        throw new Error(
-          `Runtime pin store has unsupported schema version ${String(version)}. Use a compatible OpenClaw version.`,
-        );
+  return withDaemonRuntimePinDatabase(env, writable, (db) =>
+    admitDaemonRuntimePinStore(db, writable, operation),
+  );
+}
+
+/** Doctor prepares the target before its shared-source transaction and retains the same handle. */
+export async function withPreparedDaemonRuntimePinStore<T>(
+  env: NodeJS.ProcessEnv,
+  operation: (owner: { database: DatabaseSync; path: string; created: boolean }) => Promise<T>,
+): Promise<T> {
+  resolveSqliteInspectionSignal(getAsyncWorkSignal())?.throwIfAborted();
+  using owner = openDaemonRuntimePinDatabase(env, true);
+  if (!owner) {
+    throw new Error("Runtime pin store cannot be prepared.");
+  }
+  await runUpdateSqliteMigrationAsync(
+    owner.database,
+    owner.path,
+    () => admitDaemonRuntimePinStore(owner.database, true, () => undefined),
+    { created: owner.created, retainExclusive: true },
+  );
+  return await operation(owner);
+}
+
+function admitDaemonRuntimePinStore<T>(
+  db: DatabaseSync,
+  writable: boolean,
+  operation: (db: DatabaseSync) => T,
+): T | undefined {
+  if (!getSqliteDatabaseAdmission(db, schemaAdmission)) {
+    const version = readSqliteUserVersion(db);
+    if (
+      version === 0 &&
+      !db.prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").get()
+    ) {
+      if (!writable) {
+        return undefined;
       }
-      if (version !== 0) {
-        assertSqliteSchemaContains(db, "Runtime pin store", DAEMON_RUNTIME_PIN_SCHEMA_SQL);
-        assertSqliteIntegrity(db, "Runtime pin store");
-      }
-      publishSqliteDatabaseAdmission(db, schemaAdmission, true);
+      db.exec("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL");
+      return runSqliteImmediateTransactionSync(db, () => {
+        db.exec(DAEMON_RUNTIME_PIN_SCHEMA_SQL);
+        writeSqliteUserVersion(db, DAEMON_RUNTIME_PIN_SCHEMA_VERSION);
+        publishSqliteDatabaseAdmission(db, schemaAdmission, true);
+        return operation(db);
+      });
+    } else if (version !== DAEMON_RUNTIME_PIN_SCHEMA_VERSION) {
+      throw new Error(
+        `Runtime pin store has unsupported schema version ${String(version)}. Use a compatible OpenClaw version.`,
+      );
     }
-    return writable ? runSqliteImmediateTransactionSync(db, () => operation(db)) : operation(db);
-  });
+    assertSqliteSchemaContains(db, "Runtime pin store", DAEMON_RUNTIME_PIN_SCHEMA_SQL);
+    assertSqliteIntegrity(db, "Runtime pin store");
+    publishSqliteDatabaseAdmission(db, schemaAdmission, true);
+  }
+  return writable ? runSqliteImmediateTransactionSync(db, () => operation(db)) : operation(db);
 }
 
 /** The versioned receipt is independent of pin-data admission until a pin is used. */
@@ -179,7 +217,8 @@ export function readDaemonRuntimePinValue(db: DatabaseSync, key: string): unknow
 }
 
 const unshippedMigrations = new Set<string>();
-export function completeUnshippedDaemonRuntimePinMigration(env: NodeJS.ProcessEnv): boolean {
+
+function pendingUnshippedRuntimePinMigration(env: NodeJS.ProcessEnv): false | string | undefined {
   if (!getDatabaseEngineInput("state")) {
     return false;
   }
@@ -188,15 +227,52 @@ export function completeUnshippedDaemonRuntimePinMigration(env: NodeJS.ProcessEn
     const receipt = readDaemonRuntimePinMigrationReceipt(env);
     if (receipt?.phase === "complete" && receipt.source_state === "none/unshipped") {
       unshippedMigrations.add(pathname);
-      return true;
+    } else {
+      return pathname;
     }
-    withDaemonRuntimePinStore(env, true, (db) =>
-      db
-        .prepare(`INSERT INTO daemon_runtime_pin_migration VALUES (1, 'none/unshipped', 'complete', ?)
-        ON CONFLICT(version) DO UPDATE SET source_state='none/unshipped', phase='complete', updated_at=excluded.updated_at`)
-        .run(Date.now()),
+  }
+  return undefined;
+}
+
+function completeUnshippedReceipt(db: DatabaseSync): void {
+  db.prepare(`INSERT INTO daemon_runtime_pin_migration VALUES (1, 'none/unshipped', 'complete', ?)
+    ON CONFLICT(version) DO UPDATE SET source_state='none/unshipped', phase='complete', updated_at=excluded.updated_at`).run(
+    Date.now(),
+  );
+}
+
+export function completeUnshippedDaemonRuntimePinMigration(env: NodeJS.ProcessEnv): boolean {
+  const pending = pendingUnshippedRuntimePinMigration(env);
+  if (pending === false) {
+    return false;
+  }
+  if (pending !== undefined) {
+    withDaemonRuntimePinStore(env, true, completeUnshippedReceipt);
+    unshippedMigrations.add(pending);
+  }
+  return true;
+}
+
+export async function completeUnshippedDaemonRuntimePinMigrationAsync(
+  env: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  const pending = pendingUnshippedRuntimePinMigration(env);
+  if (pending === false) {
+    return false;
+  }
+  if (pending !== undefined) {
+    await withPreparedDaemonRuntimePinStore(env, (owner) =>
+      runUpdateSqliteMigrationAsync(
+        owner.database,
+        owner.path,
+        () =>
+          runSqliteImmediateTransactionSync(owner.database, () =>
+            completeUnshippedReceipt(owner.database),
+          ),
+        { retainExclusive: true },
+      ),
     );
-    unshippedMigrations.add(pathname);
+    unshippedMigrations.add(pending);
   }
   return true;
 }

@@ -1,5 +1,8 @@
+import { isDeepStrictEqual } from "node:util";
+import type { Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { EngineConnection } from "../../infra/sql-connection.js";
+import { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
 import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type {
   SqliteWorkerBackend,
@@ -46,11 +49,16 @@ import { assertCapturedSessionEntryReadSource } from "./session-entry-read-sourc
 import { readSessionPendingInputAuthorityFactsInTransaction } from "./session-pending-input-authority.kernel.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionWorkerDatabaseBinding = {
   database: EngineConnection;
   databasePath: string;
-  admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
+  admit(
+    stage: "prepare" | "transaction" | "commit",
+    restriction?: AgentDatabaseAdmissionRestriction,
+    transferList?: Transferable[],
+  ): void;
 };
 
 /** Private write domains borrow one canonical connection and its admission lifecycle. */
@@ -83,22 +91,24 @@ export function bindSessionWorkerBackend<Operations extends SqliteWorkerOperatio
 function createSessionWorkerOperationContext(
   database: OpenClawAgentDatabase,
   options: AgentWorkerOperationContext["options"],
-  bound: {
-    admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
-  },
+  bound: Pick<SessionWorkerDatabaseBinding, "admit">,
   domain: string,
 ): AgentWorkerOperationContext {
   const native = database.db;
   const context: AgentWorkerOperationContext = {
     options,
     open: () => database,
-    admit(stage, publication) {
-      bound.admit(stage, (request, dispatch) => {
-        if (!isRecord(request.facts)) {
-          throw new Error(`${domain} admission omitted its database identity`);
-        }
-        dispatch({ ...request, facts: { ...request.facts, publication } });
-      });
+    admit(stage, publication, transferList) {
+      bound.admit(
+        stage,
+        (request, dispatch) => {
+          if (!isRecord(request.facts)) {
+            throw new Error(`${domain} admission omitted its database identity`);
+          }
+          dispatch({ ...request, facts: { ...request.facts, publication } });
+        },
+        transferList,
+      );
     },
     writeTransaction(operationLabel, owner, write, diagnosticContext) {
       return runOpenClawAgentWriteTransaction(
@@ -151,6 +161,11 @@ export function commitSessionEntryPatch(
   { writeTransaction, admit }: AgentWorkerOperationContext,
 ): SessionEntryPatchReceipt {
   return writeTransaction(input.operationLabel, "Session patch", (database) => {
+    const reuseEntry =
+      input.retainedEntry &&
+      input.retainedEntry.writeToken ===
+        readSqliteDatabaseScopedWriteToken(database.db, input.retainedEntry.writeScopes);
+    let previousEntry: SessionEntry | undefined;
     if (
       input.ensureIdentitySource &&
       (!("operation" in input) || input.operation.kind !== "ensure-identity")
@@ -227,6 +242,9 @@ export function commitSessionEntryPatch(
           );
         }
         const existing = fresh[0]?.entry;
+        if (reuseEntry && fresh[0]?.sessionKey === input.sessionKey) {
+          previousEntry = existing;
+        }
         const writeBase = existing ?? input.fallbackEntry;
         if (!writeBase) {
           result = {
@@ -258,6 +276,9 @@ export function commitSessionEntryPatch(
           readSnapshot: (current) => readSessionEntryPatchSnapshot(current, input.selection, true),
           options,
         });
+        if (reuseEntry && input.prepared[0]?.sessionKey === input.sessionKey) {
+          previousEntry = input.prepared[0].entry;
+        }
       }
       const publication = mutation.identity
         ? prepareSessionEntryReplacementPublication(
@@ -280,7 +301,7 @@ export function commitSessionEntryPatch(
       }
       result = {
         kind: "session-entry-patch",
-        entry: mutation.entry,
+        ...(input.returnEntry === false ? {} : { entry: mutation.entry }),
         applied: mutation.applied,
         lifecycleEffects,
         publication,
@@ -289,6 +310,31 @@ export function commitSessionEntryPatch(
             ? predicate.transcriptPredicate
             : undefined,
       };
+      const entry = publication?.fullEntries?.get(input.sessionKey);
+      const base = previousEntry;
+      if (base && entry && publication) {
+        result.entryDelta = {
+          sessionKey: input.sessionKey,
+          values: Object.entries(entry).filter(
+            ([key, value]) =>
+              !Object.hasOwn(base, key) || !isDeepStrictEqual(value, Reflect.get(base, key)),
+          ),
+          removed: Object.keys(base).filter((key) => !Object.hasOwn(entry, key)),
+          returnEntry: input.returnEntry !== false,
+        };
+        delete result.entry;
+        publication.current.delete(input.sessionKey);
+        const entries = new Map(publication.fullEntries);
+        entries.delete(input.sessionKey);
+        publication.fullEntries = entries;
+        const actor = publication.actorPostimages?.get(input.sessionKey);
+        if (actor) {
+          publication.actorPostimages = new Map(publication.actorPostimages).set(input.sessionKey, {
+            ...actor,
+            entry: undefined,
+          });
+        }
+      }
     }
     return transferSessionEntryWorkerCandidate(database, admit, result);
   });
@@ -318,7 +364,7 @@ export function transferSessionEntryWorkerCandidate<Receipt extends object>(
   if (result.publication) {
     if (
       result.publication.source &&
-      (result.publication.fullEntries?.size || result.publication.actorPostimages?.size)
+      (result.publication.fullEntries || result.publication.actorPostimages?.size)
     ) {
       sealSessionEntryPublicationSource(result.publication.source);
     }

@@ -6,6 +6,8 @@ import { isTerminalInteractive } from "./terminal-interactivity.js";
 /** Offer a consent-gated doctor repair, then retry the failed operation once. */
 export async function offerInvalidConfigRecovery(params: {
   runtime: RuntimeEnv;
+  /** An unresolved database target permits only Doctor's file-backed config repair. */
+  runDoctor?: () => Promise<void>;
   retry: () => Promise<void>;
 }): Promise<boolean> {
   const command = formatCliCommand("openclaw doctor --fix");
@@ -24,8 +26,12 @@ export async function offerInvalidConfigRecovery(params: {
   }
 
   try {
-    const { doctorCommand } = await import("../commands/doctor.js");
-    await doctorCommand(params.runtime, { repair: true });
+    if (params.runDoctor) {
+      await params.runDoctor();
+    } else {
+      const { doctorCommand } = await import("../commands/doctor.js");
+      await doctorCommand(params.runtime, { repair: true });
+    }
   } catch (error) {
     if (error instanceof ExitError) {
       throw error;

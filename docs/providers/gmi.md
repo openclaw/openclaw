@@ -76,6 +76,8 @@ GPU control matters more than hosted convenience.
 
 ## Models
 
+OpenAI tool turns automatically use `reasoning_effort: "none"` for GPT-5.6 and omit the field for GPT-5.5 and GPT-5.4 mini.
+
 The plugin catalog seeds commonly available GMI Cloud route ids:
 
 | Model ref                          | Input        | Context   | Max output |

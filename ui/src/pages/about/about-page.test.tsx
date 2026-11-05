@@ -15,14 +15,19 @@ beforeEach(() => i18n.setLocale("en"));
 it("follows the replacement Gateway version and ignores the retired source", () => {
   const first = createApplicationGateway();
   const second = createApplicationGateway();
-  const publishVersion = (source: typeof first, version: string) => {
+  const publishVersion = (
+    source: typeof first,
+    version: string,
+    commit?: string,
+    builtAt?: string,
+  ) => {
     source.publish({
       ...source.gateway.snapshot,
       phase: "connected",
-      hello: { server: { version } } as GatewayHelloOk,
+      hello: { server: { version, commit, builtAt } } as GatewayHelloOk,
     });
   };
-  publishVersion(first, "2026.10.1");
+  publishVersion(first, "2026.10.1", "aaaaaaa", "2026-10-21T11:55:00.000Z");
   publishVersion(second, "2026.10.2");
   const [gateway, setGateway] = createSignal(first.gateway);
   const context = {
@@ -38,14 +43,24 @@ it("follows the replacement Gateway version and ignores the retired source", () 
   flush();
   expect(view.container.querySelector("openclaw-about-page")).not.toBeNull();
   expect(view.container.textContent).toContain("2026.10.1");
+  expect(view.container.textContent).toContain("aaaaaaa");
+  expect(view.container.querySelector('time[datetime="2026-10-21T11:55:00.000Z"]')).not.toBeNull();
   setGateway(second.gateway);
   flush();
   expect(view.container.textContent).toContain("2026.10.2");
   expect(view.container.textContent).not.toContain("2026.10.1");
+  expect(view.container.textContent).not.toContain("aaaaaaa");
+  expect(view.container.querySelector('time[datetime="2026-10-21T11:55:00.000Z"]')).toBeNull();
   publishVersion(first, "2026.10.3");
   flush();
   expect(view.container.textContent).not.toContain("2026.10.3");
   publishVersion(second, "2026.10.4");
   flush();
   expect(view.container.textContent).toContain("2026.10.4");
+  second.publish({ ...second.gateway.snapshot, phase: "reconnecting" });
+  flush();
+  expect(view.container.textContent).toContain("2026.10.4");
+  second.publish({ ...second.gateway.snapshot, phase: "stopped", hello: null });
+  flush();
+  expect(view.container.textContent).not.toContain("2026.10.4");
 });

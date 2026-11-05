@@ -257,8 +257,7 @@ export async function startNostrGatewayAccount(
         },
         onConnect: (relay) => {
           connectedRelays.add(normalizeRelayLifecycleKey(relay));
-          // Treat >=1 connected relay as ready. This favors partial availability over quorum
-          // fidelity; circuit-breaker health stays private to nostr-bus, so ready is not all-relays.
+          // One connected relay is enough for partial availability, not an all-relay quorum.
           ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
           ctx.log?.debug?.(`[${account.accountId}] Connected to relay: ${relay}`);
         },
@@ -278,13 +277,6 @@ export async function startNostrGatewayAccount(
         },
         onRejected: (reason) => {
           ctx.log?.debug?.(`[${account.accountId}] Event rejected: ${reason}`);
-        },
-        onCircuitBreakerChange: (relay, state) => {
-          if (state === "open") {
-            ctx.log?.warn?.(`[${account.accountId}] Circuit breaker opened for relay: ${relay}`);
-          } else {
-            ctx.log?.info?.(`[${account.accountId}] Circuit breaker closed for relay: ${relay}`);
-          }
         },
       });
       activeBuses.set(account.accountId, bus);
@@ -331,10 +323,12 @@ export const nostrPairingTextAdapter = {
     message: string;
     accountId?: string;
   }) => {
-    const bus = activeBuses.get(accountId ?? resolveDefaultNostrAccountId(cfg));
-    if (bus) {
-      await bus.sendDm(id, message);
+    const aid = accountId ?? resolveDefaultNostrAccountId(cfg);
+    const bus = activeBuses.get(aid);
+    if (!bus) {
+      throw new Error(`Nostr bus not running for account ${aid}`);
     }
+    await bus.sendDm(id, message);
   },
 };
 
@@ -386,6 +380,6 @@ export const nostrOutboundAdapter = {
   },
 } satisfies ChannelOutboundAdapter;
 
-export function getActiveNostrBuses(): Map<string, NostrBusHandle> {
-  return new Map(activeBuses);
+export function getActiveNostrBuses(): ReadonlyMap<string, NostrBusHandle> {
+  return activeBuses;
 }

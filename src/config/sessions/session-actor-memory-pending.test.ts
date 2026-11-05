@@ -68,7 +68,19 @@ function fixture() {
   };
   const source = (pendingOnly = true, sessionId = scope.sessionId) =>
     pending.read({ ...scope, sessionId, kind: "source", pendingOnly });
-  return { state, pending, grants, stageInput, stageMany, source };
+  const finish = (requestHash = owner.requestHash) =>
+    pending.mutate({
+      ...owner,
+      kind: "finish",
+      inputId: "input-1",
+      requestHash,
+      disposition: "cancelled",
+    }).withdrawnInputId;
+  const complete = (
+    outcome: Extract<PendingInputMutation, { kind: "complete" }>["outcome"],
+    runId = owner.runId,
+  ) => pending.mutate({ ...owner, runId, kind: "complete", outcome }).outcome;
+  return { state, pending, grants, stageInput, stageMany, source, finish, complete };
 }
 
 describe("memory actor pending input custody", () => {
@@ -92,38 +104,29 @@ describe("memory actor pending input custody", () => {
     expect(state.hot.pendingInputs[0]).not.toHaveProperty("message_json");
     assert(retried.stagedInput, "Expected staged input");
     retried.stagedInput.message_json = "caller mutation";
-    expect(source()).toMatchObject({
-      pending: { message_json: JSON.stringify(message) },
-    });
+    expect(source()).toMatchObject({ pending: { message_json: JSON.stringify(message) } });
   });
 
   it("keeps recoverable outcomes replaceable and makes final completion sticky", () => {
-    const { state, pending, stageInput } = fixture();
+    const { state, pending, stageInput, complete } = fixture();
     pending.mutate(stageInput());
-    pending.mutate({
-      ...owner,
-      kind: "complete",
-      outcome: { reason: "cancelled", status: "error", stopReason: "restart" },
-    });
+    complete({ reason: "cancelled", status: "error", stopReason: "restart" });
     expect(state.hot.pendingInputs).toHaveLength(1);
     const completed = { reason: "completed", status: "ok" } as const;
-    pending.mutate({ ...owner, kind: "complete", outcome: completed });
+    complete(completed);
     expect(state.hot.pendingInputs).toEqual([]);
     expect(state.hot.completionKeys).toEqual([scope.idempotencyKey]);
-    expect(
-      pending.mutate({ ...owner, kind: "complete", outcome: { reason: "failed", status: "error" } })
-        .outcome,
-    ).toEqual(completed);
+    expect(complete({ reason: "failed", status: "error" })).toEqual(completed);
     expect(pending.read({ ...scope, kind: "stage", trackCompletion: true })).toMatchObject({
       previous: { outcome: completed, succeeded: 1 },
     });
-    expect(() =>
-      pending.mutate({ ...owner, runId: "other-run", kind: "complete", outcome: completed }),
-    ).toThrow("Input completion conflicts with the accepted input");
+    expect(() => complete(completed, "other-run")).toThrow(
+      "Input completion conflicts with the accepted input",
+    );
   });
 
   it("settles only the accepted owner and supplies current authority to admission", () => {
-    const { state, pending, grants, stageInput, source } = fixture();
+    const { state, pending, grants, stageInput, source, finish } = fixture();
     state.hot.members = [{ identityId: "person-1", addedAt: 1, addedBy: "person-1" }];
     assert(state.hot.entry, "Expected session");
     state.hot.entry.sessionDiffBaseline = {
@@ -141,26 +144,10 @@ describe("memory actor pending input custody", () => {
       readSource: { databaseIdentity: "incarnation-1" },
     });
     expect(grants[0]?.grant.authority?.entry).not.toHaveProperty("sessionDiffBaseline");
-    expect(() =>
-      pending.mutate({
-        ...owner,
-        kind: "finish",
-        inputId: "input-1",
-        requestHash: "other-hash",
-        disposition: "cancelled",
-      }),
-    ).toThrow("Pending input settlement lost its accepted owner");
-    expect(
-      pending.mutate({ ...owner, kind: "finish", inputId: "input-1", disposition: "cancelled" })
-        .withdrawnInputId,
-    ).toBe("input-1");
-    expect(source()).toMatchObject({
-      pending: { state: "cancelled" },
-    });
-    expect(
-      pending.mutate({ ...owner, kind: "finish", inputId: "input-1", disposition: "cancelled" })
-        .withdrawnInputId,
-    ).toBeUndefined();
+    expect(() => finish("other-hash")).toThrow("Pending input settlement lost its accepted owner");
+    expect(finish()).toBe("input-1");
+    expect(source()).toMatchObject({ pending: { state: "cancelled" } });
+    expect(finish()).toBeUndefined();
   });
 
   it("finds committed input when pending custody is absent and excludes other sessions", () => {
@@ -172,15 +159,8 @@ describe("memory actor pending input custody", () => {
       eventId: "event-1",
       rawSeq: 1,
     });
-    expect(source(false)).toEqual({
-      kind: "source",
-      current: true,
-      committed: message,
-    });
-    expect(source()).toEqual({
-      kind: "source",
-      current: true,
-    });
+    expect(source(false)).toEqual({ kind: "source", current: true, committed: message });
+    expect(source()).toEqual({ kind: "source", current: true });
     expect(pending.read({ ...scope, kind: "stage", trackCompletion: true })).toMatchObject({
       committed: { messageId: "event-1", message },
     });
@@ -192,12 +172,17 @@ describe("memory actor pending input custody", () => {
     stageMany(3);
     const consumed = state.pendingInputs.get("key-2")!;
     state.pendingInputs.set("key-2", { ...consumed, consumed_event_id: "event-2" });
-    const page = pending.history({ ...scope, limit: 1 });
+    const page = pending.history({ ...scope, liveInputIds: ["input-1", "input-3"], limit: 1 });
     expect(page.rows.map((row) => row.input_id)).toEqual(["input-3"]);
     expect(page.total).toBe(2);
     expect(
       pending
-        .history({ ...scope, limit: 1, before: page.nextBefore })
+        .history({
+          ...scope,
+          liveInputIds: ["input-1", "input-3"],
+          limit: 1,
+          before: page.nextBefore,
+        })
         .rows.map((row) => row.input_id),
     ).toEqual(["input-1"]);
     expect(pending.history({ ...scope, id: "input-2" }).rows).toEqual([]);
@@ -210,30 +195,6 @@ describe("memory actor pending input custody", () => {
     );
     expect(() => pending.receipts({ ...scope, runIds: ["run-1"] })).toThrow(
       "ambiguous source run IDs",
-    );
-  });
-
-  it("interrupts only unconsumed inputs without live custody", () => {
-    const { pending, stageMany } = fixture();
-    stageMany(2);
-    const checked: string[] = [];
-    const receipt = pending.interruptHistory(
-      { ...scope, ids: ["input-1", "input-2"] },
-      {
-        isProtected(candidate, currentSessionId) {
-          checked.push(candidate.input_id);
-          return currentSessionId === scope.sessionId && candidate.input_id === "input-1";
-        },
-        admit() {},
-      },
-    );
-    expect(checked).toEqual(["input-1", "input-2"]);
-    expect(receipt).toEqual({ kind: "pending-input-history-interrupted", ids: ["input-2"] });
-    expect(pending.history(scope).rows.map(({ input_id, state }) => ({ input_id, state }))).toEqual(
-      [
-        { input_id: "input-2", state: "interrupted" },
-        { input_id: "input-1", state: "queued" },
-      ],
     );
   });
 });

@@ -1,74 +1,137 @@
-import { createEffect, createMemo, createUniqueId } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createMemo, createSignal, createUniqueId, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
-import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../../lib/presentation.ts";
+import { Menu, type MenuControls, type MenuItem } from "../../../components/solid/menu.tsx";
+import { resolveAvatarInitials } from "../../../lib/identity-avatar.ts";
+import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 
-export function GitHubPublicationMenu(props: {
-  choices: readonly { source: "shared" | "personal"; login: string; label: string }[];
+/** The Gateway supplies verified GitHub account images; initials cover absent or failed loads. */
+export function GitHubPublicationAvatar(props: { login: string; url?: string }) {
+  const [failedUrl, setFailedUrl] = createSignal<string>();
+  return (
+    <span class="github-publication-mobile__avatar" aria-hidden="true">
+      <Show
+        when={props.url !== failedUrl() && props.url}
+        fallback={resolveAvatarInitials({ username: props.login }).initials}
+      >
+        {(url) => (
+          <img
+            src={url()}
+            alt=""
+            referrerpolicy="no-referrer"
+            onError={() => setFailedUrl(props.url)}
+          />
+        )}
+      </Show>
+    </span>
+  );
+}
+
+type GitHubPublicationMenuProps = {
+  choices: readonly {
+    source: "shared" | "personal";
+    login: string;
+    label: string;
+    avatarUrl?: string;
+  }[];
   selected?: "shared" | "personal";
   duplicateLogin: boolean;
   busy: boolean;
   presented: PresentationValue;
+  mobile?: boolean;
+  menuControls?: boolean;
+  controls?: MenuControls;
+  trigger?: JSX.Element;
   onSelect: (source: "shared" | "personal") => void;
-}) {
-  const id = createUniqueId();
-  let menu: MenuHandle | undefined;
-  const isPresented = (value: PresentationValue) =>
-    typeof value === "boolean" ? value : value.isPresented();
-  createEffect(
-    () => props.presented,
-    (value) => {
-      const sync = () => {
-        if (!isPresented(value)) {
-          menu?.close();
-        }
-      };
-      sync();
-      if (typeof value !== "boolean") {
-        value.owner.addEventListener(PRESENTATION_CHANGED_EVENT, sync);
-        return () => value.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, sync);
-      }
-      return undefined;
-    },
-  );
-  const items = createMemo(() =>
+};
+
+export function createGitHubPublicationAccountMenuItems(
+  props: Pick<
+    GitHubPublicationMenuProps,
+    "choices" | "selected" | "duplicateLogin" | "busy" | "mobile"
+  > & { trailingCheck?: boolean; accountLabels?: boolean },
+) {
+  return createMemo<MenuItem[]>(() =>
     props.choices.map((choice) => ({
       id: choice.source,
-      label: `@${choice.login}${props.duplicateLogin ? ` · ${choice.label}` : ""}`,
+      label: `@${choice.login}${props.mobile || props.duplicateLogin ? ` · ${choice.label}` : ""}`,
       class: "session-menu__item",
       type: "radio" as const,
       checked: props.selected === choice.source,
       disabled: props.busy,
-      content: (
+      content: props.mobile ? (
+        <span class="github-publication-mobile__choice">
+          <GitHubPublicationAvatar login={choice.login} url={choice.avatarUrl} />
+          <span class="github-publication-mobile__choice-text">
+            <span>{choice.label}</span>
+            <span class="github-publication-mobile__choice-login">@{choice.login}</span>
+          </span>
+        </span>
+      ) : props.accountLabels ? (
+        <span class="chat-pr-account-choice">
+          <span>{choice.label}</span>
+          <span class="chat-pr-account-choice__login">@{choice.login}</span>
+        </span>
+      ) : (
         <span class="session-menu__text">
           @{choice.login}
           {props.duplicateLogin ? ` · ${choice.label}` : undefined}
         </span>
       ),
-      details: (
-        <span class="session-menu__icon" aria-hidden="true">
-          {props.selected === choice.source && <Icon name="check" />}
-        </span>
-      ),
+      details:
+        props.trailingCheck === false ? undefined : (
+          <span class="session-menu__icon" aria-hidden="true">
+            {props.selected === choice.source && <Icon name="check" />}
+          </span>
+        ),
     })),
   );
+}
+
+export function GitHubPublicationMenu(props: GitHubPublicationMenuProps) {
+  const id = createUniqueId();
+  const triggerRef = props.controls?.ref();
+  const presentation = createMemo(() => projectPresentation(props.presented));
+  const selectedChoice = () => props.choices.find((choice) => choice.source === props.selected);
+  const label = () => {
+    const selected = props.mobile ? selectedChoice() : undefined;
+    return selected
+      ? `${t("githubPublication.account")}: ${selected.label}, @${selected.login}`
+      : t("githubPublication.account");
+  };
+  const items = createGitHubPublicationAccountMenuItems(props);
   return (
     <Menu
-      id={`github-publication-${id}`}
-      class="chat-pr__accounts"
-      panelClass="chat-pr__accounts-panel"
-      placement="top-end"
-      label={t("githubPublication.account")}
-      disabled={props.busy}
-      triggerClass="btn btn--ghost btn--icon chat-icon-btn"
-      trigger={<Icon name="chevronDown" />}
-      items={items()}
       ref={(handle) => {
-        menu = handle;
+        if (handle.overlay.trigger) {
+          triggerRef?.(handle.overlay.trigger);
+        }
       }}
+      id={`github-publication-${id}`}
+      class={props.mobile ? "github-publication-mobile__accounts" : "chat-pr__accounts"}
+      panelClass={
+        props.mobile ? "github-publication-mobile__accounts-panel" : "chat-pr__accounts-panel"
+      }
+      placement="top-end"
+      label={label()}
+      disabled={props.busy}
+      triggerAttributes={{ "data-form-control": props.menuControls ? "" : undefined }}
+      triggerClass={
+        props.mobile
+          ? "github-publication-mobile__account-trigger"
+          : "btn btn--ghost btn--icon chat-icon-btn"
+      }
+      trigger={
+        <Show when={props.trigger} fallback={<Icon name="chevronDown" />}>
+          {props.trigger}
+        </Show>
+      }
+      items={items()}
+      open={presentation().read() ? undefined : false}
       onBeforeShow={(event) => {
-        if (!isPresented(props.presented)) {
+        if (!presentation().read()) {
           event.preventDefault();
         }
       }}

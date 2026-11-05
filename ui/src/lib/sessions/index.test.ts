@@ -1,8 +1,10 @@
 // @vitest-environment node
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
   SessionsListResult,
@@ -136,7 +138,10 @@ it("automatically retries an explicitly retryable group catalog failure", async 
             retryAfterMs: 100,
           });
         }
-        return { groups: [{ name: "Recovered" }], sectionOrder: ["work", "category:Recovered"] };
+        return {
+          groups: [{ name: "Recovered", position: 0 }],
+          sectionOrder: ["work", "category:Recovered"],
+        };
       },
     },
     ["sessions.groups.list"],
@@ -164,7 +169,7 @@ it("publishes state.error when replacing the group catalog is rejected", async (
 });
 
 it("reports a group catalog replacement as stale after a same-client reconnect", async () => {
-  const replaced = createDeferred<{ groups: Array<{ name: string }> }>();
+  const replaced = createDeferred<{ groups: Array<{ name: string; position: number }> }>();
   const { sessions, publish } = sessionHarness(
     {
       "sessions.groups.put": () => replaced.promise,
@@ -176,7 +181,7 @@ it("reports a group catalog replacement as stale after a same-client reconnect",
   const operation = sessions.groupsPut(["Alpha"]);
   publish(false);
   publish(true);
-  replaced.resolve({ groups: [{ name: "Alpha" }] });
+  replaced.resolve({ groups: [{ name: "Alpha", position: 0 }] });
   await expect(operation).resolves.toBe("stale");
   expect(sessions.state.groups).toEqual([]);
   expect(sessions.state.error).toBeNull();
@@ -187,7 +192,7 @@ it("keeps a confirmed group rename completed when its row refresh outlives the c
   const refreshed = createDeferred<SessionsListResult>();
   const { sessions, publish, request } = sessionHarness(
     {
-      "sessions.groups.rename": () => ({ groups: [{ name: "Beta" }] }),
+      "sessions.groups.rename": () => ({ groups: [{ name: "Beta", position: 0 }] }),
       "sessions.list": () => refreshed.promise,
     },
     ["sessions.groups.rename"],
@@ -265,7 +270,11 @@ it("creates a session while a list refresh is in flight", async () => {
   expect(sessions.state.loading).toBe(true);
   const created = sessions.create({ agentId: "main" });
   await waitForFast(() =>
-    expect(request).toHaveBeenCalledWith("sessions.create", { agentId: "main" }),
+    expect(request).toHaveBeenCalledWith(
+      "sessions.create",
+      { agentId: "main" },
+      expect.objectContaining({ timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS }),
+    ),
   );
   pending.resolve(sessionsResult([], 1));
   await expect(created).resolves.toBe(key);
@@ -461,15 +470,6 @@ it("ignores stale archive state after a newer unarchive via Gateway events", asy
     archived: false,
     updatedAt: 30,
   });
-  sessions.dispose();
-});
-
-it("does not probe for a group catalog when the method is explicitly absent", async () => {
-  const { sessions, request } = sessionHarness({}, []);
-  await sessions.groupsLoad();
-  await sessions.groupsLoad();
-  expect(request).not.toHaveBeenCalled();
-  expect(sessions.state.groups).toEqual([]);
   sessions.dispose();
 });
 

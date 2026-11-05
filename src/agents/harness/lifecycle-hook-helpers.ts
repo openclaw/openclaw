@@ -26,7 +26,6 @@ type AgentHarnessHookParams<Event> = {
 };
 type FinalizeRetryBudget = Map<string, number>;
 
-/** Returns the current global hook runner for harness lifecycle hooks. */
 export function getAgentHarnessHookRunner(): AgentHarnessHookRunner {
   return getGlobalHookRunner();
 }
@@ -68,13 +67,15 @@ export function runAgentHarnessLlmOutputHook(
 async function executeAgentHarnessAgentEndHook(
   params: AgentHarnessHookParams<PluginHookAgentEndEvent> & { unrefTimeout?: boolean },
 ): Promise<void> {
-  const loadMessages = takeHookMessageLoader(params.event);
+  let loadMessages = takeHookMessageLoader(params.event);
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("agent_end")) {
     return;
   }
   try {
     const event = loadMessages ? { ...params.event, messages: await loadMessages() } : params.event;
+    // Loaders can capture the whole attempt; pending hooks only need their hydrated messages.
+    loadMessages = undefined;
     await hookRunner.runAgentEnd(event, buildAgentHookContext(params.ctx), {
       unrefTimeout: params.unrefTimeout ?? false,
     });
@@ -97,7 +98,6 @@ export async function awaitAgentHarnessAgentEndHook(
   await executeAgentHarnessAgentEndHook({ ...params, unrefTimeout: false });
 }
 
-/** Normalized before-finalize hook decision consumed by harness loops. */
 type AgentHarnessBeforeAgentFinalizeOutcome =
   | { action: "continue" }
   | { action: "revise"; reason: string }
@@ -107,7 +107,7 @@ type AgentHarnessBeforeAgentFinalizeOutcome =
 export async function runAgentHarnessBeforeAgentFinalizeHook(
   params: AgentHarnessHookParams<PluginHookBeforeAgentFinalizeEvent>,
 ): Promise<AgentHarnessBeforeAgentFinalizeOutcome> {
-  const loadMessages = takeHookMessageLoader(params.event);
+  let loadMessages = takeHookMessageLoader(params.event);
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_agent_finalize")) {
     return { action: "continue" };
@@ -118,6 +118,7 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(
       runId: params.event.runId ?? params.ctx.runId,
       ...(loadMessages ? { messages: await loadMessages() } : {}),
     };
+    loadMessages = undefined;
     return normalizeBeforeAgentFinalizeResult(
       await hookRunner.runBeforeAgentFinalize(
         eventForNormalization,

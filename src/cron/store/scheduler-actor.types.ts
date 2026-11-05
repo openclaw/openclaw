@@ -1,4 +1,5 @@
 import type { CronConfig } from "../../config/types.cron.js";
+import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
 import type { CronNotificationIntent } from "../service/notification-intents.js";
 import type { CronJob } from "../types.js";
 import type { CronRunQueueOperations, CronRunRequestContext } from "./run-queue.types.js";
@@ -8,18 +9,24 @@ export type CronScheduleMaintenanceOptions = {
   recomputeExpired?: boolean;
   nowMs?: number;
   repairFutureCronNextRunAtMs?: boolean;
-  preserveExpiredPacedNextRunJobId?: string;
+  /** Manual force runs retain the disabled job's pending schedule. */
+  preserveDisabledJobId?: string;
   skipScheduleErrorHandling?: boolean;
 };
 
 export type CronSchedulerConfig = {
   cronEnabled: boolean;
+  preparingAgentIds?: string[];
   cronConfig?: CronConfig;
   defaultAgentId?: string;
   configuredChannels?: string[];
   maxMissedJobsPerRestart?: number;
   missedJobStaggerMs?: number;
   startupDeferredMissedAgentJobDelayMs?: number;
+  /** The Gateway process that owns this scheduler; see `cron.drainQueue`. */
+  hostProcessId?: string;
+  /** Plugin instances that can serve command schedules; see `cron.drainQueue`. */
+  pluginCommandHosts?: PluginCommandScheduleHost[];
 };
 
 export type CronSchedulerSnapshot = { config: CronSchedulerConfig };
@@ -50,6 +57,8 @@ export type CronSchedulerOperations = {
       snapshot: CronSchedulerSnapshot;
       skipJobIds?: string[];
       deferAgentWork?: boolean;
+      /** Slots due at or after this process went live are late, not downtime catch-up. */
+      liveSinceMs?: number;
     };
     output: CronSchedulerResult;
   };

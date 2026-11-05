@@ -2,28 +2,7 @@ import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
-const { FakeWebSocket } = await vi.hoisted(async () => {
-  const { EventEmitter } = await import("node:events");
-  class MockWebSocket extends EventEmitter {
-    static readonly OPEN = 1;
-    static readonly CLOSED = 3;
-    static instances: MockWebSocket[] = [];
-    readyState = 0;
-    sent: string[] = [];
-    constructor() {
-      super();
-      MockWebSocket.instances.push(this);
-    }
-    send(payload: string) {
-      this.sent.push(payload);
-    }
-    close() {
-      this.readyState = MockWebSocket.CLOSED;
-      this.emit("close", 1000, Buffer.from(""));
-    }
-  }
-  return { FakeWebSocket: MockWebSocket };
-});
+const { FakeWebSocket } = await vi.hoisted(() => import("./realtime-voice-socket.test-support.js"));
 vi.mock("./ws-runtime.js", () => ({ WebSocket: FakeWebSocket }));
 
 beforeEach(() => {
@@ -50,11 +29,9 @@ it("sends xAI creation before its observer can cancel and releases the next turn
   const connecting = bridge.connect();
   await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
   const socket = FakeWebSocket.instances[0]!;
-  const emit = (event: unknown) => socket.emit("message", Buffer.from(JSON.stringify(event)));
   const sent = () => socket.sent.map((payload) => JSON.parse(payload) as { type: string });
-  socket.readyState = FakeWebSocket.OPEN;
-  socket.emit("open");
-  emit({ type: "session.updated" });
+  socket.open();
+  socket.emitServer({ type: "session.updated" });
   await connecting;
   bridge.sendUserMessage?.("First response.");
   expect(
@@ -62,8 +39,8 @@ it("sends xAI creation before its observer can cancel and releases the next turn
       .filter((event) => event.type.startsWith("response."))
       .map((event) => event.type),
   ).toEqual(["response.create", "response.cancel"]);
-  emit({ type: "response.created", response: { id: "cancelled" } });
-  emit({
+  socket.emitServer({ type: "response.created", response: { id: "cancelled" } });
+  socket.emitServer({
     type: "response.output_audio.delta",
     item_id: "discarded",
     delta: Buffer.alloc(320).toString("base64"),
@@ -71,10 +48,13 @@ it("sends xAI creation before its observer can cancel and releases the next turn
   expect(onAudio).not.toHaveBeenCalled();
   bridge.sendUserMessage?.("Follow-up response.");
   expect(sent().filter((event) => event.type === "response.create")).toHaveLength(1);
-  emit({ type: "response.done", response: { id: "cancelled", status: "cancelled", output: [] } });
+  socket.emitServer({
+    type: "response.done",
+    response: { id: "cancelled", status: "cancelled", output: [] },
+  });
   expect(sent().filter((event) => event.type === "response.create")).toHaveLength(2);
-  emit({ type: "response.created", response: { id: "recovery" } });
-  emit({
+  socket.emitServer({ type: "response.created", response: { id: "recovery" } });
+  socket.emitServer({
     type: "response.output_audio.delta",
     item_id: "heard",
     delta: Buffer.alloc(320).toString("base64"),

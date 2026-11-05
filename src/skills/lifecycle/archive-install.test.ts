@@ -1,4 +1,3 @@
-// Archive install tests cover archive validation, extraction, and install output.
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
@@ -14,10 +13,11 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import type { PluginHookSkillChangedEvent } from "../../plugins/hook-types.js";
+import { addTestHook, createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
-  CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
+  CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS as clawHubMarkers,
   applyExtractedSkillRoot,
   installExtractedSkillRoot,
 } from "./archive-install.js";
@@ -25,6 +25,7 @@ import { resolveWorkspaceSkillInstallDir } from "./install-paths.js";
 import { digestClawHubSkillTree } from "./skill-tree-digest.js";
 
 const tempDirs = createTrackedTempDirs();
+const read = (dir: string, name = "SKILL.md") => fs.readFile(path.join(dir, name), "utf8");
 
 async function writeZipArchive(params: {
   archivePath: string;
@@ -81,16 +82,28 @@ function skillFileContent(name: string): string {
 }
 
 function versionedSkillFileContent(name: string, version: string): string {
-  return [
-    "---",
-    `name: ${name}`,
-    "description: Lifecycle test skill",
-    `version: ${version}`,
-    "---",
-    "",
-    "# Test",
-    "",
-  ].join("\n");
+  return `---\nname: ${name}\ndescription: Lifecycle test skill\nversion: ${version}\n---\n\n# Test\n`;
+}
+
+async function writeSkill(dir: string, content: string) {
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, "SKILL.md"), content);
+}
+
+async function fixture(content: string) {
+  const root = await tempDirs.make("openclaw-skill-archive-");
+  const workspaceDir = path.join(root, "workspace");
+  const extractedRoot = path.join(root, "extracted");
+  await writeSkill(extractedRoot, content);
+  const install = (
+    slug: string,
+    options: Omit<
+      Parameters<typeof installExtractedSkillRoot>[0],
+      "workspaceDir" | "extractedRoot" | "slug" | "mode"
+    > & { mode?: "install" | "update" } = {},
+  ) =>
+    installExtractedSkillRoot({ workspaceDir, extractedRoot, slug, mode: "install", ...options });
+  return { root, workspaceDir, extractedRoot, install };
 }
 
 afterEach(async () => {
@@ -153,9 +166,7 @@ describe("skill archive install", () => {
         });
         expect(remote.ok).toBe(true);
         expect(await fs.readlink(path.join(root, "host/skills/links/relative"))).toBe("asset.txt");
-        expect(await fs.readFile(path.join(root, "host/skills/links/relative"), "utf8")).toBe(
-          "contained asset",
-        );
+        expect(await read(root, "host/skills/links/relative")).toBe("contained asset");
       } finally {
         await session.dispose();
       }
@@ -233,14 +244,14 @@ describe("skill archive install", () => {
         archivePath,
         tempDirPrefix: "openclaw-skill-clawhub-test-",
         timeoutMs: 120_000,
-        rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
+        rootMarkers: clawHubMarkers,
         onExtracted: async (extractedRoot) =>
           await installExtractedSkillRoot({
             workspaceDir,
             slug: `legacy-${marker.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
             extractedRoot,
             mode: "install",
-            rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
+            rootMarkers: clawHubMarkers,
           }),
       });
 
@@ -317,12 +328,7 @@ describe("skill archive install", () => {
       expectedSourceVersion: undefined,
     },
   ] as const)("applies $label policy before attributing a committed install", async (testCase) => {
-    const root = await tempDirs.make("openclaw-skill-change-create-");
-    const workspaceDir = path.join(root, "workspace");
-    const extractedRoot = path.join(root, "extracted");
-    await fs.mkdir(extractedRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(extractedRoot, "SKILL.md"),
+    const { extractedRoot, install } = await fixture(
       versionedSkillFileContent("Hook Create", "4.5.6"),
     );
     await fs.writeFile(path.join(extractedRoot, "binary.bin"), Buffer.from([0, 255, 1, 254]));
@@ -344,13 +350,10 @@ describe("skill archive install", () => {
       ]),
     );
 
-    const result = await installExtractedSkillRoot({
-      workspaceDir,
-      slug: "hook-create",
-      extractedRoot,
+    const result = await install("hook-create", {
       mode: testCase.mode,
       policy: testCase.policy,
-      ...(testCase.label === "ClawHub" ? { rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS } : {}),
+      ...(testCase.label === "ClawHub" ? { rootMarkers: clawHubMarkers } : {}),
     });
     expect(handler).toHaveBeenCalledTimes(1);
     if (testCase.mode === "update") {
@@ -445,9 +448,7 @@ describe("skill archive install", () => {
         });
         expect(handler).toHaveBeenCalledTimes(1);
         expect(handler.mock.calls[0]?.[0]).toMatchObject({ request: { mode: "install" } });
-        expect(await fs.readFile(path.join(staleDir, "SKILL.md"), "utf8")).toBe(
-          "stale Gateway file",
-        );
+        expect(await read(staleDir)).toBe("stale Gateway file");
         const targetDir = resolveWorkspaceSkillInstallDir(hostWorkspace, "host-skill");
         if (blocked) {
           expect(result).toMatchObject({
@@ -458,9 +459,7 @@ describe("skill archive install", () => {
           expect(committed).not.toHaveBeenCalled();
         } else {
           expect(result).toEqual({ ok: true, targetDir });
-          expect(await fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).toContain(
-            "Host Skill",
-          );
+          expect(await read(targetDir)).toContain("Host Skill");
           expect(committed).toHaveBeenCalledTimes(1);
           expect(committed.mock.calls[0]?.[0]).toMatchObject({ action: "created" });
           expect(committed.mock.calls[0]?.[1]).toEqual({ workspaceDir });
@@ -474,15 +473,10 @@ describe("skill archive install", () => {
   it.each(["unchanged", "absent", "appeared", "force"] as const)(
     "preserves native replacement behavior when the installed skill is %s",
     async (state) => {
-      const root = await tempDirs.make("openclaw-skill-update-state-");
-      const workspaceDir = path.join(root, "workspace");
-      const extractedRoot = path.join(root, "extracted");
-      await fs.mkdir(extractedRoot, { recursive: true });
-      await fs.writeFile(path.join(extractedRoot, "SKILL.md"), "replacement");
+      const { workspaceDir, install } = await fixture("replacement");
       const targetDir = resolveWorkspaceSkillInstallDir(workspaceDir, "weather");
       if (state !== "absent") {
-        await fs.mkdir(targetDir, { recursive: true });
-        await fs.writeFile(path.join(targetDir, "SKILL.md"), "original");
+        await writeSkill(targetDir, "original");
       }
       const expectedClawHubState =
         state === "unchanged"
@@ -495,10 +489,7 @@ describe("skill archive install", () => {
           : state === "force"
             ? undefined
             : null;
-      const result = await installExtractedSkillRoot({
-        workspaceDir,
-        slug: "weather",
-        extractedRoot,
+      const result = await install("weather", {
         mode: "update",
         expectedClawHubState,
       });
@@ -512,21 +503,14 @@ describe("skill archive install", () => {
       } else {
         expect(result).toEqual({ ok: true, targetDir });
       }
-      expect(await fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).toBe(
-        state === "appeared" ? "original" : "replacement",
-      );
+      expect(await read(targetDir)).toBe(state === "appeared" ? "original" : "replacement");
     },
   );
 
   it("restores a skill when backup validation blocks replacement", async () => {
-    const root = await tempDirs.make("openclaw-skill-archive-install-");
-    const workspaceDir = path.join(root, "workspace");
-    const extractedRoot = path.join(root, "extracted");
-    await fs.mkdir(extractedRoot, { recursive: true });
-    await fs.writeFile(path.join(extractedRoot, "SKILL.md"), skillFileContent("Staged Update"));
+    const { workspaceDir, extractedRoot } = await fixture(skillFileContent("Staged Update"));
     const targetDir = resolveWorkspaceSkillInstallDir(workspaceDir, "staged-update");
-    await fs.mkdir(targetDir, { recursive: true });
-    await fs.writeFile(path.join(targetDir, "SKILL.md"), skillFileContent("Installed Skill"));
+    await writeSkill(targetDir, skillFileContent("Installed Skill"));
     const skillsDir = path.dirname(targetDir);
     const expectedClawHubState = {
       slug: "staged-update",
@@ -540,7 +524,7 @@ describe("skill archive install", () => {
       slug: "staged-update",
       extractedRoot,
       mode: "update",
-      rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
+      rootMarkers: clawHubMarkers,
       expectedClawHubState,
       beforeInstall: async () => {
         await fs.writeFile(path.join(targetDir, "notes.md"), "edited before backup", "utf8");
@@ -556,12 +540,8 @@ describe("skill archive install", () => {
         'Skill "staged-update" changed during update. Updating replaces the installed skill directory.',
       failureKind: "invalid-request",
     });
-    await expect(fs.readFile(path.join(targetDir, "notes.md"), "utf8")).resolves.toBe(
-      "edited before backup",
-    );
-    await expect(fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).resolves.toContain(
-      "Installed Skill",
-    );
+    await expect(read(targetDir, "notes.md")).resolves.toBe("edited before backup");
+    await expect(read(targetDir)).resolves.toContain("Installed Skill");
     await expect(
       fs.readdir(path.join(skillsDir, ".openclaw-install-backups")),
     ).resolves.toHaveLength(0);
@@ -570,23 +550,15 @@ describe("skill archive install", () => {
   it.each(["update", "install"] as const)(
     "emits artifacts only when %s of an existing skill commits",
     async (mode) => {
-      const root = await tempDirs.make("openclaw-skill-change-update-");
-      const workspaceDir = path.join(root, "workspace");
-      const extractedRoot = path.join(root, "extracted");
-      await fs.mkdir(extractedRoot, { recursive: true });
-      await fs.writeFile(
-        path.join(extractedRoot, "SKILL.md"),
+      const { workspaceDir, extractedRoot, install } = await fixture(
         versionedSkillFileContent("Before Update", "1.0.0"),
       );
-      const handler = vi.fn();
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([{ hookName: "skill_changed", handler }]),
-      );
+      const handler = vi.fn<(event: PluginHookSkillChangedEvent) => void>();
+      const registry = createMockPluginRegistry([]);
+      addTestHook({ registry, pluginId: "test-plugin", hookName: "skill_changed", handler });
+      initializeGlobalHookRunner(registry);
       if (mode === "update") {
-        await installExtractedSkillRoot({
-          workspaceDir,
-          slug: "hook-update",
-          extractedRoot,
+        await install("hook-update", {
           mode: "install",
           policy: { origin: { type: "path", spec: "./skill" } },
         });
@@ -600,10 +572,7 @@ describe("skill archive install", () => {
       );
       await fs.writeFile(path.join(extractedRoot, "payload.bin"), Buffer.from([0, 128, 255]));
 
-      const result = await installExtractedSkillRoot({
-        workspaceDir,
-        slug: "hook-update",
-        extractedRoot,
+      const result = await install("hook-update", {
         mode,
         policy: {
           origin:
@@ -620,15 +589,7 @@ describe("skill archive install", () => {
       }
       expect(result.ok).toBe(true);
       expect(handler).toHaveBeenCalledTimes(1);
-      const event = handler.mock.calls[0]?.[0] as {
-        action: string;
-        source: string;
-        before: { name: string; revision: { contentSha256: string; treeSha256: string } };
-        after: {
-          name: string;
-          revision: { contentSha256: string; treeSha256: string; sourceVersion?: string };
-        };
-      };
+      const event = handler.mock.calls[0]![0];
       expect(event).toMatchObject({
         action: "updated",
         source: "source-install",
@@ -638,22 +599,17 @@ describe("skill archive install", () => {
           revision: { sourceVersion: "abc123" },
         },
       });
-      expect(event.before.revision.contentSha256).not.toBe(event.after.revision.contentSha256);
-      expect(event.before.revision.treeSha256).not.toBe(event.after.revision.treeSha256);
+      expect(event.before!.revision.contentSha256).not.toBe(event.after!.revision.contentSha256);
+      expect(event.before!.revision.treeSha256).not.toBe(event.after!.revision.treeSha256);
     },
   );
 
   it.each(["before apply", "after target check"] as const)(
     "refuses a guarded deferred update when the old skill disappears %s",
     async (when) => {
-      const root = await tempDirs.make("openclaw-skill-missing-upgrade-");
-      const workspaceDir = path.join(root, "workspace");
-      const extractedRoot = path.join(root, "extracted");
-      await fs.mkdir(extractedRoot, { recursive: true });
-      await fs.writeFile(path.join(extractedRoot, "SKILL.md"), "new skill");
+      const { workspaceDir, extractedRoot } = await fixture("new skill");
       const targetDir = resolveWorkspaceSkillInstallDir(workspaceDir, "weather");
-      await fs.mkdir(targetDir, { recursive: true });
-      await fs.writeFile(path.join(targetDir, "SKILL.md"), "old skill");
+      await writeSkill(targetDir, "old skill");
       const expectedClawHubState = {
         slug: "weather",
         skillFilePath: "SKILL.md",
@@ -686,20 +642,12 @@ describe("skill archive install", () => {
   );
 
   it("emits a deferred update hook only after the owning transaction commits", async () => {
-    const root = await tempDirs.make("openclaw-skill-change-deferred-");
-    const workspaceDir = path.join(root, "workspace");
-    const extractedRoot = path.join(root, "extracted");
-    await fs.mkdir(extractedRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(extractedRoot, "SKILL.md"),
+    const { extractedRoot, install } = await fixture(
       versionedSkillFileContent("Before Update", "1.0.0"),
     );
     const handler = vi.fn();
     initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "skill_changed", handler }]));
-    await installExtractedSkillRoot({
-      workspaceDir,
-      slug: "hook-update",
-      extractedRoot,
+    await install("hook-update", {
       mode: "install",
       policy: { origin: { type: "path", spec: "./skill" } },
     });
@@ -709,15 +657,14 @@ describe("skill archive install", () => {
       versionedSkillFileContent("After Update", "2.0.0"),
     );
 
-    const rolledBack = await installExtractedSkillRoot({
-      workspaceDir,
-      slug: "hook-update",
-      extractedRoot,
-      mode: "update",
-      deferCommit: true,
-      assertOwned: () => undefined,
-      policy: { origin: { type: "path", spec: "./skill" } },
-    });
+    const defer = () =>
+      install("hook-update", {
+        mode: "update",
+        deferCommit: true,
+        assertOwned: () => undefined,
+        policy: { origin: { type: "path", spec: "./skill" } },
+      });
+    const rolledBack = await defer();
     expect(rolledBack.ok).toBe(true);
     if (!rolledBack.ok || !rolledBack.transaction) {
       throw new Error("expected deferred skill transaction");
@@ -726,15 +673,7 @@ describe("skill archive install", () => {
     await rolledBack.transaction.rollback();
     expect(handler).not.toHaveBeenCalled();
 
-    const committed = await installExtractedSkillRoot({
-      workspaceDir,
-      slug: "hook-update",
-      extractedRoot,
-      mode: "update",
-      deferCommit: true,
-      assertOwned: () => undefined,
-      policy: { origin: { type: "path", spec: "./skill" } },
-    });
+    const committed = await defer();
     expect(committed.ok).toBe(true);
     if (!committed.ok || !committed.transaction) {
       throw new Error("expected deferred skill transaction");
@@ -768,8 +707,6 @@ describe("skill archive install", () => {
       ok: false,
       error: "Deferred skill replacement requires a live owner guard.",
     });
-    expect(await fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).toBe(
-      skillFileContent("Before"),
-    );
+    expect(await read(targetDir)).toBe(skillFileContent("Before"));
   });
 });
