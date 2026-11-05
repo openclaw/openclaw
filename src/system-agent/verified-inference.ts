@@ -22,7 +22,6 @@ import type {
   AgentHarnessRuntimeArtifactBinding,
   ExpectedAgentHarnessRuntimeArtifact,
 } from "../agents/harness/runtime-artifact.types.js";
-import { resolveAgentHarnessOwnerPluginIds } from "../agents/harness/runtime-plugin.js";
 import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
@@ -44,6 +43,7 @@ import {
   resolveSystemAgentConfiguredRouteFromConfig,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
+import { resolveRouteHarnessOwnerPluginIds } from "./verified-inference-harness-owner.js";
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 type SystemAgentConfiguredRouteIdentity = DistributiveOmit<
   SystemAgentConfiguredRoute,
@@ -283,26 +283,6 @@ async function projectVerifiedExecutionFingerprint(
       ownerPluginIds,
     }),
   };
-}
-
-function resolveRouteHarnessOwnerPluginIds(
-  config: OpenClawConfig,
-  route: SystemAgentConfiguredRoute,
-): string[] {
-  if (
-    route.runner !== "embedded" ||
-    !route.agentHarnessRuntimeOverride ||
-    route.agentHarnessRuntimeOverride === "openclaw"
-  ) {
-    return [];
-  }
-  const workspaceDir = resolveAgentWorkspaceDir(config, route.agentId, process.env);
-  return resolveAgentHarnessOwnerPluginIds({
-    runtime: route.agentHarnessRuntimeOverride,
-    provider: route.provider,
-    config,
-    workspaceDir,
-  });
 }
 
 function resolveRouteOwnerPluginIds(

@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { FailoverError } from "../agents/failover-error.js";
+import * as harnessAvailability from "../agents/harness/availability.js";
+import * as runtimePlugin from "../agents/harness/runtime-plugin.js";
 import { createFixtureProviderModels } from "../agents/test-helpers/model-fallback-config-fixture.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAgentEventTestHarness } from "../gateway/server-chat.agent-events.test-harness.js";
@@ -107,6 +109,79 @@ function revalidateOwner(
 }
 
 describe("setup inference plugin ownership", () => {
+  function implicitOpenAiRoute(): SystemAgentConfiguredRoute {
+    const provider = "openai";
+    const model = "gpt-5.6-sol";
+    const modelLabel = `${provider}/${model}`;
+    const config: OpenClawConfig = {
+      agents: {
+        entries: { main: { agentDir: "/tmp/openclaw-agent" } },
+        defaults: { model: modelLabel, workspace: "/tmp/openclaw-workspace" },
+      },
+    };
+    return {
+      runner: "embedded",
+      provider,
+      model,
+      modelLabel,
+      agentId: "main",
+      agentDir: "/tmp/openclaw-agent",
+      sourceConfig: config,
+      runConfig: config,
+    };
+  }
+
+  it("stages no implicit Codex owner when the bounded probe's transport override falls back to OpenClaw", async () => {
+    // The bounded "reply OK" probe applies streamParams: { maxTokens }, which Codex
+    // treats as an authored transport override and declines (falling back to OpenClaw).
+    // The staged snapshot must mirror that same fallback so the bound execution matches.
+    vi.spyOn(harnessAvailability, "resolveAvailableAgentHarnessPolicy").mockImplementation(
+      (params) => ({
+        runtime: params.requestTransportOverrides === "present" ? "openclaw" : "codex",
+      }),
+    );
+    vi.spyOn(runtimePlugin, "resolveAgentHarnessOwnerPluginIds").mockReturnValue(["codex"]);
+    const route = implicitOpenAiRoute();
+    const staged = verifiedInference.captureSystemAgentOwnerPluginArtifacts({
+      config: route.sourceConfig,
+      executionRoute: route,
+    });
+    expect(staged.ownerPluginIds).toEqual([]);
+    // A successful run that fell back to OpenClaw reports no Codex owner either, so the
+    // staged snapshot revalidates without drifting.
+    const fallbackBinding = {
+      ownerPluginIds: [],
+      ownerPluginArtifacts: [],
+      execution: route,
+      auth: {
+        agentHarnessId: "openclaw",
+        runtimeOwnerKind: "plugin-harness",
+        runtimeOwnerId: "openclaw",
+        runtimeOwnerFingerprint: "openclaw-fallback-owner",
+      },
+    } as Awaited<ReturnType<typeof createSystemAgentVerifiedInferenceTestFixture>>["binding"];
+    vi.spyOn(verifiedInference, "createSystemAgentVerifiedInferenceBinding").mockImplementation(
+      async () => fallbackBinding as never,
+    );
+    await expect(
+      revalidateStableSetupInferenceOwner({
+        route,
+        auth: fallbackBinding.auth as never,
+        stagedOwnerPluginArtifacts: staged,
+      }),
+    ).resolves.toMatchObject({ ownerPluginIds: [] });
+  });
+
+  it("keeps an explicit Codex owner that the bounded probe does not override", () => {
+    vi.spyOn(runtimePlugin, "resolveAgentHarnessOwnerPluginIds").mockReturnValue(["codex"]);
+    const route = embeddedRoute("codex");
+    const staged = verifiedInference.captureSystemAgentOwnerPluginArtifacts({
+      config: route.sourceConfig,
+      executionRoute: route,
+    });
+    expect(staged.ownerPluginIds).toEqual(["codex"]);
+  });
+
   it("runs a bounded read-only probe with a detached transcript", async () => {
     const route = embeddedRoute("openclaw");
     vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => {

@@ -1,0 +1,3 @@
+# Cover the implicit-harness owner snapshot regression for verified setup inference
+# (P1 transport-override fallback + P2 production-operation revalidation tests).
+73
