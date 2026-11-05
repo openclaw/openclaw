@@ -1,2 +1,2 @@
-# Browser host callbacks and screencast policy must act as their owning call when shared CDP events arrive in another call's async context.
-296
+# Browser host guards and screencast navigation checks must act as their owning call when shared CDP events arrive in another call's async context; includes real-Chromium frame-delivery proof.
+390

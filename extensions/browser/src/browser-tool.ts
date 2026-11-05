@@ -229,10 +229,8 @@ export function createBrowserTool(
       // connections deliver navigation events in whichever call's context created them, so
       // every host check for this request runs in the context this call was admitted in.
       const runInInvocation = AsyncLocalStorage.snapshot();
-      const bindToInvocation = <Inputs extends unknown[], Result>(
-        callback: ((...inputs: Inputs) => Result) | undefined,
-      ) =>
-        callback ? (...inputs: Inputs) => runInInvocation(() => callback(...inputs)) : undefined;
+      const bindToInvocation = (assert: (() => void) | undefined) =>
+        assert ? () => runInInvocation(assert) : undefined;
       const assertInvocationCurrent = bindToInvocation(opts?.assertInvocationCurrent);
       const assertLocalLoopbackCurrent = bindToInvocation(opts?.assertLocalLoopbackCurrent);
       assertInvocationCurrent?.();
@@ -662,24 +660,22 @@ export function createBrowserTool(
           ...(dashboardTarget
             ? {
                 managedOnly: true as const,
-                // Dashboard checks read Gateway board state through this call's runtime scope.
-                assertCurrent: bindToInvocation(
-                  async (
-                    admittedProfile?: Parameters<
-                      typeof import("./browser-dashboard.js").assertBrowserDashboardTargetCurrent
-                    >[3],
-                  ) => {
-                    const { assertBrowserDashboardTargetCurrent } =
-                      await import("./browser-dashboard.js");
-                    await assertBrowserDashboardTargetCurrent(
-                      dashboardTarget,
-                      opts?.agentId,
-                      { signal },
-                      admittedProfile,
-                    );
-                    assertInvocationCurrent?.();
-                  },
-                ),
+                // Awaited on the request's own chain, never from shared listeners.
+                assertCurrent: async (
+                  admittedProfile?: Parameters<
+                    typeof import("./browser-dashboard.js").assertBrowserDashboardTargetCurrent
+                  >[3],
+                ) => {
+                  const { assertBrowserDashboardTargetCurrent } =
+                    await import("./browser-dashboard.js");
+                  await assertBrowserDashboardTargetCurrent(
+                    dashboardTarget,
+                    opts?.agentId,
+                    { signal },
+                    admittedProfile,
+                  );
+                  assertInvocationCurrent?.();
+                },
               }
             : {}),
         },

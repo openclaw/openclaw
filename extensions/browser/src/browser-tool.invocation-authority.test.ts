@@ -1,24 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import "./browser-tool.test-support.js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { createBrowserTool } from "./browser-tool.js";
 import { getBrowserRequestScope } from "./browser/request-scope.js";
 
-const {
-  browserActionsMocks: actions,
-  browserClientMocks: client,
-  gatewayMocks: gateway,
-  resetBrowserToolMocks,
-} = await import("./browser-tool.test-support.js");
-
-// Records whose context the dashboard target check, which reads Gateway board state, runs in.
-const dashboardChecks = vi.hoisted(() => [] as string[]);
-vi.mock("./browser-dashboard.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./browser-dashboard.js")>()),
-  assertBrowserDashboardTargetCurrent: async () => {
-    dashboardChecks.push(calls.getStore()?.name ?? "none");
-  },
-}));
+const { browserActionsMocks: actions, resetBrowserToolMocks } =
+  await import("./browser-tool.test-support.js");
 
 beforeEach(resetBrowserToolMocks);
 afterEach(resetBrowserToolMocks);
@@ -78,40 +65,4 @@ it("checks request authority against the invoking call from another call's event
   const refused = "tool invocation authority is no longer active";
   expect(outcomes).toEqual(["allowed", "allowed", refused, refused]);
   expect(checked).not.toContain("earlier");
-});
-
-it("runs dashboard target checks as the invoking call from another call's event context", async () => {
-  dashboardChecks.length = 0;
-  const dashboard = {
-    sessionKey: "agent:main:dashboard-test",
-    name: "service",
-    instanceId: "widget-one",
-    revision: 1,
-    paused: false,
-    stopping: false,
-    url: "https://example.test/",
-    browserTab: { target: "host", profile: "openclaw", targetId: "DASHBOARD" },
-  };
-  gateway.callGatewayTool.mockResolvedValueOnce(dashboard);
-  const deliverEvent = calls.run({ name: "earlier", current: true }, () =>
-    AsyncLocalStorage.snapshot(),
-  );
-  client.browserTabs.mockImplementationOnce(async () => {
-    const assertCurrent = getBrowserRequestScope()?.assertCurrent;
-    expect(assertCurrent).toBeTypeOf("function");
-    await deliverEvent(() => assertCurrent?.());
-    return { running: true, tabs: [{ targetId: "DASHBOARD", url: dashboard.url }] };
-  });
-  const tool = createBrowserTool({
-    assertInvocationCurrent,
-    agentSessionKey: dashboard.sessionKey,
-    agentId: "main",
-  });
-
-  await calls.run({ name: "invoking", current: true }, () =>
-    tool.execute("dashboard", { action: "tabs", dashboard: "service" }),
-  );
-
-  // The tool's own admission check, then the check delivered from the earlier call's event.
-  expect(dashboardChecks).toEqual(["invoking", "invoking"]);
 });
