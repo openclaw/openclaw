@@ -126,6 +126,7 @@ const fixtures = Array.from({ length: 8 }, (_session, session) => {
         (sum, event) => sum + Buffer.byteLength(JSON.stringify(event)) + 1,
         0,
       ),
+      selectedEventCount: events.length,
       totalEvents: 128,
       transcriptMutationAt: 1,
       truncated: values.mode !== "complete",
