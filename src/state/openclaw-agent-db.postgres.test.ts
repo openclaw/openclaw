@@ -14,7 +14,11 @@ import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { prepareDoctorDatabaseMigrations } from "../commands/doctor-schema-migrations.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import type { TranscriptTurnBoundary } from "../config/sessions/transcript-entry-anchor.js";
-import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
+import {
+  createTranscriptEventInserter,
+  createTranscriptPayloadUpdater,
+  prepareTranscriptPayload,
+} from "../config/sessions/transcript-payload.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { withEngineStoreAdmission as admit } from "../infra/database-engine/admission-scope.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
@@ -468,10 +472,26 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       }
       expect(paths.map((file) => fs.readFileSync(file))).toEqual(anchors);
       const upgraded = openDatabase(options);
-      assert(isPostgresSqlConnection(upgraded.db));
+      const upgradedDb = upgraded.db;
+      assert(isPostgresSqlConnection(upgradedDb));
       expect(postgresFacts(upgraded.db)?.version).toBe(schemaVersion);
       admit(() => {
         assertMemorySearch(upgraded.db);
+        expect(
+          upgraded.db.prepare("SELECT * FROM session_transcript_active_event_facts").all(),
+        ).toEqual([]);
+        expect(() =>
+          upgradedDb.runTransaction(() => {
+            upgraded.db.exec("DROP TABLE session_transcript_active_event_facts");
+            createTranscriptPayloadUpdater(
+              upgraded.db,
+              target.sessionId,
+            )({
+              seq: 0,
+              ...prepareTranscriptPayload(upgraded.db, '{"type":"custom","id":"repair"}'),
+            });
+          }),
+        ).toThrow(/session_transcript_active_event_facts/);
         expect(
           upgraded.get("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'"),
         ).toEqual({ schema_version: schemaVersion });

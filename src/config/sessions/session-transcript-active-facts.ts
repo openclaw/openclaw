@@ -44,16 +44,18 @@ export function transcriptDependencyFactsProjectableSql(
   database: EngineConnection,
   alias: TranscriptPayloadAlias,
 ): RawBuilder<SqlBool> {
-  /* kysely-allow-raw: closed payload aliases name already prepared or stored writer inputs. */
-  const identity = sql.ref(`${alias}.event_json`);
-  /* kysely-allow-raw: validated envelopes already contain the exact model projection. */
-  const navigation = sql.ref(`${alias}.navigation_json`);
+  const identity =
+    /* kysely-allow-raw: closed payload aliases name already prepared or stored writer inputs. */ sql.ref(
+      `${alias}.event_json`,
+    );
+  const navigation =
+    /* kysely-allow-raw: closed payload aliases name validated envelopes with the exact model projection. */ sql.ref(
+      `${alias}.navigation_json`,
+    );
   if (isPostgresSqlConnection(database)) {
-    /* kysely-allow-raw: PG's model projection guards scalar data; only native JSON validity is needed. */
-    return sql<SqlBool>`${navigation} IS NOT NULL OR ${jsonNativeFieldsValid(database, identity)}`;
+    return /* kysely-allow-raw: PG's model projection guards scalar data; only native JSON validity is needed. */ sql<SqlBool>`${navigation} IS NOT NULL OR ${jsonNativeFieldsValid(database, identity)}`;
   }
-  /* kysely-allow-raw: SQLite json_each(json_extract(data)) treats text as JSON source; do not eagerly parse legacy scalar placement data. */
-  return sql<SqlBool>`CASE WHEN ${navigation} IS NOT NULL THEN 1
+  return /* kysely-allow-raw: SQLite json_each(json_extract(data)) treats text as JSON source; do not eagerly parse legacy scalar placement data. */ sql<SqlBool>`CASE WHEN ${navigation} IS NOT NULL THEN 1
     WHEN NOT ${jsonNativeFieldsValid(database, identity)} THEN 0
     WHEN json_extract(${identity}, '$.type') = 'custom'
       AND json_extract(${identity}, '$.customType') = ${BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE}

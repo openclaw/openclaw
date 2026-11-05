@@ -1,2 +1,2 @@
-# Agent41 empty-table migration/restore, transactional facts lifecycle, and cross-engine hydration equivalence.
-737
+# Agent41 migration/restore, facts lifecycle, cross-engine hydration, and FK-backed index recovery.
+841

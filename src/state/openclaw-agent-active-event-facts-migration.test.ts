@@ -179,7 +179,7 @@ it.each(["earlier-crossing", "full"] as const)(
                 env: state.env,
                 integrityCheck: "full",
               })
-            : ensureOpenClawAgentSchema(database, "main", pathname, 40),
+            : ensureOpenClawAgentSchema(database, "main", pathname, 41),
         ).toThrow(/foreign.?key/iu);
       });
       expectVersion(database, mode === "full" ? 40 : 39);

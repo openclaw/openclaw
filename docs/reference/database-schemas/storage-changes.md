@@ -3218,8 +3218,9 @@ rows. Its declared SQLite scoped backup retains `schema_meta`, the prior SQLite 
 version, and the new table's absence. The 40-to-41 crossing uses the established
 schema-only admission policy, then checks the new empty table and its foreign
 key at migration finalization. Existing foreign keys are unchanged and are not
-rescanned for this step. Earlier crossings and explicit full integrity checks
-retain their existing coverage, including global foreign-key validation.
+rescanned for this step. Crossings from schema 38 or 39 retain schema-only
+preflight and global foreign-key validation at finalization. Explicit full
+integrity checks retain their existing coverage.
 Whole-upgrade timing must
 distinguish this version phase from any separate maintenance or update backup.
 PostgreSQL keeps its existing exact-predecessor backup owner; this declaration

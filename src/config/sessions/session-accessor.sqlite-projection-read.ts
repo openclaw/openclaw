@@ -171,7 +171,10 @@ export function selectActiveTranscriptMetadataRows(database: Pick<TranscriptRead
       /* kysely-allow-raw: missing facts alone evaluate the exact native byte-accounting expression. */
       sql<number>`CASE WHEN facts.seq IS NOT NULL THEN facts.serialized_bytes ELSE ${eb
         .selectFrom("transcript_events as event")
-        .select(sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("bytes"))
+        .select(
+          /* kysely-allow-raw: legacy byte accounting includes exactly one JSONL separator. */
+          sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("bytes"),
+        )
         .whereRef("event.session_id", "=", "active.session_id")
         .whereRef("event.seq", "=", "active.event_seq")} END`.as("serialized_bytes"),
     ]);

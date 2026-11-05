@@ -4,6 +4,7 @@ import {
   jsonRemovePaths,
   jsonValid,
 } from "../../infra/database-engine/json-values.js";
+import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -697,8 +698,16 @@ export function transcriptEventUtf8BytesSql(
   >(`${alias}.event_utf8_bytes`);
 }
 
-/** Media repair can run under an admitted predecessor schema before its forward migration. */
+/** Repair and projection rebuilds can run under an admitted predecessor before migration. */
 export function isHistoricalTranscriptActiveFactsSchema(database: EngineConnection): boolean {
+  if (isPostgresSqlConnection(database)) {
+    const schema = getPostgresPhysicalFacts(database);
+    return (
+      schema !== undefined &&
+      schema.version < AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION &&
+      !schema.catalog.some((fact) => fact.table === "session_transcript_active_event_facts")
+    );
+  }
   const schema = getAdmittedSqliteSchemaFacts(database);
   return (
     schema !== undefined &&
