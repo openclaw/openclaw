@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -12,8 +12,56 @@ import {
   readUpdateStateSchemaVersions,
   updateStateSchemaVersionsMatch,
 } from "./update-candidate-state.js";
+import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each(["inspection", "snapshot"] as const)(
+  "%s keeps the selected state root when another profile has a newer schema",
+  async (mode) => {
+    const home = fs.realpathSync(dirs.make("update-schema-profile-"));
+    const stateDir = path.join(home, "selected");
+    const shared = path.join(stateDir, "state", "openclaw.sqlite");
+    const unrelated = path.join(home, ".openclaw", "state", "openclaw.sqlite");
+    for (const [file, version] of [
+      [shared, 7],
+      [unrelated, 999],
+    ] as const) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const database = openNodeSqliteDatabase(file);
+      try {
+        database.exec(`PRAGMA user_version=${version};`);
+      } finally {
+        database.close();
+      }
+    }
+    const before = fs.readFileSync(unrelated);
+
+    const env = {
+      HOME: home,
+      OPENCLAW_HOME: home,
+      OPENCLAW_STATE_DIR: path.dirname(path.dirname(unrelated)),
+    };
+    const versions =
+      mode === "inspection"
+        ? await readUpdateStateSchemaVersions({
+            stateDir,
+            config: {},
+            env: { ...process.env, ...env },
+          })
+        : await runUpdateCandidateSnapshotWorker({
+            stateDir,
+            targetStateDir: path.join(home, "snapshot"),
+            candidateRoot: fileURLToPath(new URL("../../", import.meta.url)),
+            config: {},
+            env,
+          });
+
+    expect(versions).toContainEqual({ path: shared, userVersion: 7, contentVersion: 7 });
+    expect(versions.some((entry) => entry.path === unrelated)).toBe(false);
+    expect(fs.readFileSync(unrelated)).toEqual(before);
+  },
+);
 
 it.each(["malformed", "nonregular-wal", "empty-worker"])(
   "reports an actionable schema inspection failure: %s",

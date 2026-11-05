@@ -33,6 +33,12 @@ backup.
 
 ## Update implementation contract
 
+Update inspection and snapshot workers bind plugin metadata discovery to the
+selected installation's state directory, including requests from older installed
+updaters. A different profile's database version must not block that inspection.
+The candidate worker must contain this repair; an older updater inspecting with
+its own worker still needs an updated runtime.
+
 Within one database-generation observation, update and Doctor workers reuse a
 verified digest while the file's device, inode, size, and nanosecond birth,
 modification, and change times remain identical. Each family observation still

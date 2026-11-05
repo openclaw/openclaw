@@ -12,14 +12,6 @@ import type {
 // integrity checks and backup/VACUUM, which expose no AbortSignal contract.
 async function snapshotCandidateState(): Promise<unknown> {
   // File workers must not retain the subprocess's database/config inspection graph.
-  const { createUpdateStateInspectionReporter } =
-    await import("./update-candidate-state.diagnostics.js");
-  const {
-    discoverUpdateStateSchemaInspectionInProcess,
-    readUpdateCandidateStateInventoryInProcess,
-    readUpdateStateSchemaVersionsInProcess,
-    snapshotUpdateCandidateState,
-  } = await import("./update-candidate-state.js");
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -45,6 +37,19 @@ async function snapshotCandidateState(): Promise<unknown> {
         typeof import("./update-database-restore-source.js").prepareUpdateDatabaseRestoreSourceInProcess
       >[0] & { mode: "database-restore-preparation" })
     | { mode: "database-generations"; paths: string[] };
+  if ("stateDir" in input) {
+    // Older installed drivers omit this from their restricted environment payload.
+    // Metadata discovery must use the same installation as the inspected databases.
+    input.env = { ...input.env, OPENCLAW_STATE_DIR: input.stateDir };
+  }
+  const { createUpdateStateInspectionReporter } =
+    await import("./update-candidate-state.diagnostics.js");
+  const {
+    discoverUpdateStateSchemaInspectionInProcess,
+    readUpdateCandidateStateInventoryInProcess,
+    readUpdateStateSchemaVersionsInProcess,
+    snapshotUpdateCandidateState,
+  } = await import("./update-candidate-state.js");
   switch (input.mode) {
     case "database-restore-preparation": {
       const { prepareUpdateDatabaseRestoreSourceInProcess } =
