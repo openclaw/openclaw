@@ -48,7 +48,10 @@ export class SidebarChildExpansion {
       }
       return true;
     };
-    this.selectedRootKey = input.rows.find(reveal)?.key ?? null;
+    // Only nested selections reveal an owning group; top-level sessions keep
+    // the user's saved group collapse, including across a page reload.
+    this.selectedRootKey =
+      input.rows.find((row) => !row.visuallyActive && reveal(row))?.key ?? null;
   }
 
   revealOnce(key: string): boolean {
