@@ -42,4 +42,10 @@ describe("LINE question postback data", () => {
       parseLineQuestionPostbackData(`line.question=${QUESTION_ID}&line.option=abc`),
     ).toBeUndefined();
   });
+
+  it("ignores an option index outside the safe integer range", () => {
+    expect(
+      parseLineQuestionPostbackData(`line.question=${QUESTION_ID}&line.option=9007199254740992`),
+    ).toBeUndefined();
+  });
 });

@@ -56,15 +56,13 @@ function sourceTelephonyTtsFormat(
     return "pcm";
   }
   if (
-    normalized === "mulaw" ||
-    normalized === "ulaw" ||
     normalized.includes("mu-law") ||
     normalized.includes("mulaw") ||
     normalized.includes("ulaw")
   ) {
     return "mulaw";
   }
-  if (normalized === "alaw" || normalized.includes("a-law") || normalized.includes("alaw")) {
+  if (normalized.includes("a-law") || normalized.includes("alaw")) {
     return "alaw";
   }
   throw new Error(`Unsupported telephony TTS output format for ${platformName}: ${outputFormat}`);

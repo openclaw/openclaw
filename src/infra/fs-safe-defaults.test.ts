@@ -5,8 +5,11 @@ import { describe, expect, it } from "vitest";
 import { nativeProcessTestEntrypoints } from "./native-process-runtime.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
-const coreUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.fsSafeCore);
-const memoryUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.memoryFsUtils);
+const modules = {
+  coreUrl: resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.fsSafeCore),
+  envUrl: resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.fsSafeEnv),
+  memoryUrl: resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.memoryFsUtils),
+};
 
 type NativeMode = "auto" | "off" | "require";
 
@@ -28,13 +31,15 @@ function inspectNativeDefaults(params: {
   const output = execFileSync(
     process.execPath,
     [
-      ...resolveRuntimeWorkerArgv(coreUrl).slice(0, -1),
+      ...resolveRuntimeWorkerArgv(modules.coreUrl).slice(0, -1),
       "--input-type=module",
       "--eval",
       `
       const options = JSON.parse(process.argv[1]);
       const config = await import("@openclaw/fs-safe/config");
       if (options.beforeImport) config.configureFsSafeNative({ mode: options.beforeImport });
+      const { normalizeFsSafeNativeEnv } = await import(options.envUrl);
+      normalizeFsSafeNativeEnv();
       await import(options.coreUrl);
       await import(options.memoryUrl);
       const before = config.getFsSafeNativeConfig().mode;
@@ -42,11 +47,7 @@ function inspectNativeDefaults(params: {
       const after = config.getFsSafeNativeConfig().mode;
       process.stdout.write(JSON.stringify({ before, after }));
     `,
-      JSON.stringify({
-        ...params,
-        coreUrl: coreUrl.href,
-        memoryUrl: memoryUrl.href,
-      }),
+      JSON.stringify({ ...params, ...modules }),
     ],
     {
       cwd: fileURLToPath(new URL("../../", import.meta.url)),
@@ -103,12 +104,19 @@ describe("fs-safe defaults", () => {
     ).toEqual({ before: "off", after: "require" });
   });
 
-  it("retains legacy mode migration without overriding it", () => {
-    expect(inspectNativeDefaults({ env: { OPENCLAW_FS_SAFE_PYTHON_MODE: "require" } })).toEqual({
-      before: "require",
-      after: "require",
-    });
-  });
+  it.each(["FS_SAFE_PYTHON_MODE", "OPENCLAW_FS_SAFE_PYTHON_MODE"])(
+    "maps deprecated %s at OpenClaw startup without overriding native configuration",
+    (key) => {
+      expect(inspectNativeDefaults({ env: { [key]: "require" }, afterImport: "off" })).toEqual({
+        before: "require",
+        after: "off",
+      });
+      expect(inspectNativeDefaults({ env: { [key]: "require" }, beforeImport: "off" })).toEqual({
+        before: "off",
+        after: "off",
+      });
+    },
+  );
 
   it.skipIf(process.platform !== "win32")(
     "honors case-insensitive Windows environment names",

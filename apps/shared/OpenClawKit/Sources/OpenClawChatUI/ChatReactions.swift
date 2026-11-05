@@ -155,15 +155,15 @@ public struct OpenClawChatReactionsRouteLease: Sendable {
     }
 }
 
-public enum OpenClawChatReactionEmoji {
-    public static let quick = ["👍", "❤️", "🎉", "👀", "🚀", "😂"]
+enum OpenClawChatReactionEmoji {
+    static let quick = ["👍", "❤️", "🎉", "👀", "🚀", "😂"]
     /// ICU spelling of the Gateway's single-grapheme emoji sequence rule.
     private static let sequence = try? NSRegularExpression(
         pattern: #"^(?:\p{Regional_Indicator}{2}|[#*0-9]️?⃣|"#
             + #"\x{1F3F4}[\x{E0061}-\x{E007A}]+\x{E007F}|"#
             + #"\p{Extended_Pictographic}️?\p{Emoji_Modifier}?(?:‍\p{Extended_Pictographic}️?\p{Emoji_Modifier}?)*)$"#)
 
-    public static func isValid(_ emoji: String) -> Bool {
+    static func isValid(_ emoji: String) -> Bool {
         guard emoji.count == 1, emoji.unicodeScalars.count <= 32 else { return false }
         let range = NSRange(emoji.startIndex..., in: emoji)
         return self.sequence?.firstMatch(in: emoji, range: range)?.range == range

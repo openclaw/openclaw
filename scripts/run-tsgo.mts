@@ -1,4 +1,5 @@
-// Runs tsgo through local resource policy and sparse-checkout guards.
+// Runs the type checker (tsrs; tsgo where tsrs ships no binary) through local resource
+// policy and sparse-checkout guards.
 import type { ChildProcess, StdioOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -14,6 +15,7 @@ import {
   applyLocalTsgoPolicy,
   resolveLocalCheckEnv,
   resolveRepoToolBinPath,
+  resolveTypeCheckTool,
 } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
@@ -67,7 +69,12 @@ export function prepareTsgoCommand(
   }
 
   // Subdirectories share checkout ownership, but another checkout's install never does.
-  const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: findRepoRoot(cwd) ?? cwd });
+  const compilerPath = resolveRepoToolBinPath(
+    resolveTypeCheckTool(process.platform, process.arch, env, finalArgs),
+    {
+      cwd: findRepoRoot(cwd) ?? cwd,
+    },
+  );
   let timeoutMs: number | undefined;
   try {
     timeoutMs = resolveTsgoTimeoutMs(env);
@@ -78,7 +85,7 @@ export function prepareTsgoCommand(
   }
   return {
     args: finalArgs,
-    bin: tsgoPath,
+    bin: compilerPath,
     cwd,
     env,
     shell: process.platform === "win32",
@@ -110,7 +117,7 @@ export async function runPreparedTsgoCommand(
     let capturedBytes = 0;
     let overflow = false;
     let interrupted = false;
-    const code = await runManagedCommand({
+    const managedCommand = {
       ...command,
       args: capture ? [...command.args, "--pretty", "false"] : command.args,
       requireProcessTreeExit: process.platform !== "win32",
@@ -145,7 +152,14 @@ export async function runPreparedTsgoCommand(
             },
           }
         : {}),
-    });
+    };
+    const metricsDir = command.env.OPENCLAW_TSGO_METRICS_DIR?.trim();
+    // Keep CI output capture and cleanup callbacks on the same managed invocation.
+    const code = metricsDir
+      ? await (
+          await import("./lib/tsgo-performance.mts")
+        ).runMeasuredTsgoCommand(managedCommand, metricsDir)
+      : await runManagedCommand(managedCommand);
     await Promise.all(forwarding);
     const stdout = Buffer.concat(outputs[0]!).toString("utf8");
     const stderr = Buffer.concat(outputs[1]!).toString("utf8");
@@ -171,7 +185,8 @@ export async function runPreparedTsgoCommand(
     console.error(
       `[tsgo] no completion after ${command.timeoutMs}ms; killed the tsgo process tree. Raise OPENCLAW_TSGO_TIMEOUT_MS for intentionally longer builds, or unset it to disable the watchdog.`,
     );
-    return 1;
+    // CI collectors stop admitting work for watchdog exit 124.
+    return 124;
   }
 }
 

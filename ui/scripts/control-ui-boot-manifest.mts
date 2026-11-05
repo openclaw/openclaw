@@ -1,8 +1,8 @@
 #!/usr/bin/env -S node --import tsx
 // Regenerates ui/config/control-ui-boot-modules.json: the modules shared shell and
 // route-specific boot flows need, plus requested dynamic entry points. Builds
-// without the previous boot groups, captures ready routes against the mocked
-// Gateway, and keeps fetched modules reachable from what each route requested.
+// without the previous boot groups, captures ready cold and credential-authorized
+// warm routes, and keeps fetched modules reachable from what each route requested.
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -19,11 +19,18 @@ import {
   resolvePlaywrightChromiumExecutablePath,
 } from "../src/test-helpers/control-ui-e2e.ts";
 import controlUiViteConfig from "../vite.config.ts";
+import { deferControlUiBootSpeculation } from "./control-ui-boot-capture.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const manifestPath = path.join(repoRoot, "ui", "config", "control-ui-boot-modules.json");
 const SETTLE_MS = 3_000;
 const READY_TIMEOUT_MS = 60_000;
+// Idle decoration must not become a route preload just because the capture
+// waits for background work to settle after the composer is already visible.
+const idleEntries = new Set([
+  "ui/src/app/app-shell-idle.runtime.ts",
+  "ui/src/components/lobster-pet.tsx",
+]);
 
 const mime: Record<string, string> = {
   ".html": "text/html",
@@ -48,7 +55,17 @@ function serveDist(distDir: string): Promise<{ baseUrl: string; close: () => Pro
       filePath = path.join(distDir, "index.html");
     }
     res.setHeader("Content-Type", mime[path.extname(filePath)] ?? "application/octet-stream");
-    res.end(fs.readFileSync(filePath));
+    const source = fs.readFileSync(filePath);
+    // Like the Gateway, anchor the portable entry before a canonical deep route
+    // reloads; otherwise /chat/main asks this fixture for /chat/assets/*.js.
+    res.end(
+      filePath.endsWith("index.html")
+        ? source
+            .toString("utf8")
+            .replaceAll('src="./assets/', 'src="/assets/')
+            .replaceAll('href="./assets/', 'href="/assets/')
+        : source,
+    );
   });
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () => {
@@ -85,23 +102,60 @@ async function collectBootChunkPaths(
     executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
   });
   try {
-    const page = await browser.newPage();
     const chunkPaths = new Set<string>();
-    page.on("request", (request) => {
-      const { pathname } = new URL(request.url());
-      if (pathname.startsWith("/assets/") && pathname.endsWith(".js")) {
-        chunkPaths.add(pathname);
+    for (const warm of [false, true]) {
+      // Neither prior worker precaches nor a prior credential handoff may feed
+      // the next capture. Keep cold sign-in and authorized warm boot distinct.
+      const context = await browser.newContext({ serviceWorkers: "block" });
+      try {
+        await context.addInitScript(deferControlUiBootSpeculation);
+        const page = await context.newPage();
+        // Capture required boot code, not the shell's optional idle menu/route warmups.
+        // Removing navigation metadata alone does not disable registered menu warmups.
+        const protocol = await context.newCDPSession(page);
+        await protocol.send("Emulation.setDataSaverOverride", { dataSaverEnabled: true });
+        page.on("request", (request) => {
+          const { pathname } = new URL(request.url());
+          if (pathname.startsWith("/assets/") && pathname.endsWith(".js")) {
+            chunkPaths.add(pathname);
+          }
+        });
+        await installMockGateway(page, {
+          serverBuildId: readDistBuildId(distDir),
+          // The roster hook would import diagnostics into the measured boot graph.
+          awaitInitialRoster: false,
+        });
+        const waitForRoute = async () => {
+          await page
+            .locator(
+              route === "chat"
+                ? ".agent-chat__composer-combobox textarea"
+                : ".new-session-page__message",
+            )
+            .waitFor({ timeout: READY_TIMEOUT_MS });
+          await page.waitForTimeout(SETTLE_MS);
+        };
+        await page.goto(`${baseUrl}/${route}${warm ? "#token=synthetic-boot-capture" : ""}`, {
+          waitUntil: "commit",
+        });
+        await waitForRoute();
+        if (warm) {
+          // Warm admission exercises readers absent from the cold ready route.
+          await page.waitForFunction(
+            () =>
+              Object.keys(localStorage).some((key) =>
+                key.startsWith("openclaw.control.bootRecord.v1:"),
+              ),
+            undefined,
+            { timeout: READY_TIMEOUT_MS },
+          );
+          await page.reload();
+          await waitForRoute();
+        }
+      } finally {
+        await context.close();
       }
-    });
-    await installMockGateway(page, { serverBuildId: readDistBuildId(distDir) });
-    await page.goto(`${baseUrl}/${route}`, { waitUntil: "commit" });
-    // Route readiness proves the capture did not stall on an error surface.
-    await page
-      .locator(
-        route === "chat" ? ".agent-chat__composer-combobox textarea" : ".new-session-page__message",
-      )
-      .waitFor({ timeout: READY_TIMEOUT_MS });
-    await page.waitForTimeout(SETTLE_MS);
+    }
     return chunkPaths;
   } finally {
     await browser.close();
@@ -158,7 +212,10 @@ function routeModuleKeys(
       }
     }
   }
-  return new Set([...seen].map(controlUiBootManifestKey));
+  // Inline style text does not request a sheet; its external counterpart may be lazy.
+  return new Set(
+    [...seen].filter((id) => !/[?&]inline(?:[=&]|$)/u.test(id)).map(controlUiBootManifestKey),
+  );
 }
 
 function partitionBootKeys(routes: Record<"new" | "chat", Set<string>>) {
@@ -230,15 +287,20 @@ async function main(): Promise<void> {
       const routeEntries = { new: new Set<string>(), chat: new Set<string>() };
       for (const route of ["new", "chat"] as const) {
         const chunks = await collectBootChunkPaths(server.baseUrl, distDir, route);
-        const requestedEntries = [...chunks].flatMap(
-          (chunk) => graph.dynamicEntries.get(chunk) ?? [],
-        );
+        const requestedEntries = [...chunks]
+          .flatMap((chunk) => graph.dynamicEntries.get(chunk) ?? [])
+          .filter((id) => !idleEntries.has(controlUiBootManifestKey(id)));
         routeEntries[route] = new Set(requestedEntries.map(controlUiBootManifestKey));
         // Fetched shared chunks can co-locate modules only the other route
         // imports; keep the modules reachable from what this route requested.
         const needed = routeModuleKeys(graph, chunks, [...graph.entryModules, ...requestedEntries]);
         const fetched = manifestKeysForChunks(chunks, distDir);
-        routes[route] = new Set(fetched.filter((key) => needed.has(key)));
+        // Extracted styles can have empty JS stubs and disappear from source maps.
+        // Their static import graph still proves which ready route needs them.
+        routes[route] = new Set([
+          ...fetched.filter((key) => needed.has(key)),
+          ...[...needed].filter((key) => key.endsWith(".css")),
+        ]);
         if (routes[route].size < 100) {
           throw new Error(
             `Boot capture looks truncated: ${route} recorded only ${routes[route].size} modules`,

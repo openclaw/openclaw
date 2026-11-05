@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 public struct ChatModelProviderSection: Identifiable, Sendable, Equatable {
     public let id: String
@@ -118,13 +119,11 @@ public final class ChatModelPickerStore {
     }
 
     private static func normalizedProvider(_ provider: String?) -> String {
-        let normalized = ChatPayloadDecoding.trimmedNonEmptyString(provider)?.lowercased() ?? ""
-        return normalized.isEmpty ? "other" : normalized
+        self.normalizedProviderIfPresent(provider) ?? "other"
     }
 
     private static func normalizedProviderIfPresent(_ provider: String?) -> String? {
-        guard let provider = ChatPayloadDecoding.trimmedNonEmptyString(provider) else { return nil }
-        return self.normalizedProvider(provider)
+        provider?.trimmedNonEmpty?.lowercased()
     }
 
     private static func effectiveProvider(_ choice: OpenClawChatModelChoice) -> String {

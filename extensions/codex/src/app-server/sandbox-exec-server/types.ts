@@ -47,7 +47,7 @@ export type ResolvedFsSandboxEntry =
   | {
       kind: "glob";
       pattern: string;
-      matcher: RegExp;
+      matcher: (target: string) => boolean;
       literalPrefix: string;
       access: FsAccessMode;
     };
@@ -100,7 +100,10 @@ type OpenClawExecServerLease = {
 
 /** Locally interpreted exec-server protocol backed by an OpenClaw sandbox. */
 export type OpenClawExecServer = OpenClawExecServerLease & {
-  processAuthorities?: Map<string, CodexNativeProcessClient>;
+  processAuthorities?: Map<
+    string,
+    { authority: CodexNativeProcessClient; unsubscribe: () => void }
+  >;
   backend: NonNullable<SandboxContext["backend"]>;
   fsBridge: NonNullable<SandboxContext["fsBridge"]>;
   readonly networkIsolated: boolean;

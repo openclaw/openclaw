@@ -1,4 +1,3 @@
-// Gateway startup auth preparation.
 // Merges auth overrides, resolves secret refs, validates weak secrets, and generates fallbacks.
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -40,24 +39,6 @@ export function mergeGatewayTailscaleConfig(
     merged.preserveFunnel = override.preserveFunnel;
   }
   return merged;
-}
-
-function resolveGatewayAuthFromConfig(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  authOverride?: GatewayAuthConfig;
-  tailscaleOverride?: GatewayTailscaleConfig;
-}) {
-  const tailscaleConfig = mergeGatewayTailscaleConfig(
-    params.cfg.gateway?.tailscale,
-    params.tailscaleOverride,
-  );
-  return resolveGatewayAuthForConfig({
-    config: params.cfg,
-    authOverride: params.authOverride,
-    env: params.env,
-    tailscaleMode: tailscaleConfig.mode ?? "off",
-  });
 }
 
 function findActiveGatewaySharedSecret(auth: ResolvedGatewayAuth): string {
@@ -192,11 +173,14 @@ export async function ensureGatewayStartupAuth(params: {
   if (resolutionConfig !== params.cfg) {
     copyConfigResolutionFactsExcept(params.cfg, resolutionConfig, ["gateway.auth.token"]);
   }
-  const resolved = resolveGatewayAuthFromConfig({
-    cfg: resolutionConfig,
+  const tailscaleMode =
+    mergeGatewayTailscaleConfig(resolutionConfig.gateway?.tailscale, params.tailscaleOverride)
+      .mode ?? "off";
+  const resolved = resolveGatewayAuthForConfig({
+    config: resolutionConfig,
     env,
     authOverride,
-    tailscaleOverride: params.tailscaleOverride,
+    tailscaleMode,
   });
   assertGatewayAuthNotKnownWeak(
     resolved,
@@ -225,16 +209,12 @@ export async function ensureGatewayStartupAuth(params: {
     },
   };
   copyConfigResolutionFactsExcept(params.cfg, nextCfg, ["gateway.auth.token"]);
-  const nextAuth = resolveGatewayAuthFromConfig({
-    cfg: nextCfg,
+  const nextAuth = resolveGatewayAuthForConfig({
+    config: nextCfg,
     env,
     authOverride: params.authOverride,
-    tailscaleOverride: params.tailscaleOverride,
+    tailscaleMode,
   });
-  // The generated token is crypto-random, so this cannot match the weak set
-  // in practice — but running the assertion on both branches documents that
-  // the rule applies uniformly and guards against any future path that might
-  // feed a non-generated value through nextAuth.
   assertGatewayAuthNotKnownWeak(nextAuth);
   warnHooksTokenReuseGatewayAuth({ cfg: nextCfg, auth: nextAuth, warn: params.warn });
   return {

@@ -3,119 +3,105 @@ import { describe, expect, it } from "vitest";
 import { buildSlackProgressCardBlocks } from "./progress-blocks.js";
 import { itemLine, progressLine, toolLine } from "./progress-blocks.test-helpers.js";
 
+type CardOptions = Parameters<typeof buildSlackProgressCardBlocks>[0];
+const card = (options: Partial<CardOptions>) =>
+  buildSlackProgressCardBlocks({ detailed: true, state: "working", lines: [], ...options });
+const section = (text: string) => ({ type: "section", text: { type: "mrkdwn", text } });
+const plain = (text: string) => ({
+  type: "section",
+  text: { type: "plain_text", text, emoji: false },
+});
+const context = (text: string) => ({ type: "context", elements: [{ type: "mrkdwn", text }] });
+const approval = (detail: string, label = "Approval"): ChannelProgressDraftLine => ({
+  kind: "approval",
+  label,
+  text: label,
+  detail,
+  status: "requested",
+});
+const link = { text: "Open work session", url: "https://example.com/session" };
+const linkBlock = expect.objectContaining({
+  type: "actions",
+  elements: [
+    expect.objectContaining({
+      type: "button",
+      action_id: "openclaw:session_link",
+      url: link.url,
+      text: { type: "plain_text", text: link.text },
+    }),
+  ],
+});
+
 describe("buildSlackProgressCardBlocks", () => {
-  it.each(["working", "success", "error"] as const)(
-    "omits filler and preserves failures in an empty %s card",
-    (state) => {
-      for (const detailed of [false, true]) {
-        expect(buildSlackProgressCardBlocks({ detailed, state, lines: [] })).toEqual(
-          state === "error"
-            ? [{ type: "section", text: { type: "plain_text", text: "Failed", emoji: false } }]
-            : [],
-        );
-      }
-    },
-  );
-
-  it.each(["working", "success", "error"] as const)(
-    "keeps text, commentary, approvals, session links, and any failure outcome by default when %s",
-    (state) => {
-      const blocks = buildSlackProgressCardBlocks({
-        detailed: false,
-        state,
-        title: "Review",
-        narration: [
-          { text: "Checking the workspace" },
-          { text: "Read *literal*", format: "plain" },
-        ],
-        plan: [{ step: "Inspect", status: "in_progress" }],
-        lines: [
-          itemLine("Considering the change", "Reasoning"),
-          toolLine("pnpm test"),
-          { ...itemLine("Tool output"), toolName: "exec" },
-          { ...toolLine("failed check"), status: "exit 1" },
-          {
-            kind: "approval",
-            label: "Approval",
-            text: "Approval",
-            detail: "Run checks",
-            status: "requested",
-          },
-        ],
-        toolCalls: 2,
-        elapsedSeconds: 12,
-        diffStat: { files: 1, added: 2, removed: 1 },
-        sessionLinks: [{ text: "Open work session", url: "https://example.com/session" }],
-      });
-      expect(blocks).toEqual([
-        ...(state === "error"
-          ? [{ type: "section", text: { type: "plain_text", text: "Failed", emoji: false } }]
-          : []),
-        { type: "section", text: { type: "plain_text", text: "Review", emoji: false } },
-        { type: "section", text: { type: "mrkdwn", text: "_Checking the workspace_" } },
-        { type: "section", text: { type: "plain_text", text: "Read *literal*", emoji: false } },
-        { type: "section", text: { type: "mrkdwn", text: "_Considering the change_" } },
-        ...(state === "working"
-          ? [{ type: "section", text: { type: "mrkdwn", text: "Approval required: Run checks" } }]
-          : [
-              {
-                type: "actions",
-                elements: [
-                  {
-                    type: "button",
-                    action_id: "openclaw:session_link",
-                    text: { type: "plain_text", text: "Open work session" },
-                    url: "https://example.com/session",
-                  },
-                ],
-              },
-            ]),
-      ]);
-    },
-  );
-
-  it.each([
-    { toolCalls: 1, files: 1, added: 0, removed: 0, footer: "1 tool · 1 file · 2s" },
-    { toolCalls: 2, files: 3, added: 12, removed: 4, footer: "2 tools · 3 files +12 −4 · 2s" },
-    { toolCalls: 0, files: 0, added: 0, removed: 0, footer: "2s" },
-    { toolCalls: 0, files: 1, added: 0, removed: 4, footer: "1 file −4 · 2s" },
-  ])("renders the live footer as $footer", ({ toolCalls, files, added, removed, footer }) => {
-    expect(
-      buildSlackProgressCardBlocks({
-        detailed: true,
-        state: "working",
-        lines: [],
-        toolCalls,
-        elapsedSeconds: 2,
-        diffStat: { files, added, removed },
-      }),
-    ).toEqual([{ type: "context", elements: [{ type: "mrkdwn", text: footer }] }]);
+  it.each<[boolean, CardOptions["state"]]>([
+    [false, "working"],
+    [false, "error"],
+    [true, "working"],
+    [true, "success"],
+  ])("renders card layout (detailed=%s, state=%s)", (detailed, state) => {
+    const blocks = card({
+      detailed,
+      state,
+      title: "Implementing",
+      narration: [{ text: "Checking the workspace." }, { text: "Read *literal*", format: "plain" }],
+      plan: [
+        { step: "Inspect", status: "completed" },
+        { step: "Patch", status: "in_progress" },
+      ],
+      lines: [
+        itemLine("Considering the change", "Reasoning"),
+        toolLine("run tests"),
+        { ...itemLine("Tool output"), toolName: "exec" },
+        { ...toolLine("failed check"), status: "exit 1" },
+        approval("Run checks"),
+      ],
+      toolCalls: 3,
+      elapsedSeconds: 12,
+      diffStat: { files: 4, added: 2, removed: 1 },
+      sessionLinks: [link],
+    });
+    const headings = [...(state === "error" ? [plain("Failed")] : []), plain("Implementing")];
+    const failure = `${state === "success" ? "Recovered: " : ""}Exec — failed check — exit 1`;
+    const attention = [
+      ...(detailed ? [failure] : []),
+      ...(state === "working" ? ["Approval required: Run checks"] : []),
+    ];
+    expect(blocks).toEqual([
+      ...headings,
+      section("_Checking the workspace._"),
+      plain("Read *literal*"),
+      ...(detailed ? [section("✓ Inspect\n▸ Patch")] : []),
+      section(
+        detailed
+          ? "_Considering the change_\nExec — run tests\nTool output"
+          : "_Considering the change_",
+      ),
+      ...(attention.length ? [section(attention.join("\n"))] : []),
+      ...(detailed
+        ? [context(state === "working" ? "3 tools · 4 files +2 −1 · 12s" : "4 files +2 −1")]
+        : []),
+      ...(state !== "working" ? [linkBlock] : []),
+    ]);
+    if (state !== "working") {
+      expect(card({ state, title: "Implementing" })).toEqual(headings);
+    }
   });
 
   it("omits detail placeholders from completed tools and preserves plain narration", () => {
     expect(
-      buildSlackProgressCardBlocks({
-        detailed: true,
+      card({
         state: "success",
         narration: [{ text: "Read *literal* <@U123>", format: "plain" }],
         lines: [{ ...toolLine(""), status: "completed" }],
         toolCalls: 1,
         elapsedSeconds: 2,
+        diffStat: { files: 0, added: 0, removed: 0 },
       }),
-    ).toEqual([
-      {
-        type: "section",
-        text: { type: "plain_text", text: "Read *literal* <@U123>", emoji: false },
-      },
-      { type: "section", text: { type: "mrkdwn", text: "Exec" } },
-    ]);
+    ).toEqual([plain("Read *literal* <@U123>"), section("Exec")]);
   });
 
   it("keeps plan selection, summary, and truncation budgets without emoji", () => {
-    const blocks = buildSlackProgressCardBlocks({
-      detailed: true,
-      state: "working",
-      lines: [],
+    const blocks = card({
       maxLineChars: 20,
       plan: Array.from({ length: 51 }, (_, index) => ({
         step: index === 49 ? "Active step with a long description" : `Step ${index}`,
@@ -134,243 +120,49 @@ describe("buildSlackProgressCardBlocks", () => {
   });
 
   it("retains independent approvals and failures in the card attention section", () => {
-    const blocks = buildSlackProgressCardBlocks({
-      detailed: true,
-      state: "working",
+    const blocks = card({
       title: "Working",
       lines: [
-        { kind: "approval", label: "Approve deploy", status: "requested", text: "Approve deploy" },
-        {
-          kind: "approval",
-          label: "Approve restart",
-          status: "requested",
-          text: "Approve restart",
-        },
+        approval("", "Approve deploy"),
+        approval("", "Approve restart"),
         { kind: "command-output", label: "Build", status: "exit 1", text: "Build exit 1" },
         { kind: "command-output", label: "Test", status: "exit 2", text: "Test exit 2" },
       ],
     });
-    const text = JSON.stringify(blocks);
-    for (const expected of [
-      "Approve deploy",
-      "Approve restart",
-      "Build — exit 1",
-      "Test — exit 2",
-    ]) {
-      expect(text).toContain(expected);
-    }
-  });
-
-  it("preserves authored commentary and reasoning Markdown beside tool activity", () => {
-    const blocks = buildSlackProgressCardBlocks({
-      detailed: true,
-      state: "working",
-      title: "Checking the workspace",
-      lines: [
-        {
-          id: "reasoning",
-          kind: "item",
-          label: "Reasoning",
-          text: "Compare <#C123> approaches 🔍",
-        },
-        {
-          id: "commentary:1",
-          kind: "item",
-          label: "Update",
-          text: "Checking **the fix** <@U123> & <!channel> 🔧",
-        },
-        toolLine("run tests"),
-      ],
-    });
-    expect(blocks[1]).toEqual({
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: "_Compare &lt;#C123&gt; approaches 🔍_\n_Checking *the fix* &lt;@U123&gt; &amp; &lt;!channel&gt; 🔧_\nExec — run tests",
-      },
-    });
-  });
-
-  it.each([
-    ["Run **bold** checks", "_Run *bold* checks_"],
-    ["Read C:\\path", "_Read C:\\path_"],
-    [
-      "Check `code` for <@U123> & <!channel>",
-      "_Check `code` for &lt;@U123&gt; &amp; &lt;!channel&gt;_",
-    ],
-  ])("renders authored commentary %s inside one italic wrapper", (narration, expected) => {
-    expect(
-      buildSlackProgressCardBlocks({
-        detailed: true,
-        state: "working",
-        narration: [{ text: narration }],
-        lines: [],
-      }),
-    ).toEqual([{ type: "section", text: { type: "mrkdwn", text: expected } }]);
-  });
-
-  it("renders authored narration inside one italic wrapper while preserving inline code", () => {
-    const blocks = buildSlackProgressCardBlocks({
-      detailed: true,
-      state: "working",
-      title: "Working",
-      narration: [{ text: "Check _x_ and *x* with `pnpm test` for <@U123> & <!channel>" }],
-      lines: [],
-    });
-    expect(blocks[1]).toEqual({
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: "_Check x and x with `pnpm test` for &lt;@U123&gt; &amp; &lt;!channel&gt;_",
-      },
-    });
-  });
-
-  it("renders authored plan Markdown without activating Slack mentions", () => {
-    const blocks = buildSlackProgressCardBlocks({
-      detailed: true,
-      state: "working",
-      title: "Working",
-      plan: [
-        { step: "Run `pnpm test` for **checks** <@U123> & <!channel>", status: "in_progress" },
-      ],
-      lines: [],
-    });
-    expect(blocks[1]).toEqual({
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: "▸ Run `pnpm test` for *checks* &lt;@U123&gt; &amp; &lt;!channel&gt;",
-      },
-    });
-  });
-
-  it("escapes only entities in literal attention text", () => {
-    const blocks = buildSlackProgressCardBlocks({
-      detailed: true,
-      state: "working",
-      title: "Working",
-      lines: [{ ...toolLine("`pnpm test` <@U123> & <!channel>"), status: "exit 1" }],
-    });
-    expect(blocks[1]).toEqual({
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: "Exec — `pnpm test` &lt;@U123&gt; &amp; &lt;!channel&gt; — exit 1",
-      },
-    });
-  });
-
-  it("keeps approval attention visible beside fifty recent activity rows", () => {
-    const blocks = buildSlackProgressCardBlocks({
-      detailed: true,
-      state: "working",
-      title: "Working",
-      maxLineChars: 300,
-      lines: [
-        {
-          kind: "approval",
-          label: "Approval",
-          text: "Approval required",
-          detail: "Run the command",
-          status: "requested",
-        },
-        ...Array.from({ length: 50 }, (_, index) => ({
-          ...progressLine(index),
-          detail: "x".repeat(300),
-        })),
-      ],
-    });
-    expect(JSON.stringify(blocks)).toContain("Run the command");
-  });
-
-  it("renders the working card with narration, plan, one activity block, and live footer", () => {
-    const blocks = buildSlackProgressCardBlocks({
-      detailed: true,
-      state: "working",
-      title: "Implementing",
-      narration: [{ text: "Checking the workspace." }],
-      plan: [
-        { step: "Inspect", status: "completed" },
-        { step: "Patch", status: "in_progress" },
-      ],
-      lines: [toolLine("run tests"), itemLine("prepare the workspace", "Preamble")],
-      toolCalls: 3,
-      elapsedSeconds: 12,
-      diffStat: { files: 4, added: 2, removed: 1 },
-    });
-
     expect(blocks).toEqual([
-      { type: "section", text: { type: "plain_text", text: "Implementing", emoji: false } },
-      {
-        type: "section",
-        text: { type: "mrkdwn", text: "_Checking the workspace._" },
-      },
-      { type: "section", text: { type: "mrkdwn", text: "✓ Inspect\n▸ Patch" } },
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: "Exec — run tests\n_prepare the workspace_",
-        },
-      },
-      {
-        type: "context",
-        elements: [{ type: "mrkdwn", text: "3 tools · 4 files +2 −1 · 12s" }],
-      },
+      plain("Working"),
+      section(
+        "Approval required: Approve deploy\nApproval required: Approve restart\nBuild — exit 1\nTest — exit 2",
+      ),
     ]);
   });
 
-  it.each([{ state: "success" as const }, { state: "error" as const }])(
-    "renders $state terminal cards and gates the session action on public URL",
-    ({ state }) => {
-      const blocks = buildSlackProgressCardBlocks({
-        detailed: true,
-        state,
-        title: "Implementing",
-        lines: [toolLine("run tests")],
-        diffStat: { files: 2, added: 1, removed: 1 },
-        sessionLinks: [
-          { url: "https://team.openclaw.ai/openclaw/chat/main", text: "Open in OpenClaw" },
-        ],
-      });
+  const source = "Check **x** _y_ `pnpm test` C:\\path <#C123> <@U123> & <!channel> 🔧";
+  const escaped =
+    "Check *x* y `pnpm test` C:\\path &lt;#C123&gt; &lt;@U123&gt; &amp; &lt;!channel&gt; 🔧";
+  it.each<[Partial<CardOptions>, string]>([
+    [{ lines: [itemLine(source)] }, `_${escaped}_`],
+    [{ narration: [{ text: source }] }, `_${escaped}_`],
+    [{ plan: [{ step: source, status: "in_progress" }] }, `▸ ${escaped.replace(" y ", " _y_ ")}`],
+    [
+      { lines: [{ ...toolLine("`pnpm test` <@U123> & <!channel>"), status: "exit 1" }] },
+      "Exec — `pnpm test` &lt;@U123&gt; &amp; &lt;!channel&gt; — exit 1",
+    ],
+  ])("renders literal progress text: %j", (options, expected) => {
+    expect(card(options)).toEqual([section(expected)]);
+  });
 
-      const headings = [
-        ...(state === "error"
-          ? [{ type: "section", text: { type: "plain_text", text: "Failed", emoji: false } }]
-          : []),
-        { type: "section", text: { type: "plain_text", text: "Implementing", emoji: false } },
-      ];
-      expect(blocks.slice(0, headings.length)).toEqual(headings);
-      // Finished cards keep the diff stat only: no tool-call/elapsed receipt.
-      expect(blocks).toContainEqual({
-        type: "context",
-        elements: [{ type: "mrkdwn", text: "2 files +1 −1" }],
-      });
-      expect(blocks.at(-1)).toEqual({
-        type: "actions",
-        elements: [
-          {
-            type: "button",
-            action_id: "openclaw:session_link",
-            text: { type: "plain_text", text: "Open in OpenClaw" },
-            url: "https://team.openclaw.ai/openclaw/chat/main",
-          },
-        ],
-      });
-
-      expect(
-        buildSlackProgressCardBlocks({ detailed: true, state, title: "Implementing", lines: [] }),
-      ).toEqual(headings);
-    },
-  );
-
-  it("keeps the newest activity rows inside one section and the Slack block budget", () => {
-    const blocks = buildSlackProgressCardBlocks({
-      detailed: true,
-      state: "working",
+  it("keeps approval attention and newest activity inside Slack's budgets", () => {
+    const blocks = card({
       title: "Working",
-      lines: Array.from({ length: 60 }, (_value, index) => progressLine(index)),
+      maxLineChars: 300,
+      lines: [
+        approval("Run the command"),
+        ...Array.from({ length: 60 }, (_value, index) => ({
+          ...progressLine(index),
+          detail: `run ${index} ${"x".repeat(300)}`,
+        })),
+      ],
       elapsedSeconds: 1,
     });
     const activity = blocks.find(
@@ -378,42 +170,9 @@ describe("buildSlackProgressCardBlocks", () => {
     );
 
     expect(blocks.length).toBeLessThanOrEqual(50);
+    expect(JSON.stringify(blocks)).toContain("Run the command");
     expect(activity).toBeDefined();
     expect(JSON.stringify(activity)).toContain("Exec 59 — run 59");
     expect(JSON.stringify(activity)).not.toContain("Exec 0");
   });
-
-  it.each(["success", "error"] as const)(
-    "settles approval and failure text when a card ends as %s",
-    (state) => {
-      const lines: ChannelProgressDraftLine[] = [
-        {
-          kind: "approval",
-          label: "Approval",
-          detail: "Run the command",
-          status: "requested",
-          text: "Approval required",
-        },
-        {
-          kind: "command-output",
-          label: "Bash",
-          detail: "run checks",
-          status: "exit 1",
-          text: "Bash: run checks · exit 1",
-        },
-      ];
-      const working = JSON.stringify(
-        buildSlackProgressCardBlocks({ detailed: true, state: "working", title: "Working", lines }),
-      );
-      expect(working).toContain("Run the command");
-      expect(working).toContain("exit 1");
-      const finished = JSON.stringify(
-        buildSlackProgressCardBlocks({ detailed: true, state, title: "Working", lines }),
-      );
-      expect(finished).not.toContain("Run the command");
-      expect(finished).not.toContain("requested");
-      expect(finished.includes("Recovered:")).toBe(state === "success");
-      expect(finished).toContain("exit 1");
-    },
-  );
 });

@@ -33,7 +33,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.flow.collect
@@ -46,21 +47,16 @@ import kotlin.math.sin
 
 // Canonical 120x120 mascot geometry from ui/public/favicon.svg. Parts stay
 // separate so the original silhouette can react without substituting artwork.
-private val BodyPath by lazy {
-  PathParser()
-    .parsePathString(
-      "M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 " +
-        "C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z",
-    ).toPath()
-}
-private val LeftClawPath by lazy {
-  PathParser().parsePathString("M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z").toPath()
-}
-private val RightClawPath by lazy {
-  PathParser().parsePathString("M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z").toPath()
-}
-private val LeftAntennaPath by lazy { PathParser().parsePathString("M45 15 Q35 5 30 8").toPath() }
-private val RightAntennaPath by lazy { PathParser().parsePathString("M75 15 Q85 5 90 8").toPath() }
+private fun avatarPath(svg: String) = lazy { PathParser().parsePathString(svg).toPath() }
+
+private val BodyPath by avatarPath(
+  "M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 " +
+    "C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z",
+)
+private val LeftClawPath by avatarPath("M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z")
+private val RightClawPath by avatarPath("M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z")
+private val LeftAntennaPath by avatarPath("M45 15 Q35 5 30 8")
+private val RightAntennaPath by avatarPath("M75 15 Q85 5 90 8")
 
 private val CoralBright = Color(0xFFFF4D4D)
 private val CoralDark = Color(0xFF991B1B)
@@ -287,14 +283,8 @@ internal class AndroidWearAnimatorScaleSource(
         }
       }
     val lifecycleObserver =
-      object : DefaultLifecycleObserver {
-        override fun onStart(owner: LifecycleOwner) {
-          refresh()
-        }
-
-        override fun onResume(owner: LifecycleOwner) {
-          refresh()
-        }
+      LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_START || event == Lifecycle.Event.ON_RESUME) refresh()
       }
 
     context.registerReceiver(receiver, IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED))
@@ -350,36 +340,12 @@ private fun DrawScope.drawCanonicalAvatar(
       scale(stretchX, pose.bodyStretch, pivot = Offset(60f, 110f))
       rotate(pose.bodyTilt, pivot = Offset(60f, 60f))
     }) {
-      drawPath(
-        path = BodyPath,
-        brush =
-          Brush.linearGradient(
-            colors = listOf(CoralBright, CoralDark),
-            start = Offset(15f, 10f),
-            end = Offset(105f, 110f),
-          ),
-      )
+      drawCoralPath(BodyPath, Offset(15f, 10f), Offset(105f, 110f))
       withTransform({ rotate(pose.leftClawDegrees, pivot = LeftClawPivot) }) {
-        drawPath(
-          path = LeftClawPath,
-          brush =
-            Brush.linearGradient(
-              colors = listOf(CoralBright, CoralDark),
-              start = Offset(3.125f, 43.67f),
-              end = Offset(26.197f, 65.451f),
-            ),
-        )
+        drawCoralPath(LeftClawPath, Offset(3.125f, 43.67f), Offset(26.197f, 65.451f))
       }
       withTransform({ rotate(pose.rightClawDegrees, pivot = RightClawPivot) }) {
-        drawPath(
-          path = RightClawPath,
-          brush =
-            Brush.linearGradient(
-              colors = listOf(CoralBright, CoralDark),
-              start = Offset(93.803f, 43.67f),
-              end = Offset(116.875f, 65.451f),
-            ),
-        )
+        drawCoralPath(RightClawPath, Offset(93.803f, 43.67f), Offset(116.875f, 65.451f))
       }
 
       val antennaStroke = Stroke(width = 2f, cap = StrokeCap.Round)
@@ -400,6 +366,14 @@ private fun DrawScope.drawCanonicalAvatar(
       drawCanonicalMouth(state, pose.mouthLevel, animationSeconds)
     }
   }
+}
+
+private fun DrawScope.drawCoralPath(
+  path: Path,
+  start: Offset,
+  end: Offset,
+) {
+  drawPath(path, Brush.linearGradient(colors = listOf(CoralBright, CoralDark), start = start, end = end))
 }
 
 private fun DrawScope.drawCanonicalEye(
@@ -570,10 +544,7 @@ internal fun smoothAvatarMouth(
 internal fun scaledAvatarDeltaSeconds(
   deltaSeconds: Float,
   durationScale: Float,
-): Float {
-  if (durationScale <= 0f) return 0f
-  return (deltaSeconds / durationScale).coerceIn(0f, 0.05f)
-}
+): Float = if (durationScale <= 0f) 0f else (deltaSeconds / durationScale).coerceIn(0f, 0.05f)
 
 private fun syntheticSpeechMouth(animationSeconds: Float): Float {
   val tau = 2f * PI.toFloat()

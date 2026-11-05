@@ -4,9 +4,22 @@ import Testing
 @testable import OpenClawWatchApp
 
 struct WatchGatewayConfigurationTests {
-    @Test func `direct Watch setup retains the endpoint prefix across credential handoff`() throws {
+    @Test(arguments: [
+        ("watch.example.invalid", "watch.example.invalid"),
+        ("127.0.0.1", "127.0.0.1"),
+        ("::1", "[::1]"),
+        ("[::1]", "[::1]"),
+        ("fd00::1", "[fd00::1]"),
+        ("[fd00::1]", "[fd00::1]"),
+        ("fe80::1%en0", "[fe80::1%25en0]"),
+        ("[fe80::1%en0]", "[fe80::1%25en0]"),
+    ])
+    func `direct Watch setup retains the endpoint prefix across credential handoff`(
+        host: String,
+        authority: String) throws
+    {
         let link = GatewayConnectDeepLink(
-            host: "watch.example.invalid",
+            host: host,
             port: 443,
             tls: true,
             contextPath: "/gateways/team%2Fwatch",
@@ -16,12 +29,13 @@ struct WatchGatewayConfigurationTests {
         let configuration = try #require(WatchGatewayConfiguration(setupLink: link, sentAtMs: 1))
         let paired = configuration.withoutBootstrapToken()
 
+        #expect(configuration.link.host == host)
         #expect(configuration.link.contextPath == "/gateways/team%2Fwatch")
-        #expect(configuration.gatewayID == "watch-direct:https://watch.example.invalid:443/gateways/team%2Fwatch")
+        #expect(configuration.gatewayID == "watch-direct:https://" + host.lowercased() + ":443/gateways/team%2Fwatch")
         #expect(WatchGatewayConfiguration.httpBaseURL(for: paired.link)?.absoluteString
-            == "https://watch.example.invalid:443/gateways/team%2Fwatch")
+            == "https://" + authority + ":443/gateways/team%2Fwatch")
         #expect(paired.voiceConnection.websocketURLs.first?.absoluteString
-            == "wss://watch.example.invalid:443/gateways/team%2Fwatch")
+            == "wss://" + authority + ":443/gateways/team%2Fwatch")
         #expect(paired.link.bootstrapToken == nil)
 
         let restored = try JSONDecoder().decode(
@@ -33,6 +47,7 @@ struct WatchGatewayConfigurationTests {
     @Test func `direct Watch setup selects a secure endpoint without changing its namespace`() throws {
         let link = try #require(GatewayConnectDeepLink.fromSetupCode(
             #"{"url":"ws://192.168.1.2:18789","urls":["wss://watch.example.invalid/team-a","wss://backup.example.invalid/team-b"],"bootstrapToken":"one-time-setup"}"#))
+        #expect(WatchGatewayConfiguration.httpBaseURL(for: link) == nil)
         let configuration = try #require(WatchGatewayConfiguration(setupLink: link, sentAtMs: 2))
         #expect(configuration.link.contextPath == "/team-a")
         #expect(configuration.voiceConnection.websocketURLs.map(\.absoluteString)

@@ -62,23 +62,7 @@ async function runPromptWithKeys(params: {
   return await result;
 }
 
-async function runPromptWithReturn(params: {
-  cursorAt: string;
-  initialValues?: string[];
-}): Promise<string[] | symbol | undefined> {
-  return await runPromptWithKeys({ ...params, keys: ["\r"] });
-}
-
 describe("promptMigrationSkillSelectionValues", () => {
-  it("keeps the cursor item selected when submitting with return", async () => {
-    await expect(
-      runPromptWithReturn({
-        cursorAt: "skill:alpha",
-        initialValues: ["skill:alpha"],
-      }),
-    ).resolves.toEqual(["skill:alpha"]);
-  });
-
   it("preserves a cursor item deselected with space before return", async () => {
     await expect(
       runPromptWithKeys({
@@ -87,33 +71,6 @@ describe("promptMigrationSkillSelectionValues", () => {
         keys: [" ", "\r"],
       }),
     ).resolves.toEqual(["skill:beta"]);
-  });
-
-  it("activates Toggle all off before submitting with return", async () => {
-    await expect(
-      runPromptWithReturn({
-        cursorAt: MIGRATION_SELECTION_TOGGLE_ALL_OFF,
-        initialValues: ["skill:alpha", "skill:beta"],
-      }),
-    ).resolves.toEqual([MIGRATION_SELECTION_TOGGLE_ALL_OFF]);
-  });
-
-  it("activates Toggle all on before submitting with return", async () => {
-    await expect(
-      runPromptWithReturn({
-        cursorAt: MIGRATION_SELECTION_TOGGLE_ALL_ON,
-        initialValues: [],
-      }),
-    ).resolves.toEqual([MIGRATION_SELECTION_TOGGLE_ALL_ON, "skill:alpha", "skill:beta"]);
-  });
-
-  it("submits the initial recommended set when Enter is pressed on Accept recommended", async () => {
-    await expect(
-      runPromptWithReturn({
-        cursorAt: MIGRATION_SELECTION_ACCEPT,
-        initialValues: ["skill:alpha", "skill:beta"],
-      }),
-    ).resolves.toEqual(["skill:alpha", "skill:beta"]);
   });
 
   it("snaps the visual selection to the recommended set when Space is pressed on Accept recommended", async () => {

@@ -12,14 +12,6 @@ type PairingCommandAuthParams = {
   senderIsOwner?: boolean;
 };
 
-type PairingCommandAuthState = {
-  isInternalGatewayCaller: boolean;
-  isMissingPairingPrivilege: boolean;
-  isMissingSetupHandoffPrivilege: boolean;
-  canIssueFullAccessSetup: boolean;
-  approvalCallerScopes?: readonly string[];
-};
-
 const COMMAND_OWNER_PAIRING_SCOPES = ["operator.pairing"] as const;
 const PAIRING_SCOPE = "operator.pairing";
 const ADMIN_SCOPE = "operator.admin";
@@ -71,9 +63,7 @@ function hasSetupHandoffPrivilege(scopes: readonly string[]): boolean {
   return scopes.includes(TALK_SECRETS_SCOPE) || scopes.includes(ADMIN_SCOPE);
 }
 
-export function resolvePairingCommandAuthState(
-  params: PairingCommandAuthParams,
-): PairingCommandAuthState {
+export function resolvePairingCommandAuthState(params: PairingCommandAuthParams) {
   const isInternalGatewayCaller = isInternalGatewayPairingCaller(params);
   if (isInternalGatewayCaller) {
     const approvalCallerScopes = Array.isArray(params.gatewayClientScopes)

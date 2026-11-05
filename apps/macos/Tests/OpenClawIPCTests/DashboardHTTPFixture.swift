@@ -28,7 +28,10 @@ final class DashboardHTTPFixture {
         self.usesTLS = usesTLS
     }
 
+    /// A nonzero `port` reclaims an endpoint a stopped fixture released, so a
+    /// test can bring a previously unreachable URL back.
     static func start(
+        port: UInt16 = 0,
         html: String = DashboardHTTPFixture.html,
         contentSecurityPolicy: String = "default-src 'none'",
         beforeResponse: (@MainActor () async -> Void)? = nil,
@@ -45,8 +48,9 @@ final class DashboardHTTPFixture {
         } else {
             parameters = .tcp
         }
-        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
-        let listener = try NWListener(using: parameters, on: .any)
+        // The required endpoint alone selects the port; also passing it to `on:` throws.
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port) ?? .any)
+        let listener = try NWListener(using: parameters)
         let responseHandler: (@MainActor (String) -> RawResponse?)? = if let rawResponseHandler {
             rawResponseHandler
         } else if let requestHandler {
@@ -188,7 +192,7 @@ private final class DashboardHTTPFixtureServer: @unchecked Sendable {
             return
         }
         let id = UUID()
-        let timeout = DispatchWorkItem { [weak self] in self?.close(id) }
+        let timeout = DispatchWorkItem { [weak self] in self?.expire(id) }
         self.clients[id] = Client(connection: connection, timeout: timeout)
         connection.start(queue: self.queue)
         self.queue.asyncAfter(deadline: .now() + 5, execute: timeout)
@@ -263,6 +267,13 @@ private final class DashboardHTTPFixtureServer: @unchecked Sendable {
                 self?.close(id)
             }
         })
+    }
+
+    private func expire(_ id: UUID) {
+        guard let client = self.clients[id] else { return }
+        // Complete requests held by a test's response hook belong to that test's lifetime.
+        guard client.responseTask == nil || client.didRespond else { return }
+        self.close(id)
     }
 
     private func close(_ id: UUID) {

@@ -15,14 +15,20 @@ import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runti
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { clearInternalHooks, resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import * as nodeSelectionRuntime from "openclaw/plugin-sdk/node-selection-runtime";
 import { clearPluginCommands } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createAgentHarnessHostCapabilitiesForTest,
   createEmptyPluginRegistry,
   disposePluginRegistryInstances,
   getActivePluginRegistry,
+  runInHarnessToolAuthorityForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { drainSessionDiskBudgetWorkers } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
@@ -61,11 +67,11 @@ import {
   adaptCodexTestClientFactory,
   createCodexTestModel,
   createCodexTestToolTerminalObserver,
+  stubCodexInferenceTransportEnv,
   useAutoCleanupTempDirTracker,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
 import { createCodexLifecycleTurnHarness } from "./thread-lifecycle.test-fixtures.js";
-import { CODEX_APP_SERVER_VERSION } from "./version.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 
 export {
@@ -74,7 +80,10 @@ export {
 } from "./run-attempt-hook-test-support.js";
 
 const execApprovalsRuntimeMocks = vi.hoisted(() => ({
-  loadExecApprovals: vi.fn<() => ExecApprovalsFile>(() => ({ version: 1, agents: {} })),
+  loadExecApprovalsReadOnlyAsync: vi.fn<() => Promise<ExecApprovalsFile>>(async () => ({
+    version: 1,
+    agents: {},
+  })),
 }));
 
 function createHarnessHostCapabilities(
@@ -110,7 +119,7 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
     await importOriginal<typeof import("openclaw/plugin-sdk/exec-approvals-runtime")>();
   return {
     ...actual,
-    loadExecApprovals: execApprovalsRuntimeMocks.loadExecApprovals,
+    loadExecApprovalsReadOnlyAsync: execApprovalsRuntimeMocks.loadExecApprovalsReadOnlyAsync,
   };
 });
 
@@ -131,6 +140,9 @@ type RunCodexAppServerAttemptOptions = Omit<
   "bindingStore"
 > & {
   bindingStore?: NonNullable<Parameters<typeof runCodexAppServerAttemptImpl>[1]>["bindingStore"];
+  registeredHarness?: NonNullable<
+    Parameters<typeof runInHarnessToolAuthorityForTest>[3]
+  >["registeredHarness"];
 };
 
 export function queueActiveRunMessageForTest(
@@ -225,12 +237,30 @@ export function runCodexAppServerAttempt(
     }
   };
   trackedParams.onExecutionPhase = observeExecutionPhase;
-  const promise = runCodexAppServerAttemptImpl(trackedParams, {
-    ...options,
-    startupTimeoutFloorMs: options.startupTimeoutFloorMs ?? 30_000,
-    bindingStore: options.bindingStore ?? testCodexAppServerBindingStore,
-    ...(clientFactory ? { clientFactory } : {}),
-  }).finally(() => {
+  const { registeredHarness, ...attemptOptions } = options;
+  const runAdmitted = async (admitted: EmbeddedRunAttemptParams) => {
+    // Steering callers retain the original params even when cancellation adds a copy.
+    params.toolAuthorityFingerprint = admitted.toolAuthorityFingerprint;
+    try {
+      return await runCodexAppServerAttemptImpl(admitted, {
+        ...attemptOptions,
+        startupTimeoutFloorMs: attemptOptions.startupTimeoutFloorMs ?? 30_000,
+        bindingStore: attemptOptions.bindingStore ?? testCodexAppServerBindingStore,
+        ...(clientFactory ? { clientFactory } : {}),
+      });
+    } finally {
+      if (params.toolAuthorityFingerprint === admitted.toolAuthorityFingerprint) {
+        delete params.toolAuthorityFingerprint;
+      }
+    }
+  };
+  // Gateway runs reach the harness inside an admitted session turn.
+  const promise = runInHarnessToolAuthorityForTest(
+    trackedParams,
+    "codex",
+    runAdmitted,
+    registeredHarness ? { registeredHarness } : undefined,
+  ).finally(() => {
     if (trackedParams.onExecutionPhase === observeExecutionPhase) {
       trackedParams.onExecutionPhase = onExecutionPhase;
     }
@@ -296,6 +326,10 @@ async function drainActiveAppServerAttemptsForTest(): Promise<boolean> {
   }
 }
 
+function createRunAttemptTestConfig(): NonNullable<EmbeddedRunAttemptParams["config"]> {
+  return { tools: { web: { search: { enabled: false } } } };
+}
+
 export function createParams(
   sessionFile: string,
   workspaceDir: string,
@@ -332,7 +366,7 @@ export function createParams(
     },
     thinkLevel: "medium",
     disableTools: false,
-    config: { tools: { web: { search: { enabled: false } } } },
+    config: createRunAttemptTestConfig(),
     timeoutMs: 5_000,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
@@ -393,73 +427,20 @@ export async function bindProductionHarnessHostCapabilitiesForTest(
   return close;
 }
 
+export { assistantMessage, createCodexRuntimePlanFixture } from "./test-support.js";
+export { setCodexTestModelSupportsTools } from "./thread-lifecycle.test-fixtures.js";
+
 export {
-  setCodexTestModelSupportsTools,
-  createCodexRuntimePlanFixture,
-} from "./thread-lifecycle.test-fixtures.js";
-
-export function assistantMessage(text: string, timestamp: number) {
-  return {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "openai-chatgpt-responses",
-    provider: "openai",
-    model: "gpt-5.4-codex",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop" as const,
-    timestamp,
-  };
-}
-
-export function userMessage(text: string, timestamp: number) {
-  return {
-    role: "user" as const,
-    content: [{ type: "text" as const, text }],
-    timestamp,
-  };
-}
-
-export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
-  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.at(index);
-  if (!call) {
-    throw new Error(`Expected ${label} call ${index + 1}`);
-  }
-  return call;
-}
-
-export function getMockRuntimeIdentity() {
-  return { serverVersion: CODEX_APP_SERVER_VERSION };
-}
-
-export { mockClientRuntimeMethods, turnStartResult } from "./codex-app-server.test-fixtures.js";
+  getMockRuntimeIdentity,
+  mockCall,
+  mockClientRuntimeMethods,
+  rateLimitsUpdated,
+  turnStartResult,
+  userMessage,
+} from "./codex-app-server.test-fixtures.js";
 
 export function threadStartResult(threadId = "thread-1", options: { cwd?: string } = {}) {
-  const cwd = options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test";
-  return createThreadStartResult(threadId, cwd);
-}
-
-export function rateLimitsUpdated(resetsAt: number): CodexServerNotification {
-  return {
-    method: "account/rateLimits/updated",
-    params: {
-      rateLimits: {
-        limitId: "codex",
-        limitName: "Codex",
-        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt },
-        secondary: null,
-        credits: null,
-        planType: "plus",
-        rateLimitReachedType: "rate_limit_reached",
-      },
-    },
-  };
+  return createThreadStartResult(threadId, options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test");
 }
 
 export function createAppServerHarness(
@@ -469,7 +450,8 @@ export function createAppServerHarness(
     options?: { signal?: AbortSignal },
   ) => Promise<unknown>,
   options: {
-    persistedThreads?: string[];
+    codexHome?: string;
+    persistedThreads?: Parameters<typeof createCodexLifecycleTurnHarness>[0]["persistedThreads"];
     onStart?: (
       authProfileId: string | undefined,
       agentDir: string | undefined,
@@ -482,6 +464,7 @@ export function createAppServerHarness(
       respond: requestImpl,
       persistedThreads: options.persistedThreads,
       agentDir: path.join(tempDir, "wire-agent"),
+      codexHome: options.codexHome,
     });
     setCodexAppServerClientFactoryForTest(
       async (_start, auth, agentDir, _config, clientOptions) => {
@@ -578,6 +561,9 @@ function defaultAttemptHarnessResponse(method: string) {
   if (method === "config/read") {
     return { config: {}, origins: {}, layers: [] };
   }
+  if (method === "skills/list") {
+    return { data: [] };
+  }
   if (method === "turn/start") {
     return turnStartResult();
   }
@@ -606,6 +592,7 @@ export function createStartedThreadHarness(
 export function createResumeHarness(
   threadId = "thread-existing",
   requestImpl: Parameters<typeof createAppServerHarness>[0] = async () => undefined,
+  persistedThread?: ReturnType<typeof threadStartResult> & { thread: { model?: string | null } },
 ) {
   return createAppServerHarness(
     async (method, params, requestOptions) => {
@@ -614,8 +601,6 @@ export function createResumeHarness(
         return override;
       }
       if (method === "thread/resume") {
-        // Resume must echo the requested thread; a different id is rejected as
-        // an unsafe subscription.
         const resumeParams = params as { threadId?: string; modelProvider?: string };
         return {
           ...threadStartResult(resumeParams.threadId ?? "thread-existing"),
@@ -624,7 +609,7 @@ export function createResumeHarness(
       }
       return defaultAttemptHarnessResponse(method);
     },
-    { persistedThreads: [threadId] },
+    { persistedThreads: [persistedThread ?? threadId] },
   );
 }
 
@@ -649,7 +634,9 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
   };
 }
 
-export function setupRunAttemptTestHooks(options: { sessionOwner?: null } = {}): void {
+export function setupRunAttemptTestHooks(
+  options: { isolateNativeSkillHome?: boolean; sessionOwner?: null } = {},
+): void {
   // Keep unique test roots alive while the suite reuses native database workers.
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterAll(async () => {
@@ -659,6 +646,7 @@ export function setupRunAttemptTestHooks(options: { sessionOwner?: null } = {}):
       cleanup();
     }),
   );
+  let nativeSkillTestHome: string | undefined;
 
   beforeEach(async (context) => {
     if (!context.codexAttemptRuntime) {
@@ -666,11 +654,19 @@ export function setupRunAttemptTestHooks(options: { sessionOwner?: null } = {}):
     }
     // Direct runtime tests supply the plugin root normally owned by loader registration.
     setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
+    // Protocol fixtures have no remote nodes; ambient discovery must not wait on fake timers.
+    vi.spyOn(nodeSelectionRuntime, "loadNodeExecAvailability").mockResolvedValue({
+      cacheKey: "[]",
+      isAvailable: () => false,
+    });
     // Machine-managed sandbox requirements must not leak into policy fixtures.
     vi.spyOn(codexRequirements, "readCodexRequirementsToml").mockReturnValue(undefined);
     // An uninitialized real host approvals store intentionally fails closed.
-    execApprovalsRuntimeMocks.loadExecApprovals.mockReset();
-    execApprovalsRuntimeMocks.loadExecApprovals.mockReturnValue({ version: 1, agents: {} });
+    execApprovalsRuntimeMocks.loadExecApprovalsReadOnlyAsync.mockReset();
+    execApprovalsRuntimeMocks.loadExecApprovalsReadOnlyAsync.mockResolvedValue({
+      version: 1,
+      agents: {},
+    });
     defaultCodexAppInventoryCache.clear();
     defaultCodexPluginMetadataCache.clear();
     resetCodexTestBindingStore();
@@ -683,7 +679,14 @@ export function setupRunAttemptTestHooks(options: { sessionOwner?: null } = {}):
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
+    stubCodexInferenceTransportEnv();
     tempDir = tempDirs.make("openclaw-codex-run-", resolvePreferredOpenClawTmpDir());
+    if (options.isolateNativeSkillHome) {
+      nativeSkillTestHome ??= tempDir;
+      vi.stubEnv("HOME", nativeSkillTestHome);
+      vi.stubEnv("CODEX_HOME", "");
+    }
+    setRuntimeConfigSnapshot(createRunAttemptTestConfig());
     await context.codexAttemptRuntime.start();
     // createParams models an ordinary durable session; seeded native bindings
     // must have the same authoritative core owner as a real resumed conversation.
@@ -712,6 +715,7 @@ export function setupRunAttemptTestHooks(options: { sessionOwner?: null } = {}):
     await context.codexAttemptRuntime.stop();
     // A run beyond the drain deadline still needs the original database revocation fence.
     await cleanupRunSessionOwnersForTest({ closeDatabases: !drained });
+    clearRuntimeConfigSnapshot();
     resetCodexAppServerClientFactoryForTest();
     setManagedCodexPluginRoot(undefined);
     clearRuntimeAuthProfileStoreSnapshots();
@@ -724,6 +728,7 @@ export function setupRunAttemptTestHooks(options: { sessionOwner?: null } = {}):
     clearInternalHooks();
     defaultCodexAppInventoryCache.clear();
     defaultCodexPluginMetadataCache.clear();
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     if (pluginCleanup) {
       expect(pluginCleanup.failures).toEqual([]);

@@ -18,10 +18,9 @@ const DISCORD_AUTO_ARCHIVE_MINUTES = new Set([60, 1440, 4320, 10080]);
 export function readDiscordParentIdParam(
   params: Record<string, unknown>,
 ): string | null | undefined {
-  if (params.clearParent === true || params.parentId === null) {
-    return null;
-  }
-  return readStringParam(params, "parentId");
+  return params.clearParent === true || params.parentId === null
+    ? null
+    : readStringParam(params, "parentId");
 }
 
 /**
@@ -33,10 +32,7 @@ export function readDiscordAutoArchiveDurationParam(
   key: string,
 ): number | undefined {
   const value = readPositiveIntegerParam(params, key);
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!DISCORD_AUTO_ARCHIVE_MINUTES.has(value)) {
+  if (value !== undefined && !DISCORD_AUTO_ARCHIVE_MINUTES.has(value)) {
     throw new Error(`${key} must be one of 60, 1440, 4320, or 10080 minutes`);
   }
   return value;

@@ -10,15 +10,17 @@ import {
 } from "../daemon/constants.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { isValidProfileName, resolveProfileStateDir } from "./profile-utils.js";
+import {
+  isValidProfileName,
+  resolveProfileGatewayPort,
+  resolveProfileStateDir,
+} from "./profile-utils.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 
-type CliProfileParseResult =
-  | { ok: true; profile: string | null; argv: string[] }
-  | { ok: false; error: string };
-
-export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
+export function parseCliProfileArgs(
+  argv: string[],
+): { ok: true; profile: string | null; argv: string[] } | { ok: false; error: string } {
   // Root profile flags are stripped before Commander sees argv, except command-local cases.
   let profile: string | null = null;
   let sawDev = false;
@@ -66,11 +68,7 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     return { kind: "pass" };
   });
 
-  if (!scanned.ok) {
-    return scanned;
-  }
-
-  return { ok: true, profile, argv: scanned.argv };
+  return scanned.ok ? { ok: true, profile, argv: scanned.argv } : scanned;
 }
 
 export function applyCliProfileEnv(params: {
@@ -115,10 +113,7 @@ export function applyCliProfileEnv(params: {
     }) === path.join(inheritedProfileStateDir, "openclaw.json"),
   );
   const inheritedManagedServiceSelectors =
-    switchesInheritedProfile &&
-    isGatewayServiceEnv(env) &&
-    switchesInheritedProfileState &&
-    replacesInheritedProfileConfig;
+    isGatewayServiceEnv(env) && switchesInheritedProfileState && replacesInheritedProfileConfig;
 
   if (inheritedManagedServiceSelectors) {
     for (const key of GATEWAY_SERVICE_SELECTOR_ENV_KEYS) {
@@ -130,10 +125,9 @@ export function applyCliProfileEnv(params: {
   // Switch them together so an explicit profile cannot mutate the service's profile.
   env.OPENCLAW_PROFILE = profile;
 
-  const retainedStateDir = inheritedManagedServiceSelectors ? undefined : existingStateDir;
   const stateDir =
-    retainedStateDir && !switchesInheritedProfileState ? retainedStateDir : selectedProfileStateDir;
-  if (!retainedStateDir || switchesInheritedProfileState) {
+    existingStateDir && !switchesInheritedProfileState ? existingStateDir : selectedProfileStateDir;
+  if (!existingStateDir || switchesInheritedProfileState) {
     env.OPENCLAW_STATE_DIR = stateDir;
   }
 
@@ -154,6 +148,6 @@ export function applyCliProfileEnv(params: {
   }
 
   if (profile === "dev" && !env.OPENCLAW_GATEWAY_PORT?.trim()) {
-    env.OPENCLAW_GATEWAY_PORT = "19001";
+    env.OPENCLAW_GATEWAY_PORT = String(resolveProfileGatewayPort(profile));
   }
 }

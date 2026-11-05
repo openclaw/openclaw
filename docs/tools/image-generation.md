@@ -15,12 +15,18 @@ when the provider finishes. The completion agent follows the session's current
 visible-reply contract with a short
 user-facing caption and every structured generated attachment. If generation
 fails, the agent returns a concise visible failure instead. If the requester
-session is inactive or its active wake fails, OpenClaw sends an idempotent
-direct fallback with the generated images so the result is not lost.
+session is inactive or its active wake fails, OpenClaw sends a
+direct fallback with the generated images so the result is not lost. Retries do
+not post the same images again.
+
+You can send a follow-up while the completion agent is still working. The new
+turn waits for the completion and its delivery to settle before starting.
 
 In WebChat and the macOS app, generated attachments stay on the completion
-reply instead of appearing again in a separate image-only message. Replaying
-a completed delivery keeps the same message and attachment identities.
+reply instead of appearing again in a separate image-only message. An interactive
+WebChat request keeps its completion in that session even when a previous channel
+conversation left an external delivery route there. Replaying a completed delivery
+keeps the same message and attachment identities.
 
 <Note>
 The tool only appears when at least one image-generation provider is
@@ -28,6 +34,10 @@ available. If you do not see `image_generate` in your agent's tools,
 configure `agents.defaults.mediaModels.image`, set up a provider API key,
 or sign in with OpenAI ChatGPT/Codex OAuth.
 </Note>
+
+A key in `models.providers.<provider>.apiKey` also makes the tool available,
+including an env-backed SecretRef. Inline keys in an auth or billing cooldown
+remain unavailable.
 
 ## Quick start
 
@@ -76,6 +86,18 @@ For OpenAI-compatible LAN endpoints such as LocalAI, keep the custom
 `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: true`. Private and
 internal image endpoints remain blocked by default.
 </Warning>
+
+OpenAI-compatible image endpoints, including LiteLLM and custom endpoints under
+`models.providers.openai`, can return either `b64_json` or `data[].url`.
+OpenClaw automatically trusts image URLs at the configured provider origin.
+Other private destinations require an explicit private-network opt-in; a local
+provider does not authorize arbitrary LAN or loopback image hosts. Every redirect
+is checked, and downloads obey the operation deadline and image size cap from
+`agents.defaults.mediaMaxMb`.
+The image server must return an image `Content-Type`. Provider HTTP credentials are
+not forwarded to image URLs; provider TLS credentials stay on the provider's
+origin, including across redirects. GPT Image models return base64 directly; OpenClaw
+does not force the legacy `response_format` parameter on custom endpoints.
 
 ## Common routes
 
@@ -209,9 +231,12 @@ Not all providers support all parameters. When a fallback provider supports a
 nearby geometry option instead of the exact requested one, OpenClaw remaps to
 the closest supported size, aspect ratio, or resolution before submission.
 Unsupported output hints are dropped for providers that do not declare
-support and reported in the tool result. Tool results report the applied
-settings. `details.normalization` captures any requested-to-applied
-translation.
+support and reported in the tool result. Completed results keep request hints in
+`details.requested` and report each saved image in `details.outputs`. Dimensions
+and format come from the image bytes; quality is included only when the provider
+reports a concrete value. Missing output settings remain unknown.
+`details.normalization` describes adjustments before submission, not proof that
+the provider applied them. Completion messages include the observed output settings.
 </Note>
 
 ## Configuration
@@ -333,7 +358,7 @@ and ComfyUI support 1.
     `openai` OAuth profile is configured, OpenClaw reuses the same
     OAuth profile used by Codex subscription chat models and sends the
     image request through the Codex Responses backend. Legacy Codex base
-    URLs such as `https://chatgpt.com/backend-api` are canonicalized to
+    URLs such as `https://chatgpt.com/backend-api` are converted to
     `https://chatgpt.com/backend-api/codex` for image requests. OpenClaw
     does **not** silently fall back to `OPENAI_API_KEY` for that request -
     to force direct OpenAI Images API routing, configure
@@ -439,7 +464,7 @@ and ComfyUI support 1.
   </Accordion>
   <Accordion title="OpenRouter image models">
     OpenRouter image generation uses the same `OPENROUTER_API_KEY` and
-    routes canonical requests through OpenRouter's dedicated `/api/v1/images`
+    routes standard requests through OpenRouter's dedicated `/api/v1/images`
     endpoint. Configured custom OpenRouter base URLs retain the existing
     chat-completions image route for proxy compatibility. Select OpenRouter
     image models with the `openrouter/` prefix:
@@ -520,7 +545,8 @@ and ComfyUI support 1.
     The bundled xAI provider uses `/v1/images/generations` for prompt-only
     requests and `/v1/images/edits` when `image` or `images` is present.
 
-    - Models: `xai/grok-imagine-image`, `xai/grok-imagine-image-quality`
+    - Models: `xai/grok-imagine-image` (default), `xai/grok-imagine-image-2.0`,
+      `xai/grok-imagine-image-quality`
     - Count: up to 4
     - References: one `image` or up to three `images`
     - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `2:1`,

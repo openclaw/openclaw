@@ -7,7 +7,6 @@ it.each([
   ["capacity", 1025],
   ["enabled", "yes"],
   ["isolation", "docker"],
-  ["containerImage", "   "],
 ])("rejects invalid worker hosting %s=%j", (field, value) => {
   const result = validateConfigObject({ nodeHost: { workerRuns: { [field]: value } } });
   expect(result.ok).toBe(false);

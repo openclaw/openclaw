@@ -99,7 +99,7 @@ and rejects `DISABLE_LIBRARY_VALIDATION=1`. Its private Bun executable has the
 The managed elevation workflow upgrades an already paired Mac. Its selected state and config must define an
 app-readable direct remote Gateway route with string token or password auth, and the selected macOS node identity must
 already be paired. `migration-plan` performs those checks without changing the app, process, LaunchAgent, state, or
-Gateway. It recognizes the canonical CLI-managed `ai.openclaw.node` job and app-backed background LaunchAgents. If the
+Gateway. It recognizes the standard CLI-managed `ai.openclaw.node` job and app-backed background LaunchAgents. If the
 old app is running in background mode without a LaunchAgent, use `--adopt-running-app` instead of
 `--migrate-launch-agent` and pass its state/config paths explicitly when they are not the defaults.
 
@@ -144,7 +144,7 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 ## Security and permissions
 
 - The bridge checks **caller code signatures**. The production OpenClaw host accepts only the exact Peekaboo CLI
-  bundle (`boo.peekaboo.peekaboo`) signed by Peekaboo's canonical current/legacy release signer set (`FWJYW4S8P8`
+  bundle (`boo.peekaboo.peekaboo`) signed by Peekaboo's official current/legacy release signer set (`FWJYW4S8P8`
   and `Y5PE65HELJ`). Sharing the app's UID or using another client signed by the app's development team is not
   sufficient.
 - Prefer the signed bridge/app identity over a generic `node` runtime for Accessibility. Granting Accessibility to `node` lets any package launched by that Node executable inherit GUI automation access. See [macOS permissions](/platforms/mac/permissions#accessibility-grants-for-node-and-cli-runtimes).
@@ -158,7 +158,7 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 ## Troubleshooting
 
 - Update OpenClaw.app to pick up embedded automation fixes, including crashes when closing the host's own windows. Updating only the `peekaboo` CLI does not replace the bridge host's window automation code.
-- If `peekaboo` reports "bridge client is not authorized", ensure the client is properly signed. As an alternative, run the host with `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` in **debug** mode only.
+- If `peekaboo` reports "bridge client is not authorized", check that the client is properly signed. As an alternative, run the host with `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` in **debug** mode only.
 - If no hosts are found, open one of the host apps (Peekaboo.app or OpenClaw.app). Then check that permissions are granted.
 
 ## Related

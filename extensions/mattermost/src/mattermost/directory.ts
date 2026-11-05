@@ -1,4 +1,4 @@
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { ChannelDirectoryAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectMattermostAccount, listMattermostAccountIds } from "./accounts.js";
 import {
@@ -9,15 +9,9 @@ import {
   type MattermostUser,
 } from "./client.js";
 import { resolveMattermostTrustedChatKind } from "./monitor-auth.js";
-import type { ChannelDirectoryEntry, OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
+import type { ChannelDirectoryEntry } from "./runtime-api.js";
 
-type MattermostDirectoryParams = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  query?: string | null;
-  limit?: number | null;
-  runtime: RuntimeEnv;
-};
+type MattermostDirectoryParams = Parameters<NonNullable<ChannelDirectoryAdapter["listPeers"]>>[0];
 
 /** Build the requested account client, or aggregate accounts for an explicitly unscoped lookup. */
 function buildClients(params: MattermostDirectoryParams): MattermostClient[] {
@@ -32,13 +26,15 @@ function buildClients(params: MattermostDirectoryParams): MattermostClient[] {
     if (!account.enabled || !account.botToken || !account.baseUrl) {
       continue;
     }
+    const allowPrivateNetwork = account.config.network?.dangerouslyAllowPrivateNetwork === true;
     const client = createMattermostClient({
       baseUrl: account.baseUrl,
       botToken: account.botToken,
-      allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+      allowPrivateNetwork,
     });
-    if (!seen.has(client.token)) {
-      seen.add(client.token);
+    const key = JSON.stringify([client.baseUrl, client.token, allowPrivateNetwork]);
+    if (!seen.has(key)) {
+      seen.add(key);
       clients.push(client);
     }
   }
@@ -59,7 +55,7 @@ export async function listMattermostDirectoryGroups(
   if (!clients.length) {
     return [];
   }
-  const q = normalizeLowercaseStringOrEmpty(params.query);
+  const q = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
   const seenIds = new Set<string>();
   const entries: ChannelDirectoryEntry[] = [];
 
@@ -77,8 +73,8 @@ export async function listMattermostDirectoryGroups(
           continue;
         }
         if (q) {
-          const name = normalizeLowercaseStringOrEmpty(ch.name);
-          const display = normalizeLowercaseStringOrEmpty(ch.display_name);
+          const name = normalizeLowercaseStringOrEmpty(ch.name).normalize("NFC");
+          const display = normalizeLowercaseStringOrEmpty(ch.display_name).normalize("NFC");
           if (!name.includes(q) && !display.includes(q)) {
             continue;
           }

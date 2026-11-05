@@ -1,17 +1,13 @@
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { fetchLiveProviderModelRows } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  DEEPINFRA_BASE_URL,
-  DEEPINFRA_TTS_FALLBACK_CATALOG,
-  type DeepInfraSurfaceModel,
-} from "./media-models.js";
-import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { DEEPINFRA_BASE_URL, type DeepInfraSurfaceModel } from "./media-models.js";
 import { parseDeepInfraPricingCatalog } from "./pricing-api.js";
 import {
   DEEPINFRA_MODEL_CATALOG,
@@ -36,37 +32,28 @@ type DeepInfraDiscoveryOptions = {
   discoveryMode?: "strict" | "advisory";
 };
 
-type DeepInfraAgentModelPricing = DeepInfraSurfaceModel["pricing"];
-
-interface DeepInfraAgentModelMetadata {
-  description?: string;
-  context_length?: number | null;
-  max_tokens?: number | null;
-  pricing?: DeepInfraAgentModelPricing;
-  tags?: string[];
-  default_width?: number | null;
-  default_height?: number | null;
-  default_iterations?: number | null;
-}
+type DeepInfraDiscoveredModel = Pick<
+  DeepInfraSurfaceModel,
+  "id" | "name" | "tags" | "contextWindow" | "maxTokens"
+>;
 
 interface DeepInfraAgentModelEntry {
   id: string;
-  metadata: DeepInfraAgentModelMetadata | null;
+  metadata: {
+    context_length?: number | null;
+    max_tokens?: number | null;
+    tags?: string[];
+  } | null;
 }
 
 interface DeepInfraDiscoveredCatalog {
-  chat: DeepInfraSurfaceModel[];
-  vlm: DeepInfraSurfaceModel[];
-  embed: DeepInfraSurfaceModel[];
-  imageGen: DeepInfraSurfaceModel[];
-  videoGen: DeepInfraSurfaceModel[];
-  tts: DeepInfraSurfaceModel[];
-  stt: DeepInfraSurfaceModel[];
-  /** True iff served from a successful live fetch; false for the static fallback. */
-  live: boolean;
+  chat: DeepInfraDiscoveredModel[];
+  vlm: DeepInfraDiscoveredModel[];
+  imageGen: DeepInfraDiscoveredModel[];
+  videoGen: DeepInfraDiscoveredModel[];
 }
 
-function entryToSurfaceModel(entry: DeepInfraAgentModelEntry): DeepInfraSurfaceModel | null {
+function entryToSurfaceModel(entry: DeepInfraAgentModelEntry): DeepInfraDiscoveredModel | null {
   const id = typeof entry?.id === "string" ? entry.id.trim() : "";
   if (!id) {
     return null;
@@ -75,166 +62,20 @@ function entryToSurfaceModel(entry: DeepInfraAgentModelEntry): DeepInfraSurfaceM
   if (metadata === null) {
     return null;
   }
-  if (
-    !isRecord(metadata) ||
-    !Array.isArray(metadata.tags) ||
-    metadata.tags.some((tag) => typeof tag !== "string")
-  ) {
+  if (!isRecord(metadata) || !isStringArray(metadata.tags)) {
     throw new Error("DeepInfra model metadata discovery unavailable.");
   }
-  const pricing: DeepInfraAgentModelPricing = metadata.pricing ?? {};
   return {
     id,
     name: id,
-    description: typeof metadata.description === "string" ? metadata.description : undefined,
     tags: metadata.tags,
     contextWindow: asPositiveSafeInteger(metadata.context_length),
     maxTokens: asPositiveSafeInteger(metadata.max_tokens),
-    pricing,
-    defaultWidth: asPositiveSafeInteger(metadata.default_width),
-    defaultHeight: asPositiveSafeInteger(metadata.default_height),
-    defaultIterations: asPositiveSafeInteger(metadata.default_iterations),
   };
-}
-
-function bucketBySurface(models: DeepInfraSurfaceModel[]): DeepInfraDiscoveredCatalog {
-  const catalog: DeepInfraDiscoveredCatalog = {
-    chat: [],
-    vlm: [],
-    embed: [],
-    imageGen: [],
-    videoGen: [],
-    tts: [],
-    stt: [],
-    live: true,
-  };
-  const buckets = new Map<string, DeepInfraSurfaceModel[]>([
-    ["chat", catalog.chat],
-    ["vlm", catalog.vlm],
-    ["embed", catalog.embed],
-    ["image-gen", catalog.imageGen],
-    ["video-gen", catalog.videoGen],
-    ["tts", catalog.tts],
-    ["stt", catalog.stt],
-  ]);
-  for (const model of models) {
-    for (const tag of new Set(model.tags)) {
-      buckets.get(tag)?.push(model);
-    }
-  }
-  return catalog;
-}
-
-// Static fallback. Chat rows live in openclaw.plugin.json (manifest-validated);
-// non-chat surfaces live below because the manifest validator only accepts
-// chat-shaped rows. These are used pre-auth / offline; live discovery
-// overrides once a key is configured.
-interface ManifestChatModelEntry {
-  id: string;
-  name?: string;
-  contextWindow?: number;
-  maxTokens?: number;
-  reasoning?: boolean;
-  input?: Array<"text" | "image">;
-  cost?: { input?: number; output?: number; cacheRead?: number };
-}
-
-function manifestChatEntryToSurfaceModel(entry: ManifestChatModelEntry): DeepInfraSurfaceModel {
-  const cost = entry.cost ?? {};
-  const pricing: DeepInfraAgentModelPricing = {};
-  if (typeof cost.input === "number") {
-    pricing.input_tokens = cost.input;
-  }
-  if (typeof cost.output === "number") {
-    pricing.output_tokens = cost.output;
-  }
-  if (typeof cost.cacheRead === "number" && cost.cacheRead > 0) {
-    pricing.cache_read_tokens = cost.cacheRead;
-  }
-  const tags: string[] = ["chat"];
-  if (entry.input?.includes("image")) {
-    tags.push("vlm");
-  }
-  if (entry.reasoning) {
-    tags.push("reasoning");
-  }
-  return {
-    id: entry.id,
-    name: entry.name ?? entry.id,
-    tags,
-    contextWindow: entry.contextWindow,
-    maxTokens: entry.maxTokens,
-    pricing,
-  };
-}
-
-// Pre-auth/offline defaults; successful live discovery replaces this catalog.
-const STATIC_NON_CHAT_FALLBACK: DeepInfraSurfaceModel[] = [
-  {
-    id: "black-forest-labs/FLUX-1-schnell",
-    name: "black-forest-labs/FLUX-1-schnell",
-    tags: ["image-gen"],
-    pricing: { per_image_unit: 0.003 },
-    defaultWidth: 1024,
-    defaultHeight: 1024,
-    defaultIterations: 4,
-  },
-  {
-    id: "black-forest-labs/FLUX-1-dev",
-    name: "black-forest-labs/FLUX-1-dev",
-    tags: ["image-gen"],
-    pricing: { per_image_unit: 0.025 },
-    defaultWidth: 1024,
-    defaultHeight: 1024,
-    defaultIterations: 28,
-  },
-  {
-    id: "Qwen/Qwen-Image-Max",
-    name: "Qwen/Qwen-Image-Max",
-    tags: ["image-gen"],
-    pricing: { per_image_unit: 0.075 },
-    defaultWidth: 1024,
-    defaultHeight: 1024,
-    defaultIterations: 28,
-  },
-  {
-    id: "stabilityai/sdxl-turbo",
-    name: "stabilityai/sdxl-turbo",
-    tags: ["image-gen"],
-    pricing: { per_image_unit: 0.0002 },
-    defaultWidth: 1024,
-    defaultHeight: 1024,
-    defaultIterations: 4,
-  },
-  ...DEEPINFRA_TTS_FALLBACK_CATALOG,
-  {
-    id: "openai/whisper-large-v3-turbo",
-    name: "openai/whisper-large-v3-turbo",
-    tags: ["stt"],
-    pricing: { input_seconds: 0.00004 },
-  },
-  {
-    id: "BAAI/bge-m3",
-    name: "BAAI/bge-m3",
-    tags: ["embed"],
-    pricing: { input_tokens: 0.01 },
-    maxTokens: 8192,
-    contextWindow: 8192,
-  },
-];
-
-// Registration stays synchronous; live discovery feeds the capability catalog hooks.
-export function getDeepInfraSurfaceFallbackCatalog(): DeepInfraDiscoveredCatalog {
-  const rawChat = (manifest.modelCatalog.providers.deepinfra.models ??
-    []) as ManifestChatModelEntry[];
-  const chatModels = rawChat.map(manifestChatEntryToSurfaceModel);
-  const catalog = bucketBySurface([...chatModels, ...STATIC_NON_CHAT_FALLBACK]);
-  catalog.live = false;
-  return catalog;
 }
 
 function chatSurfaceModelToModelDefinition(
-  model: DeepInfraSurfaceModel,
+  model: DeepInfraDiscoveredModel,
 ): Omit<ModelDefinitionConfig, "cost"> {
   const manifestModel = DEEPINFRA_MODEL_CATALOG.find((entry) => entry.id === model.id);
   const input: Array<"text" | "image"> = model.tags.includes("vlm") ? ["text", "image"] : ["text"];
@@ -250,30 +91,30 @@ function chatSurfaceModelToModelDefinition(
   };
 }
 
-function canDiscoverDeepInfra(options?: DeepInfraDiscoveryOptions): boolean {
+async function canDiscoverDeepInfra(options?: DeepInfraDiscoveryOptions): Promise<boolean> {
   if (options?.hasApiKey !== undefined) {
     return options.hasApiKey;
   }
   const env = options?.env ?? process.env;
   const fromEnv = env.DEEPINFRA_API_KEY;
   return (
-    (typeof fromEnv === "string" && fromEnv.trim() !== "") ||
-    isProviderApiKeyConfigured({ provider: "deepinfra", agentDir: options?.agentDir })
+    Boolean(fromEnv?.trim()) ||
+    (await isProviderApiKeyConfiguredAsync({ provider: "deepinfra", agentDir: options?.agentDir }))
   );
 }
 
 // Keep pre-auth offline; successful discovery shares the five-minute live catalog cache.
 export async function discoverDeepInfraSurfaces(
   options?: DeepInfraDiscoveryOptions,
-): Promise<DeepInfraDiscoveredCatalog> {
-  if (canDiscoverDeepInfra(options)) {
+): Promise<DeepInfraDiscoveredCatalog | null> {
+  if (await canDiscoverDeepInfra(options)) {
     try {
       return await loadDeepInfraSurfaces();
     } catch (error) {
       log.warn(`Model metadata discovery unavailable: ${String(error)}`);
     }
   }
-  return getDeepInfraSurfaceFallbackCatalog();
+  return null;
 }
 
 async function loadDeepInfraSurfaces(): Promise<DeepInfraDiscoveredCatalog> {
@@ -289,7 +130,7 @@ async function loadDeepInfraSurfaces(): Promise<DeepInfraDiscoveredCatalog> {
         fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
       });
       const seenIds = new Set<string>();
-      const surfaceModels: DeepInfraSurfaceModel[] = [];
+      const surfaceModels: DeepInfraDiscoveredModel[] = [];
       for (const entry of data) {
         const model = entryToSurfaceModel(entry as DeepInfraAgentModelEntry);
         if (!model || seenIds.has(model.id)) {
@@ -301,7 +142,24 @@ async function loadDeepInfraSurfaces(): Promise<DeepInfraDiscoveredCatalog> {
       if (data.length > 0 && surfaceModels.length === 0) {
         throw new Error("DeepInfra model metadata discovery unavailable.");
       }
-      return bucketBySurface(surfaceModels);
+      const catalog: DeepInfraDiscoveredCatalog = {
+        chat: [],
+        vlm: [],
+        imageGen: [],
+        videoGen: [],
+      };
+      const buckets = new Map<string, DeepInfraDiscoveredModel[]>([
+        ["chat", catalog.chat],
+        ["vlm", catalog.vlm],
+        ["image-gen", catalog.imageGen],
+        ["video-gen", catalog.videoGen],
+      ]);
+      for (const model of surfaceModels) {
+        for (const tag of new Set(model.tags)) {
+          buckets.get(tag)?.push(model);
+        }
+      }
+      return catalog;
     },
   });
 }
@@ -336,7 +194,7 @@ async function discoverDeepInfraPricing() {
 export async function discoverDeepInfraModels(
   options?: DeepInfraDiscoveryOptions,
 ): Promise<ModelDefinitionConfig[]> {
-  if (!canDiscoverDeepInfra(options)) {
+  if (!(await canDiscoverDeepInfra(options))) {
     return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
   }
   const strict = options?.discoveryMode !== "advisory";

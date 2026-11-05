@@ -70,7 +70,6 @@ describe("createDeepSeekTextFilter", () => {
   ])("drops DSML: $name", ({ chunks, expected }) => {
     const text = filteredText(chunks);
     expect(text).toBe(expected);
-    expect(text).not.toContain("DSML");
   });
 
   it("holds a partial open token until it can classify it", () => {

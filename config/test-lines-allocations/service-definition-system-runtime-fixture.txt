@@ -1,0 +1,2 @@
+# Keep definition-repair fixtures independent of the host Node installation path.
+2

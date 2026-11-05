@@ -1,3 +1,4 @@
+import { onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ProviderModelRouteCandidate,
@@ -10,6 +11,7 @@ import {
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityRef,
 } from "./model-auth-availability.js";
+import * as openaiRoutes from "./openai-model-routes.js";
 import type { createOpenAIModelRoutesResolver } from "./openai-model-routes.js";
 
 export const platformRoute = {
@@ -38,6 +40,13 @@ export function routeResolverFactory(resolution: ProviderModelRouteResolution | 
   return (() => () => resolution) as typeof createOpenAIModelRoutesResolver;
 }
 
+export function mockRouteResolverFactory(factory: typeof createOpenAIModelRoutesResolver) {
+  const spy = vi
+    .spyOn(openaiRoutes, "createOpenAIModelRoutesResolver")
+    .mockImplementationOnce(factory);
+  onTestFinished(() => spy.mockRestore());
+}
+
 export function authStore(
   profiles: Record<string, unknown> = {},
   order?: AuthProfileStore["order"],
@@ -60,11 +69,11 @@ export function evaluate(params: {
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
 }) {
+  mockRouteResolverFactory(routeResolverFactory(params.resolution ?? dualRoutes));
   return createModelAuthAvailabilityResolver({
     cfg: (params.cfg ?? {}) as OpenClawConfig,
     authStore: params.store ?? authStore(),
     env: params.env ?? {},
-    routeResolverFactory: routeResolverFactory(params.resolution ?? dualRoutes),
     syntheticAuthProviderRefs: params.syntheticAuthProviderRefs,
     preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
     preparedRuntimeAuthStore: params.preparedRuntimeAuthStore,

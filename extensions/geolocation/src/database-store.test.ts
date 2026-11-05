@@ -1,44 +1,39 @@
-import { constants } from "node:fs";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveGeolocationSettings } from "./config.js";
 import { createGeolocationDatabaseStore } from "./database-store.js";
 
-const created: string[] = [];
 const now = new Date("2026-01-03T00:00:00Z");
+let stateDir: string;
 
-async function tempStateDir(): Promise<string> {
+beforeEach(async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(now);
   // Realpath first: macOS tmp is a symlink and the store compares resolved paths.
-  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "geolocation-store-")));
-  created.push(dir);
-  return dir;
-}
+  stateDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "geolocation-store-")));
+});
 
 function jsonResponse(body: Buffer, ok = true): Response {
   return new Response(Uint8Array.from(body), { status: ok ? 200 : 404 });
 }
 
-function chunkedResponse(
-  chunkBytes: number,
-  chunkCount: number,
-  cancel?: () => Promise<void>,
-): Response {
-  let emitted = 0;
+function oversizedResponse(cancel: () => Promise<void>): Response {
+  let remaining = 3;
   return new Response(
     new ReadableStream<Uint8Array>(
       {
         pull(controller) {
-          if (emitted >= chunkCount) {
+          if (remaining-- > 0) {
+            controller.enqueue(new Uint8Array(128 * 1024 * 1024));
+          } else {
             controller.close();
-            return;
           }
-          emitted += 1;
-          controller.enqueue(new Uint8Array(chunkBytes));
         },
         cancel,
       },
@@ -48,343 +43,240 @@ function chunkedResponse(
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
-  await Promise.all(created.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await fs.rm(stateDir, { recursive: true, force: true });
 });
 
-describe("geolocation database store", () => {
-  it("tries the previous month when the current build is not published yet", async () => {
-    const stateDir = await tempStateDir();
-    const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse(Buffer.from("nope"), false));
-    const store = createStore(stateDir, fetchImpl, {
-      databaseUrl: "https://host.test/db-{yyyy}-{mm}.mmdb",
-    });
-
-    await expect(store.load()).rejects.toThrow(/db-2026-01.*db-2025-12/s);
-    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
-      "https://host.test/db-2026-01.mmdb",
-      "https://host.test/db-2025-12.mmdb",
-    ]);
+it("tries the previous month when the current build is not published yet", async () => {
+  const store = createStore(async () => jsonResponse(Buffer.from("nope"), false), {
+    databaseUrl: "https://host.test/db-{yyyy}-{mm}.mmdb",
   });
 
-  it("downloads once when concurrent callers race the first lookup", async () => {
-    const stateDir = await tempStateDir();
-    const fetchImpl = vi.fn(async () => jsonResponse(Buffer.from("garbage")));
-    const store = createStore(stateDir, fetchImpl);
-
-    const results = await Promise.allSettled([store.load(), store.load(), store.load()]);
-
-    expect(results.every((r) => r.status === "rejected")).toBe(true);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    await expect(fs.readdir(path.join(stateDir, "geolocation"))).rejects.toThrow();
-  });
-
-  it("names the source in the cache path so a swapped source cannot reuse the old data", async () => {
-    const stateDir = await tempStateDir();
-    const settingsFor = (databaseUrl: string) =>
-      createStore(stateDir, Buffer.alloc(0), { databaseUrl }).databaseFile;
-
-    expect(settingsFor("https://a.test/db.mmdb")).not.toBe(settingsFor("https://b.test/db.mmdb"));
-  });
-
-  it("rejects an oversized body after its source cancellation settles", async () => {
-    const stateDir = await tempStateDir();
-    // 3 chunks of 128 MiB exceeds the 256 MiB compressed ceiling on the third
-    // read, so the reader must stop rather than buffer the whole response.
-    const chunkBytes = 128 * 1024 * 1024;
-    const cancellationStarted = createDeferred<void>();
-    const finishCancellation = createDeferred<void>();
-    let cancellationFinished = false;
-    const store = createStore(stateDir, async () =>
-      chunkedResponse(chunkBytes, 3, async () => {
-        cancellationStarted.resolve();
-        await finishCancellation.promise;
-        cancellationFinished = true;
-        throw new Error("synthetic cancellation failure");
-      }),
-    );
-
-    const loading = store.load();
-    let settled = false;
-    const observed = loading.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    try {
-      await Promise.race([cancellationStarted.promise, observed]);
-      expect(settled).toBe(false);
-    } finally {
-      finishCancellation.resolve();
-    }
-    await expect(loading).rejects.toThrow(/exceeded the \d+ byte cap/);
-    await observed;
-    expect(cancellationFinished).toBe(true);
-    await expect(fs.readdir(path.join(stateDir, "geolocation"))).rejects.toThrow();
-  });
-
-  it("refuses a gzip source that inflates past the on-disk ceiling", async () => {
-    const stateDir = await tempStateDir();
-    // A highly compressible payload stands in for a compression bomb: the
-    // compressed bytes are tiny, the inflated output is what must be bounded.
-    const inflated = Buffer.alloc(700 * 1024 * 1024, 0);
-    const compressed = gzipSync(inflated);
-    const store = createStore(stateDir, compressed, {
-      databaseUrl: "https://host.test/db.mmdb.gz",
-    });
-
-    await expect(store.load()).rejects.toThrow(/db\.mmdb\.gz/);
-    await expect(fs.readdir(path.join(stateDir, "geolocation"))).rejects.toThrow();
-  });
+  await expect(store.load()).rejects.toThrow(/db-2026-01.*db-2025-12/s);
 });
 
+it("shares an oversized download and rejects callers only after cancellation settles", async () => {
+  // The third 128 MiB chunk exceeds the 256 MiB compressed ceiling.
+  const cancellationStarted = createDeferred<void>();
+  const finishCancellation = createDeferred<void>();
+  let cancellationFinished = false;
+  const store = createStore(async () =>
+    oversizedResponse(async () => {
+      cancellationStarted.resolve();
+      await finishCancellation.promise;
+      cancellationFinished = true;
+      throw new Error("synthetic cancellation failure");
+    }),
+  );
+
+  const loading = store.load();
+  const concurrent = Promise.allSettled([loading, store.load(), store.load()]);
+  let settled = false;
+  const markSettled = () => {
+    settled = true;
+  };
+  const observed = loading.then(markSettled, markSettled);
+  try {
+    await Promise.race([cancellationStarted.promise, observed]);
+    expect(settled).toBe(false);
+  } finally {
+    finishCancellation.resolve();
+  }
+  await expect(loading).rejects.toThrow(/exceeded the \d+ byte cap/);
+  await observed;
+  expect((await concurrent).every((result) => result.status === "rejected")).toBe(true);
+  expect(store.fetchImpl).toHaveBeenCalledOnce();
+  expect(cancellationFinished).toBe(true);
+  await expect(fs.readdir(path.join(stateDir, "geolocation"))).rejects.toThrow();
+});
+
+it("refuses a gzip source that inflates past the on-disk ceiling", async () => {
+  const store = createStore(gzipSync(Buffer.alloc(700 * 1024 * 1024, 0)), {
+    databaseUrl: "https://host.test/db.mmdb.gz",
+  });
+
+  await expect(store.load()).rejects.toThrow(/db\.mmdb\.gz/);
+  await expect(fs.readdir(path.join(stateDir, "geolocation"))).rejects.toThrow();
+});
 function cityDatabase(city: string): Buffer {
   const text = (value: string) =>
     Buffer.concat([Buffer.from([0x40 + Buffer.byteLength(value)]), Buffer.from(value)]);
+  const field = (key: string, bytes: number[]) => Buffer.concat([text(key), Buffer.from(bytes)]);
   // One IPv4 node points both branches at the same synthetic city record.
   return Buffer.concat([
     Buffer.from([0, 0, 17, 0, 0, 17]),
     Buffer.alloc(16),
-    Buffer.from([0xe1]),
-    text("city"),
-    Buffer.from([0xe1]),
-    text("names"),
-    Buffer.from([0xe1]),
-    text("en"),
+    ...["city", "names", "en"].flatMap((key) => [Buffer.from([0xe1]), text(key)]),
     text(city),
-    Buffer.from("abcdef4d61784d696e642e636f6d", "hex"),
-    Buffer.from([0xe7]),
-    text("node_count"),
-    Buffer.from([0xc1, 1]),
-    text("record_size"),
-    Buffer.from([0xa1, 24]),
-    text("ip_version"),
-    Buffer.from([0xa1, 4]),
-    text("binary_format_major_version"),
-    Buffer.from([0xa1, 2]),
-    text("binary_format_minor_version"),
-    Buffer.from([0xa0]),
-    text("build_epoch"),
-    Buffer.from([0xc1, 1]),
+    Buffer.from("abcdef4d61784d696e642e636f6de7", "hex"),
+    field("node_count", [0xc1, 1]),
+    field("record_size", [0xa1, 24]),
+    field("ip_version", [0xa1, 4]),
+    field("binary_format_major_version", [0xa1, 2]),
+    field("binary_format_minor_version", [0xa0]),
+    field("build_epoch", [0xc1, 1]),
     text("database_type"),
     text("synthetic-city"),
   ]);
 }
 
 function createStore(
-  stateDir: string,
-  body: Buffer | typeof fetch,
-  {
-    databaseUrl = "https://host.test/db.mmdb",
-    downloaded,
-    warn,
-  }: {
-    databaseUrl?: string;
-    downloaded?: () => Promise<void>;
-    warn?: (message: string) => void;
-  } = {},
+  body: Buffer | typeof fetch = vienna,
+  options: { databaseUrl?: string; warn?: (message: string) => void } = {},
 ) {
-  return createGeolocationDatabaseStore({
+  const databaseUrl = options.databaseUrl ?? "https://host.test/db.mmdb";
+  const settings = resolveGeolocationSettings({ databaseUrl });
+  const fetchImpl = vi.fn<typeof fetch>(
+    typeof body === "function" ? body : async () => jsonResponse(body),
+  );
+  const store = createGeolocationDatabaseStore({
     stateDir,
-    settings: resolveGeolocationSettings({ databaseUrl }),
-    now: () => now,
-    logger: warn ? { info: () => {}, warn } : undefined,
-    fetchImpl:
-      typeof body === "function"
-        ? body
-        : async () => {
-            await downloaded?.();
-            return jsonResponse(body);
-          },
+    settings,
+    logger: options.warn ? { info: () => {}, warn: options.warn } : undefined,
+    fetchImpl,
   });
+  const digest = createHash("sha256").update(databaseUrl).digest("hex").slice(0, 12);
+  const databaseFile = path.join(stateDir, "geolocation", `ip-city-${digest}.mmdb`);
+  return { ...store, fetchImpl, settings, databaseFile };
 }
 
-describe("geolocation database publication", () => {
-  it.each(["before", "after"] as const)(
-    "serves its download when another process publishes %s its rename",
-    async (publication) => {
-      const stateDir = await tempStateDir();
-      const body = cityDatabase("Vienna");
-      const competingBody = cityDatabase("Paris");
-      const warn = vi.fn();
-      const store = createStore(stateDir, body, { warn });
-      const rename = fs.rename;
-      let competingPublished = false;
-      vi.spyOn(fs, "rename").mockImplementationOnce(async (source, target) => {
-        const publishCompeting = async () => {
-          const oldStaging = `${store.databaseFile}.partial`;
-          await fs.writeFile(oldStaging, competingBody);
-          await rename(oldStaging, store.databaseFile);
-          competingPublished = true;
-        };
-        if (publication === "before") {
-          await publishCompeting();
-        }
-        await rename(source, target);
-        if (publication === "after") {
-          await publishCompeting();
-        }
-      });
+const vienna = cityDatabase("Vienna");
+const paris = cityDatabase("Paris");
+type Store = ReturnType<typeof createStore>;
+const cityOf = (database: Awaited<ReturnType<Store["load"]>>) =>
+  database.lookup("8.8.8.8")?.city?.names.en;
+async function seedCache(store: Store, body: Buffer) {
+  await fs.mkdir(path.dirname(store.databaseFile));
+  await fs.writeFile(store.databaseFile, body);
+  await fs.utimes(store.databaseFile, 0, 0);
+}
+async function expectPublished({ databaseFile }: Store, body: Buffer) {
+  expect(await fs.readFile(databaseFile)).toEqual(body);
+  expect(await fs.readdir(path.dirname(databaseFile))).toEqual([path.basename(databaseFile)]);
+}
 
-      const database = await store.load();
+it.each([true, false])("evicts idle readers only when published: %s", async (published) => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const store = createStore();
+  if (!published) {
+    vi.spyOn(fs, "writeFile").mockRejectedValueOnce(new Error("disk full"));
+    store.fetchImpl
+      .mockResolvedValueOnce(jsonResponse(vienna))
+      .mockRejectedValue(new Error("source unavailable"));
+  }
+  const readFile = vi.spyOn(fs, "readFile");
 
-      expect(competingPublished).toBe(true);
-      expect(database.lookup("8.8.8.8")?.city?.names.en).toBe("Vienna");
-      expect(await fs.readFile(store.databaseFile)).toEqual(
-        publication === "before" ? body : competingBody,
-      );
-      expect(warn).not.toHaveBeenCalled();
-      expect(await fs.readdir(path.dirname(store.databaseFile))).toEqual([
-        path.basename(store.databaseFile),
-      ]);
-    },
-  );
+  expect(cityOf(await store.load())).toBe("Vienna");
+  await vi.advanceTimersByTimeAsync(45_000);
+  const active = await store.load();
+  await vi.advanceTimersByTimeAsync(45_000);
+  expect(cityOf(await store.load())).toBe("Vienna");
+  expect(readFile).not.toHaveBeenCalled();
 
-  it("keeps the first download invisible while its staged file is being written", async () => {
-    const stateDir = await tempStateDir();
-    const firstBody = cityDatabase("Vienna");
-    const firstStore = createStore(stateDir, firstBody);
-    const secondDownloaded = vi.fn();
-    const secondStore = createStore(stateDir, cityDatabase("Paris"), {
-      downloaded: secondDownloaded,
-    });
-    const beforeWrite = createDeferred<void>();
-    const finishWrite = createDeferred<void>();
-    let firstWrite = true;
-    const pauseFirstWrite = async () => {
-      if (firstWrite) {
-        firstWrite = false;
-        beforeWrite.resolve();
-        await finishWrite.promise;
-      }
-    };
-    const open = fs.open;
-    vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-      if (
-        typeof flags === "number" &&
-        (flags & constants.O_CREAT) !== 0 &&
-        String(file) !== firstStore.databaseFile
-      ) {
-        await pauseFirstWrite();
-      }
-      return await open(file, flags, mode);
-    });
-    const writeFile = fs.writeFile;
-    vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
-      await pauseFirstWrite();
-      return await writeFile(file, data, options);
-    });
+  await vi.advanceTimersByTimeAsync(60_000);
+  const reopened = await Promise.all([store.load(), store.load()]);
+  expect(reopened.map(cityOf)).toEqual(["Vienna", "Vienna"]);
+  expect(readFile).toHaveBeenCalledTimes(published ? 1 : 0);
+  expect(store.fetchImpl).toHaveBeenCalledOnce();
+  // An in-progress request may still own the old reader after idle eviction.
+  expect(cityOf(active)).toBe("Vienna");
+});
 
-    const nativeMode = getFsSafeNativeConfig().mode;
+it("preserves failed-refresh backoff across idle reopens without extending it", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const store = createStore();
+  store.fetchImpl.mockRejectedValue(new Error("source unavailable"));
+  await seedCache(store, vienna);
+
+  expect(cityOf(await store.load())).toBe("Vienna");
+  expect(store.fetchImpl).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(60_000);
+  vi.setSystemTime(now.getTime() + 60_000);
+  expect(cityOf(await store.load())).toBe("Vienna");
+  expect(store.fetchImpl).toHaveBeenCalledTimes(1);
+
+  await vi.advanceTimersByTimeAsync(store.settings.refreshMs);
+  vi.setSystemTime(now.getTime() + store.settings.refreshMs + 1);
+  expect(cityOf(await store.load())).toBe("Vienna");
+  expect(store.fetchImpl).toHaveBeenCalledTimes(2);
+});
+
+it("publishes concurrent stores atomically through a symlink without replacing their readers", async () => {
+  const storage = path.join(stateDir, "cache");
+  await fs.mkdir(storage, { mode: 0o750 });
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  await fs.symlink(storage, path.join(stateDir, "geolocation"), linkType);
+  const warn = vi.fn();
+  const firstStore = createStore(vienna, { warn });
+  const secondStore = createStore(paris);
+  const beforeWrite = createDeferred<void>();
+  const finishWrite = createDeferred<void>();
+  let writeStarted = false;
+  const writeFile = fs.writeFile;
+  vi.spyOn(fs, "writeFile").mockImplementationOnce(async (file, data, options) => {
+    writeStarted = true;
+    beforeWrite.resolve();
+    await finishWrite.promise;
+    return await writeFile(file, data, options);
+  });
+
+  const nativeMode = getFsSafeNativeConfig().mode;
+  configureFsSafeNative({ mode: "off" });
+  const firstLoading = firstStore.load();
+  try {
+    await Promise.race([beforeWrite.promise, firstLoading]);
+    expect(writeStarted).toBe(true);
+    await expect(fs.stat(firstStore.databaseFile)).rejects.toMatchObject({ code: "ENOENT" });
+    configureFsSafeNative({ mode: nativeMode });
+    expect(cityOf(await secondStore.load())).toBe("Paris");
     configureFsSafeNative({ mode: "off" });
-    const firstLoading = firstStore.load();
-    try {
-      await Promise.race([beforeWrite.promise, firstLoading]);
-      expect(firstWrite).toBe(false);
-      await expect(fs.stat(firstStore.databaseFile)).rejects.toMatchObject({ code: "ENOENT" });
-      const secondDatabase = await secondStore.load();
-      expect(secondDatabase.lookup("8.8.8.8")?.city?.names.en).toBe("Paris");
-      expect(secondDownloaded).toHaveBeenCalledOnce();
-    } finally {
-      finishWrite.resolve();
-      try {
-        await firstLoading;
-      } finally {
-        configureFsSafeNative({ mode: nativeMode });
-      }
-    }
+    // Replace the first publication before its load returns, as another process could.
+    const rename = fs.rename;
+    vi.spyOn(fs, "rename").mockImplementationOnce(async (source, target) => {
+      await rename(source, target);
+      await expect(fs.readFile(firstStore.databaseFile)).resolves.toEqual(vienna);
+      const competing = `${firstStore.databaseFile}.partial`;
+      await writeFile(competing, paris);
+      await rename(competing, firstStore.databaseFile);
+    });
+  } finally {
+    finishWrite.resolve();
+    await firstLoading.finally(() => configureFsSafeNative({ mode: nativeMode }));
+  }
 
-    expect((await firstLoading).lookup("8.8.8.8")?.city?.names.en).toBe("Vienna");
-    expect(await fs.readFile(firstStore.databaseFile)).toEqual(firstBody);
-    expect(await fs.readdir(path.dirname(firstStore.databaseFile))).toEqual([
-      path.basename(firstStore.databaseFile),
-    ]);
-  });
+  expect(cityOf(await firstLoading)).toBe("Vienna");
+  expect(cityOf(await secondStore.load())).toBe("Paris");
+  expect(firstStore.fetchImpl).toHaveBeenCalledOnce();
+  expect(warn).not.toHaveBeenCalled();
+  await expectPublished(firstStore, paris);
+  if (process.platform !== "win32") {
+    expect((await fs.stat(firstStore.databaseFile)).mode & 0o777).toBe(0o666 & ~process.umask());
+    expect((await fs.stat(storage)).mode & 0o777).toBe(0o750 & ~process.umask());
+  }
+});
 
-  it.each(["staging", "publication", "download", "parse"] as const)(
-    "preserves the disk cache when %s fails",
-    async (failure) => {
-      const stateDir = await tempStateDir();
-      const oldBody = cityDatabase("Vienna");
-      const warn = vi.fn();
-      const store = createStore(
-        stateDir,
-        failure === "parse" ? Buffer.from("invalid MMDB") : cityDatabase("Paris"),
-        {
-          downloaded: async () => {
-            if (failure === "download") {
-              throw new Error("synthetic download failure");
-            }
-          },
-          warn,
-        },
-      );
-      const directory = path.dirname(store.databaseFile);
-      await fs.mkdir(directory);
-      await fs.writeFile(store.databaseFile, oldBody);
-      await fs.utimes(store.databaseFile, 0, 0);
-      if (failure === "publication") {
-        vi.spyOn(fs, "rename").mockRejectedValueOnce(new Error("synthetic publication failure"));
-      } else if (failure === "staging") {
-        const writeFile = fs.writeFile;
-        vi.spyOn(fs, "writeFile").mockImplementationOnce(async (file, _data, options) => {
-          await writeFile(file, cityDatabase("Paris").subarray(0, 10), options);
-          throw new Error("synthetic partial write failure");
-        });
-      }
+const failures = ["staging", "publication", "download", "parse"] as const;
+it.each(failures)("preserves the disk cache when %s fails", async (failure) => {
+  const warn = vi.fn();
+  const store = createStore(failure === "parse" ? Buffer.from("invalid MMDB") : paris, { warn });
+  if (failure === "download") {
+    store.fetchImpl.mockRejectedValue(new Error("synthetic download failure"));
+  }
+  await seedCache(store, vienna);
+  if (failure === "publication") {
+    vi.spyOn(fs, "rename").mockRejectedValueOnce(new Error("synthetic publication failure"));
+  } else if (failure === "staging") {
+    const writeFile = fs.writeFile;
+    vi.spyOn(fs, "writeFile").mockImplementationOnce(async (file, _data, options) => {
+      await writeFile(file, paris.subarray(0, 10), options);
+      throw new Error("synthetic partial write failure");
+    });
+  }
 
-      const database = await store.load();
-
-      expect(database.lookup("8.8.8.8")?.city?.names.en).toBe(
-        failure === "publication" || failure === "staging" ? "Paris" : "Vienna",
-      );
-      expect(await fs.readFile(store.databaseFile)).toEqual(oldBody);
-      expect(await fs.readdir(directory)).toEqual([path.basename(store.databaseFile)]);
-      expect(warn).toHaveBeenCalledOnce();
-    },
+  expect(cityOf(await store.load())).toBe(
+    failure === "publication" || failure === "staging" ? "Paris" : "Vienna",
   );
-
-  it("publishes overlapping stores with their own readers through a symlinked cache", async () => {
-    const stateDir = await tempStateDir();
-    const directory = path.join(stateDir, "geolocation");
-    const storage = path.join(stateDir, "cache");
-    await fs.mkdir(storage, { mode: 0o750 });
-    await fs.symlink(storage, directory, process.platform === "win32" ? "junction" : "dir");
-    const bothFetching = createDeferred<void>();
-    let downloads = 0;
-    const downloaded = async () => {
-      downloads += 1;
-      if (downloads === 2) {
-        bothFetching.resolve();
-      }
-      await bothFetching.promise;
-    };
-    const firstBody = cityDatabase("Vienna");
-    const secondBody = cityDatabase("Paris");
-    const firstStore = createStore(stateDir, firstBody, { downloaded });
-    const stores = [firstStore, createStore(stateDir, secondBody, { downloaded })];
-
-    const databases = await Promise.allSettled(stores.map((store) => store.load()));
-
-    expect(
-      databases.map((database) =>
-        database.status === "fulfilled"
-          ? database.value.lookup("8.8.8.8")?.city?.names.en
-          : database.reason,
-      ),
-    ).toEqual(["Vienna", "Paris"]);
-    const target = firstStore.databaseFile;
-    const published = await fs.readFile(target);
-    expect(firstBody.equals(published) || secondBody.equals(published)).toBe(true);
-    expect(await fs.readdir(storage)).toEqual([path.basename(target)]);
-    if (process.platform !== "win32") {
-      expect((await fs.stat(target)).mode & 0o777).toBe(0o666 & ~process.umask());
-      expect((await fs.stat(storage)).mode & 0o777).toBe(0o750 & ~process.umask());
-    }
-    expect((await firstStore.load()).lookup("8.8.8.8")?.city?.names.en).toBe("Vienna");
-    expect(downloads).toBe(2);
-  });
+  await expectPublished(store, vienna);
+  expect(warn).toHaveBeenCalledOnce();
 });

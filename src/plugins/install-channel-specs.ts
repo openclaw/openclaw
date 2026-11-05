@@ -75,14 +75,19 @@ export async function installWithSourceFallback<T>(params: {
   throw new Error("Plugin has no declared remote install source.");
 }
 
-type ChannelInstallSpecs = {
+type NpmChannelInstallSpecs = {
+  installSpec: string;
+  recordSpec: string;
+  npmResolution?: NpmSpecResolution;
+  channelTag?: "beta" | "latest";
+  channelReason?: "tag-behind-latest";
+};
+
+type ClawHubChannelInstallSpecs = {
   installSpec: string;
   recordSpec: string;
   fallbackSpec?: string;
   fallbackLabel?: string;
-  npmResolution?: NpmSpecResolution;
-  channelTag?: "beta" | "latest";
-  channelReason?: "tag-behind-latest";
 };
 
 export class NpmChannelResolutionError extends Error {
@@ -114,10 +119,13 @@ type ChannelInstallParams = {
   timeoutMs?: number;
 };
 
-function resolveCoreBoundNpmSpec(params: ChannelInstallParams): string | undefined {
+function resolveCoreBoundNpmSpec(
+  params: ChannelInstallParams,
+  preferCoreVersion = false,
+): string | undefined {
   if (
     params.updateChannel === "extended-stable" ||
-    (params.updateChannel === "stable" && params.versionBoundToCore)
+    (params.updateChannel === "stable" && (params.versionBoundToCore || preferCoreVersion))
   ) {
     const target = resolveDefaultNpmSpec(params.spec);
     if (target && params.officialPackageName === target.name) {
@@ -140,7 +148,7 @@ function resolveCoreBoundNpmSpec(params: ChannelInstallParams): string | undefin
 
 export async function resolveNpmInstallSpecsForUpdateChannel(
   params: ChannelInstallParams,
-): Promise<ChannelInstallSpecs> {
+): Promise<NpmChannelInstallSpecs> {
   const selectedSpec = params.installSpecOverride ?? resolveCoreBoundNpmSpec(params);
   const target = parseRegistryNpmSpec(params.spec);
   const selector = target?.selector?.toLowerCase();
@@ -201,19 +209,32 @@ export function resolveClawHubInstallSpecsForUpdateChannel(params: {
   officialPackageName?: string;
   coreVersion?: string;
   versionBoundToCore?: boolean;
-}): ChannelInstallSpecs {
+  /** Managed installs may prefer the host build; updates retain their registry target. */
+  preferCoreVersion?: boolean;
+}): ClawHubChannelInstallSpecs {
   const parsed = parseClawHubPluginSpec(params.spec);
   if (
     parsed &&
     params.officialPackageName === parsed.name &&
     (params.updateChannel === "extended-stable" ||
-      (params.updateChannel === "stable" && params.versionBoundToCore))
+      (params.updateChannel === "stable" &&
+        (params.versionBoundToCore || params.preferCoreVersion)))
   ) {
-    const npmSpec = resolveCoreBoundNpmSpec({
-      ...params,
-      spec: `${parsed.name}${parsed.version ? `@${parsed.version}` : ""}`,
-    });
-    return { installSpec: npmSpec ? `clawhub:${npmSpec}` : params.spec, recordSpec: params.spec };
+    const npmSpec = resolveCoreBoundNpmSpec(
+      {
+        ...params,
+        spec: `${parsed.name}${parsed.version ? `@${parsed.version}` : ""}`,
+      },
+      params.preferCoreVersion,
+    );
+    const installSpec = npmSpec ? `clawhub:${npmSpec}` : params.spec;
+    return {
+      installSpec,
+      recordSpec: params.spec,
+      ...(npmSpec && params.updateChannel === "stable" && params.preferCoreVersion
+        ? { fallbackSpec: params.spec, fallbackLabel: installSpec }
+        : {}),
+    };
   }
   if (
     params.updateChannel !== "beta" ||

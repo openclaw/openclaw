@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveUsableCustomProviderApiKey } from "./model-auth-provider-config.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import { createToolPolicyMatcher, isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import {
@@ -24,9 +25,6 @@ import {
   loadCapabilityMetadataSnapshot,
 } from "./tools/manifest-capability-availability.js";
 
-/**
- * Plans optional media-tool factory registration from config, policy, capabilities, and auth.
- */
 type OptionalMediaToolFactoryPlan = {
   imageGenerate: boolean;
   videoGenerate: boolean;
@@ -41,7 +39,6 @@ function hasExplicitToolModelConfig(model: AgentModelConfig | undefined): boolea
   );
 }
 
-/** Returns true only when an allowlist explicitly enables the requested tool. */
 export function isToolExplicitlyAllowedByFactoryPolicy(params: {
   toolName: string;
   allowlist?: string[];
@@ -54,7 +51,7 @@ export function isToolExplicitlyAllowedByFactoryPolicy(params: {
   const deny = expandShippedCoreToolPolicyNames(params.denylist);
   return restrictions.every(
     (allow) =>
-      allow.some((entry) => typeof entry === "string" && entry.trim().length > 0) &&
+      allow.some((entry) => entry.trim().length > 0) &&
       isToolAllowedByPolicyName(params.toolName, {
         allow: expandShippedCoreToolPolicyNames(allow),
         deny,
@@ -66,26 +63,21 @@ export function isToolExplicitlyAllowedByFactoryPolicy(params: {
 export function mergeFactoryPolicyList(
   ...lists: Array<string[] | undefined>
 ): string[] | undefined {
-  const merged = lists.flatMap((list) => (Array.isArray(list) ? list : []));
+  const merged = lists.flatMap((list) => list ?? []);
   return merged.length > 0 ? uniqueStrings(merged) : undefined;
 }
 
 function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): string[] | undefined {
   const allowlist = mergeFactoryPolicyList(...lists);
-  if (
-    !allowlist?.some(
-      (entry) => typeof entry === "string" && entry.trim() === DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
-    )
-  ) {
+  if (!allowlist?.some((entry) => entry.trim() === DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY)) {
     return allowlist;
   }
   const withoutDefaultPluginMarker = allowlist.filter(
-    (entry) => typeof entry !== "string" || entry.trim() !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+    (entry) => entry.trim() !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   );
   return uniqueStrings(["*", ...withoutDefaultPluginMarker]);
 }
 
-/** Returns whether the image understanding tool can be constructed for this agent context. */
 export function resolveImageToolFactoryAvailable(params: {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -149,15 +141,11 @@ function hasConfiguredVisionModelAuthSignal(params: {
   >["mediaUnderstandingProviders"];
 }): boolean {
   const providers = params.config?.models?.providers;
-  if (!providers || typeof providers !== "object") {
+  if (!providers) {
     return false;
   }
   for (const [providerId, providerConfig] of Object.entries(providers)) {
-    if (
-      !providerConfig?.models?.some(
-        (model) => Array.isArray(model?.input) && model.input.includes("image"),
-      )
-    ) {
+    if (!providerConfig?.models?.some((model) => model.input?.includes("image"))) {
       continue;
     }
     const profileIds = params.authStore
@@ -187,14 +175,21 @@ function hasConfiguredVisionModelAuthSignal(params: {
     ) {
       continue;
     }
-    if (profileIds.length > 0 || hasEnv) {
+    if (
+      profileIds.length > 0 ||
+      hasEnv ||
+      resolveUsableCustomProviderApiKey({
+        cfg: params.config,
+        provider: providerId,
+        authStore: params.authStore,
+      })
+    ) {
       return true;
     }
   }
   return false;
 }
 
-/** Resolves which optional media tools should be created for the current tool factory call. */
 export function resolveOptionalMediaToolFactoryPlan(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;

@@ -106,6 +106,7 @@ import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowApplication
 import org.robolectric.shadows.ShadowBroadcastPendingResult
 import org.robolectric.shadows.ShadowBroadcastReceiver
+import org.robolectric.shadows.ShadowSpeechRecognizer
 import org.robolectric.shadows.ShadowToast
 import org.robolectric.util.ReflectionHelpers
 import java.net.InetAddress
@@ -130,6 +131,47 @@ import kotlin.coroutines.CoroutineContext
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class NodeForegroundServiceTest {
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  fun enabledWakeWordsKeepMicrophoneServiceAccessAfterBackgrounding() {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    Shadows.shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(true)
+    val runtime = app.ensureRuntime()
+    val endpoint = GatewayEndpoint.manual("127.0.0.1", 18789)
+    ReflectionHelpers.setField(runtime, "connectedEndpoint", endpoint)
+    runtime.applyNodeVoiceWakeWords(endpoint.stableId, """{"triggers":["openclaw"]}""") { true }
+    runtime.setVoiceWakeEnabled(true)
+    val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
+    try {
+      controller.get().onStartCommand(null, 0, 1)
+      drainWithMainLooper {
+        withTimeout(5_000) {
+          while (controller.get().foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE == 0) yield()
+        }
+      }
+      val recognizer = Shadows.shadowOf(checkNotNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer()))
+      val source =
+        checkNotNull(
+          recognizer.lastRecognizerIntent.getParcelableExtra(
+            android.speech.RecognizerIntent.EXTRA_AUDIO_SOURCE,
+            android.os.ParcelFileDescriptor::class.java,
+          ),
+        )
+      recognizer.triggerOnReadyForSpeech(Bundle())
+      assertTrue(runtime.voiceWakeIsListening.value)
+      runtime.setForeground(false)
+      Shadows.shadowOf(Looper.getMainLooper()).idle()
+      assertTrue(runtime.voiceWakeIsListening.value)
+      controller.destroy()
+      assertEquals("Paused", runtime.voiceWakeStatusText.value)
+      assertFalse(source.fileDescriptor.valid())
+      assertTrue(recognizer.isDestroyed)
+    } finally {
+      closeNodeServiceTestFixture(controller, app)
+    }
+  }
+
   @After
   fun resetNodeServiceStartSuppression() {
     NodeForegroundService.resume(RuntimeEnvironment.getApplication(), startNow = false)
@@ -170,6 +212,9 @@ class NodeForegroundServiceTest {
   @Config(shadows = [ServiceRuntimePrefsShadow::class])
   fun coldStickyStartRestoresSavedGatewayWithoutForegroundCapabilities() {
     val app = RuntimeEnvironment.getApplication() as NodeApp
+    Shadows.shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(true)
+    app.prefs.setVoiceWakeEnabled(true)
     val gateway = lifetimeGateway(hello = ::bootstrapHello)
     val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
     val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
@@ -188,6 +233,12 @@ class NodeForegroundServiceTest {
         }
       }
       assertFalse(requireNotNull(app.peekRuntime()).isForeground.value)
+      val recognizerBeforeWords = ShadowSpeechRecognizer.getLatestSpeechRecognizer()
+      requireNotNull(app.peekRuntime()).applyNodeVoiceWakeWords(endpoint.stableId, """{"triggers":["openclaw"]}""") { true }
+      Shadows.shadowOf(Looper.getMainLooper()).idle()
+      assertEquals(0, controller.get().foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+      assertEquals(listOf("openclaw"), requireNotNull(app.peekRuntime()).voiceWakeWords.value)
+      assertEquals(recognizerBeforeWords, ShadowSpeechRecognizer.getLatestSpeechRecognizer())
     } finally {
       closeNodeServiceTestFixture(controller, app)
       gateway.shutdown()
@@ -1004,7 +1055,7 @@ class NodeForegroundServiceTest {
         drainWithMainLooper {
           withTimeout(10_000) { runtime.pendingGatewayTrust.first { it != null } }
         }
-        assertEquals("Accepted TLS must not overwrite the newer queued request's progress", "Connecting…", runtime.statusText.value)
+        assertEquals("Accepted TLS must not overwrite the newer queued request's progress", "Connecting…", runtime.gatewayConnectionDisplay.value.statusText)
         configMutex.unlock()
         configQueueHeld = false
       }
@@ -1721,7 +1772,7 @@ class NodeForegroundServiceTest {
       lifetimeGateway { role ->
         if (role == "node") {
           nodeConnects.incrementAndGet()
-          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceTokens":[{"role":"node","deviceToken":"synthetic-node-token","scopes":[]},{"role":"operator","deviceToken":"synthetic-operator-token","scopes":["operator.read","operator.write"]}]}}"""
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{},"auth":{"deviceTokens":[{"role":"node","deviceToken":"synthetic-node-token","scopes":[]},{"role":"operator","deviceToken":"synthetic-operator-token","scopes":["operator.read","operator.write"]}]}}"""
         } else {
           bootstrapHello(role)
         }
@@ -1925,9 +1976,9 @@ class NodeForegroundServiceTest {
     val gateway =
       lifetimeGateway { role ->
         if (role == "operator") {
-          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceToken":"synthetic-operator-token","role":"operator","scopes":["operator.read","operator.write"]}}"""
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{},"auth":{"deviceToken":"synthetic-operator-token","role":"operator","scopes":["operator.read","operator.write"]}}"""
         } else {
-          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{}}"""
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{}}"""
         }
       }
     val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
@@ -2015,7 +2066,7 @@ class NodeForegroundServiceTest {
       )
       assertFalse("The deadline must not admit a replacement socket", admitted.isCompleted)
       assertEquals("synthetic-old-setup", app.prefs.loadGatewayCredentials(endpoint.stableId).token)
-      assertFalse("Queued configuration must not be persisted before cleanup", app.prefs.manualEnabled.value)
+      assertFalse("Queued configuration must not be persisted before cleanup", app.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE).getBoolean("gateway.manual.enabled", false))
 
       if (disconnectBeforeRelease) {
         viewModel.disconnect()
@@ -2044,13 +2095,13 @@ class NodeForegroundServiceTest {
       if (disconnectBeforeRelease) {
         assertFalse(admitted.isCompleted)
         assertEquals("synthetic-old-setup", app.prefs.loadGatewayCredentials(endpoint.stableId).token)
-        assertFalse(app.prefs.manualEnabled.value)
+        assertFalse(app.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE).getBoolean("gateway.manual.enabled", false))
         assertEquals("Offline", runtime.gatewayConnectionDisplay.value.statusText)
         assertNull(runtime.gatewayConnectionDisplay.value.problem)
       } else {
         drainWithMainLooper { withTimeout(10_000) { admitted.await() } }
         assertEquals("synthetic-replacement-setup", app.prefs.loadGatewayCredentials(endpoint.stableId).token)
-        assertTrue(app.prefs.manualEnabled.value)
+        assertTrue(app.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE).getBoolean("gateway.manual.enabled", false))
         assertNull(runtime.gatewayConnectionDisplay.value.problem)
       }
     } finally {
@@ -2136,13 +2187,13 @@ class NodeForegroundServiceTest {
       }) { role ->
         if (role == "operator") {
           val token = if (helloCount.incrementAndGet() == 1) "synthetic-old-token" else "synthetic-new-token"
-          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceToken":"$token","role":"operator","scopes":["operator.read","operator.write"]}}"""
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{},"auth":{"deviceToken":"$token","role":"operator","scopes":["operator.read","operator.write"]}}"""
         } else {
           if (holdPrimaryWriteUntilNode && heldNodeHello.claimed.compareAndSet(false, true)) {
             heldNodeHello.entered.countDown()
             check(heldNodeHello.release.await(10, TimeUnit.SECONDS)) { "Node hello was not released" }
           }
-          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{}}"""
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{}}"""
         }
       }
     val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
@@ -2295,7 +2346,7 @@ class NodeForegroundServiceTest {
     val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
     val gateway =
       lifetimeGateway {
-        """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceToken":"synthetic-secondary-issued-token","role":"operator","scopes":["operator.read","operator.write"]}}"""
+        """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{},"auth":{"deviceToken":"synthetic-secondary-issued-token","role":"operator","scopes":["operator.read","operator.write"]}}"""
       }
     val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
     app.prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
@@ -2700,9 +2751,9 @@ class NodeForegroundServiceTest {
 
   private fun bootstrapHello(role: String): String =
     if (role == "node") {
-      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceTokens":[{"role":"operator","deviceToken":"synthetic-operator-token","scopes":["operator.read","operator.write"]}]}}"""
+      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{},"auth":{"deviceTokens":[{"role":"operator","deviceToken":"synthetic-operator-token","scopes":["operator.read","operator.write"]}]}}"""
     } else {
-      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{}}"""
+      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{}}"""
     }
 
   private fun lifetimeGatewayTlsSocketFactory(): SSLSocketFactory {
@@ -2745,7 +2796,7 @@ class NodeForegroundServiceTest {
     onConnect: ((JsonObject) -> Unit)? = null,
     sslSocketFactory: SSLSocketFactory? = null,
     hello: (String) -> String = {
-      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{}}"""
+      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{}}"""
     },
   ): MockWebServer =
     MockWebServer().apply {
@@ -2779,6 +2830,8 @@ class NodeForegroundServiceTest {
                           ?.content
                           .orEmpty(),
                       )
+                    } else if (frame["method"]?.jsonPrimitive?.content == "agents.list") {
+                      """{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}"""
                     } else {
                       onRequest(frame)
                     }

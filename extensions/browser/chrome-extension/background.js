@@ -1,3 +1,7 @@
+// The relay bridge owns CDP target synthesis; this worker owns tab
+// eligibility/access and forwards allowed frames to chrome.debugger.
+// The OpenClaw tab group is the ACL in selected mode and an ownership
+// marker in all-tabs mode.
 import {
   createNativeBootstrapController,
   discardRetiredCopilotState,
@@ -7,13 +11,6 @@ import {
 import { createPopupMessageHandler } from "./modules/popup-background.js";
 import { createRelayCommandHandler } from "./modules/relay-command-handler.js";
 import { openAuthenticatedRelaySocket } from "./modules/relay-connection.js";
-// OpenClaw extension service worker.
-//
-// Thin transport between the OpenClaw extension relay (loopback WebSocket) and
-// chrome.debugger. All CDP target synthesis lives server-side in the relay
-// bridge; this worker owns tab eligibility/access and forwards allowed frames.
-// The OpenClaw tab group is the ACL in selected mode and an ownership marker
-// in all-tabs mode.
 import {
   ACCESS_MODE_SELECTED,
   createPairingConfigStore,
@@ -22,7 +19,7 @@ import {
   toRelayTabInfo,
 } from "./modules/relay-core.js";
 import { createRelayDebugger } from "./modules/relay-debugger.js";
-import { isTabSelected } from "./modules/relay-tab-groups.js";
+import { createSerialQueue } from "./modules/serial-queue.js";
 import { registerTabAccessEvents } from "./modules/tab-access-events.js";
 import { createTabAccessPolicy } from "./modules/tab-access.js";
 
@@ -54,12 +51,10 @@ let relayConnectionsSuspended = false;
 let nativeBootstrap = null;
 // Start blocked: no runtime path may outrun the retired-state storage read.
 let retiredCopilotCustodyBlocked = true;
-/** Debounce handle for tab-list refreshes. */
 let tabsSyncTimer = null;
-let accessMutationChain = Promise.resolve();
-const pairingConfigStore = createPairingConfigStore(chrome.storage.local);
+const runAccessMutation = createSerialQueue();
+const pairingConfigStore = createPairingConfigStore();
 const tabAccessPolicy = createTabAccessPolicy({
-  isSelectedTab: isTabSelected,
   getGroupColor: async () => (await getConfig()).groupColor,
 });
 const relayDebugger = createRelayDebugger({ policy: tabAccessPolicy, requireAutomationAllowed });
@@ -148,16 +143,6 @@ async function getConfig() {
   return config;
 }
 
-function runAccessMutation(task) {
-  const pending = accessMutationChain.then(task, task);
-  accessMutationChain = pending.catch(() => undefined);
-  return pending;
-}
-
-// ---------------------------------------------------------------------------
-// Tab group management (selected-mode ACL; all-mode ownership marker)
-// ---------------------------------------------------------------------------
-
 async function focusWindowForTab(tab) {
   if (typeof tab.windowId === "number") {
     await chrome.windows.update(tab.windowId, { focused: true });
@@ -218,10 +203,6 @@ async function syncTabsToRelay() {
   const tabs = accessible.filter((tab) => tabAccessPolicy.canPublishTab(tab.id));
   send({ type: "tabs", tabs: tabs.map(toRelayTabInfo) }, socket);
 }
-
-// ---------------------------------------------------------------------------
-// chrome.debugger transport
-// ---------------------------------------------------------------------------
 
 async function detachAllDebuggerSessions() {
   await relayDebugger.detachAll(retiredCopilotCustodyBlocked);
@@ -295,10 +276,6 @@ async function pauseTab(tabId) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Relay connection
-// ---------------------------------------------------------------------------
-
 function send(message, socket = relayWs) {
   if (
     !retiredCopilotCustodyBlocked &&
@@ -313,10 +290,8 @@ function send(message, socket = relayWs) {
 
 function clearRelayOpeningDeadline() {
   relayOpeningDeadlineAt = 0;
-  if (relayOpeningDeadlineTimer) {
-    clearTimeout(relayOpeningDeadlineTimer);
-    relayOpeningDeadlineTimer = null;
-  }
+  clearTimeout(relayOpeningDeadlineTimer);
+  relayOpeningDeadlineTimer = null;
   void chrome.alarms.clear(RELAY_OPENING_DEADLINE_ALARM);
 }
 
@@ -453,7 +428,7 @@ async function connectRelay(isConnectionAllowed = () => true) {
       onApplicationMessage: (_socket, msg) => {
         void handleRelayCommand(msg);
       },
-      onAuthenticationFailure: (socket, error) => failRelayAuthentication(socket, error),
+      onAuthenticationFailure: failRelayAuthentication,
       onClose: (socket, authenticated) => {
         retireRelayOwner(owner);
         if (relayWs !== socket) {
@@ -486,11 +461,7 @@ async function connectRelay(isConnectionAllowed = () => true) {
 
 function handleRelayOpeningDeadline() {
   const ws = relayWs;
-  if (!ws) {
-    clearRelayOpeningDeadline();
-    return;
-  }
-  if (relayAuthenticatedSocket === ws) {
+  if (!ws || relayAuthenticatedSocket === ws) {
     clearRelayOpeningDeadline();
     return;
   }
@@ -530,7 +501,7 @@ async function maybeEnsureRelayDaemon(relayUrl, connectionIsCurrent) {
     return;
   }
   lastRelayEnsureAtMs = now;
-  await requestRelayEnsure(relayPort, chrome);
+  await requestRelayEnsure(relayPort);
 }
 
 function scheduleReconnect() {
@@ -553,10 +524,6 @@ async function startAutomation() {
   await nativeBootstrap.attempt();
   await connectRelay();
 }
-
-// ---------------------------------------------------------------------------
-// Popup messaging + lifecycle
-// ---------------------------------------------------------------------------
 
 const handlePopupMessage = createPopupMessageHandler({
   pairingConfigStore,

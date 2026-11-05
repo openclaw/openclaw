@@ -28,7 +28,7 @@ function normalizeLocaleToken(raw: string | undefined): string {
 
 // Resolve shell/browser locale strings such as zh_Hant_TW.UTF-8 into supported
 // setup locales, falling back to English for unknown languages.
-function resolveWizardLocale(value: string | undefined): WizardLocale {
+export function resolveWizardLocale(value: string | undefined): WizardLocale {
   const normalized = normalizeLocaleToken(value);
   if (!normalized) {
     return WIZARD_DEFAULT_LOCALE;

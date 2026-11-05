@@ -81,7 +81,6 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "extensions/reef/protocol/envelope.ts", // signed version fields authenticate before unsupported versions are rejected
   "extensions/signal/src/approval-native.ts", // approval runtime dynamically implements the public channel adapter seam
   "extensions/slack/src/approval-native.ts", // approval runtime dynamically implements the public channel adapter seam
-  "extensions/slack/src/monitor/events/agent.ts", // Slack app typings omit the agent event registrar
   "extensions/slack/src/monitor/events/assistant.ts", // Slack app typings omit the assistant event registrar
   "extensions/slack/src/monitor/events/messages.ts", // app mentions adapt into the shared Slack message pipeline
   "extensions/slack/src/monitor/slash.ts", // Slack action and options overloads omit runtime middleware fields
@@ -124,7 +123,6 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "src/channels/plugins/config-schema.ts", // Public SDK Zod generics preserve caller schema identity.
   "src/commands/channel-test-registry.ts", // Test support.
   "src/commands/doctor/cron/legacy-repair.ts", // Partially validated legacy rows cross the canonical cron store type.
-  "src/commands/doctor/cron/legacy-store-migration.ts", // Legacy loader carries partial rows in the canonical store envelope.
   "src/commands/doctor/cron/warnings.ts", // Doctor inspects partially parsed cron rows.
   "src/config/schema.hints.ts", // Zod pipe internals cross its public type namespace.
   "src/config/sessions/store-entry-shape.ts", // Legacy projection accepts partially validated session records.

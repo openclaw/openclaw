@@ -2,19 +2,26 @@
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
+import {
+  inheritLegacyDefaultAgentId,
+  tryGetLegacyDefaultAgentId,
+} from "../../../config/legacy.default-agent-owner.js";
 import type { LegacyConfigMigrationContext } from "../../../config/legacy.shared.js";
 import {
   cloneConfigWithResolutionFacts,
   copyConfigResolutionFactsThroughRewrite,
 } from "../../../config/resolution-facts.js";
+import { materializeLegacyAgentOwnershipForActiveChannelsResult } from "../../../config/validation.js";
 import {
   isPluginSourceModulePath,
   tryNativeRequireModule,
 } from "../../../plugins/native-module-require.js";
 import { getCachedPluginModuleLoader } from "../../../plugins/plugin-module-loader-cache.js";
 import { preparePluginLoaderAliases } from "../../../plugins/sdk-alias.js";
-import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
+import {
+  applyChannelDoctorCompatibilityMigrations,
+  type ChannelDoctorCompatibilityOptions,
+} from "./channel-legacy-config-migrate.js";
 import { resolveChannelAccountBindingRepairInput } from "./legacy-config-binding-repair-input.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 import { collectToolPolicyConflictWarnings } from "./legacy-config-migrations.runtime.tool-policy-conflicts.js";
@@ -59,6 +66,7 @@ export type LegacyDoctorMigrationOptions = {
   context?: LegacyConfigMigrationContext;
   // State-free previews skip plugin contracts; the committed result always uses a full run.
   pluginContracts?: boolean;
+  pluginCompatibility?: ChannelDoctorCompatibilityOptions["pluginCompatibility"];
 };
 
 /** Apply all legacy doctor migrations to raw config, returning null when nothing changed. */
@@ -76,7 +84,10 @@ export function applyLegacyDoctorMigrations(
   const original = raw;
   const copilotConfig = removeLegacyCopilotDiscovery(original);
   const contextBudget = migrateLegacyContextBudgetConfig(copilotConfig);
-  const next = cloneConfigWithResolutionFacts(contextBudget.config);
+  const next = inheritLegacyDefaultAgentId(
+    original,
+    cloneConfigWithResolutionFacts(contextBudget.config),
+  );
   const changes = contextBudget.changes.map(({ message }) => message);
   if (copilotConfig !== original) {
     changes.push(
@@ -88,8 +99,20 @@ export function applyLegacyDoctorMigrations(
   }
   const compat = applyChannelDoctorCompatibilityMigrations(next, {
     pluginContracts: options.pluginContracts !== false,
+    pluginCompatibility: options.pluginCompatibility,
   });
   changes.push(...compat.changes);
+  const legacyOwner = tryGetLegacyDefaultAgentId(next);
+  if (legacyOwner && options.pluginContracts !== false) {
+    const materialized = materializeLegacyAgentOwnershipForActiveChannelsResult(
+      compat.next,
+      legacyOwner,
+    );
+    if (materialized.insertedPaths.length > 0) {
+      Object.assign(compat.next, materialized.config);
+      changes.push("Preserved legacy ownership for enabled channels.");
+    }
+  }
   const ownership: ReturnType<
     typeof import("./legacy-config-binding-repair.runtime.js").repairUnownedChannelAccountBindings
   > =
@@ -107,10 +130,9 @@ export function applyLegacyDoctorMigrations(
     ...collectToolPolicyConflictWarnings(ownership.config),
   ];
   copyConfigResolutionFactsThroughRewrite(original, ownership.config);
-  // The config reader keeps the retired default-agent marker outside the object.
-  // Cloning must retain that owner so validation does not roll back a repairable roster.
+  // Only Doctor retains the preimage owner for state migration before the config commit.
   return {
-    next: changes.length > 0 ? inheritLegacyDefaultAgentId(original, ownership.config) : null,
+    next: changes.length > 0 ? inheritLegacyDefaultAgentId(next, ownership.config) : null,
     changes,
     ...(warnings.length ? { warnings } : {}),
   };

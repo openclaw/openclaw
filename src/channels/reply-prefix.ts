@@ -19,17 +19,11 @@ export type ReplyPrefixContextBundle = {
   onModelSelected: (ctx: ModelSelectionContext) => void;
 };
 
-/**
- * Reply option subset consumed by channel reply dispatchers.
- */
 export type ReplyPrefixOptions = Pick<
   ReplyPrefixContextBundle,
   "responsePrefix" | "responsePrefixContextProvider" | "onModelSelected"
 >;
 
-/**
- * Creates response-prefix options and a live context provider for the selected model.
- */
 export function createReplyPrefixContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -60,17 +54,9 @@ export function createReplyPrefixContext(params: {
   };
 }
 
-/**
- * Creates the reply-prefix options object expected by `getReply` call sites.
- */
 export function createReplyPrefixOptions(
   params: Parameters<typeof createReplyPrefixContext>[0],
 ): ReplyPrefixOptions {
-  const { responsePrefix, responsePrefixContextProvider, onModelSelected } =
-    createReplyPrefixContext(params);
-  return {
-    responsePrefix,
-    responsePrefixContextProvider,
-    onModelSelected,
-  };
+  const { prefixContext: _prefixContext, ...options } = createReplyPrefixContext(params);
+  return options;
 }

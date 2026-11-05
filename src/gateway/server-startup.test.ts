@@ -1,19 +1,31 @@
-/**
- * Gateway startup orchestration tests.
- */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 const prepareModelRuntimeSnapshotMock = vi.fn(async (_params: unknown) => ({}));
+const collectConfiguredRefs = vi.fn((_config: OpenClawConfig, agentId: string) => [
+  { value: agentId === "main" ? "openai/gpt-5.4" : "anthropic/sonnet-4.6" },
+]);
+const hydrate = vi.fn();
 const refreshPreparedModelRuntimeSnapshotsMock = vi.fn<
   typeof import("../agents/prepared-model-runtime.js").refreshPreparedModelRuntimeSnapshots
 >(async () => {});
 
-vi.mock("../agents/agent-scope.js", () => ({
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
+  listAgentIds: () => ["main", "secondary"],
+  resolveAgentDir: (_config: OpenClawConfig, agentId: string) => `/tmp/${agentId}`,
   resolveDefaultAgentDir: () => "/tmp/agent",
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
   resolveDefaultAgentId: () => "default",
+}));
+
+vi.mock("../agents/prepared-model-runtime.configured.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-runtime.configured.js")>()),
+  collectPreparedModelRuntimeConfiguredRefs: collectConfiguredRefs,
+}));
+vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
+  ensureAuthProfileStoreAsync: hydrate,
 }));
 
 vi.mock("../agents/prepared-model-runtime.js", () => ({
@@ -33,103 +45,27 @@ describe("gateway startup model runtime publication", () => {
   beforeEach(() => {
     prepareModelRuntimeSnapshotMock.mockClear();
     refreshPreparedModelRuntimeSnapshotsMock.mockClear();
+    collectConfiguredRefs.mockClear();
+    hydrate.mockClear();
   });
 
-  it("publishes an explicit configured primary model", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    await publishConfiguredModelRuntimeSnapshots({
-      cfg,
-    });
-
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
-      allowGatewaySubagentBinding: true,
-      gatewayLifecycle: true,
-      startup: true,
-      catalogMode: "static",
-    });
-  });
-
-  it("hydrates configured external CLI auth before prepared owner publication", async () => {
-    const cfg = {} as OpenClawConfig;
-    const hydrate = vi.fn();
-
-    await hydrateConfiguredExternalCliAuth({
-      getConfig: () => cfg,
-      log: { warn: vi.fn() },
-      deps: {
-        listAgentIds: () => ["main", "secondary"],
-        resolveAgentDir: (_config, agentId) => `/tmp/${agentId}`,
-        collectConfiguredRefs: (_config, agentId) => [
-          { value: agentId === "main" ? "openai/gpt-5.4" : "anthropic/sonnet-4.6" },
-        ],
-        hydrate,
-      },
-    });
-
-    expect(hydrate).toHaveBeenCalledTimes(2);
-    expect(hydrate).toHaveBeenCalledWith(cfg, "/tmp/main", ["openai"]);
-    expect(hydrate).toHaveBeenCalledWith(cfg, "/tmp/secondary", ["anthropic"]);
-    expect(refreshPreparedModelRuntimeSnapshotsMock).not.toHaveBeenCalled();
-  });
-
-  it("publishes the default catalog when no explicit primary model is configured", async () => {
-    const cfg = {} as OpenClawConfig;
-    await publishConfiguredModelRuntimeSnapshots({
-      cfg,
-    });
-
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
-      allowGatewaySubagentBinding: true,
-      gatewayLifecycle: true,
-      startup: true,
-      catalogMode: "static",
-    });
-  });
-
-  it("publishes lifecycle owners for configured CLI backends", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "codex-cli/gpt-5.5",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    await publishConfiguredModelRuntimeSnapshots({ cfg });
-
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
-      allowGatewaySubagentBinding: true,
-      gatewayLifecycle: true,
-      startup: true,
-      catalogMode: "static",
-    });
-  });
-
-  it("preserves the explicit startup workspace in the published default owner", async () => {
-    const cfg = {} as OpenClawConfig;
-    await publishConfiguredModelRuntimeSnapshots({
-      cfg,
-      workspaceDir: "/tmp/explicit-workspace",
-    });
-
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
-      allowGatewaySubagentBinding: true,
-      gatewayLifecycle: true,
-      startup: true,
-      catalogMode: "static",
-      defaultWorkspaceDir: "/tmp/explicit-workspace",
-    });
-  });
+  it.each([undefined, "/tmp/explicit-workspace"])(
+    "publishes startup lifecycle owners with workspace %s",
+    async (workspaceDir) => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+      };
+      await publishConfiguredModelRuntimeSnapshots({ cfg, workspaceDir });
+      expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
+        allowGatewaySubagentBinding: true,
+        gatewayLifecycle: true,
+        joinSupersedingPublication: true,
+        startup: true,
+        catalogMode: "static",
+        ...(workspaceDir ? { defaultWorkspaceDir: workspaceDir } : {}),
+      });
+    },
+  );
 
   it("propagates lifecycle catalog preparation failure", async () => {
     const error = new Error("models write failed");
@@ -170,77 +106,33 @@ describe("gateway startup model runtime publication", () => {
     const initialConfig = { ui: { theme: "light" } } as never;
     const nextConfig = { ui: { theme: "dark" } } as never;
     let currentConfig = initialConfig;
-    const depsReady = createDeferred<{
-      listAgentIds: () => string[];
-      resolveAgentDir: () => string;
-      collectConfiguredRefs: ReturnType<typeof vi.fn>;
-      hydrate: ReturnType<typeof vi.fn>;
-    }>();
-    const collectConfiguredRefs = vi.fn(() => [{ value: "openai/gpt-5.4" }]);
-    const hydrate = vi.fn();
 
     const hydration = hydrateConfiguredExternalCliAuth({
       getConfig: () => currentConfig,
       log: { warn: vi.fn() },
-      deps: depsReady.promise,
     } as never);
     currentConfig = nextConfig;
-    depsReady.resolve({
-      listAgentIds: () => ["default"],
-      resolveAgentDir: () => "/tmp/default-agent",
-      collectConfiguredRefs,
-      hydrate,
-    });
 
     await expect(hydration).resolves.toBe(nextConfig);
-    expect(collectConfiguredRefs).toHaveBeenCalledWith(nextConfig, "default");
-    expect(hydrate).toHaveBeenCalledWith(nextConfig, "/tmp/default-agent", ["openai"]);
-  });
-
-  it("drops a stale plugin generation after loading the prepared runtime", async () => {
-    let current = true;
-    const publication = publishConfiguredModelRuntimeSnapshots({
-      cfg: {},
-      isCurrent: () => current,
-    } as never);
-    current = false;
-
-    await publication;
-
+    expect(hydrate).toHaveBeenCalledTimes(2);
+    for (const [agentId, provider] of [
+      ["main", "openai"],
+      ["secondary", "anthropic"],
+    ]) {
+      expect(collectConfiguredRefs).toHaveBeenCalledWith(nextConfig, agentId);
+      expect(hydrate).toHaveBeenCalledWith(`/tmp/${agentId}`, {
+        config: nextConfig,
+        externalCli: {
+          mode: "scoped",
+          config: nextConfig,
+          allowKeychainPrompt: false,
+          providerIds: [provider],
+        },
+        allowKeychainPrompt: false,
+        readOnly: true,
+        syncExternalCli: false,
+      });
+    }
     expect(refreshPreparedModelRuntimeSnapshotsMock).not.toHaveBeenCalled();
-  });
-
-  it("threads plugin claim loss through async model config publication", async () => {
-    const configStarted = createDeferred();
-    const releaseConfig = createDeferred();
-    let current = true;
-    refreshPreparedModelRuntimeSnapshotsMock.mockImplementationOnce(
-      async (getConfig: unknown, options: unknown) => {
-        expect(getConfig).toBeTypeOf("function");
-        const config = (getConfig as () => Promise<unknown>)();
-        await configStarted.promise;
-        expect(options).toMatchObject({ isPublicationCurrent: expect.any(Function) });
-        await config;
-        expect((options as { isPublicationCurrent: () => boolean }).isPublicationCurrent()).toBe(
-          false,
-        );
-      },
-    );
-    const publication = publishConfiguredModelRuntimeSnapshots({
-      cfg: {},
-      getConfig: async () => {
-        configStarted.resolve();
-        await releaseConfig.promise;
-        return {};
-      },
-      isCurrent: () => current,
-    } as never);
-
-    await configStarted.promise;
-    current = false;
-    releaseConfig.resolve();
-    await publication;
-
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledOnce();
   });
 });

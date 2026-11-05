@@ -64,19 +64,19 @@ describe("path prepend helpers", () => {
   });
 
   it.each([
-    [env({ HOME: "/tmp/home" }), ["/custom/bin"], env({ HOME: "/tmp/home" })],
-    [env({ path: "" }), ["/custom/bin"], env({ path: "" })],
     [env({ PATH: "/usr/bin" }), [], env({ PATH: "/usr/bin" })],
     [env({ PATH: "/usr/bin" }), undefined, env({ PATH: "/usr/bin" })],
-  ])("respects requireExisting for %j with prepend %j", (envValue, prepend, expected) => {
-    applyPathPrepend(envValue, prepend, { requireExisting: true });
+  ])("preserves %j when prepends are empty or undefined", (envValue, prepend, expected) => {
+    applyPathPrepend(envValue, prepend);
     expect(envValue).toEqual(expected);
   });
 
-  it("creates PATH when prepends are provided and no path key exists", () => {
-    const envLocal = { HOME: "/tmp/home" };
+  it.each([
+    [env({ HOME: "/tmp/home" }), env({ HOME: "/tmp/home", PATH: "/custom/bin" })],
+    [env({ path: "" }), env({ path: "/custom/bin" })],
+  ])("creates a path value while preserving the key in %j", (envLocal, expected) => {
     applyPathPrepend(envLocal, ["/custom/bin"]);
-    expect(envLocal).toEqual({ HOME: "/tmp/home", PATH: "/custom/bin" });
+    expect(envLocal).toEqual(expected);
   });
 
   describe("removePathPrepend", () => {

@@ -112,24 +112,42 @@ async function generateKyselyTypes(schemaSource: string): Promise<string> {
   }
 }
 
-export async function ensureKyselyTypes(cwd = REPO_ROOT, verify = false): Promise<void> {
-  // Packaged installs and dependency-only Docker stages have no source schemas.
-  if (
-    !verify &&
-    !SCHEMAS.some((name) => fs.existsSync(path.join(cwd, "src/state", `${name}-schema.sql`)))
-  ) {
-    return;
-  }
+export async function ensureKyselyTypes(
+  cwd = REPO_ROOT,
+  verify = false,
+  options: { allowPartialCheckout?: boolean } = {},
+): Promise<void> {
   const outputDir = path.join(cwd, ".artifacts/kysely");
   const stampFile = path.join(outputDir, "inputs.sha256");
-  const schemas = SCHEMAS.map((name) => ({
-    source: fs.readFileSync(path.join(cwd, "src/state", `${name}-schema.sql`), "utf8"),
+  const inputs = SCHEMAS.map((name) => ({
+    name,
+    input: path.join(cwd, "src/state", `${name}-schema.sql`),
     output: path.join(outputDir, `${name}-db.generated.ts`),
+  }));
+  const available = inputs.filter((schema) => fs.existsSync(schema.input));
+  const partial = !verify && options.allowPartialCheckout === true;
+  if (partial) {
+    // Sparse lint must not consume a previous projection whose source is now omitted.
+    for (const schema of inputs.filter((input) => !available.includes(input))) {
+      fs.rmSync(schema.output, { force: true });
+    }
+  }
+  // Packaged installs and dependency-only Docker stages have no source schemas.
+  if (!verify && available.length === 0) {
+    if (partial) {
+      fs.rmSync(stampFile, { force: true });
+    }
+    return;
+  }
+  const schemas = (partial ? available : inputs).map((schema) => ({
+    name: schema.name,
+    source: fs.readFileSync(schema.input, "utf8"),
+    output: schema.output,
   }));
   const fingerprint = () => {
     const hash = createHash("sha256").update(fs.readFileSync(fileURLToPath(import.meta.url)));
     for (const schema of schemas) {
-      hash.update(schema.source).update("\0");
+      hash.update(schema.name).update("\0").update(schema.source).update("\0");
       hash.update(fs.existsSync(schema.output) ? fs.readFileSync(schema.output) : "missing");
     }
     return hash.digest("hex");

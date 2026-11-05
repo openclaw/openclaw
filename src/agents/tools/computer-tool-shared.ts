@@ -88,8 +88,6 @@ export type ScreenshotCapture = {
   base64: string;
   displayFrameId: string;
   mimeType: string;
-  width?: number;
-  height?: number;
 };
 
 export type ComputerObservationState = {

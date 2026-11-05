@@ -4,35 +4,38 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDataFixture } from "../../scripts/lib/code-mode-matrix-data-tasks.ts";
 import type { MatrixPerformanceEvaluation } from "../../scripts/lib/code-mode-matrix-performance-types.ts";
+import { groupBy } from "../../scripts/lib/group-by.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-type Invoice = {
-  invoiceId: string;
+type Invoice = Record<"invoiceId" | "customerId" | "status" | "dueDate", string> & {
   revision: number;
-  customerId: string;
-  status: string;
-  dueDate: string;
   amountCents?: number | string | null;
   creditCents: number;
 };
 type Page = { snapshotId: string; records: Invoice[]; nextCursor: string | null };
+type Snapshot = { snapshotId: string; recordCount: number; firstCursor: string };
 type FixtureTool = {
   execute: (id: string, input: Record<string, unknown>) => Promise<{ details: unknown }>;
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const writeFiles = (workspace: string, files: Record<string, string>) =>
+  Promise.all(
+    Object.entries(files).map(([name, value]) => fs.writeFile(path.join(workspace, name), value)),
+  );
+const decision = ({ invoiceId, revision }: Invoice, reason: string) => ({
+  invoiceId,
+  revision,
+  reason,
+});
+const sumNet = (rows: readonly { netCents: number }[]) =>
+  rows.reduce((sum, row) => sum + row.netCents, 0);
 
 async function prepare(repetition: number) {
   const fixture = createDataFixture("invoice-reconciliation", repetition);
-  const root = tempDirs.make("openclaw-invoice-matrix-");
-  const workspace = path.join(root, "workspace");
-  await fs.mkdir(workspace);
-  await Promise.all(
-    Object.entries(fixture.workspaceFiles ?? {}).map(([name, value]) =>
-      fs.writeFile(path.join(workspace, name), value),
-    ),
-  );
-  const receiptsPath = path.join(root, "receipts.jsonl");
-  const pluginPath = path.join(root, "fixture.mjs");
+  const workspace = tempDirs.make("openclaw-invoice-matrix-");
+  await writeFiles(workspace, fixture.workspaceFiles ?? {});
+  const receiptsPath = path.join(workspace, "receipts.jsonl");
+  const pluginPath = path.join(workspace, "fixture.mjs");
   await fs.writeFile(pluginPath, fixture.pluginSource!);
   const plugin = await import(pathToFileURL(pluginPath).href);
   const tools = new Map<string, FixtureTool>();
@@ -42,81 +45,59 @@ async function prepare(repetition: number) {
       tools.set(tool.name, tool);
     },
   });
-  const snapshot = (await tools.get("matrix_invoice_snapshot")!.execute("snapshot", {}))
-    .details as { snapshotId: string; recordCount: number; firstCursor: string };
+  const call = async <T>(name: string, input: Record<string, unknown>): Promise<T> =>
+    (await tools.get(name)!.execute(name, input)).details as T;
+  const snapshot = await call<Snapshot>("matrix_invoice_snapshot", {});
+  const readPage = (cursor: string, fields?: string[]) =>
+    call<Page>("matrix_invoice_page", { snapshotId: snapshot.snapshotId, cursor, fields });
   const rows: Invoice[] = [];
   const pages: Page[] = [];
   let cursor: string | null = snapshot.firstCursor;
   while (cursor !== null) {
-    const page = (
-      await tools.get("matrix_invoice_page")!.execute("page", {
-        snapshotId: snapshot.snapshotId,
-        cursor,
-      })
-    ).details as Page;
+    const page = await readPage(cursor);
     expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(8 * 1024);
     pages.push(page);
     rows.push(...page.records);
     cursor = page.nextCursor;
   }
   const policy = JSON.parse(fixture.workspaceFiles!["reconciliation-policy.json"]!);
-  // This reference groups revisions in one pass; it does not use the fixture oracle.
-  const latest = new Map<string, Invoice>();
-  for (const row of rows) {
-    if ((latest.get(row.invoiceId)?.revision ?? 0) < row.revision) {
-      latest.set(row.invoiceId, row);
-    }
-  }
-  const selected = [...latest.values()].toSorted((a, b) => a.invoiceId.localeCompare(b.invoiceId));
-  const eligible = selected.filter(
-    (row) => row.status === "open" && row.dueDate <= policy.cutoffDate,
-  );
+  // Independent reference: group once and reduce to the highest revision, not the fixture oracle.
+  const selected = [...groupBy(rows, (row) => row.invoiceId).values()]
+    .map((revisions) => revisions.reduce((a, b) => (a.revision < b.revision ? b : a)))
+    .toSorted((a, b) => a.invoiceId.localeCompare(b.invoiceId));
+  const isEligible = (row: Invoice) => row.status === "open" && row.dueDate <= policy.cutoffDate;
+  const eligible = selected.filter(isEligible);
   const payableInvoices = eligible
     .filter((row) => row.amountCents != null)
-    .map((row) => ({
-      invoiceId: row.invoiceId,
-      revision: row.revision,
-      customerId: row.customerId,
-      amountCents: Number(row.amountCents),
-      creditCents: row.creditCents,
-      netCents: Number(row.amountCents) - row.creditCents,
+    .map(({ invoiceId, revision, customerId, amountCents, creditCents }) => ({
+      invoiceId,
+      revision,
+      customerId,
+      amountCents: Number(amountCents),
+      creditCents,
+      netCents: Number(amountCents) - creditCents,
     }));
-  const totals = new Map<string, { customerId: string; invoiceCount: number; netCents: number }>();
-  for (const row of payableInvoices) {
-    const total = totals.get(row.customerId) ?? {
-      customerId: row.customerId,
-      invoiceCount: 0,
-      netCents: 0,
-    };
-    total.invoiceCount += 1;
-    total.netCents += row.netCents;
-    totals.set(row.customerId, total);
-  }
-  const customerTotals = [...totals.values()].toSorted((a, b) =>
-    a.customerId.localeCompare(b.customerId),
-  );
+  const customerTotals = [...groupBy(payableInvoices, (row) => row.customerId)]
+    .map(([customerId, invoices]) => ({
+      customerId,
+      invoiceCount: invoices.length,
+      netCents: sumNet(invoices),
+    }))
+    .toSorted((a, b) => a.customerId.localeCompare(b.customerId));
   const report = {
     snapshotId: snapshot.snapshotId,
     sourceRecordCount: rows.length,
-    invoiceCount: latest.size,
+    invoiceCount: selected.length,
     cutoffDate: policy.cutoffDate,
     payableInvoices,
     excludedInvoices: selected
-      .filter((row) => row.status !== "open" || row.dueDate > policy.cutoffDate)
-      .map((row) => ({
-        invoiceId: row.invoiceId,
-        revision: row.revision,
-        reason: row.status === "open" ? "future" : row.status,
-      })),
+      .filter((row) => !isEligible(row))
+      .map((row) => decision(row, row.status === "open" ? "future" : row.status)),
     exceptions: eligible
       .filter((row) => row.amountCents == null)
-      .map((row) => ({
-        invoiceId: row.invoiceId,
-        revision: row.revision,
-        reason: "unknown_amount",
-      })),
+      .map((row) => decision(row, "unknown_amount")),
     customerTotals,
-    totalNetCents: [...totals.values()].reduce((sum, row) => sum + row.netCents, 0),
+    totalNetCents: sumNet(customerTotals),
   };
   const artifacts = {
     "reconciliation.json": JSON.stringify(report),
@@ -126,48 +107,36 @@ async function prepare(repetition: number) {
         .map((row) => `${row.customerId},${row.invoiceCount},${row.netCents}\n`)
         .join(""),
   };
-  await Promise.all(
-    Object.entries(artifacts).map(([name, value]) =>
-      fs.writeFile(path.join(workspace, name), value),
-    ),
-  );
+  await writeFiles(workspace, artifacts);
   const trace: MatrixPerformanceEvaluation["trace"] = {
     calls: [],
     outcomes: [],
     assistantTurns: 1,
     models: [],
-    activities: Object.entries(artifacts).flatMap(([name, content]) => [
-      { name: "write", input: { path: name, content }, result: {}, isError: false },
-      { name: "read", input: { path: name }, result: { kind: "text", content }, isError: false },
-    ]),
+    activities: [],
   };
   const receipts: unknown[] = (await fs.readFile(receiptsPath, "utf8"))
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
   return {
-    fixture,
     report,
     rows,
     pages,
-    snapshot,
-    tools,
+    readFirstPage: (fields: string[]) => readPage(snapshot.firstCursor, fields),
     evaluate: (patch: Partial<MatrixPerformanceEvaluation> = {}) =>
       fixture.evaluate({ workspace, trace, receipts, ...patch }),
     workspace,
-    trace,
     receipts,
   };
 }
 
 describe("paginated invoice task", () => {
-  it("accepts independently reconciled artifacts across seeds with complete bounded source pages", async () => {
+  it("accepts independently reconciled artifacts without file-tool calls across seeds and complete bounded pages", async () => {
     const totals: number[] = [];
     for (const repetition of [1, 2, 3]) {
       const run = await prepare(repetition);
-      expect(run.rows).toHaveLength(192);
-      expect(run.pages).toHaveLength(8);
-      expect(run.report.invoiceCount).toBe(144);
+      expect([run.rows.length, run.pages.length, run.report.invoiceCount]).toEqual([192, 8, 144]);
       expect(run.report.payableInvoices.some((row) => row.amountCents === 0)).toBe(true);
       expect(run.rows.some((row) => row.amountCents === null)).toBe(true);
       expect(run.rows.some((row) => !("amountCents" in row))).toBe(true);
@@ -176,29 +145,19 @@ describe("paginated invoice task", () => {
       );
       expect(Object.values(await run.evaluate()).every(Boolean)).toBe(true);
       totals.push(run.report.totalNetCents);
-      const projected = (
-        await run.tools.get("matrix_invoice_page")!.execute("projection", {
-          snapshotId: run.snapshot.snapshotId,
-          cursor: run.snapshot.firstCursor,
-          fields: ["invoiceId", "revision"],
-        })
-      ).details as Page;
-      expect(projected.records).toEqual(
-        run.pages[0]!.records.map(({ invoiceId, revision }) => ({ invoiceId, revision })),
-      );
-      expect(projected.nextCursor).toBe(run.pages[0]!.nextCursor);
+      expect(await run.readFirstPage(["invoiceId", "revision"])).toEqual({
+        ...run.pages[0],
+        records: run.pages[0]!.records.map(({ invoiceId, revision }) => ({ invoiceId, revision })),
+      });
     }
     expect(new Set(totals).size).toBe(3);
   });
 
-  it("rejects missing final-page evidence while accepting artifacts produced without file tool calls", async () => {
+  it("rejects missing final-page evidence", async () => {
     const run = await prepare(4);
     expect((await run.evaluate({ receipts: run.receipts.slice(0, -1) })).completePageCoverage).toBe(
       false,
     );
-    expect(
-      Object.values(await run.evaluate({ trace: { ...run.trace, activities: [] } })).every(Boolean),
-    ).toBe(true);
   });
 
   it("rejects altered invoice decisions, CSV totals, and preserved source files", async () => {

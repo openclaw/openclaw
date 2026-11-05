@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -22,8 +23,11 @@ export type AgentSchemaMigration = {
 
 export type OpenClawDatabaseMaintenanceScope = {
   readonly ownsSchemaMaintenance: boolean;
+  /** SQLite admission coverage for this offline Doctor operation; absent at runtime. */
+  readonly sqliteIntegrityCheck?: "quick" | "full";
   assertOwnerCurrent(this: void, access?: "read"): void;
   assertDatabaseAccess(this: void, databasePath: string): void;
+  assertCleanupDatabaseAccess(this: void, databasePath: string): void;
   assertAdmission(this: void): void;
   assertReadAdmission(this: void): void;
   addAgentSchemaMigrationCheck(check: (migration: AgentSchemaMigration) => void): void;
@@ -35,7 +39,7 @@ export type OpenClawDatabaseMaintenanceScope = {
     phase: MaintenanceResource["phase"],
     close: MaintenanceResource["close"],
   ): void;
-  close(): Promise<void>;
+  close(beforeResources?: () => void | Promise<void>): Promise<void>;
 };
 
 const liveAuthorityReads = resolveGlobalSingleton(
@@ -60,10 +64,46 @@ export function allowsMaintenanceLiveAuthorityReads(
   return false;
 }
 
+/** Raw source descriptor closes are safe only before maintenance admits native source reads. */
+export function maintenanceOwnerHasSourceCustody(
+  scope: OpenClawDatabaseMaintenanceScope | undefined,
+  pathname: string,
+): boolean {
+  if (!scope?.ownsSchemaMaintenance) {
+    return false;
+  }
+  scope.assertReadAdmission();
+  return !allowsMaintenanceLiveAuthorityReads(scope, pathname);
+}
+
+const MAINTENANCE_IN_PROCESS_COPY_MAX_BYTES = 64 * 1024 * 1024;
+
+export function maintenanceOwnerMayCopySourcesInProcess(
+  scope: OpenClawDatabaseMaintenanceScope | undefined,
+  pathname: string,
+): boolean {
+  if (!maintenanceOwnerHasSourceCustody(scope, pathname)) {
+    return false;
+  }
+  // Larger families keep the cancellable isolated child so a slow copy cannot pin Doctor's main thread.
+  let bytes = 0;
+  for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+    bytes += fs.statSync(`${pathname}${suffix}`, { throwIfNoEntry: false })?.size ?? 0;
+    if (bytes > MAINTENANCE_IN_PROCESS_COPY_MAX_BYTES) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export const maintenanceResources = resolveGlobalSingleton(
   Symbol.for("openclaw.databaseMaintenanceResources"),
   () => ({
-    current: new AsyncLocalStorage<{ scope: OpenClawDatabaseMaintenanceScope; active: boolean }>(),
+    current: new AsyncLocalStorage<{
+      scope: OpenClawDatabaseMaintenanceScope;
+      active: boolean;
+      workerAccess?: boolean;
+    }>(),
     claims: new WeakMap<
       object,
       MaintenanceResource & { scope: OpenClawDatabaseMaintenanceScope; release: () => void }
@@ -76,6 +116,11 @@ export function getOpenClawDatabaseMaintenanceScope():
   | OpenClawDatabaseMaintenanceScope
   | undefined {
   return maintenanceResources.current.getStore()?.scope;
+}
+
+/** Background work retains command custody without borrowing its native execution path. */
+export function isOpenClawDatabaseMaintenanceWorkerAccess(): boolean {
+  return maintenanceResources.current.getStore()?.workerAccess === true;
 }
 
 /** Doctor selects live source reads only after its pre-mutation backup boundary. */
@@ -111,8 +156,12 @@ export function getOpenClawDatabaseMaintenanceResourceScope(
   return maintenanceResources.claims.get(resource)?.scope;
 }
 
-export function runMaintenance<T>(scope: OpenClawDatabaseMaintenanceScope, operation: () => T): T {
-  const accepted = { scope, active: true };
+export function runMaintenance<T>(
+  scope: OpenClawDatabaseMaintenanceScope,
+  operation: () => T,
+  workerAccess = isOpenClawDatabaseMaintenanceWorkerAccess(),
+): T {
+  const accepted = { scope, active: true, workerAccess };
   try {
     const result = maintenanceResources.current.run(accepted, operation);
     if (result instanceof Promise) {
@@ -149,6 +198,10 @@ export function captureOpenClawDatabaseMaintenanceResource(
     async run<T>(operation: () => Promise<T>): Promise<T> {
       assertCurrent();
       return runMaintenance(expectedScope, operation);
+    },
+    async runWorker<T>(operation: () => Promise<T>): Promise<T> {
+      assertCurrent();
+      return runMaintenance(expectedScope, operation, true);
     },
   };
 }

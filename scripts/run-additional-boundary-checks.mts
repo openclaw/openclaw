@@ -15,6 +15,7 @@ import {
   terminateManagedChild,
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
+import { decodeUtf8Tail } from "./lib/output-tail.mts";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
@@ -22,18 +23,17 @@ const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
 const TIMEOUT_KILL_GRACE_MS = 250;
 const POST_FORCE_KILL_WAIT_MS = 250;
 
-type ProcessSignal = `SIG${string}`;
 type TimerHandle = ReturnType<typeof setTimeout>;
-type BoundaryCheck = { args: string[]; command: string; label: string };
+type BoundaryCheck = (typeof BOUNDARY_CHECKS)[number];
 
-type BoundaryShard = { count: number; index: number; label: string };
+type BoundaryShard = NonNullable<ReturnType<typeof parseShardSpec>>;
 type OutputWriter = { write(chunk: string): boolean };
 type BoundaryCheckResult = {
   check: BoundaryCheck;
   code: number;
   durationMs: number;
   output: string;
-  signal: ProcessSignal | null;
+  signal: NodeJS.Signals | null;
   timedOut: boolean;
 };
 type CheckExecutionOptions = {
@@ -62,14 +62,15 @@ export const BOUNDARY_CHECKS = (
     "lint:tmp:no-raw-channel-fetch",
     "lint:tmp:no-raw-http2-imports",
     "lint:agent:ingress-owner",
-    // This full-root pass runs all four focused rules, including the narrower
-    // HTTP/window.open guards and both public assertion aliases.
+    // One pass owns all focused AST guards, including forced process exits in
+    // runtime sources and shipped launchers, not unrelated developer tooling.
     "lint:no-chained-type-assertions",
     "lint:plugins:no-monolithic-plugin-sdk-entry-imports",
     "lint:plugins:no-extension-src-imports",
     "lint:plugins:no-extension-test-core-imports",
     "lint:plugins:plugin-sdk-subpaths-exported",
     ["deps:root-ownership:check", "pnpm", ["deps:root-ownership:check"]],
+    ["deps:pins:check", "pnpm", ["deps:pins:check"]],
     ["web-fetch-provider-boundary", "pnpm", ["run", "lint:web-fetch-provider-boundaries"]],
     [
       "extension-plugin-sdk-boundaries",
@@ -119,7 +120,7 @@ export function resolvePositiveInteger(value: unknown, fallback: number, label =
   return parsed;
 }
 
-export function parseShardSpec(value: unknown): BoundaryShard | null {
+export function parseShardSpec(value: unknown) {
   if (!value) {
     return null;
   }
@@ -187,15 +188,6 @@ export function formatCommand({ command, args }: Pick<BoundaryCheck, "args" | "c
   return [command, ...args].join(" ");
 }
 
-function decodeUtf8Tail(buffer: Buffer) {
-  let start = 0;
-  while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
-    start += 1;
-  }
-  // Appends are complete JS strings; only a byte slice's leading boundary can be partial.
-  return buffer.subarray(start).toString("utf8");
-}
-
 export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
   const limit = Math.max(1, maxBytes);
   const chunks: string[] = [];
@@ -244,8 +236,8 @@ export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
   };
 }
 
-function terminateChild(child: ChildProcess, signal: ProcessSignal) {
-  terminateManagedChild(child, signal as NodeJS.Signals, {
+function terminateChild(child: ChildProcess, signal: NodeJS.Signals) {
+  terminateManagedChild(child, signal, {
     onChildSignalError(error) {
       throw error;
     },
@@ -274,7 +266,7 @@ async function finishTerminatedProcessTree(
   }
 }
 
-function terminateActiveChildren(activeChildren: Iterable<ChildProcess>, signal: ProcessSignal) {
+function terminateActiveChildren(activeChildren: Iterable<ChildProcess>, signal: NodeJS.Signals) {
   for (const child of activeChildren) {
     terminateChild(child, signal);
   }
@@ -301,7 +293,7 @@ function installActiveChildCleanup(activeChildren: Set<ChildProcess>) {
     resolveShutdownForceKill?.();
   };
   const cleanup = (
-    signal: ProcessSignal,
+    signal: NodeJS.Signals,
     { waitForExit = false }: { waitForExit?: boolean } = {},
   ) => {
     if (!active) {
@@ -327,8 +319,8 @@ function installActiveChildCleanup(activeChildren: Set<ChildProcess>) {
       .then(() => undefined);
     return shutdownPromise;
   };
-  const signalHandlers = new Map<ProcessSignal, () => void>();
-  const signals: ProcessSignal[] =
+  const signalHandlers = new Map<NodeJS.Signals, () => void>();
+  const signals: NodeJS.Signals[] =
     process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
   for (const signal of signals) {
     const handler = () => {
@@ -338,7 +330,7 @@ function installActiveChildCleanup(activeChildren: Set<ChildProcess>) {
       }
       void cleanup(signal, { waitForExit: true }).finally(() => {
         removeHandlers();
-        process.kill(process.pid, signal as NodeJS.Signals);
+        process.kill(process.pid, signal);
       });
     };
     signalHandlers.set(signal, handler);
@@ -383,7 +375,7 @@ export function runSingleCheck(
     let settled = false;
     let timedOut = false;
     let forceKillTimer: TimerHandle | null = null;
-    const finish = (code: number | null, signal: ProcessSignal | null) => {
+    const finish = (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) {
         return;
       }
@@ -402,13 +394,6 @@ export function runSingleCheck(
         output: output.read(),
       });
     };
-    const finishAfterTimeoutTeardown = async (
-      code: number | null,
-      signal: ProcessSignal | null,
-    ) => {
-      await finishTerminatedProcessTree(child, TIMEOUT_KILL_GRACE_MS);
-      finish(code, signal);
-    };
     const timeout = setTimeout(() => {
       timedOut = true;
       output.append(
@@ -421,9 +406,9 @@ export function runSingleCheck(
         );
         terminateChild(child, "SIGKILL");
       }, TIMEOUT_KILL_GRACE_MS);
-      forceKillTimer.unref?.();
+      forceKillTimer.unref();
     }, resolvedCheckTimeoutMs);
-    timeout.unref?.();
+    timeout.unref();
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -435,7 +420,7 @@ export function runSingleCheck(
     });
     child.on("close", (code, signal) => {
       if (timedOut) {
-        void finishAfterTimeoutTeardown(code, signal);
+        void finishTerminatedProcessTree(child).then(() => finish(code, signal));
         return;
       }
       finish(code, signal);

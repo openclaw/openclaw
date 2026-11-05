@@ -14,7 +14,9 @@ import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import type { ReadOnlyWorkspaceSkillMount } from "./workspace-mounts.js";
 
-const SANDBOX_ENGINE_PROBE_TIMEOUT_MS = 5_000;
+// Matches the other sandbox engine control calls: on a busy host `podman info` waits on
+// storage locks for several seconds while the engine is still healthy.
+const SANDBOX_ENGINE_PROBE_TIMEOUT_MS = 30_000;
 const PODMAN_INIT_PATH = "/run/podman-init";
 const PODMAN_KEEP_ID_MAPPING_MIN_VERSION = [4, 3] as const;
 const PODMAN_GPUS_MIN_VERSION = [5, 0] as const;
@@ -75,6 +77,21 @@ function assertPodmanVersionAtLeast(
   );
 }
 
+async function probePodman(args: string[]) {
+  const signal = AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS);
+  try {
+    return await execContainer(PODMAN_SANDBOX_ENGINE, args, { allowFailure: true, signal });
+  } catch (error) {
+    if (!signal.aborted) {
+      throw error;
+    }
+    throw new Error(
+      `Podman did not answer \`podman ${args[0]}\` within ${SANDBOX_ENGINE_PROBE_TIMEOUT_MS / 1000}s. Check that Podman is responsive on the Gateway host (for example, \`podman info\`), then retry.`,
+      { cause: error },
+    );
+  }
+}
+
 async function isPodmanMachineConnection(params: {
   selectedName: string;
   uri: string;
@@ -93,14 +110,7 @@ async function isPodmanMachineConnection(params: {
   if (uri.protocol !== "ssh:" || !loopback || !uri.port || !uri.username) {
     return false;
   }
-  const result = await execContainer(
-    PODMAN_SANDBOX_ENGINE,
-    ["machine", "list", "--format", "json"],
-    {
-      allowFailure: true,
-      signal: AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS),
-    },
-  );
+  const result = await probePodman(["machine", "list", "--format", "json"]);
   if (result.code !== 0) {
     return false;
   }
@@ -148,14 +158,7 @@ async function assertSupportedPodmanConnection(remoteSocketPath: string): Promis
   machine: boolean;
   target: SandboxContainerEngineTarget;
 }> {
-  const result = await execContainer(
-    PODMAN_SANDBOX_ENGINE,
-    ["system", "connection", "list", "--format", "json"],
-    {
-      allowFailure: true,
-      signal: AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS),
-    },
-  );
+  const result = await probePodman(["system", "connection", "list", "--format", "json"]);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
     throw new Error(`Failed to inspect the active Podman connection: ${detail}`);
@@ -177,10 +180,7 @@ async function assertSupportedPodmanConnection(remoteSocketPath: string): Promis
   if (configuredUri !== undefined && configuredName) {
     // Podman 4.8 switched to connection-first; older clients use HOST presence.
     // `info` reports the server version, which cannot decide client-side selection.
-    const client = await execContainer(PODMAN_SANDBOX_ENGINE, ["--version"], {
-      allowFailure: true,
-      signal: AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS),
-    });
+    const client = await probePodman(["--version"]);
     const version = /^podman(?:-remote)?(?:\.exe)? version (\d+)\.(\d+)\.\d+(?:[-+]\S+)?$/u.exec(
       client.stdout.trim(),
     );
@@ -248,19 +248,23 @@ async function assertSupportedPodmanConnection(remoteSocketPath: string): Promis
   };
 }
 
-export async function resolvePodmanSandboxRuntimeInfo(): Promise<PodmanSandboxRuntimeInfo> {
-  const result = await execContainer(
-    PODMAN_SANDBOX_ENGINE,
-    [
-      "info",
-      "--format",
-      "{{.Host.Security.Rootless}}\t{{.Host.ServiceIsRemote}}\t{{.Host.RemoteSocket.Path}}\t{{.Version.Version}}",
-    ],
-    {
-      allowFailure: true,
-      signal: AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS),
-    },
-  );
+let processRuntimeInfo: Promise<PodmanSandboxRuntimeInfo> | undefined;
+
+export function resolvePodmanSandboxRuntimeInfo(): Promise<PodmanSandboxRuntimeInfo> {
+  // Discovery also scans every container's state. Keep the process-owned facts;
+  // bound commands pin this endpoint instead of following later context changes.
+  return (processRuntimeInfo ??= probePodmanSandboxRuntimeInfo().catch((error: unknown) => {
+    processRuntimeInfo = undefined;
+    throw error;
+  }));
+}
+
+async function probePodmanSandboxRuntimeInfo(): Promise<PodmanSandboxRuntimeInfo> {
+  const result = await probePodman([
+    "info",
+    "--format",
+    "{{.Host.Security.Rootless}}\t{{.Host.ServiceIsRemote}}\t{{.Host.RemoteSocket.Path}}\t{{.Version.Version}}",
+  ]);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
     throw new Error(`Failed to inspect Podman user namespace mode: ${detail}`);
@@ -280,9 +284,16 @@ export async function validateSandboxContainerEngineTarget(
   engine: SandboxContainerEngine,
   expectedTarget?: SandboxContainerEngineTarget,
 ): Promise<void> {
+  if (engine.id === "docker" && expectedTarget) {
+    const { assertDockerPersistentTargetCurrent, dockerPersistentTargetFromEngineTarget } =
+      await import("./docker-persistent-target.js");
+    await assertDockerPersistentTargetCurrent(
+      dockerPersistentTargetFromEngineTarget(expectedTarget),
+      AbortSignal.timeout(30_000),
+    );
+  }
   if (engine.id === "podman") {
-    // Podman resolves its active connection for every invocation. Validate once
-    // at the start of each lifecycle sequence so context changes cannot reuse stale approval.
+    // Recorded resources must belong to the endpoint captured by this process.
     const runtimeInfo = await resolvePodmanSandboxRuntimeInfo();
     assertPodmanSandboxTarget(expectedTarget, runtimeInfo.target);
   }
@@ -309,7 +320,8 @@ export function bindPodmanSandboxEngine(
 ): SandboxContainerEngine {
   return {
     ...PODMAN_SANDBOX_ENGINE,
-    globalArgs: target.globalArgs,
+    // Native execution must not follow later CONTAINER_HOST/CONNECTION changes.
+    globalArgs: target.globalArgs.length ? target.globalArgs : ["--remote=false"],
   };
 }
 

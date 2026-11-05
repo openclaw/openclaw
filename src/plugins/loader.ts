@@ -11,6 +11,7 @@ export {
   resolveRuntimePluginRegistry,
   acquirePluginRegistryForInspection,
   loadAndActivateRootPluginRegistry,
+  loadOpenClawPluginsAsync,
 } from "./loader-runtime-load.js";
 
 /** Loads a caller-owned registry value without changing the process-wide active registry. */

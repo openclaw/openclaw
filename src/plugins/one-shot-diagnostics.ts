@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../shared/async-work-scope.js";
+import { getBoundLegacyPluginSdkResourceHost } from "./legacy-sdk-resource-host.js";
 
 const log = createSubsystemLogger("plugins");
 
@@ -58,6 +59,11 @@ export async function startOneShotDiagnosticsExporters(params: {
   if (!isOtelExportConfigured(config)) {
     return null;
   }
+  const host = getBoundLegacyPluginSdkResourceHost();
+  if (!host) {
+    throw new Error("One-shot diagnostics requires a bound SDK host scheduler");
+  }
+  const scheduler = host.scheduler;
   const [{ acquirePluginRegistryForInspection }, { startPluginServices }] = await Promise.all([
     import("./loader.js"),
     import("./services.js"),
@@ -120,6 +126,7 @@ export async function startOneShotDiagnosticsExporters(params: {
     }
     servicesHandle = await work.track(() =>
       startPluginServices({
+        scheduler,
         registry: { ...acquired.registry, services },
         config,
         oneShotStopTimeouts: {

@@ -1,4 +1,6 @@
+import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 
 /** Bind delayed session notices and their actions to the submitting Gateway owner. */
 export function captureSessionNoticeOwner(context: ApplicationContext): () => boolean {
@@ -16,4 +18,21 @@ export function captureSessionNoticeOwner(context: ApplicationContext): () => bo
     // A transport reconnect preserves an authenticated owner. Unscoped actions
     // remain bound to the original connection.
     (Boolean(recoveryScope) || gateway.snapshot.client === client);
+}
+
+export function openSessionNoticeTarget(
+  context: ApplicationContext,
+  sessionKey: string,
+  agentId: string,
+) {
+  selectApplicationSession({
+    selection: context.agentSelection,
+    gateway: context.gateway,
+    sessionKey,
+    agentId,
+  });
+  context.navigate(
+    "chat",
+    sessionNavigationTarget({ context, face: "chat", sessionKey, agentId }).options,
+  );
 }

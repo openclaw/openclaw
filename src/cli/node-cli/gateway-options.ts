@@ -8,28 +8,12 @@ import {
 } from "../../node-host/gateway-cloudflare-access.js";
 import { decodePairingSetupCode } from "../../pairing/setup-code.js";
 
-type NodeGatewayOptions = {
-  host?: string;
-  port?: string | number;
-  contextPath?: string;
-  tls?: boolean;
-  tlsFingerprint?: string;
-};
+type NodePairGatewayOptions = ReturnType<typeof resolveNodePairGatewayPayload>;
 
-type NodePairGatewayOptions = {
-  host: string;
-  port: number;
-  contextPath?: string;
-  tls: boolean;
-  tlsFingerprint?: string;
-  bootstrapToken: string;
-  expiresAtMs?: number;
-  candidates: NodeHostGatewayConfig[];
-};
-
-type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
-
-function gatewayConfigFromUrl(url: string, tlsFingerprint?: string): NodeHostGatewayConfig {
+function gatewayConfigFromUrl(
+  url: string,
+  tlsFingerprint?: string,
+): NodeHostGatewayConfig & Required<Pick<NodeHostGatewayConfig, "host" | "port" | "tls">> {
   const parsed = new URL(url);
   const tls = parsed.protocol === "wss:";
   return {
@@ -49,18 +33,16 @@ export function resolveNodePairGatewayOptions(
 }
 
 /** Project a validated pairing payload into the canonical node-host candidate list. */
-export function resolveNodePairGatewayPayload(
-  payload: PairingSetupPayload,
-): NodePairGatewayOptions {
+export function resolveNodePairGatewayPayload(payload: ReturnType<typeof decodePairingSetupCode>) {
   const candidates = (payload.urls ?? [payload.url]).map((url) =>
     gatewayConfigFromUrl(url, url === payload.url ? payload.tlsFingerprint : undefined),
   );
   const primary = candidates[0]!;
   return {
-    host: primary.host ?? "127.0.0.1",
-    port: primary.port ?? 18789,
+    host: primary.host,
+    port: primary.port,
     ...(primary.contextPath ? { contextPath: primary.contextPath } : {}),
-    tls: primary.tls ?? false,
+    tls: primary.tls,
     ...(primary.tlsFingerprint ? { tlsFingerprint: primary.tlsFingerprint } : {}),
     bootstrapToken: payload.bootstrapToken,
     ...(payload.expiresAtMs !== undefined ? { expiresAtMs: payload.expiresAtMs } : {}),
@@ -69,7 +51,9 @@ export function resolveNodePairGatewayPayload(
 }
 
 export function resolveNodeGatewayOptions(
-  options: NodeGatewayOptions,
+  options: Pick<NodeHostGatewayConfig, "host" | "contextPath" | "tls" | "tlsFingerprint"> & {
+    port?: string | number;
+  },
   config: NodeHostConfig | null,
   pair?: NodePairGatewayOptions,
   env: NodeJS.ProcessEnv = process.env,
@@ -80,14 +64,12 @@ export function resolveNodeGatewayOptions(
   const port = options.port === undefined ? baselinePort : parseTcpPort(options.port);
   const endpointChanged = host !== baselineHost || (port !== null && port !== baselinePort);
   const baselineTlsFingerprint = pair?.tlsFingerprint ?? config?.gateway?.tlsFingerprint;
+  // Empty CLI values must not discard the saved endpoint's certificate pin.
   const selectedTlsFingerprint =
     options.tls === false
       ? undefined
-      : options.tlsFingerprint !== undefined
-        ? options.tlsFingerprint
-        : endpointChanged
-          ? undefined
-          : baselineTlsFingerprint;
+      : (normalizeOptionalString(options.tlsFingerprint) ??
+        (endpointChanged ? undefined : baselineTlsFingerprint));
   const baselineTls = pair?.tls ?? config?.gateway?.tls;
   const tlsFingerprint = selectedTlsFingerprint
     ? requireTlsFingerprint(selectedTlsFingerprint)

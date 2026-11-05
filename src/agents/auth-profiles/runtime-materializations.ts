@@ -14,30 +14,17 @@ export type RuntimeAuthMaterialization = Readonly<{
   authProfileId?: string;
 }>;
 
-type RuntimeAuthMaterializationMutationListener = (event: {
-  agentDir?: string;
-  affectsInheritedStores: boolean;
-}) => void;
-
 const MAX_RUNTIME_AUTH_MATERIALIZATIONS_PER_OWNER = 64;
 const materializations = new Map<string, RuntimeAuthMaterialization[]>();
-const listeners = new Set<RuntimeAuthMaterializationMutationListener>();
+export const runtimeAuthMaterializationChanges: {
+  onChange?: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void;
+} = {};
 
 function notify(agentDir?: string): void {
-  const event = {
+  runtimeAuthMaterializationChanges.onChange?.({
     ...(agentDir ? { agentDir } : {}),
     affectsInheritedStores: agentDir === undefined,
-  };
-  for (const listener of listeners) {
-    listener(event);
-  }
-}
-
-export function registerRuntimeAuthMaterializationMutationListener(
-  listener: RuntimeAuthMaterializationMutationListener,
-): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  });
 }
 
 /** Records successful auth at the boundary that proved one exact runtime route. */
