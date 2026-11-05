@@ -244,6 +244,17 @@ Details:
 The Decision provider receives page labels and the user message. Select a
 provider you trust with both, such as a local System One or ONNX model.
 
+### Use an existing reranker
+
+The gate's questions are relevance questions, so any reranker works as its
+Decision model through the bundled [Rerank provider](/providers/rerank): point
+`models.providers.rerank` at a vLLM, TEI, Infinity, llama.cpp, Cohere, Jina, or
+Voyage `/rerank` endpoint and select `rerank/<model id>`. The shortlist's
+`choice` options and each page's `boolean` question are scored as documents
+against the user message. Reranker scores are relevance, not calibrated
+probabilities: tune `highThreshold` and `mediumThreshold` in `shadow` mode
+before going `live`.
+
 ## Pre-compaction memory flush
 
 Knowledge owns the pre-compaction flush when `writesEnabled` is `true`. With

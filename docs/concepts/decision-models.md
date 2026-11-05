@@ -55,6 +55,12 @@ Configure the provider plugin before selecting its model:
   and the OpenAI Platform Decisions API. Configure an OpenAI API key;
   ChatGPT/Codex subscription credentials do not authorize this endpoint.
   Evaluations send the supplied evidence to OpenAI and incur Platform usage charges.
+- [Rerank](/providers/rerank) is bundled and uses any reranker behind a
+  `/rerank` endpoint: vLLM, Hugging Face TEI, Infinity, llama.cpp, Cohere,
+  Jina, or Voyage. List the endpoint and model under `models.providers.rerank`;
+  self-hosted servers need no credential. A reranker answers `boolean`,
+  `choice`, and `sort` questions with relevance scores, which suits matching
+  judgments such as the Knowledge recall gate, not rubric scoring.
 - [SubQ](/plugins/subq) connects to hosted SubQ Snap for text/JSON decisions.
   Configure a protected SubQ credential. This V1 adapter supports text/JSON
   input only; it does not expose the vendor API's image input.
@@ -82,6 +88,9 @@ The current plugins declare these model references:
 | `typesafe/jev-1.13.0`                | Jev 1.13.0             | TypeSafe credential                                    |
 | `typesafe/jev-latest`                | Jev                    | TypeSafe credential; follows the vendor's latest model |
 | `typesafe/kev-latest`                | Kev (local server)     | Running System One server and explicit loopback URL    |
+
+Rerank models have no fixed list: any model you configure under
+`models.providers.rerank` is selectable as `rerank/<model id>`.
 
 The ONNX, SubQ, and TypeSafe AI plugins are currently unpublished candidates. Their setup pages explain
 source-checkout use and the packaged host floor. The table describes the plugins' declared models,
