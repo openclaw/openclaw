@@ -13,7 +13,7 @@ const roster = vi.hoisted(() => ({
   agents: [{ id: "ops" }, { id: "research" }],
 }));
 
-// Roster enrichment reads workspaces and model state; authorization remains real.
+// mock-isolation: Roster enrichment reads workspaces and model state; authorization remains real.
 vi.mock("../session-utils.js", () => ({
   listAgentsForGateway: async (cfg: OpenClawConfig) => ({
     ...roster,
