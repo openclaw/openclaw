@@ -1,7 +1,6 @@
 {
   "version": 2,
   "locale": "th",
-  "glossaryHash": "e7980ebf4abfb0d374b527af7393c7cb820a36187b41e5308c911651c2983ab4",
   "translations": {
     "native.android.000452ffd65ee11a": "ข้ามเครื่องมือ 1 รายการแล้ว",
     "native.android.004fd715ebe3d013": "การสนทนาล่าสุด",
