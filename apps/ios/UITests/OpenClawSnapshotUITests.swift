@@ -124,6 +124,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.captureReleaseScreenshot(Self.chatScreenshotTarget) { app in
             let input = self.chatMessageInput(in: app)
             XCTAssertTrue(input.waitForExistence(timeout: 8))
+            XCTAssertFalse(app.buttons["chat-session-artifacts"].exists, "The offline demo has no artifact catalog")
             input.tap()
             let keyboard = app.keyboards.firstMatch
             if UIDevice.current.userInterfaceIdiom == .phone {

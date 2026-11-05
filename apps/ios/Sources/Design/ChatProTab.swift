@@ -143,10 +143,12 @@ struct ChatProTab: View {
             self.headerAgentIdentity
         }
         .sharedBackgroundVisibility(.hidden)
-        ToolbarItem(placement: .topBarTrailing) {
-            self.artifactsButton
+        if !self.appModel.isLocalChatFixtureEnabled {
+            ToolbarItem(placement: .topBarTrailing) {
+                self.artifactsButton
+            }
+            .sharedBackgroundVisibility(.hidden)
         }
-        .sharedBackgroundVisibility(.hidden)
         ToolbarItem(placement: .topBarTrailing) {
             self.chatActionsMenu
         }
