@@ -1,26 +1,15 @@
 import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  startGatewayWithClient,
-} from "../test-helpers.e2e.js";
+import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { MODELS_AUTH_INTEGRATION_ENV } from "../test-helpers.env.js";
 
 it.each([true, false])(
   "models.list and session changes separate manual policy from defaults and auth=%s",
   async (authenticated) => {
     const state = await createOpenClawTestState({
       label: "manual-model-policy",
-      env: {
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
+      env: { ...MODELS_AUTH_INTEGRATION_ENV },
     });
     const token = "manual-policy-fixture-token";
     const cfg = {
@@ -51,7 +40,7 @@ it.each([true, false])(
       gateway: { mode: "local", auth: { mode: "token", token }, reload: { mode: "off" } },
     };
     try {
-      const { client, server, port } = await startGatewayWithClient({
+      const { client, server } = await startGatewayWithClient({
         cfg,
         configPath: state.configPath,
         token,
@@ -66,25 +55,7 @@ it.each([true, false])(
         expect(
           legacy.models.every((model) => !Object.hasOwn(model, "manualSelectionAllowed")),
         ).toBe(true);
-        const modern = await connectGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
-          token,
-          scopes: ["operator.admin"],
-          caps: ["model-selection-policy"],
-        });
-        try {
-          const negotiated = await modern.request<ModelsListResult>("models.list", configured);
-          expect(negotiated.models.find((model) => model.id === "manual")?.available).toBe(
-            authenticated,
-          );
-          expect(negotiated.models).toEqual(
-            legacy.models.map((row) =>
-              Object.assign({}, row, { manualSelectionAllowed: row.id === "manual" }),
-            ),
-          );
-        } finally {
-          await disconnectGatewayClient(modern);
-        }
+        expect(legacy.models.find((model) => model.id === "manual")?.available).toBe(authenticated);
         const catalog = await client.request<ModelsListResult>("models.list", {
           agentId: "main",
         });

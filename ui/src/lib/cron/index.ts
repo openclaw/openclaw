@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { CronAddResult } from "../../../../packages/gateway-protocol/src/schema/cron.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronRunResult } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
 import { toNumber } from "../format.ts";
 import { parseFailureAlertCooldownMs } from "./decimal.ts";
@@ -31,7 +32,6 @@ import type { CronFormState, CronState } from "./types.ts";
 export { createInitialCronState, loadCronStatus } from "./state.ts";
 export { loadCronScopeStats } from "./scope.ts";
 export { loadCronJobsPage } from "./jobs-full.ts";
-export { resolveConfiguredCronModelSuggestions } from "./model-suggestions.ts";
 
 const CRON_CHANNEL_LAST = "last";
 
@@ -86,7 +86,7 @@ function requireCronConfigRevision(revision: string | null | undefined): string 
   if (revision) {
     return revision;
   }
-  throw new Error("This automation is missing its configuration revision. Refresh and try again.");
+  throw new Error(t("cron.missingConfigRevision"));
 }
 
 export function updateCronJobsFilter(
@@ -311,6 +311,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       delivery,
       failureAlert,
     };
+    if (editingJob && form.ownerProfileId && form.ownerProfileId !== editingJob.ownerProfileId) {
+      job.ownerProfileId = form.ownerProfileId;
+    }
     if (schedule) {
       job.schedule = schedule;
     }
@@ -411,13 +414,11 @@ async function updateCronJobDefinition(
       const latestJob = await client.request<CronJob>("cron.get", { id: job.id });
       if (isCurrent() && ownsEditor()) {
         startCronEdit(state, latestJob);
-        state.cronError =
-          "This automation changed on the Gateway. The latest definition is loaded; review it before retrying.";
+        state.cronError = t("cron.changedOnGateway");
       }
     } catch {
       if (isCurrent() && ownsEditor()) {
-        state.cronError =
-          "This automation changed on the Gateway, but the latest definition could not be loaded. Refresh before retrying.";
+        state.cronError = t("cron.changedOnGatewayLoadFailed");
       }
     }
     return false;
@@ -426,8 +427,10 @@ async function updateCronJobDefinition(
 
 // Mutations reload the list and scheduler status so both canonical views stay current.
 async function reloadCronJobsSnapshot(state: CronState) {
-  await loadCronJobsPage(state, { tableFilters: true });
-  await loadCronStatus(state);
+  await Promise.all([
+    loadCronJobsPage(state, { tableFilters: true, refresh: true }),
+    loadCronStatus(state),
+  ]);
 }
 
 export async function toggleCronJob(
@@ -471,7 +474,7 @@ export async function runCronJob(state: CronState, jobId: string, mode: "force" 
     }
     await loadCronRuns(state);
     if ("enqueued" in result && result.enqueued) {
-      reportFeedback(`Run queued. Run ID: ${result.runId}`, "cronNotice");
+      reportFeedback(t("cron.runQueued", { runId: result.runId }), "cronNotice");
     }
   });
 }

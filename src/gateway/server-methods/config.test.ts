@@ -260,6 +260,25 @@ it.each([
     expect(queueFollowUp).toHaveBeenCalledOnce();
   },
 );
+it("acknowledges a CLI-routed config.patch accepted for restart like the offline write", async () => {
+  const queueFollowUp = vi.fn();
+  configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
+    path: "/tmp/openclaw.json",
+    config: { hooks: { enabled: true } },
+    hash: "restart-hash",
+    application: Promise.resolve("restart-pending"),
+    queueFollowUp,
+  });
+  // `openclaw config set` connects as the CLI; Control UI and RPC callers keep the error above.
+  const { harness, operation } = startConfigWrite(
+    "config.patch",
+    { raw: { hooks: { enabled: true } }, baseHash: "base-hash" },
+    { client: { connect: { client: { id: "cli", mode: "cli" } } } as never },
+  );
+  await operation;
+  expectSuccess(harness.respond, expect.objectContaining({ ok: true, restartPending: true }));
+  expect(queueFollowUp).toHaveBeenCalledOnce();
+});
 describe("config.openFile", () => {
   it("opens the configured file without shell interpolation", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config $(touch pwned).json" }, async () => {
@@ -477,13 +496,7 @@ it("uses write-snapshot policies before merging manifest-backed model IDs", asyn
     ],
   });
   storedConfig = configFor("myproxy", "https://proxy.example/v1", {
-    models: [
-      modelDefinition("vendor/modern-model", {
-        name: "Before",
-        contextWindow: 200_000,
-        reasoning: false,
-      }),
-    ],
+    models: [modelDefinition("vendor/modern-model", { name: "Before" })],
   });
 
   const sourceConfig = structuredClone(storedConfig);
@@ -553,6 +566,65 @@ describe("local custom endpoint config workflow", () => {
     }
     expect(configWriteMocks.readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
     expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
+  });
+  it("reports custom endpoint writes accepted for restart without claiming active configuration", async () => {
+    const queueFollowUp = vi.fn();
+    configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
+      path: "/tmp/openclaw.json",
+      config: {},
+      hash: "restart-hash",
+      application: Promise.resolve("restart-pending"),
+      queueFollowUp,
+    });
+    const client = createMemoryOperatorClient(["operator.admin"]);
+    client.connect.client = { ...client.connect.client, id: "openclaw-control-ui", mode: "ui" };
+    client.internal = { isLocalClient: true };
+    const harness = createConfigHandlerHarness({
+      method: "config.customEndpoint",
+      params: endpoint,
+      overrides: { client },
+    });
+    await expectDefined(
+      configHandlers["config.customEndpoint"],
+      "endpoint handler",
+    )(harness.options);
+    expectFailure(harness.respond, expect.stringContaining("accepted for restart"));
+    expectFailure(harness.respond, expect.stringContaining("wait for the Gateway to restart"));
+    expect(harness.respond).toHaveBeenCalledOnce();
+    expect(queueFollowUp).toHaveBeenCalledOnce();
+  });
+  it("preserves omitted provider adapters and existing model adapters when editing a connection", async () => {
+    const model = {
+      id: "chat",
+      name: "Lab chat",
+      api: "openai-completions" as const,
+      maxTokens: 6400,
+    };
+    storedConfig = {
+      models: { providers: { lab: { baseUrl: "http://lab.lan/v1", models: [model] } } },
+    };
+    const client = createMemoryOperatorClient(["operator.admin"]);
+    client.internal = { isLocalClient: true };
+    const harness = createConfigHandlerHarness({
+      method: "config.customEndpoint",
+      params: {
+        action: "edit",
+        provider: "lab",
+        baseHash: "base-hash",
+        baseUrl: "http://lab.lan/v2",
+        noAuth: true,
+        models: [{ id: "chat", existingId: "chat", edits: {} }],
+      },
+      overrides: { client },
+    });
+    await expectDefined(
+      configHandlers["config.customEndpoint"],
+      "endpoint handler",
+    )(harness.options);
+    expectSuccess(harness.respond, expect.objectContaining({ ok: true }));
+    expect(storedConfig.models?.providers?.lab).not.toHaveProperty("api");
+    expect(storedConfig.models?.providers?.lab?.models).toEqual([model]);
+    expect(storedConfig.models?.providers?.lab?.baseUrl).toBe("http://lab.lan/v2");
   });
   it("uses the authored config writer and CAS for local creation, editing and reference-aware deletion", async () => {
     storedConfig = { agents: { defaults: { model: "openai/official" } } };

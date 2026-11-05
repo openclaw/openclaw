@@ -31,13 +31,9 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
+import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { withRequesterTestAuthority } from "./sessions-initial-transfer.test-support.js";
-import { sessionMessagingHandlers } from "./sessions-messaging.js";
-import { sessionSharingTestContext, soloClient } from "./sessions-sharing.test-support.js";
-import type { GatewayRequestHandler, RespondFn } from "./types.js";
-
-const chatSend = vi.hoisted(() => vi.fn<GatewayRequestHandler>());
-vi.mock("./chat-send-external-entry.js", () => ({ handleDirectExternalChatSend: chatSend }));
+import { sessionSharingTestContext } from "./sessions-sharing.test-support.js";
 
 const fixture = useSubagentControlFixture();
 afterEach(() => {
@@ -106,7 +102,7 @@ async function createInitialYieldFixture(label: string) {
   };
 }
 
-it("resumes a yielded child through sessions.send and wakes its original parent after the same batch settles", async () => {
+it("continues a yielded child and wakes its original parent after the same batch settles", async () => {
   vi.useFakeTimers();
   const { runSubagentAnnounceFlow } = await vi.importActual<
     typeof import("../../agents/subagents/announce/subagent-announce.js")
@@ -279,38 +275,25 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   expect(dispatch).not.toHaveBeenCalled();
 
   const followup = "Read the completed tool outputs and finish the existing task.";
-  chatSend.mockImplementation(async ({ respond }) => {
-    respond(true, { runId: nextRunId, status: "started" });
-  });
-  const sendResponse = vi.fn<RespondFn>();
-  const handler = expectDefined(sessionMessagingHandlers["sessions.send"], "sessions.send");
-  const send = () =>
-    handler({
-      req: { type: "req", id: "resume-request", method: "sessions.send" },
-      params: { key: childSessionKey, message: followup, idempotencyKey: nextRunId },
-      respond: sendResponse,
-      context,
-      client: soloClient(),
-      isWebchatConnect: () => false,
-    });
-  await send();
-  expect(sendResponse).toHaveBeenCalledWith(
-    true,
-    { runId: nextRunId, status: "started" },
-    undefined,
-    undefined,
-  );
+  expect(
+    await reactivateCompletedSubagentSession({
+      sessionKey: childSessionKey,
+      runId: nextRunId,
+      task: followup,
+      gatewayContextResolver: context.resolveGatewayContext,
+      session: {
+        cfg: getRuntimeConfig(),
+        activeSessionAgentId: "main",
+        sessionEntry:
+          loadSessionEntry({ agentId: "main", sessionKey: childSessionKey }) ?? undefined,
+      },
+    }),
+  ).toBe(true);
   expect(subagentRuns.has(previousRunId)).toBe(false);
   const resumed = expectDefined(subagentRuns.get(nextRunId), "resumed child");
   expect(resumed).toMatchObject({ task: followup, taskRunId: previousRunId, requesterSessionKey });
   expect(resumed.pauseReason).toBeUndefined();
   expectSharedRequesterCohort([nextRunId, siblingRunId], [nextRunId, siblingRunId]);
-
-  chatSend.mockImplementation(async ({ respond }) => {
-    respond(true, { runId: nextRunId, status: "started" }, undefined, { cached: true });
-  });
-  await send();
-  expect(subagentRuns.get(nextRunId)).toBe(resumed);
 
   await complete(nextRunId, childSessionKey, "Recovered child consumed its tool results.");
   expectCompletedRun(nextRunId, "Recovered child consumed its tool results.");

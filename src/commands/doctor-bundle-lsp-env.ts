@@ -1,11 +1,5 @@
 /** Doctor note for Gateway env vars that bundle LSP servers no longer inherit. */
 import { note } from "../../packages/terminal-core/src/note.js";
-import {
-  collectWithheldLspEnvNames,
-  formatWithheldLspEnvHints,
-  LSP_ENV_PASSTHROUGH_DOCS_URL,
-  resolveLspServerEnv,
-} from "../agents/agent-bundle-lsp-env.js";
 import { resolveStdioMcpServerLaunchConfig } from "../agents/mcp-stdio.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -14,15 +8,12 @@ import { loadEnabledBundleLspConfig } from "../plugins/bundle-lsp.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { shouldManageGatewayService } from "./doctor-service-repair-policy.js";
 
-type LoadBundleLspConfig = typeof loadEnabledBundleLspConfig;
-
 /** Notes commonly needed, non-secret Gateway env names that configured bundle LSP servers lack. */
 export async function noteBundleLspEnvPassthrough(params: {
   cfg: OpenClawConfig;
   workspaceDirs: readonly string[];
   env?: NodeJS.ProcessEnv;
   service?: Pick<GatewayService, "readCommand">;
-  loadLspConfig?: LoadBundleLspConfig;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   noteFn?: typeof note;
 }): Promise<void> {
@@ -30,13 +21,12 @@ export async function noteBundleLspEnvPassthrough(params: {
     return;
   }
   const { cfg, workspaceDirs } = params;
-  const loadLspConfig = params.loadLspConfig ?? loadEnabledBundleLspConfig;
   const runWithPluginMetadataSnapshot = params.runWithPluginMetadataSnapshot;
   // Each workspace resolves its own servers at runtime, so one name can carry
   // different launch envs; keep every one so none hides another's withheld names.
   const servers = new Map<string, Array<Record<string, string> | undefined>>();
   for (const workspaceDir of workspaceDirs) {
-    const load = () => loadLspConfig({ workspaceDir, cfg });
+    const load = () => loadEnabledBundleLspConfig({ workspaceDir, cfg });
     const loaded = runWithPluginMetadataSnapshot
       ? runWithPluginMetadataSnapshot({ config: cfg, workspaceDir }, load)
       : load();
@@ -50,6 +40,12 @@ export async function noteBundleLspEnvPassthrough(params: {
   if (servers.size === 0) {
     return;
   }
+  const {
+    collectWithheldLspEnvNames,
+    formatWithheldLspEnvHints,
+    LSP_ENV_PASSTHROUGH_DOCS_URL,
+    resolveLspServerEnv,
+  } = await import("../agents/agent-bundle-lsp-env.js");
   const env = params.env ?? process.env;
   const service = params.service ?? resolveGatewayService();
   const sources = [env];

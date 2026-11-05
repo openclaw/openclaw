@@ -15,6 +15,7 @@ import {
 } from "./allocation.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
+import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import {
   listGitWorktrees,
   requireGit,
@@ -24,6 +25,7 @@ import {
 import {
   setWorktreePreparationTemplate,
   startWorktreePreparationPhase,
+  timeWorktreePreparationPhase,
 } from "./preparation-timing.js";
 import {
   deleteTemplateAsync,
@@ -41,7 +43,7 @@ const log = createSubsystemLogger("agents/worktrees");
 export const WORKTREE_TEMPLATE_DIRECTORY = ".templates";
 const pendingPreparations = new Map<string, Promise<void>>();
 
-async function retainWorktreeTemplate(
+export async function retainWorktreeTemplate(
   env: NodeJS.ProcessEnv,
   selection:
     | WorktreeTemplateRecord
@@ -125,7 +127,7 @@ async function retireWorktreeTemplate(
         timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
       });
     } else {
-      await fs.rm(record.path, { recursive: true, force: true });
+      await nativeWorktreeFilesystem.remove(record.path, options);
     }
     await deleteTemplateAsync(env, record.id, assertCurrent);
     return true;
@@ -145,7 +147,10 @@ export async function collectWorktreeTemplates(
   onError?: (error: unknown, id: string) => void,
 ): Promise<void> {
   for (const record of await listTemplatesAsync(env)) {
-    if (record.status === "ready" && record.lastUsedAt >= before) {
+    const expiresBefore = record.cacheKey.startsWith("warm:")
+      ? Math.max(before, Date.now() - 60 * 60_000)
+      : before;
+    if (record.status === "ready" && record.lastUsedAt >= expiresBefore) {
       continue;
     }
     try {
@@ -156,7 +161,7 @@ export async function collectWorktreeTemplates(
           if (
             !current ||
             current.id !== record.id ||
-            (current.status === "ready" && current.lastUsedAt >= before) ||
+            (current.status === "ready" && current.lastUsedAt >= expiresBefore) ||
             (await hasTemplateReadersAsync(env, current.id, guard.commitGuard))
           ) {
             return;
@@ -289,7 +294,9 @@ export async function prepareWorktreeTemplate(params: {
           if (
             hasReaders ||
             ((await worktreePathExists(existing.path)) &&
-              (await params.validate(existing, options)) &&
+              (await timeWorktreePreparationPhase("templateValidate", () =>
+                params.validate(existing, options),
+              )) &&
               (existing.contentKey === params.contentKey ||
                 (await params.refresh?.(existing, options))))
           ) {
@@ -322,9 +329,30 @@ export async function prepareWorktreeTemplate(params: {
           });
           return undefined;
         }
-        setWorktreePreparationTemplate("cold", { reason: "template-disk-admission" });
+        // Preserve the observed miss after build progress replaces reason with ready.
+        setWorktreePreparationTemplate("cold", {
+          reason: "template-disk-admission",
+          missReason: !existing
+            ? "no-generation"
+            : existing.status !== "ready"
+              ? "invalid"
+              : existing.backend !== params.backend
+                ? "backend-changed"
+                : existing.sourceCommit !== params.sourceCommit
+                  ? "commit-changed"
+                  : existing.contentKey !== params.contentKey
+                    ? "content-changed"
+                    : "invalid",
+          priorSourceCommit: existing?.sourceCommit.slice(0, 12),
+          requestedSourceCommit: params.sourceCommit.slice(0, 12),
+        });
         await params.requireSpace();
-        if (existing && !(await retireWorktreeTemplate(params.env, existing, options))) {
+        if (
+          existing &&
+          !(await timeWorktreePreparationPhase("templateRetire", () =>
+            retireWorktreeTemplate(params.env, existing, options),
+          ))
+        ) {
           return undefined;
         }
         const id = randomUUID();

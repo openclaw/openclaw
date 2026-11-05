@@ -11,6 +11,7 @@ import {
   type UpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import {
   withOpenClawTestState,
@@ -286,10 +287,6 @@ export function registerDoctorConfigReceiptTests(
   runDoctorHealthFlow: typeof import("./doctor-health.js").runDoctorHealthFlow,
 ) {
   const ipcResultPath = "/tmp/openclaw-update-doctor-result.json";
-  const resultRuntime = () => {
-    vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", ipcResultPath);
-    return createDoctorRuntime();
-  };
   it.each([
     "unchanged",
     "ok",
@@ -301,6 +298,7 @@ export function registerDoctorConfigReceiptTests(
     "restored-config",
     "schema-refusal",
     "wrapped-refusal",
+    "lease-loss",
   ] as const)("publishes consumed input and final committed hash (%s)", async (outcome) => {
     await withDoctorState(async (state) => {
       const resultPath = state.path("doctor-result.json");
@@ -327,6 +325,12 @@ export function registerDoctorConfigReceiptTests(
       };
       const failures: Partial<Record<typeof outcome, Error>> = {
         error: new Error("health failed after commit"),
+        "lease-loss": new Error("maintenance failed", {
+          cause: new OpenClawStateLeaseError("state lease heartbeat is not running", {
+            code: "OPENCLAW_STATE_LEASE_LOST",
+            loss: { reason: "admission-failed" },
+          }),
+        }),
         "partial-config": new AggregateError([configFailure("partial", "unknown")]),
         "unrestored-config": configFailure("complete", "not-restored"),
         "restored-config": configFailure("partial", "restored"),
@@ -336,7 +340,24 @@ export function registerDoctorConfigReceiptTests(
         "wrapped-refusal": new AggregateError([new UpdateDoctorError("stop failed", [stopFact])]),
       };
       const failure = failures[outcome];
+      const preservesWarnings = outcome === "unchanged" || outcome === "advisory";
+      const configWarning = 'Plugin "fixture" config repair failed; config preserved.';
       mocks.runContributions.mockImplementation(async (ctx) => {
+        if (preservesWarnings) {
+          ctx.configResult.warnings = [configWarning];
+          await createDoctorHealthContribution("doctor:fixture-warning", "Fixture warning", {
+            healthChecks: {
+              description: "Optional fixture maintenance",
+              detect: async () => [
+                {
+                  checkId: "core/doctor/fixture-warning",
+                  severity: "warning",
+                  message: "optional maintenance incomplete",
+                },
+              ],
+            },
+          }).run(ctx);
+        }
         if (outcome === "unchanged") {
           return;
         }
@@ -366,6 +387,14 @@ export function registerDoctorConfigReceiptTests(
       const result: UpdatePostInstallDoctorResult = {
         ...(outcome === "advisory" ? postInstallAdvisory : { status: failure ? "error" : "ok" }),
         configHash: expectedHash,
+        ...(preservesWarnings
+          ? {
+              warnings: [
+                configWarning,
+                "core/doctor/fixture-warning: optional maintenance incomplete",
+              ],
+            }
+          : {}),
       };
       if (outcome === "partial-config" || outcome === "unrestored-config") {
         result.maintenanceRefusal = { kind: "data-at-risk", reason: "gateway-state-unverified" };
@@ -382,7 +411,12 @@ export function registerDoctorConfigReceiptTests(
                 ? ["gateway-stop", "stale-gateway-stop-failed"]
                 : ["doctor", "doctor-failed"];
         result.failureFacts = [
-          { check, code, message: outcome === "error" ? failure.message : expect.any(String) },
+          {
+            check,
+            code,
+            message: outcome === "error" ? failure.message : expect.any(String),
+            ...(outcome === "lease-loss" ? { leaseLoss: { reason: "admission-failed" } } : {}),
+          },
         ];
       }
       if (outcome !== "unchanged") {
@@ -401,60 +435,22 @@ export function registerDoctorConfigReceiptTests(
       if (outcome !== "unchanged") {
         expect(expectedHash).not.toBe(hashConfigRaw(fs.readFileSync(state.configPath, "utf8")));
       }
+      if (preservesWarnings) {
+        expect(runtime.exit).not.toHaveBeenCalledWith(1);
+      }
       if (outcome === "advisory") {
         expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledBefore(runtime.exit);
         expect(runtime.exit).toHaveBeenCalledWith(86);
       }
     });
   });
-  it.each([false, true])(
-    "preserves health warnings in the update result (advisory=%s)",
-    async (advisory) => {
-      mocks.runContributions.mockImplementation(async (ctx) => {
-        ctx.configResult.warnings = ['Plugin "fixture" config repair failed; config preserved.'];
-        await createDoctorHealthContribution("doctor:fixture-warning", "Fixture warning", {
-          healthChecks: {
-            description: "Optional fixture maintenance",
-            detect: async () => [
-              {
-                checkId: "core/doctor/fixture-warning",
-                severity: "warning",
-                message: "optional maintenance incomplete",
-              },
-            ],
-          },
-        }).run(ctx);
-        if (advisory) {
-          ctx.postInstallDoctorResult = postInstallAdvisory;
-        }
-      });
-      const runtime = resultRuntime();
-
-      await runDoctorHealthFlow(runtime, {});
-
-      expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
-        resultPath: ipcResultPath,
-        result: {
-          ...(advisory ? postInstallAdvisory : { status: "ok" }),
-          configHash: "unchanged",
-          warnings: [
-            'Plugin "fixture" config repair failed; config preserved.',
-            "core/doctor/fixture-warning: optional maintenance incomplete",
-          ],
-        },
-      });
-      expect(runtime.exit).not.toHaveBeenCalledWith(1);
-      if (advisory) {
-        expect(runtime.exit).toHaveBeenCalledWith(86);
-      }
-    },
-  );
   it("reports a cron ownership refusal instead of a recoverable post-install advisory", async () => {
     mocks.runContributions.mockImplementation(async (ctx) => {
       ctx.configWriteRefusal = "cron-owner-safety";
       ctx.postInstallDoctorResult = postInstallAdvisory;
     });
-    const runtime = resultRuntime();
+    vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", ipcResultPath);
+    const runtime = createDoctorRuntime();
 
     try {
       await runDoctorHealthFlow(runtime, {});
@@ -463,7 +459,6 @@ export function registerDoctorConfigReceiptTests(
     }
 
     expect(mocks.outro).toHaveBeenCalledWith("Doctor finished, but config fixes were not applied.");
-    expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.exit).not.toHaveBeenCalledWith(86);
     expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({

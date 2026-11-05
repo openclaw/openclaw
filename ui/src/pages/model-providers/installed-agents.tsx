@@ -18,6 +18,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { hasProviderBrandIcon } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsSection,
@@ -543,7 +544,8 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
             </Show>
           }
           checked={presentation().enabled()}
-          disabled={busy() || view().blocked}
+          disabled={view().blocked}
+          saving={busy()}
           onChange={(checked) => {
             const display = presentation();
             return setEnabled(props.agent, checked, (...args) => presentToggle(display, ...args));
@@ -591,20 +593,16 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
               </>
             }
             actions={
-              <openclaw-tooltip prop:content={label()}>
-                <button
-                  type="button"
-                  class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
-                  aria-label={label()}
-                  disabled={props.checking || view().pending.size > 0}
-                  onClick={() => {
-                    void load();
-                    retryDiscovery();
-                  }}
-                >
-                  <Icon name="refresh" />
-                </button>
-              </openclaw-tooltip>
+              <RefreshButton
+                class="model-providers__refresh-button"
+                label={label()}
+                busy={props.checking}
+                disabled={view().pending.size > 0}
+                onClick={() => {
+                  void load();
+                  retryDiscovery();
+                }}
+              />
             }
           >
             {props.children}

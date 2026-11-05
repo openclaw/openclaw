@@ -28,11 +28,13 @@ import {
 } from "../command-turn-context.js";
 import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import { isActiveRunSafeCommandTurn } from "../commands-registry.js";
+import { waitForReplyDispatcherSettlement } from "../dispatch-dispatcher.js";
 import {
   createAbortAwareDispatcher,
   DispatchReplyOperationAbortedError,
   isDispatchReplyOperationAbortedError,
 } from "./dispatch-from-config.abort.js";
+import { deferLifecycleBlockedDispatchClaim } from "./dispatch-from-config.claim-retry.js";
 import {
   resolveDispatchResetAdmission,
   shouldLetSlackRoutedThreadBypassBusyReplyOperation,
@@ -45,6 +47,7 @@ import type {
 import { restoreArchivedDispatchSession } from "./dispatch-session-archive.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { isExplicitSteerCommandTurn } from "./explicit-steer-routing.js";
+import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
@@ -63,6 +66,7 @@ export function createDispatchReplyOperationCoordinator(
 ) {
   let dispatchReplyOperation: ReplyOperation | undefined;
   let admittedExpectedSessionId: string | undefined;
+  let admittedDatabaseIncarnation: string | undefined;
   let dispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchLifecycleAdmission: SessionEffectRef | undefined;
@@ -71,8 +75,6 @@ export function createDispatchReplyOperationCoordinator(
   let dispatchLifecycleAbortController: AbortController | undefined;
   let preDispatchLifecycleInterrupted = false;
   let dispatchResetTriggered = false;
-  let allowRestartTombstoneParentFork = false;
-  let allowRestartTombstoneReset = false;
   const dispatchLifecycleWork = {
     owner: new Set<Promise<void>>(),
     delivery: new Set<Promise<void>>(),
@@ -113,6 +115,10 @@ export function createDispatchReplyOperationCoordinator(
   const waitForDispatchDelivery = async (): Promise<void> => {
     await Promise.allSettled(Array.from(dispatchLifecycleWork.delivery));
     await waitForReplyDispatcherIdle(params.dispatcher);
+  };
+  const waitForDispatchSettlement = async (): Promise<void> => {
+    await Promise.allSettled(Array.from(dispatchLifecycleWork.delivery));
+    await waitForReplyDispatcherSettlement(params.dispatcher);
   };
 
   const releasePreDispatchLifecycleAdmission = async (
@@ -161,7 +167,7 @@ export function createDispatchReplyOperationCoordinator(
     removePreDispatchLifecycleAbortListener?.();
     const onAbort = () => {
       void releasePreDispatchLifecycleAdmission(() =>
-        waitForReplyDispatcherIdle(params.dispatcher),
+        waitForReplyDispatcherSettlement(params.dispatcher),
       );
     };
     abortSignal.addEventListener("abort", onAbort, { once: true });
@@ -247,18 +253,13 @@ export function createDispatchReplyOperationCoordinator(
         sessionKey: params.dispatchOperationSessionKey,
         storePath: params.operationSessionStoreEntry.storePath,
       });
-      ({
-        resetTriggered: dispatchResetTriggered,
-        allowRestartTombstoneParentFork,
-        allowRestartTombstoneReset,
-      } = await resolveDispatchResetAdmission({
+      ({ resetTriggered: dispatchResetTriggered } = await resolveDispatchResetAdmission({
         agentId: params.agentId,
         cfg: params.cfg,
         ctx: params.ctx,
         entry: params.operationSessionStoreEntry.entry,
         hasPluginOwnedBinding,
         sessionKey: params.dispatchOperationSessionKey,
-        storePath: params.operationSessionStoreEntry.storePath,
       }));
     }
     if (phase !== "pre_dispatch" && preDispatchLifecycleInterrupted) {
@@ -440,10 +441,9 @@ export function createDispatchReplyOperationCoordinator(
           params.initialDispatchReplyOperation,
         ].filter((operation): operation is ReplyOperation => operation !== undefined),
         storePath: params.operationSessionStoreEntry.storePath,
+        expectedDatabaseIncarnation: admittedDatabaseIncarnation,
         kind: replyTurnKind,
         resetTriggered: dispatchResetTriggered,
-        allowRestartTombstoneParentFork,
-        allowRestartTombstoneReset,
         routeThreadId: params.routeThreadId,
         originatingLeafEntryId: params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId,
         upstreamAbortSignal: input?.abortSignal ?? params.replyOptions?.abortSignal,
@@ -462,6 +462,14 @@ export function createDispatchReplyOperationCoordinator(
         }
       }
     } catch (error) {
+      const deferred = await deferLifecycleBlockedDispatchClaim(error, mailboxClaim);
+      if (deferred) {
+        if (input?.abortSignal.aborted || input?.retirementRequested) {
+          return { status: "aborted" };
+        }
+        admittedDatabaseIncarnation ??= deferred.databaseIncarnation;
+        return await ensureDispatchReplyOperation(phase, hasPluginOwnedBinding);
+      }
       if (mailboxClaim) {
         releaseSessionControllerClaim(mailboxClaim);
       }
@@ -585,6 +593,21 @@ export function createDispatchReplyOperationCoordinator(
     params.replyOptions?.abortSignal;
   let observedReplyDelivery = false;
   let agentRunTerminalOutcome: "completed" | "failed" | undefined;
+  const observeDeliveryProgress = (
+    deliveryOutcome: Promise<ReplyDispatchDeliveryOutcome> | undefined,
+    event: string,
+  ) => {
+    const operation = dispatchReplyOperation;
+    void deliveryOutcome?.then(
+      (outcome) => {
+        if (outcome === "delivered") {
+          operation?.watchdog.progress("finalization", event);
+        }
+      },
+      () => {},
+    );
+  };
+
   const markObservedReplyDelivery = async () => {
     if (observedReplyDelivery) {
       return;
@@ -640,7 +663,7 @@ export function createDispatchReplyOperationCoordinator(
   };
 
   const completeDispatchReplyOperation = () => {
-    void releasePreDispatchLifecycleAdmission(() => waitForReplyDispatcherIdle(params.dispatcher));
+    void releasePreDispatchLifecycleAdmission(waitForDispatchSettlement);
     const operation = dispatchReplyOperation;
     if (!operation) {
       return;
@@ -649,10 +672,14 @@ export function createDispatchReplyOperationCoordinator(
     const complete = () => {
       if (params.replyOptions?.internalEventExecution) {
         // Source-owned effects retain the admitted operation until delivery settles.
-        const settle = () => operation.complete();
+        const settle = () =>
+          operation.completeWithAfterClearBarrier(
+            waitForReplyDispatcherSettlement(params.dispatcher),
+            timeoutPolicy,
+          );
         void waitForDispatchDelivery().then(settle, settle);
       } else {
-        operation.completeWithAfterClearBarrier(waitForDispatchDelivery(), timeoutPolicy);
+        operation.completeWithAfterClearBarrier(waitForDispatchSettlement(), timeoutPolicy);
       }
     };
     // Abort races the resolver, not its bookkeeping. Retain this exact owner
@@ -715,6 +742,7 @@ export function createDispatchReplyOperationCoordinator(
     isDispatchOperationAborted,
     isPreDispatchOperationAborted,
     markObservedReplyDelivery,
+    observeDeliveryProgress,
     releasePreDispatchLifecycleAdmission,
     runWithDispatchLifecycleAdmission,
     throwIfDispatchOperationAborted,

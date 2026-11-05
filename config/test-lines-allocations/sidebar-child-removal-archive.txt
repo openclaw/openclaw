@@ -1,0 +1,2 @@
+# Saved-coordinate browser regression for #167670; hit testing needs real CSS layout.
+54

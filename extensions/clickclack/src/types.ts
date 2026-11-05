@@ -14,14 +14,12 @@ export type ClickClackAccountConfig = Omit<
   token?: unknown;
 };
 
-type ClickClackConfig = Omit<ClickClackConfigInput, "token" | "accounts"> & {
-  token?: unknown;
-  accounts?: Record<string, Partial<ClickClackAccountConfig>>;
-};
-
 export type CoreConfig = OpenClawConfig & {
   channels?: OpenClawConfig["channels"] & {
-    clickclack?: ClickClackConfig;
+    clickclack?: Omit<ClickClackConfigInput, "token" | "accounts"> & {
+      token?: unknown;
+      accounts?: Record<string, Partial<ClickClackAccountConfig>>;
+    };
   };
 };
 

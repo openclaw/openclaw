@@ -8,6 +8,7 @@ import { collectBaseArrayPaths } from "../../config/patch-replace-paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelsConfigSchema } from "../../config/zod-schema.core.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withGuardedFetchRequestAuthority } from "../../infra/net/fetch-request-authority.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { CUSTOM_ENDPOINT_APIS, customEndpointModelInputs } from "../../shared/custom-endpoint.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -58,7 +59,16 @@ export const customEndpointParams = z.discriminatedUnion("action", [
     .object({
       ...target,
       ...connection,
-      action: z.enum(["create", "edit"]),
+      action: z.literal("create"),
+      models: z.array(model).min(1),
+    })
+    .strict(),
+  z
+    .object({
+      ...target,
+      ...connection,
+      action: z.literal("edit"),
+      api: z.enum(CUSTOM_ENDPOINT_APIS).optional(),
       models: z.array(model).min(1),
     })
     .strict(),
@@ -193,7 +203,13 @@ export function prepareCustomEndpointPatch(
       }
       return next;
     });
-    if (params.noAuth && models.some((row) => (row.api ?? params.api) !== "openai-completions")) {
+    if (
+      params.noAuth &&
+      models.some(
+        (row) =>
+          (row.api ?? params.api ?? existing?.api ?? "openai-completions") !== "openai-completions",
+      )
+    ) {
       throw new Error(
         "No authentication is supported only for effective Chat Completions routes, including model overrides.",
       );
@@ -201,7 +217,7 @@ export function prepareCustomEndpointPatch(
     value = {
       ...existing,
       baseUrl: params.baseUrl,
-      api: params.api,
+      ...(params.api === undefined ? {} : { api: params.api }),
       models,
       ...(params.noAuth ? { auth: "none" } : existing?.auth === "none" ? { auth: null } : {}),
     };
@@ -269,11 +285,13 @@ export function createCustomEndpointHandler(
       if (params.noAuth && params.api !== "openai-completions") {
         throw new Error("No authentication requires Chat Completions.");
       }
-      const { discoverCustomApiModelIds } = await import("../../commands/onboard-custom-config.js");
-      authority.assertCurrent();
-      const models = await discoverCustomApiModelIds({
-        baseUrl: params.baseUrl,
-        ...(params.noAuth ? {} : { apiKey: params.apiKey }),
+      const models = await withGuardedFetchRequestAuthority(authority.assertCurrent, async () => {
+        const { discoverCustomApiModelIds } =
+          await import("../../commands/onboard-custom-config.js");
+        return await discoverCustomApiModelIds({
+          baseUrl: params.baseUrl,
+          ...(params.noAuth ? {} : { apiKey: params.apiKey }),
+        });
       });
       authority.assertCurrent();
       respond(true, { models, inferenceTested: false }, undefined);

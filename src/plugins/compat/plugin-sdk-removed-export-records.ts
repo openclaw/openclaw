@@ -120,12 +120,6 @@ export const PLUGIN_SDK_REMOVED_EXPORT_RECORDS = [
       "openclaw/plugin-sdk/reply-runtime.HEARTBEAT_TOKEN",
     ],
     diagnostics: ["plugin SDK shipped-surface guard and migration guide"],
-    tests: [
-      "src/plugins/compat/registry.test.ts",
-      "test/scripts/plugin-sdk-shipped-surface.test.ts",
-    ],
-    releaseNote:
-      "Maintainer-approved breaking removal on 2026-10-03: heartbeat execution moved to ordinary Automations; these exports are removed without deprecated aliases.",
   },
   {
     code: "plugin-sdk-heartbeat-agent-harness-runtime",
@@ -141,12 +135,6 @@ export const PLUGIN_SDK_REMOVED_EXPORT_RECORDS = [
       "openclaw/plugin-sdk/agent-harness-runtime.normalizeHeartbeatToolResponse",
     ],
     diagnostics: ["plugin SDK shipped-surface guard and migration guide"],
-    tests: [
-      "src/plugins/compat/registry.test.ts",
-      "test/scripts/plugin-sdk-shipped-surface.test.ts",
-    ],
-    releaseNote:
-      "Maintainer-approved breaking removal on 2026-10-03: heartbeat response tool SDK exports are removed; no deprecated aliases remain.",
   },
   {
     code: "plugin-sdk-reply-silence-parsers",

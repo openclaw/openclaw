@@ -73,6 +73,9 @@ export async function compactWithSafetyTimeout<T>(
     },
     timeoutMs,
     "Compaction",
+    // The ceiling stays epoch-valued for callers (the host watchdog and the delegated
+    // summary share it); convert it once here into the elapsed budget the helper
+    // enforces on the monotonic clock.
     deadlineAt - Date.now(),
   );
 }

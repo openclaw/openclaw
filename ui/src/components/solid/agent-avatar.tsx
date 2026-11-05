@@ -5,7 +5,8 @@ import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
-import type { AgentSelectOption } from "../agent-select.ts";
+import type { AgentSelectOption } from "../agent-select-types.ts";
+import { useAvatarGatewayContext } from "./identity-avatar-view.ts";
 import { AgentOptionAvatar } from "./identity-avatar.tsx";
 
 export type AgentAvatarProps = {
@@ -13,29 +14,26 @@ export type AgentAvatarProps = {
   identity: AgentIdentityResult | null;
 };
 
-export function AgentAvatarContent(props: AgentAvatarProps) {
-  const loader = createIdentityAvatars();
-  onSettled(() => loader.connect());
-  const avatarSource = projectOwner(loader, (owner) => owner);
-  const avatar = createMemo(() => {
-    const option = props.option;
-    const identity = props.identity;
-    const url = option.agent ? resolveAgentAvatarUrl(option.agent, identity) : null;
-    return avatarSource.read().withActiveRoutes(() => ({
-      image: url ? loader.resolve(url) : null,
-      textAvatar: option.agent ? resolveAgentTextAvatar(option.agent, identity) : null,
-      onError: url ? loader.imageErrorHandler(url) : undefined,
-    }));
-  });
-
-  return <AgentOptionAvatar option={props.option} avatar={avatar()} />;
-}
-
-export type AgentAvatarElement = SolidBridgeElement<AgentAvatarProps>;
 export const AgentAvatar = defineSolidBridge<AgentAvatarProps>(
   "openclaw-agent-avatar",
   (props) => {
-    return <AgentAvatarContent {...props} />;
+    const gateway = useAvatarGatewayContext();
+    const loader = createIdentityAvatars();
+    onSettled(() => loader.connect());
+    const avatarSource = projectOwner(loader, (owner) => owner);
+    const avatar = createMemo(() => {
+      gateway();
+      const option = props.option;
+      const identity = props.identity;
+      const url = option.agent ? resolveAgentAvatarUrl(option.agent, identity) : null;
+      return avatarSource.read().withActiveRoutes(() => ({
+        image: url ? loader.resolve(url) : null,
+        textAvatar: option.agent ? resolveAgentTextAvatar(option.agent, identity) : null,
+        onError: url ? loader.imageErrorHandler(url) : undefined,
+      }));
+    });
+
+    return <AgentOptionAvatar option={props.option} avatar={avatar()} />;
   },
   {
     properties: {
@@ -44,6 +42,9 @@ export const AgentAvatar = defineSolidBridge<AgentAvatarProps>(
     },
   },
 );
+
+export type AgentAvatarElement = SolidBridgeElement<AgentAvatarProps>;
+
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-agent-avatar": AgentAvatarElement;

@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
 import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
-import type { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
+import type { createTtsDirectiveTextStreamCleaner } from "../../tts/directive-facts.js";
 import type { PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import type { GetReplyOptions, SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext, FinalizedRuntimeMsgContext } from "../templating.js";

@@ -5,7 +5,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { getFeishuUserAgent } from "./client.js";
-import { requestFeishuApi } from "./comment-shared.js";
+import { sendFeishuMessage } from "./message-send.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
 import {
   createFeishuPartialReplyDeliveryError,
@@ -162,34 +162,6 @@ function shouldPushStreamingUpdate(previousText: string, nextText: string): bool
   );
 }
 
-/** Merges cumulative or overlapping streaming snapshots without duplicating content. */
-export function mergeStreamingText(
-  previousText: string | undefined,
-  nextText: string | undefined,
-): string {
-  const previous = previousText ?? "";
-  const next = nextText ?? "";
-  if (!next) {
-    return previous;
-  }
-  if (!previous || next === previous) {
-    return next;
-  }
-  if (next.includes(previous)) {
-    return next;
-  }
-  if (previous.includes(next)) {
-    return previous;
-  }
-  const maxOverlap = Math.min(previous.length, next.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (previous.slice(-overlap) === next.slice(0, overlap)) {
-      return `${previous}${next.slice(overlap)}`;
-    }
-  }
-  return `${previous}${next}`;
-}
-
 export class FeishuStreamingSession {
   private client: Client;
   private creds: Credentials;
@@ -304,28 +276,9 @@ export class FeishuStreamingSession {
     // reliably routes streaming cards into Feishu topics, whereas
     // message.create with root_id may silently ignore root_id for card
     // references (card_id format).
-    const sendOptions = options ?? {};
-    const sendRes = await requestFeishuApi(
-      () =>
-        sendOptions.replyToMessageId
-          ? this.client.im.message.reply({
-              path: { message_id: sendOptions.replyToMessageId },
-              data: {
-                msg_type: "interactive",
-                content: cardContent,
-                ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
-              },
-            })
-          : this.client.im.message.create({
-              params: { receive_id_type: receiveIdType },
-              data: {
-                receive_id: receiveId,
-                msg_type: "interactive",
-                content: cardContent,
-                // The SDK omits root_id from its types, but Feishu accepts it at runtime.
-                ...(sendOptions.rootId ? { root_id: sendOptions.rootId } : {}),
-              },
-            }),
+    const sendRes = await sendFeishuMessage(
+      { client: this.client, receiveId, receiveIdType },
+      { ...options, content: cardContent, msgType: "interactive" },
       "Send card failed",
     );
     if (sendRes.code !== 0) {

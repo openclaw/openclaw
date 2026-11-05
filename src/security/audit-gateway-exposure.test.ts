@@ -452,7 +452,7 @@ function auditSecretReuse(
     },
     env: {},
     includeFilesystem: false,
-    includeChannelSecurity: false,
+    plugins: [],
     ...options,
   });
 }

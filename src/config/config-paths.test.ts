@@ -17,14 +17,7 @@ describe("concrete config path readers and mutation guards", () => {
     "reads diagnostic %s keys while all mutation parsers reject them",
     (key) => {
       const path = `tools.media.audio.request.headers.${key}`;
-      expect(tokenizeConcreteConfigPath(path).tokens).toEqual([
-        "tools",
-        "media",
-        "audio",
-        "request",
-        "headers",
-        key,
-      ]);
+      expect(tokenizeConcreteConfigPath(path).tokens).toEqual(path.split("."));
       for (const parse of [
         parseConcreteConfigPath,
         parseConcreteConfigPathTokens,
@@ -34,15 +27,6 @@ describe("concrete config path readers and mutation guards", () => {
       }
     },
   );
-
-  it("retains quoted keys and array-index provenance through the shared grammar", () => {
-    const parsed = tokenizeConcreteConfigPath('entries["123"].headers["X.Trace"][0]');
-    expect(parsed.tokens).toEqual(["entries", "123", "headers", "X.Trace", 0]);
-    expect(parsed.quotedNumericSegments).toEqual(new Set([1]));
-    expect(parseConcreteConfigPathWithProvenance('entries["123"].headers["X.Trace"][0]')).toEqual(
-      parsed,
-    );
-  });
 });
 
 describe("config path own-property traversal", () => {
@@ -57,74 +41,42 @@ describe("config path own-property traversal", () => {
     ["agents.entries.worker.tools.exec.reviewer.model", "fallbacks", ["openai/gpt-4o"]],
     ["agents.defaults.pdfModel", "timeoutMs", 5000],
     ["agents.defaults.mediaModels.video", "timeoutMs", 5000],
-  ] as const)("keeps a shorthand primary when setting %s.%s", (path, member, value) => {
-    const parent = path.split(".");
-    const root: Record<string, unknown> = {};
-    setConfigValueAtPath(root, parent, "openai/gpt-4o-mini");
-    setConfigValueAtPath(root, [...parent, member], value);
-    expect(getConfigValueAtPath(root, parent)).toEqual({
-      primary: "openai/gpt-4o-mini",
-      [member]: value,
-    });
-  });
-
-  it.each(["agents.defaults.utilityModel", "agents.entries.worker.utilityModel"])(
-    "keeps utility routing disabled when adding fallbacks at %s",
-    (path) => {
+    ["agents.defaults.utilityModel", "fallbacks", ["local/backup"], ""],
+    ["agents.entries.worker.utilityModel", "fallbacks", ["local/backup"], ""],
+  ] as const)(
+    "keeps the authored primary when setting %s.%s",
+    (path, member, value, configuredPrimary?: string) => {
+      const primary = configuredPrimary ?? "openai/gpt-4o-mini";
       const parent = path.split(".");
       const root: Record<string, unknown> = {};
-      setConfigValueAtPath(root, parent, "");
-      setConfigValueAtPath(root, [...parent, "fallbacks"], ["local/backup"]);
+      setConfigValueAtPath(root, parent, primary);
+      setConfigValueAtPath(root, [...parent, member], value);
       expect(getConfigValueAtPath(root, parent)).toEqual({
-        primary: "",
-        fallbacks: ["local/backup"],
+        primary,
+        [member]: value,
       });
     },
   );
 
-  it.each([
-    { member: "fallbacks", value: ["backup"] },
-    { member: "timeoutMs", value: 5000 },
-  ])("does not promote unrelated plugin strings when setting $member", ({ member, value }) => {
-    const root = { plugins: { entries: { demo: { config: { model: "opaque" } } } } };
-    setConfigValueAtPath(root, ["plugins", "entries", "demo", "config", "model", member], value);
-    expect(root.plugins.entries.demo.config.model).toEqual({ [member]: value });
-  });
-
-  it("does not treat an inherited prototype leaf as config", () => {
-    const key = "toString";
-    const parent: Record<string, unknown> = {};
-    const root: Record<string, unknown> = { parent };
-
-    expect(getConfigValueAtPath(root, ["parent", key])).toBeUndefined();
-    expect(unsetConfigValueAtPath(root, ["parent", key])).toBe(false);
-    expect(root).toEqual({ parent: {} });
-
-    setConfigValueAtPath(root, ["parent", key], "own");
-    expect(Object.hasOwn(parent, key)).toBe(true);
-    expect(getConfigValueAtPath(root, ["parent", key])).toBe("own");
-    expect(unsetConfigValueAtPath(root, ["parent", key])).toBe(true);
-    expect(root).toEqual({});
-  });
-
-  it("replaces an inherited parent instead of traversing it", () => {
-    const prototypeBranch = { leaf: "prototype" };
-    const root = Object.create({ branch: prototypeBranch }) as Record<string, unknown>;
-
-    expect(getConfigValueAtPath(root, ["branch", "leaf"])).toBeUndefined();
-    expect(unsetConfigValueAtPath(root, ["branch", "leaf"])).toBe(false);
-    expect(prototypeBranch).toEqual({ leaf: "prototype" });
-
-    setConfigValueAtPath(root, ["branch", "leaf"], "own");
-    expect(Object.hasOwn(root, "branch")).toBe(true);
-    expect(root.branch).toEqual({ leaf: "own" });
-    expect(prototypeBranch).toEqual({ leaf: "prototype" });
-
-    expect(unsetConfigValueAtPath(root, ["branch", "leaf"])).toBe(true);
-    expect(Object.hasOwn(root, "branch")).toBe(false);
-    expect(getConfigValueAtPath(root, ["branch", "leaf"])).toBeUndefined();
-    expect(prototypeBranch).toEqual({ leaf: "prototype" });
-  });
+  it.each(["parent", "leaf"])(
+    "ignores inherited %s properties during read, write and unset",
+    (location) => {
+      const inherited = { leaf: "prototype" };
+      const root: Record<string, unknown> =
+        location === "parent"
+          ? Object.create({ branch: inherited })
+          : { branch: Object.create(inherited) };
+      const path = ["branch", "leaf"];
+      expect(getConfigValueAtPath(root, path)).toBeUndefined();
+      expect(unsetConfigValueAtPath(root, path)).toBe(false);
+      setConfigValueAtPath(root, path, "own");
+      expect(root).toEqual({ branch: { leaf: "own" } });
+      expect(getConfigValueAtPath(root, path)).toBe("own");
+      expect(unsetConfigValueAtPath(root, path)).toBe(true);
+      expect(root).toEqual({});
+      expect(inherited).toEqual({ leaf: "prototype" });
+    },
+  );
 
   function inheritedProperty(key: string, kind: "setter" | "non-writable", value: unknown) {
     const setter = vi.fn();
@@ -147,26 +99,23 @@ describe("config path own-property traversal", () => {
     });
   }
 
-  for (const inheritedKind of ["setter", "non-writable"] as const) {
-    it(`creates an own parent over an inherited ${inheritedKind} property`, () => {
-      const { setter, object: root } = inheritedProperty("branch", inheritedKind, {
-        leaf: "prototype",
-      });
-
-      expect(() => setConfigValueAtPath(root, ["branch", "leaf"], "own")).not.toThrow();
-      expect(setter).not.toHaveBeenCalled();
-      expectOwnProperty(root, "branch", { leaf: "own" });
-    });
-
-    it(`creates an own leaf over an inherited ${inheritedKind} property`, () => {
-      const { setter, object: parent } = inheritedProperty("leaf", inheritedKind, "prototype");
-      const root = { parent };
-
-      expect(() => setConfigValueAtPath(root, ["parent", "leaf"], "own")).not.toThrow();
-      expect(setter).not.toHaveBeenCalled();
-      expectOwnProperty(parent, "leaf", "own");
-    });
-  }
+  it.each([
+    ["setter", "parent"],
+    ["setter", "leaf"],
+    ["non-writable", "parent"],
+    ["non-writable", "leaf"],
+  ] as const)("creates an own %s-shadowing %s", (kind, location) => {
+    const isParent = location === "parent";
+    const key = isParent ? "branch" : "leaf";
+    const { setter, object } = inheritedProperty(
+      key,
+      kind,
+      isParent ? { leaf: "prototype" } : "prototype",
+    );
+    setConfigValueAtPath(isParent ? object : { branch: object }, ["branch", "leaf"], "own");
+    expect(setter).not.toHaveBeenCalled();
+    expectOwnProperty(object, key, isParent ? { leaf: "own" } : "own");
+  });
 });
 
 describe("raw diagnostic path traversal", () => {

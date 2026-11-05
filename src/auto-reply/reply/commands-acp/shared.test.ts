@@ -14,26 +14,20 @@ describe("formatRuntimeOptionsText", () => {
 });
 
 describe("parseSteerInput", () => {
-  it.each([
-    [
-      ["one", "—session", "first", "two", "--session=second", "—literal"],
-      "second",
-      "one two —literal",
-    ],
-  ])(
+  it.each([["one —session first two --session=second —literal", "second", "one two —literal"]])(
     "consumes session values without changing instructions: %s",
-    (tokens, sessionToken, instruction) => {
-      expect(parseSteerInput(tokens)).toEqual({
+    (text, sessionToken, instruction) => {
+      expect(parseSteerInput(text)).toEqual({
         ok: true,
         value: { sessionToken, instruction },
       });
     },
   );
 
-  it.each([{ tokens: ["--session", "—next", "one"] }])(
-    "rejects missing session values: $tokens",
-    ({ tokens }) => {
-      expect(parseSteerInput(tokens)).toEqual({
+  it.each([{ text: "--session —next one" }])(
+    "rejects missing session values: $text",
+    ({ text }) => {
+      expect(parseSteerInput(text)).toEqual({
         ok: false,
         error:
           "--session requires a value. Usage: /acp steer [--session <session-key|session-id|session-label>] <instruction>",

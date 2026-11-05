@@ -22,7 +22,7 @@ export function readEndpointDraft(
   return {
     provider,
     baseUrl: typeof entry.baseUrl === "string" ? entry.baseUrl : "",
-    api: customEndpointApi(entry.api) ?? "openai-completions",
+    api: customEndpointApi(entry.api),
     noAuth: entry.auth === "none",
     models: (Array.isArray(entry.models) ? entry.models : []).flatMap((value) => {
       const row = asNullableRecord(value);

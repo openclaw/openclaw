@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveAgentWorkspaceMemoryRouting,
   shouldIncludeAgentHarnessRuntimeContext,
-} from "./prompt-context.js";
+} from "../../plugin-sdk/agent-harness-attempt-runtime.js";
 
 describe("harness runtime context inclusion", () => {
   it.each([
@@ -30,10 +30,10 @@ describe("harness workspace memory routing", () => {
       resolveAgentWorkspaceMemoryRouting({
         config: scope === "missing config" ? undefined : config,
         agentId: scope === "missing agent" ? undefined : "main",
-        workspaceDir: path.join(
+        workspaceDir: [
           workspaceDir,
           ...(scope === "other workspace" ? ["sandbox"] : ["nested", ".."]),
-        ),
+        ].join(path.sep),
         toolNames: new Set(tools),
       }),
     ).toEqual({ memoryToolNames, memoryToolRouted });

@@ -93,17 +93,16 @@ function sandboxFixture(
   config: OpenClawConfig,
   authority?: AdmittedRunOperatorAuthority,
 ): SandboxContext {
+  const unexpectedExecution = async () => {
+    throw new Error("unexpected shell execution");
+  };
   const backend: SandboxBackendHandle = {
     id: "docker",
     runtimeId: "sandbox",
     runtimeLabel: "sandbox",
     workdir: target.containerWorkdir,
-    buildExecSpec: async () => {
-      throw new Error("unexpected shell execution");
-    },
-    runShellCommand: async () => {
-      throw new Error("unexpected shell execution");
-    },
+    buildExecSpec: unexpectedExecution,
+    runShellCommand: unexpectedExecution,
   };
   bindSandboxPersistentExecCapability(backend, {
     target: { kind: "docker", endpoint: "unix:///fixture/docker.sock", daemonId: "fixture" },
@@ -279,24 +278,22 @@ it.each([
       };
       expect(retained.assertCurrent).toThrow();
     } else {
-      fixture.replaceSession(
-        change === "skills"
-          ? {
-              skillLibrarySelections: [
-                {
-                  skillId: "changed-skill",
-                  revision: "a".repeat(64),
-                  name: "changed",
-                  ownerProfileId: fixture.profileId,
-                },
-              ],
-            }
-          : change === "permission mode"
-            ? { permissionMode: "read-only" }
-            : change === "exec host"
-              ? { execHost: "gateway" }
-              : { sandboxMode: "off" },
-      );
+      const patches: Record<typeof change, Partial<SessionEntry>> = {
+        skills: {
+          skillLibrarySelections: [
+            {
+              skillId: "changed-skill",
+              revision: "a".repeat(64),
+              name: "changed",
+              ownerProfileId: fixture.profileId,
+            },
+          ],
+        },
+        "permission mode": { permissionMode: "read-only" },
+        "exec host": { execHost: "gateway" },
+        "sandbox mode": { sandboxMode: "off" },
+      };
+      fixture.replaceSession(patches[change]);
     }
     expect(retained.signal.aborted).toBe(true);
     expect(retained.assertCurrent).toThrow();
@@ -404,15 +401,13 @@ it("keeps sandbox source authority through a real background notification commit
         sessionKey: target.sessionKey,
         sessionId: target.sessionId,
       }),
-    ).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "message",
-          message: expect.objectContaining({
-            content: [{ type: "text", text: "Watcher found a new error." }],
-          }),
+    ).toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({
+          content: [{ type: "text", text: "Watcher found a new error." }],
         }),
-      ]),
+      }),
     );
     expect(retained.signal.aborted).toBe(false);
     retained.assertCurrent();
@@ -431,7 +426,6 @@ it("preserves sandbox streams across native read markers and concurrent run proj
     const client = createSessionMutationTestClient(fixture.profileId);
     const context = createSessionMutationTestContext(fixture.config);
     const patch = async (
-      id: string,
       params: {
         key: string;
         unread: boolean;
@@ -442,7 +436,7 @@ it("preserves sandbox streams across native read markers and concurrent run proj
     ) => {
       const respond = vi.fn();
       await sessionMutationHandlers["sessions.patch"]!({
-        req: { type: "req", id, method: "sessions.patch", params },
+        req: { type: "req", id: "patch", method: "sessions.patch", params },
         params,
         isWebchatConnect: () => true,
         client,
@@ -474,7 +468,7 @@ it("preserves sandbox streams across native read markers and concurrent run proj
           });
           registrationObserved = true;
         };
-        await patch(`read-marker-${unread}`, params, {
+        await patch(params, {
           sessionId: target.sessionId,
           lifecycleRevision: target.lifecycleRevision,
           ...(unread ? { markedUnreadAt: expect.any(Number) } : { lastReadAt: expect.any(Number) }),
@@ -485,7 +479,6 @@ it("preserves sandbox streams across native read markers and concurrent run proj
         clearAgentRunContext("read-marker-next-turn");
       }
       await patch(
-        "mixed-permission-change",
         { key: target.sessionKey, unread: false, permissionMode: "read-only" },
         { permissionMode: "read-only" },
       );

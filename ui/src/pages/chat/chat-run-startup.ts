@@ -3,11 +3,11 @@ import type { WorkerEnvironmentStartStatus } from "../../../../packages/gateway-
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 
 registerChatComposerEnglish();
 
-registerNewSessionSetupEnglish();
+registerNewSessionRuntimeEnglish();
 
 export type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/src/index.js";
 
@@ -120,7 +120,6 @@ export function chatStartupStatusLabel(
   run: ChatRunStartupStatus | null | undefined,
   placement: ApplicationPlacementStartupStatus | null | undefined,
   environmentStartStatus: WorkerEnvironmentStartStatus | undefined = placement?.startStatus,
-  awaitingActivity = false,
 ): string | undefined {
   const startStatus = environmentStartStatus;
   if (
@@ -164,12 +163,9 @@ export function chatStartupStatusLabel(
       return t("chat.startupStatus.preparingWorkspace");
     case "starting":
       return t("newSession.starting");
-    case "active":
-    case "sending":
-      return t("chat.composer.sendingMessage");
     default:
-      // Queue custody and recovery can precede execution; only an explicit phase proves preparation.
-      return awaitingActivity ? t("chat.startupStatus.waitingForTurn") : undefined;
+      // Ordinary send latency uses the same working indicator as an active turn.
+      return undefined;
   }
 }
 

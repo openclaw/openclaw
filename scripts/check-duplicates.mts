@@ -23,6 +23,7 @@ const targets = [
   "test",
   "skills",
   "config",
+  "crates/openclaw-iroh-node",
   "cli-invocation.mjs",
   "cli-parent-lifetime.mjs",
   "cli-root-options.mjs",
@@ -36,8 +37,12 @@ const targets = [
   "node-runtime-recovery.mjs",
   "node-runtime-env.mjs",
   "node-sqlite.mjs",
+  "node-sqlite-capabilities.mjs",
+  "runtime-process-bootstrap.generated.mjs",
+  "runtime-process-scripts.generated.mjs",
   "node-version.mjs",
   "openclaw.mjs",
+  "standalone-runtime-profile.mjs",
   "tsdown.ai.config.ts",
   "tsdown.config.ts",
   "vitest.config.ts",
@@ -59,6 +64,9 @@ const generatedIgnores = [
   "**/.build/**",
   "**/.artifacts/**",
   "vendor/**",
+  // napi-rs generates the iroh binding loader and its type declarations.
+  "crates/openclaw-iroh-node/index.js",
+  "crates/openclaw-iroh-node/index.d.ts",
 ];
 
 const testIgnores = ["test", "e2e.test", "live.test"].flatMap((suffix) =>

@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { nativeRuntime } from "../../test-helpers/chat-model.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import {
   hostedRuntime,
   mountPlacement,
-  nativeRuntime,
   placementDevice,
   placementFixture,
 } from "./placement.test-support.ts";
@@ -227,7 +227,7 @@ it("does not grant a model or write permission through required worker metadata"
 it("renders required placement as a readonly indicator, not a machine or workspace picker", async () => {
   const f = await ready();
   const container = mountPlacement(f);
-  expect(container.textContent).toContain("OpenClaw worker");
+  expect(container.textContent).toContain("Cloud device");
   expect(container.querySelector("[data-required-placement]")).not.toBeNull();
   expect(container.querySelector("button, input, .oc-popover")).toBeNull();
 });

@@ -4,13 +4,15 @@ import {
   readNativeBrowserState,
   subscribeNativeBrowserState,
   type NativeBrowserMessage,
-  type NativeBrowserState,
   type NativeBrowserTab,
 } from "../../app/native-browser-bridge.ts";
+import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
+import { observeDocumentScroll } from "../../lib/reactive/document-scroll.ts";
+import { observeIntersection, observeResize } from "../../lib/reactive/observers.ts";
+import { observeWindowResize } from "../../lib/reactive/window-resize.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { readBrowserInspectedNode, type BrowserPanelTab } from "./browser-client.ts";
 import type { BrowserPanelInputOwner } from "./browser-panel-input-owner.ts";
-import { createBrowserPanelNativePresentation } from "./browser-panel-native-presentation.ts";
 import type { BrowserPanelHost } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
 import type { BrowserPanelStateWriter } from "./browser-panel-state.ts";
@@ -51,15 +53,211 @@ interface BrowserPanelNativeHost extends BrowserPanelStateWriter<
   exitCaptureModes(): void;
 }
 
+let presentationOrder = 0;
+
 const presenters = new Set<{
   includesTab(tab: NativeBrowserTab): boolean;
-  presentation: ReturnType<typeof createBrowserPanelNativePresentation>;
+  presentation: BrowserPanelNative["presentation"];
 }>();
 const popupScopes = new Map<string, string>();
 
 /** Project the native owner's retained tabs into this session's panel. */
 export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
-  const presentation = createBrowserPanelNativePresentation(controller);
+  // The web panel owns geometry and occlusion; native owns the actual views.
+  // Every panel has a scope, including insecure HTTP origins without randomUUID.
+  const scope = generateUUID();
+  let presentedTabId: string | null = null;
+  let lastPresented = 0;
+  let presentationStage: HTMLElement | null = null;
+  let intersecting = true;
+  let occluded = false;
+  let frame: number | null = null;
+  let lastPresentation: { key: string } | null = null;
+  let connected = false;
+
+  function hostElement(): Element | null {
+    const root = controller.host.renderRoot;
+    return root instanceof ShadowRoot ? root.host : root instanceof Element ? root : null;
+  }
+
+  function schedule(): void {
+    if (!connected || frame !== null) {
+      return;
+    }
+    frame = requestAnimationFrame(() => {
+      frame = null;
+      report();
+    });
+  }
+
+  function canPresent(): boolean {
+    return Boolean(
+      connected &&
+      controller.host.isConnected &&
+      controller.host.browserPanelIsOpen() &&
+      controller.native.activeTab &&
+      controller.mode === "interact" &&
+      !occluded &&
+      intersecting,
+    );
+  }
+
+  function report(): void {
+    if (!connected) {
+      return;
+    }
+    if (!presentationStage || !canPresent()) {
+      presentation.hide();
+      return;
+    }
+    const rect = presentationStage.getBoundingClientRect();
+    const host = hostElement();
+    let hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    // document hit-testing stops at shadow hosts. Descend to distinguish this
+    // panel from a dialog or another panel within the same application root.
+    while (hit?.shadowRoot && typeof hit.shadowRoot.elementFromPoint === "function") {
+      const inner = hit.shadowRoot.elementFromPoint(
+        rect.x + rect.width / 2,
+        rect.y + rect.height / 2,
+      );
+      if (!inner || inner === hit) {
+        break;
+      }
+      hit = inner;
+    }
+    let ancestor: Node | null = hit;
+    while (ancestor && ancestor !== host) {
+      ancestor = ancestor instanceof ShadowRoot ? ancestor.host : ancestor.parentNode;
+    }
+    if (!ancestor || rect.width <= 0 || rect.height <= 0) {
+      presentation.hide();
+      return;
+    }
+    send(controller.activeTargetId, {
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+    });
+  }
+
+  function send(
+    tabId: string | null,
+    rect: { x: number; y: number; width: number; height: number } | null,
+  ): void {
+    const payload = {
+      type: "present" as const,
+      scope,
+      tabId,
+      rect,
+      visible: Boolean(tabId),
+    };
+    const presentation = { key: JSON.stringify(payload) };
+    if (presentation.key === lastPresentation?.key) {
+      return;
+    }
+    lastPresentation = presentation;
+    const sessionKey = controller.host.sessionKey;
+    presentedTabId = tabId;
+    if (tabId) {
+      // Native resolves duplicate presentations of one tab in favor of the
+      // most recent scope; this order also selects a popup's web presenter.
+      lastPresented = ++presentationOrder;
+    }
+    void postNativeBrowserMessage(payload).then((reply) => {
+      if (
+        reply &&
+        !reply.ok &&
+        connected &&
+        controller.host.sessionKey === sessionKey &&
+        lastPresentation === presentation
+      ) {
+        controller.reportError(reply.error);
+      }
+    });
+  }
+
+  const presentation = {
+    scope,
+    get presentedTabId() {
+      return presentedTabId;
+    },
+    get lastPresented() {
+      return lastPresented;
+    },
+    mount(): () => void {
+      connected = true;
+      // Native responder focus can route back to this panel without DOM events.
+      hostElement()?.setAttribute("data-native-browser-scope", scope);
+      const stopOcclusion = subscribeNativeOverlayOcclusion(
+        (value) => {
+          occluded = value;
+          if (value) {
+            presentation.hide();
+          }
+          schedule();
+        },
+        () => presentationStage?.getBoundingClientRect() ?? null,
+      );
+      presentation.update();
+      return () => {
+        presentation.hide();
+        hostElement()?.removeAttribute("data-native-browser-scope");
+        connected = false;
+        if (frame !== null) {
+          cancelAnimationFrame(frame);
+          frame = null;
+        }
+        stopOcclusion();
+        lastPresentation = null;
+        void postNativeBrowserMessage({ type: "release-scope", scope });
+      };
+    },
+    update(): void {
+      if (!connected) {
+        return;
+      }
+      if (!canPresent()) {
+        presentation.hide();
+      }
+      schedule();
+    },
+    mountStage(element: HTMLElement): () => void {
+      presentationStage = element;
+      intersecting = true;
+      const stopSize =
+        typeof ResizeObserver === "function" ? observeResize([element], schedule) : undefined;
+      const stopIntersection =
+        typeof IntersectionObserver === "function"
+          ? observeIntersection([element], ([entry]) => {
+              intersecting = entry?.isIntersecting ?? intersecting;
+              schedule();
+            })
+          : undefined;
+      const stopScroll = observeDocumentScroll(document, schedule);
+      const stopResize = observeWindowResize(window, schedule);
+      presentation.update();
+      return () => {
+        presentation.hide();
+        presentationStage = null;
+        stopSize?.();
+        stopIntersection?.();
+        stopScroll();
+        stopResize();
+      };
+    },
+    renew(): void {
+      // Explicit selection reclaims a tab that another panel scope may now own.
+      lastPresentation = null;
+      schedule();
+    },
+    hide(): void {
+      if (connected) {
+        send(null, null);
+      }
+    },
+  };
+
   const presenterEntry = { includesTab, presentation };
   let allNativeTabs: NativeBrowserTab[] = [];
   let pendingActivation: string | null = null;
@@ -80,10 +278,10 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
     return allNativeTabs.filter((tab) => includesTab(tab));
   }
 
-  function acceptState(state: NativeBrowserState, activatePopups: boolean): void {
+  function acceptTabs(tabs: NativeBrowserTab[], activatePopups: boolean): void {
     const previous = new Set(nativeTabs().map((tab) => tab.id));
     const activeBefore = native.activeTab;
-    allNativeTabs = state.tabs;
+    allNativeTabs = tabs;
     controller.setState("tabs", native.mergeRemoteTabs(controller.tabs));
     const view = controller.view;
     if (
@@ -94,7 +292,7 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       controller.setState("view", null);
     }
     for (const id of popupScopes.keys()) {
-      if (!state.tabs.some((tab) => tab.id === id)) {
+      if (!tabs.some((tab) => tab.id === id)) {
         popupScopes.delete(id);
       }
     }
@@ -179,9 +377,9 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       presenters.add(presenterEntry);
       const initial = readNativeBrowserState();
       if (initial) {
-        acceptState(initial, false);
+        acceptTabs(initial.tabs, false);
       }
-      const stopState = subscribeNativeBrowserState((state) => acceptState(state, true));
+      const stopState = subscribeNativeBrowserState((state) => acceptTabs(state.tabs, true));
       const stopPresentation = presentation.mount();
       return () => {
         stopState();
@@ -215,6 +413,13 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       }
       if (reply && !reply.ok) {
         controller.reportError(reply.error);
+      } else if (reply?.ok && request.type === "close") {
+        // The native close commits before its scheduled state push. Publish the
+        // acknowledged removal before callers decide whether to close the panel.
+        acceptTabs(
+          allNativeTabs.filter((tab) => tab.id !== request.tabId),
+          false,
+        );
       }
       return reply?.ok === true;
     },

@@ -7,7 +7,6 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
   type ChannelHealthPolicy,
-  type ChannelHealthEvaluation,
 } from "../channel-health-policy.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
@@ -74,7 +73,7 @@ export function createStartupChecker(
 
 function shouldIgnoreReadinessFailure(
   accountSnapshot: ChannelAccountSnapshot,
-  health: ChannelHealthEvaluation,
+  health: ReturnType<typeof evaluateChannelHealth>,
 ): boolean {
   if (health.reason === "unmanaged" || health.reason === "stale-socket") {
     return true;
@@ -102,6 +101,7 @@ export function createReadinessChecker(
     getStateDatabaseFailure?: () => Error | undefined;
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
+    isChatSendAvailable?: () => boolean;
     shouldSkipChannelReadiness?: () => boolean;
   },
 ): ReadinessChecker {
@@ -149,6 +149,10 @@ export function createReadinessChecker(
     if (pluginReload) {
       cachedState = null;
       return { ready: false, coreReady: false, failing: ["plugin-reload"], pluginReload, uptimeMs };
+    }
+    if (deps.isChatSendAvailable?.() === false) {
+      cachedState = null;
+      return { ready: false, coreReady: false, failing: ["chat-startup"], uptimeMs };
     }
     if (
       cachedState &&

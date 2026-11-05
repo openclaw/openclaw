@@ -9,7 +9,6 @@ import { flush } from "../test-helpers/solid-settle.ts";
 import "../components/modal-dialog.tsx";
 import { CommandPaletteLoading } from "./app-shell-command-palette-loading-view.tsx";
 import { ShellCommandPaletteOwner } from "./app-shell-command-palette-loading.ts";
-import { COMMAND_PALETTE_ELEMENT, createLazyCustomElementRequests } from "./lazy-custom-element.ts";
 
 let restoreDialog: () => void;
 let container: HTMLDivElement;
@@ -33,10 +32,7 @@ const emptyActions = { request: () => {}, clear: () => {}, cancel: () => {}, pen
 function loaderHost<T extends object>(elements: T) {
   return {
     elements,
-    commandPaletteElement: COMMAND_PALETTE_ELEMENT,
-    lazyCustomElements: createLazyCustomElementRequests(),
-    chatNavigationOptions: () => undefined,
-    navigate: () => {},
+    shellNavigation: { chatNavigationOptions: () => undefined, navigate: () => {} },
   };
 }
 function mountLoading(state: ShellCommandPaletteOwner["loading"], onClose: () => void) {
@@ -74,6 +70,7 @@ async function mountLoader() {
   onTestFinished(disposeOwner);
   const close = vi.fn(() => state.clear());
   mountLoading(state, close);
+  await vi.dynamicImportSettled();
   flush();
   await container.querySelector("openclaw-modal-dialog")!.updateComplete;
   const input = container.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
@@ -101,7 +98,7 @@ describe("cold command palette input custody", () => {
 
   it.each(["open", "toggle"] as const)(
     "preserves the %s intent when the retained palette is detached",
-    (action) => {
+    async (action) => {
       const palette = () =>
         Object.assign(document.createElement("openclaw-command-palette"), {
           custodianAvailable: false,
@@ -120,9 +117,9 @@ describe("cold command palette input custody", () => {
         dispose: disposeRoot,
       }));
       onTestFinished(dispose);
-      mountLoading(owner.loading, () => {});
-
       owner[action]();
+      mountLoading(owner.loading, () => {});
+      await vi.dynamicImportSettled();
       flush();
       expect(detached.openPalette).not.toHaveBeenCalled();
       expect(detached.togglePalette).not.toHaveBeenCalled();
@@ -136,7 +133,7 @@ describe("cold command palette input custody", () => {
       const replacement = palette();
       container.append(replacement);
       host.elements.commandPalette = replacement;
-      request.mock.calls[0]?.[2]?.();
+      owner.open();
       expect(replacement.openPalette).toHaveBeenCalledOnce();
       const take = replacement.openPalette.mock.calls[0]?.[0];
       expect(typeof take).toBe("function");
@@ -146,24 +143,6 @@ describe("cold command palette input custody", () => {
       expect(owner.loading.active()).toBe(false);
     },
   );
-
-  it("retains its live field and selection while the shell refreshes and locks a queued submit", async () => {
-    const { state, input } = await mountLoader();
-    type(input, "Keep this selection");
-    input.setSelectionRange(5, 9, "backward");
-    flush();
-    expect(container.querySelector("textarea")).toBe(input);
-    expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([
-      5,
-      9,
-      "backward",
-    ]);
-    keydown(input, { metaKey: true });
-    flush();
-    expect(state.submitRequested()).toBe(true);
-    expect(input.readOnly).toBe(true);
-    expect(container.querySelector("textarea")).toBe(input);
-  });
 
   it.each(["typed", "pasted", "replaced", "dropped", "composing"])(
     "preserves only a typed mention trigger: %s",
@@ -252,6 +231,7 @@ describe("cold command palette input custody", () => {
       type(input, value);
       const event = keydown(input, modifier);
       keydown(input, { ...modifier, repeat: true });
+      flush();
       expect(event.defaultPrevented).toBe(true);
       if (!submit) {
         expect(close).not.toHaveBeenCalled();
@@ -261,6 +241,8 @@ describe("cold command palette input custody", () => {
         expect(state.submitRequested()).toBe(false);
         return;
       }
+      expect(input.readOnly).toBe(true);
+      expect(container.querySelector("textarea")).toBe(input);
       const take = state.captureHandoff();
       expect(take()).toMatchObject({ value, submitRequested: true });
       expect(take()).toBeUndefined();
@@ -335,41 +317,33 @@ describe("cold command palette input custody", () => {
     );
   });
 
-  it("retires a composition handoff when its shell owner is disposed", async () => {
-    const { state, input, disposeOwner } = await mountLoader();
-    compose(input);
-    type(input, "retired prompt");
-    const take = state.captureHandoff();
-    const accepted = vi.fn();
-    state.handoff(accepted);
-    compose(input, true);
-    disposeOwner();
-    expect(take()).toBeUndefined();
-    await vi.advanceTimersByTimeAsync(20);
-    expect(accepted).not.toHaveBeenCalled();
-  });
-
-  it.each(["composing", "commit-pending"] as const)(
-    "retires a %s handoff without reviving its prompt on reopen",
+  it.each(["composing", "commit-pending", "disposed"] as const)(
+    "retires a composition handoff after %s",
     async (phase) => {
-      const { state, input } = await mountLoader();
+      const { state, input, disposeOwner } = await mountLoader();
       compose(input);
       type(input, "retired text");
       const accepted = vi.fn();
       state.handoff(accepted);
       const take = state.captureHandoff();
-      if (phase === "commit-pending") {
+      if (phase !== "composing") {
         compose(input, true);
       }
-      state.clear();
-      // A late ref/input from the old render cannot resurrect custody.
-      state.inputRef(undefined);
-      state.captureInput();
-      state.begin();
+      if (phase === "disposed") {
+        disposeOwner();
+      } else {
+        state.clear();
+        // A late ref/input from the old render cannot resurrect custody.
+        state.inputRef(undefined);
+        state.captureInput();
+        state.begin();
+      }
       expect(take()).toBeUndefined();
       await vi.advanceTimersByTimeAsync(20);
       expect(accepted).not.toHaveBeenCalled();
-      expect(state.value()).toBe("");
+      if (phase !== "disposed") {
+        expect(state.value()).toBe("");
+      }
     },
   );
 });

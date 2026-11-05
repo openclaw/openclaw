@@ -342,7 +342,7 @@ describe("Models page catalog publication", () => {
 
     const warnings = page.querySelectorAll('.model-providers__catalog-progress[role="alert"]');
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]?.textContent).toContain("More models could not be discovered.");
+    expect(warnings[0]?.textContent).toContain("Couldn’t load more models. Try again.");
     expect(page.querySelector(".model-providers__provider-list .provider-usage__error")).toBeNull();
     expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
     expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
@@ -454,6 +454,8 @@ describe("Models page catalog publication", () => {
         page.querySelector('[role="option"][data-value="openai/published-later"]'),
       ).not.toBeNull();
       const utility = modelPicker(page, "utility");
+      utility.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
+      await utility.updateComplete;
       const search = utility.querySelector<HTMLInputElement>('input[type="search"]');
       expect(search).not.toBeNull();
       search!.value = "Discovered";
@@ -486,11 +488,15 @@ describe("Models page catalog publication", () => {
       pendingProviders: ["openai"],
     });
 
-    publishEvent({ type: "event", event: "config.changed", payload: {} });
+    publishEvent({
+      type: "event",
+      event: "chat.metadata.changed",
+      payload: { modelCatalogChanged: true },
+    });
     await waitForSolid(() =>
       expect(
         page.querySelector('.model-providers__catalog-progress[role="alert"]')?.textContent,
-      ).toContain("More models could not be discovered."),
+      ).toContain("Couldn’t load more models. Try again."),
     );
     expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).not.toBeNull();
     await openModelPicker(page);
@@ -521,10 +527,14 @@ describe("Models page catalog publication", () => {
     );
   });
 
-  it("Models page Retry retains choices after a rejected request and displays the recovered catalog", async () => {
+  it("Models page Retry recovers partial provider discovery without replacing saved choices", async () => {
     const { context, discover, readPublished, runtimeConfig } =
       createCatalogHarness(preparedCatalog);
-    readPublished.mockReturnValue({ ...preparedCatalog, refreshFailed: true });
+    readPublished.mockReturnValue({
+      ...preparedCatalog,
+      refreshFailed: true,
+      providerOutcomes: [{ provider: "openai", status: "unavailable" }],
+    });
     const pending = deferred<ModelCatalogResult>();
 
     discover.mockRejectedValueOnce(new Error("discovery failed"));
@@ -532,6 +542,9 @@ describe("Models page catalog publication", () => {
     discover.mockReturnValueOnce(pending.promise);
     const page = appendPage(context);
     await waitForProviders(page, savedModelConfig);
+    expect(page.querySelector('[data-provider-id="openai"]')?.textContent).toContain(
+      "Models unavailable",
+    );
 
     const retainedPicker = modelPicker(page, "primary");
     await retryCatalog(page);
@@ -557,6 +570,7 @@ describe("Models page catalog publication", () => {
         ...preparedCatalog.models,
         { id: "recovered", name: "Recovered model", provider: "openai", available: true },
       ],
+      providerOutcomes: [{ provider: "openai", status: "ready" }],
     });
     await waitForSolid(() => expect(displayedCatalog(page)?.models?.at(-1)?.id).toBe("recovered"));
     await drainPageUpdates(page);
@@ -564,6 +578,9 @@ describe("Models page catalog publication", () => {
     expect(modelPicker(page, "primary")).toBe(retainedPicker);
     expect(page.querySelector('[role="option"][data-value="openai/recovered"]')).not.toBeNull();
     expect(page.view.props.catalogDiscoveryError).toBeNull();
+    expect(page.querySelector('[data-provider-id="openai"]')?.textContent).not.toContain(
+      "Models unavailable",
+    );
     expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });

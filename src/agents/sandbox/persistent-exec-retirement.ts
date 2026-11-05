@@ -16,7 +16,6 @@ function expected(record: SandboxPersistentExecRecord) {
 /** Retirement owns the whole runtime, but must settle its workspace before releasing durable custody. */
 export async function prepareSandboxPersistentExecRetirement(params: {
   containerName: string;
-  containerId?: string;
   assertCurrent: () => void;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ requiresCheckpoint: boolean; finish: () => Promise<void> }> {
@@ -24,7 +23,6 @@ export async function prepareSandboxPersistentExecRetirement(params: {
   const store = createSandboxPersistentExecStore({ env: params.env });
   const original = await store.list({
     containerName: params.containerName,
-    containerId: params.containerId,
   });
   const assertWorkspace = async (records: SandboxPersistentExecRecord[]) => {
     if (records.length) {

@@ -9,12 +9,8 @@ import {
 } from "./native-workspace-behavior.js";
 import { escapeTableCell } from "./report.js";
 import type { RuntimeId } from "./runtime-id.js";
-import {
-  runtimeParityCellStatus,
-  normalizeRuntimePair,
-  type RuntimeParityDrift,
-  type RuntimeParityResult,
-} from "./runtime-parity.js";
+import { runtimeParityCellStatus, normalizeRuntimePair } from "./runtime-parity.js";
+import type { RuntimeParityDrift, RuntimeParityResult } from "./runtime-parity.types.js";
 import {
   readRuntimeToolCoverageConfig,
   readScenarioRuntimeToolCoverageMetadata,
@@ -86,7 +82,6 @@ function summarizeRuntimeToolCalls(
 export function buildQaToolCoverageReport(params: {
   scenarios: readonly QaSeedScenarioWithSource[];
   summary?: QaParitySuiteSummary;
-  generatedAt?: string;
 }) {
   const results = new Map(
     (params.summary?.scenarios ?? []).flatMap(({ runtimeParity }) =>
@@ -193,7 +188,7 @@ export function buildQaToolCoverageReport(params: {
   const requiredTools = rows.filter((row) => row.required).length;
   return {
     runtimePair: normalizeRuntimePair(params.summary?.run?.runtimePair),
-    generatedAt: params.generatedAt ?? new Date().toISOString(),
+    generatedAt: new Date().toISOString(),
     evaluated,
     totalTools: rows.length,
     requiredTools,

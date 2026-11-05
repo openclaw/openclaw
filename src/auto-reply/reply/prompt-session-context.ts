@@ -47,7 +47,7 @@ function normalizePromptRouteChannel(raw?: string | null): string | undefined {
 }
 
 /** Whether an explicit route names the stored conversation, before inheritance fills coordinates. */
-export function isStoredConversationRoute(params: {
+function isStoredConversationRoute(params: {
   channel?: string;
   to?: string;
   accountId?: string;

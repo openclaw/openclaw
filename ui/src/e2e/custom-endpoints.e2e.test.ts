@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { configSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -9,13 +10,68 @@ import {
   emptyUsage,
   providerPageOptions,
 } from "./model-catalog-fixtures.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "custom-endpoints",
   startServer: startControlUiE2eServer,
 });
 suite.define(() => {
+  it("edits model-level adapters without authoring a provider adapter", async () => {
+    await suite.withPage(providerPageOptions(1200, 1125), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["config.get", "config.patch", "config.customEndpoint"],
+        methodResponses: {
+          "config.get": configSnapshot(
+            {
+              models: {
+                providers: {
+                  lab: {
+                    baseUrl: "http://lab.lan/v1",
+                    auth: "none",
+                    models: [{ id: "chat", name: "Lab chat", api: "openai-completions" }],
+                  },
+                },
+              },
+            },
+            "model-api-base",
+          ),
+          "models.list": { models: [] },
+          "models.authStatus": { ts: 1, providers: [], providerCapabilities: [] },
+          "usage.status": emptyUsage(),
+        },
+      });
+      await page.goto(suite.server.baseUrl + "settings/model-providers");
+      const edit = page
+        .locator("[data-custom-endpoints]")
+        .getByRole("button", { name: "Edit endpoint", exact: true });
+      await edit.waitFor();
+      const entryFrame = await takeControlUiScreenshotFrame(
+        page,
+        page.locator(".shell"),
+        [page.locator("[data-custom-endpoints]")],
+        { animations: "disabled" },
+      );
+      await writeFile(path.join(suite.artifactDir, "model-level-entry.png"), entryFrame.png);
+      expect(await edit.isDisabled()).toBe(false);
+      await edit.click();
+      const form = page.locator(".custom-endpoint-editor");
+      expect(await form.getByLabel("API adapter", { exact: true }).inputValue()).toBe("");
+      const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [form], {
+        animations: "disabled",
+      });
+      await writeFile(path.join(suite.artifactDir, "model-level-adapters.png"), frame.png);
+      await form.getByLabel("API base URL", { exact: true }).fill("http://lab.lan/v2");
+      await gateway.deferNext("config.customEndpoint");
+      await form.getByRole("button", { name: "Save", exact: true }).click();
+      const request = await gateway.waitForRequest("config.customEndpoint");
+      expect(request.params).toMatchObject({
+        action: "edit",
+        provider: "lab",
+        baseUrl: "http://lab.lan/v2",
+      });
+      expect(request.params).not.toHaveProperty("api");
+    });
+  });
   it("creates, edits and deletes independent endpoints with separate credential outcomes", async () => {
     await suite.withPage(providerPageOptions(1200, 1125), async ({ page }) => {
       const config = { agents: { defaults: { model: "openai/official" } } };
@@ -98,7 +154,10 @@ suite.define(() => {
         .toBe(true);
       await gateway.deferNext("config.customEndpoint");
       await form.getByRole("button", { name: "Delete endpoint", exact: true }).click();
-      await page.getByRole("button", { name: "Delete endpoint", exact: true }).last().click();
+      await page
+        .locator(".confirm-dialog")
+        .getByRole("button", { name: "Delete endpoint", exact: true })
+        .click();
       const removed = await gateway.waitForRequest("config.customEndpoint", { after: 2 });
       expect(removed.params).toEqual({
         action: "delete",

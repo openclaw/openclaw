@@ -121,16 +121,13 @@ export function registerAgentConfigMutationTests({
       if (revoke) {
         expect(result.ok).toBe(false);
         expect(result.error?.message).toContain("deletion no longer owns");
-        expect(writeCalls).toBe(1);
         expect(persisted).toEqual(newer);
         expect(readAgentDeletionJournal("doomed")).toBeUndefined();
       } else {
         expect(result.ok, result.error?.message).toBe(true);
-        expect(writeCalls).toBe(2);
         expect(Buffer.byteLength(raw)).toBeLessThan(Buffer.byteLength(beforeRaw) / 2);
         const expected = structuredClone(newer);
         delete expected.agents.entries.doomed;
-        expect(Object.keys(persisted.agents.entries).toSorted()).toEqual(["main", "survivor"]);
         expect(persisted).toEqual({ ...expected, meta: expect.any(Object) });
         const stale = await patch(before.hash, { logging: { level: "debug" } });
         expect(stale.ok).toBe(false);

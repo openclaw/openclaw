@@ -26,22 +26,9 @@ const provider: MemoryEmbeddingProvider = {
   embed: async () => [1, 0],
   embedBatch: async (inputs) => inputs.map(() => [1, 0]),
 };
-const defaultClient = {
-  baseUrl: proxyUrl,
-  headers: {},
-  model,
-  inputType: "passage",
-  documentInputType: "document",
-  outputDimensionality: 512,
-};
-async function createAdapter(client: OpenAiEmbeddingClient = defaultClient, providerId?: string) {
+async function createAdapter(client: OpenAiEmbeddingClient, id?: string) {
   mocks.createOpenAiEmbeddingProvider.mockResolvedValueOnce({ provider, client });
-  return adapter.create({
-    config: {},
-    model: client.model,
-    fallback: "none",
-    provider: providerId,
-  });
+  return adapter.create({ config: {}, model: client.model, fallback: "none", provider: id });
 }
 async function cache(
   baseUrl: string,
@@ -73,9 +60,8 @@ it("keeps native cache identity independent of OpenClaw attribution and credenti
       version,
       "User-Agent": `openclaw/${version}`,
     });
-  const previous = await forVersion("2026.7.1");
   const current = await forVersion("2026.7.2");
-  expect(current).toEqual(previous);
+  expect(current).toEqual(await forVersion("2026.7.1"));
   expect(current).toMatchObject({
     provider: "openai",
     baseUrl: nativeUrl,
@@ -114,20 +100,25 @@ it.each([
     const first = await forTenant("tenant-a", "proxy-key-before-rotation");
     expect(first).toEqual(await forTenant("tenant-a", "proxy-key-after-rotation", rotatedHeader));
     expect(first).not.toEqual(await forTenant("tenant-b", "proxy-key-after-rotation"));
-    expect(first?.headers).toEqual(
-      expect.arrayContaining(Object.entries(tenantHeaders("tenant-a"))),
-    );
-    expect(first).toMatchObject({ provider: providerId, baseUrl });
+    expect(first).toMatchObject({
+      provider: providerId,
+      baseUrl,
+      headers: expect.arrayContaining(Object.entries(tenantHeaders("tenant-a"))),
+    });
     expect(JSON.stringify(first)).not.toContain("fixture-secret");
     expect(JSON.stringify(first)).not.toContain("proxy-key-before-rotation");
   },
 );
 
 it("sends document input_type in OpenAI batch embedding requests", async () => {
-  const result = await createAdapter();
-  expect(mocks.createOpenAiEmbeddingProvider).toHaveBeenCalledWith(
-    expect.objectContaining({ provider: "openai" }),
-  );
+  const result = await createAdapter({
+    baseUrl: proxyUrl,
+    headers: {},
+    model,
+    inputType: "passage",
+    documentInputType: "document",
+    outputDimensionality: 512,
+  });
   await result.runtime?.batchEmbed?.({
     agentId: "main",
     chunks: [{ text: "doc one" }],
@@ -137,12 +128,9 @@ it("sends document input_type in OpenAI batch embedding requests", async () => {
     timeoutMs: 60_000,
     debug: () => {},
   });
-  const requests = mocks.runOpenAiEmbeddingBatches.mock.calls[0]?.[0].requests;
-  expect(requests).toHaveLength(1);
-  expect(requests?.[0]?.body).toEqual({
-    model,
-    input: "doc one",
-    dimensions: 512,
-    input_type: "document",
-  });
+  expect(mocks.runOpenAiEmbeddingBatches.mock.calls[0]?.[0].requests).toEqual([
+    expect.objectContaining({
+      body: { model, input: "doc one", dimensions: 512, input_type: "document" },
+    }),
+  ]);
 });

@@ -1,5 +1,5 @@
 import type { Bot } from "grammy";
-import type { Message } from "grammy/types";
+import type { Message, MessageEntity } from "grammy/types";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { withTelegramNativeQuoteFallback } from "./reply-parameters.js";
 import {
@@ -45,7 +45,11 @@ async function deliverDraftPage<T>(params: {
   page: TelegramTextDeliveryPage;
   context: string;
   warn?: (message: string) => void;
-  send: (content: Pick<TelegramDraftPreview, "text" | "parseMode" | "richMessage">) => Promise<T>;
+  send: (
+    content: Pick<TelegramDraftPreview, "text" | "parseMode" | "richMessage"> & {
+      entities?: MessageEntity[];
+    },
+  ) => Promise<T>;
   request?: <R>(send: () => Promise<R>) => Promise<R>;
 }) {
   const { page } = params;
@@ -66,7 +70,8 @@ async function deliverDraftPage<T>(params: {
       // A preview replaces one message; its fallback must remain a single send.
       fallbackLimit: Number.MAX_SAFE_INTEGER,
       sender: {
-        sendPlain: (text) => params.send({ text }),
+        sendPlain: (text, _fallback, _label, entities) =>
+          params.send({ text, ...(entities?.length ? { entities } : {}) }),
         sendHtml: (text) => params.send({ text, parseMode: "HTML" }),
         sendRich: (richMessage) => params.send({ text: page.plainText, richMessage }),
       },
@@ -90,7 +95,7 @@ export async function editTelegramDraftMessage(params: {
     context: "stream preview edit",
     warn: params.warn,
     request: params.request,
-    send: ({ text, parseMode, richMessage }) => {
+    send: ({ text, parseMode, richMessage, entities }) => {
       if (richMessage) {
         return params.api.raw.editMessageText({
           chat_id: params.chatId,
@@ -98,9 +103,11 @@ export async function editTelegramDraftMessage(params: {
           rich_message: richMessage,
         });
       }
-      const other = parseMode
-        ? { parse_mode: parseMode, ...params.linkPreviewParams }
-        : params.linkPreviewParams;
+      const other = {
+        ...(parseMode ? { parse_mode: parseMode } : {}),
+        ...(entities?.length ? { entities } : {}),
+        ...params.linkPreviewParams,
+      };
       // Preserve grammY's call shape when no preview options apply.
       return Object.keys(other).length > 0
         ? params.api.editMessageText(params.chatId, params.messageId, text, other)
@@ -125,7 +132,7 @@ export async function sendTelegramDraftMessage(params: {
       page,
       context: "stream preview",
       warn: params.warn,
-      send: ({ text, parseMode, richMessage }) => {
+      send: ({ text, parseMode, richMessage, entities }) => {
         assertCurrentSend();
         return richMessage
           ? params.api.raw.sendRichMessage({
@@ -135,6 +142,7 @@ export async function sendTelegramDraftMessage(params: {
             })
           : params.api.sendMessage(chatId, text, {
               ...(parseMode ? { parse_mode: parseMode } : {}),
+              ...(entities?.length ? { entities } : {}),
               ...sendMessageParams,
               ...linkPreviewParams,
             });

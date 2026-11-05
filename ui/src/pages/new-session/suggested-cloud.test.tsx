@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
 import { createMemo, createSignal } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { placementControls } from "./placement.test-support.ts";
 import { draftWhereChipParams, resolveWhereChip } from "./where-chip.ts";
 import { WhereChip } from "./where-chip.tsx";
 
@@ -42,39 +43,6 @@ async function fixture(onChange?: () => void) {
 
 afterEach(() => [sessionStorage, localStorage].forEach((storage) => storage.clear()));
 
-it.each([
-  ["successful save", "cloud", [profile], undefined, null],
-  ["save failure", "", [], suggestedProfile, "Crabbox login expired"],
-  ["local reselection", "", [profile], undefined, null],
-  ["Gateway reconnection", "", [], undefined, null],
-] as const)(
-  "settles suggested Cloud adoption after %s without dispatching or replacing newer intent",
-  async (outcome, cloudProfileId, cloudProfiles, suggestion, error) => {
-    const { place, gateway, flow, request, adoption, context } = await fixture();
-    flow.setMessage("Prepare this repository");
-    const selecting = place.suggestedCloudProfile.adopt();
-    expect(place.cloudProfileId).toBe("");
-    expect(flow.submitBlock()?.gate).toBe("cloud");
-    expect(request.mock.calls.some(([method]) => method === "sessions.dispatch")).toBe(false);
-    if (outcome === "local reselection") {
-      place.selectDevice("");
-    }
-    if (outcome === "Gateway reconnection") {
-      context.gateway.snapshot.phase = "connecting";
-      gateway.synchronize(context.gateway);
-      place.invalidateGatewayDiscovery(true);
-    }
-    adoption.resolve(error ? Promise.reject(new Error(error)) : { profile });
-    await selecting;
-    expect(place).toMatchObject({
-      cloudProfileId,
-      suggestedCloudProfile: { pending: false },
-    });
-    expect(gateway).toMatchObject({ cloudProfiles, suggestedProfile: suggestion });
-    expect(flow.error).toBe(error);
-  },
-);
-
 it("keeps the adopted profile when an older catalog read finishes", async () => {
   const { place, gateway, request, adoption } = await fixture();
   const staleCatalog = Promise.withResolvers<unknown>();
@@ -99,33 +67,23 @@ async function renderedFixture() {
   const mounted = mountSolid(() => {
     const [revision, setRevision] = createSignal(0);
     publish = () => setRevision((value) => value + 1);
-    const params = createMemo(() => {
+    const view = createMemo(() => {
       revision();
       return {
-        context: result.context,
-        data: undefined,
-        place: result.place,
-        gateway: result.gateway,
-        submitting: result.flow.submitting,
-        pendingPlacement: Boolean(result.flow.pendingPlacement.sessionKey),
-        onConnectMachine: vi.fn(),
-        onNavigate: vi.fn(),
-        onFocusComposer: vi.fn(),
-        onChange: publish,
+        params: {
+          ...placementControls(result),
+          submitting: result.flow.submitting,
+          pendingPlacement: Boolean(result.flow.pendingPlacement.sessionKey),
+          onChange: publish,
+        },
+        state: resolveWhereChip(draftWhereChipParams(result.place, result.gateway)),
+        error: result.flow.error,
       };
-    });
-    const state = createMemo(() => {
-      revision();
-      return resolveWhereChip(draftWhereChipParams(result.place, result.gateway));
-    });
-    const error = createMemo(() => {
-      revision();
-      return result.flow.error;
     });
     return (
       <>
-        <WhereChip params={params()} state={state()} />
-        <div role="alert">{error()}</div>
+        <WhereChip params={view().params} state={view().state} />
+        <div role="alert">{view().error}</div>
       </>
     );
   });
@@ -186,12 +144,22 @@ it("presents held adoption, retains its error, and selects only the accepted ret
   expect(result.request.mock.calls.some(([method]) => method === "sessions.dispatch")).toBe(false);
 });
 
-it.each(["local reselection", "Gateway reconnection"] as const)(
-  "releases held adoption presentation on %s and ignores its late rejection",
-  async (outcome) => {
+it.each([
+  ["local reselection", true],
+  ["local reselection", false],
+  ["Gateway reconnection", true],
+  ["Gateway reconnection", false],
+] as const)(
+  "releases held adoption on %s and ignores its late result (accepted=%s)",
+  async (outcome, accepted) => {
     const result = await renderedFixture();
+    result.flow.setMessage("Prepare this repository");
     result.suggestion().click();
     await waitForSolid(() => expect(result.trigger().disabled).toBe(true));
+    expect(result.flow.submitBlock()?.gate).toBe("cloud");
+    expect(result.request.mock.calls.some(([method]) => method === "sessions.dispatch")).toBe(
+      false,
+    );
     if (outcome === "local reselection") {
       result.place.selectDevice("");
     } else {
@@ -201,11 +169,23 @@ it.each(["local reselection", "Gateway reconnection"] as const)(
     }
     await waitForSolid(() => expect(result.trigger().disabled).toBe(false));
     expect(result.place.cloudProfileId).toBe("");
-    result.adoption.reject(new Error("Retired Cloud login expired"));
+    if (accepted) {
+      result.adoption.resolve({ profile });
+    } else {
+      result.adoption.reject(new Error("Retired Cloud login expired"));
+    }
+    await Promise.allSettled(result.request.mock.results.map(({ value }) => value));
     await waitForSolid(() => {
       expect(result.getByRole("alert").textContent).toBe("");
       expect(result.trigger().disabled).toBe(false);
+      expect(result.gateway).toMatchObject({
+        cloudProfiles: outcome === "local reselection" && accepted ? [profile] : [],
+        suggestedProfile:
+          outcome === "local reselection" && !accepted ? suggestedProfile : undefined,
+      });
     });
     expect(result.place.cloudProfileId).toBe("");
+    expect(result.place.suggestedCloudProfile.pending).toBe(false);
+    expect(result.flow.error).toBeNull();
   },
 );

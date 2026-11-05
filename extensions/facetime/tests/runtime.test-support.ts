@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
       },
   helper: {
     connectedSockets: 2,
-    connectedHelperBundles: ["com.apple.FaceTime", "com.apple.mobilephone"],
+    connectedHelperBundles: ["com.apple.FaceTime", "com.apple.FaceTime.FTConversationService"],
     start: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
     answerCall: vi.fn(),
@@ -57,10 +57,7 @@ vi.mock("../src/helper-supervisor.js", () => ({
     stop() {}
     status() {
       return (
-        [
-          ["FaceTime", "com.apple.FaceTime", "com.apple.FaceTime.FTConversationService"],
-          ["Phone", "com.apple.mobilephone", "com.apple.TelephonyUtilities"],
-        ] as const
+        [["FaceTime", "com.apple.FaceTime", "com.apple.FaceTime.FTConversationService"]] as const
       ).map(([target, ...bundles]) => ({
         target,
         connected: bundles.some((bundle) => mocks.helper.connectedHelperBundles.includes(bundle)),
@@ -114,8 +111,8 @@ export const carrierPeer = {
   processStartedAtMs: Date.parse("Tue Nov 14 22:13:20 2023"),
   connectionGeneration: 7,
 };
-export const commandResult = (stdout = "", code = 0) => ({ code, stdout, stderr: "" });
-export const mutedResult = (outcome: string, muted: boolean) => ({
+const commandResult = (stdout = "", code = 0) => ({ code, stdout, stderr: "" });
+const mutedResult = (outcome: string, muted: boolean) => ({
   outcome,
   muted,
   is_uplink_muted: muted,
@@ -139,7 +136,7 @@ export const completeAction = (owner: Record<string, unknown>) => ({
 export const completeSharedAction = (owner: Record<string, unknown>) => ({
   ...helperResult([
     { ...owner, helperBundleIdentifier: "com.apple.FaceTime" },
-    { ...owner, helperBundleIdentifier: "com.apple.mobilephone" },
+    { ...owner, helperBundleIdentifier: "com.apple.FaceTime.FTConversationService" },
   ]),
   ...owner,
 });
@@ -177,7 +174,7 @@ export const pendingDialCarrierResult = () =>
       helperBundleIdentifier: "com.apple.FaceTime",
       helperPeer: { ...carrierPeer },
     },
-    { found: false, helperBundleIdentifier: "com.apple.mobilephone" },
+    { found: false, helperBundleIdentifier: "com.apple.FaceTime.FTConversationService" },
   ]);
 
 export const pendingDialCancellationResult = (callUUID?: string) => ({
@@ -190,29 +187,17 @@ export const pendingDialCancellationResult = (callUUID?: string) => ({
       found: false,
       ...(callUUID ? { call_uuid: callUUID } : {}),
     },
-    { helperBundleIdentifier: "com.apple.mobilephone", cancelled: false, found: false },
+    {
+      helperBundleIdentifier: "com.apple.FaceTime.FTConversationService",
+      cancelled: false,
+      found: false,
+    },
   ],
 });
 
 export const endedCall = (callUUID: string, identity: { dial_id?: string } = {}) => ({
   event: "ft-call-status-changed",
   data: { call_uuid: callUUID, call_status: 6, has_ended: true, is_outgoing: true, ...identity },
-});
-
-export const outgoingCall = (
-  callUUID: string,
-  callStatus = 1,
-  identity: { dial_id?: string; is_sending_audio?: boolean } = {},
-) => ({
-  event: "ft-call-status-changed",
-  data: {
-    call_uuid: callUUID,
-    call_status: callStatus,
-    is_outgoing: true,
-    handle: { value: "owner@example.com" },
-    transport: incomingCall().data.transport,
-    ...identity,
-  },
 });
 
 export const dialReply = (call_uuid = "outbound-call", extra: Record<string, unknown> = {}) => ({
@@ -293,7 +278,10 @@ export async function resetRuntimeTestState() {
   vi.clearAllMocks();
   mocks.helperParams = undefined;
   mocks.helper.connectedSockets = 2;
-  mocks.helper.connectedHelperBundles = ["com.apple.FaceTime", "com.apple.mobilephone"];
+  mocks.helper.connectedHelperBundles = [
+    "com.apple.FaceTime",
+    "com.apple.FaceTime.FTConversationService",
+  ];
   mocks.carrierProcessAlive = false;
   const exitedCarrierPids = new Set<string>();
   mocks.systemRun.mockImplementation(async (argv: string[]) => {

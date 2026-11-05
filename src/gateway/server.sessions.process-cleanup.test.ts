@@ -86,6 +86,6 @@ test("sessions.processes.list exposes only owned background processes without co
       ],
     },
   });
-  expect(running.pendingOutput).toEqual([{ stream: "stdout", text: "Building the package\n" }]);
+  expect(registry.prepareSessionPoll(running, undefined).output).toBe("Building the package\n");
   expect(running.terminalPollObserved).toBeUndefined();
 });

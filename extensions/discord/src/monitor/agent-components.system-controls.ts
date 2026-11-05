@@ -23,15 +23,13 @@ import type {
 const AGENT_BUTTON_KEY = "agent";
 const AGENT_SELECT_KEY = "agentsel";
 
-type AgentSystemControlParams = {
+async function runAgentSystemControlInteraction(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentMessageInteraction;
   data: ComponentData;
   kind: "button" | "select";
   formatEventText: (params: { componentId: string; username: string; userId: string }) => string;
-};
-
-async function runAgentSystemControlInteraction(params: AgentSystemControlParams): Promise<void> {
+}): Promise<void> {
   const label = `agent ${params.kind}`;
   const componentLabel = params.kind === "button" ? "button" : "select menu";
   const parsed = parseAgentComponentData(params.data);

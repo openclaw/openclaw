@@ -9,7 +9,7 @@ import {
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
+import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-protocol.js";
 import {
   buildToolSchemaDirectoryPrompt,
   restrictToolSearchCatalog,
@@ -81,7 +81,8 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       const catalogCount = restrictToolSearchCatalog({
         catalogRef: catalog.ref,
         allowedToolNames: new Set(allowedEntries.map((entry) => entry.name)),
-        baselineEntries: catalog.entries,
+        allowedDirectToolNames: new Set(allowedTools.map((tool) => tool.name)),
+        baselineEntries: allowedEntries,
       });
       const allowedNames = new Set(allowedTools.map((tool) => normalizeToolPolicyName(tool.name)));
       const tools = baselineTools.filter((tool) => {

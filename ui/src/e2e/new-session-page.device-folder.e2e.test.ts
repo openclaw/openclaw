@@ -37,10 +37,13 @@ const folderEnvironment = { ...environment, workerHost: { deviceFolders: true } 
 const environments = (
   device: typeof folderEnvironment & { invocableCommands?: string[] } = folderEnvironment,
 ) => ({ environments: [device], profiles: [] });
-const launchResponses = {
-  "sessions.dispatch": { placement: { state: "active", generation: 1 } },
-  "sessions.send": { runId: "run-device-folder", status: "started" },
-};
+const launchResponses = (sessionKey: string) => ({
+  "sessions.dispatch": {
+    sessionId: `session:${sessionKey}`,
+    placement: { state: "active", generation: 1 },
+  },
+  "chat.send": { runId: "run-device-folder", status: "started" },
+});
 async function setup(page: Page, scenario: ControlUiMockGatewayScenario) {
   const gateway = await installMockGateway(page, {
     operatorScopes: ["operator.admin", "operator.read", "operator.write"],
@@ -72,7 +75,7 @@ suite.define(() => {
           "environments.list": { environments: [environment], profiles: [] },
           "sessions.create": { key: sessionKey },
           "sessions.list": createdSessionListResult(sessionKey),
-          ...launchResponses,
+          ...launchResponses(sessionKey),
         },
       });
       expect(await page.locator('[data-value="device-folder"]').count()).toBe(0);
@@ -85,13 +88,15 @@ suite.define(() => {
       const model = page.locator('[data-chat-model-select="true"]');
       const selectModel = async (id: "worker" | "remote") => {
         await model.click();
-        await selectChatModelOption(page.locator(`[data-chat-model-option="example/${id}"]`));
+        await selectChatModelOption(page, `example/${id}`);
       };
       await selectModel("remote");
       await project.click();
       const folderChoice = page.locator('[data-value="device-folder"]');
       await expect.poll(() => folderChoice.isDisabled()).toBe(true);
-      await expect.poll(() => folderChoice.textContent()).toContain("worker-turn runtime");
+      await expect
+        .poll(() => folderChoice.textContent())
+        .toContain("Not available with this model");
       await page.keyboard.press("Escape");
       await selectModel("worker");
       await project.click();
@@ -108,7 +113,7 @@ suite.define(() => {
       await expect.poll(() => start.isDisabled()).toBe(true);
       expect(await input.inputValue()).toBe(deviceFolder.path);
       const folder = page.locator(".new-session-page__device-folder");
-      await expect.poll(() => folder.textContent()).toContain("worker-turn runtime");
+      await expect.poll(() => folder.textContent()).toContain("This model can’t work");
       await message.press("Enter");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
@@ -140,8 +145,10 @@ suite.define(() => {
         agentId: "main",
         deviceId: deviceFolder.deviceId,
       });
-      expect((await gateway.waitForRequest("sessions.send")).params).toMatchObject({
-        key: sessionKey,
+      expect((await gateway.waitForRequest("chat.send")).params).toMatchObject({
+        sessionKey,
+        sessionId: `session:${sessionKey}`,
+        expectedLeafEntryId: null,
         message: "Work in the existing device folder",
       });
     }));
@@ -167,10 +174,10 @@ suite.define(() => {
           "fs.listDir": { ...home, entries: [{ name: "src", path: "/Users/dev/src" }] },
           "sessions.create": { key: sessionKey },
           "sessions.list": createdSessionListResult(sessionKey),
-          ...launchResponses,
+          ...launchResponses(sessionKey),
         },
       });
-      await page.getByRole("button", { name: "Browse folders on Paired runner" }).click();
+      await page.getByRole("button", { name: "Existing folder on Paired runner" }).click();
       expect((await gateway.waitForRequest("fs.listDir")).params).toEqual({
         nodeId: "paired-runner",
       });
@@ -212,8 +219,10 @@ suite.define(() => {
           }),
         },
       });
-      await page.locator('[data-value="device-folder"]').waitFor();
-      expect(await page.locator('[data-value="browse-device"]').count()).toBe(0);
+      // Writers type the device path: the row selects it instead of opening a browser.
+      const folderChoice = page.locator('[data-value="device-folder"]');
+      await folderChoice.waitFor();
+      expect(await folderChoice.locator(".new-session-page__submenu-chevron").count()).toBe(0);
     }));
   it("restores a pending device-folder create without changing its device or path", () =>
     suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
@@ -223,7 +232,7 @@ suite.define(() => {
         workspace: "/srv/gateway",
         methodResponses: {
           "environments.list": environments(),
-          ...launchResponses,
+          "chat.send": { runId: "run-device-folder", status: "started" },
         },
       });
       await page.locator('[data-value="device-folder"]').click();
@@ -233,7 +242,9 @@ suite.define(() => {
       const first = await gateway.waitForRequest("sessions.create");
       expect(first.params).toMatchObject({ deviceFolder });
       const sessionKey = asRecord(first.params).key;
-      expect(sessionKey).toEqual(expect.any(String));
+      if (typeof sessionKey !== "string") {
+        throw new Error("Expected the created session key");
+      }
       await page.reload();
       await gateway.waitForRequest("environments.list");
       await expect.poll(() => input.inputValue()).toBe(deviceFolder.path);
@@ -244,6 +255,10 @@ suite.define(() => {
       const retry = await gateway.waitForRequest("sessions.create");
       expect(retry.params).toEqual(first.params);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+      await gateway.setMethodResponse("sessions.dispatch", {
+        sessionId: `session:${sessionKey}`,
+        placement: { state: "active", generation: 1 },
+      });
       await gateway.resolveDeferred("sessions.create", { key: sessionKey });
       expect((await gateway.waitForRequest("sessions.dispatch")).params).toMatchObject({
         deviceId: deviceFolder.deviceId,

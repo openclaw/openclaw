@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginSetupRegistry } from "../plugins/setup-registry.test-support.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -87,13 +88,7 @@ describe("resolveCliRuntimeExecutionProvider", () => {
   beforeEach(() => {
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
-      resolvePluginSetupRegistry: () => ({
-        providers: [],
-        cliBackends: [],
-        configMigrations: [],
-        autoEnableProbes: [],
-        diagnostics: [],
-      }),
+      resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
       resolveRuntimeCliBackends: () => [claudeBinding],
     });
   });
@@ -207,20 +202,43 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     );
   });
 
-  it("keeps standalone CLI backend provider refs visible", () => {
+  it.each([undefined, "acme-cli"])(
+    "keeps standalone CLI refs visible (binding %s)",
+    (modelProvider) => {
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: () => [
+          claudeBinding,
+          { id: "acme-cli", pluginId: "acme", modelProvider, config: { command: "acme" } },
+        ],
+      });
+      const isVisibleProvider = createModelPickerVisibleProviderPredicate();
+      expect(isCliRuntimeProvider("claude-cli")).toBe(true);
+      expect(isVisibleProvider("claude-cli")).toBe(false);
+      expect(isVisibleProvider("acme-cli")).toBe(true);
+    },
+  );
+
+  it("recognizes runtime providers without loading unrelated setup backends", () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [
         claudeBinding,
-        { id: "acme-cli", pluginId: "acme", config: { command: "acme" } },
+        { id: "standalone-cli", pluginId: "standalone", config: { command: "standalone" } },
       ],
+      resolvePluginSetupRegistry: unexpectedMetadata,
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "acme-cli"
+          ? {
+              pluginId: "acme",
+              backend: { id: "acme-cli", modelProvider: "acme", config: { command: "acme" } },
+            }
+          : undefined,
     });
 
-    const isVisibleProvider = createModelPickerVisibleProviderPredicate();
-
-    expect(isCliRuntimeProvider("claude-cli")).toBe(true);
-    expect(isVisibleProvider("claude-cli")).toBe(false);
+    expect(isCliRuntimeProvider(" Claude-CLI ", { config: {} })).toBe(true);
+    expect(isCliRuntimeProvider(" Acme-CLI ", { config: {} })).toBe(true);
+    expect(isCliRuntimeProvider("anthropic", { config: {} })).toBe(false);
+    expect(isCliRuntimeProvider("standalone-cli", { config: {} })).toBe(false);
     expect(isCliRuntimeProvider("acme-cli")).toBe(false);
-    expect(isVisibleProvider("acme-cli")).toBe(true);
   });
 
   it("collapses CLI runtime rows only into a canonical row config pins to that runtime", () => {

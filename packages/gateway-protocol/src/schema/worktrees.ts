@@ -108,6 +108,7 @@ export const WorktreesBranchesResultSchema = closedObject({
   headBranch: Type.Optional(NonEmptyString),
   repositoryStatus: Type.Optional(WorktreeRepositoryStatusSchema),
   branchesUnavailable: Type.Optional(Type.Boolean()),
+  refreshing: Type.Optional(Type.Boolean()),
 });
 
 export const WorktreesRestoreParamsSchema = closedObject({
@@ -165,6 +166,13 @@ export const WorktreesGcResultSchema = closedObject({
   evictions: Type.Optional(Type.Record(Type.String(), Type.Integer({ minimum: 0 }))),
 });
 
+export const WorktreesRecoverFileParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  path: NonEmptyString,
+  recoveryId: Type.String({ format: "uuid" }),
+  expectedOwnerId: NonEmptyString,
+});
+
 export const WorktreesRecoverRemovalParamsSchema = closedObject({
   id: NonEmptyString,
   snapshot: WorktreeOidSchema,
@@ -199,6 +207,7 @@ export type WorktreesRemoveResult = Static<typeof WorktreesRemoveResultSchema>;
 export type WorktreesRestoreParams = Static<typeof WorktreesRestoreParamsSchema>;
 export type WorktreesGcParams = Static<typeof WorktreesGcParamsSchema>;
 export type WorktreesGcResult = Static<typeof WorktreesGcResultSchema>;
+export type WorktreesRecoverFileParams = Static<typeof WorktreesRecoverFileParamsSchema>;
 export type WorktreesRecoverRemovalParams = Static<typeof WorktreesRecoverRemovalParamsSchema>;
 export type WorktreesRecoverRemovalResult = Static<typeof WorktreesRecoverRemovalResultSchema>;
 export type WorktreesRetireSnapshotParams = Static<typeof WorktreesRetireSnapshotParamsSchema>;

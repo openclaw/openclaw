@@ -34,7 +34,7 @@ export type CustomEndpointModel = {
 export type CustomEndpointDraft = {
   provider: string;
   baseUrl: string;
-  api: CustomEndpointApi;
+  api?: CustomEndpointApi;
   noAuth: boolean;
   models: CustomEndpointModel[];
 };

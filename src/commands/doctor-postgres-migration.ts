@@ -15,7 +15,6 @@ export async function backupDoctorPostgresMigration(
   const before = hasUpdateDoctorMigrationCapture()
     ? undefined
     : await fingerprintPostgresBackup(sourcePath, config);
-  maintenance.assertAdmission();
   await capturePostgresBackup({
     sourcePath,
     directory,

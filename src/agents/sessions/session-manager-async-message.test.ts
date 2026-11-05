@@ -14,22 +14,13 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import {
-  bindSessionPendingInputSources,
-  stageSessionPendingInput,
-  withSessionPendingInputPersistence,
-} from "../../config/sessions/session-accessor.pending-inputs.js";
-import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "../../config/sessions/session-accessor.sqlite-maintenance-kick.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as reclamationRun from "../../config/sessions/session-accessor.sqlite-reclamation-run.js";
-import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
-import { createSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
-import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -46,6 +37,7 @@ import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { sessionManagerReadMessageAnchor } from "./session-manager-message-anchor.js";
 import * as metadataRuntime from "./session-manager-metadata-runtime.js";
+import { withSelectedTranscriptReader } from "./session-manager-reader.test-support.js";
 import { SessionManager } from "./session-manager.js";
 
 let state: OpenClawTestState;
@@ -601,19 +593,24 @@ it("commits user and custom messages in FIFO order without host writes, and chec
     ]);
     expect(manager.getLeafId()).toBe(lastId);
     expect(beforeFreshMessageCommit).toHaveBeenCalledTimes(3);
-    const beforeRejectedReplay = manager.getPersistedEntries();
-    const refusedReplay = await manager.appendMessageAsync(user("first")).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(refusedReplay).toMatchObject({
-      name: "Error",
-      message: `Session transcript keyed user is outside the current turn: ${first.entryId}`,
+    const beforeReplay = manager.getPersistedEntries();
+    expect(await manager.appendMessageWithTranscriptAnchorAsync(user("first"))).toMatchObject({
+      appended: false,
+      entryId: first.entryId,
+      message: first.message,
     });
-    expect(isRecordedModelFallbackStop(refusedReplay)).toBe(false);
-    expect(manager.getPersistedEntries()).toEqual(beforeRejectedReplay);
-    const afterRefusal = await manager.appendMessageAsync(user("after-replay-refusal"));
-    expect(manager.getLeafEntry()).toMatchObject({ id: afterRefusal, parentId: lastId });
+    for (const conflicting of [
+      { ...user("first"), content: "Different input" },
+      { ...user("first"), __openclaw: { senderId: "different-principal" } },
+    ]) {
+      await expect(manager.appendMessageAsync(conflicting)).rejects.toThrow(
+        "conflicts with the admitted message",
+      );
+    }
+    expect(manager.getPersistedEntries()).toEqual(beforeReplay);
+    expect(manager.getLeafId()).toBe(lastId);
+    const afterReplay = await manager.appendMessageAsync(user("after-replay"));
+    expect(manager.getLeafEntry()).toMatchObject({ id: afterReplay, parentId: lastId });
     expect(hostExec.mock.calls.filter(([sql]) => /^BEGIN\b/iu.test(sql))).toEqual([]);
     expect(await loadTranscriptEvents(target)).toEqual(manager.getPersistedEntries());
   } finally {
@@ -621,7 +618,7 @@ it("commits user and custom messages in FIFO order without host writes, and chec
   }
 });
 
-it("revalidates overtaken keyed replays while retaining fresh committed pending users", async () => {
+it("acknowledges overtaken keyed replays while retaining fresh committed pending users", async () => {
   const { target, manager } = await fixture(state, "overtaken-keyed-replay");
   const originalId = await manager.appendMessageAsync(user("original"));
   let newerId: string | undefined;
@@ -639,15 +636,11 @@ it("revalidates overtaken keyed replays while retaining fresh committed pending 
       spy.mockRestore();
     }
   };
-  const replayFailure = await appendOvertaken(user("original"), "after-replay").then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-  expect(replayFailure).toMatchObject({
-    name: "Error",
-    message: `Session transcript keyed user is outside the current turn: ${originalId}`,
+  expect(await appendOvertaken(user("original"), "after-replay")).toMatchObject({
+    entryId: originalId,
+    appended: false,
+    viewWasSuperseded: true,
   });
-  expect(isRecordedModelFallbackStop(replayFailure)).toBe(false);
   expect(manager.getEntries()).toMatchObject([
     { id: originalId, parentId: null },
     { id: newerId, parentId: originalId },
@@ -736,72 +729,6 @@ it("fences local navigation changes at worker commit and receipt publication", a
   ]);
 });
 
-it.each([false, true])(
-  "preserves pending custody and closed committed replay (collected: %s)",
-  async (collected) => {
-    const { target, manager } = await fixture(state, `pending-messages-${collected}`);
-    const stage = async (key: string) =>
-      expectDefined(
-        await stageSessionPendingInput(target, {
-          runId: key,
-          message: user(key),
-          assertCurrent: () => {},
-        }),
-        "Expected pending input custody",
-      );
-    const firstSource = await stage("first");
-    const sources = [firstSource];
-    if (collected) {
-      sources.push(await stage("second"));
-    }
-    const receipt = collected
-      ? expectDefined(
-          bindSessionPendingInputSources(sources, user("aggregate")),
-          "Expected aggregate custody",
-        )
-      : firstSource;
-    const beforeFreshMessageCommit = vi.fn(() => {
-      throw new Error("Accepted input must retain its original admission");
-    });
-    try {
-      await expect(manager.appendMessageAsync(firstSource.message)).rejects.toThrow(
-        "admitted turn",
-      );
-      const committed = await receipt.run(() =>
-        manager.appendMessageWithTranscriptAnchorAsync(receipt.message, {
-          beforeFreshMessageCommit,
-        }),
-      );
-      expect(committed).toMatchObject({
-        entryId: receipt.inputId,
-        message: receipt.message,
-        appended: true,
-      });
-      expect([receipt.state, ...sources.map((source) => source.state)]).toEqual(
-        Array(sources.length + 1).fill("consumed"),
-      );
-      expect(beforeFreshMessageCommit).not.toHaveBeenCalled();
-      const events = await loadTranscriptEvents(target);
-      expect(events).toEqual(manager.getPersistedEntries());
-      receipt.finish("cancelled");
-      await expect(
-        withSessionPendingInputPersistence(receipt, () =>
-          manager.appendMessageWithTranscriptAnchorAsync(receipt.message, {
-            beforeFreshMessageCommit,
-          }),
-        ),
-      ).resolves.toMatchObject({ entryId: receipt.inputId, appended: false });
-      expect(beforeFreshMessageCommit).not.toHaveBeenCalled();
-      expect(await loadTranscriptEvents(target)).toEqual(events);
-    } finally {
-      receipt.finish("interrupted");
-      for (const source of sources) {
-        source.finish("interrupted");
-      }
-    }
-  },
-);
-
 it("rolls back worker promotion when pending authority retires at commit", async () => {
   const { target, manager } = await fixture(state, "revoked-message");
   await manager.appendMessageAsync(user("seed"));
@@ -838,60 +765,6 @@ it("rolls back worker promotion when pending authority retires at commit", async
   }
   expect(await loadTranscriptEvents(target)).toEqual(before);
 });
-
-async function withSelectedTranscriptReader<T>(
-  target: Parameters<typeof SessionManager.openModelContextAsync>[0],
-  run: (actor?: SessionActor) => Promise<T>,
-  retainActor = false,
-): Promise<T> {
-  const { databaseClaim } = await loadSessionEntryForAdmission(target);
-  let actor: SessionActor | undefined;
-  try {
-    if (!("kind" in databaseClaim) || databaseClaim.kind !== "worker" || !databaseClaim.reader) {
-      throw new Error("Expected admitted durable session reader");
-    }
-    const reader = databaseClaim.reader;
-    const assertCurrent = () => reader.assertCurrent();
-    if (retainActor) {
-      const identity = readDatabasePathIdentitySync(reader.database.path);
-      if (!identity.key.startsWith("file:")) {
-        throw new Error("Expected a physical actor database");
-      }
-      const acquired = await createSessionActorFactory(reader.database).acquire(
-        {
-          sessionKey: target.sessionKey,
-          database: {
-            kind: "file",
-            physicalIdentity: identity.key.slice(5),
-            birthtime: identity.birthtime,
-            nativeLocation: reader.database.path,
-          },
-        },
-        { assertCurrent, assertReadable: assertCurrent },
-      );
-      if ("kind" in acquired) {
-        throw new Error("Expected a durable session actor");
-      }
-      actor = acquired;
-      await actor.read({ assertCurrent, authorize: assertCurrent });
-    }
-    return await withOwnedSessionTranscriptWrites(
-      {
-        sessionTarget: target,
-        sessionReader: reader,
-        ...(actor && { sessionActor: { actor, database: reader.database } }),
-        withTranscriptWrite: async (write) => write(),
-      },
-      () => run(actor),
-    );
-  } finally {
-    try {
-      await actor?.release();
-    } finally {
-      await databaseClaim.release();
-    }
-  }
-}
 
 it("lets another session write between actor appends while retaining manager order", async () => {
   const target = {

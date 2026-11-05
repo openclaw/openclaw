@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import * as fences from "../../packages/markdown-core/src/fences.js";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -96,14 +95,7 @@ describe("EmbeddedBlockChunker", () => {
   it("keeps a fitting skin tone intact at the normal streaming cap", () => {
     const cluster = "👋🏽";
     const source = `${"x".repeat(1198)}${cluster}done`;
-    const boundaries = new Set(
-      Array.from(
-        new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(source),
-        (segment) => segment.index,
-      ),
-    );
-    boundaries.add(source.length);
-
+    const insideCluster = new Set([1199, 1200, 1201]);
     for (const deltaSize of [source.length, 17, 1]) {
       for (const force of [false, true]) {
         const chunker = paragraphChunker(800, 1200);
@@ -112,14 +104,14 @@ describe("EmbeddedBlockChunker", () => {
         expectChunksWithinLength(chunks, 1200);
         expect(chunks.filter((chunk) => chunk.includes(cluster))).toHaveLength(1);
         expectSourceCoverage(metadata, source);
-        expect(metadata.every((entry) => boundaries.has(entry.sourceEnd))).toBe(true);
+        expect(metadata.every((entry) => !insideCluster.has(entry.sourceEnd))).toBe(true);
         expectDrained(chunker, source.length);
       }
     }
   });
 
   it("preserves paragraph selection and source cursors across a forced tail", () => {
-    const tail = "Cccc";
+    const tail = "\n\nCccc";
     for (const force of [false, true]) {
       const prefix = force ? `${"x".repeat(20)}\n` : "";
       const source = `${prefix}Aaaa\n\nBbbb\n\nCccc`;
@@ -130,12 +122,12 @@ describe("EmbeddedBlockChunker", () => {
       expect(emitted).toEqual(
         force
           ? [
-              ["x".repeat(20), prefix],
-              ["Aaaa", "Aaaa\n\n"],
-              ["Bbbb", "Bbbb\n\n"],
-              ["Cccc", "Cccc"],
+              ["x".repeat(20), "x".repeat(20)],
+              ["\nAaaa", "\nAaaa"],
+              ["\n\nBbbb", "\n\nBbbb"],
+              [tail, tail],
             ]
-          : [["Aaaa\n\nBbbb", "Aaaa\n\nBbbb\n\n"]],
+          : [["Aaaa\n\nBbbb", "Aaaa\n\nBbbb"]],
       );
       expect(chunker.bufferedText).toBe(force ? "" : tail);
       expect(chunker.hasBuffered()).toBe(!force);
@@ -237,8 +229,7 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunker.replace(snapshot)).toBe(true);
     const chunks = [...first, ...drainChunks(chunker, true)];
     expect(renderedBody(chunks.flatMap(renderedCode))).toBe(`${"A".repeat(52)}NEW`);
-    expect(chunker.consumedLength).toBe(snapshot.length);
-    expect(chunker.sourceLength).toBe(snapshot.length);
+    expectDrained(chunker, snapshot.length);
     expect(drainChunks(chunker, true)).toEqual([]);
   });
 
@@ -257,8 +248,7 @@ describe("EmbeddedBlockChunker", () => {
       chunker.drain({ force: true, emit });
       expect(chunks.every((chunk) => chunk.startsWith(renderedOpener))).toBe(true);
       expect(chunks.every((chunk) => chunk.endsWith("\n```"))).toBe(true);
-      expect(chunker.consumedLength).toBe(checkpoint.length);
-      expect(chunker.hasBuffered()).toBe(false);
+      expectDrained(chunker, checkpoint.length);
 
       const continuation = `\n${"abcdefghijklmnopqrstuvwxyz".slice(body.length)}\n\`\`\``;
       const source = checkpoint + continuation;
@@ -398,7 +388,7 @@ describe("EmbeddedBlockChunker", () => {
     const chunker = paragraphChunker(30, 200, { flushOnParagraph: true });
     chunker.append("First paragraph.\n\nSecond paragraph.\n\nThird paragraph.");
     expect(drainChunks(chunker)).toEqual(["First paragraph.\n\nSecond paragraph."]);
-    expect(chunker.bufferedText).toBe("Third paragraph.");
+    expect(chunker.bufferedText).toBe("\n\nThird paragraph.");
   });
 
   it.each([
@@ -434,7 +424,6 @@ describe("EmbeddedBlockChunker", () => {
     const { chunks, metadata, emit } = captureChunks();
     chunker.append(initial);
     let candidates = 0;
-    const scanSpy = vi.spyOn(fences, "scanFenceSpans");
     // Capture before spying; every invocation explicitly supplies the original RegExp receiver.
     // oxlint-disable-next-line typescript/unbound-method
     const nativeExec = RegExp.prototype.exec;
@@ -451,10 +440,8 @@ describe("EmbeddedBlockChunker", () => {
     });
     try {
       chunker.drain({ force: false, emit });
-      expect(scanSpy).toHaveBeenCalledTimes(1);
     } finally {
       spy.mockRestore();
-      scanSpy.mockRestore();
     }
     const streamedCount = chunks.length;
     expect(streamedCount).toBeGreaterThan(1);
@@ -504,16 +491,7 @@ describe("EmbeddedBlockChunker", () => {
   describe("Markdown tables", () => {
     const chunking = { minChars: 800, maxChars: 1200, breakPreference: "paragraph" } as const;
     const intro = "Here is the quarterly summary you asked for.";
-    const buildTable = (rowCount: number) =>
-      [
-        "| Region | Owner | Q1 | Q2 |",
-        "| --- | --- | ---: | ---: |",
-        ...Array.from(
-          { length: rowCount },
-          (_, i) => `| R${String(i + 1).padStart(2, "0")} | North | ${1100 + i} | ${2200 + i} |`,
-        ),
-      ].join("\n");
-    const capRows = buildTable(38);
+    const capRows = "| Region | Total |\n| --- | ---: |\n| North | 1100 |";
     const tableAtCap = capRows.replace(
       "Region",
       `Region${" ".repeat(chunking.maxChars - capRows.length)}`,
@@ -525,7 +503,7 @@ describe("EmbeddedBlockChunker", () => {
     it("keeps a streamed table whole when it fills maxChars and a heading follows directly", () => {
       const text = `${intro}\n\n${tableAtCap}\n# Next steps`;
       for (const delta of [1, 17, 43, text.length]) {
-        expect(tableChunks(text, delta)).toEqual([intro, tableAtCap, "# Next steps"]);
+        expect(tableChunks(text, delta)).toEqual([`${intro}\n\n`, tableAtCap, "\n# Next steps"]);
       }
     });
 

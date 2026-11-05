@@ -1,6 +1,11 @@
 // Serialized into the browser mock, like the session and response fixture owners.
 export function createControlUiMockSessionSubscriptions(
-  scenario: { mainSessionKey: string; defaultAgentId: string; sessionScope: string },
+  scenario: {
+    mainSessionKey: string;
+    defaultAgentId: string;
+    sessionScope: string;
+    subscriptionInitialHistory: boolean;
+  },
   isRecord: (value: unknown) => value is Record<string, unknown>,
 ) {
   const scopedEvents = new Set(
@@ -21,12 +26,48 @@ export function createControlUiMockSessionSubscriptions(
   };
   return {
     canonicalKey,
+    completeInitialHistory(
+      params: unknown,
+      response: unknown,
+      readHistory: (
+        historyParams: Record<string, unknown>,
+        respond: (history: unknown, deferred?: boolean) => void,
+      ) => void,
+      respond: (response: unknown, deferred?: boolean) => void,
+    ): boolean {
+      if (
+        !scenario.subscriptionInitialHistory ||
+        !isRecord(params) ||
+        !isRecord(params.initialHistory) ||
+        !isRecord(response) ||
+        Object.hasOwn(response, "__mockError")
+      ) {
+        return false;
+      }
+      const historyParams = {
+        ...params.initialHistory,
+        sessionKey: response.key,
+        agentId: params.agentId,
+      };
+      // The caller owns dispatch; completion may wait for a held nested startup reply.
+      readHistory(historyParams, (history, deferred) => {
+        const error = isRecord(history) ? history["__mockError"] : undefined;
+        respond(
+          {
+            ...response,
+            initialHistory: isRecord(error) ? { ok: false, error } : { ok: true, payload: history },
+          },
+          deferred,
+        );
+      });
+      return true;
+    },
     createClient(lifecycle?: {
       isOpen: () => boolean;
       startRepeatingEvents: () => void;
       stopRepeatingEvents: () => void;
     }) {
-      const keys = new Set<string>();
+      const observers = new Map<string, string>();
       let capabilities: readonly unknown[] = [];
       let observesSessions = false;
       const hasCapability = (capability: string) => capabilities.includes(capability);
@@ -38,16 +79,19 @@ export function createControlUiMockSessionSubscriptions(
             typeof candidate.sessionKey === "string" &&
             Boolean(candidate.sessionKey.trim()),
         );
-        return Boolean(source && keys.has(subscriptionKey(source.sessionKey, source.agentId)));
+        return Boolean(
+          source &&
+          [...observers.values()].includes(subscriptionKey(source.sessionKey, source.agentId)),
+        );
       };
       return {
         hasCapability,
         hasSubscription,
         get size() {
-          return keys.size;
+          return observers.size;
         },
         clear() {
-          keys.clear();
+          observers.clear();
           observesSessions = false;
         },
         recordRequest(method: string, params: unknown, result?: unknown) {
@@ -60,12 +104,14 @@ export function createControlUiMockSessionSubscriptions(
             observesSessions = isRecord(result) && result.subscribed === true;
           } else if (typeof params.key === "string" && params.key.trim()) {
             const key = subscriptionKey(params.key, params.agentId);
+            const observer =
+              typeof params.subscriptionId === "string" ? params.subscriptionId : key;
             if (method === "sessions.messages.subscribe") {
-              keys.add(key);
+              observers.set(observer, key);
               lifecycle?.startRepeatingEvents();
             } else if (method === "sessions.messages.unsubscribe") {
-              keys.delete(key);
-              if (keys.size === 0) {
+              observers.delete(observer);
+              if (observers.size === 0) {
                 lifecycle?.stopRepeatingEvents();
               }
             }

@@ -29,9 +29,9 @@ let queue: NostrIngressQueue;
 let stateDir: string;
 const activeIngress: ReturnType<typeof createNostrIngress>[] = [];
 
-function createEvent(overrides: Partial<Event> = {}): Event {
+function createEvent(id = "1", overrides: Partial<Event> = {}): Event {
   return {
-    id: "1".repeat(64),
+    id: id.repeat(64),
     kind: 4,
     pubkey: "a".repeat(64),
     content: "ciphertext",
@@ -53,8 +53,6 @@ function startIngress(params: Partial<IngressOptions> = {}) {
     maxQueuedAdmissions: 1_000,
     admissionRateLimit: { windowMs: 60_000, maxEvents: 1_000 },
     onError: vi.fn(),
-    pollIntervalMs: 60_000,
-    adoptionStallTimeoutMs: 5_000,
     ...params,
   });
   activeIngress.push(ingress);
@@ -176,7 +174,7 @@ describe("Nostr durable ingress state", () => {
 
   it("recovers an uncompleted relay event with a fresh drain exactly once", async () => {
     const interrupted = startIngress();
-    await interrupted.receive(createEvent({ id: "3".repeat(64) }));
+    await interrupted.receive(createEvent("3"));
     await interrupted.waitForIdle();
     expect(await queue.listClaims()).toHaveLength(1);
     await interrupted.stop();
@@ -200,12 +198,12 @@ describe("Nostr durable ingress state", () => {
       deliver: async (_event, lifecycle) => lifecycle.onAdopted(),
     });
     await expect(ingress.receive({} as Event)).rejects.toThrow("missing id");
-    const cyclic = createEvent({ id: "0".repeat(64) }) as Event & { extra?: unknown };
+    const cyclic = createEvent("0") as Event & { extra?: unknown };
     cyclic.extra = cyclic;
     await expect(ingress.receive(cyclic)).rejects.toThrow(
       "could not be serialized for durable ingress",
     );
-    await expect(ingress.receive(createEvent({ id: "f".repeat(64) }))).resolves.toBe("accepted");
+    await expect(ingress.receive(createEvent("f"))).resolves.toBe("accepted");
   });
 
   it("latches the first append failure across queued admissions", async () => {
@@ -218,8 +216,8 @@ describe("Nostr durable ingress state", () => {
     } satisfies NostrIngressQueue;
     const afterDurableAppend = vi.fn();
     const ingress = startIngress({ queue: failingQueue, deliver: vi.fn(), afterDurableAppend });
-    const first = ingress.receive(createEvent({ id: "7".repeat(64) }));
-    const queued = ingress.receive(createEvent({ id: "8".repeat(64) }));
+    const first = ingress.receive(createEvent("7"));
+    const queued = ingress.receive(createEvent("8"));
     await expect(first).rejects.toThrow("Nostr durable admission failed");
     await expect(queued).rejects.toThrow("Nostr durable admission failed");
     expect(enqueue).toHaveBeenCalledTimes(3);
@@ -234,17 +232,17 @@ describe("Nostr durable ingress state", () => {
       maxSerializedPayloadBytes: 600,
       admissionRateLimit: { windowMs: 60_000, maxEvents: 1 },
     });
-    await expect(
-      ingress.receive(createEvent({ id: "1".repeat(64), content: "\\".repeat(40) })),
-    ).rejects.toThrow("exceeds the durable ingress size limit");
-    await expect(ingress.receive(createEvent({ id: "2".repeat(64) }))).rejects.toThrow(
+    await expect(ingress.receive(createEvent("1", { content: "\\".repeat(40) }))).rejects.toThrow(
+      "exceeds the durable ingress size limit",
+    );
+    await expect(ingress.receive(createEvent("2"))).rejects.toThrow(
       "exceeds the durable admission rate",
     );
     expect(enqueue).not.toHaveBeenCalled();
   });
 
   it("applies bounded backpressure without latching admission", async () => {
-    const held = createEvent({ id: "c".repeat(64) });
+    const held = createEvent("c");
     await queue.enqueue(
       held.id,
       { version: 1, receivedAt: Date.now(), rawEvent: JSON.stringify(held) },
@@ -252,7 +250,7 @@ describe("Nostr durable ingress state", () => {
     );
     const ingress = startIngress({ maxPendingEvents: 1 });
     await ingress.waitForIdle();
-    await expect(ingress.receive(createEvent({ id: "d".repeat(64) }))).rejects.toThrow(
+    await expect(ingress.receive(createEvent("d"))).rejects.toThrow(
       "exceeds the durable ingress backlog",
     );
 
@@ -261,7 +259,7 @@ describe("Nostr durable ingress state", () => {
       throw new Error("expected held ingress claim");
     }
     await queue.complete(heldClaim);
-    await expect(ingress.receive(createEvent({ id: "e".repeat(64) }))).resolves.toBe("accepted");
+    await expect(ingress.receive(createEvent("e"))).resolves.toBe("accepted");
   });
 
   it("bounds the in-memory admission chain before queue I/O", async () => {
@@ -279,8 +277,8 @@ describe("Nostr durable ingress state", () => {
       deliver: async (_event, lifecycle) => lifecycle.onAdopted(),
     });
     try {
-      const first = ingress.receive(createEvent({ id: "3".repeat(64) }));
-      await expect(ingress.receive(createEvent({ id: "4".repeat(64) }))).rejects.toThrow(
+      const first = ingress.receive(createEvent("3"));
+      await expect(ingress.receive(createEvent("4"))).rejects.toThrow(
         "exceeds the in-memory admission backlog",
       );
       listGate.resolve();
@@ -305,7 +303,7 @@ describe("Nostr durable ingress state", () => {
     } satisfies NostrIngressQueue;
     const deliver = vi.fn();
     const ingress = startIngress({ queue: blockingQueue, deliver });
-    const admission = ingress.receive(createEvent({ id: "b".repeat(64) }));
+    const admission = ingress.receive(createEvent("b"));
     await enqueueStarted.promise;
 
     const stop = ingress.stop();
@@ -314,8 +312,6 @@ describe("Nostr durable ingress state", () => {
     await expect(admission).resolves.toBe("accepted");
     await stop;
     expect(deliver).not.toHaveBeenCalled();
-    await expect(ingress.receive(createEvent({ id: "c".repeat(64) }))).rejects.toThrow(
-      "Nostr ingress stopped",
-    );
+    await expect(ingress.receive(createEvent("c"))).rejects.toThrow("Nostr ingress stopped");
   });
 });

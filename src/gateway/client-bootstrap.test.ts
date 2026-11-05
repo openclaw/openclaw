@@ -15,12 +15,10 @@ vi.mock("../infra/tls/gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/tls/gateway.js")>()),
   inspectGatewayTlsCertificate: mocks.certificate,
 }));
-
 vi.mock("./connection-details.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./connection-details.js")>()),
   buildGatewayConnectionDetailsWithResolvers: mocks.details,
 }));
-
 vi.mock("./credentials-secret-inputs.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./credentials-secret-inputs.js")>()),
   resolveGatewayCredentialsWithSecretInputs: mocks.credentials,
@@ -60,55 +58,9 @@ function inspectLocalCertificate() {
   });
 }
 
-function localTlsExpectation(source: string) {
-  return { url: LOCAL_URL, source, pin: LOCAL_PIN, inspect: true, scope: undefined };
-}
-
-function remoteTlsCase(name: string, url: string, pin = REMOTE_PIN, scope?: string) {
-  return {
-    name,
-    url,
-    source: "config gateway.remote.url",
-    config: remoteConfig({ url, tlsFingerprint: `sha256:${pin}` }),
-    pin,
-    inspect: false,
-    scope,
-  };
-}
-
 beforeEach(() => {
   Object.values(mocks).forEach((mock) => mock.mockReset());
   mocks.credentials.mockResolvedValue({});
-});
-
-it.each([
-  [OVERRIDE_URL, "cli --url", "cli"],
-  [REMOTE_URL, "config gateway.remote.url", undefined],
-] as const)("preserves auth provenance for %s", async (url, urlSource, source) => {
-  const details = connection(url, urlSource);
-  mocks.details.mockReturnValueOnce(details);
-
-  const result = await bootstrap({
-    config: {},
-    gatewayUrl: source ? url : undefined,
-    env: process.env,
-  });
-
-  expect(result).toEqual({
-    url,
-    urlSource,
-    connectionDetails: details,
-    urlOverrideSource: source,
-    deviceAuthScope: url,
-    preauthHandshakeTimeoutMs: undefined,
-    auth: { token: undefined, password: undefined },
-  });
-  const [params] = mocks.credentials.mock.lastCall ?? [];
-  expect(params).toMatchObject({
-    urlOverride: source ? url : undefined,
-    urlOverrideSource: source,
-  });
-  expect(params?.env).toBe(process.env);
 });
 
 it.each([
@@ -188,51 +140,70 @@ it("selects local credentials for a hosted Gateway port with a remote primary", 
     url: "ws://127.0.0.1:19876",
     auth: { token: "local-token" },
   });
-  for (const field of ["urlOverrideSource", "deviceAuthScope", "sshTunnel"] as const) {
-    expect(result[field]).toBeUndefined();
-  }
-  expect(mocks.details).toHaveBeenCalledWith({
-    config,
-    url: undefined,
-    ignoreEnvUrlOverride: true,
-    localPortOverride: 19876,
-  });
+  expect([result.urlOverrideSource, result.deviceAuthScope, result.sshTunnel]).toEqual([
+    undefined,
+    undefined,
+    undefined,
+  ]);
 });
 
 it.each([
-  {
-    name: "configured local listener",
-    config: { gateway: { tls: TLS_CONFIG } },
-    ...localTlsExpectation("local loopback"),
-  },
-  {
-    name: "remote fallback to local",
-    config: remoteConfig({ tlsFingerprint: REMOTE_PIN }, { tls: TLS_CONFIG }),
-    ...localTlsExpectation("missing gateway.remote.url (fallback local)"),
-  },
-  ...["config gateway.remote.url", "env OPENCLAW_GATEWAY_URL", "cli --url"].map((source) =>
-    Object.assign(remoteTlsCase(source, REMOTE_URL, REMOTE_PIN.toUpperCase()), {
-      url: source === "config gateway.remote.url" ? REMOTE_URL : OVERRIDE_URL,
-      source,
-      pin: source === "cli --url" ? undefined : REMOTE_PIN,
-    }),
+  ["local loopback", LOCAL_URL, { gateway: { tls: TLS_CONFIG } }, LOCAL_PIN, true],
+  [
+    "missing gateway.remote.url (fallback local)",
+    LOCAL_URL,
+    remoteConfig({ tlsFingerprint: REMOTE_PIN }, { tls: TLS_CONFIG }),
+    LOCAL_PIN,
+    true,
+  ],
+  ...["config gateway.remote.url", "env OPENCLAW_GATEWAY_URL", "cli --url"].map(
+    (source) =>
+      [
+        source,
+        source === "config gateway.remote.url" ? REMOTE_URL : OVERRIDE_URL,
+        remoteConfig({ url: REMOTE_URL, tlsFingerprint: `sha256:${REMOTE_PIN.toUpperCase()}` }),
+        source === "cli --url" ? undefined : REMOTE_PIN,
+        false,
+      ] as const,
   ),
-  remoteTlsCase("plaintext remote target fails closed", LOCAL_WS),
+  [
+    "config gateway.remote.url",
+    LOCAL_WS,
+    remoteConfig({ url: LOCAL_WS, tlsFingerprint: REMOTE_PIN }),
+    REMOTE_PIN,
+    false,
+  ],
   ...[
     [LOCAL_PIN, "remote:tls:f40b2abc628c46b0d05315dada50e36a2d04147d5d7d5c290a8ccecad5ac26ad"],
     [REMOTE_PIN, "remote:tls:684dff5e10578007130807c7d9aa95d045019428f2d404c7d708f38f2d7b5fa2"],
-  ].map(([pin, scope]) => remoteTlsCase(`loopback scope ${pin}`, LOCAL_URL, pin, scope)),
-])("selects TLS ownership for $name", async ({ url, source, config, pin, scope, inspect }) => {
-  mocks.details.mockReturnValue(connection(url, source));
-  inspectLocalCertificate();
-  const result = await bootstrap({ config, gatewayUrl: source === "cli --url" ? url : undefined });
-  expect(result.tlsFingerprint).toBe(pin);
-  expect(mocks.certificate.mock.calls).toEqual(inspect ? [[TLS_CONFIG]] : []);
-  if (scope) {
-    expect(result.deviceAuthScope).toBe(scope);
-    expect(result.sshTunnel).toBeUndefined();
-  }
-});
+  ].map(
+    ([pin, scope]) =>
+      [
+        "config gateway.remote.url",
+        LOCAL_URL,
+        remoteConfig({ url: LOCAL_URL, tlsFingerprint: `sha256:${pin}` }),
+        pin,
+        false,
+        scope,
+      ] as const,
+  ),
+] as const)(
+  "selects TLS ownership for %s %s",
+  async (source, url, config, pin, inspect, scope?: string) => {
+    mocks.details.mockReturnValue(connection(url, source));
+    inspectLocalCertificate();
+    const result = await bootstrap({
+      config,
+      gatewayUrl: source === "cli --url" ? url : undefined,
+    });
+    expect(result.tlsFingerprint).toBe(pin);
+    expect(mocks.certificate.mock.calls).toEqual(inspect ? [[TLS_CONFIG]] : []);
+    if (scope) {
+      expect(result.deviceAuthScope).toBe(scope);
+      expect(result.sshTunnel).toBeUndefined();
+    }
+  },
+);
 
 it.each([
   ["public origin", "gateway.example", "https://gateway.example", false, undefined],

@@ -343,7 +343,7 @@ function EndpointEditor(props: {
       .map(asNullableRecord)
       .find((entry) => entry?.id === (row.existingId ?? row.id));
     return t("modelProviders.endpoints.route", {
-      api: typeof previous?.api === "string" ? previous.api : value.api,
+      api: typeof previous?.api === "string" ? previous.api : (value.api ?? "openai-completions"),
       url: typeof previous?.baseUrl === "string" ? previous.baseUrl : value.baseUrl,
     });
   }
@@ -407,7 +407,9 @@ function EndpointEditor(props: {
                   <>
                     <button
                       class="btn btn--sm"
-                      disabled={disabled() || !api(item().entry.api)}
+                      disabled={
+                        disabled() || (item().entry.api !== undefined && !api(item().entry.api))
+                      }
                       onClick={() => begin(item().provider, item().entry)}
                     >
                       {t("modelProviders.endpoints.editConnection")}
@@ -486,7 +488,7 @@ function EndpointEditor(props: {
                         pattern="[a-z0-9]+(-[a-z0-9]+)*"
                         value={value().provider}
                         disabled={editing() || status().busy}
-                        placeholder="lab-inference"
+                        placeholder={t("modelProviders.endpoints.idPlaceholder")}
                         onInput={(event) => update({ provider: event.currentTarget.value })}
                       />
                     </label>
@@ -497,7 +499,7 @@ function EndpointEditor(props: {
                         required
                         value={value().baseUrl}
                         disabled={status().busy}
-                        placeholder="http://inference.lan:8000/v1"
+                        placeholder={t("modelProviders.endpoints.urlPlaceholder")}
                         onInput={(event) => {
                           update({ baseUrl: event.currentTarget.value });
                           setDiscovered([]);
@@ -508,7 +510,7 @@ function EndpointEditor(props: {
                       <span>{t("modelProviders.endpoints.adapter")}</span>
                       <select
                         aria-label={t("modelProviders.endpoints.adapter")}
-                        value={value().api}
+                        value={value().api ?? ""}
                         disabled={status().busy}
                         onChange={(event) => {
                           const next = api(event.currentTarget.value);
@@ -521,6 +523,9 @@ function EndpointEditor(props: {
                           setDiscovered([]);
                         }}
                       >
+                        <Show when={value().api === undefined}>
+                          <option value="">{t("modelProviders.endpoints.keepAdapters")}</option>
+                        </Show>
                         <For each={CUSTOM_ENDPOINT_APIS}>
                           {(entry) => <option value={entry}>{apiLabels[entry]}</option>}
                         </For>
@@ -561,6 +566,7 @@ function EndpointEditor(props: {
                       class="btn btn--sm"
                       disabled={
                         status().busy ||
+                        !value().api ||
                         value().api === "anthropic-messages" ||
                         !value().baseUrl ||
                         !value().provider

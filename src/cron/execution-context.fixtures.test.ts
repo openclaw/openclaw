@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import fixtureData from "./execution-context.fixtures.json" with { type: "json" };
 import {
   replayScheduledContextFixture,
   type ScheduledContextFixture,
@@ -7,9 +7,7 @@ import {
 
 // Job shapes found by scripts/dev/cron-context-replay.mts on a real Gateway,
 // anonymized. Regenerate with --emit-fixtures when new shapes appear.
-const fixtures = JSON.parse(
-  readFileSync(new URL("./execution-context.fixtures.json", import.meta.url), "utf8"),
-) as ScheduledContextFixture[];
+const fixtures = fixtureData as ScheduledContextFixture[];
 
 describe("scheduled execution context on stored job shapes", () => {
   it("covers the stored shapes", () => {

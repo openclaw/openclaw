@@ -42,6 +42,8 @@
 
 ## Recovery and closeout
 
+- A dependency refresh on main does not require replacing an older workflow binding. Run the current trusted wrapper again: it installs the anchor's frozen dependency set outside shared checkouts and reuses the completed entry. Do not delete bindings or alter another operation's tooling root. Missing already-pinned package directories are a separate retained-projection recovery case; follow [the dependency recovery owner](../../../../docs/reference/scripts/pr-tooling.md#recover-a-retained-dependency-projection).
+
 - Accepted/uncertain auto submission: retire retained request before remote-head replacement.
 
 ```bash
@@ -109,12 +111,7 @@ scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
 - Outcome + verification complete → remove task-owned test logs, receipts, proof archives, scratch, `.crabbox` outputs, task archives under `.local`/temp. Published PR proof needs no local duplicate.
 - Remaining finished worktrees: ownership/holder check + advertised native closeout. No archive/export/evidence handoff/replacement cleanup receipt required. Native finalized-task option for disposable-proof refusal only; preserve guard refusals.
 - Preserve unrelated/unknown files, deliverables, explicit retention, unfinished source/necessary recovery state, active owners, credentials, agent state, shared dependencies. Never force removal, clear locks, sign off for another owner. Report `removed` only after path + registration absent; else path + exact blocker.
-- Reconciled merge with completion pending: ownership cleanup first, then current receipt OID:
-
-```bash
-git rev-parse refs/openclaw/pr-merge-outcomes/<PR>
-scripts/pr merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion
-```
+- Reconciled merge with completion pending: follow [delayed completion](https://docs.openclaw.ai/reference/scripts/merge-recovery#delayed-completion). Use the persistent checkout as cwd and an absolute, qualified wrapper for the retained workflow. The persistent checkout's own wrapper may be stale. This explicit closeout schedules no background retry. Resolve advanced/inaccessible remote branches separately without deleting them by name. An unresolved completion-comment attempt stays inspection-only until its marker is reconciled.
 
 - Revalidates historical merge; native worktree, PR-owned local branches, remote head branch must be absent. Never merges/deletes resources. From `merged`, may post first completion comment; uncertain comment attempt → marker lookup only, never another POST. Missing/ambiguous marker stays pending; reread OID after every transition.
 - First admin comment requires retained prior-CI evidence. Before cleanup requirement: verify landed historical parent against retained admission main. Comment labels audit reconstructed after merge, not original at-landing audit; preserve historical CI qualification, never claim current-head success. Other admin receipts need owner review of original audit/completion record.

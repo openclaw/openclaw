@@ -367,7 +367,6 @@ function resetNodeHostPluginRegistry(): void {
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.nodeHostPluginTestApi")] = {
-    getNodeHostPluginRegistry: () => nodeHostPluginRegistry,
     resetNodeHostPluginRegistry,
   };
 }

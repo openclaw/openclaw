@@ -10,17 +10,17 @@ import {
   isRpcSourceQueued,
   listRpcSourceEntries,
 } from "../../sessions/session-controller.rpc-sources.js";
-import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.history.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
+import { replaceOversizedChatHistoryMessages } from "../chat-history-budget.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
   captureRpcSourceScopeMatcher,
   type SessionRuntimeScope,
 } from "../session-runtime-scope.js";
-import { replaceOversizedChatHistoryMessages } from "./chat-history-budget.js";
 
 const PENDING_INPUT_DISPLAY_MAX_BYTES = 128 * 1024;
 // Correlation is useful for browser UUIDs, but arbitrary external run IDs must
@@ -129,6 +129,12 @@ export async function readChatPendingInputs(
         state: item.state,
         message: messages[index],
       };
+      if (
+        item.state === "cancelled" &&
+        item.message["__openclaw"]?.pendingInputCancelledByUser === true
+      ) {
+        display.cancelledByUser = true;
+      }
       if (item.runId.length <= PENDING_INPUT_CORRELATION_MAX_CHARS) {
         display.runId = item.runId;
         if (item.state === "queued" && options.queuedRunIds?.has(item.runId)) {

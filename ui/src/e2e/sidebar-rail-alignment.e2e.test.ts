@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { captureFrame } from "./sidebar-assertions.test-support.ts";
 import { sidebarSessionList } from "./sidebar-contract.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
@@ -90,6 +91,22 @@ suite.define(() => {
             }),
           );
           expect(iconInk[0]).toEqual(iconInk[1]);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && !hasTouch) {
+            const sidebar = page.locator(".sidebar.sidebar--rail");
+            await captureFrame(suite.artifactDir, "sidebar.png", sidebar, [owner]);
+          }
+          const toolbarBox = await page.locator(".sidebar-session-toolbar").boundingBox();
+          // Fresh preferences have no personal sections above the first row.
+          const sessionsBox = await page.locator(".sidebar-sessions").boundingBox();
+          const firstRowBox = await page
+            .locator(".sidebar-sessions .sidebar-recent-session")
+            .first()
+            .boundingBox();
+          expect(toolbarBox).not.toBeNull();
+          expect(sessionsBox).not.toBeNull();
+          expect(firstRowBox).not.toBeNull();
+          expect(sessionsBox!.y - toolbarBox!.y - toolbarBox!.height).toBe(6);
+          expect(firstRowBox!.y - sessionsBox!.y).toBe(0);
         },
       );
     },
