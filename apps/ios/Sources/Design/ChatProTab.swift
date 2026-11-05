@@ -55,7 +55,6 @@ struct ChatProTab: View {
 
     var body: some View {
         self.content
-            .disabled(self.isGatewayTransitionPending)
             .task {
                 if self.speech == nil {
                     let gateway = self.appModel.operatorSession
@@ -76,8 +75,14 @@ struct ChatProTab: View {
                 .chatViewModelOwnerID)
     }
 
+    private var areSessionActionsDisabled: Bool {
+        self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned ||
+            self.isGatewayTransitionPending
+    }
+
     private var content: some View {
         self.chatSurface
+            .disabled(self.isGatewayTransitionPending)
             .modifier(ChatScrollEdgeTreatment())
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -116,6 +121,7 @@ struct ChatProTab: View {
                     ChatNewSessionOptionsPopover(viewModel: viewModel) {
                         self.showsNewSessionOptions = false
                     }
+                    .disabled(self.isGatewayTransitionPending)
                     .presentationDetents([.medium])
                     .presentationDragIndicator(.visible)
                 }
@@ -450,7 +456,7 @@ struct ChatProTab: View {
                     self.chatActionButton(
                         title: "New chat in worktree",
                         systemImage: "arrow.triangle.branch",
-                        disabled: self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
+                        disabled: self.areSessionActionsDisabled)
                     {
                         Task { await self.viewModel?.startNewSession(worktree: true) }
                     }
@@ -459,7 +465,7 @@ struct ChatProTab: View {
                 self.chatActionButton(
                     title: "New session options…",
                     systemImage: "slider.horizontal.3",
-                    disabled: self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
+                    disabled: self.areSessionActionsDisabled)
                 {
                     self.pendingChatAction = .newSessionOptions
                 }
@@ -470,6 +476,7 @@ struct ChatProTab: View {
                     {
                         self.showsChatActions = false
                     }
+                    .disabled(self.isGatewayTransitionPending)
                 }
 
                 Button {
