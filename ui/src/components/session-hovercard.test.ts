@@ -11,7 +11,6 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { SessionHovercard, type SessionHovercardInput } from "./session-hovercard-solid.tsx";
-import { writeHovercardExcerpt } from "./session-hovercard.ts";
 
 function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSession {
   return {
@@ -103,29 +102,6 @@ function attributionSummary(container: ParentNode): string {
     .replace(/\s+/gu, " ")
     .trim();
 }
-
-describe("writeHovercardExcerpt", () => {
-  function clampedElement(maxLength = Number.POSITIVE_INFINITY) {
-    const element = document.createElement("div");
-    Object.defineProperty(element, "clientHeight", { get: () => 54 });
-    Object.defineProperty(element, "scrollHeight", {
-      get: () => ((element.textContent ?? "").length > maxLength ? 72 : 54),
-    });
-    return element;
-  }
-
-  it("drops punctuation and spaces before the ellipsis", () => {
-    const element = clampedElement(17);
-    writeHovercardExcerpt(element, "First paragraph. Tail sentence.");
-    expect(element.textContent).toBe("First paragraph…");
-  });
-
-  it("does not split a grapheme at the cut", () => {
-    const element = clampedElement(13);
-    writeHovercardExcerpt(element, "Status: 👩‍💻 is working on it");
-    expect(element.textContent).toBe("Status…");
-  });
-});
 
 describe("session hovercard", () => {
   it("shows the owning session failure above the notepad", () => {
@@ -503,7 +479,9 @@ describe("session hovercard", () => {
         );
         const notice = container.querySelector('[role="status"]');
         expect(notice?.textContent).toContain(
-          status === "rate-limited" ? "GitHub API rate limit reached" : "could not be refreshed",
+          status === "rate-limited"
+            ? "GitHub API rate limit reached"
+            : "Couldn’t refresh GitHub status",
         );
         if (status === "unavailable") {
           expect(notice?.textContent).not.toContain("rate limit");
@@ -584,18 +562,14 @@ describe("session hovercard", () => {
     ).not.toBeNull();
   });
 
-  it("renders the latest turn as plain text when progress is absent", () => {
-    const container = document.body.appendChild(document.createElement("div"));
-    renderCard(
-      { row: row({ lastMessagePreview: "  Finished <strong>without markup</strong>.  " }) },
-      container,
-    );
+  it("reserves the task area for progress reports, never the latest message", () => {
+    const latestMessage = "Land";
+    const container = renderCard({
+      row: row({ lastMessagePreview: latestMessage }),
+    });
 
-    expect(container.querySelector(".session-hovercard__excerpt")?.textContent).toBe(
-      "Finished <strong>without markup</strong>.",
-    );
-    expect(container.querySelector(".session-hovercard__excerpt strong")).toBeNull();
-    expect(container.querySelector(".session-progress-card")).toBeNull();
+    expect(container.textContent).not.toContain(latestMessage);
+    expect(container.querySelector(".session-hovercard__task")).toBeNull();
   });
 
   it.each(["active", "markdown-only", "completed"])(
@@ -603,10 +577,7 @@ describe("session hovercard", () => {
     (mode) => {
       const card = progressCard();
       const container = renderCard({
-        row: row({
-          ...(mode === "active" ? { lastMessagePreview: "This must not appear." } : {}),
-          ...(mode === "completed" ? { status: "done" } : {}),
-        }),
+        row: row(mode === "completed" ? { status: "done" } : {}),
         progressCard: {
           ...card,
           steps:
@@ -633,8 +604,6 @@ describe("session hovercard", () => {
       );
       expect(container.querySelector(".session-progress-card")).toBeNull();
       expect(container.querySelector("time")).toBeNull();
-      expect(container.querySelector(".session-hovercard__excerpt")).toBeNull();
-      expect(container.textContent).not.toContain("This must not appear.");
     },
   );
 

@@ -16,12 +16,14 @@ import {
   readDeferredPluginMigrations,
   recordDeferredPluginMigrations,
 } from "../infra/deferred-plugin-migrations.js";
+import { writeExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import * as sqliteReadWorkers from "../infra/sqlite-readonly-worker.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { createUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../infra/update-run-timeouts.js";
@@ -32,7 +34,10 @@ import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plug
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
@@ -132,6 +137,62 @@ const doctorRepairOptions = {
 } as const;
 
 describe("runDoctorConfigPreflight", () => {
+  it("prepares canonical exec policy asynchronously when invalid config cannot drive migrations", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, { plugins: { enabled: false } });
+      const invalidConfig = '{"gateway":{"port":"invalid"},"plugins":{"enabled":false}}';
+      await fs.writeFile(configPath, invalidConfig);
+      const source = openOpenClawStateDatabase();
+      const pathname = source.path;
+      const raw = JSON.stringify({
+        version: 1,
+        agents: { main: { allowlist: ["/usr/bin/git"] } },
+      });
+      writeExecApprovalsConfigRow({ db: source.db, file: { version: 1 }, raw, now: 73 });
+      closeOpenClawStateDatabaseForTest();
+      let inspected = false;
+      const result = await runDoctorConfigPreflight({
+        ...doctorRepairOptions,
+        repairPrefixedConfig: false,
+        measure: async (name, run) => {
+          if (name !== "doctor.config-preflight.exec-approvals-migration") {
+            return run();
+          }
+          inspected = true;
+          const synchronousChild = vi.spyOn(sqliteReadWorkers, "runSqliteReadOnlyWorkerSync");
+          try {
+            return await run();
+          } finally {
+            const sourceCopies = synchronousChild.mock.calls.filter(
+              ([sourcePath]) => sourcePath === pathname,
+            );
+            synchronousChild.mockRestore();
+            expect(sourceCopies).toEqual([]);
+          }
+        },
+      });
+      expect(inspected).toBe(true);
+      expect(result.snapshot.valid).toBe(false);
+      expect(result.stateMigrationUnsettled).toBe(false);
+      expect(await fs.readFile(configPath, "utf8")).toBe(invalidConfig);
+      const database = openOpenClawStateDatabase();
+      const row = database.db
+        .prepare(
+          "SELECT raw_json, updated_at_ms FROM exec_approvals_config WHERE config_key='current'",
+        )
+        .get();
+      expect(row?.updated_at_ms).toBe(73);
+      expect(JSON.parse(String(row?.raw_json))).toMatchObject({
+        agents: { main: { allowlist: [{ pattern: "/usr/bin/git" }] } },
+      });
+      expect(
+        (await fs.readdir(path.dirname(pathname))).filter((name) =>
+          name.includes(".pre-exec-approvals-migration-"),
+        ),
+      ).toHaveLength(1);
+    });
+  });
+
   it.each([
     [undefined, true],
     ["recoverable", false],

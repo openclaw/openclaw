@@ -355,7 +355,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           inFlightRun: { runId: "mock-plan-run" },
         },
       ]);
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
     });
 
     it("serves preview session agent:main:tax-research through both chat entry points", async () => {
@@ -470,7 +470,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         // The fixture viewer is Riley; this shared checkout belongs to Peter.
         await selectAllSidebarSessions(page);
         await page.getByText("OpenClaw work checkout", { exact: true }).click();
-        await page.getByRole("button", { name: "Write a message to send." }).waitFor();
+        await page.getByRole("button", { name: "Type a message first." }).waitFor();
         if (captureUiProof) {
           await page.screenshot({ path: path.join(artifacts, "chat.png") });
         }

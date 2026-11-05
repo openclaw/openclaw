@@ -37,6 +37,7 @@ import {
 import {
   captureSqliteReaderOwner,
   currentSqliteOperationTiming,
+  readSqliteOperationHoldContext,
 } from "./sqlite-reader-lifecycle.js";
 import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 import type { SqliteWorkerDatabaseContext } from "./sqlite-worker-database-context.js";
@@ -470,12 +471,14 @@ function settleSqliteTransactionSync<T>(
     }
   };
   let commitStarted = false;
+  const operationLabel = options?.operationLabel || captureSqliteReaderOwner()?.operation;
+  const hydration = operationLabel?.startsWith("sessions.transcript-hydration.") === true;
   let statementTiming: ReturnType<ReturnType<typeof startSqliteStatementTiming>> | undefined;
   try {
     // Share admitted schema inside rollback protection unless the source fence already owns it.
     const stopStatementTiming =
-      options?.operationLabel === "session.lifecycle.delete"
-        ? startSqliteStatementTiming()
+      operationLabel === "session.lifecycle.delete" || hydration
+        ? startSqliteStatementTiming(hydration)
         : undefined;
     let result: T;
     try {
@@ -503,6 +506,10 @@ function settleSqliteTransactionSync<T>(
     }
     // Include COMMIT and failed holders: both keep other writers waiting too.
     try {
+      if (timing?.diskRead) {
+        // Borrow the last transaction's existing identifiers/counts until operation settlement.
+        timing.diskRead.context = options?.diagnosticContext;
+      }
       const elapsedMs = Date.now() - transactionStartedAt;
       const hostAdmissionWaitMs = (timing?.hostAdmissionWaitMs ?? 0) - admissionWaitBefore;
       const databaseAdmissionWaitMs =
@@ -515,9 +522,13 @@ function settleSqliteTransactionSync<T>(
         (options?.logger ?? transactionLog).warn("slow SQLite transaction hold", {
           async: false,
           callbackKind: "application-transaction",
+          isMainThread,
+          mode,
+          pid: process.pid,
+          threadId,
           ...transactionDiagnosticLabels(db, options),
-          ...(timing?.holdContext
-            ? { context: { ...options?.diagnosticContext, ...timing.holdContext } }
+          ...(timing?.holdContext || (hydration && timing?.hydrationActiveEvents !== undefined)
+            ? { context: readSqliteOperationHoldContext(options?.diagnosticContext, hydration) }
             : {}),
           elapsedMs,
           phases: {
@@ -527,9 +538,15 @@ function settleSqliteTransactionSync<T>(
             sqlMs,
             ...(statementTiming
               ? {
-                  statementExecutionMs: statementTiming.totalMs,
+                  statementExecutionMs: Math.round(statementTiming.totalMs * 100) / 100,
                   // Residual includes JS, preparation, GC and scheduling; neither field is CPU time.
-                  callbackOtherMs: Math.max(0, sqlMs - statementTiming.totalMs),
+                  callbackOtherMs:
+                    Math.round(Math.max(0, sqlMs - statementTiming.totalMs) * 100) / 100,
+                  // Overlaps statement/other wall time; never subtract GC from both.
+                  callbackGcMs:
+                    statementTiming.callbackGcMs === undefined
+                      ? undefined
+                      : Math.round(statementTiming.callbackGcMs * 100) / 100,
                 }
               : {}),
             hostAdmissionWaitMs,
@@ -537,10 +554,6 @@ function settleSqliteTransactionSync<T>(
             commitMs,
           },
           ...(statementTiming ? { statementTiming: statementTiming.summarize() } : {}),
-          isMainThread,
-          mode,
-          pid: process.pid,
-          threadId,
           thresholdMs: options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS,
         });
       }
@@ -549,6 +562,9 @@ function settleSqliteTransactionSync<T>(
     } finally {
       if (timing) {
         timing.preparedAtMs = Date.now();
+        if (timing.hydrationActiveEvents !== undefined) {
+          timing.hydrationActiveEvents = undefined;
+        }
       }
     }
   }

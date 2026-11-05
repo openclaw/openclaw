@@ -73,7 +73,7 @@ receive verified-subscription priority over environment API keys.
 Codex execution or sign-in inspection errors are reported with a retry diagnostic;
 only a missing executable or login is treated as absent.
 
-In the Control UI, Model Setup can also select models from installed native
+In the Control UI, Models can also select models from installed native
 agents through the shared model picker. **Use** saves that model and its runtime
 without running the setup test; authentication and tools stay with the native
 agent. Provider **Test & use** still requires a verified tool-free reply.

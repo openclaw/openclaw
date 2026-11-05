@@ -45,12 +45,20 @@ suite.define(() => {
           await waitForControlUiRoute(page, from);
           const topbarGeometry = () =>
             page.evaluate(() =>
-              [".topbar-nav-toggle", ".topbar-search", ".header-new-session"].map((selector) => {
+              [".topbar-nav-toggle", ".topbar-search"].map((selector) => {
                 const rect = document.querySelector(selector)?.getBoundingClientRect();
                 return rect && [rect.x, rect.y, rect.width, rect.height];
               }),
             );
           const settingsTopbar = await topbarGeometry();
+          const phoneUsageActions = width === 400 && to.routeId === "usage";
+          const settingsPill = phoneUsageActions
+            ? await page.locator(".topnav-shell__actions").boundingBox()
+            : null;
+          if (phoneUsageActions) {
+            expect(settingsPill).not.toBeNull();
+            expect(await page.locator(".usage-phone-actions__trigger").count()).toBe(0);
+          }
           await page.evaluate(() => {
             const shifts: unknown[] = [];
             const record = (entries: PerformanceEntryList) => {
@@ -79,6 +87,11 @@ suite.define(() => {
             window.dispatchEvent(new PopStateEvent("popstate"));
           }, to.pathname);
           await waitForControlUiRoute(page, to);
+          if (phoneUsageActions) {
+            await page
+              .locator(".topnav-shell__page-actions .usage-phone-actions__trigger")
+              .waitFor();
+          }
           await page.waitForFunction(
             () =>
               !document
@@ -101,6 +114,12 @@ suite.define(() => {
                 );
               }),
           );
+          if (phoneUsageActions) {
+            // The pill reserves its page action before the route mounts.
+            expect(await page.locator(".topnav-shell__actions").boundingBox()).toEqual(
+              settingsPill,
+            );
+          }
           expect(shifts).toEqual([]);
           expect(await topbarGeometry()).toEqual(settingsTopbar);
         },

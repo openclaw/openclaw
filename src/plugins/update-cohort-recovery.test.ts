@@ -42,7 +42,7 @@ import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
-import { readPluginCohortArtifactIdentity } from "./update-cohort-artifacts.js";
+import { readPluginCohortPublishedArtifactIdentity } from "./update-cohort-artifacts.js";
 import {
   beginUpdatePluginCohort,
   recordPluginCohortRetentionMarker,
@@ -70,7 +70,12 @@ function generation(state: OpenClawTestState, version: string) {
     version,
     installPath: packageDir,
   };
-  return { npmRoot, packageDir, record, identity: readPluginCohortArtifactIdentity(packageDir) };
+  return {
+    npmRoot,
+    packageDir,
+    record,
+    identity: readPluginCohortPublishedArtifactIdentity(packageDir),
+  };
 }
 
 async function fixture(state: OpenClawTestState) {
@@ -741,3 +746,65 @@ it.each(["replacement-active", "database-restored", "later-payload"] as const)(
     );
   },
 );
+
+it("keeps a damaged npm payload without package.json as its rollback baseline", async () => {
+  await withOpenClawTestState(
+    { label: "cohort-damaged-payload", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+    async (state) => {
+      await state.writeConfig(config);
+      const original = generation(state, "1.0.0");
+      await seedInstalledPluginIndex({ fixture: original.record }, { config, env: state.env });
+      fs.rmSync(path.join(original.packageDir, "package.json"));
+      const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
+      const pair = await beginUpdatePluginCohort({
+        runId,
+        installKey: state.root,
+        env: state.env,
+        fence,
+        from: {
+          root: state.root,
+          nodePath: process.execPath,
+          version: "2026.10.9",
+          buildId: "old",
+        },
+        to: { root: state.root, nodePath: process.execPath, version: "2026.10.10", buildId: "new" },
+      });
+      const damaged = { ...original.identity, manifestSha256: null };
+      expect(pair.cohort.priorArtifacts).toMatchObject([
+        { pluginId: "fixture", packageDir: original.packageDir, identity: damaged },
+      ]);
+      const repaired = generation(state, "2.0.0");
+      recoveryStore.writePluginCohortRecovery(
+        pair,
+        {
+          ...pair.cohort,
+          artifacts: [
+            {
+              pluginId: "fixture",
+              packageName,
+              targetNpmRoot: repaired.npmRoot,
+              targetPackageDir: repaired.packageDir,
+              stagedIdentity: repaired.identity,
+              identity: repaired.identity,
+            },
+          ],
+          publications: [
+            {
+              kind: "records",
+              records: [{ pluginId: "fixture", before: original.record, after: repaired.record }],
+            },
+          ],
+        },
+        fence,
+        { env: state.env },
+      );
+      await seedInstalledPluginIndex({ fixture: repaired.record }, { config, env: state.env });
+      await settleUpdatePluginCohort({ runId, env: state.env, fence, action: "rollback" });
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual({ fixture: original.record });
+      expect(fs.existsSync(path.join(original.packageDir, "package.json"))).toBe(false);
+      expect(recoveryStore.loadPluginCohortRecovery(runId, { env: state.env })).toBeUndefined();
+    },
+  );
+});

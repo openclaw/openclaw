@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { vitestWorkerRuntimeAssets } from "../../../scripts/lib/package-root-modules.mts";
 import { resolveSqliteSchemaAssetInputs } from "../../../scripts/lib/sqlite-schema-assets.mts";
-import { vitestWorkerRuntimeAssets } from "../../../scripts/lib/vitest-worker-declarations.mts";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -175,6 +175,7 @@ async function prepareCandidateDoctorRuntime(): Promise<void> {
     [
       runtimeProcessEntrypoints.updateMigratedFinalize,
       runtimeProcessEntrypoints.workerNativeLifecycle,
+      runtimeProcessEntrypoints.spawnBroker,
       runtimeProcessEntrypoints.sqliteWriterAdmission,
       runtimeProcessEntrypoints.sqliteStore,
       runtimeProcessEntrypoints.sqliteIntegrity,
@@ -360,7 +361,16 @@ export function expectDoctorDiagnostics(): void {
 export function expectSuccess(lane: Lane, doctorExpected = true): void {
   expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   const result = reportedResult(lane);
-  expect(result, JSON.stringify(result, null, 2)).toMatchObject(
+  const phases = vi
+    .mocked(defaultRuntime.error)
+    .mock.calls.flat()
+    .filter((value): value is string => typeof value === "string")
+    .flatMap((value) => value.split("\n"))
+    .filter((line) => line.startsWith("doctor fixture phase: "))
+    .slice(-32)
+    .join("\n")
+    .slice(-4096);
+  expect(result, `${JSON.stringify(result, null, 2)}\n${phases}`).toMatchObject(
     lane === "resume"
       ? { status: "ok" }
       : { status: "ok", postUpdate: { plugins: { status: "ok" } } },

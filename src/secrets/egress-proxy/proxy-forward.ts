@@ -1,4 +1,5 @@
 import {
+  createServer as createHttpServer,
   request as httpRequest,
   ServerResponse,
   type ClientRequest,
@@ -106,6 +107,12 @@ export function handleUpgradeRequest(
     return;
   }
   handler(request, response, { stream, stopBuffering });
+}
+
+export function createRequestServer(handleRequest: RequestHandler) {
+  return createHttpServer(handleRequest).on("upgrade", (request, _socket, head) =>
+    handleUpgradeRequest(handleRequest, request, head),
+  );
 }
 
 /** Forwards one authorized request, retaining ownership across a WebSocket upgrade. */

@@ -650,6 +650,12 @@ button.sidebar-image-view__image {
 
 .sidebar-file-view__edit-actions .btn:last-child:not(:disabled):hover {
   background: var(--primary-hover);
+  color: var(--primary-foreground);
+}
+
+.sidebar-file-view__edit-actions .btn:last-child:not(:disabled):active {
+  background: var(--primary-active);
+  color: var(--primary-foreground);
 }
 
 .sidebar-file-view__compact-action {
@@ -682,7 +688,7 @@ button.sidebar-image-view__image {
   height: 28px;
   border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg-elevated) 50%, transparent);
+  background: var(--bg-elevated);
   box-shadow: none;
 }
 

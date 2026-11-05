@@ -23,7 +23,7 @@ import {
   createPluginToolFactoryResolver,
 } from "../../src/plugins/tool-factory-runtime.js";
 import { AsyncWorkScope } from "../../src/shared/async-work-scope.js";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { summarizeDurationDistribution } from "../lib/perf-duration-distribution.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -48,14 +48,9 @@ const startAt = integer("start-at", 0);
 const cpuStartAt = integer("cpu-start-at", 0);
 assert(global.gc, "Run with --expose-gc");
 const profilePath = path.resolve(`${values.output ?? "plugin-gateway-scope"}.heapprofile`);
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
-marker("identify-start");
+writeGatewayGcTraceMarker("identify-start", profilePath);
 global.gc();
-marker("identify-stop");
+writeGatewayGcTraceMarker("identify-stop", profilePath);
 
 const builder = createPluginRegistry({
   runtime: createUnavailableRuntime("setup-only", "scope-benchmark"),
@@ -242,13 +237,13 @@ try {
   const before = process.memoryUsage();
   const cpu = process.cpuUsage();
   loop.reset();
-  marker("diagnostics-start");
+  writeGatewayGcTraceMarker("diagnostics-start", profilePath);
   measuredStart = performance.now();
   await run(turns, latencies);
   measuredEnd = performance.now();
   const usedCpu = process.cpuUsage(cpu);
   const after = process.memoryUsage();
-  marker("diagnostics-stop");
+  writeGatewayGcTraceMarker("diagnostics-stop", profilePath);
   loop.disable();
   await nextTurn();
   recordGcCollections(observer.takeRecords(), collections, measuredStart, measuredEnd);

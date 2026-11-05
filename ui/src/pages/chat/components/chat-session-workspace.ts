@@ -126,7 +126,7 @@ function openFile(
         ),
       ),
     (result) => result.content,
-    `Failed to load ${path}`,
+    `Couldn’t load ${path}. Check that the file still exists.`,
     {
       line: opts.line,
       disposition: opts.disposition,
@@ -580,7 +580,7 @@ export function createSessionWorkspaceProps(
             runtime.loadSessionWorkspaceArtifactContent(state, workspace, artifactId, signal),
           ),
         (result) => result.content,
-        `Failed to load artifact ${artifactId}`,
+        `Couldn’t load artifact ${artifactId}. Check that the artifact is still available.`,
         {
           disposition: artifactDisposition,
           intent: openIntent,

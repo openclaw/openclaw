@@ -46,7 +46,7 @@ GitHub CLI identity is native by default. When `tools.github` is omitted, local 
 
 Gateway GitHub reads and Publish PR account options reuse successful `gh auth token --hostname github.com` reads for up to 60 seconds, matching the credential-verification cache. Host `gh auth login`, `logout`, or `switch` changes can therefore take up to 60 seconds to appear on those read surfaces. Concurrent reads share one native lookup. OAuth shutdown, profile replacement or rotation, and disconnect clear the native-token cache. Environment tokens, managed profile credentials, caller permissions, and session access are still checked live; publication obtains its own live native credential. Failed token reads and anonymous-access absence proofs are not cached.
 
-Use **Settings → Profile → GitHub connections** to see **My GitHub** and **System GitHub** together. Administrators explicitly choose **For the system** to configure this shared execution identity; the general connection flow defaults to **For me** for identified users. Per-agent overrides remain an advanced administrative setting under **Agents → Tools**. A personal connection is separate from `tools.github`: it supports explicitly selected Gateway-brokered publication and does not change agent shell credentials, shared defaults, or verified sign-in identity. See [GitHub connections](/concepts/user-model#github-connections).
+Use **Settings → Profile → GitHub accounts** to see **My GitHub** and **System GitHub** together. Administrators explicitly choose **For the system** to configure this shared execution identity; the general connection flow defaults to **For me** for identified users. Per-agent overrides remain an advanced administrative setting under **Agents → Tools**. A personal connection is separate from `tools.github`: it supports explicitly selected Gateway-brokered publication and does not change agent shell credentials, shared defaults, or verified sign-in identity. See [GitHub connections](/concepts/user-model#github-connections).
 
 OpenClaw displays a one-time user code with a **Copy code** button beside it; clicking the code selects it in full for manual copying. Open the fixed `https://github.com/login/device` link, paste the code, and approve `repo`, `workflow`, `read:org`, and `gist`. The latter two are part of GitHub CLI's minimum classic-token contract. The Gateway owns the device code, token exchange, account verification, private managed `gh` profile, and rotating refresh token. Setup and refresh do not return credentials in browser responses or place them in config, logs, command arguments, transcripts, or the model runtime environment. OpenClaw-owned local exec receives an access token only through its private process-launch environment, as described below.
 
@@ -132,7 +132,7 @@ it checks the selected publisher at the publication boundary. A bot-authored PR
 from another conversation is not eligible for own-PR import just because the
 publisher created it; guests continue in its original publication conversation.
 
-For an open PR originally published from this conversation, `refresh_base`
+For an open PR prepared or originally published from this conversation, `refresh_base`
 selects its current GitHub destination before integrating the base into the
 managed workspace. This includes a base branch changed outside the conversation.
 Ordinary publication then continues the same PR and head branch. The Gateway
@@ -241,6 +241,16 @@ If recovery returns `headChanged: true`, it completed that original accepted
 head while GitHub has since advanced; repeat preparation to integrate the newer
 head. Preparation makes no GitHub writes
 and is not a publication receipt.
+
+After preparation, `refresh_base` integrates the PR's target branch into the saved
+source. A fresh refresh reads the current target branch ref, even when GitHub's PR
+details still name an older base commit. It preserves the accepted PR head,
+original branch, and requester permissions.
+Finish pending `prepare_pr` conflicts before refreshing the base; finish pending
+`refresh_base` conflicts before preparing another head. A retry completes its
+already accepted base first, even if the target advances or changes; refresh again
+to integrate the newer target. Repeating preparation after base integration retains
+the integrated history in the review comparison.
 
 After preparation, ordinary shared publication appends changes to the original
 PR's head repository and branch. It preserves the PR number, author, existing
