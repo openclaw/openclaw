@@ -154,9 +154,26 @@ export class TranscriptInitialRange {
   }
 
   private normalIndexes(range: Range): number[] {
-    // Estimated rows can shrink as they enter, especially collapsed work.
-    // Keep the boundary neighbours even when a fast gesture skips viewports.
-    return this.normalRange(this.viewportOnly ? { ...range, overscan: 0 } : range, this.rowIndexes);
+    if (this.viewportOnly) {
+      return this.normalRange({ ...range, overscan: 0 }, this.rowIndexes);
+    }
+    if (
+      this.isReaderMoving() &&
+      this.scrollSample.distance >= (this.virtualizer().scrollRect?.height ?? 600)
+    ) {
+      // The first row starts at its cached offset. Shorter arriving rows leave
+      // space after the window, so retain following overscan without mounting
+      // the already-skipped preceding neighbour during a large jump.
+      return this.normalRange(
+        {
+          ...range,
+          endIndex: Math.min(range.count - 1, range.endIndex + range.overscan),
+          overscan: 0,
+        },
+        this.rowIndexes,
+      );
+    }
+    return this.normalRange(range, this.rowIndexes);
   }
 
   private endIndexes(): number[] {
