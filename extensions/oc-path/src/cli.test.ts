@@ -941,38 +941,34 @@ describe("openclaw path CLI", () => {
       );
     });
 
-    it("refuses sentinel-bearing Markdown insertion during a CLI dry run", async () => {
-      const { workspaceDir, filePath } = fileFixture("AGENTS.md");
-      const before = "---\nname: x\n---\n";
-      writeFileSync(filePath, before, "utf-8");
-      const rt = createTestRuntime();
-
-      await pathSetCommand(
-        "oc://AGENTS.md/[frontmatter]/+note",
-        "before__OPENCLAW_REDACTED__after",
-        { cwd: workspaceDir, json: true, dryRun: true },
-        rt,
-      );
-
-      expect(rt.exitCode).toBe(1);
-      expect(stdoutText(rt)).toContain("OC_EMIT_SENTINEL");
-      expect(stdoutText(rt)).toContain("oc://AGENTS.md/[frontmatter]/+note");
-      expect(readFileSync(filePath, "utf-8")).toBe(before);
-    });
-
     it.each([
+      [
+        "AGENTS.md",
+        "---\nname: x\n---\n",
+        "[frontmatter]/+note",
+        "before__OPENCLAW_REDACTED__after",
+      ],
       ["gateway.jsonc", '{ "token": "x" }', "token", "__OPENCLAW_REDACTED__"],
       ["data.jsonc", '{"items":[]}', "items/+", '{"__OPENCLAW_REDACTED__":1}'],
+      ["data.jsonc", '{"items":{}}', "items/+__OPENCLAW_REDACTED__", "1"],
+      ["data.jsonc", '{"items":{}}', "items/+pre__OPENCLAW_REDACTED__post", "1"],
       ["data.jsonl", '{"old":1}\n', "+", '{"__OPENCLAW_REDACTED__":1}'],
       ["data.yaml", "items: []\n", "items/+", '{"__OPENCLAW_REDACTED__":1}'],
     ])("CLI-S03 refuses sentinel content for %s at %s", async (file, before, suffix, value) => {
       const { workspaceDir, filePath } = fileFixture(file);
       writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
-      await pathSetCommand(`oc://${file}/${suffix}`, value, { cwd: workspaceDir, json: true }, rt);
+      await pathSetCommand(
+        `oc://${file}/${suffix}`,
+        value,
+        { cwd: workspaceDir, json: true, dryRun: file === "AGENTS.md" },
+        rt,
+      );
       expect(rt.exitCode).toBe(1);
       expect(stdoutText(rt)).toContain("OC_EMIT_SENTINEL");
-      expect(stdoutText(rt)).toContain(file === "data.jsonl" ? "oc:///L2" : file);
+      expect(stdoutText(rt)).toContain(
+        file === "data.jsonl" ? "oc:///L2" : file === "AGENTS.md" ? `oc://${file}/${suffix}` : file,
+      );
       expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 
