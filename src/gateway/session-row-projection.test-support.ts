@@ -366,6 +366,7 @@ export function createSessionRowProjectionFixture(params: {
         now,
         subagentRuns: options?.subagentRuns ?? rowContext.subagentRuns.atTime(now),
         activeModel: record.fallbackModel,
+        preparedRunState: options?.preparedRunState,
         excludedChildKeys: options?.excludedChildKeys,
         childActivity:
           options?.childActivity ??

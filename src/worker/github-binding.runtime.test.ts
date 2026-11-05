@@ -228,19 +228,28 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("GitHub checkout binding failed"));
   });
 
-  it("disables the binding before any token use when a Windows profile is not owner-only", async () => {
+  it("removes the written profile when Windows permissions reject the binding", async () => {
     const remoteHead = await publishEarlierTurn();
     vi.spyOn(os, "platform").mockReturnValue("win32");
-    inspectPathPermissions.mockResolvedValueOnce({
-      ok: true,
-      source: "windows-acl",
-      ownerTrusted: false,
-      groupReadable: true,
-      worldReadable: false,
-      groupWritable: false,
-      worldWritable: false,
-    } as never);
+    let rejectedProfile = "";
+    inspectPathPermissions.mockImplementationOnce(async (profileDir: string) => {
+      rejectedProfile = profileDir;
+      expect(await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8")).toContain(
+        binding.token,
+      );
+      return {
+        ok: true,
+        source: "windows-acl",
+        ownerTrusted: false,
+        groupReadable: true,
+        worldReadable: false,
+        groupWritable: false,
+        worldWritable: false,
+      };
+    });
     await expect(prepare()).resolves.toBeUndefined();
+    expect(rejectedProfile).not.toBe("");
+    await expect(fs.access(rejectedProfile)).rejects.toMatchObject({ code: "ENOENT" });
 
     expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
     expect(remoteHead).not.toBe(initialHead);
