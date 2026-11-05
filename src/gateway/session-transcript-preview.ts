@@ -101,15 +101,8 @@ function readSessionModelPreviewItems(
   maxChars: number,
 ): Promise<SessionPreviewItem[]> {
   return readBoundedSessionPreviewItemsAsync(maxItems, async ({ maxEvents, maxBytes }) => {
-    let truncated = false;
     const manager = await withSessionTranscriptHydrationCaller("preview", () =>
-      SessionManager.openBoundedAsync(target, {
-        maxEvents,
-        maxBytes,
-        onTruncated: () => {
-          truncated = true;
-        },
-      }),
+      SessionManager.openBoundedAsync(target, { maxEvents, maxBytes }),
     );
     const selection = readSessionManagerBoundedSelection(manager);
     return {
