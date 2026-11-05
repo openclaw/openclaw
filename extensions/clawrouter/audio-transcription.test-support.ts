@@ -22,6 +22,7 @@ export async function withClawRouterAudioFixture(
     cfg: OpenClawConfig;
     filePath: string;
     requests: Capture[];
+    arrivals: string[];
     audio: Buffer;
     home: string;
     catalog: AudioCatalog;
@@ -51,6 +52,7 @@ export async function withClawRouterAudioFixture(
       const filePath = home + "/meeting (1).wav";
       await fs.writeFile(filePath, audio);
       const requests: Capture[] = [];
+      const arrivals: string[] = [];
       const catalogRequests: string[] = [];
       const catalog: AudioCatalog = {
         provider: "openai",
@@ -118,6 +120,7 @@ export async function withClawRouterAudioFixture(
               );
               return;
             }
+            arrivals.push(`${req.method} ${req.url}`);
             const body = await consumeBuffer(req);
             const form = await new Response(body, {
               headers: { "content-type": req.headers["content-type"] ?? "" },
@@ -153,7 +156,7 @@ export async function withClawRouterAudioFixture(
               },
             },
           };
-          await run({ cfg, filePath, requests, audio, home, catalog, catalogRequests });
+          await run({ cfg, filePath, requests, arrivals, audio, home, catalog, catalogRequests });
         },
       );
     },
