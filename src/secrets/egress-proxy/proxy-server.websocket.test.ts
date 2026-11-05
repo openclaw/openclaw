@@ -114,7 +114,7 @@ async function rawUpgrade(
       ? `Proxy-Authorization: Basic ${Buffer.from(`openclaw:${auth}`).toString("base64")}\r\n`
       : "";
   const target = params.forward
-    ? `https://localhost:${port}${params.pathname ?? "/"}`
+    ? new URL(params.pathname ?? "/", `https://localhost:${port}`).href
     : (params.pathname ?? "/");
   socket.write(
     Buffer.concat([
@@ -363,7 +363,7 @@ describe("secret egress WebSocket forwarding", () => {
     proxyEnv = proxy.registerProcess().env;
     const request = await rawUpgrade({
       pathname: "https://other.example/socket",
-      credential: "ordinary-value",
+      forward: true,
     });
     await request.closed;
     expect(Buffer.concat(request.received).toString()).toMatch(/^HTTP\/1\.1 403 /);

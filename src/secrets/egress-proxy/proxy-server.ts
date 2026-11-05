@@ -361,10 +361,15 @@ export async function startSecretEgressProxyServer(params: {
   const parseRequestTarget = (
     request: IncomingMessage,
     response: ServerResponse,
-    base?: string,
+    base?: URL,
   ): { target: URL; host: string } | undefined => {
     try {
       const target = new URL(request.url ?? "/", base);
+      // Absolute and network-path targets must not escape a CONNECT origin,
+      // including from a cleartext tunnel into HTTPS secret substitution.
+      if (base && target.origin !== base.origin) {
+        throw new Error("Request target differs from CONNECT origin");
+      }
       return { target, host: normalizeHostname(target.hostname) };
     } catch {
       // URL accepts hostnames our exact-host policy rejects. Both checks must
@@ -459,14 +464,14 @@ export async function startSecretEgressProxyServer(params: {
 
   // Requests inside a CONNECT tunnel carry origin-form URLs: the tunnel target is
   // the destination, never the Host header.
-  const tunnelRequestHandler =
-    (
-      scheme: "http" | "https",
-      target: ConnectTarget,
-      registered: RegisteredProcess,
-    ): RequestHandler =>
-    (request, response, upgrade) => {
-      const parsed = parseRequestTarget(request, response, connectTargetOrigin(scheme, target));
+  const tunnelRequestHandler = (
+    scheme: "http" | "https",
+    target: ConnectTarget,
+    registered: RegisteredProcess,
+  ): RequestHandler => {
+    const origin = new URL(connectTargetOrigin(scheme, target));
+    return (request, response, upgrade) => {
+      const parsed = parseRequestTarget(request, response, origin);
       if (parsed) {
         forwardRequest({
           request,
@@ -478,6 +483,7 @@ export async function startSecretEgressProxyServer(params: {
         });
       }
     };
+  };
 
   const tlsServerFor = (target: ConnectTarget, registered: RegisteredProcess) => {
     const key = `${target.hostname}:${target.port}`;
@@ -637,20 +643,21 @@ export async function startSecretEgressProxyServer(params: {
         if (head.length > 0) {
           clientSocket.unshift(head);
         }
-        // Only the first byte tells cleartext loopback HTTP from TLS.
-        if (
-          isLiteralLoopbackHost(target.hostname) &&
-          !(await startsWithTlsHandshake(clientSocket))
-        ) {
-          if (authorization.isActive() && !clientSocket.destroyed) {
-            createRequestServer(tunnelRequestHandler("http", target, authorization)).emit(
-              "connection",
-              clientSocket,
-            );
-          }
+        const plaintext =
+          isLiteralLoopbackHost(target.hostname) && !(await startsWithTlsHandshake(clientSocket));
+        // Sniffing awaits client bytes; authority can end before either handoff.
+        if (!authorization.isActive() || clientSocket.destroyed) {
+          clientSocket.destroy();
           return;
         }
-        tlsServer.acceptConnection(clientSocket);
+        if (plaintext) {
+          createRequestServer(tunnelRequestHandler("http", target, authorization)).emit(
+            "connection",
+            clientSocket,
+          );
+        } else {
+          tlsServer.acceptConnection(clientSocket);
+        }
       } catch (error) {
         if (!authorization.isActive() || clientSocket.destroyed) {
           return;

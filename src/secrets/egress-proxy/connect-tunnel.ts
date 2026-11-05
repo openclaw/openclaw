@@ -15,11 +15,12 @@ export function isLiteralLoopbackHost(host: string): boolean {
   return host === "localhost" || host === "::1" || (net.isIPv4(host) && host.startsWith("127."));
 }
 
-// fetch tunnels cleartext HTTP through CONNECT, so a tunnel to loopback is TLS
-// only if its first byte is a handshake record. The byte stays queued.
+// Clients such as Node 24 fetch tunnel cleartext HTTP through CONNECT. Identify
+// TLS by its handshake record without consuming the queued bytes.
 export function startsWithTlsHandshake(socket: Duplex): Promise<boolean> {
   return new Promise((resolve) => {
     const settle = () => {
+      clearTimeout(deadline);
       socket.off("readable", settle);
       socket.off("close", settle);
       const chunk: Buffer | null = socket.read();
@@ -28,7 +29,17 @@ export function startsWithTlsHandshake(socket: Duplex): Promise<boolean> {
       }
       resolve(chunk?.[0] === 0x16);
     };
+    // Match the proxy's upstream connection deadline; silent peers must not
+    // retain a process grant's socket indefinitely while choosing a protocol.
+    const deadline = setTimeout(() => {
+      socket.destroy();
+      settle();
+    }, 30_000);
+    deadline.unref();
     socket.once("readable", settle);
     socket.once("close", settle);
+    if (socket.destroyed || socket.readableLength > 0) {
+      settle();
+    }
   });
 }
