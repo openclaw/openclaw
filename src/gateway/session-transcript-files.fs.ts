@@ -1,10 +1,9 @@
 // Resolves, archives, and cleans up transcript files owned by Gateway sessions.
 import fs from "node:fs";
 import path from "node:path";
-import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
+import { readSessionArchivePrefix } from "../config/sessions/archive-compression.js";
 import {
   formatSessionArchiveTimestamp,
   parseSessionArchiveTimestamp,
@@ -19,7 +18,6 @@ import {
 } from "../config/sessions/paths.js";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
@@ -98,16 +96,10 @@ async function resetArchiveHeaderMatchesSessionId(
   sessionId: string,
   archivePath: string,
 ): Promise<boolean> {
-  // Compressed archives must be probed through the materialized JSONL cache:
-  // a raw prefix read of zstd bytes never matches a session header, which
-  // would silently drop every compressed archive from fallback history.
+  // Discovery needs only the header, not a plaintext copy of every candidate.
   try {
-    await using opened = await openLocalFileSafely({
-      filePath: await materializeSessionArchiveForRead(archivePath),
-    });
-    const buffer = Buffer.alloc(64 * 1024);
-    const bytesRead = await readFileWindowFully(opened.handle, buffer, 0);
-    const lines = buffer.toString("utf-8", 0, bytesRead).split(/\r?\n/);
+    const buffer = await readSessionArchivePrefix(archivePath, 64 * 1024);
+    const lines = buffer.toString("utf-8").split(/\r?\n/);
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) {

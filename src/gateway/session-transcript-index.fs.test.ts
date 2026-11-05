@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { zstdCompressSync } from "node:zlib";
 import * as fileReads from "@openclaw/fs-safe/advanced";
 import { afterEach, expect, test, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
@@ -156,16 +157,18 @@ function sourcePage(reader: ArchivedTranscriptReader, cursor?: SessionTranscript
   return reader.readSourcePage({ mode: "page", cursor }, archiveSnapshot);
 }
 
-test("prepares cold source pages incrementally before selecting the final archive branch and reset", async () => {
+test("prepares compressed source pages incrementally before selecting the final archive branch and reset", async () => {
   const rows = Array.from({ length: 260 }, (_, index) =>
     message(`message-${index}`, `prompt ${index}`, index === 0 ? null : `message-${index - 1}`),
   );
-  const file = await fixture([
+  const plainFile = await fixture([
     ...rows,
     { type: "leaf", id: "leaf", parentId: "message-259", targetId: "message-100" },
     { type: "reset", id: "reset", parentId: "message-100", firstKeptEntryId: "message-99" },
     message("after-reset", "new reply", "reset", "assistant"),
   ]);
+  const file = `${plainFile}.zst`;
+  fs.writeFileSync(file, zstdCompressSync(fs.readFileSync(plainFile)));
   const reader = new ArchivedTranscriptReader({ sessionId: "test", exactArchivePath: file });
   const parse = vi.spyOn(recordParser, "parseTranscriptRecord");
   let page = await sourcePage(reader);

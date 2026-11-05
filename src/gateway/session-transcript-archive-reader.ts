@@ -1,13 +1,11 @@
 // Reads transcript artifacts; live store acquisition stays with the caller.
 import fs from "node:fs";
-import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import {
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
+import { openSessionArchiveReader } from "../config/sessions/archive-compression.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
-import { hasErrnoCode } from "../infra/errno.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   resolveHistoryAnchorPageRange,
@@ -95,15 +93,15 @@ async function readRecentSessionSnapshotFromPathAsync(
     return { messages: [], transcriptEvents: [] };
   }
   const { maxBytes, maxLines } = opts;
-  const handle = await fs.promises.open(filePath, "r");
+  const handle = await openSessionArchiveReader(filePath);
   let lines: string[];
   try {
     const stat = await handle.stat();
     assertArchiveTranscriptSource(filePath, stat, index.displaySource, sessionId);
-    const readLen = Math.min(stat.size, maxBytes);
-    const readStart = Math.max(0, stat.size - readLen);
+    const readLen = Math.min(index.byteSize, maxBytes);
+    const readStart = Math.max(0, index.byteSize - readLen);
     const buffer = Buffer.alloc(readLen);
-    const bytesRead = await readFileWindowFully(handle, buffer, readStart);
+    const bytesRead = await handle.read(buffer, readStart);
     const finalStat = await handle.stat();
     assertArchiveTranscriptSource(filePath, finalStat, index.displaySource, sessionId);
     if (bytesRead <= 0) {
@@ -158,7 +156,7 @@ export class ArchivedTranscriptReader {
     if (this.scope.exactArchivePath) {
       const exactPath = this.scope.exactArchivePath;
       if ((await fs.promises.stat(exactPath).catch(() => null))?.isFile()) {
-        return await materializeSessionArchiveForRead(exactPath);
+        return exactPath;
       }
       return null;
     }
@@ -172,14 +170,7 @@ export class ArchivedTranscriptReader {
       if (!(await fs.promises.stat(archivePath).catch(() => null))?.isFile()) {
         continue;
       }
-      try {
-        return await materializeSessionArchiveForRead(archivePath);
-      } catch (error) {
-        if (hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")) {
-          throw error;
-        }
-        continue;
-      }
+      return archivePath;
     }
     return null;
   }
@@ -428,16 +419,10 @@ export class ArchivedTranscriptReader {
           this.scope.agentId,
         );
     for (const archivePath of candidates) {
-      let filePath: string;
-      try {
-        filePath = await materializeSessionArchiveForRead(archivePath);
-      } catch (error) {
-        if (hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")) {
-          throw error;
-        }
-        // Try the next valid retained generation.
+      if (!(await fs.promises.stat(archivePath).catch(() => null))?.isFile()) {
         continue;
       }
+      const filePath = archivePath;
       const index = await readSessionTranscriptIndex(filePath, this.scope.sessionId);
       if (!index) {
         continue;

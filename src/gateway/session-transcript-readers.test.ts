@@ -3,6 +3,7 @@ import { zstdCompressSync } from "node:zlib";
 import { describe, expect, test } from "vitest";
 import { realisticTranscriptText } from "../../test/helpers/session-archive.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { resolveSessionArchiveReadPath } from "../config/sessions/archive-compression.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
@@ -463,6 +464,9 @@ describe("session transcript reader facade", () => {
           maxBytes: 256 * 1024,
         }),
       ).resolves.toMatchObject({ found: true });
+      expect(
+        fs.existsSync(resolveSessionArchiveReadPath(archivePath, fs.statSync(archivePath))),
+      ).toBe(false);
     },
   );
 
