@@ -1,0 +1,2 @@
+18
+# Stable 2026.10.10 upgrade proof distinguishes retired usage cache scope from preserved cache cells.
