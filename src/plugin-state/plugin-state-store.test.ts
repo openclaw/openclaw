@@ -6,13 +6,18 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { ok } from "@openclaw/normalization-core/result";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   clearOpenClawDatabaseQuarantine,
   recordOpenClawDatabaseQuarantine,
 } from "../state/openclaw-quarantine-store.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  openClawStateDatabaseCache,
+} from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { admitStateSchemaFacts } from "../state/openclaw-state-db-schema-version.js";
 import {
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
@@ -799,10 +804,22 @@ describe("plugin-state-store.errors", () => {
           reason: "persisted failure",
         }),
       ).toBe(true);
+      const inspected = openNodeSqliteDatabase(path, { readOnly: true });
       try {
+        // Acquisition can inspect a valid schema before discovering its quarantine.
+        // That refused acquisition must not leave facts usable by the keyed-store cache.
+        admitStateSchemaFacts(inspected, path);
+        expect(() =>
+          openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+            path,
+            testState.env,
+          ),
+        ).toThrow(/is quarantined/);
         for (const read of [
           () => store.lookup("k"),
           () => store.lookupMany(["k"]),
+          () => store.entries(),
+          () => store.count(),
           () => store.register("k", true),
         ]) {
           await rejects(read, {
@@ -811,6 +828,7 @@ describe("plugin-state-store.errors", () => {
           });
         }
       } finally {
+        inspected.close();
         clearOpenClawStateDatabaseOpenFailure(path);
         expect(clearOpenClawDatabaseQuarantine(path, { env: testState.env })).toBe(true);
       }
