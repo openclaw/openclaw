@@ -377,7 +377,8 @@ export async function tryReuseCodexLiveThread(
         kind: "ready",
         binding: {
           ...binding,
-          preparedOpenClawBaseInstructions: options.resolveOpenClawBaseInstructions(binding),
+          preparedOpenClawBaseInstructions:
+            options.resolveRetainedOpenClawBaseInstructions(binding),
           lifecycle: { action: "resumed" },
         },
       };
@@ -704,7 +705,7 @@ export async function tryReuseCodexLiveThread(
         liveThreadConfigFingerprint,
         liveThreadEphemeralPolicy,
         liveThreadOwnership: retainedThread,
-        preparedOpenClawBaseInstructions: options.resolveOpenClawBaseInstructions(binding),
+        preparedOpenClawBaseInstructions: options.resolveRetainedOpenClawBaseInstructions(binding),
         ...(!incognito && retainedThread.serviceTier && resumeParams.serviceTier === undefined
           ? { clearInheritedServiceTier: true }
           : {}),

@@ -366,6 +366,40 @@ describe("Codex native configuration lifecycle", () => {
     },
   );
 
+  // Codex keeps the rollout's creation base when a resume sends none, so reports must too.
+  it("reports the retained creation base after a later systemPrompt replacement", async () => {
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+    const native = threadStartResult("retained-base-thread", { cwd: workspaceDir });
+    const fixture = await createAgentLifecycleHarness({
+      respond: async (method) =>
+        method === "thread/start" || method === "thread/resume" ? native : readNativeConfig(method),
+    });
+    const created = await startOrResumeThread(lifecycleParams(fixture.client));
+    fixture.seed(native, { loaded: false, subscribed: false });
+    const resumed = await startOrResumeThread({
+      ...lifecycleParams(fixture.client),
+      developerInstructions: "Replacement policy.",
+      systemPromptReplaced: true,
+    });
+
+    const [start, resume] = fixture.writes
+      .map((line): unknown => JSON.parse(line))
+      .filter(isJsonObject)
+      .filter((frame) => frame.method === "thread/start" || frame.method === "thread/resume");
+    expect([start?.method, resume?.method]).toEqual(["thread/start", "thread/resume"]);
+    const creationBase = isJsonObject(start?.params) ? start.params.baseInstructions : undefined;
+    expect(creationBase).toEqual(
+      expect.stringContaining("You are a personal assistant running inside OpenClaw."),
+    );
+    expect(created).toMatchObject({
+      openClawCreationBaseInstructions: creationBase,
+      preparedOpenClawBaseInstructions: creationBase,
+    });
+    expect(isJsonObject(resume?.params) && "baseInstructions" in resume.params).toBe(false);
+    expect(resume?.params).toMatchObject({ developerInstructions: "Replacement policy." });
+    expect(resumed.preparedOpenClawBaseInstructions).toBe(creationBase);
+  });
+
   it("refuses warm incognito reuse when OpenClaw's base changes beside an authored native base", async () => {
     params.sessionKey = "agent:main:dashboard:incognito-operator-base";
     registerCodexTestSessionIdentity(sessionFile, "session-1", params.sessionKey);

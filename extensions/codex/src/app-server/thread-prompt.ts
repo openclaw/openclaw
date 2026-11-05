@@ -171,6 +171,23 @@ export function resolveCodexOpenClawBaseInstructions(
 }
 
 /**
+ * OpenClaw's base a resumed thread holds. A resume without a base keeps the rollout's
+ * creation base unless an authored base overrides it (codex-rs/core/src/session/mod.rs, base
+ * priority order), so after a systemPrompt replacement the saved creation text stays active
+ * until the thread rotates.
+ */
+export function resolveCodexRetainedOpenClawBaseInstructions(
+  params: CodexThreadPromptContext,
+  options: CodexThreadConfigurationOptions,
+  creationBaseInstructions: string | undefined,
+): string | undefined {
+  if (!options.systemPromptReplaced) {
+    return resolveCodexOpenClawBaseInstructions(params, options);
+  }
+  return hasAuthoredCodexBaseInstructions(options) ? undefined : creationBaseInstructions;
+}
+
+/**
  * A request base outranks `model_instructions_file` and `instructions`
  * (codex-rs/core/src/config/mod.rs), so with either authored OpenClaw omits the base and
  * carries its policy ahead of the developer instructions. Start and resume place it alike,

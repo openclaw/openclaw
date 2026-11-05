@@ -252,6 +252,15 @@ export async function materializePendingSupervisionBranch(
       nativeModelProvider,
     };
     const startParams = await buildThreadStartParams(nativeAttempt, nativeStartOptions);
+    // Rendered from the probed native model, which the pre-startup estimate could not know.
+    const openClawBaseInstructions = resolveCodexOpenClawBaseInstructions(
+      nativeAttempt,
+      nativeStartOptions,
+    );
+    const openClawCreationBaseInstructions =
+      startParams.baseInstructions === openClawBaseInstructions
+        ? openClawBaseInstructions
+        : undefined;
     assertExactSupervisionModelSelection(startParams, {
       model: nativeModel,
       modelProvider: nativeModelProvider,
@@ -335,6 +344,7 @@ export async function materializePendingSupervisionBranch(
             model: nativeModel,
             modelProvider: bindingModelProvider,
             historyCoveredThrough,
+            openClawCreationBaseInstructions,
           },
         },
         params.throwIfAborted,
@@ -398,11 +408,8 @@ export async function materializePendingSupervisionBranch(
       model: nativeModel,
       modelProvider: bindingModelProvider,
       historyCoveredThrough,
-      // Rendered from the probed native model, which the pre-startup estimate could not know.
-      preparedOpenClawBaseInstructions: resolveCodexOpenClawBaseInstructions(
-        nativeAttempt,
-        nativeStartOptions,
-      ),
+      openClawCreationBaseInstructions,
+      preparedOpenClawBaseInstructions: openClawBaseInstructions,
       lifecycle: { action: "forked" },
     };
   } catch (error) {

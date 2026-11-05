@@ -367,7 +367,8 @@ export async function resumeExistingCodexThread(
         },
         params,
       ),
-      preparedOpenClawBaseInstructions: context.resolveOpenClawBaseInstructions(resumeBinding),
+      preparedOpenClawBaseInstructions:
+        context.resolveRetainedOpenClawBaseInstructions(resumeBinding),
       lifecycle: {
         action: "resumed",
         ...(activeTurnIds.length ? { activeTurnIds } : {}),
@@ -603,6 +604,8 @@ export async function startFreshCodexThread(
     startParams,
     { model: response.model, modelProvider: bindingModelProvider ?? null },
   );
+  // An authored native base moves OpenClaw's base into the developer carrier.
+  const baseInstructions = context.resolveOpenClawBaseInstructions();
   const startedBinding: CodexAppServerThreadBinding = {
     threadId: response.thread.id,
     ...(clientId ? { clientId } : {}),
@@ -631,6 +634,8 @@ export async function startFreshCodexThread(
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
+    openClawCreationBaseInstructions:
+      startParams.baseInstructions === baseInstructions ? baseInstructions : undefined,
   };
   if (!preserveExistingBinding) {
     const nextBinding: CodexAppServerThreadBinding = {
@@ -685,8 +690,6 @@ export async function startFreshCodexThread(
     response.thread.id,
     rotatedContextEngineBinding ? "rotated" : "started",
   );
-  // An authored native base moves OpenClaw's base into the developer carrier.
-  const baseInstructions = context.resolveOpenClawBaseInstructions();
   return {
     ...startedBinding,
     // Stored native-auth bindings omit redundant provider attribution; this

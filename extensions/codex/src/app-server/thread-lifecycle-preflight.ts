@@ -70,7 +70,10 @@ import type {
 } from "./thread-lifecycle-types.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
 import { assertAdoptedCodexThreadResumeAllowed } from "./thread-policy.js";
-import { resolveCodexOpenClawBaseInstructions } from "./thread-prompt.js";
+import {
+  resolveCodexOpenClawBaseInstructions,
+  resolveCodexRetainedOpenClawBaseInstructions,
+} from "./thread-prompt.js";
 import {
   assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   buildCodexRingZeroThreadConfigPatch,
@@ -299,6 +302,13 @@ export async function prepareCodexThreadRequestContext(
         binding
           ? resumeOptions(binding)
           : { ...params, hostSystemAgentActive: options.preflight.hostSystemAgentActive },
+      ),
+    // Reports for a resumed thread count the base it holds, including a retained creation base.
+    resolveRetainedOpenClawBaseInstructions: (binding: CodexAppServerThreadBinding) =>
+      resolveCodexRetainedOpenClawBaseInstructions(
+        params.params,
+        resumeOptions(binding),
+        binding.openClawCreationBaseInstructions,
       ),
     throwIfAborted: options.throwIfAborted,
   };

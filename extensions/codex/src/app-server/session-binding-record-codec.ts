@@ -174,6 +174,9 @@ const threadBindingSchema = z
     ringZeroClientInstanceId: optionalStringSchema,
     /** Durable fact preventing a later unrestricted turn from widening this thread. */
     nativeToolPolicyRestricted: z.literal(true).optional().catch(undefined),
+    // OpenClaw base the creation request pinned. Codex keeps a rollout's creation base when
+    // a resume sends none, so reports count this text after a systemPrompt replacement.
+    openClawCreationBaseInstructions: optionalStringSchema,
     // Optional creation-policy attestation; legacy bindings remain readable.
     restrictedThreadConfigFingerprint: optionalNonBlankStringSchema,
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
