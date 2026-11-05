@@ -118,7 +118,7 @@ it.each([
             },
       );
       release.resolve();
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(500);
       expect(attempts).toBe(2);
       if (stillClosed) {
         expect(delivered).not.toHaveBeenCalled();
@@ -163,7 +163,7 @@ it("parks queued input when database admission closes until a fresh drain is req
     await withAgentDatabaseCloseFence(target, async () => {
       enqueueFollowupRun(key, queued, defaults);
       scheduleFollowupDrain(key, runFollowup);
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(250);
 
       expect(attempts).toBe(1);
       expect(queuedState()?.items).toEqual([queued]);

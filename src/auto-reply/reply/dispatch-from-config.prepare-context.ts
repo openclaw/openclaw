@@ -373,13 +373,41 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     reclaimPendingInput && recorder?.withPendingInputCurrent
       ? await recorder.withPendingInputCurrent(claimInput)
       : claimInput();
+  const lifecycle = params.replyOptions?.turnAdoptionLifecycle;
+  // Recovery can arrive before the retired source finishes cleanup.
+  if (inboundDedupeClaim.status === "inflight" && lifecycle?.admission === "exclusive") {
+    throw new Error("Inbound message is still owned by a pending dispatch");
+  }
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
     return skipDuplicate();
   }
-  const commitInboundDedupeIfClaimed = () => inboundDedupeClaim.commit?.();
+  const commitInboundDedupeIfClaimed = () => {
+    const admission = state.replyOperationRunState.admission;
+    // Queued admission is pending; its source still owns the input receipt.
+    if (
+      lifecycle?.admission === "exclusive" &&
+      admission?.status === "accepted" &&
+      admission.mode === "followup" &&
+      !state.turnAdoptionState?.adopted &&
+      !state.inboundDedupeReplayUnsafe
+    ) {
+      return;
+    }
+    inboundDedupeClaim.commit?.();
+  };
   const releaseInboundDedupeIfClaimed = () => inboundDedupeClaim.release?.();
-  const lifecycle = params.replyOptions?.turnAdoptionLifecycle;
   if (lifecycle && inboundDedupeClaim.status === "claimed") {
+    const onAdopted = lifecycle.onAdopted;
+    lifecycle.onAdopted = async () => {
+      await onAdopted();
+      inboundDedupeClaim.commit();
+    };
+    const onSettled = lifecycle.onSettled;
+    lifecycle.onSettled = () => {
+      // Abandonment released its exact owner; only consumption can still commit.
+      inboundDedupeClaim.commit();
+      return onSettled?.();
+    };
     const onAbandoned = lifecycle.onAbandoned;
     lifecycle.onAbandoned = () => {
       // Release before ingress retries, including abandonment before commit.

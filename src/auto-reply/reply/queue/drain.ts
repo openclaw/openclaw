@@ -297,6 +297,7 @@ async function executeClaim(
         const signal = AbortSignal.any([
           claim.abortController.signal,
           generation.signal,
+          getGatewayRestartDrainSignal(),
           ...(cancellation.signal ? [cancellation.signal] : []),
         ]);
         try {
@@ -329,6 +330,12 @@ async function executeClaim(
     // Generic throws/returns and the operation's broader preparation marker never
     // grant or revoke replayability; the producer-local receipt is authoritative.
     const preparationRefused = claim.retryBeforeExecution === true;
+    if (preparationRefused && !pluginUnavailable) {
+      // Every retry yields so failed preparation cannot starve reload or cancellation.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 250).unref?.();
+      });
+    }
     // An unavailable owner without a replacement cannot recover in this drain.
     // Preserve the preparation refusal so its source records abandonment.
     const retrySources =
