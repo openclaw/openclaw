@@ -3,6 +3,10 @@ title: Matrix restart replay dedupe
 scenario:
   id: matrix-restart-replay-dedupe
   surface: channels
+  gatewayConfigPatch:
+    logging:
+      level: debug
+      consoleLevel: debug
   coverage:
     primary:
       - channels.resumed-final-reply
