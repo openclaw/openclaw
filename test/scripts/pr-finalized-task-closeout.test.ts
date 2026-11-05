@@ -21,6 +21,7 @@ import { createCommandTest, type CommandFixture } from "../helpers/command-fixtu
 import {
   copyPrRoutingWrapperSources,
   createIndependentPrFixtureEnv,
+  linkPrWrapperDependencies,
 } from "./pr-wrapper.test-support.js";
 
 const owner = "11111111-1111-4111-8111-111111111111";
@@ -88,7 +89,7 @@ async function fixture(command: CommandFixture) {
   const landed = git("rev-parse", "HEAD");
   git("remote", "add", "origin", "https://github.com/fixture/repo.git");
   git("update-ref", "refs/remotes/origin/main", landed);
-  symlinkSync(realpathSync("node_modules"), join(repo, "node_modules"));
+  linkPrWrapperDependencies(repo);
   const template = join(repo, ".worktrees", ".templates", "unrelated");
   git("worktree", "add", "-q", "--detach", template, base);
   const shared = join(root, "shared-dependencies");
@@ -402,6 +403,21 @@ describePosix("scripts/pr finalized-task closeout", () => {
     f.preserved();
   });
 
+  it("preserves an installation shared through a package link in another checkout", async ({
+    f,
+  }) => {
+    const scope = join(f.template, "node_modules", "@fixture");
+    mkdirSync(scope, { recursive: true });
+    const consumer = join(scope, "package");
+    symlinkSync(f.artifacts[2]!, consumer);
+    const result = await f.run();
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toMatch(/shared dependencies/iu);
+    expect(readFileSync(join(consumer, "proof.txt"), "utf8")).toBe("task-owned proof\n");
+    expect(existsSync(f.worktree)).toBe(true);
+    f.preserved();
+  });
+
   for (const kind of ["directory", "symlink"] as const) {
     it(`preserves a selected ${kind} inside another checkout's shared dependencies`, async ({
       f,
@@ -419,6 +435,25 @@ describePosix("scripts/pr finalized-task closeout", () => {
       expect(result.output).toContain(f.template);
       expect(readFileSync(join(packages, "keep"), "utf8")).toBe("shared package bytes\n");
       expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      f.preserved();
+    });
+  }
+
+  for (const kind of ["directory", "symlink"] as const) {
+    it(`preserves a selected ${kind} inside another registered checkout`, async ({ f }) => {
+      const checkout = join(f.repo, ".artifacts", "other-checkout");
+      f.git("worktree", "add", "-q", "--detach", checkout, f.head);
+      const source = join(checkout, "scripts");
+      const wrapper = readFileSync(join(source, "pr"), "utf8");
+      const link = join(source, "task-link");
+      symlinkSync(f.artifacts[2]!, link);
+      const result = await f.runArtifacts([kind === "directory" ? source : link]);
+      expect(result.status, result.output).not.toBe(0);
+      expect(result.output).toMatch(/registered worktree|native owner/iu);
+      expect(result.output).toContain(checkout);
+      expect(readFileSync(join(source, "pr"), "utf8")).toBe(wrapper);
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(f.git("-C", checkout, "rev-parse", "HEAD")).toBe(f.head);
       f.preserved();
     });
   }

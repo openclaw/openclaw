@@ -81,6 +81,36 @@ function requireNoCredentialStores(directory) {
   }
 }
 
+function* dependencyReferences(directory) {
+  const root = physical(directory);
+  yield root;
+  const pending = [root];
+  if (stat(directory).isSymbolicLink()) {
+    yield path.resolve(path.dirname(directory), fs.readlinkSync(directory));
+  }
+  while (pending.length) {
+    const parent = pending.pop();
+    for (const entry of fs.readdirSync(parent, { withFileTypes: true })) {
+      const child = path.join(parent, entry.name);
+      if (entry.isSymbolicLink()) {
+        // Inspect installed package links, including scopes and nested stores,
+        // without recursively following targets outside this installation.
+        yield path.resolve(parent, fs.readlinkSync(child));
+        try {
+          yield physical(child);
+        } catch (error) {
+          // Broken package links still retain their literal target reference.
+          if (error.code !== "ENOENT") {
+            throw error;
+          }
+        }
+      } else if (entry.isDirectory()) {
+        pending.push(child);
+      }
+    }
+  }
+}
+
 function inventory(plan) {
   const { root, worktree, artifacts } = plan;
   if (worktree) {
@@ -171,25 +201,30 @@ function inventory(plan) {
     if (checkout === worktree || !stat(checkout)) {
       continue;
     }
+    const registered = physical(checkout);
     if (
       artifacts.some(
         (resource) =>
-          !stat(resource.path)?.isSymbolicLink() && within(resource.path, physical(checkout)),
+          (registered !== root && within(registered, resource.path)) ||
+          (!stat(resource.path)?.isSymbolicLink() && within(resource.path, registered)),
       )
     ) {
-      throw new Error(`Artifact contains a registered worktree; use its native owner: ${checkout}`);
+      throw new Error(`Artifact overlaps a registered worktree; use its native owner: ${checkout}`);
     }
     const dependencies = path.join(checkout, "node_modules");
-    const shared = stat(dependencies) && physical(dependencies);
-    if (
-      shared &&
-      resources.some(
-        (resource) =>
-          within(shared, resource.path) ||
-          (!stat(resource.path)?.isSymbolicLink() && within(resource.path, shared)),
-      )
-    ) {
-      throw new Error(`Shared dependencies are referenced by ${checkout}`);
+    if (!stat(dependencies)) {
+      continue;
+    }
+    for (const shared of dependencyReferences(dependencies)) {
+      if (
+        resources.some(
+          (resource) =>
+            within(shared, resource.path) ||
+            (!stat(resource.path)?.isSymbolicLink() && within(resource.path, shared)),
+        )
+      ) {
+        throw new Error(`Shared dependencies are referenced by ${checkout}`);
+      }
     }
   }
   for (const resource of artifacts) {
