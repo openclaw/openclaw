@@ -27,13 +27,17 @@ struct ChatSourcePreview: Identifiable, Hashable {
     }
 }
 
-/// Keeps parsed Markdown and recorded result fields for unchanged transcript rows.
+/// Keeps parsed Markdown, recorded result fields and cited cards for unchanged transcript rows.
 /// The projection is rebuilt from canonical history, never from a neighboring turn.
 struct ChatSourcePreviewProjector {
     private struct Entry {
         let message: OpenClawChatMessage
         let links: [URL]
         let results: [Result]
+        /// Cards for `links`, built from the same-run rows in `sourceIDs` under the projector's context.
+        var previews: [ChatSourcePreview] = []
+        var sourceIDs: [UUID] = []
+        var rendered: [Candidate: RenderedCandidate] = [:]
     }
 
     private struct Result {
@@ -55,17 +59,7 @@ struct ChatSourcePreviewProjector {
         var page: Candidate?
         var search: Candidate?
 
-        func preview(
-            cached: [Candidate: RenderedCandidate],
-            retained: inout [Candidate: RenderedCandidate]) -> ChatSourcePreview
-        {
-            func render(_ candidate: Candidate) -> RenderedCandidate {
-                let value = retained[candidate] ?? cached[candidate] ?? RenderedCandidate(
-                    title: ChatSourcePreviewProjector.title(candidate.title, source: candidate.name),
-                    excerpt: ChatSourcePreviewProjector.excerpt(candidate.excerpt, source: candidate.name))
-                retained[candidate] = value
-                return value
-            }
+        func preview(render: (Candidate) -> RenderedCandidate) -> ChatSourcePreview {
             let source = render(self.source)
             let pageExcerpt = self.page.map(render)?.excerpt
             let excerpt = pageExcerpt ?? self.search.map(render)?.excerpt
@@ -85,38 +79,64 @@ struct ChatSourcePreviewProjector {
 
     private var entries: [UUID: Entry] = [:]
     private var renderedCandidates: [Candidate: RenderedCandidate] = [:]
+    private var context: OpenClawChatSourceContext?
 
     mutating func project(
         _ messages: [OpenClawChatMessage],
         context: OpenClawChatSourceContext? = nil) -> [UUID: [ChatSourcePreview]]
     {
         var retained: [UUID: Entry] = [:]
-        var retainedCandidates: [Candidate: RenderedCandidate] = [:]
+        var renderedNow: [Candidate: RenderedCandidate] = [:]
         var runs: [String: [Entry]] = [:]
+        var changedRuns: Set<String> = []
+        var rerendered = false
         var previews: [UUID: [ChatSourcePreview]] = [:]
         for message in messages {
             guard let runID = ChatPayloadDecoding.trimmedNonEmptyString(message.transcriptRunID) else { continue }
-            let entry: Entry = if let cached = self.entries[message.id], cached.message == message {
-                cached
+            var entry: Entry
+            if let cached = self.entries[message.id], cached.message == message {
+                entry = cached
             } else {
-                Entry(
+                entry = Entry(
                     message: message,
                     links: message.isCompletedReply ? Self.citations(in: message) : [],
                     results: Self.results(in: message, runID: runID))
+                changedRuns.insert(runID)
+            }
+            if !entry.links.isEmpty {
+                let sources = runs[runID] ?? []
+                let sourceIDs = sources.map(\.message.id)
+                // Cards depend only on this reply, the earlier rows of its run and the context.
+                if context != self.context || changedRuns.contains(runID) || entry.sourceIDs != sourceIDs {
+                    var rendered: [Candidate: RenderedCandidate] = [:]
+                    entry.previews = Self.previews(links: entry.links, entries: sources, context: context) { candidate in
+                        let value = rendered[candidate] ?? renderedNow[candidate] ??
+                            self.renderedCandidates[candidate] ?? RenderedCandidate(
+                                title: Self.title(candidate.title, source: candidate.name),
+                                excerpt: Self.excerpt(candidate.excerpt, source: candidate.name))
+                        rendered[candidate] = value
+                        return value
+                    }
+                    renderedNow.merge(rendered) { current, _ in current }
+                    entry.sourceIDs = sourceIDs
+                    entry.rendered = rendered
+                    rerendered = true
+                }
+                previews[message.id] = entry.previews
             }
             retained[message.id] = entry
-            if !entry.links.isEmpty {
-                previews[message.id] = Self.previews(
-                    links: entry.links,
-                    entries: runs[runID] ?? [],
-                    context: context,
-                    cached: self.renderedCandidates,
-                    retained: &retainedCandidates)
-            }
             runs[runID, default: []].append(entry)
         }
+        // Rendered Markdown is kept for exactly the cited replies that remain.
+        if rerendered || self.entries.values.contains(where: {
+            !$0.links.isEmpty && retained[$0.message.id]?.links.isEmpty != false
+        }) {
+            self.renderedCandidates = retained.values.reduce(into: [:]) {
+                $0.merge($1.rendered) { current, _ in current }
+            }
+        }
         self.entries = retained
-        self.renderedCandidates = retainedCandidates
+        self.context = context
         return previews
     }
 
@@ -124,8 +144,7 @@ struct ChatSourcePreviewProjector {
         links: [URL],
         entries: [Entry],
         context: OpenClawChatSourceContext?,
-        cached: [Candidate: RenderedCandidate],
-        retained: inout [Candidate: RenderedCandidate]) -> [ChatSourcePreview]
+        render: (Candidate) -> RenderedCandidate) -> [ChatSourcePreview]
     {
         var cited = Set(links.map(Self.key))
         var sources: [String: Sources] = [:]
@@ -191,7 +210,7 @@ struct ChatSourcePreviewProjector {
             if let index = previews.firstIndex(where: { Self.key($0.url) == canonical }) {
                 previews[index].citedURLs.append(link)
             } else if previews.count < 8 {
-                var preview = source.preview(cached: cached, retained: &retained)
+                var preview = source.preview(render: render)
                 preview.citedURLs = [link]
                 previews.append(preview)
             }
