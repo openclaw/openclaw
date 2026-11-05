@@ -1,0 +1,4 @@
+# The update backup keeps automatic restoration when a reader opens its WAL database
+# between the before and after generation reads, reusing the receipt instead of a
+# second private image; a real commit still refuses.
+41

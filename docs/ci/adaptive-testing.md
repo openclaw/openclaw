@@ -225,10 +225,13 @@ failure recall, graph completeness, and net savings including collection cost.
 Canonical pull requests in aggressive selection mode can omit nine qualified
 Markdown tests from the conventional directory fallback. This applies only when
 the change includes a Markdown source module and otherwise contains only test
-budget allocations or companion tests with a verified separate CI process.
+budget allocations, regular JavaScript/TypeScript production sources under
+`src`, `extensions` or `packages`, or companion tests with a verified separate CI process.
 Companion tests must have one explicit, complete canonical owner outside the
-shared Markdown worker. Same-worker tests, unknown owners, fixtures and other
-source/configuration changes retain full coverage. Independently checked docs
+shared Markdown worker. Same-worker tests, unknown owners, helpers, fixtures,
+missing or symlinked companion sources, and tooling/configuration changes retain
+full coverage. A changed production companion that affects a qualified test's
+input fingerprint retains that test. Independently checked docs
 keep their existing selection rules. Explicit owners, changed tests,
 import consumers, policy checks and smoke tests retain their existing selection.
 The stateful table test is outside this pilot. Scheduled, main and release runs
