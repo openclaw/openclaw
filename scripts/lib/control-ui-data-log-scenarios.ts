@@ -356,7 +356,7 @@ export const dataLogScenarios: readonly InteractionScenario[] = [
     run: async (page) => {
       const filter = page.getByRole("searchbox", { name: "Search logs", exact: true });
       await filter.fill("no-synthetic-log-matches");
-      await page.getByText("No log entries.", { exact: true }).waitFor({ state: "visible" });
+      await page.getByText("No log entries yet.", { exact: true }).waitFor({ state: "visible" });
       if ((await page.locator(".log-row").count()) !== 0) {
         throw new Error("The empty log filter retained a rendered row");
       }
