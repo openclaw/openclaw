@@ -592,7 +592,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   // Retain normalized source facts before retirement removes heartbeat settings.
-  const modelBillingRouteConfig = state.candidate;
   const preRetiredConfigState = state;
   state = await applyRetiredConfigStep({
     state,
@@ -644,7 +643,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const migrationResult = await finalizeMigrationResult({
     cfg,
-    modelBillingRouteConfig,
+    modelBillingRouteConfig: preRetiredConfigState.candidate,
     shouldWriteConfig,
     pluginInventoryChanged: pluginMetadataSnapshotState.inventoryChanged,
     metadataSnapshot: pluginMetadataSnapshotState.current,
@@ -667,11 +666,36 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // Later Doctor contributions and service finalization consume these callbacks.
   const resources = preparingResources.move();
 
+  const retirementOnlyBlocker =
+    (!modelRetirementOnly && "model-retirement") ||
+    (state !== preRetiredConfigState && "config-repair") ||
+    (!snapshot.exists && "config-missing") ||
+    (!snapshot.valid && "config-invalid") ||
+    (legacyStep.blocksWrite && "legacy-write-blocked") ||
+    (deferHeartbeat && "heartbeat-deferred") ||
+    (!preflight.preflightLegacyStateConfig && "preflight-unsettled") ||
+    (preflight.configChanged && "preflight-config-changed") ||
+    (preflight.stateMigrationUnsettled && "state-migration-unsettled") ||
+    (preflight.cronStoreSelectionUnresolved && "cron-selection-unresolved") ||
+    (Boolean(preflight.heartbeatMigrationSource) && "heartbeat-migration") ||
+    (Boolean(preflight.modelBillingRouteMigrationSource) && "billing-migration") ||
+    (configRepairWarnings.length > 0 && "repair-warning") ||
+    (mutableAllowlistWarnings.length > 0 && "mutable-allowlist-warning") ||
+    (pluginWarnings.length > 0 && "plugin-warning") ||
+    (Boolean(migrationResult.modelBillingRouteWarnings?.length) && "billing-warning") ||
+    (pluginMetadataSnapshotState.inventoryChanged && "plugin-inventory-changed") ||
+    (channelWorkObserved && "channel-work") ||
+    (providerRenames.length > 0 && "provider-renames") ||
+    (blockedCodexModelIdentities.size > 0 && "blocked-models") ||
+    (retiredPhoneControlCleanup.cleanupPending && "phone-cleanup") ||
+    (migrationResult.postSessionPluginMigrationPlanBound !== true && "session-plan-unbound") ||
+    (Boolean(migrationResult.postSessionPluginMigration?.step.refusal) && "session-plan-refused");
+
   const configResult = {
     [Symbol.asyncDispose]: () => resources.disposeAsync(),
     ...finalized,
     cfg,
-    heartbeatMigrationSource: modelBillingRouteConfig,
+    heartbeatMigrationSource: preRetiredConfigState.candidate,
     ...(shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
       ? {
           confirmedConfigSource: {
@@ -708,30 +732,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(providerRenames.length > 0 ? { providerRenames } : {}),
     modelRetirementRepairRan:
       modelRetirementRepairRan && !legacyStep.blocksWrite && (shouldWriteConfig || snapshot.valid),
-    retirementOnly:
-      modelRetirementOnly &&
-      state === preRetiredConfigState &&
-      snapshot.exists &&
-      snapshot.valid &&
-      !legacyStep.blocksWrite &&
-      !deferHeartbeat &&
-      Boolean(preflight.preflightLegacyStateConfig) &&
-      !preflight.configChanged &&
-      !preflight.stateMigrationUnsettled &&
-      !preflight.cronStoreSelectionUnresolved &&
-      !preflight.heartbeatMigrationSource &&
-      !preflight.modelBillingRouteMigrationSource &&
-      configRepairWarnings.length === 0 &&
-      mutableAllowlistWarnings.length === 0 &&
-      pluginWarnings.length === 0 &&
-      !migrationResult.modelBillingRouteWarnings?.length &&
-      !pluginMetadataSnapshotState.inventoryChanged &&
-      !channelWorkObserved &&
-      providerRenames.length === 0 &&
-      blockedCodexModelIdentities.size === 0 &&
-      !retiredPhoneControlCleanup.cleanupPending &&
-      migrationResult.postSessionPluginMigrationPlanBound === true &&
-      !migrationResult.postSessionPluginMigration?.step.refusal,
+    retirementOnly: !retirementOnlyBlocker,
+    retirementOnlyBlocker: retirementOnlyBlocker || undefined,
     ...migrationResult,
     runWithPluginMetadataSnapshot,
     invalidatePluginMetadataSnapshot,

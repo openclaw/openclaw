@@ -92,6 +92,23 @@ describe("transcript layout lifetime", () => {
     }
   });
 
+  it("preserves the rendered root across a same-task host move", async () => {
+    scheduledCallbacks(true);
+    const host = new ChatSessionVirtualizerHost(() => {});
+    const render = () =>
+      host.render([{ kind: "item", key: "row", item: "retained row" }], () => null, null, false);
+    try {
+      host.connect();
+      const root = render();
+      host.disconnect();
+      host.connect();
+      await Promise.resolve();
+      expect(render()).toBe(root);
+    } finally {
+      host.dispose();
+    }
+  });
+
   it("releases the admitted cache after terminal host disposal", async () => {
     const host = new ChatSessionVirtualizerHost(() => {});
     const admitAndDispose = () => {
@@ -110,7 +127,12 @@ describe("transcript layout lifetime", () => {
         "gutter",
         false,
       );
-      host.layout.rows = [{ key: "row", revision: "revision" }];
+      host.render(
+        [{ kind: "item", key: "row", revision: "revision", item: message }],
+        () => null,
+        null,
+        false,
+      );
       host.dispose();
       return new WeakRef(message);
     };
