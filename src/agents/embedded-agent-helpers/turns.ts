@@ -324,9 +324,10 @@ export const mergeConsecutiveUserMessages = (
     messages,
     role: "user",
     merge: mergeConsecutiveUserTurns,
-    // Carriers and operator updates own their authority and cache lifetime.
+    // Carriers, operator updates and synthetic context own their authority, cache and media facts.
     canMerge: options.preserveContextBoundaries
-      ? (message) => !hasRuntimeContextMarker(message) && !message.operatorMessage
+      ? (message) =>
+          !hasRuntimeContextMarker(message) && !message.operatorMessage && !message.synthetic
       : undefined,
   });
 

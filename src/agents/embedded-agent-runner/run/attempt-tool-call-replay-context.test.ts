@@ -134,6 +134,15 @@ it("keeps Copilot's x-initiator user fact after an earlier completed turn", () =
   ).toBe("user");
 });
 
+it("keeps synthetic context rows and stored input media facts separate", () => {
+  const summary: UserMessage = { ...user("Compaction summary"), synthetic: true };
+  const kept = user("Kept input");
+  expect(sanitize(model, [summary, kept]).messages).toEqual([summary, kept]);
+  const withMedia = { ...kept, __openclaw: { mediaFacts: [{ path: "stored.png" }] } };
+  const extension: UserMessage = { ...user("Extension context"), synthetic: true };
+  expect(sanitize(model, [withMedia, extension]).messages).toEqual([withMedia, extension]);
+});
+
 it("keeps operator updates separate while Bedrock still merges every adjacent user", () => {
   const update: UserMessage = { ...user("Operator update"), operatorMessage: { turnScoped: true } };
   expect(sanitize(model, [current, update, user("Steering")]).messages).toEqual([
