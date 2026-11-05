@@ -728,7 +728,11 @@ for publication ordering and prepared/direct recovery.
   plugin npm and ClawHub retain target-serialized slots and refuse before any
   new dispatch if cancellation remains unconfirmed. Legacy unidentified ClawHub
   children or live publishers also retain the dispatch guard. A parent failure
-  cancels its own waiting npm children. To clean up as a reviewer, list
+  cancels its own waiting npm children and its recorded unfinished ClawHub
+  children; it rejects a recorded child's pending gate first, because a cancel
+  request alone leaves a Plugin ClawHub New child waiting on
+  `clawhub-plugin-bootstrap`. A 403 rejection warns with the reviewer commands.
+  To clean up as a reviewer, list
   `workflow_dispatch` runs by `github-actions[bot]` created for this release,
   reject their gate, cancel:
 
