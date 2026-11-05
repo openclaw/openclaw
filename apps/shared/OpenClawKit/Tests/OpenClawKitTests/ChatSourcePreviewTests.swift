@@ -279,6 +279,13 @@ struct ChatSourcePreviewTests {
             ([search("Edited"), fetch, answer, otherSearch, otherAnswer], context),
             ([search("Edited"), fetch, otherSearch, otherAnswer], context),
             (original, nil),
+            (original, context),
+        ]
+        // Replies whose cards must be reused (true) or rebuilt (false) at a step.
+        let reuse: [Int: [UUID: Bool]] = [
+            1: [answer.id: true, otherAnswer.id: true],
+            2: [answer.id: false, otherAnswer.id: true],
+            9: [answer.id: false, otherAnswer.id: false],
         ]
         var projector = ChatSourcePreviewProjector()
         var previous: [UUID: [ChatSourcePreview]] = [:]
@@ -286,12 +293,10 @@ struct ChatSourcePreviewTests {
             let incremental = projector.project(step.messages, context: step.context)
             var fresh = ChatSourcePreviewProjector()
             #expect(incremental == fresh.project(step.messages, context: step.context), "step \(index)")
-            if index == 1 {
-                // Appending an unrelated row keeps every reply's recorded cards.
-                for id in [answer.id, otherAnswer.id] {
-                    let before = previous[id]?.withUnsafeBufferPointer(\.baseAddress)
-                    #expect(before != nil && before == incremental[id]?.withUnsafeBufferPointer(\.baseAddress))
-                }
+            for (id, reused) in reuse[index] ?? [:] {
+                let before = previous[id]?.withUnsafeBufferPointer(\.baseAddress)
+                let after = incremental[id]?.withUnsafeBufferPointer(\.baseAddress)
+                #expect(before != nil && after != nil && (before == after) == reused, "step \(index)")
             }
             previous = incremental
         }
