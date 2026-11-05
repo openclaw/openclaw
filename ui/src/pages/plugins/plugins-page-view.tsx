@@ -17,19 +17,24 @@ import {
 } from "../../app-route-paths.ts";
 import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsLoadingSkeleton, SettingsPage } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsLoadingSkeleton,
+  SettingsPage,
+  SettingsPageHeader,
+} from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { WizardLogin } from "../../components/wizard-login-controller.tsx";
+import { configSecretFields } from "../../lib/config/config-secret-fields.ts";
 import { currentConfigRead } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginCatalogResults as PluginCatalogResults } from "./catalog-results.tsx";
+import "./custom-elements.ts";
 import {
   PluginArtTile,
   renderPluginConsentDialog as PluginConsentDialog,
 } from "./consent-dialog.tsx";
-import "./custom-elements.ts";
 import { pluginDetailLocation, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import {
   pluginRowKey,
@@ -89,6 +94,10 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
   const page = () => {
     props.page.read();
     return props.page;
+  };
+  const installPaused = () => {
+    const update = page().context.overlays.snapshot;
+    return update.updateRunning || update.updateReconciliationPending;
   };
   const hasInventory = createMemo(() => page().state.result !== null);
   // The owner mutates in place; publish fresh props for each page revision.
@@ -197,11 +206,14 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     onConfigPatch: (path: Array<string | number>, value: unknown) =>
       page().settings.patch(path, value),
     onConfigRemove: (path: Array<string | number>) => page().settings.patch(path, undefined),
+    configSecretFields: configSecretFields(page().context),
     onConfigReload: page().reloadConfig,
     onConfigReadRetry: actions.retryConfigRead,
     onConfigWriteRetry: () => void page().context.runtimeConfig.retry(),
     onRefresh: () => void page().refreshCatalog(),
     onAskPlugin: onAskPlugin(),
+    onSelectPrompt: (prompt: string) => void page().recommendedPrompts.select(prompt),
+    promptBlockedReason: page().recommendedPrompts.blockedReason(),
     onAskSetting: ask(),
   }));
 
@@ -248,6 +260,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       <PluginDetailBoundary onRetry={() => void page().showDetails(detailProps.pluginId)}>
         <PluginSettingsDetail
           {...shared()}
+          promptBusy={page().recommendedPrompts.pending}
           configUnsupportedPaths={configAnalysis().unsupportedPaths}
           pluginId={detailProps.pluginId}
           installProgress={page().consent.getActiveInstall(pluginRowKey(detailProps.pluginId))}
@@ -304,11 +317,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                   page().context.basePath,
                 )
           }
-          backLabel={
-            page().surface === "discovery" || settingsParentRoute() === "plugins"
-              ? t("tabs.plugins")
-              : t("nav.settings")
-          }
+          backLabel={t("tabs.plugins")}
           tab={page().state.installedDetailTab}
           onBack={() => {
             if (settings()) {
@@ -343,6 +352,13 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           }}
         />
       )}
+      {page().surface !== "discovery" && !detailPluginId() && (
+        <SettingsPageHeader
+          registerHeading={page().registerRemovalHeading}
+          title={t("tabs.plugins")}
+          subtitle={t("pluginsPage.settingsDescription")}
+        />
+      )}
       <SettingsWorkspace>
         {PluginRowMessageView(page().state.pageNotice ?? undefined)}
         {page().surface === "discovery" ? (
@@ -361,6 +377,9 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                     registerInstallAction={page().registerInstallAction}
                     registerIcon={page().icons.register}
                     onAskPlugin={onAskPlugin()}
+                    onSelectPrompt={(prompt) => void page().recommendedPrompts.select(prompt)}
+                    promptBusy={page().recommendedPrompts.pending}
+                    promptBlockedReason={page().recommendedPrompts.blockedReason()}
                     connected={page().gateway.connected}
                     skillsSection={catalogSkillsSection()}
                     result={page().state.catalogDetail?.result ?? null}
@@ -370,8 +389,12 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                     onRetry={() =>
                       void page().showCatalogDetail(page().state.catalogDetail?.id ?? null)
                     }
+                    installTitle={
+                      installPaused() ? t("pluginsPage.installPausedByUpdate") : undefined
+                    }
                     canInstall={
                       page().canMutate() &&
+                      !installPaused() &&
                       !page().state.messages[`install:${catalogId()}`]?.savedInstall &&
                       catalogInstallable()
                     }
@@ -404,7 +427,10 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                   pluginIconUrls={page().state.iconUrls}
                   iconLoading={page().icons.catalog.isLoading}
                   pluginIconLoading={page().icons.installed.isLoading}
-                  canInstall={page().canMutate()}
+                  installTitle={
+                    installPaused() ? t("pluginsPage.installPausedByUpdate") : undefined
+                  }
+                  canInstall={page().canMutate() && !installPaused()}
                   installProgress={page().consent.read().installProgress}
                   inventory={page().state.result?.plugins}
                   entryHref={(id) => pathForPluginCatalogEntry(id, page().context.basePath)}

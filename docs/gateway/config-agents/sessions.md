@@ -170,9 +170,9 @@ read current usage. Administrator access is required.
 Turn on **Archive older transcripts** and set **Archive after (days)** to a
 positive whole number. Changes save through the normal Settings flow and apply
 without a Gateway restart. Once the policy is saved and applied, **Run now**
-starts or joins a background batch and returns promptly. The panel follows its
-status until completion or failure; leaving the page does not stop the worker.
-The worker also runs automatically without new chat activity. Inactive current
+starts or joins a maintenance batch and returns promptly. The panel follows its
+status until completion or failure; leaving the page does not stop maintenance.
+Maintenance also runs automatically without new messages. Inactive current
 and historical transcripts can become cold; opening or resuming one restores
 its history before use.
 

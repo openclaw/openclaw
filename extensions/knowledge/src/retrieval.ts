@@ -391,7 +391,7 @@ export function keywordSearch(
         );
         // BM25 statistics must come only from the searched corpus. The scope table
         // holds exactly the eligible records, so an unfiltered search queries it
-        // directly; a filtered search ranks within a copy of just its subset.
+        // directly; a filtered search ranks within just its validated subset.
         const corpus = selected.length === records.length ? table : "keyword_query_v1";
         if (corpus !== table) {
           db.exec("DROP TABLE IF EXISTS temp.keyword_query_v1");
@@ -399,10 +399,10 @@ export function keywordSearch(
             "CREATE VIRTUAL TABLE temp.keyword_query_v1 USING fts5(id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2')",
           );
           const insertQuery = db.prepare(
-            `INSERT INTO temp.keyword_query_v1 SELECT id,title,aliases,body FROM ${table} WHERE id=?`,
+            "INSERT INTO temp.keyword_query_v1(id,title,aliases,body) VALUES (?,?,?,?)",
           );
           for (const r of selected) {
-            insertQuery.run(r.id);
+            insertQuery.run(r.id, r.title, (r.metadata.aliases ?? []).join("\n"), r.body);
           }
         }
         // Unpredictable delimiters checked against the corpus prevent authored marker injection.

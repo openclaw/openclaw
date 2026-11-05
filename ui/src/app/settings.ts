@@ -210,15 +210,10 @@ export function readSettingsForGateway(
     scoped = {
       ...scoped,
       ...cached.record,
-      navigationByProfile: {
-        ...scoped?.navigationByProfile,
-        ...Object.fromEntries(
-          Object.entries(cached.pendingNavigation).map(([id, pending]) => [
-            id,
-            { ...scoped?.navigationByProfile?.[id], ...pending },
-          ]),
-        ),
-      },
+      navigationByProfile: mergeProfileNavigation(
+        scoped?.navigationByProfile,
+        cached.pendingNavigation,
+      ),
     };
   }
   if (!scoped) {
@@ -236,6 +231,17 @@ export function readSettingsForGateway(
     parsed: record,
     available: Boolean(storage),
   };
+}
+
+function mergeProfileNavigation(
+  stored: PersistedUiSettings["navigationByProfile"],
+  pending: Record<string, ProfileNavigation>,
+): NonNullable<PersistedUiSettings["navigationByProfile"]> {
+  const merged = { ...stored };
+  for (const [id, navigation] of Object.entries(pending)) {
+    merged[id] = { ...merged[id], ...navigation };
+  }
+  return merged;
 }
 
 export function profileNavigation(
@@ -497,6 +503,7 @@ export function loadUiPreferences(
       ...(parsed.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
       ...(parsed.sessionDeleteConfirm === false ? { sessionDeleteConfirm: false } : {}),
       ...(parsed.chatModelChangeConfirm === false ? { chatModelChangeConfirm: false } : {}),
+      dismissedReadOnlyConfigNotice: normalizeOptionalString(parsed.dismissedReadOnlyConfigNotice),
       ...(parsed.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
       ...(parsed.openLinksExternally === true ? { openLinksExternally: true } : {}),
     };
@@ -578,38 +585,27 @@ export function saveSettings(
   }
   const profileId = resolveProfileAppearanceProfileId(next.gatewayUrl);
   // Each action owns only its fields; group edits cannot replay stale pins, or vice versa.
-  const navigation: ProfileNavigation = {};
   const profilelessNavigation: ProfileNavigation = {};
   const canonicalNavigation: Partial<UiSettings> = {};
-  for (const [key, setting, normalize] of NAVIGATION_FIELDS) {
-    if (!options.navigationPatch || Object.hasOwn(options.navigationPatch, setting)) {
-      const value = setting === "sidebarEntries" ? next[setting] : (normalize(next[setting]) ?? []);
-      Object.assign(navigation, { [key]: value });
-      Object.assign(canonicalNavigation, { [setting]: value });
-    }
-    Object.assign(profilelessNavigation, {
-      [key]: !profileId && Object.hasOwn(navigation, key) ? navigation[key] : source?.parsed[key],
-    });
-  }
   const pendingNavigation = {
     ...(settingsFallback?.key === scopedKey ? settingsFallback.pendingNavigation : null),
   };
-  if (profileId) {
-    // A profile reapplication is not an authored edit. Retain only changed fields
-    // through storage failure so recovery cannot replay an unchanged sibling layout.
-    const storedNavigation = profileNavigation(source?.parsed, profileId);
-    const changed: ProfileNavigation = {};
-    for (const [key] of NAVIGATION_FIELDS) {
-      if (
-        Object.hasOwn(navigation, key) &&
-        JSON.stringify(navigation[key]) !== JSON.stringify(storedNavigation?.[key])
-      ) {
-        Object.assign(changed, { [key]: navigation[key] });
+  const storedNavigation = profileId ? profileNavigation(source?.parsed, profileId) : null;
+  for (const [key, setting, normalize] of NAVIGATION_FIELDS) {
+    let profilelessValue = source?.parsed[key];
+    if (!options.navigationPatch || Object.hasOwn(options.navigationPatch, setting)) {
+      const value = setting === "sidebarEntries" ? next[setting] : (normalize(next[setting]) ?? []);
+      Object.assign(canonicalNavigation, { [setting]: value });
+      if (!profileId) {
+        profilelessValue = value;
+      }
+      // Reapplying an unchanged profile value is not an authored edit. Retain only
+      // changed fields through storage failure, never a stale sibling layout.
+      if (profileId && JSON.stringify(value) !== JSON.stringify(storedNavigation?.[key])) {
+        pendingNavigation[profileId] = { ...pendingNavigation[profileId], [key]: value };
       }
     }
-    if (Object.keys(changed).length > 0) {
-      pendingNavigation[profileId] = { ...pendingNavigation[profileId], ...changed };
-    }
+    Object.assign(profilelessNavigation, { [key]: profilelessValue });
   }
   const sessionsByGateway = Object.fromEntries(
     [
@@ -675,15 +671,10 @@ export function saveSettings(
     ...profilelessNavigation,
     sidebarEntries: source?.parsed.sidebarEntries,
     sidebarPinnedRoutes: source?.parsed.sidebarPinnedRoutes,
-    navigationByProfile: {
-      ...source?.parsed.navigationByProfile,
-      ...Object.fromEntries(
-        Object.entries(pendingNavigation).map(([id, value]) => [
-          id,
-          { ...source?.parsed.navigationByProfile?.[id], ...value },
-        ]),
-      ),
-    },
+    navigationByProfile: mergeProfileNavigation(
+      source?.parsed.navigationByProfile,
+      pendingNavigation,
+    ),
     sidebarLiveActivity: next.sidebarLiveActivity === false ? false : undefined,
     chatMessageMaxWidth: normalizeChatMessageMaxWidth(next.chatMessageMaxWidth),
     showAdvancedSettings: next.showAdvancedSettings === true ? true : undefined,
@@ -701,6 +692,7 @@ export function saveSettings(
     // Only the opted-out value is persisted; absence means the safe default.
     sessionDeleteConfirm: next.sessionDeleteConfirm === false ? false : undefined,
     chatModelChangeConfirm: next.chatModelChangeConfirm === false ? false : undefined,
+    dismissedReadOnlyConfigNotice: normalizeOptionalString(next.dismissedReadOnlyConfigNotice),
     // External links keep host behavior unless the operator explicitly opts in.
     openLinksInControlUiBrowser: next.openLinksInControlUiBrowser === true ? true : undefined,
     openLinksExternally: next.openLinksExternally === true ? true : undefined,

@@ -12,6 +12,16 @@ async function applyAcrossProcess(request: AgentDatabaseReaderRequest): Promise<
   await closeWorkerTaskPoolResources(encodeAgentDatabaseReaderRequest(request));
 }
 
+/** Offline maintenance closes retained readers in every isolate; later reads may reopen them. */
+export async function closeAgentDatabaseReaders(databasePaths: readonly string[]): Promise<void> {
+  const candidates = [...new Set(databasePaths.map((pathname) => path.resolve(pathname)))].map(
+    (pathname) => ({ path: pathname }),
+  );
+  if (candidates.length > 0) {
+    await applyAcrossProcess({ kind: "close", candidates, deleted: false });
+  }
+}
+
 /** Deletion closes the databases everywhere and refuses reopening them until the agent returns. */
 export async function closeDeletedAgentDatabases(
   agentId: string,

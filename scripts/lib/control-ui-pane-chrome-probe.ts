@@ -3,6 +3,7 @@ export function installPaneChromeProbe() {
   const selectors = {
     headerTrailing: ".chat-pane__header-trailing",
     headerIdentity: ".chat-pane__identity-actions",
+    historyBoundary: ".chat-history-boundary__action",
     identity: ".chat-pane__crumbs",
     sessionTitle: ".chat-pane__session-title-text",
     composerControls: ".chat-controls__session, .chat-controls__permission-picker",
@@ -20,6 +21,10 @@ export function installPaneChromeProbe() {
     composerHeight: number;
     boxes: Record<Region, number[] | null>;
     paneFacts: { transcript: boolean; archivedFooter: boolean; genericComposer: boolean };
+    identityChildren: string[];
+    boundaryLabel: string | null;
+    messageRows: number;
+    activityGroups: number;
   };
   const frames: Frame[] = [];
   let connectionIndicatorFrames = 0;
@@ -231,6 +236,13 @@ export function installPaneChromeProbe() {
         regions: next,
         boxes,
         paneFacts,
+        identityChildren: Array.from(
+          root?.querySelector(".chat-pane__identity-actions")?.children ?? [],
+          (element) => element.localName,
+        ),
+        boundaryLabel: root?.querySelector(".chat-history-boundary__action")?.textContent ?? null,
+        messageRows: root?.querySelectorAll("[data-message-id]").length ?? 0,
+        activityGroups: root?.querySelectorAll(".chat-activity-group").length ?? 0,
         composerHeight:
           document
             .querySelector(".chat-pane-cache__pane--active .agent-chat__composer-shell")

@@ -28,6 +28,21 @@ This is a sampled safeguard, not a kernel-enforced ceiling: rapid allocations ca
 
 Durable commands apply the same computed bound through the systemd unit's `MemoryMax` instead of the sampler. The kernel bounds the unit's cgroup, including its descendants. Each durable command has its own bound; commands do not share an aggregate budget.
 
+## Host I/O isolation
+
+When a Linux Gateway service delegates CPU, I/O, and memory controllers, ordinary
+Gateway-hosted agent commands run below a shared I/O ceiling that protects the
+Gateway database. Commands with the same session key share a child ceiling of
+half that aggregate read/write bandwidth and IOPS budget. Starting more commands
+in one session does not increase its share. Commands without a session key share
+one separate child ceiling.
+
+This reserves headroom against one session monopolizing the aggregate budget; it
+is not equal-share scheduling among every active session. Command cancellation
+and memory-limit enforcement still target the owned command tree. They do not
+terminate other commands sharing its session budget. Startup reports unavailable
+delegation with Doctor guidance; hosts without it retain their existing behavior.
+
 ## Parameters
 
 <ParamField path="command" type="string" required>
@@ -129,7 +144,7 @@ Notes:
 - Running, completed, and failed results preserve execution warnings in structured `warningText` as well as visible text, so Code Mode callers can follow guidance such as using a noninteractive command when sandbox PTY is unavailable. Calls without warnings omit this field.
 - Before a Gateway restart, a background command continuation keeps the original requester's still-current authority, including permitted reviewer models. Another participant's permissions do not replace it, and revoked authority prevents further execution. Adopted durable completions after restart are new system input under the owning session principal's current authority; requester continuations are not restored.
 - When an approved async command completes, its continuation uses the normal agent run timeout from `agents.defaults.timeoutSeconds`. The follow-up observer can finish waiting while the accepted agent run continues.
-- Subagent sessions do not receive automatic background-exec wakes. Collect the result with `process poll` before yielding without another completion source.
+- Hidden subagent sessions do not receive automatic background-exec wakes; visible spawned sessions do. Collect the result with `process poll` before yielding without another completion source.
 - The process owner tracks agent-started background commands. Use the returned process session ID to inspect output, poll, or stop a command; its completion can wake the agent.
 - For work that should happen later or on a schedule, use cron instead of `exec` sleep/delay patterns.
 
@@ -241,6 +256,14 @@ openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 ```
 
 Control UI: the **Devices** page includes a small "Exec node binding" panel for the same settings. A saved target can become unresolvable or stop advertising execution support. Its binding then stays selected and is marked **Unavailable**. You can clear it with **Any node** or **Use default**, even when no execution-capable nodes are available. Supported names, addresses, and ID prefixes resolve without rewriting the saved reference.
+
+### macOS Local Network access
+
+A Gateway running as a macOS LaunchAgent can fail to reach LAN devices even when
+the same command succeeds in Terminal. Check [Local Network permission for the
+Gateway runtime](/platforms/mac/permissions#local-network-access-for-the-gateway)
+when Gateway-hosted commands fail with `EHOSTUNREACH`. If a connected node already
+has access, select that node with `host=node` for the command.
 
 ### Python environments (`uv`)
 

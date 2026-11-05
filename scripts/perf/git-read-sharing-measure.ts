@@ -21,6 +21,7 @@ import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import { fileURLToPath } from "node:url";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const reads = Number(process.argv[2] ?? 4096);
 assert(Number.isSafeInteger(reads) && reads > 0 && reads % 64 === 0);
@@ -159,12 +160,7 @@ const used = process.threadCpuUsage(cpu);
 const submissions = { ...fixture.counts };
 global.gc();
 const inspector = new Session();
-inspector.connect();
-await inspector.post("HeapProfiler.startSampling", {
-  samplingInterval: 4096,
-  includeObjectsCollectedByMajorGC: true,
-  includeObjectsCollectedByMinorGC: true,
-});
+await startCollectedHeapSampling(inspector, 4096);
 await run();
 const { profile } = await inspector.post("HeapProfiler.stopSampling");
 inspector.disconnect();

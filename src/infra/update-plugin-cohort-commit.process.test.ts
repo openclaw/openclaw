@@ -4,8 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { vitestWorkerRuntimeAssets } from "../../scripts/lib/package-root-modules.mts";
 import { resolveSqliteSchemaAssetInputs } from "../../scripts/lib/sqlite-schema-assets.mts";
-import { vitestWorkerRuntimeAssets } from "../../scripts/lib/vitest-worker-declarations.mts";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import { useExecutorFixture } from "../cli/update-cli/update-command-executor.test-support.js";
@@ -39,6 +39,8 @@ it.each([false, true])(
       [
         runtimeProcessEntrypoints.updateMigratedFinalize,
         runtimeProcessEntrypoints.workerNativeLifecycle,
+        // Native lifecycle selects this through the manifest, outside literal imports.
+        runtimeProcessEntrypoints.spawnBroker,
         runtimeProcessEntrypoints.sqliteWriterAdmission,
         runtimeProcessEntrypoints.sqliteStore,
         runtimeProcessEntrypoints.sqliteIntegrity,
@@ -164,7 +166,7 @@ it.each([false, true])(
           });
         }
         const result = await invoke();
-        expect(result.cleanup).toBe("normal");
+        expect(result.cleanup, JSON.stringify(result)).toBe("normal");
         expect(result.termination).toBe("exit");
         if (wrongBuild) {
           expect(result.code).not.toBe(0);
