@@ -4,6 +4,11 @@ export function installWarmReloadTranscriptProbe(mode: "reader" | "end" = "end")
     atMs: number;
     scrollTop: number;
     distanceFromEnd: number;
+    scrollHeight: number;
+    clientHeight: number;
+    rangeHeight: string;
+    columnMargin: string;
+    blockTop: string;
     rows: Array<{ key: string; y: number; height: number; characters: number; expanded: number }>;
   }> = [];
   let anchor: string | undefined;
@@ -50,6 +55,12 @@ export function installWarmReloadTranscriptProbe(mode: "reader" | "end" = "end")
       const state = {
         scrollTop: thread.scrollTop,
         distanceFromEnd: thread.scrollHeight - thread.clientHeight - thread.scrollTop,
+        scrollHeight: thread.scrollHeight,
+        clientHeight: thread.clientHeight,
+        rangeHeight: inner.style.height,
+        columnMargin:
+          inner.querySelector<HTMLElement>(".chat-virtual-sizer")?.style.marginTop ?? "",
+        blockTop: inner.querySelector<HTMLElement>(".chat-virtual-block")?.style.top ?? "",
         rows,
       };
       const rowSignature = rows

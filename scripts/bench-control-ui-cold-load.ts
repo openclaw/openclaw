@@ -32,6 +32,7 @@
 // --critical-path-intent-ms 150 includes hover/focus prefetch before route activation.
 // --settings-core-schema replays the server's core config schema, prepared before sampling.
 // Paint/CLS and static-shell geometry are recorded in presentation; --filmstrip-only saves frames.
+// --active-transcript-two-round appends new turns, then completes the pending tool after commit.
 // --transcript-witness distinguishes native saved/live text paint in warm Chat reloads.
 // --transcript-witness-hold also holds startup for saved paint: correctness only, never timing.
 // --details-processes observes populated warm Details with one synthetic running process.
@@ -297,6 +298,7 @@ const { values } = parseArgs({
     "transcript-witness": { type: "boolean", default: false },
     "active-transcript": { type: "boolean", default: false },
     "active-transcript-reader": { type: "boolean", default: false },
+    "active-transcript-two-round": { type: "boolean", default: false },
     "transcript-witness-hold": { type: "boolean", default: false },
     "row-facts": { type: "boolean", default: false },
     "late-row-facts": { type: "boolean", default: false },
@@ -954,6 +956,9 @@ if (values["active-transcript"] && !values["transcript-witness"]) {
 }
 if (values["active-transcript-reader"] && !values["active-transcript"]) {
   throw new Error("active-transcript-reader requires active-transcript");
+}
+if (values["active-transcript-two-round"] && !values["active-transcript"]) {
+  throw new Error("active-transcript-two-round requires active-transcript");
 }
 const transcriptWitness = values["transcript-witness"]
 ? createTranscriptReloadWitness(fixture, values["active-transcript"])
@@ -1627,17 +1632,74 @@ try {
   const witnessInit = transcriptWitness
     ? `
     const witnessLive = localStorage.getItem(${JSON.stringify(witnessPhaseKey)}) === "live";
-    const witnessMessages = witnessLive ? ${JSON.stringify(transcriptWitness.variants.live)} : ${JSON.stringify(transcriptWitness.variants.saved)};
+    const witnessMessages = witnessLive ? ${JSON.stringify(values["active-transcript-two-round"] ? transcriptWitness.variants.intermediate : transcriptWitness.variants.live)} : ${JSON.stringify(transcriptWitness.variants.saved)};
     window.openclawControlUiE2eGateway.setHistoryMessages(witnessMessages);
     ${
       values["active-transcript"]
         ? `
-    const totalMessages = witnessLive ? ${transcriptWitness.totalMessages.live} : ${transcriptWitness.totalMessages.saved};
+    const totalMessages = witnessLive ? ${values["active-transcript-two-round"] ? transcriptWitness.totalMessages.intermediate : transcriptWitness.totalMessages.live} : ${transcriptWitness.totalMessages.saved};
     for (const method of ["chat.history", "chat.startup"]) window.openclawControlUiE2eGateway.setMethodResponse(method, {
       ...${JSON.stringify({ ...witnessHistory, messages: [] })}, messages: witnessMessages, totalMessages,
       hasMore: totalMessages > witnessMessages.length,
       nextOffset: totalMessages > witnessMessages.length ? witnessMessages.length : undefined,
     });`
+        : ""
+    }
+    ${
+      values["active-transcript-two-round"]
+        ? `
+    if (witnessLive) {
+      const phases = [];
+      Reflect.set(window, "__activeTranscriptRounds", phases);
+      const recordPhase = (phase, extra = {}) => phases.push({ phase, atMs: performance.now(), ...extra });
+      recordPhase("intermediate-history", { totalMessages, messages: witnessMessages.length, messageId: "active-reload-fresh-result" });
+      const awaitFirstCommit = () => {
+        const pane = document.querySelector(".chat-pane-cache__pane--active");
+        const history = Reflect.get(window, "__warmReload")?.witnesses()?.history ?? [];
+        const received = history.some((entry) => entry.source !== "snapshot-read" && entry.live === 1);
+        if (!pane || !Reflect.get(pane, "transcriptReady") || !received || !pane.querySelector('[data-position-marker-id="active-reload-fresh-result"]')) {
+          requestAnimationFrame(awaitFirstCommit);
+          return;
+        }
+        recordPhase("intermediate-commit", {
+          messageId: "active-reload-fresh-result",
+          markerAttached: Boolean(pane.querySelector('[data-position-marker-id="active-reload-fresh-result"]')),
+          rowAttached: Boolean(pane.querySelector('[data-virtual-row-key="group:assistant:msg:id:active-reload-fresh-result:0"]')),
+        });
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const messages = ${JSON.stringify(transcriptWitness.variants.live)};
+          const totalMessages = ${transcriptWitness.totalMessages.live};
+          const response = {
+            ...${JSON.stringify({ ...witnessHistory, messages: [] })}, messages, totalMessages,
+            deltaCursor: "active-transcript-completed-v1",
+            hasMore: totalMessages > messages.length,
+            nextOffset: totalMessages > messages.length ? messages.length : undefined,
+          };
+          window.openclawControlUiE2eGateway.setHistoryMessages(messages);
+          for (const method of ["chat.history", "chat.startup"]) {
+            window.openclawControlUiE2eGateway.setMethodResponse(method, response);
+            window.openclawControlUiE2eGateway.setRequestHandler(method, ({ respond }) => {
+              recordPhase("completed-history-response", { method, totalMessages, messages: messages.length });
+              respond(response);
+            });
+          }
+          recordPhase("tool-completion", { runId: "active-reload-run", messageId: "active-reload-tool-answer" });
+          window.openclawControlUiE2eGateway.emit("sessions.changed", {
+            sessionKey: ${JSON.stringify(fixture.selectedSessionKey)}, agentId: "main", phase: "message",
+          });
+          const awaitCompletedCommit = () => {
+            const completed = [...pane.querySelectorAll('.chat-virtual-row')].some((row) => row.textContent?.includes("The synthetic inspection is complete."));
+            if (!completed || !Reflect.get(pane, "transcriptReady")) {
+              requestAnimationFrame(awaitCompletedCommit);
+              return;
+            }
+            recordPhase("completed-commit", { messageId: "active-reload-tool-answer" });
+          };
+          requestAnimationFrame(awaitCompletedCommit);
+        }));
+      };
+      requestAnimationFrame(awaitFirstCommit);
+    }`
         : ""
     }
     if (witnessLive && ${values["transcript-witness-hold"]}) window.openclawControlUiE2eGateway.deferNext("chat.startup");
@@ -2809,7 +2871,10 @@ try {
     }
     const warmReload =
       values["warm-reload"] || firstLoad
-        ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
+        ? await page.evaluate(() => ({
+            ...Reflect.get(window, "__warmReload").read(),
+            transcriptRounds: Reflect.get(window, "__activeTranscriptRounds"),
+          }))
         : undefined;
     if (transcriptWitness) {
       const observed = warmReload?.transcriptWitnesses;
@@ -2837,7 +2902,14 @@ try {
         (values["active-transcript-reader"] || observed.attached.live) &&
         (!values["active-transcript"] || Boolean(warmReload?.transcriptStability?.anchor)) &&
         (values["active-transcript"] || !observed.attached.saved) &&
-        (values["active-transcript-reader"] || observed.live.paintMs !== null);
+        (values["active-transcript-reader"] || observed.live.paintMs !== null) &&
+        (!values["active-transcript-two-round"] ||
+          (warmReload?.transcriptRounds?.some(
+            (entry: { phase: string }) => entry.phase === "completed-history-response",
+          ) &&
+            warmReload.transcriptRounds.some(
+              (entry: { phase: string }) => entry.phase === "completed-commit",
+            )));
       await writeFile(
         path.join(artifactDir, `run-${run + 1}.transcript-witness.json`),
         JSON.stringify(
@@ -2846,6 +2918,7 @@ try {
             capturedAt: new Date().toISOString(),
             hold: witnessHold,
             observed,
+            phases: warmReload?.transcriptRounds,
             valid: Boolean(valid),
             savedPaintObserved:
               observed?.saved.paintMs !== null && observed?.saved.paintMs !== undefined,
@@ -4104,6 +4177,8 @@ try {
               preparedAt: transcriptWitness.preparedAt,
               messageCount: transcriptWitness.messageCount,
               snapshotMessageCount: transcriptWitness.snapshotMessageCount,
+              twoRound: values["active-transcript-two-round"],
+              totalMessages: transcriptWitness.totalMessages,
               measurement: values["transcript-witness-hold"]
                 ? "held-correctness"
                 : "natural-timing",

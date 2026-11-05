@@ -31,7 +31,11 @@ export function createTranscriptReloadWitness(
       text: "The latest implementation is ready for verification.",
     },
   };
-  const variants: Record<"saved" | "live", unknown[]> = { saved: messages, live: messages };
+  const variants: Record<"saved" | "intermediate" | "live", unknown[]> = {
+    saved: messages,
+    intermediate: messages,
+    live: messages,
+  };
   const activeHistory = active ? createActiveTranscriptReloadFixture(messages) : null;
   if (!active) {
     for (const source of ["saved", "live"] as const) {
@@ -69,6 +73,7 @@ export function createTranscriptReloadWitness(
   }
   if (activeHistory) {
     variants.saved = activeHistory.saved.slice(-80);
+    variants.intermediate = activeHistory.intermediate.slice(-80);
     variants.live = activeHistory.live.slice(-80);
     for (const source of ["saved", "live"] as const) {
       const id = source === "saved" ? "active-reload-long-reply" : "active-reload-fresh-result";
@@ -91,6 +96,7 @@ export function createTranscriptReloadWitness(
     liveMessageCount: variants.live.length,
     totalMessages: {
       saved: activeHistory?.saved.length ?? messages.length,
+      intermediate: activeHistory?.intermediate.length ?? messages.length,
       live: activeHistory?.live.length ?? messages.length,
     },
     // Native persistence retains the last 80 distinct-sequence fixture messages.

@@ -89,6 +89,11 @@ export function createActiveTranscriptReloadFixture(prefix: unknown[] = []) {
     ),
   ];
   const saved = projectChatDisplayMessages(rawSaved);
+  const fresh = [
+    message("user", "A fresh synthetic prompt", "active-reload-fresh-prompt", 6),
+    message("assistant", "A fresh synthetic result", "active-reload-fresh-result", 7),
+  ];
+  const intermediate = projectChatDisplayMessages([...rawSaved, ...fresh]);
   const live = projectChatDisplayMessages([
     ...rawSaved,
     {
@@ -109,10 +114,9 @@ export function createActiveTranscriptReloadFixture(prefix: unknown[] = []) {
       5,
       "active-reload-run",
     ),
-    message("user", "A fresh synthetic prompt", "active-reload-fresh-prompt", 6),
-    message("assistant", "A fresh synthetic result", "active-reload-fresh-result", 7),
+    ...fresh,
   ]);
-  return { saved, live, fullReply };
+  return { saved, intermediate, live, fullReply };
 }
 
 function createTranscriptThumbnail(seed: number): Buffer {

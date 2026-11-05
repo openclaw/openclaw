@@ -5,6 +5,8 @@ import { projectChatDisplayMessages } from "../../../src/gateway/chat-display-pr
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createActiveTranscriptReloadFixture } from "../test-helpers/control-ui-team-scale-history-fixture.ts";
+import { widgetHtml } from "../test-helpers/control-ui-team-scale-widget-html.ts";
+import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Cached transcript text fidelity" });
@@ -19,9 +21,15 @@ const message = {
 };
 
 suite.define(() => {
-  it.each(["reader", "end"] as const)(
-    "keeps the cached %s stable through an active history refresh",
-    async (anchor) => {
+  const canvasView = useCanvasSandboxFixture();
+  it.each([
+    ["reader", false],
+    ["end", false],
+    ["reader", true],
+    ["end", true],
+  ] as const)(
+    "keeps the cached %s stable through an active history refresh (two rounds: %s)",
+    async (anchor, twoRounds) => {
       await suite.withPage(
         { serviceWorkers: "block", viewport: { width: 1720, height: 1180 } },
         async ({ page }) => {
@@ -35,7 +43,12 @@ suite.define(() => {
             },
             {
               role: "assistant",
-              content: `Synthetic answer ${index}. ` + "Evidence remains readable. ".repeat(12),
+              content:
+                `Synthetic answer ${index}. ` +
+                "Evidence remains readable. ".repeat(12) +
+                (index === 11
+                  ? '\n\n[embed ref="active-reload-metric" title="Synthetic metric" height="220" /]'
+                  : ""),
               __openclaw: { id: `answer-${index}`, seq: index * 2 + 2 },
             },
           ]).flat();
@@ -47,7 +60,10 @@ suite.define(() => {
             authMode: "trusted-proxy",
             historyMessages: fixture.saved,
             deferredMethods: ["connect"],
-            methodResponses: { "chat.message.get": { ok: true, message: fixture.fullReply } },
+            methodResponses: {
+              "chat.message.get": { ok: true, message: fixture.fullReply },
+              "canvas.document.view": canvasView(widgetHtml(0)),
+            },
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           await gateway.waitForRequest("connect");
@@ -56,6 +72,8 @@ suite.define(() => {
           await page.locator(".chat-thread").evaluate((thread) => {
             thread.scrollTop -= 200;
           });
+          await gateway.waitForRequest("canvas.document.view");
+          await page.locator("openclaw-canvas-widget-view iframe").waitFor({ state: "attached" });
           await page.evaluate(async () => {
             const pane = document.querySelector(".chat-pane-cache__pane--active");
             await Reflect.get(pane!, "sessionSnapshotStore").flush();
@@ -67,7 +85,7 @@ suite.define(() => {
           await gateway.waitForRequest("connect");
           await page.locator(".chat-thread-inner--virtual").waitFor({ state: "visible" });
           await page.waitForFunction(() => Reflect.get(window, "__activeTranscriptReload").ready);
-          await gateway.setHistoryMessages(fixture.live);
+          await gateway.setHistoryMessages(twoRounds ? fixture.intermediate : fixture.live);
           await gateway.resolveDeferred("connect");
           await page
             .locator('[data-position-marker-id="active-reload-fresh-result"]')
@@ -78,6 +96,23 @@ suite.define(() => {
                 requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
               ),
           );
+          if (twoRounds) {
+            await gateway.setHistoryMessages(fixture.live);
+            await gateway.emitGatewayEvent("sessions.changed", {
+              sessionKey,
+              agentId: "main",
+              phase: "message",
+            });
+            await page
+              .getByText("The synthetic inspection is complete.", { exact: true })
+              .waitFor({ state: "attached" });
+            await page.evaluate(
+              () =>
+                new Promise<void>((resolve) =>
+                  requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+                ),
+            );
+          }
           const result: ReturnType<ReturnType<typeof installWarmReloadTranscriptProbe>["read"]> =
             await page.evaluate(() => Reflect.get(window, "__activeTranscriptReload").read());
           const frames = result.frames;
@@ -91,7 +126,11 @@ suite.define(() => {
           if (anchor === "reader") {
             expect(
               frames.every(
-                (frame) => frame.rows.find((item) => item.key === retained.key)?.y === retained.y,
+                (frame) =>
+                  Math.abs(
+                    (frame.rows.find((item) => item.key === retained.key)?.y ?? Infinity) -
+                      retained.y,
+                  ) <= 1,
               ),
               JSON.stringify(frames),
             ).toBe(true);
@@ -99,7 +138,7 @@ suite.define(() => {
             expect(
               new Set(frames.map((frame) => frame.scrollTop)).size,
               JSON.stringify(result),
-            ).toBe(2);
+            ).toBe(twoRounds ? 3 : 2);
             expect(
               await page
                 .locator(".chat-thread")

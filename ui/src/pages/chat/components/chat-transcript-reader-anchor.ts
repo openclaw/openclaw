@@ -59,7 +59,30 @@ export class TranscriptReaderAnchor {
   // delivery. Its restoration already accounts for that delivery's rows.
   private ownedSinceDelivery = false;
 
-  constructor(private readonly host: ReaderAnchorHost) {}
+  constructor(
+    private readonly host: ReaderAnchorHost,
+    private readonly onRowsMeasured: () => void,
+  ) {}
+
+  get endReady(): boolean {
+    return (
+      !this.host.offsetState.pendingScrollOffset &&
+      (this.host.initialRange.pending || this.rowsMeasured)
+    );
+  }
+
+  /** Native receipts and the virtual range must describe the same measurement batch. */
+  get rowsMeasured(): boolean {
+    return this.host.virtualizer.getVirtualItems().every(({ key }) => {
+      const row = this.host.virtualizer.elementsCache.get(key);
+      const height = row && this.heights.get(row);
+      return (
+        row?.isConnected === true &&
+        height !== undefined &&
+        Math.abs(height - (this.host.virtualizer.itemSizeCache.get(key) ?? -1)) < 0.5
+      );
+    });
+  }
 
   /** Restoration, scroll commands, prepend and disclosure anchors place the reader themselves. */
   private positionOwned(): boolean {
@@ -151,6 +174,7 @@ export class TranscriptReaderAnchor {
       correction += delta;
       this.unlanded.set(key, (this.unlanded.get(key) ?? 0) + delta);
     }
+    this.onRowsMeasured();
     if (!correction) {
       return;
     }

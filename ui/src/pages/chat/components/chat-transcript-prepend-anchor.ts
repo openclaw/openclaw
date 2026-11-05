@@ -14,6 +14,7 @@ export class TranscriptPrependAnchor {
   constructor(
     private readonly messageElements: ReadonlyMap<string, HTMLElement>,
     private readonly onLayoutCorrection: (before: number, after: number) => void,
+    private readonly endRowKey?: () => string | null | undefined,
   ) {}
 
   /** Stable message identity used to resolve its row in the committed projection. */
@@ -32,7 +33,11 @@ export class TranscriptPrependAnchor {
       (messageKey === null ? null : this.committedMessageRows.get(messageKey)) ??
       this.pending?.rowKey ??
       null;
-    return extractTranscriptRange(range, indexes, [focusedRowKey, rowKey]);
+    return extractTranscriptRange(range, indexes, [
+      focusedRowKey,
+      rowKey,
+      this.endRowKey?.() ?? null,
+    ]);
   }
 
   /** Whether the next projection inserts history before the committed first message. */
@@ -69,28 +74,23 @@ export class TranscriptPrependAnchor {
   }
 
   /** Keep the message fixed while newly mounted viewport rows replace their estimates. */
-  update(
-    element: HTMLDivElement | null,
-    virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-    measureRows: () => boolean,
-  ): boolean {
+  update(virtualizer: Virtualizer<HTMLDivElement, HTMLElement>, rowsMeasured: boolean): boolean {
     const anchor = this.pending;
     if (!anchor) {
       return false;
     }
-    const changed = measureRows();
     const moved = restoreTranscriptPrependAnchor(
       anchor,
-      element,
+      virtualizer.scrollElement,
       virtualizer,
       this.messageElements.values(),
       this.onLayoutCorrection,
     );
-    if (anchor.measured && !changed && !moved) {
+    if (anchor.measured && rowsMeasured && !moved) {
       this.pending = null;
     }
-    anchor.measured = true;
-    return true;
+    anchor.measured ||= rowsMeasured;
+    return rowsMeasured || moved;
   }
 
   /** Carry the viewport target with native reader movement, not layout growth. */
