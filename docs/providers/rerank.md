@@ -52,15 +52,20 @@ it as the Decision model:
     providers: {
       rerank: {
         baseUrl: "http://127.0.0.1:8000/v1",
-        models: [{ id: "BAAI/bge-reranker-v2-m3", name: "BGE reranker v2 m3" }],
+        models: [
+          { id: "Alibaba-NLP/gte-reranker-modernbert-base", name: "GTE reranker ModernBERT" },
+        ],
       },
     },
   },
   agents: {
-    defaults: { decisionModel: "rerank/BAAI/bge-reranker-v2-m3" },
+    defaults: { decisionModel: "rerank/Alibaba-NLP/gte-reranker-modernbert-base" },
   },
 }
 ```
+
+Any reranker your server hosts works; `Alibaba-NLP/gte-reranker-modernbert-base`
+is the recommended model for the Knowledge recall gate (see below).
 
 - The model `id` is sent as `model` in each request. Use the name your server
   expects.
@@ -100,9 +105,13 @@ multi-step logic. Use a native Decision provider for those.
 
 ## Recall gate example
 
-The Knowledge recall gate asks one `boolean` question per memory page, with
-the page label in `instructions`, and a `choice` question to shortlist large
-indexes. Both map directly onto rerank calls:
+The Knowledge [recall gate](/plugins/knowledge/memory-provider#recall-gate)
+asks one `boolean` question per candidate page. By default the candidates come
+from keyword search, the state is the bare user message, and each question
+carries the page title and its best passages, so every question maps onto one
+(query, document) pair in a single rerank call. The recommended model is
+[`Alibaba-NLP/gte-reranker-modernbert-base`](https://huggingface.co/Alibaba-NLP/gte-reranker-modernbert-base);
+the gate's defaults were measured with it:
 
 ```json5
 {
@@ -110,20 +119,24 @@ indexes. Both map directly onto rerank calls:
     providers: {
       rerank: {
         baseUrl: "http://127.0.0.1:8080",
-        models: [{ id: "BAAI/bge-reranker-v2-m3", name: "BGE reranker v2 m3" }],
+        models: [
+          { id: "Alibaba-NLP/gte-reranker-modernbert-base", name: "GTE reranker ModernBERT" },
+        ],
       },
     },
   },
-  agents: { defaults: { decisionModel: "rerank/BAAI/bge-reranker-v2-m3" } },
+  agents: {
+    defaults: { decisionModel: "rerank/Alibaba-NLP/gte-reranker-modernbert-base" },
+  },
   plugins: {
     entries: { knowledge: { config: { recallGate: { mode: "shadow" } } } },
   },
 }
 ```
 
-Reranker scores are not calibrated probabilities. Run the gate in `shadow`
-mode first and tune `highThreshold` and `mediumThreshold` against its logs
-before switching to `live`.
+Reranker scores are not calibrated probabilities, and each model scores on its
+own scale. With a different model, run the gate in `shadow` mode first and
+tune `highThreshold` against its logged scores before switching to `live`.
 
 ## Privacy
 

@@ -7,7 +7,13 @@ import type {
 } from "openclaw/plugin-sdk/decisions";
 import { expect, it, vi } from "vitest";
 import { memoryFixture } from "./memory-provider.test-support.js";
-import { decide, parseRecallGate, renderInjection, type GateEntry } from "./recall-gate.js";
+import {
+  decide,
+  GATE_SKIP_HINT,
+  parseRecallGate,
+  renderInjection,
+  type GateEntry,
+} from "./recall-gate.js";
 import { useTestTempDirs } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
@@ -78,11 +84,13 @@ const entries = (n: number, line = (i: number) => `note: entry ${i}`): GateEntry
   Array.from({ length: n }, (_, i) => ({ id: `r${i}`, line: line(i), label: `e${i}` }));
 
 const policy = (extra = {}) => ({ ...parseRecallGate(gate().recallGate)!, ...extra });
+/** Model-pick mode with the pointer tier on: the index-shortlist cases below. */
+const MODEL = { candidates: "model", highThreshold: 0.85, mediumThreshold: 0.5, maxCandidates: 5 };
 
 async function decideWith(script: Script, list: GateEntry[], extra = {}) {
   const rt = runtime(script);
   const result = await decide({
-    policy: policy(extra),
+    policy: policy({ ...MODEL, ...extra }),
     entries: list,
     message: "anything",
     decisions: rt.decisions,
@@ -126,16 +134,70 @@ async function setup(config = gate(), script: Script = {}) {
 }
 
 it("parses defaults and turns off cleanly", () => {
+  // The measured keyword-shortlist setup; pointer tier and skip hint stay off.
   expect(parseRecallGate(gate().recallGate)).toEqual({
     mode: "shadow",
-    highThreshold: 0.85,
-    mediumThreshold: 0.5,
+    candidates: "keyword",
+    highThreshold: 0.75,
     timeoutMs: 1500,
     maxIndexChars: 24_000,
-    maxCandidates: 5,
+    maxCandidates: 10,
+    excerpts: 4,
+    excerptChars: 1_000,
+    pageChars: 2_800,
   });
   expect(parseRecallGate({ mode: "off" })).toBe(undefined);
   expect(parseRecallGate({ highThreshold: 0.3, mediumThreshold: 0.6 })!.highThreshold).toBe(0.6);
+  expect(parseRecallGate({ skipHintBelow: 0.858 })).toMatchObject({ skipHintBelow: 0.858 });
+});
+
+it("without the pointer tier, mid scores and bare yeses inject nothing", async () => {
+  const { result } = await decideWith(
+    { relevant: { "entry 1": "yes", "entry 2": 0.6 } },
+    entries(3),
+    {
+      mediumThreshold: undefined,
+      highThreshold: 0.75,
+    },
+  );
+  expect(result.status === "ok" && result.decisions.map((d) => d.tier)).toEqual([
+    "low",
+    "low",
+    "low",
+  ]);
+});
+
+it("keyword mode scores the given candidates with their excerpts, no shortlist question", async () => {
+  const list: GateEntry[] = [
+    { id: "a", line: "note: Nova", label: "Nova", text: "rabies booster due in March" },
+    { id: "b", line: "note: Oven", label: "Oven", text: "firebrick" },
+  ];
+  const rt = runtime({ relevant: { Nova: 0.8, Oven: 0.3 } });
+  const result = await decide({
+    policy: policy(),
+    entries: list,
+    message: "Is Nova due?",
+    decisions: rt.decisions,
+    agentId: "main",
+    signal: new AbortController().signal,
+  });
+  expect(rt.calls).toHaveLength(1);
+  const batch = rt.calls[0]!.batch;
+  // Rerankers score (message, title + excerpt) pairs; no prompt framing around the message.
+  expect(batch.state).toEqual({ type: "text", text: "Is Nova due?" });
+  expect(batch.questions.page0).toMatchObject({
+    type: "boolean",
+    instructions: "Nova\nrabies booster due in March",
+  });
+  expect(result).toEqual({
+    status: "ok",
+    offered: 2,
+    shortlisted: 2,
+    decisions: [
+      { id: "a", score: 0.8, tier: "high" },
+      { id: "b", score: 0.3, tier: "low" },
+    ],
+  });
 });
 
 it("scores pages independently: two relevant pages that split choice mass both pass", async () => {
@@ -253,7 +315,7 @@ it("rechecks authority before every Decision request", async () => {
   });
   await expect(
     decide({
-      policy: policy(),
+      policy: policy(MODEL),
       entries: entries(9),
       message: "x",
       decisions: rt.decisions,
@@ -273,7 +335,7 @@ it("counts the header inside the injection budget", () => {
     entry: { id: `r${i}`, line: "", label: `page ${i}` },
     tier: "medium" as const,
   }));
-  const text = renderInjection(items);
+  const text = renderInjection(items, 2_800);
   expect(text.startsWith("## Knowledge recall")).toBe(true);
   expect(text.length).toBeLessThanOrEqual(6_000);
   expect(text.length).toBeGreaterThan(5_800);
@@ -283,14 +345,55 @@ it("shadow mode logs the decisions and injects nothing", async () => {
   const { run, logged } = await setup(gate(), { relevant: { Nova: 0.95 } });
   expect(await run("Is Nova due for her shots?")).toBe(undefined);
   const [record] = logged();
-  expect(record).toMatchObject({ mode: "shadow", outcome: "shadow", offered: 3, shortlisted: 3 });
+  // Keyword search ran over all three pages and shortlisted the one sharing words.
+  expect(record).toMatchObject({ mode: "shadow", outcome: "shadow", offered: 3, shortlisted: 1 });
   expect(record.decisions.filter((d: { tier: string }) => d.tier === "high")).toHaveLength(1);
   // Logs carry IDs and scores, never message or record text.
   expect(JSON.stringify(record)).not.toMatch(/Nova|shots/u);
 });
 
-it("live mode injects high bodies, medium pointers and nothing for low", async () => {
+it("live keyword mode injects only the matched excerpt; unmatched pages are never scored", async () => {
   const { run, logged, calls } = await setup(gate({ mode: "live" }), {
+    relevant: { Nova: 0.8, Pizza: 0.99, Garage: 0.99 },
+  });
+  const result = await run("Is Nova due for her shots?");
+  expect(Object.keys(result)).toEqual(["prependContext"]);
+  const text: string = result.prependContext;
+  expect(text).toContain("### Nova vaccination schedule");
+  expect(text).toContain("rabies booster is due in March");
+  expect(text).not.toMatch(/Pizza|Garage|knowledge_lookup/u);
+  expect(calls).toHaveLength(1);
+  expect(JSON.stringify(calls[0]!.batch)).not.toMatch(/Pizza|Garage/u);
+  expect(logged()[0]).toMatchObject({ mode: "live", outcome: "injected", shortlisted: 1 });
+});
+
+it("keyword mode never scores when no page shares a word with the message", async () => {
+  const { run, calls, logged } = await setup(gate({ mode: "live", skipHintBelow: 0.9 }));
+  expect(await run("Quantum chromodynamics?")).toBe(undefined);
+  expect(calls).toHaveLength(0);
+  expect(logged()[0]).toMatchObject({ outcome: "none", offered: 3, shortlisted: 0 });
+});
+
+it("the skip hint is off by default and opt-in below its cutoff", async () => {
+  const off = await setup(gate({ mode: "live" }), { relevant: { Nova: 0.2 } });
+  expect(await off.run("Is Nova due for her shots?")).toBe(undefined);
+  expect(off.logged()[0]).toMatchObject({ outcome: "none" });
+  const on = await setup(gate({ mode: "live", skipHintBelow: 0.858 }), { relevant: { Nova: 0.2 } });
+  expect(await on.run("Is Nova due for her shots?")).toEqual({ prependContext: GATE_SKIP_HINT });
+  expect(on.logged()[0]).toMatchObject({ outcome: "skip-hint" });
+  // A score at or above the cutoff gives no hint.
+  const near = await setup(gate({ mode: "live", skipHintBelow: 0.858, highThreshold: 0.9 }), {
+    relevant: { Nova: 0.86 },
+  });
+  expect(await near.run("Is Nova due for her shots?")).toBe(undefined);
+  // Shadow mode logs the hint it would add and injects nothing.
+  const shadow = await setup(gate({ skipHintBelow: 0.858 }), { relevant: { Nova: 0.2 } });
+  expect(await shadow.run("Is Nova due for her shots?")).toBe(undefined);
+  expect(shadow.logged()[0]).toMatchObject({ outcome: "shadow" });
+});
+
+it("model mode injects high bodies, medium pointers and nothing for low", async () => {
+  const { run, logged, calls } = await setup(gate({ mode: "live", ...MODEL }), {
     relevant: { Nova: 0.9, Pizza: 0.6, Garage: 0.1 },
   });
   const result = await run("Is Nova due for her shots?");
@@ -309,7 +412,9 @@ it("live mode injects high bodies, medium pointers and nothing for low", async (
 });
 
 it("injects nothing when the agent has no Decision model or the provider is down", async () => {
-  const { run, logged } = await setup(gate({ mode: "live" }), { unavailable: "not-configured" });
+  const { run, logged } = await setup(gate({ mode: "live", ...MODEL }), {
+    unavailable: "not-configured",
+  });
   expect(await run("Is Nova due for her shots?")).toBe(undefined);
   expect(logged()[0]).toMatchObject({
     outcome: "unavailable",
@@ -338,7 +443,9 @@ it("injects nothing and never throws on runtime errors or timeouts", async () =>
 });
 
 it("keeps the standing index in the system prompt and out of the gate", async () => {
-  const { run, indexHook, ctx } = await setup(gate({ mode: "live" }), { relevant: { Nova: 0.99 } });
+  const { run, indexHook, ctx } = await setup(gate({ mode: "live", ...MODEL }), {
+    relevant: { Nova: 0.99 },
+  });
   const index = await indexHook({ prompt: "x", messages: [] }, ctx);
   expect(index.appendSystemContext).toContain("## Knowledge Index");
   const text: string = (await run("Is Nova due for her shots?")).prependContext;

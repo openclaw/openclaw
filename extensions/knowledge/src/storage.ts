@@ -15,6 +15,8 @@ import { EvidenceReadInput } from "./evidence-read-contract.js";
 import { VerifyInput, type VerifyOutput } from "./ingestion-contract.js";
 import { buildGateEntries, buildMemoryIndex } from "./memory-index.js";
 import { approvedRecall } from "./model.js";
+import { GateCandidatesInput } from "./recall-gate.js";
+import { keywordCandidates } from "./recall-keyword.js";
 import { recentActivity } from "./recent-activity.js";
 import type { RecentInput } from "./recent.js";
 import { withinBudget } from "./response-budget.js";
@@ -239,6 +241,27 @@ export class KnowledgeStorage extends StorageIngestion {
       );
       access.assertCurrent();
       return { entries: buildGateEntries(records, Date.now()).slice(0, GATE_INDEX_MAX_ENTRIES) };
+    });
+  }
+  /** Keyword-shortlisted recall-gate candidates with excerpts of their best passages. */
+  async gateCandidates(input: GateCandidatesInput, access: VaultAccess) {
+    if (!Check(GateCandidatesInput, input)) {
+      throw new Error("Invalid recall gate candidate input.");
+    }
+    return this.run(access, async (vault) => {
+      const data = await vault.scan();
+      const records = this.store.withDatabase((db) =>
+        eligible(data, withdrawnIds(db, this.retrievalBinding(access)), false),
+      );
+      const bodies = new Map(records.map((record) => [record.id, record.body]));
+      const pages = buildGateEntries(records, Date.now()).map((entry) => ({
+        entry,
+        body: bodies.get(entry.id) ?? "",
+      }));
+      const { message, limit, ...excerpts } = input;
+      const entries = keywordCandidates(message, pages, limit, excerpts);
+      access.assertCurrent();
+      return { offered: pages.length, entries };
     });
   }
   /** Read temporal projections within the same authority and identity fence as search. */

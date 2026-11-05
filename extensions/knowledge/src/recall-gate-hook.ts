@@ -2,20 +2,22 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { openPrivatePartition } from "./memory-index-hook.js";
 import {
   decide,
-  GATE_BODY_MAX,
+  GATE_SKIP_HINT,
   renderInjection,
+  wantsSkipHint,
   type GateDecision,
+  type GateEntry,
   type GateResult,
   type RecallGatePolicy,
 } from "./recall-gate.js";
 import type { Stores } from "./stores.js";
 
-// Lines read for a high-tier page; renderInjection clips the body to GATE_BODY_MAX.
+// Lines read for a high-tier page in model mode; renderInjection clips to pageChars.
 const BODY_LINES = 60;
 
 type GateRecord = {
   mode: RecallGatePolicy["mode"];
-  outcome: "injected" | "shadow" | "none" | "unavailable" | "error";
+  outcome: "injected" | "shadow" | "skip-hint" | "none" | "unavailable" | "error";
   ms: number;
   offered?: number;
   shortlisted?: number;
@@ -71,10 +73,26 @@ export function registerRecallGateHook(
           return undefined;
         }
         const { runtime, access } = opened;
-        const { entries } = await runtime.enqueue(access.assertCurrent, () =>
-          runtime.client.call("gateIndex", access),
-        );
         const message = event.currentUserMessage ?? event.prompt;
+        const keyword = policy.candidates === "keyword";
+        // Keyword mode reports how many pages the search ran over; model mode how
+        // many index entries fit the budget.
+        const listed: { offered?: number; entries: GateEntry[] } = keyword
+          ? message.trim()
+            ? await runtime.enqueue(access.assertCurrent, () =>
+                runtime.client.call("gateCandidates", access, {
+                  message: message.slice(0, 20_000),
+                  limit: policy.maxCandidates,
+                  excerpts: policy.excerpts,
+                  excerptChars: policy.excerptChars,
+                  pageChars: policy.pageChars,
+                }),
+              )
+            : { offered: 0, entries: [] }
+          : await runtime.enqueue(access.assertCurrent, () =>
+              runtime.client.call("gateIndex", access),
+            );
+        const { entries } = listed;
         const result = await decide({
           policy,
           entries,
@@ -85,16 +103,26 @@ export function registerRecallGateHook(
           assertCurrent: access.assertCurrent,
         });
         if (result.status === "unavailable") {
-          const { offered, stage, reason } = result;
+          const { stage, reason } = result;
+          const offered = listed.offered ?? result.offered;
           log({ mode: policy.mode, outcome: "unavailable", offered, stage, reason, ms: ms() });
           return undefined;
         }
-        const { offered, shortlisted, decisions } = result;
+        const { shortlisted, decisions } = result;
+        const offered = listed.offered ?? result.offered;
         const base = { mode: policy.mode, offered, shortlisted, decisions };
         const hits = decisions.filter((d) => d.tier !== "low");
-        if (policy.mode === "shadow" || hits.length === 0) {
-          log({ ...base, outcome: hits.length ? "shadow" : "none", ms: ms() });
+        const skipHint = hits.length === 0 && wantsSkipHint(decisions, policy);
+        if (policy.mode === "shadow" || (hits.length === 0 && !skipHint)) {
+          const outcome = hits.length || skipHint ? "shadow" : "none";
+          log({ ...base, outcome, ms: ms() });
           return undefined;
+        }
+        if (skipHint) {
+          controller.signal.throwIfAborted();
+          access.assertCurrent();
+          log({ ...base, outcome: "skip-hint", injectedChars: GATE_SKIP_HINT.length, ms: ms() });
+          return { prependContext: GATE_SKIP_HINT };
         }
         const byId = new Map(entries.map((e) => [e.id, e]));
         const items = await Promise.all(
@@ -103,15 +131,21 @@ export function registerRecallGateHook(
             if (d.tier !== "high") {
               return { entry, tier: d.tier };
             }
+            // Keyword candidates carry their excerpt; inject that, never the whole page.
+            if (keyword) {
+              return entry.text
+                ? { entry, tier: d.tier, body: entry.text }
+                : { entry, tier: d.tier };
+            }
             const found = await runtime.enqueue(access.assertCurrent, () =>
               runtime.client.call("memoryGet", access, { id: d.id, from: 1, count: BODY_LINES }),
             );
             return found.status === "ok"
-              ? { entry, tier: d.tier, body: found.text.slice(0, GATE_BODY_MAX + 1) }
+              ? { entry, tier: d.tier, body: found.text.slice(0, policy.pageChars + 1) }
               : { entry, tier: d.tier };
           }),
         );
-        const text = renderInjection(items);
+        const text = renderInjection(items, policy.pageChars);
         // Publication is the boundary: a turn whose deadline, hook lifetime or
         // memory audience lapsed while the gate ran gets nothing.
         controller.signal.throwIfAborted();
