@@ -123,8 +123,8 @@ function runsCliEntrypoint(params: { runtime: GatewayDaemonRuntime; wrapperPath?
  * Runtime inputs plus the CLI entrypoint the service runs: the retained `serviceCli`, the
  * durable copy that replaces a disposable npx, dlx, or bunx CLI, or undefined for this CLI.
  * Runtime and wrapper inputs are validated first. Nothing installs here: with
- * `installDurableCli` a missing or unusable durable copy becomes `durableCliReplacement`
- * for the service install to perform; otherwise only a checked copy is reused.
+ * `installDurableCli` the durable copy becomes `durableCliReplacement`, which the service install
+ * checks and reuses or replaces under the package lock; otherwise only a checked copy is reused.
  */
 export async function resolveDaemonInstallPlanInputs(
   params: Parameters<typeof resolveDaemonInstallRuntimeInputs>[0] & {

@@ -79,7 +79,7 @@ describe("resolveDurableServiceCli", () => {
       JSON.stringify({ name: "openclaw", version }),
     );
     fs.writeFileSync(path.join(npxPackage, "openclaw.mjs"), "");
-    fs.mkdirSync(path.join(npxPackage, "dist"));
+    fs.mkdirSync(path.join(npxPackage, "dist"), { recursive: true });
     fs.writeFileSync(path.join(npxPackage, "dist", "index.js"), "");
     return path.join(npxPackage, "openclaw.mjs");
   };
@@ -111,7 +111,7 @@ describe("resolveDurableServiceCli", () => {
     installedCopyErrors.mockResolvedValueOnce([]);
 
     await expect(
-      resolveDurableServiceCli(stateEnv(), { install: true, service: "gateway" }, entrypoint),
+      resolveDurableServiceCli(stateEnv(), { install: false, service: "gateway" }, entrypoint),
     ).resolves.toEqual({ entrypoint: durable });
     expect(runGlobalPackageUpdateSteps).not.toHaveBeenCalled();
   });
@@ -141,15 +141,20 @@ describe("resolveDurableServiceCli", () => {
     ]);
   });
 
-  it("keeps a failed install's restore from undoing another install's swap of the shared copy", async () => {
-    const env = stateEnv();
+  // A live durable copy at 1.0.0: the package check reads its version, the fake updater swaps
+  // it at the activation gate, and restore puts back what that swap displaced.
+  const liveCopy = () => {
     const packageRoot = path.dirname(durableCopy());
     const manifest = path.join(packageRoot, "package.json");
     const writeVersion = (version: string) =>
       fs.writeFileSync(manifest, JSON.stringify({ name: "openclaw", version }));
-    const liveVersion = () => JSON.parse(fs.readFileSync(manifest, "utf8")).version;
+    const liveVersion = (): string => JSON.parse(fs.readFileSync(manifest, "utf8")).version;
     writeVersion("1.0.0");
-    // Swaps the live copy at the activation gate; restore puts back what that swap displaced.
+    installedCopyErrors.mockImplementation(async ({ expectedVersion }) =>
+      liveVersion() === expectedVersion
+        ? []
+        : [`expected ${expectedVersion}, found ${liveVersion()}`],
+    );
     runGlobalPackageUpdateSteps.mockImplementation(async (params) => {
       await params.beforeActivate?.();
       const previous = liveVersion();
@@ -171,16 +176,20 @@ describe("resolveDurableServiceCli", () => {
       writeVersion(params.installSpec?.split("@")[1] ?? "");
       return { failedStep: null };
     });
-    const plan = async (version: string, service: "gateway" | "node") =>
-      (await resolveDurableServiceCli(env, { install: true, service }, npxEntrypoint(version)))
-        ?.replacement;
+    return liveVersion;
+  };
+  const plan = async (version: string, service: "gateway" | "node") =>
+    (await resolveDurableServiceCli(stateEnv(), { install: true, service }, npxEntrypoint(version)))
+      ?.replacement;
+
+  // The Gateway install swaps in 2.0.0 and then fails, while a node install for `nodeVersion`
+  // arrives; the node install is planned only after the Gateway's swap is live.
+  async function raceFailedGatewayInstall(nodeVersion: string) {
     const gatewaySwapped = createDeferredCore();
     const gatewayFails = createDeferredCore();
     const nodeAskedForLock = createDeferredCore();
-
-    // The Gateway install swaps in 2.0.0, then fails while a node install arrives with 3.0.0.
     const gateway = installDurableServiceCli({
-      env,
+      env: stateEnv(),
       replacement: await plan("2.0.0", "gateway"),
       install: async (beforeMutation) => {
         await beforeMutation?.();
@@ -194,20 +203,36 @@ describe("resolveDurableServiceCli", () => {
     await gatewaySwapped.promise;
     packageLock.onAttempt = () => nodeAskedForLock.resolve();
     const node = installDurableServiceCli({
-      env,
-      replacement: await plan("3.0.0", "node"),
+      env: stateEnv(),
+      replacement: await plan(nodeVersion, "node"),
       install: async (beforeMutation) => await beforeMutation?.(),
       verify: async () => true,
       warn: vi.fn(),
     });
-    // Without a shared package lock the node install finishes here, before the failure.
+    // Without the package lock the node install finishes here, before the Gateway fails.
     await Promise.race([nodeAskedForLock.promise, node]);
     gatewayFails.resolve();
+    try {
+      await expect(gateway).rejects.toThrow("gateway install failed");
+      await node;
+    } finally {
+      packageLock.onAttempt = () => {};
+      runGlobalPackageUpdateSteps.mockReset();
+      installedCopyErrors.mockReset();
+    }
+  }
 
-    await expect(gateway).rejects.toThrow("gateway install failed");
-    await node;
-    expect(liveVersion()).toBe("3.0.0");
-    packageLock.onAttempt = () => {};
-    runGlobalPackageUpdateSteps.mockReset();
-  });
+  it.each([
+    ["swaps in its own version", "3.0.0"],
+    ["reuses the version the Gateway swapped in", "2.0.0"],
+  ])(
+    "keeps a failed Gateway install's restore from undoing a node install that %s",
+    async (_name, nodeVersion) => {
+      const liveVersion = liveCopy();
+
+      await raceFailedGatewayInstall(nodeVersion);
+
+      expect(liveVersion()).toBe(nodeVersion);
+    },
+  );
 });

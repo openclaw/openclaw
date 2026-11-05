@@ -585,8 +585,8 @@ export async function buildGatewayInstallPlan(params: {
   /** Retained CLI to plan for instead of this process's own entrypoint and executable. */
   serviceCli?: { executable: string; entrypoint: string | null };
   /**
-   * Plan for an install that may (re)place the durable copy of a disposable CLI; the plan's
-   * durableCliReplacement goes to installDurableServiceCli. Comparisons and Doctor omit it.
+   * Plan for an install that runs the durable copy of a disposable CLI; the plan's durableCliReplacement
+   * goes to installDurableServiceCli, which reuses or replaces it. Comparisons and Doctor omit it.
    */
   installDurableCli?: boolean;
   wrapperPath?: string;

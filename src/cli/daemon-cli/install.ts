@@ -594,7 +594,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     warn(warning);
   }
 
-  // Planning validates the runtime and wrapper; a durable-copy replacement waits for install.
+  // Planning validates the runtime and wrapper; the durable copy is checked and placed during install.
   const {
     programArguments,
     workingDirectory,

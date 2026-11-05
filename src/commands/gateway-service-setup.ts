@@ -14,7 +14,7 @@ export async function prepareGatewayServiceInstall(params: {
   warn: DaemonInstallWarnFn;
 }) {
   const { runtimePinUpdate, ...runtime } = params.selection;
-  // Planning validates the runtime and wrapper; a durable-copy replacement waits for install.
+  // Planning validates the runtime and wrapper; the durable copy is checked and placed during install.
   const { durableCliReplacement, ...plan } = await buildGatewayInstallPlan({
     ...runtime,
     port: params.port,

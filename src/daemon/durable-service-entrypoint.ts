@@ -68,14 +68,43 @@ export function resolveDurableServiceBinDir(
   return options.planned || fsSync.existsSync(launcher) ? binDir : undefined;
 }
 
-/** A durable copy that a service install must (re)place before the service runs it. */
+/**
+ * The durable copy a service install runs. Despite the name, the install reuses a copy that
+ * still serves this version when it checks it under the package lock, and replaces it otherwise.
+ */
 export type DurableServiceCliReplacement = {
   version: string;
   globalRoot: string;
   packageRoot: string;
-  /** The entrypoint the service will run; the staged copy must contain it. */
+  /** The entrypoint the service will run; a replacement must contain it. */
   entrypoint: string;
 };
+
+/** Why the copy at `packageRoot` cannot serve `version`; empty when it can be reused. */
+async function collectDurableCopyErrors(packageRoot: string, version: string): Promise<string[]> {
+  const exists = await fs.access(path.join(packageRoot, "openclaw.mjs")).then(
+    () => true,
+    () => false,
+  );
+  if (!exists) {
+    return ["missing"];
+  }
+  const [{ collectPackageDistContentInventoryErrors }, { collectInstalledGlobalPackageErrors }] =
+    await Promise.all([
+      import("../infra/package-dist-inventory.js"),
+      import("../infra/update-global.js"),
+    ]);
+  const errors = await collectInstalledGlobalPackageErrors({
+    packageRoot,
+    expectedVersion: version,
+  });
+  if (errors.length > 0) {
+    return errors;
+  }
+  return await collectPackageDistContentInventoryErrors(packageRoot).catch((error: unknown) => [
+    String(error),
+  ]);
+}
 
 /**
  * Entrypoint a service should run instead of a disposable CLI copy, or undefined when
@@ -84,8 +113,8 @@ export type DurableServiceCliReplacement = {
  * Neither mode installs. `install: false` (Doctor, repair, install comparisons) reuses an
  * existing copy only when it matches this CLI's version and passes the package integrity
  * checks, and throws DurableServiceCliError naming the explicit reinstall otherwise.
- * `install: true` instead returns the replacement for installDurableServiceCli to perform
- * inside the service install, after planning has validated everything else.
+ * `install: true` returns the replacement for installDurableServiceCli, which checks the copy
+ * under the package lock and reuses or replaces it inside the service install.
  */
 export async function resolveDurableServiceCli(
   env: NodeJS.ProcessEnv,
@@ -99,24 +128,19 @@ export async function resolveDurableServiceCli(
     return undefined;
   }
   const { layout, packageRoot, entrypoint: durableEntrypoint } = resolveDurableLayout(env);
-  const exists = await fs.access(durableEntrypoint).then(
-    () => true,
-    () => false,
-  );
-  if (!options.install && !exists) {
+  if (
+    !options.install &&
+    !(await fs.access(durableEntrypoint).then(
+      () => true,
+      () => false,
+    ))
+  ) {
     return undefined;
   }
   // Package-inspection machinery loads only for a disposable CLI.
-  const [
-    { resolveOpenClawPackageRoot },
-    { collectPackageDistContentInventoryErrors },
-    { readPackageVersion },
-    { collectInstalledGlobalPackageErrors },
-  ] = await Promise.all([
+  const [{ resolveOpenClawPackageRoot }, { readPackageVersion }] = await Promise.all([
     import("../infra/openclaw-root.js"),
-    import("../infra/package-dist-inventory.js"),
     import("../infra/package-json.js"),
-    import("../infra/update-global.js"),
   ]);
   const sourceRoot = await resolveOpenClawPackageRoot({
     argv1: await realpathOrResolve(entrypoint),
@@ -125,26 +149,18 @@ export async function resolveDurableServiceCli(
   if (!sourceRoot || !version) {
     throw new Error("Cannot determine the running OpenClaw version for service installation.");
   }
-  const errors = exists
-    ? await collectInstalledGlobalPackageErrors({ packageRoot, expectedVersion: version })
-    : ["missing"];
-  if (errors.length === 0) {
-    errors.push(
-      ...(await collectPackageDistContentInventoryErrors(packageRoot).catch((error: unknown) => [
-        String(error),
-      ])),
-    );
-  }
-  if (errors.length === 0) {
-    return { entrypoint: durableEntrypoint };
-  }
   if (!options.install) {
+    const errors = await collectDurableCopyErrors(packageRoot, version);
+    if (errors.length === 0) {
+      return { entrypoint: durableEntrypoint };
+    }
     throw new DurableServiceCliError(
       `The background service's OpenClaw copy at ${packageRoot} cannot be reused (${errors.slice(0, 2).join("; ")}). Reinstall it with: ${formatDurableInstallCommand(version, "gateway install --force", env)}`,
     );
   }
-  // The copy is published only inside the service install, so plan its entry from this
-  // CLI's own files: the same version has the same layout.
+  // Whether the copy is reused is decided under the package lock, and a replacement is
+  // published only inside the service install, so plan the entry from this CLI's own
+  // files: the same version has the same layout.
   const { planCliEntrypoint } = await import("./program-args.js");
   const planned = await planCliEntrypoint({
     sourceEntrypoint: entrypoint,
@@ -166,7 +182,8 @@ export async function resolveDurableServiceCli(
 /**
  * Runs a service install whose plan carries a durable-copy replacement.
  *
- * npm stages and verifies the new copy first while an existing service keeps serving the old
+ * Under the package lock the copy is checked again: a copy that still serves this version is
+ * reused as is. Otherwise npm stages and verifies the new copy first while an existing service keeps serving the old
  * one. The swap waits at the package updater's activation gate until the service install's
  * mutation hook, which runs under the service operation lock just before the service's own
  * runtime-pin checks and definition write. The previous copy stays backed up until the
@@ -175,7 +192,8 @@ export async function resolveDurableServiceCli(
  * service is verified loaded.
  *
  * Gateway and node services share the copy but not a service lock, so one package lock covers
- * staging through settlement: a failed install's restore cannot undo another install's swap.
+ * the check, staging and settlement, including a reuse: a failed install's restore cannot undo
+ * another install's swap or the copy another install's service now runs.
  * `openclaw update` does not take this lock; it updates the copy under its own ownership.
  */
 export async function installDurableServiceCli(params: {
@@ -212,7 +230,11 @@ async function installUnderPackageLock(
   },
 ): Promise<void> {
   const replacement = params.replacement;
-  // Read under the lock: an install that waited may now replace a copy another one made.
+  // Read under the lock: an install that waited sees the copy other installs left behind.
+  if ((await collectDurableCopyErrors(replacement.packageRoot, replacement.version)).length === 0) {
+    await params.install();
+    return;
+  }
   const replacesExisting = await fs.access(replacement.packageRoot).then(
     () => true,
     () => false,

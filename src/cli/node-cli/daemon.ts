@@ -252,7 +252,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const retainedRuntime = recordedRuntime?.status === "supported" ? recordedRuntime : undefined;
 
   const wrapperPath = installEnv.OPENCLAW_WRAPPER;
-  // Planning validates the runtime and wrapper; a durable-copy replacement waits for install.
+  // Planning validates the runtime and wrapper; the durable copy is checked and placed during install.
   const { devMode, runtime, runtimePath, cliEntrypoint, durableCliReplacement } =
     await resolveDaemonInstallPlanInputs({
       service: "node",
