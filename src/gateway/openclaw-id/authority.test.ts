@@ -121,8 +121,10 @@ describe("OpenClaw ID membership authority: linking", () => {
     expect(record.authority?.seq).toBe(1);
     expect(record.binding?.body.k_srv).toBe(K_SRV);
     expect(await authority.admittedPeerKeys()).toEqual({ seq: 1, admitted: [ceremony.peerKey] });
-    // Nothing secret about R is stored: only its public key.
-    expect(JSON.stringify(record)).not.toMatch(/seed|kit|OCK1/i);
+    // Nothing secret about R is stored: only its public key. Match secret-named fields and the
+    // kit text, not substrings that random signature bytes can contain.
+    expect(JSON.stringify(record)).not.toMatch(/"[^"]*(seed|kit)[^"]*":/i);
+    expect(JSON.stringify(record)).not.toContain("OCK1-");
   });
 
   // Spec section 11 #7: relayed traffic tries a root ceremony and is refused.
