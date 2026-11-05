@@ -26,6 +26,7 @@ import type {
   ConfigUnsetOptions,
 } from "./config-cli-input.js";
 import { getAtPath, isConfigSchemaPath, parseConfigSetPath } from "./config-cli-path.js";
+import { resolveAgentEntryKeyCase } from "./config-cli-roster.js";
 import { isConfigMachineOutput, isConfigSetJsonParseOnly } from "./config-output-mode.js";
 import type { ConfigSetOptions } from "./config-set-input.js";
 import { formatCliJsonFailure } from "./failure-output.js";
@@ -229,7 +230,10 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     const uiHints =
       runtimeSchema?.uiHints ??
       (await import("../config/schema-base.js")).computeBaseConfigUiHints();
-    const res = getAtPath(redactConfigObject(snapshot.config, uiHints), parsedPath);
+    const res = getAtPath(
+      redactConfigObject(snapshot.config, uiHints),
+      resolveAgentEntryKeyCase(snapshot.config as Record<string, unknown>, parsedPath),
+    );
     if (!res.found || res.value === undefined) {
       const schema =
         runtimeSchema?.schema ??

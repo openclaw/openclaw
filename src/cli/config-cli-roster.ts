@@ -4,6 +4,34 @@ import { parseLegacyAgentRoster } from "../config/legacy.roster.js";
 import type { ConfigSetOperation } from "./config-cli-input.js";
 import { getAtPath, type PathSegment } from "./config-cli-path.js";
 
+/**
+ * Resolves an `agents.entries.<id>` key to the stored spelling when only casing differs.
+ *
+ * The schema accepts keys case-insensitively and the runtime identifies each entry by its
+ * normalized id, but `config get/set/unset` address the authored key literally. An exact key
+ * always wins; the fallback matches casing only, so an unrepresentable key cannot be redirected
+ * onto a different agent (unlike normalizing the request).
+ */
+export function resolveAgentEntryKeyCase(
+  root: Record<string, unknown>,
+  path: readonly PathSegment[],
+): PathSegment[] {
+  if (path[0] !== "agents" || path[1] !== "entries" || typeof path[2] !== "string") {
+    return [...path];
+  }
+  const agents = root.agents;
+  const entries = isRecord(agents) ? agents.entries : undefined;
+  if (!isRecord(entries) || Object.hasOwn(entries, path[2])) {
+    return [...path];
+  }
+  const requested = path[2].toLowerCase();
+  const matches = Object.keys(entries).filter((key) => key.toLowerCase() === requested);
+  if (matches.length !== 1) {
+    return [...path];
+  }
+  return [...path.slice(0, 2), matches[0], ...path.slice(3)];
+}
+
 /** Keeps the documented list input and keyed input on one mutable roster. */
 export class ConfigMutationAgentRoster {
   private legacyOrder: string[] | undefined;

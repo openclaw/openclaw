@@ -1,0 +1,2 @@
+# Cover agent-entry key casing when the config CLI addresses agents.entries.<id>.
+41

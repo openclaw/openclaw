@@ -48,7 +48,7 @@ import {
   type PathSegment,
   unsetAtPath,
 } from "./config-cli-path.js";
-import { ConfigMutationAgentRoster } from "./config-cli-roster.js";
+import { ConfigMutationAgentRoster, resolveAgentEntryKeyCase } from "./config-cli-roster.js";
 import {
   assertStrictConfigForMutation,
   loadValidConfigForWrite,
@@ -247,7 +247,17 @@ export async function runConfigOperations(params: {
     appliedOperations.push({ ...operation, setPath });
     return writePath;
   };
-  for (const operation of operations) {
+  for (const requestedOperation of operations) {
+    let operation = requestedOperation;
+    // Address the stored agent-entry spelling when only casing differs, so the same id that
+    // `agents list` prints is editable through `config set/unset`.
+    const resolvedSetPath = resolveAgentEntryKeyCase(
+      next as Record<string, unknown>,
+      operation.setPath,
+    );
+    if (resolvedSetPath.some((segment, index) => segment !== operation.setPath[index])) {
+      operation = { ...operation, setPath: resolvedSetPath };
+    }
     const merge =
       operation.mutation === "merge" || (options.merge && operation.mutation !== "replace");
     roster.prepare(operation, Boolean(merge));
