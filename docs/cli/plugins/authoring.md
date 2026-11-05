@@ -86,6 +86,9 @@ entry paths are rewritten to the compiled files included in the archive.
 See [Feature plugins](/plugins/feature-plugins) for activation approval, reload,
 view lifecycle, and recovery.
 
+Validation refusals, such as a missing plugin manifest or an unsupported archive
+extension, print their specific reason and exit with status `1`.
+
 ### Provider scaffold
 
 ```bash
