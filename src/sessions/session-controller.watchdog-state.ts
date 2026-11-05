@@ -3,16 +3,15 @@ export const SESSION_WATCHDOG_ABORT_FLOOR_MS = 5 * 60_000;
 export const SESSION_WATCHDOG_QUIET_TOOL_MS = 15 * 60_000;
 export const SESSION_WATCHDOG_CLEANUP_MS = 60_000;
 
-export type SessionWatchdogWaitKind =
-  | "global_capacity"
-  | "deferred_maintenance"
-  | "human_question"
-  | "approval"
-  | "runtime_owned"
-  | "retry"
-  | "backend";
 export type OwnedWait = {
-  kind: SessionWatchdogWaitKind;
+  kind:
+    | "global_capacity"
+    | "deferred_maintenance"
+    | "human_question"
+    | "approval"
+    | "runtime_owned"
+    | "retry"
+    | "backend";
   deadlineAtMs?: number;
   rateLimitStopMessage?: string;
   /** A runtime-owned wait whose release hands a finished turn back to its run. */
@@ -36,7 +35,7 @@ export type SessionWatchdogSnapshot = Readonly<{
   semanticDeadlineAtMs: number;
   executionDeadlineAtMs?: number;
   cleanupDeadlineAtMs?: number;
-  waits: ReadonlyArray<{ kind: SessionWatchdogWaitKind; deadlineAtMs?: number }>;
+  waits: ReadonlyArray<{ kind: OwnedWait["kind"]; deadlineAtMs?: number }>;
   requests?: ReadonlyArray<{ requestTimeoutMs?: number; deadlineAtMs?: number }>;
   tools: ReadonlyArray<{
     toolName: string;

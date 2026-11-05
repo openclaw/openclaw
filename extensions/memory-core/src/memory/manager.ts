@@ -336,8 +336,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   protected async syncPublishedIndexInBackground(params: { reason: string }): Promise<void> {
-    if (this.syncing || this.reindexProgress) {
-      return await this.syncBackground(params);
+    await this.syncing?.catch(() => undefined);
+    if (this.reindexProgress) {
+      return await this.syncAdmitted(params);
     }
     await this.syncOutcomes.track(() =>
       runMemorySearchMaintenance({
@@ -601,8 +602,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         this.dirty ||
         this.sessionsDirty ||
         this.indexIdentityDirty ||
+        this.sessionBackgroundIndexing ||
         this.syncing !== null ||
-        this.activeBackgroundSearchSyncs.size > 0,
+        this.activeBackgroundCleanup.size > 0,
       lastSyncError: this.syncOutcomes.lastError,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.databasePath,

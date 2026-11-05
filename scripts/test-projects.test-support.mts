@@ -177,7 +177,7 @@ type ChangedTestTargetOptions = {
   combineSiblingWithImportGraph?: boolean;
   boundedOwners?: boolean;
   aggressive?: { maxDirectImporters: number; maxDirectoryTests: number };
-  adaptiveMarkdown?: boolean;
+  adaptiveMarkdown?: { isIndependentCompanion: (file: string) => boolean };
   onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
   forceFullImportGraph?: boolean;
   resolveAliases?: boolean;
@@ -2801,18 +2801,18 @@ export function resolveImportGraphDependents(
 }
 
 /** Fingerprint current workspace inputs from the same graph that selects their consumers. */
-export function createTestInputFingerprint(cwd = process.cwd()) {
+export function createTestInputFingerprint(cwd = process.cwd(), additionalPaths: string[] = []) {
   let dependencies: Map<string, string[]> | undefined;
   const hashes = new Map<string, string | null>();
   return (roots: string[]): string | null => {
     try {
       if (!dependencies) {
         dependencies = new Map();
-        const graph = getImportGraph(cwd, {
-          tooling: true,
-          resolveAliases: true,
-          runtimeOnly: true,
-        });
+        const graph = getImportGraph(
+          cwd,
+          { tooling: true, resolveAliases: true, runtimeOnly: true },
+          additionalPaths,
+        );
         for (const [dependency, importers] of graph.reverseImports) {
           for (const importer of importers) {
             const inputs = dependencies.get(importer) ?? [];
@@ -4705,8 +4705,9 @@ function resolveBoundedChangedTestTargetPlan(
     options.aggressive && options.adaptiveMarkdown
       ? createAdaptiveMarkdownFilter(
           changedPaths,
-          createTestInputFingerprint(cwd),
+          createTestInputFingerprint(cwd, changedPaths),
           adaptiveMarkdownQualification,
+          options.adaptiveMarkdown.isIndependentCompanion,
         )
       : (owners: string[]) => owners;
   const graphOptions = {

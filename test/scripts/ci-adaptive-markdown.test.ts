@@ -1,9 +1,13 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createAdaptiveMarkdownFilter } from "../../scripts/lib/ci-adaptive-markdown.mjs";
-import { createTestInputFingerprint } from "../../scripts/test-projects.test-support.mts";
+import * as sourceFacts from "../../scripts/lib/test-selector-source-facts.mts";
+import {
+  createTestInputFingerprint,
+  resolveAffectedTestsFromImportGraph,
+} from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -41,11 +45,12 @@ function fixture() {
     commonHash: hash(["package.json"]),
     tests: { [unchanged]: hash([unchanged, source]) },
   };
-  const select = (changes = [changed]) =>
+  const select = (changes = [changed], isIndependentCompanion = (_file: string) => false) =>
     createAdaptiveMarkdownFilter(
       changes,
       createTestInputFingerprint(cwd),
       qualification,
+      isIndependentCompanion,
     )([changedTest, unchanged]);
   return { cwd, select };
 }
@@ -72,6 +77,7 @@ it("invalidates qualification when the test adds a dependency or global inputs c
   expect(select()).toEqual([changedTest, unchanged]);
   expect(select([changed, "test/setup.env.ts"])).toEqual([changedTest, unchanged]);
   expect(select([])).toEqual([changedTest, unchanged]);
+  expect(select(["config/test-lines-allocations/markdown.txt"])).toEqual([changedTest, unchanged]);
 });
 
 it("invalidates common configuration changes and rejects symlink input substitution", () => {
@@ -82,4 +88,35 @@ it("invalidates common configuration changes and rejects symlink input substitut
   fs.renameSync(path.join(cwd, source), path.join(cwd, "saved.ts"));
   fs.symlinkSync(path.join(cwd, "saved.ts"), path.join(cwd, source));
   expect(select()).toEqual([changedTest, unchanged]);
+});
+
+it("admits qualified companions and allocations only alongside a Markdown source", () => {
+  const { select } = fixture();
+  const companion = "src/transport.test.ts";
+  const allocation = "config/test-lines-allocations/transport.txt";
+  const independent = (file: string) => file === companion;
+  expect(select([changed, companion, allocation], independent)).toEqual([changedTest]);
+  expect(select([changed, companion])).toEqual([changedTest, unchanged]);
+  expect(select([changed, changedTest])).toEqual([changedTest, unchanged]);
+  expect(select([changed, `${root}companion.spec.ts`])).toEqual([changedTest, unchanged]);
+  expect(select([companion, allocation], independent)).toEqual([changedTest, unchanged]);
+});
+
+it("shares the qualification graph with selection when changes include a non-source input", () => {
+  const { cwd } = fixture();
+  const changes = [changed, "config/test-lines-allocations/transport.txt"];
+  const scans = vi.spyOn(sourceFacts, "readTestSelectorSourceFacts");
+  try {
+    expect(createTestInputFingerprint(cwd, changes)([unchanged])).not.toBeNull();
+    expect(
+      resolveAffectedTestsFromImportGraph(changes, cwd, {
+        tooling: true,
+        resolveAliases: true,
+        runtimeOnly: true,
+      }),
+    ).toEqual([changedTest]);
+    expect(scans).toHaveBeenCalledTimes(1);
+  } finally {
+    scans.mockRestore();
+  }
 });

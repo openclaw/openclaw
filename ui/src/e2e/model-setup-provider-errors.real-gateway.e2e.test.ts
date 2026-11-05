@@ -20,6 +20,12 @@ const suite = createControlUiE2eSuite({
       createListener: () =>
         createServer((request, response) => {
           request.resume();
+          // Catalog discovery must succeed before the inference failure under test.
+          if (request.url === "/v1/models") {
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(JSON.stringify({ data: [{ id: "hy4-preview" }] }));
+            return;
+          }
           const inference = request.url?.endsWith("/chat/completions");
           inferenceRequests += inference ? 1 : 0;
           if (!inference || upstreamMode === "error") {
@@ -45,6 +51,7 @@ const suite = createControlUiE2eSuite({
       config: {
         gateway: { controlUi: { enabled: true } },
         agents: { entries: { main: {} } },
+        plugins: { allow: ["tencent"] },
         models: {
           providers: {
             "tencent-tokenhub": {
