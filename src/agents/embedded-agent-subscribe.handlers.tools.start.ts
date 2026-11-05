@@ -1,5 +1,7 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { isReplyDispatchDeliveryError } from "../auto-reply/reply/reply-dispatch-outcome.js";
 import {
   emitAgentActivityEvent,
   projectAgentToolActivity,
@@ -440,7 +442,17 @@ export function handleToolExecutionStart(
           () => settleAskUserPromptDelivery(questionId),
           (error: unknown) => {
             settleAskUserPromptDelivery(questionId, error);
-            ctx.log.warn(`failed to deliver ${toolName} prompt: ${String(error)}`);
+            ctx.log.warn(
+              `failed to deliver ${toolName} prompt: ${formatErrorMessage(error, { includeCode: true })}`,
+              {
+                runId: ctx.params.runId,
+                toolCallId,
+                questionId,
+                channel: ctx.params.messageChannel,
+                accountId: ctx.params.currentAccountId,
+                ...(isReplyDispatchDeliveryError(error) ? { outcome: error.outcome } : {}),
+              },
+            );
           },
         );
     }
