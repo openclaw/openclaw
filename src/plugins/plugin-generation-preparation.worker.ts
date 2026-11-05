@@ -4,7 +4,11 @@ import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { createPluginGenerationArtifact } from "./plugin-generation-capture.js";
+import {
+  createPluginGenerationArtifact,
+  capturePluginSnapshotGeneration,
+  capturePluginSourceSnapshot,
+} from "./plugin-generation-capture.js";
 import {
   createPluginGenerationMetrics,
   withPluginGenerationMetrics,
@@ -31,6 +35,12 @@ import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capt
 import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import { recordPluginNativeLoad } from "./plugin-source-capture-native-loads.js";
+import {
+  acquirePluginSourceSnapshot,
+  pluginSourceSnapshotClosureDigest,
+  stagePluginSourceSnapshot,
+} from "./plugin-source-snapshot-artifact.js";
+import type { PluginSourceSnapshotBinding } from "./plugin-source-snapshot.types.js";
 
 type Resource = { dispose(): void; disposeAsync(): Promise<void> };
 type CaptureCommand = Extract<GenerationWorkerInput, { operation: "capture" }>;
@@ -42,6 +52,7 @@ function createPreparationSession(context: CaptureCommand) {
   const sentReceipts: PluginNativeAdmissionTransfer["receipts"] = new Map();
   const sentRoots = new Set<string>();
   const borrowedRootIds = new WeakMap<object, number>();
+  const snapshotReaders = new Set<Awaited<ReturnType<typeof acquirePluginSourceSnapshot>>>();
   let forkSourceCustody: (() => PluginSourceCustodyFork) | undefined;
 
   function borrowNativeRoot(root: PluginNativeAdmissionTransfer["roots"][number]): number {
@@ -241,6 +252,11 @@ function createPreparationSession(context: CaptureCommand) {
     );
     await cache.sourceAdmissions?.dispose();
     throwSettledAggregate(outcomes, "Plugin preparation resources failed to close");
+    // The reader outlives independent runtime/native cleanup, including failed disposal.
+    for (const snapshot of snapshotReaders) {
+      await snapshot.releaseAsync();
+    }
+    snapshotReaders.clear();
   }
   async function execute(command: GenerationWorkerInput): Promise<GenerationWorkerReply> {
     const metrics = createPluginGenerationMetrics();
@@ -293,7 +309,40 @@ function createPreparationSession(context: CaptureCommand) {
                       ),
                 unresolvedAncestors,
               };
+            } else if (command.snapshotPublication) {
+              const capture = capturePluginSourceSnapshot(command.rootDir);
+              const publication = command.snapshotPublication;
+              const snapshot = own({
+                contentDigest: capture.sourceDigest,
+                dependencyClosureDigest: pluginSourceSnapshotClosureDigest(capture),
+                stage: markPluginSourceCaptureOperation(
+                  async (binding: PluginSourceSnapshotBinding) =>
+                    own(
+                      await stagePluginSourceSnapshot({
+                        stateDir: publication.stateDir,
+                        capture,
+                        binding,
+                        // The host installation owner checks authority before and after this await.
+                        assertCurrent: () => {},
+                      }),
+                    ),
+                ),
+                dispose: () => capture.dispose(),
+                disposeAsync: () => capture.disposeAsync(),
+              });
+              failedCapture = snapshot;
+              result = snapshot;
             } else {
+              const snapshot = command.sourceSnapshot
+                ? await acquirePluginSourceSnapshot({
+                    ...command.sourceSnapshot,
+                    // Index authority belongs to the host; the worker owns artifact validation.
+                    assertCurrent: () => {},
+                  })
+                : undefined;
+              if (snapshot) {
+                snapshotReaders.add(snapshot);
+              }
               const retained =
                 command.sourceCustodyId === undefined
                   ? undefined
@@ -312,22 +361,31 @@ function createPreparationSession(context: CaptureCommand) {
                   }
                 }
                 artifact = own(
-                  createPluginGenerationArtifact(
-                    command.rootDir,
-                    command.entryFile,
-                    (run) => run(),
-                    (filename) => mapSource(command.captureId, filename),
-                    undefined,
-                    undefined,
-                    retained,
-                    command.retainSourceCustody,
-                  ),
+                  snapshot
+                    ? capturePluginSnapshotGeneration(
+                        snapshot,
+                        command.entryFile,
+                        (run) => run(),
+                        (filename) => mapSource(command.captureId, filename),
+                      )
+                    : createPluginGenerationArtifact(
+                        command.rootDir,
+                        command.entryFile,
+                        (run) => run(),
+                        (filename) => mapSource(command.captureId, filename),
+                        undefined,
+                        undefined,
+                        command.bundledReloadSource,
+                        retained,
+                        command.retainSourceCustody,
+                      ),
                 );
               } catch (error) {
                 await retained?.source.disposeAsync();
                 throw error;
               }
               failedCapture = artifact;
+              snapshot?.assertCurrent();
               if (
                 command.sourceCustodyDigest !== undefined &&
                 artifact.sourceDigest !== command.sourceCustodyDigest
@@ -396,6 +454,12 @@ function createPreparationSession(context: CaptureCommand) {
               stack: exception.stack,
               ...("code" in exception && typeof exception.code === "string"
                 ? { code: exception.code }
+                : {}),
+              ...("artifactPath" in exception && typeof exception.artifactPath === "string"
+                ? { artifactPath: exception.artifactPath }
+                : {}),
+              ...("modulePath" in exception && typeof exception.modulePath === "string"
+                ? { modulePath: exception.modulePath }
                 : {}),
             },
             ...((command.operation === "capture" ||

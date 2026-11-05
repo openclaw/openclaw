@@ -10,6 +10,7 @@ import {
   retainSnapshotTempDirectory,
   retainSnapshotWork,
 } from "../../infra/sqlite-readonly-location-cleanup.js";
+import { resolveSqliteInspectionSignal } from "../../infra/sqlite-readonly-worker.js";
 import { createSqliteSnapshotStagingDirectory } from "../../infra/sqlite-snapshot-staging.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
@@ -156,6 +157,7 @@ async function readCronState({
   const dedicated = preserveArtifacts || maintenance !== undefined;
   const pool = dedicated ? createReadPool() : retainedReadPool(admission);
   const controller = new AbortController();
+  const signal = resolveSqliteInspectionSignal(controller.signal) ?? controller.signal;
   const producerSettled = createDeferredCore();
   let stagingRoot: string | undefined;
   let releaseSnapshot: (() => void) | undefined;
@@ -220,16 +222,11 @@ async function readCronState({
     try {
       maintenance?.own(resource, "shared-resources", () => resource.close());
       if (preserveArtifacts) {
-        stagingRoot = await createSqliteSnapshotStagingDirectory(
-          undefined,
-          false,
-          controller.signal,
-          true,
-        );
+        stagingRoot = await createSqliteSnapshotStagingDirectory(undefined, false, signal, true);
         releaseSnapshot = retainSnapshotTempDirectory(stagingRoot);
       }
       const location = statePath;
-      controller.signal.throwIfAborted();
+      signal.throwIfAborted();
       admission.assertCurrent();
       const result = await pool.run(
         {
@@ -240,7 +237,7 @@ async function readCronState({
           inspect,
         },
         {
-          signal: controller.signal,
+          signal,
           inputBytes:
             Buffer.byteLength(location) +
             Buffer.byteLength(storeKey ?? "") +
@@ -267,7 +264,7 @@ async function readCronState({
       }
     }
     throwSqliteLifecycleErrors(failures, "Cron read-only state inspection and cleanup failed.");
-    controller.signal.throwIfAborted();
+    signal.throwIfAborted();
     admission.assertCurrent();
     return loaded;
   };

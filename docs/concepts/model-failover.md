@@ -13,6 +13,12 @@ OpenClaw handles failures in two stages:
 1. **Auth-profile rotation** within the current provider.
 2. **Model fallback** to the next model in `agents.defaults.model.fallbacks`.
 
+When an assistant failure explicitly identifies an unknown, missing, or retired
+model, OpenClaw skips other credentials and advances to the configured fallback.
+Without a fallback, it surfaces the error. Account-access and plan restrictions,
+authentication failures, quota errors, and ambiguous not-found responses still
+allow profile rotation.
+
 Turn usage includes completed model candidates even when their answer is discarded
 during fallback. Costs retain each candidate's price; if any completed candidate's
 price is unavailable, the total cost stays unknown. The final selected model and
@@ -166,6 +172,8 @@ existing run deadline and cost limits still apply.
 Local session-coordination errors also stop fallback. For example, when prepared
 session capability metadata changes, OpenClaw surfaces that error without trying
 another model. Changing providers cannot repair stale session authority.
+The `model-fallback/decision` logger records `local_runtime_coordination` for
+these stops and `transcript_not_continuable` when the transcript cannot continue.
 
 Fallback requests reuse the original user turn and its attachments exactly once.
 Fresh plugin context for the fallback model is added separately, preserving the

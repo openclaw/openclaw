@@ -20,8 +20,8 @@ afterEach(() => {
 
 const emptyReport = { stalls: [], dropped: 0, unattributedDropped: 0, delayMaxMs: 0 };
 
-function fixture() {
-  let now = 0;
+function fixture(initial = 0) {
+  let now = initial;
   const monitor = createMainThreadStallMonitor(() => now);
   monitors.push(monitor);
   return { monitor, elapse: (milliseconds: number) => (now += milliseconds) };
@@ -142,20 +142,31 @@ describe("main-thread stall attribution", () => {
     ]);
   });
 
-  it("reports callbacks at the 250 ms boundary, excluding shorter work and async waits", async () => {
-    const { monitor, elapse } = fixture();
-    runWithMainThreadTask("scheduler:short", () => elapse(249));
-    await runWithMainThreadTask("gateway:rpc:sessions.list", async () => {
-      elapse(250);
-      await Promise.resolve();
-      elapse(5_000);
-    });
-    expect(monitor.drain()).toMatchObject({
-      stalls: [{ elapsedMs: 250, task: "gateway:rpc:sessions.list", taskMs: 250 }],
-      dropped: 0,
-      delayMaxMs: 250,
-    });
-  });
+  it.each([0, 0.125, 2 ** 32 + 0.125])(
+    "reports the 250 ms boundary and excludes waits at clock offset %s",
+    async (offset) => {
+      const { monitor, elapse } = fixture(offset);
+      runWithMainThreadTask("scheduler:short", () => elapse(249));
+      await runWithMainThreadTask("gateway:rpc:sessions.list", async () => {
+        elapse(250);
+        await Promise.resolve();
+        elapse(5_000);
+      });
+      expect(monitor.drain()).toMatchObject({
+        stalls: [
+          {
+            elapsedMs: 250,
+            task: "gateway:rpc:sessions.list",
+            taskMs: 250,
+            startedAt: offset + 249,
+            endedAt: offset + 499,
+          },
+        ],
+        dropped: 0,
+        delayMaxMs: 250,
+      });
+    },
+  );
 
   it("keeps unattributed overflow out of the scoped-stall drop count", () => {
     vi.useFakeTimers();

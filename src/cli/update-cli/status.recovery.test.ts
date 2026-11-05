@@ -7,6 +7,7 @@ import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import * as marker from "../../infra/update-capture-privacy-marker.js";
 // Prepare the lazy production graph during collection, not inside the first test timeout.
 import { inspectUpdateRecoveryBackups } from "../../infra/update-recovery-backup-status.js";
+import * as updateHistory from "../../infra/update-run-reader.js";
 import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
 import { updateStatusCommand as updateStatus } from "./status.js";
 
@@ -15,7 +16,10 @@ const mocks = vi.hoisted(() => ({
   log: vi.fn(),
   writeJson: vi.fn(),
 }));
-vi.mock("../../infra/update-run-reader.js", () => ({ getUpdateRunAsync: mocks.readRun }));
+vi.mock("../../infra/update-run-reader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-run-reader.js")>()),
+  getUpdateRunAsync: mocks.readRun,
+}));
 // Windows may canonicalize a recorded path's case or 8.3 spelling.
 const pinSpelling = vi.hoisted(() => ({
   canonical: undefined as ((p: string) => string) | undefined,
@@ -173,7 +177,7 @@ async function run(c: Capture) {
 }
 
 it.each([
-  ["absent", "ambiguous"],
+  ["absent", "warning"],
   ["failed", "unresolved"],
   ["unavailable", "unreadable"],
 ] as const)("reuses one injected %s ledger observation", async (state, status) => {
@@ -408,23 +412,28 @@ it.each([
     expect(await text(c.manifestPath)).toBe("{");
   }
 });
-it("keeps failed recovery ambiguous beside an unreadable marked capture", async () => {
-  const c = await capture();
-  const damaged = await capture(secondId);
-  await fs.writeFile(damaged.manifestPath, "{");
-  const row = await run(c);
-  mocks.readRun.mockImplementation(async (id) => (id === firstId ? row : undefined));
-  expect((await inspect()).recoverySets).toMatchObject([
-    { runId: firstId, status: "ambiguous" },
-    { directory: damaged.directory, status: "unreadable" },
-  ]);
-  expect(await text(damaged.manifestPath)).toBe("{");
-});
+it.each(["unreadable", "orphan"] as const)(
+  "keeps failed recovery ambiguous beside %s marked evidence",
+  async (kind) => {
+    const c = await capture();
+    const other = await capture(secondId);
+    if (kind === "unreadable") {
+      await fs.writeFile(other.manifestPath, "{");
+    }
+    const row = await run(c);
+    mocks.readRun.mockImplementation(async (id) => (id === firstId ? row : undefined));
+    expect((await inspect()).recoverySets).toMatchObject([
+      { runId: firstId, status: "ambiguous" },
+      { directory: other.directory, status: kind === "unreadable" ? "unreadable" : "warning" },
+    ]);
+    expect(await text(other.manifestPath)).toBe(kind === "unreadable" ? "{" : other.raw);
+  },
+);
 it("reports a capture-root enumeration failure globally", async () => {
   const store = `${stateDir}.update-captures`;
   await fs.writeFile(store, "not a directory");
   const status = await inspect();
-  expect(status.recoverySetsError).toMatch(/ENOTDIR|not a directory/i);
+  expect(status.recoverySetsError).toMatch(/not a directory/i);
   expect(status).not.toHaveProperty("recoverySets");
   expect(await text(store)).toBe("not a directory");
 });
@@ -475,13 +484,33 @@ it("reports a set from a failure that never activated as stale and directs it to
   });
   expect((await inspect()).recoverySets[0].status).toBe("unresolved");
 });
-it.each(["committed", "restored", "never-activated"] as const)(
+it.each(["committed", "restored", "never-activated", "superseded"] as const)(
   "does not let a %s capture obscure one failed recovery source",
   async (outcome) => {
     const failed = await capture();
     const older = await capture(secondId);
     const olderRun = await run(older);
-    if (outcome === "never-activated") {
+    const failedRun = await run(failed);
+    using listRuns = vi.spyOn(updateHistory, "listUpdateRuns");
+    if (outcome === "superseded") {
+      olderRun.status = "succeeded";
+      const successor = createUpdateRunRecordFixture("33333333-3333-4333-8333-333333333333", {
+        status: "succeeded",
+        createdAtMs: 3,
+        updatedAtMs: 4,
+        finishedAtMs: 4,
+        verification: {
+          serviceRunning: true,
+          versionMatch: true,
+          settled: true,
+          coreReady: true,
+          pluginErrors: [],
+        },
+      });
+      listRuns.mockImplementation((input = {}) =>
+        input.succeeded ? [successor, olderRun] : [successor, failedRun, olderRun],
+      );
+    } else if (outcome === "never-activated") {
       olderRun.steps = [
         { step: "requested", status: "completed" },
         { step: "original-state-capture", status: "completed" },
@@ -490,7 +519,6 @@ it.each(["committed", "restored", "never-activated"] as const)(
     } else {
       await terminal(older, outcome);
     }
-    const failedRun = await run(failed);
     mocks.readRun.mockImplementation(async (id) => (id === firstId ? failedRun : olderRun));
     const sets = (await inspect()).recoverySets;
     expect(sets.find((set: { runId: string }) => set.runId === firstId)).toMatchObject({
@@ -498,7 +526,9 @@ it.each(["committed", "restored", "never-activated"] as const)(
       nextAction: expect.stringContaining(failed.manifestPath),
       message: expect.stringContaining("Retained original state requires manual inspection"),
     });
-    expect(sets.find((set: { runId: string }) => set.runId === secondId).status).toBe("stale");
+    expect(sets.find((set: { runId: string }) => set.runId === secondId).status).toBe(
+      outcome === "superseded" ? "warning" : "stale",
+    );
     expect(await text(failed.manifestPath)).toBe(failed.raw);
     expect(await text(older.manifestPath)).toBe(older.raw);
   },

@@ -265,7 +265,7 @@ export function setDurableProcessObserver(observer: (() => Promise<void>) | unde
 }
 type ProcessChange = { sessionKey: string; agentId?: string };
 const changeListeners = new Set<(target: ProcessChange) => void>();
-const pendingChanges = new Map<string, ProcessChange>();
+const pendingChanges = new Map<string, Set<string | undefined>>();
 let changeTimer: NodeJS.Timeout | undefined;
 
 /** Process observation is independent of the creating turn's lifetime. */
@@ -286,21 +286,26 @@ function queueProcessChange(session: ProcessSession) {
   if (!sessionKey || changeListeners.size === 0) {
     return;
   }
-  const target = { sessionKey, agentId: session.agentId };
-  pendingChanges.set(JSON.stringify([sessionKey, session.agentId]), target);
+  const agents = pendingChanges.get(sessionKey);
+  if (agents) {
+    agents.add(session.agentId);
+  } else {
+    pendingChanges.set(sessionKey, new Set([session.agentId]));
+  }
   // Bound chatty output to the former five-second polling cadence. Later writes
   // never postpone the signal, and no command text or output crosses this bus.
   changeTimer ??= runInDetachedAsyncContext(() =>
     setTimeout(() => {
       changeTimer = undefined;
-      const changes = [...pendingChanges.values()];
+      const changes = [...pendingChanges];
       pendingChanges.clear();
-      for (const change of changes) {
-        notifyListeners(changeListeners, change);
+      for (const [changedSessionKey, agentIds] of changes) {
+        for (const agentId of agentIds) {
+          notifyListeners(changeListeners, { sessionKey: changedSessionKey, agentId });
+        }
       }
-    }, 5_000),
+    }, 5_000).unref(),
   );
-  changeTimer.unref();
 }
 
 /** Return whether a process session id is live, retained, or reserved for notification. */

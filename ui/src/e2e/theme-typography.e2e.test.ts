@@ -49,9 +49,11 @@ suite.define(() => {
     const chat = page.locator("openclaw-select-picker:has(#settings-font-chat)");
     const preview = page.locator(".settings-typography-preview");
     await preview.waitFor();
-    expect(await ui.locator("..").locator("..").textContent()).toContain(
-      "Stored in this browser only",
-    );
+    expect(
+      await page
+        .locator("#settings-appearance-typography > .settings-section__scope")
+        .textContent(),
+    ).toContain("Stored in this browser only");
     await page.evaluate(() => document.fonts.ready);
     const families = () =>
       preview.evaluate((panel) => {
@@ -248,9 +250,10 @@ suite.define(() => {
 
     const readChrome = async () => {
       const chrome = await page.evaluate(() => ({
-        color: document.documentElement.style.getPropertyValue(
-          "--control-ui-system-chrome-background",
-        ),
+        color: document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')!.content,
+        // Safari shows the document canvas in the safe areas around its bars.
+        html: getComputedStyle(document.documentElement).backgroundColor,
+        body: getComputedStyle(document.body).backgroundColor,
         metas: Array.from(
           document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'),
           (meta) => ({ color: meta.content, media: meta.getAttribute("media") }),
@@ -260,11 +263,15 @@ suite.define(() => {
         resolveRenderedColors,
         Object.fromEntries([
           ["chrome", chrome.color],
+          ["html", chrome.html],
+          ["body", chrome.body],
           ...chrome.metas.map((meta, index) => [`meta-${index}`, meta.color]),
         ]),
       );
       return {
         color: colors.chrome,
+        html: colors.html,
+        body: colors.body,
         metas: chrome.metas.map((meta, index) => ({
           color: colors[`meta-${index}`],
           media: meta.media,
@@ -274,6 +281,8 @@ suite.define(() => {
     const expectChrome = async (color: RenderedColor) => {
       await expect.poll(readChrome).toEqual({
         color,
+        html: color,
+        body: color,
         metas: [
           { color, media: null },
           { color, media: null },
@@ -297,7 +306,17 @@ suite.define(() => {
     await page.goBack();
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
     await expectChrome(pageColor);
+    // The drawer's 44% black backdrop dims the page; the system chrome dims with it.
+    const dimmed = { ...pageColor };
+    for (const channel of ["red", "green", "blue"] as const) {
+      dimmed[channel] = Math.round(pageColor[channel] * 0.56);
+    }
     await navigationDrawerToggle(page).click();
+    await expectChrome(dimmed);
+    await page.locator(".shell-nav-backdrop").click({ position: { x: 700, y: 450 } });
+    await expectChrome(pageColor);
+    await navigationDrawerToggle(page).click();
+    await expectChrome(dimmed);
     await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
     await page.locator(".new-session-page__message").waitFor();
     await expectChrome(canvasColor);
@@ -318,7 +337,7 @@ suite.define(() => {
       const parent = shell.parentNode!;
       const next = shell.nextSibling;
       const color = () =>
-        document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background");
+        document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')!.content;
       try {
         shell.remove();
         const removed = color();

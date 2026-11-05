@@ -12,6 +12,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
+import { resolveBundledPluginReloadSource } from "./plugin-bundled-reload.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import {
   addPluginGenerationMetrics,
@@ -41,10 +42,17 @@ import {
   settlePluginNativeAdmissionState,
   type PluginNativeAdmissionTransfer,
 } from "./plugin-native-admission-state.js";
+import { resolvePluginPreparationExecArgv } from "./plugin-preparation-exec-argv.js";
+import { PluginSnapshotDependencyError } from "./plugin-snapshot-dependency-error.js";
 import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
 import { resolvePluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import { createPluginSourceCaptureRoot } from "./plugin-source-capture-directory.js";
 import { subscribePluginNativeLoads } from "./plugin-source-capture-native-loads.js";
+import { PluginSourceSnapshotValidationError } from "./plugin-source-snapshot-artifact.js";
+import type {
+  PluginSourceSnapshotBinding,
+  PluginSourceSnapshotDescriptor,
+} from "./plugin-source-snapshot.types.js";
 
 export type PreparedPluginGenerationArtifact = {
   artifact: PluginGenerationArtifact;
@@ -54,12 +62,27 @@ type PreparationParameters = {
   rootDir: string;
   source: string | readonly string[];
   standalone?: boolean;
+  bundledReload?: boolean;
+  sourceSnapshot?: { descriptor: PluginSourceSnapshotDescriptor; stateDir: string };
+};
+export type PreparedPluginSourceSnapshot = {
+  contentDigest: string;
+  dependencyClosureDigest: string;
+  publish(
+    binding: PluginSourceSnapshotBinding,
+  ): Promise<Omit<PluginSourceSnapshotDescriptor, "installedRevision">>;
+  dispose(): void;
+  disposeAsync(): Promise<void>;
 };
 type CaptureCommand = Extract<GenerationWorkerInput, { operation: "capture" }>;
 type OwnedPreparationParameters = PreparationParameters &
   Pick<
     CaptureCommand,
-    "retainSourceCustody" | "sourceCustodyId" | "sourceCustodyDigest" | "inspection"
+    | "retainSourceCustody"
+    | "sourceCustodyId"
+    | "sourceCustodyDigest"
+    | "inspection"
+    | "snapshotPublication"
   >;
 type PreparationPool = ReturnType<typeof createPreparationPool>;
 type PreparationOwner = {
@@ -79,14 +102,15 @@ function createPreparationPool(nativeSource: RetainedNativeWorkerSource) {
     }
   >();
   let retired = false;
+  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.pluginGenerationPreparation);
   const pool = createOwnedWorkerTaskPool<GenerationWorkerInput, GenerationWorkerReply>(
     {
-      workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.pluginGenerationPreparation),
+      workerUrl,
       maxWorkers: 1,
       idleTimeoutMs: 0,
       restartOnError: false,
       prepareWorker: () => ({
-        options: {},
+        options: { execArgv: resolvePluginPreparationExecArgv(workerUrl) },
         releaseResources: async () => {
           retired = true;
           // Captured handles cannot migrate to a replacement isolate. Stop queued
@@ -183,21 +207,25 @@ export async function preparePluginGenerationArtifact(
   );
   const admission = nativeAdmissionStateFor();
   const rootDir = path.resolve(params.rootDir);
-  const source = await retainPreparedPluginGenerationSource(
-    owner,
-    JSON.stringify([
-      rootDir,
-      params.standalone ? params.source : undefined,
-      admission.viewKey,
-      admission.owners.get(rootDir),
-    ]),
-    async () => {
-      const seed = await prepareOwnedPluginGeneration({ ...params, retainSourceCustody: true });
-      // SAFETY: A seed capture returns only its retained source digest.
-      const { sourceDigest } = seed.value as { sourceDigest: string };
-      return { captureId: seed.captureId, sourceDigest, disposeAsync: seed.close };
-    },
-  );
+  // Published snapshots already own immutable bytes; rebuild their runtime owner independently.
+  const source = params.sourceSnapshot
+    ? undefined
+    : await retainPreparedPluginGenerationSource(
+        owner,
+        JSON.stringify([
+          rootDir,
+          params.standalone ? params.source : undefined,
+          params.bundledReload,
+          admission.viewKey,
+          admission.owners.get(rootDir),
+        ]),
+        async () => {
+          const seed = await prepareOwnedPluginGeneration({ ...params, retainSourceCustody: true });
+          // SAFETY: A seed capture returns only its retained source digest.
+          const { sourceDigest } = seed.value as { sourceDigest: string };
+          return { captureId: seed.captureId, sourceDigest, disposeAsync: seed.close };
+        },
+      );
   const prepared = await prepareOwnedPluginGeneration({
     ...params,
     sourceCustodyId: source?.captureId,
@@ -208,6 +236,26 @@ export async function preparePluginGenerationArtifact(
     artifact: prepared.value as PluginGenerationArtifact,
     attachModuleSource: prepared.attachModuleSource,
   };
+}
+
+/** Capture unexecuted installation source; publication authority remains with the caller. */
+export async function preparePluginSourceSnapshot(params: {
+  rootDir: string;
+  stateDir: string;
+}): Promise<PreparedPluginSourceSnapshot> {
+  const prepared = await prepareOwnedPluginGeneration({
+    rootDir: params.rootDir,
+    source: params.rootDir,
+    snapshotPublication: {
+      stateDir: params.stateDir,
+    },
+  });
+  const { bindPluginSnapshotPublication } = await import("./plugin-source-snapshot-publication.js");
+  return bindPluginSnapshotPublication(
+    // SAFETY: The source-only command returns the worker's owned staging handle.
+    prepared.value as Parameters<typeof bindPluginSnapshotPublication>[0],
+    params.stateDir,
+  );
 }
 
 /** Inspect exact captured inputs without blocking the host or evaluating plugin code. */
@@ -382,7 +430,7 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
         asynchronous,
         args: codec.encodeArguments(args),
       };
-      return asynchronous ? request(command) : requestSync(command, sourceCapture);
+      return asynchronous ? request(command, sourceCapture) : requestSync(command, sourceCapture);
     },
     {
       exportRoot: () => {
@@ -407,9 +455,18 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
           ? new PluginSourceRecoveryUnavailableError(undefined)
           : reply.error.name === "PluginDependencyLinkError"
             ? new PluginDependencyLinkError(reply.error.message)
-            : reply.error.name === "SyntaxError"
-              ? new SyntaxError(reply.error.message)
-              : new Error(reply.error.message);
+            : reply.error.name === "PluginSourceSnapshotValidationError" &&
+                reply.error.artifactPath !== undefined
+              ? new PluginSourceSnapshotValidationError(
+                  reply.error.artifactPath,
+                  reply.error.message,
+                )
+              : reply.error.name === "PluginSnapshotDependencyError" &&
+                  reply.error.modulePath !== undefined
+                ? new PluginSnapshotDependencyError(reply.error.modulePath)
+                : reply.error.name === "SyntaxError"
+                  ? new SyntaxError(reply.error.message)
+                  : new Error(reply.error.message);
       Object.assign(error, reply.error);
       throw reply.sourceAcquisitionFailure ? markPluginSourceAcquisitionError(error) : error;
     }
@@ -423,7 +480,7 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     }
     return codec.decode(reply.value);
   }
-  async function request(command: GenerationWorkerInput): Promise<unknown> {
+  async function request(command: GenerationWorkerInput, sourceCapture = false): Promise<unknown> {
     if (closing) {
       throw new Error("Plugin preparation worker has closed");
     }
@@ -437,7 +494,7 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
         {
           // Capture cost scales with package size and filesystem latency. Its owner
           // controls retirement; an arbitrary deadline can reject healthy plugins.
-          ...(command.operation === "capture" ? {} : { timeoutMs: 120_000 }),
+          ...(command.operation === "capture" || sourceCapture ? {} : { timeoutMs: 120_000 }),
           progressSignal: waitSignal,
           transferList: (value) =>
             value.operation === "capture" && value.callbackPort ? [value.callbackPort] : [],
@@ -531,12 +588,22 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     }
   }
   try {
+    const bundledReloadSource = params.bundledReload
+      ? resolveBundledPluginReloadSource(params.rootDir)
+      : undefined;
     const artifact = await request({
       operation: "capture",
       captureId,
       progressSignal: waitSignal,
-      rootDir: params.rootDir,
-      entryFile: params.standalone ? params.source : undefined,
+      rootDir: bundledReloadSource?.hostRoot ?? params.rootDir,
+      entryFile: bundledReloadSource
+        ? bundledReloadSource.ownedPaths.map((relative) =>
+            path.join(bundledReloadSource.hostRoot, relative),
+          )
+        : params.standalone
+          ? params.source
+          : undefined,
+      bundledReloadSource,
       storage,
       installRoots,
       readOnly,
@@ -546,6 +613,8 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
       sourceCustodyId: params.sourceCustodyId,
       sourceCustodyDigest: params.sourceCustodyDigest,
       inspection: params.inspection,
+      sourceSnapshot: params.sourceSnapshot,
+      snapshotPublication: params.snapshotPublication,
       callbackPort: port2,
       admission: {
         // Each selected package keeps its own admission authority; dependencies share indexes.

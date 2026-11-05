@@ -136,7 +136,11 @@ it.each(["default", "per-agent"])(
               );
               const outcome = await evaluate();
               expect(
-                listDecisionModels({ config, snapshot: prepared.snapshot.metadataSnapshot }),
+                listDecisionModels({
+                  config,
+                  snapshot: prepared.snapshot.metadataSnapshot,
+                  catalog: prepared.snapshot.modelCatalog.entries,
+                }),
               ).toContainEqual(
                 expect.objectContaining({
                   provider: "clawrouter",

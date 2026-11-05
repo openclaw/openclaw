@@ -43,9 +43,9 @@ export type MessageRenderOptions = {
   connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
-  getTurnVideoMessages?: (
+  getTurnMediaMessages?: (
     key: string,
-  ) => readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[] | undefined;
+  ) => readonly import("./chat-turn-media-gallery.ts").TurnMediaMessage[] | undefined;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   onAssistantAttachmentLoaded?: () => void;

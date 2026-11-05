@@ -189,12 +189,13 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
   );
   // Inventory changes reuse the viewport geometry; only layout invalidation reads it again.
   createLayoutMeasurement(
-    () => ({ windowed: windowed(), columns: columnCount() }),
+    () => ({ windowed: windowed(), columns: columnCount(), phone: props.phoneLayout === true }),
     (next) => {
       if (!next?.windowed) {
         return undefined;
       }
-      scroller = start.closest<HTMLElement>(".data-table-container");
+      // The phone list has no scroller of its own; rows scroll with the page.
+      scroller = start.closest<HTMLElement>(next.phone ? ".content" : ".data-table-container");
       const margin = scroller
         ? start.getBoundingClientRect().top -
           scroller.getBoundingClientRect().top +

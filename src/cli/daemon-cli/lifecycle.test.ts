@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-support.js";
 import {
   createHealthyRestartSnapshot,
@@ -104,8 +105,12 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../config/io.js", () => ({ createConfigIO }));
 
+// mock-isolation: The fixture owns process identities and signals without native process discovery.
 vi.mock("../../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync,
+  findVerifiedGatewayListenerPidsOnPort: async (
+    ...args: Parameters<typeof findVerifiedGatewayListenerPidsOnPortSync>
+  ) => findVerifiedGatewayListenerPidsOnPortSync(...args),
   signalVerifiedGatewayPidSync,
   formatGatewayPidList: (pids: number[]) => formatGatewayPidList(pids),
 }));
@@ -399,10 +404,16 @@ describe("runDaemonRestart health checks", () => {
     });
   });
 
-  it("rejects --skip-deferral without --safe", async () => {
-    await expect(runDaemonRestart({ json: true, skipDeferral: true })).rejects.toThrow(
-      "--skip-deferral requires --safe",
-    );
+  it.each([
+    [{ skipDeferral: true }, "--skip-deferral requires --safe"],
+    [{ safe: true, force: true }, "--safe cannot be combined with --force"],
+    [{ safe: true, wait: "5s" }, "--safe cannot be combined with --wait"],
+    [{ force: true, wait: "5s" }, "--force cannot be combined with --wait"],
+    [{ safe: true, preserveDefinition: true }, "--preserve-definition requires"],
+  ])("rejects restart flag conflict %o as an expected CLI error", async (opts, message) => {
+    const error = await runDaemonRestart({ json: true, ...opts }).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(ExpectedCliError);
+    expect((error as ExpectedCliError).machineOutput).toContain(message);
     expectNoCalls(callGatewayCli, runServiceRestart);
   });
 

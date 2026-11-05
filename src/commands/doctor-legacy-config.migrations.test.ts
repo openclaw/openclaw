@@ -460,10 +460,7 @@ describe("normalizeCompatibilityConfigValues", () => {
             },
             models: {
               "claude-cli/claude-opus-4-7": { alias: "Legacy Opus" },
-              "anthropic/claude-opus-4-7": {
-                alias: "Canonical Opus",
-                agentRuntime: { id: "openclaw" },
-              },
+              "anthropic/claude-opus-4-7": { alias: "Canonical Opus" },
               "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
             },
             modelPolicy: {
@@ -485,7 +482,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         models: {
           "anthropic/claude-opus-4-7": {
             alias: "Canonical Opus",
-            agentRuntime: { id: "openclaw" },
+            agentRuntime: { id: "claude-cli" },
           },
           "anthropic/claude-sonnet-4-6": {
             alias: "Sonnet",
@@ -620,14 +617,17 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toEqual(["Removed legacy skills.entries.nano-banana-pro."]);
   });
 
-  it("removes nano-banana from skills.allowBundled during migration", async () => {
-    const res = await normalizeCompatibilityConfigValues({
-      skills: { allowBundled: ["peekaboo", "nano-banana-pro"] },
-    });
+  it.each([{ retained: [] }, { retained: ["peekaboo"] }])(
+    "keeps skills.allowBundled restrictive after removing nano-banana ($retained)",
+    async ({ retained }) => {
+      const res = await normalizeCompatibilityConfigValues({
+        skills: { allowBundled: [...retained, "nano-banana-pro"] },
+      });
 
-    expect(res.config.skills?.allowBundled).toEqual(["peekaboo"]);
-    expect(res.changes).toEqual(["Removed nano-banana-pro from skills.allowBundled."]);
-  });
+      expect(res.config.skills?.allowBundled).toEqual(retained);
+      expect(res.changes).toEqual(["Removed nano-banana-pro from skills.allowBundled."]);
+    },
+  );
 
   it("migrates legacy web search provider config to plugin-owned config paths", async () => {
     const res = await normalizeCompatibilityConfigValues({

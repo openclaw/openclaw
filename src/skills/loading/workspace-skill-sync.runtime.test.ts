@@ -19,7 +19,7 @@ import {
 import { refreshSkillsDiscovery } from "../runtime/refresh.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
+import { resolveWorkshopSkillsDir } from "../test-support/workshop-config.test-support.js";
 import { useLoadingFixture, writeSkillFixture as writeSkill } from "./loading.test-support.js";
 import { ensureWritableSkillDirectories } from "./skill-directory-modes.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
@@ -27,7 +27,7 @@ import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 
 // These tests publish resource revisions explicitly; passive scans would race reuse assertions.
 const isolatedConfig = {
-  plugins: { enabled: false },
+  plugins: { allow: ["skill-workshop"] },
   skills: { load: { watch: false } },
 } satisfies OpenClawConfig;
 
@@ -256,19 +256,20 @@ describe("syncWorkspaceSkills", () => {
     }
   });
 
-  it("skips discovery and copying when the synced snapshot still matches", async () => {
+  it.each([true, false])("reuses synced skills with discovery prepared=%s", async (prepared) => {
     const { source, target } = await setupSkills();
     await writeSkill(skillPath(source, "alpha"), "alpha", "Alpha skill");
     await writeSkill(skillPath(source, "hidden"), "hidden", "Prompt-hidden skill", {
       frontmatterExtra: "disable-model-invocation: true",
     });
-    const skillsSnapshot = await buildSnapshot(source);
+    const skillsSnapshot = prepared ? await buildSnapshot(source) : undefined;
     const params = {
       ...syncOptions(source, target),
       skillsSnapshot,
     };
 
     const first = await syncWorkspaceSkills(params);
+    params.skillsSnapshot ??= await buildSnapshot(source);
     const ignorePath = skillPath(target, ".gitignore");
     await fs.utimes(ignorePath, 1, 1);
     await fs.rm(path.join(source, "skills"), { recursive: true, force: true });
@@ -351,7 +352,7 @@ describe("syncWorkspaceSkills", () => {
       const target = await newDir("target");
       const skillName = "shared-skill";
       const config = {
-        plugins: { enabled: false },
+        plugins: { allow: ["skill-workshop"] },
         agents: {
           entries: {
             alpha: { agentDir: path.join(firstWorkspace, "agent"), workspace: agentWorkspace },

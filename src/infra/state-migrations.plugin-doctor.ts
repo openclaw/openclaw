@@ -148,6 +148,7 @@ export async function collectPluginDoctorStateMigrationPlans(
     inventory?: PluginDoctorStateMigrationInventory;
     validateDeclarations?: boolean;
     pluginIds?: readonly string[];
+    includeDisabled?: boolean;
   },
 ): Promise<PluginDoctorPlanCollection> {
   const plans: DetectedPluginDoctorStateMigrationPlan[] = [];
@@ -183,6 +184,7 @@ export async function collectPluginDoctorStateMigrationPlans(
       inventory: params.inventory,
       validateDeclarations: params.validateDeclarations,
       pluginIds: params.pluginIds,
+      includeDisabled: params.includeDisabled,
       onInspectedPlugin: (pluginId) => inspectedPluginIds.add(pluginId),
       onInspectedStatelessPlugin: (pluginId) => statelessPluginIds.add(pluginId),
       onUnavailablePlugin: (pluginId, error) => {
@@ -445,6 +447,8 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
   inventory?: PluginDoctorStateMigrationInventory;
   /** Read-only admission inspects both phases for the selected pending owners. */
   inspectPluginIds?: readonly string[];
+  /** Doctor may inspect inactive pending owners, without granting repair authority. */
+  inspectDisabled?: boolean;
   beforeCompletion?: (
     completedPluginIds: readonly string[],
     assertCurrent: () => void,
@@ -457,6 +461,7 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
     stateDir,
     oauthDir: resolveOAuthDir(params.env, stateDir),
   };
+  const inspectDisabled = Boolean(params.inspectPluginIds && params.inspectDisabled);
   const run = async (
     repairAuthority?: PluginDoctorRepairAuthority,
     certifyCompletion = true,
@@ -471,6 +476,7 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
       plannedActions: params.plannedActions,
       inventory: params.inventory,
       pluginIds: params.inspectPluginIds,
+      includeDisabled: !repairAuthority && inspectDisabled,
     });
     if (!repairAuthority && !params.inspectPluginIds) {
       return {
@@ -500,6 +506,7 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
           includeDoctorOnly: true,
           inventory: params.inventory,
           pluginIds: params.inspectPluginIds,
+          includeDisabled: !repairAuthority && inspectDisabled,
           repairAuthority,
           warnings,
         })

@@ -1,6 +1,6 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, vi, type Mock } from "vitest";
+import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { AnyAgentTool } from "./types.js";

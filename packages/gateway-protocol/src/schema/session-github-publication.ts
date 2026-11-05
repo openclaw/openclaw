@@ -414,6 +414,13 @@ export const SessionGitHubOptionsResultSchema = closedObject({
   stale: Type.Optional(Type.Boolean()),
   personal: Type.Union([PersonalGitHubStatusSchema, Type.Null()]),
   shared: Type.Union([SharedGitHubPublicationPublisherSchema, Type.Null()]),
+  /** Display-only images for the offered accounts; selections never carry them. */
+  avatarUrls: Type.Optional(
+    closedObject({
+      shared: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
+      personal: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
+    }),
+  ),
   sharedUnavailableReason: Type.Optional(
     stringLiteralUnion([
       "unavailable",

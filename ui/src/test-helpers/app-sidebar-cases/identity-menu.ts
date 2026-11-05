@@ -118,7 +118,7 @@ describe("AppSidebar footer identity menu", () => {
     }
     expect(view.attr(".sidebar-identity-menu__avatar", "aria-hidden")).toBe("true");
     const shortcut = view.query('[data-value="command:settings"] .session-menu__shortcut');
-    expect(shortcut?.textContent?.replace(/\s+/gu, "").trim()).toMatch(/^(⌘⇧,|Ctrl\+Shift\+,)$/u);
+    expect(shortcut?.textContent?.replace(/\s+/gu, "").trim()).toMatch(/^(⌘⇧,|Ctrl⇧,)$/u);
     expect(view.query(".sidebar-pair-mobile")?.hasAttribute("disabled")).toBe(true);
 
     const helpRow = view.query<HTMLElement>(".sidebar-identity-menu__help");
@@ -126,6 +126,29 @@ describe("AppSidebar footer identity menu", () => {
     const links = domProbe(helpRow!.parentElement!).all('[role="menu"] a[href]');
     const support = [...links].find((link) => link.textContent?.includes("Get support"));
     expect(support?.getAttribute("href")).toBe("https://community.openclaw.ai/");
+  });
+
+  it("keeps one account avatar and photo while the open menu rebuilds", async () => {
+    const avatarUrl = "/api/users/self/avatar?v=1";
+    const { gateway, dom, open } = await mountIdentity();
+    await dom.update({ connected: true, canPairDevice: false });
+    const user = { id: "self", name: "Ada", email: "ada@example.test", avatarUrl };
+    gateway.publish({ selfUser: user });
+    await dom.update();
+    await open();
+    const photo = () => dom.query<HTMLImageElement>(".sidebar-identity-menu__avatar img");
+    const mounted = photo();
+    expect(mounted?.getAttribute("src")).toBe(avatarUrl);
+
+    await dom.update({ canPairDevice: true });
+    await waitForSolid(() => {
+      expect(dom.query(".sidebar-pair-mobile")?.hasAttribute("disabled")).toBe(false);
+    });
+    gateway.publish({ selfUser: { ...user, name: "Ada Lovelace" } });
+    await waitForSolid(() => {
+      expect(dom.query(".sidebar-identity-menu__name")?.textContent).toBe("Ada Lovelace");
+    });
+    expect(photo()).toBe(mounted);
   });
 
   it("wraps between Profile and the footer while reconnecting", async () => {
