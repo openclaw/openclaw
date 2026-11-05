@@ -52,9 +52,9 @@ export function useStreamAutoFollow(options: {
     schedule(force = false) {
       schedule(options.identity(), force);
     },
-    handleScroll: (event: Event) => {
-      const container = event.currentTarget;
-      if (container instanceof HTMLElement) {
+    handleScroll: () => {
+      const container = options.container();
+      if (container) {
         atBottom = isNearStreamEnd(container);
       }
     },

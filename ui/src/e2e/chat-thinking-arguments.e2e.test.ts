@@ -64,7 +64,7 @@ suite.define(() => {
       await expect.poll(() => composer.inputValue()).toBe("/think ");
       await composer.press("Enter");
       const log = page.getByRole("log");
-      await expect.poll(() => log.textContent()).toContain("Current thinking level: Unknown.");
+      await expect.poll(() => log.textContent()).toContain("Current effort: Unknown.");
       expect(await log.textContent()).toContain("Options: Unknown.");
       expect(await page.locator('[data-chat-thinking-option="high"]').count()).toBe(0);
       expect(await page.locator('[data-chat-thinking-slider="true"]').count()).toBe(0);
@@ -116,18 +116,26 @@ suite.define(() => {
         await picker.waitFor({ state: "visible" });
         await expect.poll(() => composer.inputValue()).toBe("/think ");
 
-        const [pickerBox, inputBox] = await Promise.all([
-          picker.boundingBox(),
-          page.locator(".agent-chat__input").boundingBox(),
-        ]);
-        expect(pickerBox).not.toBeNull();
-        expect(inputBox).not.toBeNull();
-        expect((pickerBox?.y ?? 0) + (pickerBox?.height ?? 0)).toBeLessThanOrEqual(
-          (inputBox?.y ?? 0) + 1,
-        );
-        expect(pickerBox?.x ?? -1).toBeGreaterThanOrEqual(0);
-        expect((pickerBox?.x ?? 0) + (pickerBox?.width ?? 0)).toBeLessThanOrEqual(viewport.width);
-        expect(pickerBox?.y ?? -1).toBeGreaterThanOrEqual(0);
+        const { pickerBox, inputBox } = await page
+          .locator(".agent-chat__input")
+          .evaluate(async (input) => {
+            // The mobile composer animates its height when editing starts.
+            await Promise.all(input.getAnimations().map((animation) => animation.finished));
+            const menu = input.querySelector(".slash-menu[role='listbox']");
+            if (!menu) {
+              throw new Error("Missing thinking argument picker");
+            }
+            // Sample both bounds in one frame, including while the host sheet moves.
+            const bounds = (element: Element) => {
+              const { x, y, width, height } = element.getBoundingClientRect();
+              return { x, y, width, height };
+            };
+            return { pickerBox: bounds(menu), inputBox: bounds(input) };
+          });
+        expect(pickerBox.y + pickerBox.height).toBeLessThanOrEqual(inputBox.y + 1);
+        expect(pickerBox.x).toBeGreaterThanOrEqual(0);
+        expect(pickerBox.x + pickerBox.width).toBeLessThanOrEqual(viewport.width);
+        expect(pickerBox.y).toBeGreaterThanOrEqual(0);
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
           viewport.width,
         );

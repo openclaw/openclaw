@@ -117,6 +117,8 @@ on the same branch within 24 hours and the complete input diff is unchanged.
 Skipped jobs cannot advance the comparison base. Missing proof, incomplete
 diffs, or API errors request fresh validation. Each decision reports its reason.
 Both workflows retain their PR scopes and refresh proof daily for dependency drift.
+Plugin Init Scaffold Validation uses GitHub-hosted Ubuntu 24.04 independently of
+restricted Boat admission.
 
 Sandbox Common Smoke runs daily at 05:23 UTC and retains PR and manual runs.
 Plugin NPM Release runs its nonpublishing metadata and unpublished-package pack
@@ -488,6 +490,10 @@ Scheduled, manual, and release Matrix checks use the fixed-response mock provide
 
 For normal PRs, follow scoped CI/check evidence instead of treating parity as a required status.
 
+## OpenGrep
+
+OpenGrep PR-diff and manual full scans run on GitHub-hosted Ubuntu 24.04.
+
 ## CodeQL
 
 The `CodeQL` workflow is a narrow first-pass security scanner. Hourly, manual, and non-draft pull request runs scan Actions workflow code and the highest-risk JavaScript/TypeScript surfaces with high-confidence security queries filtered to high/critical `security-severity`.
@@ -496,7 +502,7 @@ Main scans run at minute 23 of every hour, separately from CI. An active schedul
 
 Scheduled admission compares accumulated changes separately for each of the seven categories, against that category's last successful scan. Inputs come from its CodeQL profile's extraction paths; shared workflow, admission, and query configuration changes refresh every category. Supported `paths-ignore` patterns exclude files that CodeQL does not extract; unknown pattern syntax retains the scan. The seven decisions share run, job, and tree metadata within one admission step, while keeping independent successful baselines. Changes limited to comments, blank lines, or standalone `-whitespace` rules in regular `.gitattributes` files do not invalidate extraction; other attribute changes remain shared inputs. When GitHub caps the changed-file list, admission uses an exact Git tree comparison before authorizing a skip. Unchanged inputs skip that category; missing proof, unsupported profiles, incomplete comparisons, and lookup failures run it. Proof older than 24 hours triggers a fresh scan even without source changes. Skipped scans never advance the comparison baseline.
 
-The pull request guard stays light: it only starts for changes under `.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, `scripts`, `src`, or process-owning bundled plugin runtime paths, and it runs the same high-confidence security matrix as the scheduled workflow. Android and macOS CodeQL stay out of PR defaults.
+The pull request guard stays light: it starts for root or nested `.gitattributes` changes and changes under `.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, `scripts`, `src`, or process-owning bundled plugin runtime paths, and it runs the same high-confidence security matrix as the scheduled workflow. Attribute changes select all seven categories because checkout transformations can affect either language. Android and macOS CodeQL stay out of PR defaults.
 
 ### Security categories
 
@@ -712,6 +718,7 @@ Treat GitHub titles, comments, bodies, review text, branch names, and commit mes
 ### Barnacle inactivity lifecycle
 
 The `Stale` workflow runs at 03:17, 09:17, 15:17 and 21:17 UTC.
+It uses GitHub-hosted Ubuntu so scheduled runs do not depend on restricted Boat admission.
 `scripts/github/stale-lifecycle.mjs` owns issues and PRs, including manual backfills.
 It replaces the old issue action, separate bug marker, inline backfill and global
 48-hour closed-issue locker.

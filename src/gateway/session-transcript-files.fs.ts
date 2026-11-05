@@ -103,7 +103,7 @@ async function resetArchiveHeaderMatchesSessionId(
   // would silently drop every compressed archive from fallback history.
   try {
     await using opened = await openLocalFileSafely({
-      filePath: materializeSessionArchiveForRead(archivePath),
+      filePath: await materializeSessionArchiveForRead(archivePath),
     });
     const buffer = Buffer.alloc(64 * 1024);
     const bytesRead = await readFileWindowFully(opened.handle, buffer, 0);

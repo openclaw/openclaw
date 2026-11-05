@@ -5,47 +5,15 @@ import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
-import { TOOL_CALL_RAW_TOOL_NAME } from "./tool-catalog.js";
+import type {
+  CatalogSource,
+  CatalogVisibilityOptions,
+  ToolSearchConfig,
+  UnknownToolErrorOptions,
+} from "./tool-search-protocol.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-export const TOOL_SEARCH_RAW_TOOL_NAME = "tool_search";
-export const TOOL_DESCRIBE_RAW_TOOL_NAME = "tool_describe";
-export { TOOL_CALL_RAW_TOOL_NAME } from "./tool-catalog.js";
-// One model-visible search response, including a batch, may expose at most this many candidates.
-export const MAX_TOOL_SEARCH_RESULTS = 50;
-export const MAX_TOOL_SEARCH_BATCH_QUERIES = 16;
-export const MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES = 512;
-// Includes JSON escaping and multibyte text echoed to identify batch result groups.
-export const MAX_TOOL_SEARCH_BATCH_QUERY_BYTES = 512;
-export const MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS = 4_000;
-
-export const TOOL_SEARCH_CONTROL_TOOL_NAMES = new Set([
-  TOOL_SEARCH_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_CALL_RAW_TOOL_NAME,
-]);
-
-export const TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES = new Set([
-  TOOL_SEARCH_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_CALL_RAW_TOOL_NAME,
-]);
-
-export type ToolSearchMode = "tools" | "directory";
-export type ToolSearchRequest =
-  | { kind: "single"; search: { query: string; limit: number } }
-  | { kind: "batch"; searches: Array<{ query: string; limit: number }> };
-export type CatalogSource = "openclaw" | "mcp" | "client";
 export type CatalogTool = AnyAgentTool | ToolDefinition;
-export type CatalogVisibilityOptions = {
-  includeMcp?: boolean;
-  allowedIds?: { has(id: string): boolean };
-};
-type UnknownToolRecoverySurface = "raw-tools" | "catalog";
-export type UnknownToolErrorOptions = {
-  exactIdOnly?: boolean;
-  recoverySurface?: UnknownToolRecoverySurface;
-};
 export type ToolSearchCallOptions = CatalogVisibilityOptions &
   UnknownToolErrorOptions & {
     parentToolCallId?: string;
@@ -74,9 +42,6 @@ export type ToolSearchCatalogToolExecutor = (params: {
     result: AgentToolResult<unknown>,
   ) => Promise<AgentToolResult<unknown>>;
 }) => Promise<AgentToolResult<unknown>>;
-
-/** Resolved Tool Search config after defaults and limits. */
-export type ToolSearchConfig = AgentToolSurfacePresentation["toolSearch"];
 
 /** Per-run/session context used by Tool Search control tools. */
 export type ToolSearchToolContext = {

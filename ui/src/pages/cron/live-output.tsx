@@ -105,7 +105,7 @@ export function LiveOutput(props: { gateway: CronProps["gateway"]; jobId: string
           stream = element;
         }}
         onScroll={(event) => {
-          follow.handleScroll(event);
+          follow.handleScroll();
           setPaused(!isNearStreamEnd(event.currentTarget));
         }}
       >

@@ -17,6 +17,7 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -762,3 +763,41 @@ it.each(["captured-generation", null, undefined])(
     expect(hasUpdateDoctorMigrationCapture()).toBe(false);
   },
 );
+
+it("migrates legacy exec approvals after Doctor detection retained a shared-state reader", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { env, stateDir } = state;
+    const pathname = openOpenClawStateDatabase({ env }).path;
+    await closeOpenClawStateDatabaseAsync();
+    await state.writeJson("exec-approvals.json", {
+      version: 1,
+      socket: { path: "/tmp/synthetic-approvals.sock", token: "synthetic-token" },
+      defaults: { security: "deny" },
+      agents: {},
+    });
+    const generations = readUpdateDatabaseGenerations([
+      pathname,
+      state.statePath("client", "credentials.sqlite"),
+    ]);
+    let result: Awaited<ReturnType<typeof migrateLegacyExecApprovals>> | undefined;
+    const { warnings } = await withCapture(env, generations, async () => {
+      await openOpenClawStateDatabaseForDoctor({ env });
+      // Doctor detection reads live plugin state; maintenance keeps that worker reader warm.
+      await executeExistingOpenClawStateRead(
+        { env },
+        { type: "updateRuns.recoveryAdmission" },
+        { live: true },
+      );
+      result = await migrateLegacyExecApprovals({
+        env,
+        stateDir,
+        detected: detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }),
+      });
+    });
+    expect(warnings).toEqual([]);
+    expect(result).toMatchObject({
+      warnings: [],
+      changes: ["Imported legacy exec approvals policy and local socket credentials."],
+    });
+  });
+});

@@ -26,6 +26,7 @@ import { VERSION } from "../version.js";
 import {
   getStateRuntimeSchemaAdmission,
   getStateSchemaVersionAdmission,
+  adoptPeerPublishedStateSchemaVersion,
   publishStateSchemaVersionAdmission,
 } from "./openclaw-state-db-admission.js";
 import {
@@ -247,24 +248,15 @@ export function assertOpenClawStateDatabaseForMaintenance(
   }
 
   const metadata = assertOpenClawStateDatabaseOwner(database, options);
-  if (metadata?.schema_version !== userVersion) {
-    // A peer process (the Gateway's update-run watcher) may publish the deferred
-    // version after this connection admitted its floor; refuse only if the header disagrees.
-    if (
-      metadata?.schema_version === OPENCLAW_STATE_SCHEMA_VERSION &&
-      readSqliteUserVersion(database) === OPENCLAW_STATE_SCHEMA_VERSION
-    ) {
-      publishStateSchemaVersionAdmission(database, {
-        userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-        contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      });
-    } else {
-      const schemaVersion =
-        typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
-      throw new SqliteSchemaMismatchError(
-        `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; run openclaw doctor --fix before compacting it.`,
-      );
-    }
+  if (
+    metadata?.schema_version !== userVersion &&
+    !adoptPeerPublishedStateSchemaVersion(database, metadata)
+  ) {
+    const schemaVersion =
+      typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
+    throw new SqliteSchemaMismatchError(
+      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; run openclaw doctor --fix before compacting it.`,
+    );
   }
   assertSqliteSchemaContains(
     database,

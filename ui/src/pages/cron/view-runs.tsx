@@ -346,7 +346,7 @@ export function RunsSection(props: CronRunsSectionProps) {
             aria-live="polite"
             data-test-id="cron-runs-loading"
           >
-            {t("cron.list.loading")}
+            {t("cron.runs.loading")}
           </div>
         ) : props.runsState !== "ready" ? undefined : hasRunFilters() ? (
           <div class="muted cron-runs__empty">{t("cron.runs.noMatching")}</div>
@@ -387,7 +387,7 @@ export function RunsSection(props: CronRunsSectionProps) {
           disabled={props.runsLoadingMore}
           onClick={() => props.onLoadMoreRuns()}
         >
-          {props.runsLoadingMore ? t("cron.list.loading") : t("cron.runs.loadMore")}
+          {props.runsLoadingMore ? t("cron.runs.loading") : t("cron.runs.loadMore")}
         </button>
       ) : undefined}
     </div>
@@ -434,9 +434,12 @@ function Run(props: {
   const usageSummary = createMemo(() => {
     const usage = props.entry.usage;
     return usage?.total_tokens !== undefined
-      ? `${formatCompactTokenCount(usage.total_tokens)} ${t("usage.metrics.tokens")}`
+      ? t("cron.runEntry.tokens", { count: formatCompactTokenCount(usage.total_tokens) })
       : usage?.input_tokens !== undefined && usage.output_tokens !== undefined
-        ? `${formatCompactTokenCount(usage.input_tokens)} in / ${formatCompactTokenCount(usage.output_tokens)} out`
+        ? t("cron.runEntry.inputOutputTokens", {
+            input: formatCompactTokenCount(usage.input_tokens),
+            output: formatCompactTokenCount(usage.output_tokens),
+          })
         : null;
   });
   const bodySource = () =>

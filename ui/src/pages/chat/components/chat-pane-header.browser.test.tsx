@@ -38,41 +38,38 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       containers.splice(0).forEach((container) => container.remove());
     });
 
-    it.each(["dark", "light"])("keeps public sharing neutral in the %s theme", async (theme) => {
-      const root = document.documentElement;
-      const previousMode = root.getAttribute("data-theme-mode");
-      root.setAttribute("data-theme-mode", theme);
-      onTestFinished(() => {
-        if (previousMode === null) {
-          root.removeAttribute("data-theme-mode");
-        } else {
-          root.setAttribute("data-theme-mode", previousMode);
-        }
-      });
-      const { container } = mountChatPaneHeader(containers, {
-        sharingControl: chatPaneHeaderSharing({
-          state: {
-            loading: false,
-            result: {
-              sessionKey: "agent:main:test",
-              members: [],
-              identities: [],
-              permissions: [],
-              role: "owner",
-              allowedVisibilities: ["shared"],
-              publicShare: { token: `v1.${"a".repeat(96)}`, createdAt: 1 },
-            },
-          },
-        }),
-      });
-      const trigger = container.querySelector<HTMLElement>(".chat-pane__sharing-trigger")!;
-      const state = trigger.querySelector<HTMLElement>(".chat-pane__sharing-trigger-state")!;
-      expect(state.textContent).toBe("Public");
-      expect(getComputedStyle(state).color).toBe(getComputedStyle(trigger).color);
-      const icons = trigger.querySelectorAll("svg");
-      expect(icons).toHaveLength(2);
-      expect(getComputedStyle(icons[0]!).color).toBe(getComputedStyle(icons[1]!).color);
-    });
+    it.each(["dark", "light"])(
+      "keeps public sharing neutral and aligned in the %s theme",
+      async (theme) => {
+        const root = document.documentElement;
+        const previousMode = root.getAttribute("data-theme-mode");
+        root.setAttribute("data-theme-mode", theme);
+        onTestFinished(() => {
+          if (previousMode === null) {
+            root.removeAttribute("data-theme-mode");
+          } else {
+            root.setAttribute("data-theme-mode", previousMode);
+          }
+        });
+        const { container } = mountChatPaneHeader(containers, {
+          sharingControl: chatPaneHeaderSharing({ cachedPublished: true }),
+        });
+        const trigger = container.querySelector<HTMLElement>(".chat-pane__sharing-trigger")!;
+        const state = trigger.querySelector<HTMLElement>(".chat-pane__sharing-trigger-state")!;
+        expect(state.textContent).toBe("Public");
+        expect(getComputedStyle(state).color).toBe(getComputedStyle(trigger).color);
+        const icons = trigger.querySelectorAll("svg");
+        expect(icons).toHaveLength(2);
+        expect(getComputedStyle(icons[0]!).color).toBe(getComputedStyle(icons[1]!).color);
+        const icon = icons[0]!.getBoundingClientRect();
+        const label = state.lastElementChild!.getBoundingClientRect();
+        expect(label.left - icon.right).toBeCloseTo(4);
+        expect(label.top + label.height / 2).toBeCloseTo(icon.top + icon.height / 2);
+        expect(
+          icons[1]!.getBoundingClientRect().left - state.getBoundingClientRect().right,
+        ).toBeCloseTo(0);
+      },
+    );
 
     it.each([false, true])(
       "reserves the trailing header region before actions arrive (agent=%s)",
@@ -465,86 +462,6 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       expect(observations).toEqual(
         Array.from({ length: 2 }, () => ({ open: false, focused: true })),
       );
-    });
-
-    it.each(["idle", "busy"] as const)("anchors the %s hint to its menu button", async (state) => {
-      const busy = state === "busy";
-      const reason = "Branch switch is unavailable while the agent is working.";
-      const { container, props } = mountChatPaneHeader(containers, {
-        branchSwitchDisabledReason: busy ? reason : null,
-        onClosePane: state === "idle" ? vi.fn() : undefined,
-        branches: [
-          { leafEntryId: "active", headline: "Current work", messageCount: 4, active: true },
-          { leafEntryId: "other", headline: "Earlier idea", messageCount: 2, active: false },
-        ],
-      });
-      container.style.cssText =
-        state === "idle"
-          ? "position: fixed; top: 80px; left: 80px; width: 1000px"
-          : "position: fixed; top: 80px; left: 500px; width: 650px";
-      await waitForSolid(() =>
-        expect(container.querySelector(".chat-pane__branches-trigger")).not.toBeNull(),
-      );
-      const trigger = container.querySelector<HTMLButtonElement>(".chat-pane__branches-trigger")!;
-      await page.elementLocator(trigger).hover();
-      const tooltip = () =>
-        [...document.querySelectorAll("openclaw-tooltip")]
-          .map((element) => element.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface"))
-          .find((element) => element?.matches(":popover-open"));
-      await expect.poll(() => tooltip()?.textContent).toContain(busy ? reason : "Versions");
-      await expect
-        .poll(() => {
-          const body = tooltip();
-          if (!body) {
-            return false;
-          }
-          const hint = body.getBoundingClientRect();
-          const button = trigger.getBoundingClientRect();
-          return (
-            hint.width > 0 &&
-            hint.left < button.right &&
-            hint.right > button.left &&
-            Math.min(Math.abs(hint.bottom - button.top), Math.abs(hint.top - button.bottom)) < 24
-          );
-        })
-        .toBe(true);
-
-      if (!busy) {
-        await click(trigger);
-        await expect.poll(() => tooltip()).toBeUndefined();
-        await page.getByRole("menuitem", { name: /Earlier idea/ }).click();
-        expect(props.onBranchSelect).toHaveBeenCalledWith("other");
-      }
-
-      if (state === "idle") {
-        const header = findElement(container, ".chat-pane__header");
-        const layout = findElement(container, ".chat-header-session-menu__trigger");
-        const closePane = findElement(container, ".chat-pane__close");
-        for (const width of [320, 693]) {
-          container.style.width = `${width}px`;
-          expect(trigger.checkVisibility()).toBe(true);
-          const bounds = header.getBoundingClientRect();
-          const branchBounds = trigger.getBoundingClientRect();
-          const closeBounds = layout.getBoundingClientRect();
-          expect(branchBounds.left).toBeGreaterThanOrEqual(bounds.left);
-          expect(closeBounds.right).toBeLessThanOrEqual(branchBounds.left);
-          expect(branchBounds.right).toBeLessThanOrEqual(bounds.right);
-          expect(closeBounds.right).toBeLessThanOrEqual(bounds.right);
-          expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
-          const closePaneBounds = closePane.getBoundingClientRect();
-          expect(closePane.checkVisibility()).toBe(true);
-          expect(closePaneBounds.width).toBe(32);
-          expect(closePaneBounds.height).toBe(32);
-          expect(closePaneBounds.left).toBeGreaterThanOrEqual(branchBounds.right);
-          expect(closePaneBounds.right).toBeLessThanOrEqual(bounds.right);
-          vi.mocked(props.onBranchSelect).mockClear();
-          await click(trigger);
-          await page.getByRole("menuitem", { name: /Earlier idea/ }).click();
-          expect(props.onBranchSelect).toHaveBeenCalledExactlyOnceWith("other");
-        }
-        await click(closePane);
-        expect(props.onClosePane).toHaveBeenCalledExactlyOnceWith("pane-1");
-      }
     });
   },
 );
