@@ -413,11 +413,10 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
     throw new Error("Queued channel operator authority changed; submit a new request.");
   }
   let references = 1;
-  const assertCurrent = () => {
+  const assertPolicyCurrent = () => {
     if (references === 0) {
       throw new Error("Queued channel operator authority is no longer active.");
     }
-    params.assertCurrent();
     if (!prepared.isCurrent(getConfig())) {
       throw new Error("Queued channel operator authority changed; submit a new request.");
     }
@@ -427,7 +426,7 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
     recoveryReference: snapshot.reference,
     scopes: intersectOperatorScopes(snapshot.scopes, profile.scopes),
     getRuntimeConfig: getConfig,
-    assertCurrent,
+    assertCurrent: assertPolicyCurrent,
     signal: prepared.signal,
   });
   // Every hold keeps the live revocation subscribed, so retained work settles on revocation.
@@ -447,7 +446,7 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
     ? restoreOperatorModelPolicySnapshot(snapshot.modelPolicy)
     : undefined;
   try {
-    const authority = createAdmittedRunOperatorAuthority({
+    const policyAuthority = createAdmittedRunOperatorAuthority({
       ...live,
       channelRecoverySource: { reference: snapshot.reference, modelPolicy: originalModels },
       retain: () => {
@@ -467,6 +466,23 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
         return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);
       },
     });
+    // As with Gateway recovery, work checks expire with the occurrence while an
+    // accepted continuation retains the same linked identity and original policy.
+    const authority = createAdmittedRunOperatorAuthority({
+      ...policyAuthority,
+      assertCurrent: () => {
+        params.assertCurrent();
+        policyAuthority.assertCurrent();
+      },
+      retain: () => {
+        params.assertCurrent();
+        return policyAuthority.retain!();
+      },
+      get modelPolicy() {
+        return policyAuthority.modelPolicy;
+      },
+    });
+    bindGatewayOperatorContinuationAuthority(authority, policyAuthority);
     authority.assertCurrent();
     return { authority, controlUiAdmin: false, release };
   } catch (error) {

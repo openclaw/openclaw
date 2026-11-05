@@ -3,6 +3,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import type { CurrentInboundPromptContext } from "../../agents/internal-runtime-context.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "../../agents/subagents/registry/subagent-run-generation.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { registerAgentEventLifecycleRotationHandler } from "../../infra/agent-events.js";
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
@@ -10,6 +11,8 @@ import type { ReplyOperation } from "../../sessions/session-controller.contracts
 import { runAfterReplyOperationClear } from "../../sessions/session-controller.state.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { GoalContinuation } from "./goal-continuation.types.js";
+import { recoverGoalSuccessorAfterChildSettlement } from "./goal-successor-child-settlement.js";
+import { persistGoalSuccessorCustody } from "./goal-successor-custody.js";
 import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
 
 type GoalReturnParams = {
@@ -104,21 +107,40 @@ export function createGoalContinuationReturnScope(
 }
 
 /** The reply execution owner supplies its physical run ID before any tools can yield. */
-export function bindGoalContinuationExecution(runId: string, sessionKey: string | undefined): void {
+export async function bindGoalContinuationExecution(
+  runId: string,
+  sessionKey: string | undefined,
+  requiredGoal?: Readonly<GoalContinuation>,
+): Promise<void> {
   const owner = goalReturns.getStore();
+  if (
+    requiredGoal &&
+    (!owner ||
+      owner.closed ||
+      owner.params.sessionKey !== sessionKey ||
+      owner.continuation?.goalId !== requiredGoal.goalId ||
+      owner.continuation.sessionId !== requiredGoal.sessionId ||
+      owner.continuation.lifecycleRevision !== requiredGoal.lifecycleRevision)
+  ) {
+    throw new Error("Required Goal execution has no matching admitted return.");
+  }
   if (owner && !owner.closed && owner.params.sessionKey === sessionKey) {
     owner.sourceRunId = runId;
+    await publishGoalReturnCustody(owner, runId, "running");
+    if (requiredGoal && owner.closed) {
+      throw new Error("Required Goal execution could not publish running custody.");
+    }
   }
 }
 
 /** A Goal created by this execution can use its admitted chat return, never another command's. */
-export function bindCreatedGoalContinuation(params: {
+export async function bindCreatedGoalContinuation(params: {
   runId?: string;
   sessionKey: string;
   agentId: string;
   storePath: string;
   goalId: string;
-}): void {
+}): Promise<void> {
   const owner = goalReturns.getStore();
   if (
     !owner ||
@@ -137,6 +159,101 @@ export function bindCreatedGoalContinuation(params: {
     return;
   }
   owner.continuation = { ...owner.params.expectedSession, goalId: params.goalId };
+  await publishGoalReturnCustody(owner, params.runId, "running");
+}
+
+/** Awaited by the admitted execution or the child transfer's prepare phase, never a callback. */
+async function publishGoalReturnCustody(
+  owner: GoalReturn,
+  sourceRunId: string,
+  phase: "running" | "children",
+  childRunIds?: string[],
+  assertTransferCurrent?: () => void,
+): Promise<void> {
+  const continuation = owner.continuation;
+  if (!continuation || owner.params.base.run.scheduledAutomation) {
+    return;
+  }
+  const assertCurrent = () => {
+    owner.signal.throwIfAborted();
+    assertTransferCurrent?.();
+    owner.params.base.operatorAuthority?.assertCurrent();
+    if (owner.closed || owner.generation !== getAgentRunLifecycleGeneration()) {
+      throw new Error("Goal execution lost its admitted return");
+    }
+  };
+  assertCurrent();
+  const entry = await readSessionEntryReadOnlyInWorker({
+    storePath: owner.params.storePath,
+    sessionKey: owner.params.sessionKey,
+  });
+  assertCurrent();
+  if (
+    !entry ||
+    entry.sessionId !== continuation.sessionId ||
+    entry.lifecycleRevision !== continuation.lifecycleRevision ||
+    entry.goal?.id !== continuation.goalId ||
+    entry.goal.status !== "active"
+  ) {
+    owner.close();
+    return;
+  }
+  if (
+    !(await persistGoalSuccessorCustody({
+      base: owner.params.base,
+      entry,
+      sessionKey: owner.params.sessionKey,
+      storePath: owner.params.storePath,
+      sourceRunId,
+      phase,
+      childRunIds,
+      assertCurrent,
+    }))
+  ) {
+    owner.close();
+  }
+}
+
+/** Persist dependency before registry commit releases children; promotion itself stays synchronous. */
+export async function prepareGoalContinuationYield(params: {
+  entries: readonly SubagentRunRecord[];
+  requesterTurnRunId: string;
+}): Promise<void> {
+  const settlement = goalSettlements.getStore();
+  const lendingTurn = goalReturns.getStore();
+  const owner =
+    settlement?.admitted && settlement.runId === params.requesterTurnRunId
+      ? settlement.owner
+      : lendingTurn?.sourceRunId === params.requesterTurnRunId
+        ? lendingTurn
+        : undefined;
+  if (!owner || owner.closed || owner.signal.aborted || !params.entries.length) {
+    return;
+  }
+  if (
+    params.entries.some(
+      (entry) =>
+        entry.requesterSessionKey !== owner.params.sessionKey ||
+        entry.requesterAgentId !== owner.params.base.run.agentId ||
+        (entry.completionRequesterSessionId !== undefined &&
+          (entry.completionRequesterSessionId !== owner.params.expectedSession.sessionId ||
+            entry.completionRequesterLifecycleRevision !==
+              owner.params.expectedSession.lifecycleRevision)),
+    )
+  ) {
+    return;
+  }
+  await publishGoalReturnCustody(
+    owner,
+    params.requesterTurnRunId,
+    "children",
+    params.entries.map((entry) => entry.runId),
+    () => {
+      if (settlement?.owner === owner && !settlement.isCurrent()) {
+        throw new Error("Goal child transfer lost its settlement source");
+      }
+    },
+  );
 }
 
 /** The committed yield publisher binds the return before the completion wake becomes eligible. */
@@ -249,7 +366,7 @@ export function withGoalContinuationSettlement<T>(
   return owner ? goalSettlements.run({ owner, runId, isCurrent }, run) : run();
 }
 
-/** Command preparation captures current Goal facts without injecting them into a native runtime. */
+/** Command preparation captures the exact Goal facts for the selected runtime to consume. */
 export function prepareGoalContinuationContext(params: {
   runId: string;
   sessionKey?: string;
@@ -266,7 +383,7 @@ export function prepareGoalContinuationContext(params: {
   }
 }
 
-/** Only the actual built-in harness consumes this transient context. */
+/** The selected harness or CLI runner consumes this exact-run context, never independent commands. */
 export function readGoalContinuationContext(params: {
   runId: string;
   sessionKey?: string;
@@ -322,6 +439,7 @@ export async function finishGoalContinuationSettlement(
 ): Promise<void> {
   const owner = findGoalReturn(entries);
   if (!owner) {
+    await recoverGoalSuccessorAfterChildSettlement(entries, delivered);
     return;
   }
   try {

@@ -28,6 +28,7 @@ import type { SystemEvent } from "../../infra/system-events.js";
 import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { GoalContinuation } from "./goal-continuation.types.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 
 export type SessionEventOutcome = {
@@ -80,6 +81,13 @@ export type SessionEventTarget = {
   sessionKey?: string;
 };
 
+/** Host-only requirement, not a plugin input or a grant of Goal authority. */
+export type SessionEventRequiredGoal = {
+  identity: Readonly<GoalContinuation>;
+  /** Called only after the execution owner has acquired the exact active Goal. */
+  onAcquired: (assertExecutionCurrent: () => void) => void;
+};
+
 export type SessionEventOptions = {
   agentId: string;
   sessionKey: string;
@@ -114,6 +122,7 @@ export type SessionEventOptions = {
   /** Transfer exact queued occurrences into one ordinary turn without duplicating them. */
   occurrences?: readonly SystemEvent[];
   scheduledAutomation?: ScheduledSessionAutomation;
+  requiredGoal?: SessionEventRequiredGoal;
   /** Failed promotion retains an existing passive occurrence until ordinary adoption begins. */
   preserveOccurrenceOnRejection?: true;
   /** An explicitly silent source records its result without transport delivery. */
@@ -181,6 +190,10 @@ export type ScheduledSessionAutomation = {
 
 /** Producer callbacks stay bound to the queued occurrence, not a later dispatcher. */
 export type SessionEventExecution = {
+  requiredGoal?: Omit<SessionEventRequiredGoal, "onAcquired"> & {
+    /** The event settlement owner, not the producer, releases acquired execution custody. */
+    onAcquired: (assertExecutionCurrent: () => void, release: () => void) => void;
+  };
   /** Admit the prepared input to the occurrence's durable custody before queueing. */
   prepareInput?: (recorder: UserTurnTranscriptRecorder) => Promise<void>;
   /** Original command custody survives process eviction and deferred reply execution. */

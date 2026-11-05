@@ -1,5 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import { promoteGoalContinuationYield } from "../../../auto-reply/reply/goal-continuation-return.js";
+import {
+  prepareGoalContinuationYield,
+  promoteGoalContinuationYield,
+} from "../../../auto-reply/reply/goal-continuation-return.js";
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
@@ -484,6 +487,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     candidates.filter((entry) => childRunIds.has(entry.runId));
   await params.transfer({
     entries: selectedMembers,
+    prepare: () => prepareGoalContinuationYield({ entries: selectedEntries, requesterTurnRunId }),
     mutate: (members) => {
       const entries = children(members);
       for (const entry of entries) {

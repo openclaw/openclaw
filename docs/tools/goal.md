@@ -13,9 +13,9 @@ title: "Goal"
 
 A **goal** is one durable objective attached to the current OpenClaw session.
 It gives the agent and the operator a shared target for long-running work.
-In built-in chat runs and supported local or cloud-worker Codex sessions, OpenClaw continues
-pursuing an active goal after a normal turn finishes, even when the model ends with a final reply instead of calling
-another tool. A goal is not a reminder, cron job, or standing order.
+In built-in chat runs, supported local or cloud-worker Codex sessions, and the Claude Code CLI backend,
+OpenClaw continues pursuing an active goal after a normal turn finishes. A final
+reply alone does not mean the objective is complete. A goal is not a reminder, cron job, or standing order.
 
 Local Codex sessions also support explicit Resume of an existing goal. Resume
 retains the goal identity, objective, and conversation history. If current work is
@@ -28,6 +28,11 @@ footer.
 Detached command completions return to the originating user-facing thread, so
 the next turn continues to see the same goal even when command execution used
 a separate sandbox policy session.
+
+When a goal yields to subagents, the selected harness receives the same active-goal
+context when their results return. A successful child-result turn can continue the
+goal under the current runtime and placement policy. An unrelated command, failed
+return, or operator pause does not restart pursuit.
 
 ## Quick start
 
@@ -217,7 +222,7 @@ The normal follow-up queue owns these turns. They wait for the previous turn's
 execution and delivery to settle, use normal session admission and permissions,
 and do not appear as new human messages. Queued user input and existing
 child/tool continuations take precedence; the nudge does not run alongside them.
-When a built-in chat Goal yields to children, their settled requester turn
+When a supported Goal run yields to children, their settled requester turn
 receives the current Goal context. A normal final returns pursuit to the same
 follow-up queue only after the child completion batch is committed; it does not
 make independent command runs autonomous.
@@ -236,11 +241,57 @@ the turn that completes the Goal. Human Start and Resume turns do not increment 
 
 Automatic nudges apply to built-in chat/auto-reply execution and supported local
 and cloud-worker Codex sessions, not other external runtimes, heartbeat turns, or independent
-scheduled work. They
-use the existing queue and run lifecycle rather than a periodic background
-scanner. A saved active goal alone does not start a new process or create a
-schedule after shutdown; normal session recovery or another admitted turn
-provides the next execution opportunity.
+scheduled work. They use the existing queue and run lifecycle rather than a
+periodic background scanner.
+
+### Restart recovery
+
+Before admitted goal execution, a queued successor, or a committed child yield
+releases its predecessor, OpenClaw saves a private continuation receipt. The receipt
+identifies the exact session incarnation, goal, originating authority, delivery
+policy, and any child dependency. Startup recovery resumes only these recorded
+obligations through ordinary input admission. It does not scan active goal labels
+and invent new work or use a periodic model prompt.
+
+Recovery rechecks the goal and original authority. Stop, pause, clear, replacement,
+completion, and revoked access prevent continuation. Existing child completion
+owns a waiting child batch; recovery does not relaunch its children. The receipt
+survives input acceptance until a successor takes custody, so a second restart
+cannot erase the obligation between acceptance and execution.
+
+Some live capabilities cannot be reconstructed, such as a browser-bound tool
+capture. In that case recovery leaves a visible pause and reason instead of
+substituting broader permissions. Required unanswered human decisions must still
+be resolved by their owner; a restart is not consent. A goal saved without an
+admitted continuation receipt does not by itself start a process.
+
+### Provider-native pursuit
+
+The provider adapter borrows one admitted OpenClaw run for the entire native goal
+pursuit. It retains tool authorization, cancellation, and transcript ownership
+across native iterations, and releases them only after native execution has
+stopped. OpenClaw does not send another goal nudge while that native loop owns
+execution.
+
+- **Claude Code:** version-qualified CLI runs use native `/goal` and its Stop-hook
+  evaluator within a single stdio invocation. User/project settings stay excluded
+  in managed runs; bundled skills stay disabled and native tool calls still pass
+  host authorization. Native managed-hook restrictions are respected. Completion
+  comes from native goal metadata after process settlement or that run's authorized
+  `update_goal` tool, never from a successful CLI exit or assistant prose alone. A
+  tool-owned verdict allows the final response to finish without being overwritten
+  by stale native metadata. A manual clear or an unfinished native return is not
+  achievement.
+
+Claude native pursuit requires Code 2.1.318 or newer, a bound linear session, and
+an objective representable by its native command (at most 4,000 characters and
+not a reserved clear command). Exact OpenClaw token budgets, forks, and rewinds
+are not supported by that adapter. Unsupported requests fail explicitly rather
+than truncating the objective, dropping the budget, or replacing a foreign goal.
+
+Terminal provider errors and exhausted context recovery remain visible pauses.
+Existing native retry and compaction preserve history; recovery does not reset a
+session or replay completed external effects to make an error disappear.
 
 ## Control UI
 
@@ -266,15 +317,16 @@ built-in local session with recoverable history, or an idle existing Codex sessi
 running locally or on a cloud worker with remote execution. Codex input must pass
 native admission before the runtime commits the Goal and its operation receipt.
 Cloud-worker sessions also require worker setup to admit that input. Other external
-runtimes remain unsupported. Goals are not queued or steered into another run.
+runtimes remain unsupported. The Claude Code CLI backend runs through core-owned
+local admission and applies its native compatibility checks before execution. Goals are not queued or steered into another run.
 The UI reports unsupported or busy sessions rather than creating an inactive Goal.
 
 Codex worker Goals use the same OpenClaw Goal ID, history, budgets, accounting,
 and continuation queue. Codex's separate autonomous Goal engine stays disabled;
 the core `get_goal`, `create_goal`, and `update_goal` tools remain available when
 native shell tools are enabled, subject to normal tool policy.
-Continuation retains the operator's current authority; it does not replay old
-input or recreate authority after a Gateway restart.
+Continuation retains the original operator authority; a restart never reconstructs
+it from a broader session owner.
 
 The web Control UI shows the goal as a compact pill above the chat composer:
 a status icon, the status label (for example `Pursuing goal`), the truncated

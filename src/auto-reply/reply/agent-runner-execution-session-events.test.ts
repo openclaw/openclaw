@@ -303,6 +303,7 @@ describe("ordinary session event execution", () => {
       const settle = vi.fn(async () => {
         expect(dispose).not.toHaveBeenCalled();
       });
+      const cliEffect = vi.fn();
       if (runtime === "cli") {
         useCliFallback(followupRun);
         state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
@@ -312,6 +313,7 @@ describe("ordinary session event execution", () => {
           retired = revoke;
           // The CLI owner rechecks after awaited preparation.
           params.assertCurrent?.();
+          cliEffect();
           return { payloads: [{ text: "done" }], meta: {} };
         });
       } else {
@@ -337,7 +339,7 @@ describe("ordinary session event execution", () => {
         revoke ? { kind: "rejected" } : { kind: "settled", status: "ok" },
       );
       if (runtime === "cli") {
-        expect(assertCurrent).toHaveBeenCalledTimes(2);
+        expect(cliEffect).toHaveBeenCalledTimes(revoke ? 0 : 1);
       } else {
         expect(assertCandidate).toHaveBeenCalledWith("anthropic", false);
         expect(onSuccessfulAuthProfile).toHaveBeenCalledExactlyOnceWith("scheduled-profile");

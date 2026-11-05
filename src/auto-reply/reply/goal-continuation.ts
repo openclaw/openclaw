@@ -19,6 +19,7 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { transferCommandOwnerAuthorityToSuccessor } from "../command-owner-authority.js";
 import { createGoalContinuationReturnScope } from "./goal-continuation-return.js";
 import type { GoalContinuation } from "./goal-continuation.types.js";
+import { persistGoalSuccessorCustody } from "./goal-successor-custody.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { scheduleFollowupDrain } from "./queue/drain.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
@@ -71,7 +72,7 @@ async function resolveCodexGoalPlacement(params: {
   }
 }
 
-export function isGoalContinuationCurrent(
+function isGoalContinuationIdentityCurrent(
   continuation: GoalContinuation,
   entry: SessionEntry | undefined,
 ): boolean {
@@ -82,7 +83,17 @@ export function isGoalContinuationCurrent(
     entry.lifecycleRevision === continuation.lifecycleRevision &&
     goal?.id === continuation.goalId &&
     goal.status === "active" &&
-    !entry.abortedLastRun &&
+    !entry.abortedLastRun,
+  );
+}
+
+export function isGoalContinuationCurrent(
+  continuation: GoalContinuation,
+  entry: SessionEntry | undefined,
+): boolean {
+  return Boolean(
+    isGoalContinuationIdentityCurrent(continuation, entry) &&
+    entry &&
     (entry.agentHarnessId === undefined ||
       entry.agentHarnessId === "openclaw" ||
       (entry.agentHarnessId === "codex" &&
@@ -119,10 +130,13 @@ export async function isGoalContinuationPlacementCurrent(params: {
 
 function isGoalContinuationOutcome(result: EmbeddedAgentRunResult): boolean {
   const meta = result.meta;
+  // CLI runners report a normal finish through the shared completion contract.
+  const stopReason = meta.stopReason ?? meta.completion?.finishReason;
   return (
-    (meta.stopReason === "end_turn" || meta.stopReason === "stop") &&
+    (stopReason === "end_turn" || stopReason === "stop") &&
     !meta.aborted &&
     !meta.error &&
+    !meta.completion?.refusal &&
     !meta.timeoutPhase &&
     !meta.yielded &&
     !meta.continuationPending &&
@@ -253,6 +267,25 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
     strandedReplyRetry: undefined,
     stalledTurnRecovery: undefined,
   };
+  // Publish before the predecessor can disappear or the mailbox can accept work.
+  // Store only source facts; the live queue still owns execution and fresh admission.
+  const persisted = await persistGoalSuccessorCustody({
+    base: nudge,
+    entry,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    sourceRunId: params.sourceRunId,
+    phase: "pending",
+    assertCurrent: () => {
+      params.base.operatorAuthority?.assertCurrent();
+      if (!eligible()) {
+        throw new Error("Goal continuation lost its source before custody publication");
+      }
+    },
+  });
+  if (!persisted || !eligible()) {
+    return false;
+  }
   if (params.controllerInput) {
     bindSessionControllerSource(params.controllerInput, nudge);
   }
@@ -277,7 +310,7 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   return enqueued;
 }
 
-/** The queue owner retains only the return from an admitted built-in chat Goal. */
+/** Retain the exact admitted chat return; enqueue revalidates the selected runtime placement. */
 export function createGoalContinuationReturn(
   params: Omit<GoalContinuationParams, "result" | "sourceRunId"> | undefined,
 ): <T>(run: () => T) => T {
@@ -295,7 +328,7 @@ export function createGoalContinuationReturn(
     initialGoalId: params.initialGoalId,
     operation: params.operation,
     context: (continuation, entry, existing) =>
-      isGoalContinuationCurrent(continuation, entry)
+      isGoalContinuationIdentityCurrent(continuation, entry)
         ? refreshActiveGoalContext(existing, entry)
         : undefined,
     async resume({ continuation, base, runId, result, isCurrent }) {

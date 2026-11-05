@@ -4,6 +4,7 @@ import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths
 export const gatewayPluginTestFiles = [
   "test/plugins/browser-session-authority.gateway.test.ts",
   "test/plugins/chat-abort-codex.gateway.test.ts",
+  "test/plugins/claude-native-goal-mcp.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
   "test/plugins/crabbox-allocation-authority.gateway.test.ts",
   "test/plugins/team-reports-http.gateway.test.ts",
@@ -162,6 +163,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/operator-run-authority.reconnect.test.ts",
   "src/gateway/operator-run-authority.worker.test.ts",
   "src/gateway/operator-run-recovery.channel.test.ts",
+  "src/gateway/operator-run-recovery.continuation.test.ts",
   "src/gateway/operator-run-recovery.test.ts",
   "src/gateway/probe.device-auth-scope.test.ts",
   "src/gateway/progress-card-store.worker.test.ts",
@@ -267,6 +269,9 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-history-broadcast.worker.test.ts",
   "src/gateway/session-history-cold.benchmark.test.ts",
   "src/gateway/session-history-lookup.worker.test.ts",
+  "src/gateway/session-goal-successor-execution.test.ts",
+  "src/gateway/session-goal-successor-recovery.test.ts",
+  "src/gateway/session-goal-successor-terminal.test.ts",
   "src/gateway/session-history-readonly-reader.test.ts",
   "src/gateway/session-history-worker-lifecycle.test.ts",
   "src/gateway/session-history-worker.integration.test.ts",
@@ -564,6 +569,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "test/model-account-catalog-authority.integration.test.ts",
   "test/plugins/browser-session-authority.gateway.test.ts",
   "test/plugins/chat-abort-codex.gateway.test.ts",
+  "test/plugins/claude-native-goal-mcp.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
 ];
 

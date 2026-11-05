@@ -682,6 +682,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
+  /** Existing input owner's outstanding Goal custody; private, data-only recovery basis. */
+  goalSuccessor?: import("./goal-successor.types.js").SessionGoalSuccessor;
   /** Written only by committed graceful shutdown, consumed by the next startup. */
   resumeAfterRestart?: { queuedInputIds: string[]; hadBackgroundExec?: true };
   /**

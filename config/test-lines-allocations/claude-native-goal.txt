@@ -1,0 +1,2 @@
+# Claude native Goal: runtime, managed MCP, independent host ownership and terminal Stop custody; net LF growth versus PR193024.
+980

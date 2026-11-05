@@ -261,6 +261,10 @@ export type CliBackendExecuteContext = {
   toolAvailability?: CliBackendToolAvailability;
   /** Exact host-owned reusable process lifecycle and current-turn admission. */
   liveSession?: CliBackendLiveSessionCapability;
+  /** Closure-bound goal of this admitted run; the backend owns native continuation once accepted. */
+  prepareNativeGoal?: () => Promise<
+    import("../agents/harness/native-goal.types.js").AgentHarnessNativeGoal | undefined
+  >;
   /** Offers same-turn input for this run; the host drops it when the run closes. */
   registerMessageInjection?: (injection: CliBackendMessageInjection) => void;
   /** Offers graceful turn interruption; the host drops the registration when this run closes. */

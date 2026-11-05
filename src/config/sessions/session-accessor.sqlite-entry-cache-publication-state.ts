@@ -24,6 +24,7 @@ import {
   type SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import {
+  notifySessionEntryPredicateInvalidated,
   projectSessionEntryPredicateChange,
   projectSessionEntryPredicatePostimage,
   publishRetainedSessionEntryPredicate,
@@ -446,6 +447,7 @@ export function retainPreparedSessionEntryPredicate(params: {
   matches: (before: SessionEntry | undefined, after: SessionEntry | undefined) => boolean;
   acquiring?: boolean;
   projection?: SessionEntryProjection;
+  onInvalidated?: () => void;
 }) {
   const { acquiring, ...retention } = params;
   let originalEntry = params.entry;
@@ -457,6 +459,7 @@ export function retainPreparedSessionEntryPredicate(params: {
     revision: 0,
     pending: new Set(),
     projection: params.projection,
+    onInvalidated: params.onInvalidated,
   };
   const retained = retainPreparedSessionSharingFacts({
     ...retention,
@@ -489,6 +492,7 @@ export function retainPreparedSessionEntryPredicate(params: {
       }
       if (!predicate.matches(entry)) {
         predicate.state = "changed";
+        notifySessionEntryPredicateInvalidated(predicate);
         return false;
       }
       predicate.entry = entry;
@@ -500,6 +504,7 @@ export function retainPreparedSessionEntryPredicate(params: {
       // Released guards may outlive their operation in captured authority callbacks.
       originalEntry = undefined;
       matches = undefined;
+      predicate.onInvalidated = undefined;
       predicate.entry = undefined;
       retained.release();
     },

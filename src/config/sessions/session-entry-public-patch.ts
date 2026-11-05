@@ -36,6 +36,7 @@ function generationValidPrivateFieldsForSameSession(
     ...(existingEntry.sessionDiffBaselineCapture
       ? { sessionDiffBaselineCapture: existingEntry.sessionDiffBaselineCapture }
       : {}),
+    ...(existingEntry.goalSuccessor ? { goalSuccessor: existingEntry.goalSuccessor } : {}),
     ...(existingEntry.resumeAfterRestart
       ? { resumeAfterRestart: existingEntry.resumeAfterRestart }
       : {}),

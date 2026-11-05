@@ -511,6 +511,7 @@ export async function markSessionAbortTarget(params: {
         const entry = {
           ...currentEntry,
           abortedLastRun: true,
+          goalSuccessor: undefined,
           updatedAt: params.now?.() ?? Date.now(),
         };
         const cutoff = params.resolveAbortCutoff?.({ entry: { ...currentEntry }, sessionKey });

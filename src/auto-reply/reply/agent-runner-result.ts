@@ -404,12 +404,9 @@ export async function finalizeReplyAgentRun(
       return { result: reply, accounting };
     },
   );
-  if (
-    context.sessionKey &&
-    context.storePath &&
-    context.execution.status === "ok" &&
-    completedAccounting.activeSessionEntry?.goal?.status === "active"
-  ) {
+  // Completion may commit a newer Goal state than the accounting projection.
+  // Admission owns the fresh state check, including Stop and Pause.
+  if (context.sessionKey && context.storePath && context.execution.status === "ok") {
     await enqueueGoalContinuation({
       base: context.followupRun,
       result: completedAccounting.runResult,

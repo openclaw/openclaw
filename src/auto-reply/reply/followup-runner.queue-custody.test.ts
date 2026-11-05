@@ -8,6 +8,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
   getCurrentSessionControllerOwner,
@@ -23,6 +24,7 @@ import {
   releaseSessionControllerClaim,
 } from "../../sessions/session-controller.mailbox.js";
 import { createFollowupRunner } from "./followup-runner.js";
+import { createGoalReturnEntryProbe } from "./goal-return-entry.test-support.js";
 import { enqueueFollowupRun, scheduleFollowupDrain, type FollowupRun } from "./queue.js";
 import { createQueueTestRun, installQueueRuntimeErrorSilencer } from "./queue.test-helpers.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
@@ -43,6 +45,33 @@ vi.mock("./followup-turn-execution.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./followup-turn-execution.js")>()),
   executeFollowupTurn: state.execute,
 }));
+// mock-isolation: These queue/placement tests do not own a session database writer.
+// Preserve execution and retained-return custody; terminal database accounting is separate.
+vi.mock("./agent-runner-completion.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-completion.js")>()),
+  withAgentTurnCompletion: async <T>(
+    _params: Parameters<typeof import("./agent-runner-completion.js").withAgentTurnCompletion>[0],
+    consume: (completion: undefined) => Promise<T>,
+  ) => await consume(undefined),
+}));
+// mock-isolation: This entry/placement fixture has no database owner. Isolate only custody
+// I/O; keep the production return scope, eligibility checks, and yield promotion intact.
+// Real SQLite custody publication/recovery is covered by session-goal-successor-recovery.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionEntryReadOnlyInWorker: vi.fn(),
+}));
+vi.mock("../../config/sessions/goal-successor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/goal-successor.js")>()),
+  persistSessionGoalSuccessor: async (
+    ...args: Parameters<
+      typeof import("../../config/sessions/goal-successor.js").persistSessionGoalSuccessor
+    >
+  ) => {
+    args[2]();
+    return true;
+  },
+}));
 vi.mock("./agent-runner-result-accounting.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-runner-result-accounting.js")>()),
   accountFollowupTurn: async () => undefined,
@@ -57,7 +86,10 @@ vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
   resolveQueuedReplyExecutionConfig: state.config,
 }));
 installQueueRuntimeErrorSilencer();
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.mocked(readSessionEntryReadOnlyInWorker).mockReset();
+  vi.clearAllMocks();
+});
 
 function admitted(queued: FollowupRun, operation: ReplyOperation, runId: string) {
   const turn: AdmittedFollowupTurn = {
@@ -72,13 +104,16 @@ function admitted(queued: FollowupRun, operation: ReplyOperation, runId: string)
   return { kind: "admitted" as const, turn };
 }
 
-it("acquires fresh required placement for a queued successor after its predecessor releases", async () => {
+const goalEntryTest = it.each(["openclaw", "codex"]);
+goalEntryTest("retains %s Goal custody with fresh placement", async (agentHarnessId) => {
   const queued = createQueueTestRun({ prompt: "queued required-placement successor" });
   const identity = {
     agentId: queued.run.agentId!,
     sessionId: queued.run.sessionId,
-    sessionKey: "agent:agent:required-placement-successor",
+    sessionKey: `agent:agent:required-placement-${agentHarnessId}`,
   };
+  const goal = createGoalReturnEntryProbe({ ...identity, agentHarnessId });
+  vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(goal.entry);
   queued.run.sessionKey = identity.sessionKey;
   queued.run.config = { cloudWorkers: { requiredProfile: "native" } };
   const options = { config: queued.run.config };
@@ -117,7 +152,15 @@ it("acquires fresh required placement for a queued successor after its predecess
       mailboxClaim: queued.controllerInput!.claim!,
     });
     await admitFollowupRunLifecycle(queued);
-    return admitted(queued, successor, "required-placement-successor");
+    const result = admitted(queued, successor, "required-placement-successor");
+    result.turn.session = {
+      kind: "session",
+      key: identity.sessionKey,
+      storePath: "/tmp/goal-return-entry/openclaw-agent.sqlite",
+      current: () => goal.entry,
+      publish() {},
+    };
+    return result;
   });
   state.execute.mockImplementation(async () => {
     expect(getCurrentSessionControllerOwner()).toBe(successor);
@@ -125,6 +168,7 @@ it("acquires fresh required placement for a queued successor after its predecess
       expect(borrowed).toBe(successor);
     });
     markReplyOperationExecutionStarted(successor!);
+    await goal.yieldFrom("required-placement-successor");
     try {
       await withRequiredSessionPlacement(identity, options, async () => {
         events.push("effect");
@@ -167,6 +211,7 @@ it("acquires fresh required placement for a queued successor after its predecess
     await retirement;
     await queued.controllerInput!.settlement.promise;
     expect(failures).toEqual([]);
+    expect(goal.readContext()?.text).toContain("Active goal: Finish the delegated checklist");
     expect(events).toEqual([
       "admit:1",
       "release:1",
@@ -182,6 +227,7 @@ it("acquires fresh required placement for a queued successor after its predecess
     successor?.complete();
     clearFollowupQueue(identity.sessionKey);
     await queued.controllerInput?.settlement.promise;
+    await goal.release();
     uninstall();
     clearRuntimeConfigSnapshot();
     typing.cleanup();

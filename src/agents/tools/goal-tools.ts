@@ -10,6 +10,7 @@ import {
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { updateHostGoalFromTool } from "../harness/host-native-goal.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
   type AnyAgentTool,
@@ -106,7 +107,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
         objective,
         ...(tokenBudget !== undefined ? { tokenBudget } : {}),
       });
-      bindCreatedGoalContinuation({ ...scope, runId: options.runId, goalId: goal.id });
+      await bindCreatedGoalContinuation({ ...scope, runId: options.runId, goalId: goal.id });
       return jsonResult({ status: "created", goal });
     },
   };
@@ -134,12 +135,14 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
       const note = readToolStringParam(params, "note");
       const scope = resolveGoalSessionScope(options);
       try {
-        const goal = await updateSessionGoalStatus({
-          ...scope,
-          actor: { type: "agent", id: scope.sessionKey },
-          status,
-          ...(note ? { note } : {}),
-        });
+        const goal =
+          (await updateHostGoalFromTool({ ...scope, status, note })) ??
+          (await updateSessionGoalStatus({
+            ...scope,
+            actor: { type: "agent", id: scope.sessionKey },
+            status,
+            ...(note ? { note } : {}),
+          }));
         return jsonResult({
           status: "updated",
           goal,
