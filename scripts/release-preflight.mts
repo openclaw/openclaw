@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Checks or refreshes generated release artifacts before a release publish.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { coerceErrorMessage as formatError } from "./lib/error-format.mts";
@@ -29,15 +28,7 @@ function isScope(value: string): value is Scope {
   return SCOPES.some((scope) => scope === value);
 }
 const parsedArgs = parseArgs(process.argv.slice(2));
-const fix = parsedArgs.fix;
 const releaseTasks: ReleaseTask[] = [
-  {
-    id: "update-compatibility",
-    name: "previous updater compatibility",
-    scopes: ["version"],
-    // Registry freshness belongs to release preparation; read-only source checks stay offline.
-    fix: pnpmCommand("update:compat:check"),
-  },
   {
     id: "root-dependency-ownership",
     name: "root dependency ownership",
@@ -123,7 +114,10 @@ const releaseTasks: ReleaseTask[] = [
     check: pnpmCommand("native:i18n:check"),
   },
 ];
-const selectedTasks = releaseTasks.filter((task) => taskMatchesScopes(task, parsedArgs.scopes));
+const selectedTasks = releaseTasks.filter(
+  (task) =>
+    parsedArgs.scopes.has("all") || task.scopes.some((scope) => parsedArgs.scopes.has(scope)),
+);
 const shouldCheckMacosVersions = parsedArgs.scopes.has("all") || parsedArgs.scopes.has("version");
 
 // Release-evidence reuse validates version-stamp targets without running any
@@ -140,7 +134,7 @@ if (parsedArgs.macosVersionsOnly) {
   process.exit(0);
 }
 
-if (fix) {
+if (parsedArgs.fix) {
   console.log(
     `[release-preflight] refreshing generated release artifacts (${formatScopes(parsedArgs.scopes)}, jobs=${parsedArgs.jobs})`,
   );
@@ -150,7 +144,8 @@ if (fix) {
     tasks: selectedTasks,
   });
   if (fixResult.failed.length !== 0 || fixResult.skipped.length !== 0) {
-    printFailures("release preflight refresh failed", fixResult.failed);
+    console.error("\nrelease preflight refresh failed:");
+    printCommandFailures(fixResult.failed);
     printSkipped(fixResult.skipped);
     process.exit(1);
   }
@@ -346,11 +341,6 @@ async function runCommand(command: RunnableTask): Promise<number> {
   }
 }
 
-function printFailures(title: string, failures: FailedTask[]): void {
-  console.error(`\n${title}:`);
-  printCommandFailures(failures);
-}
-
 function printCommandFailures(failures: FailedTask[]): void {
   for (const failure of failures) {
     console.error(`- ${failure.name}: exit ${failure.status} (${formatCommand(failure)})`);
@@ -461,10 +451,6 @@ function parseJobs(raw: string): number {
     process.exit(1);
   }
   return jobs;
-}
-
-function taskMatchesScopes(task: ReleaseTask, scopes: Set<Scope>): boolean {
-  return scopes.has("all") || task.scopes.some((scope) => scopes.has(scope));
 }
 
 function formatScopes(scopes: Set<Scope>): string {

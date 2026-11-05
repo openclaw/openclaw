@@ -71,7 +71,7 @@ enum ShareContentExtractor {
 
     private static func loadURL(from provider: NSItemProvider) async -> URL? {
         if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier),
-           let url = await self.loadURLValue(from: provider, typeIdentifier: UTType.url.identifier)
+           let url = await self.loadURLValue(from: provider)
         {
             return url
         }
@@ -87,20 +87,16 @@ enum ShareContentExtractor {
     }
 
     private static func loadText(from provider: NSItemProvider) async -> String? {
-        if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier),
-           let text = await self.loadTextValue(from: provider, typeIdentifier: UTType.plainText.identifier)
-        {
-            return text
-        }
-
-        if provider.hasItemConformingToTypeIdentifier(UTType.text.identifier),
-           let text = await self.loadTextValue(from: provider, typeIdentifier: UTType.text.identifier)
-        {
-            return text
+        for type in [UTType.plainText, .text] {
+            if provider.hasItemConformingToTypeIdentifier(type.identifier),
+               let text = await self.loadTextValue(from: provider, typeIdentifier: type.identifier)
+            {
+                return text
+            }
         }
 
         if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier),
-           let url = await self.loadURLValue(from: provider, typeIdentifier: UTType.url.identifier)
+           let url = await self.loadURLValue(from: provider)
         {
             return url.absoluteString
         }
@@ -108,18 +104,10 @@ enum ShareContentExtractor {
         return nil
     }
 
-    private static func loadURLValue(from provider: NSItemProvider, typeIdentifier: String) async -> URL? {
+    private static func loadURLValue(from provider: NSItemProvider) async -> URL? {
         await withCheckedContinuation { continuation in
-            provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
-                if let url = item as? URL {
-                    continuation.resume(returning: url)
-                } else if let value = item as? String, let url = URL(string: value) {
-                    continuation.resume(returning: url)
-                } else if let value = item as? NSString, let url = URL(string: value as String) {
-                    continuation.resume(returning: url)
-                } else {
-                    continuation.resume(returning: nil)
-                }
+            provider.loadItem(forTypeIdentifier: UTType.url.identifier, options: nil) { item, _ in
+                continuation.resume(returning: (item as? URL) ?? (item as? String).flatMap(URL.init(string:)))
             }
         }
     }
@@ -127,15 +115,7 @@ enum ShareContentExtractor {
     private static func loadTextValue(from provider: NSItemProvider, typeIdentifier: String) async -> String? {
         await withCheckedContinuation { continuation in
             provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
-                if let text = item as? String {
-                    continuation.resume(returning: text)
-                } else if let text = item as? NSString {
-                    continuation.resume(returning: text as String)
-                } else if let text = item as? NSAttributedString {
-                    continuation.resume(returning: text.string)
-                } else {
-                    continuation.resume(returning: nil)
-                }
+                continuation.resume(returning: (item as? String) ?? (item as? NSAttributedString)?.string)
             }
         }
     }

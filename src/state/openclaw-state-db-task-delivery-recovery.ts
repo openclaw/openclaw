@@ -1,251 +1,140 @@
 // Doctor owns preservation-first recovery of delivery metadata whose task no longer exists.
-import { createHash } from "node:crypto";
-import fs from "node:fs";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { requireDirectorySync, syncDirectorySync } from "../infra/directory-durability.js";
-import { hashFileDescriptorSync } from "../infra/file-descriptor.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
-  assertSqliteIntegrity,
-  SqliteRepairableForeignKeyError,
-} from "../infra/sqlite-integrity.js";
-import { createPrivateSqliteTempDirectorySync } from "../infra/sqlite-private-directory.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+  createPrivateSqliteTempDirectory,
+  createPrivateSqliteTempDirectorySync,
+} from "../infra/sqlite-private-directory.js";
+import { withPreparedSqliteSnapshot } from "../infra/sqlite-readonly-location-cleanup.js";
+import {
+  resolveSqliteInspectionSignal,
+  runSqliteReadOnlyWorker,
+} from "../infra/sqlite-readonly-worker.js";
+import {
+  prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationSync,
+} from "../infra/sqlite-snapshot-source.js";
+import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
+import {
+  applyOrphanTaskDeliveryRecovery,
+  assertKnownOrphanTaskDeliveryIntegrity,
+  assertOrphanTaskDeliveryRecoveryShape,
+  hasOrphanTaskDeliveryRows,
+  preserveOrphanTaskDeliveryRecoveryInProcess,
+} from "./openclaw-state-db-task-delivery-recovery-preservation.js";
 
-const ORPHAN_PREDICATE =
-  "NOT EXISTS (SELECT 1 FROM task_runs WHERE task_runs.task_id = task_delivery_state.task_id)";
-
-type OrphanDeliveryRow = {
-  rowid: bigint;
-  task_id: string;
-  requester_origin_json: string | null;
-  last_notified_event_at: bigint | null;
-};
-
-function orphanRows(database: DatabaseSync): Iterable<OrphanDeliveryRow> {
-  const statement = database.prepare(`SELECT rowid, * FROM task_delivery_state
-    WHERE ${ORPHAN_PREDICATE} ORDER BY rowid`);
-  statement.setReadBigInts(true);
-  // SAFETY: The caller checks the supported schema; encodeOrphanRow validates every legacy value before preservation or removal.
-  return statement.iterate() as Iterable<OrphanDeliveryRow>;
-}
-
-function encodeOrphanRow(row: OrphanDeliveryRow): string {
-  if (
-    typeof row.rowid !== "bigint" ||
-    typeof row.task_id !== "string" ||
-    (row.requester_origin_json !== null && typeof row.requester_origin_json !== "string") ||
-    (row.last_notified_event_at !== null && typeof row.last_notified_event_at !== "bigint")
-  ) {
-    throw new Error("Orphan task delivery values do not match the supported recovery contract.");
-  }
-  return `${JSON.stringify(row, (_key, value: unknown) => (typeof value === "bigint" ? value.toString() : value))}\n`;
-}
-
-function assertRecoveryShape(database: DatabaseSync): void {
-  const columns = database.prepare("PRAGMA table_xinfo(task_delivery_state)").all();
-  const expected = [
-    { cid: 0, name: "task_id", type: "TEXT", notnull: 1, dflt_value: null, pk: 1, hidden: 0 },
-    {
-      cid: 1,
-      name: "requester_origin_json",
-      type: "TEXT",
-      notnull: 0,
-      dflt_value: null,
-      pk: 0,
-      hidden: 0,
-    },
-    {
-      cid: 2,
-      name: "last_notified_event_at",
-      type: "INTEGER",
-      notnull: 0,
-      dflt_value: null,
-      pk: 0,
-      hidden: 0,
-    },
-  ];
-  const foreignKeys = database.prepare("PRAGMA foreign_key_list(task_delivery_state)").all();
-  const canonicalForeignKey = [
-    {
-      id: 0,
-      seq: 0,
-      table: "task_runs",
-      from: "task_id",
-      to: "task_id",
-      on_update: "NO ACTION",
-      on_delete: "CASCADE",
-      match: "NONE",
-    },
-  ];
-  const triggers = database
-    .prepare(
-      "SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'task_delivery_state'",
-    )
-    .get();
-  if (
-    JSON.stringify(columns) !== JSON.stringify(expected) ||
-    JSON.stringify(foreignKeys) !== JSON.stringify(canonicalForeignKey) ||
-    triggers
-  ) {
-    throw new Error(
-      "Orphan task delivery recovery refused an unrecognized table, foreign key, or trigger.",
-    );
-  }
-}
-
-function assertKnownOrphanIntegrity(database: DatabaseSync): number {
-  try {
-    assertSqliteIntegrity(database, "task delivery recovery database");
-    return 0;
-  } catch (error) {
-    if (error instanceof SqliteRepairableForeignKeyError) {
-      return error.repair.orphanCount;
-    }
-    throw error;
-  }
-}
-
-function syncAndHash(filePath: string) {
-  const descriptor = fs.openSync(filePath, "r+");
-  try {
-    fs.fsyncSync(descriptor);
-    return hashFileDescriptorSync(descriptor);
-  } finally {
-    fs.closeSync(descriptor);
-  }
+function recoveryFailure(error: unknown, recoveryDirectory?: string): Error {
+  return new Error(
+    `Task delivery recovery failed without committing row removal${recoveryDirectory ? `; retained artifacts: ${recoveryDirectory}` : ""}: ${String(error)}`,
+    { cause: error },
+  );
 }
 
 /**
- * Caller holds Doctor's ownership/schema fences and its immediate write transaction.
- * Foreign-key actions stay disabled: inbound dependents must fail the post-check,
- * never cascade into unrelated data. The caller rolls back any failed check.
+ * Synchronous SDK/native update-ledger callers retain their existing immediate transaction.
+ * Foreign-key actions stay disabled; inbound dependents must fail the post-check, never cascade.
  */
 export function recoverOrphanTaskDeliveryRows(database: DatabaseSync, pathname: string): string[] {
-  if (
-    !tableExists(database, "task_delivery_state") ||
-    !tableExists(database, "task_runs") ||
-    !database.prepare(`SELECT 1 FROM task_delivery_state WHERE ${ORPHAN_PREDICATE} LIMIT 1`).get()
-  ) {
+  if (!hasOrphanTaskDeliveryRows(database)) {
     return [];
   }
-  assertRecoveryShape(database);
-  const count = assertKnownOrphanIntegrity(database);
+  assertOpenClawStateDatabaseOwner(database, { pathname });
+  assertOrphanTaskDeliveryRecoveryShape(database);
+  const count = assertKnownOrphanTaskDeliveryIntegrity(database);
   if (!database.isTransaction) {
     throw new Error("Orphan task delivery recovery requires the Doctor write transaction.");
   }
-
-  // The existing worker copies WAL/rollback state in another process. Opening and
-  // closing source file descriptors here could release this process's SQLite locks.
+  // Copying source descriptors in another process preserves this native owner's POSIX locks.
   const prepared = prepareSqliteReadOnlyLocationSync(pathname);
   let recoveryDirectory: string | undefined;
   try {
-    const snapshot = openNodeSqliteDatabase(prepared.location);
-    try {
-      snapshot.exec("PRAGMA journal_mode = DELETE;");
-      assertRecoveryShape(snapshot);
-      if (assertKnownOrphanIntegrity(snapshot) !== count) {
-        throw new Error("Orphan task delivery snapshot changed before preservation.");
-      }
-      const sourceHash = createHash("sha256");
-      const snapshotHash = createHash("sha256");
-      for (const row of orphanRows(database)) {
-        sourceHash.update(encodeOrphanRow(row));
-      }
-      for (const row of orphanRows(snapshot)) {
-        snapshotHash.update(encodeOrphanRow(row));
-      }
-      if (sourceHash.digest("hex") !== snapshotHash.digest("hex")) {
-        throw new Error("Orphan task delivery snapshot does not preserve the current payload.");
-      }
-    } finally {
-      snapshot.close();
-    }
     recoveryDirectory = createPrivateSqliteTempDirectorySync(
       path.dirname(pathname),
       "openclaw-task-delivery-recovery-",
     );
-    const backupPath = path.join(recoveryDirectory, "database.sqlite");
-    const expectedBackup = syncAndHash(prepared.location);
-    fs.copyFileSync(prepared.location, backupPath, fs.constants.COPYFILE_EXCL);
-    fs.chmodSync(backupPath, 0o600);
-    if (JSON.stringify(syncAndHash(backupPath)) !== JSON.stringify(expectedBackup)) {
-      throw new Error("Orphan task delivery backup verification failed.");
-    }
-    const exportPath = path.join(recoveryDirectory, "orphan-rows.jsonl");
-    const exportDescriptor = fs.openSync(exportPath, "wx+", 0o600);
-    const exportHash = createHash("sha256");
-    let exportedCount = 0;
-    try {
-      for (const row of orphanRows(database)) {
-        const encoded = encodeOrphanRow(row);
-        fs.writeFileSync(exportDescriptor, encoded);
-        exportHash.update(encoded);
-        exportedCount += 1;
-      }
-      fs.fsyncSync(exportDescriptor);
-      if (hashFileDescriptorSync(exportDescriptor).sha256 !== exportHash.digest("hex")) {
-        throw new Error("Orphan task delivery export verification failed.");
-      }
-    } finally {
-      fs.closeSync(exportDescriptor);
-    }
-    if (exportedCount !== count) {
-      throw new Error(
-        "Orphan task delivery export did not account for every foreign-key violation.",
-      );
-    }
-    fs.writeFileSync(
-      path.join(recoveryDirectory, "manifest.json"),
-      JSON.stringify(
-        {
-          format: "openclaw.task-delivery-recovery.v1",
-          state: "preserved-before-repair",
-          sourcePath: pathname,
-          backup: {
-            file: "database.sqlite",
-            ...expectedBackup,
-            integrity: "structural-ok-known-orphans",
-          },
-          export: {
-            file: "orphan-rows.jsonl",
-            ...syncAndHash(exportPath),
-            count,
-            integerEncoding: "decimal-string",
-          },
-          relation: "task_delivery_state.task_id -> task_runs.task_id",
-          createdAt: new Date().toISOString(),
-        },
-        null,
-        2,
-      ),
-      { flag: "wx", mode: 0o600, flush: true },
+    const evidence = preserveOrphanTaskDeliveryRecoveryInProcess(
+      prepared.location,
+      pathname,
+      recoveryDirectory,
     );
-    requireDirectorySync(syncDirectorySync(recoveryDirectory), "Task delivery recovery directory");
-    requireDirectorySync(
-      syncDirectorySync(path.dirname(recoveryDirectory)),
-      "Task delivery recovery parent",
-    );
-    // Retained artifacts are recovery evidence, never a claim that this transaction committed.
-    // Any later migration or integrity failure rolls the row removal back, not the backup.
-    const removed = database
-      .prepare(`DELETE FROM task_delivery_state WHERE ${ORPHAN_PREDICATE}`)
-      .run();
-    if (Number(removed.changes) !== count) {
-      throw new Error("Orphan task delivery recovery removed an unexpected number of rows.");
+    if (evidence.count !== count) {
+      throw new Error("Orphan task delivery snapshot changed before preservation.");
     }
-    assertSqliteIntegrity(database, pathname);
-    return [
-      `Preserved and recovered ${count} orphan task delivery rows; backup and row export: ${recoveryDirectory}`,
-    ];
+    assertOpenClawStateDatabaseOwner(database, { pathname });
+    return applyOrphanTaskDeliveryRecovery(database, pathname, evidence, recoveryDirectory);
   } catch (error) {
-    throw new Error(
-      `Task delivery recovery failed without committing row removal${recoveryDirectory ? `; retained artifacts: ${recoveryDirectory}` : ""}: ${String(error)}`,
-      { cause: error },
-    );
+    throw recoveryFailure(error, recoveryDirectory);
   } finally {
     prepared.cleanup();
+  }
+}
+
+/** Prepare evidence without a source write transaction; the caller's original fences remain held. */
+export async function prepareOrphanTaskDeliveryRecovery(
+  database: DatabaseSync,
+  pathname: string,
+): Promise<() => string[]> {
+  if (!hasOrphanTaskDeliveryRows(database)) {
+    return () => [];
+  }
+  assertOpenClawStateDatabaseOwner(database, { pathname });
+  assertOrphanTaskDeliveryRecoveryShape(database);
+  if (database.isTransaction) {
+    throw new Error("Orphan task delivery preservation must precede the Doctor write transaction.");
+  }
+  const signal = resolveSqliteInspectionSignal();
+  let recoveryDirectory: string | undefined;
+  let preserved = false;
+  try {
+    const snapshot = await prepareSqliteReadOnlyLocation(pathname, {
+      preserveSourceArtifacts: true,
+      shared: false,
+      signal,
+    });
+    const prepared = await withPreparedSqliteSnapshot(snapshot, async (snapshotPath) => {
+      const directory = await createPrivateSqliteTempDirectory(
+        path.dirname(pathname),
+        "openclaw-task-delivery-recovery-",
+      );
+      recoveryDirectory = directory;
+      const evidence = await runSqliteReadOnlyWorker(snapshotPath, {
+        mode: "task-delivery-recovery",
+        sourcePath: pathname,
+        recoveryDirectory: directory,
+        signal,
+      });
+      preserved = true;
+      return { evidence, directory };
+    });
+    return () => {
+      try {
+        signal?.throwIfAborted();
+        assertOpenClawStateDatabaseOwner(database, { pathname });
+        return applyOrphanTaskDeliveryRecovery(
+          database,
+          pathname,
+          prepared.evidence,
+          prepared.directory,
+        );
+      } catch (error) {
+        throw recoveryFailure(error, prepared.directory);
+      }
+    };
+  } catch (error) {
+    if (recoveryDirectory && !preserved) {
+      try {
+        await rm(recoveryDirectory, { recursive: true, force: true });
+        recoveryDirectory = undefined;
+      } catch (cleanupError) {
+        throw createSqliteLifecycleAggregateError(
+          [error, cleanupError],
+          `Could not remove incomplete task delivery recovery: ${recoveryDirectory}`,
+          error,
+        );
+      }
+    }
+    throw recoveryFailure(error, recoveryDirectory);
   }
 }

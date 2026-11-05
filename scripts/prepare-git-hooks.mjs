@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveRuntimeBootstrapToolingEntrypointUrl } from "../runtime-process-bootstrap.generated.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
@@ -54,5 +55,28 @@ export function configurePrepareGitHooks(params = {}) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  configurePrepareGitHooks();
+  if (existsSync(join(DEFAULT_PACKAGE_ROOT, "src/state/openclaw-state-schema.sql"))) {
+    // Source preparation uses the generator CLI; packaged installs have no schemas.
+    const generated = spawnSync(
+      process.execPath,
+      [fileURLToPath(resolveRuntimeBootstrapToolingEntrypointUrl("kyselyTypes"))],
+      {
+        stdio: "inherit",
+      },
+    );
+    if (generated.error) {
+      throw generated.error;
+    }
+    if (generated.status !== 0) {
+      process.exit(generated.status ?? 1);
+    }
+  }
+  // CI preparation must not persist developer hooks in reusable workspaces.
+  if (!process.env.CI) {
+    configurePrepareGitHooks();
+  }
+  if (existsSync(join(DEFAULT_PACKAGE_ROOT, "scripts/native-protocol-inputs.json"))) {
+    const { prepareNativeProtocol } = await import("./prepare-native-protocol.mjs");
+    await prepareNativeProtocol();
+  }
 }

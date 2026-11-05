@@ -1,4 +1,3 @@
-// HTTP endpoint adapter for invoking gateway tools from OpenAI-compatible clients.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -16,7 +15,6 @@ import {
 import {
   authorizeScopedGatewayHttpRequestOrReply,
   getHeader,
-  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
@@ -35,10 +33,8 @@ export async function handleToolsInvokeHttpRequest(
     resolveGatewayContext?: GatewayContextResolver;
   },
 ): Promise<boolean> {
-  let url: URL;
-  try {
-    url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-  } catch {
+  const url = URL.parse(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  if (!url) {
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "bad_request", message: "Invalid request URL" }));
     return true;
@@ -60,7 +56,6 @@ export async function handleToolsInvokeHttpRequest(
     req,
     res,
     operatorMethod: "agent",
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });
   if (!authResult) {
     return true;
@@ -117,6 +112,7 @@ export async function handleToolsInvokeHttpRequest(
         signal,
         hasCurrentClientAuthority: () => !signal.aborted && requestAuth.hasCurrentClientAuthority(),
         isWebchatConnect: () => false,
+        pluginRegistry: context?.getGatewayMethodRegistry?.().pluginRegistry,
       },
       () =>
         invokeGatewayTool({

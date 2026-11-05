@@ -106,6 +106,7 @@ import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowApplication
 import org.robolectric.shadows.ShadowBroadcastPendingResult
 import org.robolectric.shadows.ShadowBroadcastReceiver
+import org.robolectric.shadows.ShadowSpeechRecognizer
 import org.robolectric.shadows.ShadowToast
 import org.robolectric.util.ReflectionHelpers
 import java.net.InetAddress
@@ -130,6 +131,47 @@ import kotlin.coroutines.CoroutineContext
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class NodeForegroundServiceTest {
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  fun enabledWakeWordsKeepMicrophoneServiceAccessAfterBackgrounding() {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    Shadows.shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(true)
+    val runtime = app.ensureRuntime()
+    val endpoint = GatewayEndpoint.manual("127.0.0.1", 18789)
+    ReflectionHelpers.setField(runtime, "connectedEndpoint", endpoint)
+    runtime.applyNodeVoiceWakeWords(endpoint.stableId, """{"triggers":["openclaw"]}""") { true }
+    runtime.setVoiceWakeEnabled(true)
+    val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
+    try {
+      controller.get().onStartCommand(null, 0, 1)
+      drainWithMainLooper {
+        withTimeout(5_000) {
+          while (controller.get().foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE == 0) yield()
+        }
+      }
+      val recognizer = Shadows.shadowOf(checkNotNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer()))
+      val source =
+        checkNotNull(
+          recognizer.lastRecognizerIntent.getParcelableExtra(
+            android.speech.RecognizerIntent.EXTRA_AUDIO_SOURCE,
+            android.os.ParcelFileDescriptor::class.java,
+          ),
+        )
+      recognizer.triggerOnReadyForSpeech(Bundle())
+      assertTrue(runtime.voiceWakeIsListening.value)
+      runtime.setForeground(false)
+      Shadows.shadowOf(Looper.getMainLooper()).idle()
+      assertTrue(runtime.voiceWakeIsListening.value)
+      controller.destroy()
+      assertEquals("Paused", runtime.voiceWakeStatusText.value)
+      assertFalse(source.fileDescriptor.valid())
+      assertTrue(recognizer.isDestroyed)
+    } finally {
+      closeNodeServiceTestFixture(controller, app)
+    }
+  }
+
   @After
   fun resetNodeServiceStartSuppression() {
     NodeForegroundService.resume(RuntimeEnvironment.getApplication(), startNow = false)
@@ -170,6 +212,9 @@ class NodeForegroundServiceTest {
   @Config(shadows = [ServiceRuntimePrefsShadow::class])
   fun coldStickyStartRestoresSavedGatewayWithoutForegroundCapabilities() {
     val app = RuntimeEnvironment.getApplication() as NodeApp
+    Shadows.shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(true)
+    app.prefs.setVoiceWakeEnabled(true)
     val gateway = lifetimeGateway(hello = ::bootstrapHello)
     val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
     val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
@@ -188,6 +233,12 @@ class NodeForegroundServiceTest {
         }
       }
       assertFalse(requireNotNull(app.peekRuntime()).isForeground.value)
+      val recognizerBeforeWords = ShadowSpeechRecognizer.getLatestSpeechRecognizer()
+      requireNotNull(app.peekRuntime()).applyNodeVoiceWakeWords(endpoint.stableId, """{"triggers":["openclaw"]}""") { true }
+      Shadows.shadowOf(Looper.getMainLooper()).idle()
+      assertEquals(0, controller.get().foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+      assertEquals(listOf("openclaw"), requireNotNull(app.peekRuntime()).voiceWakeWords.value)
+      assertEquals(recognizerBeforeWords, ShadowSpeechRecognizer.getLatestSpeechRecognizer())
     } finally {
       closeNodeServiceTestFixture(controller, app)
       gateway.shutdown()
@@ -393,11 +444,11 @@ class NodeForegroundServiceTest {
   fun stopRetiresQueuedActivityRefresh() = assertStopRetiresQueuedGatewayAction(QueuedGatewayAction.Refresh)
 
   @Test
-  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
   fun stopRetiresQueuedSavedGatewayConnection() = assertStopRetiresQueuedGatewayAction(QueuedGatewayAction.Save)
 
   @Test
-  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
   fun stopRetiresQueuedConversationNotification() = assertStopRetiresQueuedGatewayAction(QueuedGatewayAction.Notification)
 
   @Test
@@ -484,7 +535,7 @@ class NodeForegroundServiceTest {
         withTimeout(10_000) { runtime.gatewayConnectionDisplay.first { it.isConnected && runtime.nodeConnected.value } }
       }
       runtime.switchChatSession(target.sessionKey, target.agentId)
-      drainWithMainLooper { withTimeout(10_000) { runtime.chatHealthOk.first { it } } }
+      drainWithMainLooper { withTimeout(10_000) { runtime.chat.healthOk.first { it } } }
       assertTrue(ConversationReplyNotifier(app).show(target.toComposerOwner(), target.runId, "Synthetic assistant reply"))
       val posted = manager.activeNotifications.single { it.tag == target.notificationTag }
       var notification = posted.notification
@@ -573,7 +624,7 @@ class NodeForegroundServiceTest {
       val commandId = conversationNotificationReplyIdempotencyKey(target)
       assertEquals(commandId, sent["idempotencyKey"]?.jsonPrimitive?.content)
       assertTrue("The observed Reply must have only one chat.send", sends.isEmpty())
-      drainWithMainLooper { assertTrue(runtime.wasChatOutboxCommandAdmitted(commandId)) }
+      drainWithMainLooper { assertTrue(runtime.chat.wasOutboxCommandAdmitted(commandId)) }
       if (includeGeneration) {
         val acknowledged = manager.activeNotifications.singleOrNull { it.tag == target.notificationTag }
         assertNotNull("Durable admission must retain a current Reply acknowledgment", acknowledged)
@@ -736,7 +787,7 @@ class NodeForegroundServiceTest {
             while (!finished.isDone) yield()
             finished.get()
           }
-          val admitted = runtime.wasChatOutboxCommandAdmitted(commandId)
+          val admitted = runtime.chat.wasOutboxCommandAdmitted(commandId)
           val outcome = manager.activeNotifications.single { it.tag == target.notificationTag }.notification
           println("Warm pending trust: admitted=$admitted, sends=${sends.size}, oldLeaseCurrent=${oldLease.isCurrent()}, outcome=${outcome.extras.getCharSequence(Notification.EXTRA_TEXT)}")
           assertSame("The reply must not resolve the pending trust prompt", prompt, runtime.pendingGatewayTrust.value)
@@ -757,7 +808,7 @@ class NodeForegroundServiceTest {
           runtime.gatewayConnectionDisplay.first { it.isConnected && runtime.nodeConnected.value }
         }
         assertTrue("Approved TLS must leave the gateway ready", runtime.gatewayConnectionDisplay.value.isConnected)
-        assertTrue("TLS approval must preserve the waiting Reply's outbox admission", runtime.wasChatOutboxCommandAdmitted(commandId))
+        assertTrue("TLS approval must preserve the waiting Reply's outbox admission", runtime.chat.wasOutboxCommandAdmitted(commandId))
         assertEquals(prompt.fingerprintSha256, app.prefs.loadGatewayTlsFingerprint(endpoint.stableId))
       }
 
@@ -1004,7 +1055,7 @@ class NodeForegroundServiceTest {
         drainWithMainLooper {
           withTimeout(10_000) { runtime.pendingGatewayTrust.first { it != null } }
         }
-        assertEquals("Accepted TLS must not overwrite the newer queued request's progress", "Connecting…", runtime.statusText.value)
+        assertEquals("Accepted TLS must not overwrite the newer queued request's progress", "Connecting…", runtime.gatewayConnectionDisplay.value.statusText)
         configMutex.unlock()
         configQueueHeld = false
       }
@@ -1158,7 +1209,7 @@ class NodeForegroundServiceTest {
       )
       val beforeConnection = runtime.gatewayConnectionDisplay.value
       val beforeCredentials = app.prefs.loadGatewayCredentials(active.stableId)
-      val beforeSession = runtime.chatSessionKey.value
+      val beforeSession = runtime.chat.sessionKey.value
       connections.clear()
       ShadowToast.reset()
 
@@ -1190,7 +1241,7 @@ class NodeForegroundServiceTest {
       assertEquals(beforeConnection, runtime.gatewayConnectionDisplay.value)
       assertEquals(active.stableId, app.prefs.gatewayRegistry.activeStableId.value)
       assertEquals(beforeCredentials, app.prefs.loadGatewayCredentials(active.stableId))
-      assertEquals(beforeSession, runtime.chatSessionKey.value)
+      assertEquals(beforeSession, runtime.chat.sessionKey.value)
       assertSame(draft, viewModel.chatDraft.value)
       assertTrue(connections.isEmpty())
       assertTrue(runtime.nodeConnected.value)
@@ -1292,7 +1343,7 @@ class NodeForegroundServiceTest {
       assertTrue(connections.isEmpty())
       assertTrue(sends.isEmpty())
       assertNull(prefs.gatewayRegistry.activeStableId.value)
-      drainWithMainLooper { assertFalse(runtime.wasChatOutboxCommandAdmitted(conversationNotificationReplyIdempotencyKey(target))) }
+      drainWithMainLooper { assertFalse(runtime.chat.wasOutboxCommandAdmitted(conversationNotificationReplyIdempotencyKey(target))) }
       val retained = manager.activeNotifications.single { it.tag == target.notificationTag }.notification
       assertEquals("Synthetic assistant reply", retained.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString())
 
@@ -1304,7 +1355,7 @@ class NodeForegroundServiceTest {
       assertEquals(fresh.sessionKey, sent["sessionKey"]?.jsonPrimitive?.content)
       assertEquals(conversationNotificationReplyIdempotencyKey(fresh), sent["idempotencyKey"]?.jsonPrimitive?.content)
       assertTrue(sends.isEmpty())
-      drainWithMainLooper { assertTrue(runtime.wasChatOutboxCommandAdmitted(conversationNotificationReplyIdempotencyKey(fresh))) }
+      drainWithMainLooper { assertTrue(runtime.chat.wasOutboxCommandAdmitted(conversationNotificationReplyIdempotencyKey(fresh))) }
     } finally {
       appFixture.prefsReadGate = null
       construction.release.countDown()
@@ -1374,11 +1425,11 @@ class NodeForegroundServiceTest {
         withTimeout(10_000) { runtime.gatewayConnectionDisplay.first { it.isConnected && runtime.nodeConnected.value } }
       }
       runtime.switchChatSession(target.sessionKey, target.agentId)
-      drainWithMainLooper { withTimeout(10_000) { runtime.chatHealthOk.first { it } } }
+      drainWithMainLooper { withTimeout(10_000) { runtime.chat.healthOk.first { it } } }
       val originalIntent = NodeForegroundService.resume(app, startNow = false)
-      runtime.setChatThinkingLevel("high")
+      runtime.chat.setThinkingLevel("high")
       assertTrue("Session settings did not reach the real requester", settingsStarted.await(10, TimeUnit.SECONDS))
-      assertTrue(target.sessionKey in runtime.chatPendingSessionSettingsKeys.value)
+      assertTrue(target.sessionKey in runtime.chat.pendingSessionSettingsKeys.value)
       connections.clear()
 
       drainWithMainLooper {
@@ -1389,7 +1440,7 @@ class NodeForegroundServiceTest {
               runtime.sendConversationNotificationReply(target, "Synthetic settings reply", commandId, originalIntent)
             }
           assertFalse(reply.isCompleted)
-          assertTrue(runtime.canSendForOwner(target.toComposerOwner()))
+          assertTrue(runtime.chat.isCurrentComposerOwner(target.toComposerOwner()))
           if (retireIntent) {
             // The normal owner callback orders Resume before posted disconnect cleanup.
             // Keep the accepted connection so only the original action can reject this send.
@@ -1402,11 +1453,11 @@ class NodeForegroundServiceTest {
           }
           assertTrue(acceptedAttempt.isCurrent())
           assertTrue(runtime.gatewayConnectionDisplay.value.isConnected)
-          assertEquals(target.sessionKey, runtime.chatSessionKey.value)
-          assertTrue(runtime.canSendForOwner(target.toComposerOwner()))
+          assertEquals(target.sessionKey, runtime.chat.sessionKey.value)
+          assertTrue(runtime.chat.isCurrentComposerOwner(target.toComposerOwner()))
           settingsRelease.countDown()
           assertEquals(!retireIntent, withTimeout(10_000) { reply.await() })
-          assertEquals(!retireIntent, runtime.wasChatOutboxCommandAdmitted(commandId))
+          assertEquals(!retireIntent, runtime.chat.wasOutboxCommandAdmitted(commandId))
           assertTrue(acceptedAttempt.isCurrent())
         }
       }
@@ -1574,6 +1625,8 @@ class NodeForegroundServiceTest {
     val nextGateway = lifetimeGateway()
     val gate = RuntimeReturnGate()
     val appFixture = Shadow.extract<ServiceRuntimePrefsShadow>(app)
+    val hasDirectAdmission =
+      action == QueuedGatewayAction.Connect || action == QueuedGatewayAction.Save || action == QueuedGatewayAction.Notification
 
     try {
       runtime.connect(
@@ -1585,7 +1638,7 @@ class NodeForegroundServiceTest {
           runtime.gatewayConnectionDisplay.first { it.isConnected && runtime.nodeConnected.value }
         }
       }
-      if (action == QueuedGatewayAction.Connect) {
+      if (hasDirectAdmission) {
         val initialRoles =
           appFixture.sessionConnections
             .filter { it.endpoint.port == initialGateway.port }
@@ -1675,7 +1728,7 @@ class NodeForegroundServiceTest {
       }
       gate.release.countDown()
       drainWithMainLooper { withTimeout(10_000) { operation.join() } }
-      if (action == QueuedGatewayAction.Connect) assertFalse("Call-through probe must not crash the gateway operation", operation.isCancelled)
+      if (hasDirectAdmission) assertFalse("Call-through probe must not crash the gateway operation", operation.isCancelled)
 
       if (action == QueuedGatewayAction.Forget) {
         val savedId = GatewayEndpoint.manual("127.0.0.1", initialGateway.port).stableId
@@ -1684,16 +1737,15 @@ class NodeForegroundServiceTest {
           app.prefs.gatewayRegistry.entries.value
             .any { it.stableId == savedId },
         )
-      } else if (action == QueuedGatewayAction.Connect) {
-        // This unsaved cleartext target reaches session admission before the direct operation returns.
+      } else if (hasDirectAdmission) {
+        // These cleartext actions reach session admission before the joined operation returns.
         // Observe admission rather than delayed HTTP arrival; newer activity sockets remain valid.
         assertTrue(
           "Stopped activity work must not admit another Gateway connection",
           appFixture.sessionConnections.none { it.endpoint.stableId == nextEndpoint.stableId },
         )
       } else {
-        val target = if (action == QueuedGatewayAction.Refresh) initialGateway else nextGateway
-        assertNull("Stopped activity work must not open another Gateway socket", target.takeRequest(10, TimeUnit.SECONDS))
+        assertNull("Stopped activity work must not open another Gateway socket", initialGateway.takeRequest(10, TimeUnit.SECONDS))
       }
       if (resumeFromAnotherActivity) assertTrue(runtime.gatewayConnectionDisplay.value.isConnected && runtime.nodeConnected.value)
     } finally {
@@ -1720,7 +1772,7 @@ class NodeForegroundServiceTest {
       lifetimeGateway { role ->
         if (role == "node") {
           nodeConnects.incrementAndGet()
-          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceTokens":[{"role":"node","deviceToken":"synthetic-node-token","scopes":[]},{"role":"operator","deviceToken":"synthetic-operator-token","scopes":["operator.read","operator.write"]}]}}"""
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{},"auth":{"deviceTokens":[{"role":"node","deviceToken":"synthetic-node-token","scopes":[]},{"role":"operator","deviceToken":"synthetic-operator-token","scopes":["operator.read","operator.write"]}]}}"""
         } else {
           bootstrapHello(role)
         }
@@ -1924,9 +1976,9 @@ class NodeForegroundServiceTest {
     val gateway =
       lifetimeGateway { role ->
         if (role == "operator") {
-          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceToken":"synthetic-operator-token","role":"operator","scopes":["operator.read","operator.write"]}}"""
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{},"auth":{"deviceToken":"synthetic-operator-token","role":"operator","scopes":["operator.read","operator.write"]}}"""
         } else {
-          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{}}"""
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{}}"""
         }
       }
     val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
@@ -2014,7 +2066,7 @@ class NodeForegroundServiceTest {
       )
       assertFalse("The deadline must not admit a replacement socket", admitted.isCompleted)
       assertEquals("synthetic-old-setup", app.prefs.loadGatewayCredentials(endpoint.stableId).token)
-      assertFalse("Queued configuration must not be persisted before cleanup", app.prefs.manualEnabled.value)
+      assertFalse("Queued configuration must not be persisted before cleanup", app.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE).getBoolean("gateway.manual.enabled", false))
 
       if (disconnectBeforeRelease) {
         viewModel.disconnect()
@@ -2043,13 +2095,13 @@ class NodeForegroundServiceTest {
       if (disconnectBeforeRelease) {
         assertFalse(admitted.isCompleted)
         assertEquals("synthetic-old-setup", app.prefs.loadGatewayCredentials(endpoint.stableId).token)
-        assertFalse(app.prefs.manualEnabled.value)
+        assertFalse(app.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE).getBoolean("gateway.manual.enabled", false))
         assertEquals("Offline", runtime.gatewayConnectionDisplay.value.statusText)
         assertNull(runtime.gatewayConnectionDisplay.value.problem)
       } else {
         drainWithMainLooper { withTimeout(10_000) { admitted.await() } }
         assertEquals("synthetic-replacement-setup", app.prefs.loadGatewayCredentials(endpoint.stableId).token)
-        assertTrue(app.prefs.manualEnabled.value)
+        assertTrue(app.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE).getBoolean("gateway.manual.enabled", false))
         assertNull(runtime.gatewayConnectionDisplay.value.problem)
       }
     } finally {
@@ -2135,13 +2187,13 @@ class NodeForegroundServiceTest {
       }) { role ->
         if (role == "operator") {
           val token = if (helloCount.incrementAndGet() == 1) "synthetic-old-token" else "synthetic-new-token"
-          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceToken":"$token","role":"operator","scopes":["operator.read","operator.write"]}}"""
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{},"auth":{"deviceToken":"$token","role":"operator","scopes":["operator.read","operator.write"]}}"""
         } else {
           if (holdPrimaryWriteUntilNode && heldNodeHello.claimed.compareAndSet(false, true)) {
             heldNodeHello.entered.countDown()
             check(heldNodeHello.release.await(10, TimeUnit.SECONDS)) { "Node hello was not released" }
           }
-          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{}}"""
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{}}"""
         }
       }
     val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
@@ -2294,7 +2346,7 @@ class NodeForegroundServiceTest {
     val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
     val gateway =
       lifetimeGateway {
-        """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceToken":"synthetic-secondary-issued-token","role":"operator","scopes":["operator.read","operator.write"]}}"""
+        """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{},"auth":{"deviceToken":"synthetic-secondary-issued-token","role":"operator","scopes":["operator.read","operator.write"]}}"""
       }
     val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
     app.prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
@@ -2699,9 +2751,9 @@ class NodeForegroundServiceTest {
 
   private fun bootstrapHello(role: String): String =
     if (role == "node") {
-      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceTokens":[{"role":"operator","deviceToken":"synthetic-operator-token","scopes":["operator.read","operator.write"]}]}}"""
+      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{},"auth":{"deviceTokens":[{"role":"operator","deviceToken":"synthetic-operator-token","scopes":["operator.read","operator.write"]}]}}"""
     } else {
-      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{}}"""
+      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{}}"""
     }
 
   private fun lifetimeGatewayTlsSocketFactory(): SSLSocketFactory {
@@ -2744,7 +2796,7 @@ class NodeForegroundServiceTest {
     onConnect: ((JsonObject) -> Unit)? = null,
     sslSocketFactory: SSLSocketFactory? = null,
     hello: (String) -> String = {
-      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{}}"""
+      """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":["agents.list"]},"snapshot":{}}"""
     },
   ): MockWebServer =
     MockWebServer().apply {
@@ -2778,6 +2830,8 @@ class NodeForegroundServiceTest {
                           ?.content
                           .orEmpty(),
                       )
+                    } else if (frame["method"]?.jsonPrimitive?.content == "agents.list") {
+                      """{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}"""
                     } else {
                       onRequest(frame)
                     }

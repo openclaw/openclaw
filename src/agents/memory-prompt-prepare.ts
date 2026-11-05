@@ -13,6 +13,7 @@ export async function prepareAgentMemoryPrompt(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  projectKey?: string;
 }): Promise<PreparedMemoryPromptSection | undefined> {
   if (!params.enabled) {
     return undefined;
@@ -28,5 +29,6 @@ export async function prepareAgentMemoryPrompt(params: {
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
     sandboxed: params.sandboxed,
+    projectKey: params.projectKey,
   });
 }

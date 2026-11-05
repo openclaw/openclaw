@@ -57,24 +57,10 @@ function formatSetupResult(value: unknown, action: string): string[] | undefined
     return undefined;
   }
   return [
-    "browser setup: target=TUI process host (not the Gateway), profile=" + value.target.profile,
-    "browser setup: action=" +
-      action +
-      " phase=" +
-      value.phase +
-      " connection=" +
-      value.connection.state,
-    "browser setup: nativeHostRegistered=" +
-      installation.nativeHostRegistered +
-      " installRequested=" +
-      installation.installRequested +
-      " discoveredProfiles=" +
-      installation.discoveredProfiles +
-      " awaitingApproval=" +
-      installation.awaitingApproval +
-      " automaticBootstrapSupported=" +
-      installation.automaticBootstrapSupported,
-    "browser setup: " + NEXT_ACTIONS[value.nextAction],
+    `browser setup: target=TUI process host (not the Gateway), profile=${value.target.profile}`,
+    `browser setup: action=${action} phase=${value.phase} connection=${value.connection.state}`,
+    `browser setup: nativeHostRegistered=${installation.nativeHostRegistered} installRequested=${installation.installRequested} discoveredProfiles=${installation.discoveredProfiles} awaitingApproval=${installation.awaitingApproval} automaticBootstrapSupported=${installation.automaticBootstrapSupported}`,
+    `browser setup: ${NEXT_ACTIONS[value.nextAction]}`,
   ];
 }
 

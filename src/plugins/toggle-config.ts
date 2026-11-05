@@ -1,4 +1,4 @@
-// Toggles plugin enablement config for channels and agents.
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
@@ -61,18 +61,12 @@ export function setPluginEnabledInConfig(
   }
 
   const channels = config.channels as Record<string, unknown> | undefined;
-  const existing = channels?.[builtInChannelId];
-  const existingRecord =
-    existing && typeof existing === "object" && !Array.isArray(existing)
-      ? (existing as Record<string, unknown>)
-      : {};
-
   return {
     ...next,
     channels: {
       ...config.channels,
       [builtInChannelId]: {
-        ...existingRecord,
+        ...asNonArrayRecord(channels?.[builtInChannelId]),
         enabled,
       },
     },

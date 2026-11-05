@@ -1,7 +1,24 @@
 // Wire-client contract types shared by GatewayProtocolClient and its adapters.
 import type { ErrorShape, EventFrame, HelloOk } from "@openclaw/gateway-protocol";
+import type { GatewayClientMode, GatewayClientName } from "@openclaw/gateway-protocol/client-info";
 import type { GatewayProtocolRequestTiming } from "./pending-request.js";
 import type { GatewayProtocolRequestError } from "./protocol-request.js";
+
+export type GatewayClientCloseInfo = {
+  phase: "pre-hello" | "post-hello";
+  socketOpened: boolean;
+  transportValidated: boolean;
+  connectRequestSent?: boolean;
+  transientPreHelloCleanClose: boolean;
+  connectError?: Error;
+};
+
+export type GatewayClientConnectionMetadata = {
+  clientName?: GatewayClientName;
+  hasDeviceIdentity: boolean;
+  mode?: GatewayClientMode;
+  preauthHandshakeTimeoutMs?: number;
+};
 
 export type GatewayProtocolSocket = {
   isOpen: () => boolean;
@@ -38,6 +55,7 @@ type GatewayProtocolConnectDecision = {
   closeReason: string;
   reconnectDelayMs?: number;
   stop?: boolean;
+  keepOpen?: boolean;
   error?: Error;
 };
 type GatewayProtocolCloseDecision = {
@@ -92,6 +110,7 @@ export type GatewayProtocolClientOptions<TPlan> = {
   onConnectError?: (error: Error) => void;
   onSocketFactoryError?: (error: Error) => void;
   onReconnectStopped?: (error: Error) => void;
+  onReconnectScheduled?: (delayMs: number, signal: AbortSignal) => void;
   onParseError?: (error: unknown) => void;
   onEvent?: (event: EventFrame) => void;
   onGap?: (info: { expected: number; received: number }) => void;

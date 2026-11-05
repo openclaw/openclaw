@@ -1,4 +1,4 @@
-import "@openclaw/normalization-core/string-coerce";
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe, truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import type {
   JsonValue,
@@ -17,15 +17,7 @@ const MAX_NATIVE_HOOK_RELAY_HISTORY_ARRAY_ITEMS = 50;
 const MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS = 50;
 
 export function normalizePositiveInteger(value: number | undefined, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : fallback;
-}
-
-export function normalizeOptionalPositiveInteger(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
+  return floorPositiveFiniteNumber(value) ?? fallback;
 }
 
 export function shellQuoteArgs(args: readonly string[]): string {

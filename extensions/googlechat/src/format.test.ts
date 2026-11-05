@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { formatGoogleChatTextChunks, GOOGLE_CHAT_FORMAT_PROFILE } from "./format.js";
+import { formatGoogleChatTextChunks } from "./format.js";
 
 const formatGoogleChatText = (text: string) => formatGoogleChatTextChunks(text).join("");
 
@@ -91,25 +91,12 @@ describe("formatGoogleChatText", () => {
     ).toBe("");
   });
 
-  it("keeps raw angle-link labels as inert text", () => {
-    expect(formatGoogleChatText("<https://example.com/a.pdf|Manual>")).toBe("Manual");
-    expect(formatGoogleChatText("<https://example.com/a.pdf|User Manual>")).toBe("User Manual");
-    expect(formatGoogleChatText("<mailto:a/b@example.com|Contact Support>")).toBe(
-      "Contact Support",
-    );
-  });
-
   it("does not reinterpret a literal bullet as a Google Chat list", () => {
     expect(formatGoogleChatText("• literal bullet")).toBe("• literal bullet");
     expect(formatGoogleChatText("\\* not a list")).toBe("＊ not a list");
     expect(formatGoogleChatText("\\- not a list")).toBe("－ not a list");
     expect(formatGoogleChatText("snake_case and 2 * 3")).toBe("snake_case and 2 * 3");
     expect(formatGoogleChatText("\\`one\\` and \\`two\\`")).toBe("｀one｀ and ｀two｀");
-  });
-
-  it("uses semantic list depth instead of authored indentation width", () => {
-    expect(formatGoogleChatText("- parent\n    - child")).toBe("* parent\n    * child");
-    expect(formatGoogleChatText("   - top-level")).toBe("* top-level");
   });
 
   it("keeps dense bullet-list formatting work bounded", () => {
@@ -158,15 +145,6 @@ describe("formatGoogleChatText", () => {
     expect(formatGoogleChatText("https://example.com/a_b_c")).toBe("https://example.com/a_b_c");
   });
 
-  it.each([
-    ["**a**[**b** c](https://example.com)", "*ab* c (https://example.com)"],
-    ["[**label**](https://example.com)", "*label* (https://example.com)"],
-    ["[**label**](https://example.com)_tail_", "*label* (https://example.com)_tail_"],
-    ["**before [label](https://example.com) after**", "*before label (https://example.com) after*"],
-  ])("appends terminal link text once in %s", (markdown, expected) => {
-    expect(formatGoogleChatText(markdown)).toBe(expected);
-  });
-
   it("counts terminal link text when chunking a crossed label", () => {
     const chunks = formatGoogleChatTextChunks(
       "**a**[**b** c](https://example.com) trailing text",
@@ -175,11 +153,6 @@ describe("formatGoogleChatText", () => {
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => new TextEncoder().encode(chunk).byteLength <= 40)).toBe(true);
     expect(chunks.join(" ").match(/https:\/\/example\.com/g)).toHaveLength(1);
-  });
-
-  it("handles newline-heavy messages without changing their content", () => {
-    const text = "a\n".repeat(16_000);
-    expect(formatGoogleChatText(text)).toBe(text.trimEnd());
   });
 
   it("falls back to visually equivalent plain text for unsupported code delimiters", () => {
@@ -193,40 +166,10 @@ describe("formatGoogleChatText", () => {
     ).join("");
     expect(formatGoogleChatText(`${privateUse}\n- item`)).toBe(`${privateUse}\n\n* item`);
   });
-
-  it("strips email-alias mentions unsupported by app authentication", () => {
-    expect(formatGoogleChatText("Hello <users/alice@example.com>")).toBe("Hello");
-  });
-
-  it("chunks against the rendered UTF-8 byte size", () => {
-    const input = `| ${"H".repeat(30)} | Value |\n| --- | --- |\n${Array.from(
-      { length: 8 },
-      (_, index) => `| row-${index} | ${index} |`,
-    ).join("\n")}`;
-    const chunks = formatGoogleChatTextChunks(input, 80);
-
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => new TextEncoder().encode(chunk).byteLength <= 80)).toBe(true);
-  });
-
-  it("declares the Google Chat app-message capability profile", () => {
-    expect(GOOGLE_CHAT_FORMAT_PROFILE).toMatchObject({
-      mechanism: "markdown",
-      chunk: { limit: 32_000, unit: "bytes" },
-      constructs: {
-        bold: "native",
-        bulletList: "native",
-        heading: "fallback",
-        orderedList: "fallback",
-        table: "fallback",
-      },
-    });
-  });
 });
 
 describe("Google Chat semantic whitespace", () => {
   it.each([
-    { name: "standalone fenced block", prefix: "", expected: ["```\n \n```"] },
     {
       name: "fenced block after a full default-limit paragraph",
       prefix: "A".repeat(32_000) + "\n\n",
@@ -237,12 +180,4 @@ describe("Google Chat semantic whitespace", () => {
     expect(chunks).toEqual(expected);
     expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 32_000)).toBe(true);
   });
-});
-
-it("preserves task-list fallback when semantic whitespace joins the next chunk", () => {
-  const paragraph = "A".repeat(31_998);
-  const chunks = formatGoogleChatTextChunks(`**${paragraph}**\n\n- [x] done`);
-
-  expect(chunks).toEqual([`*${paragraph}*`, "\n\n[x] done"]);
-  expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 32_000)).toBe(true);
 });

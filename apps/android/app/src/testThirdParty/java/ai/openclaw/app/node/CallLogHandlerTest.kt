@@ -1,8 +1,8 @@
 package ai.openclaw.app.node
 
-import android.content.Context
 import android.provider.CallLog
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -14,7 +14,7 @@ import org.junit.Test
 class CallLogHandlerTest : NodeHandlerRobolectricTest() {
   @Test
   fun handleCallLogSearch_requiresPermission() {
-    val handler = CallLogHandler.forTesting(appContext(), FakeCallLogDataSource(canRead = false))
+    val handler = CallLogHandler(appContext(), FakeCallLogDataSource(canRead = false))
 
     val result = handler.handleCallLogSearch(null)
 
@@ -24,7 +24,7 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
 
   @Test
   fun handleCallLogSearch_rejectsInvalidJson() {
-    val handler = CallLogHandler.forTesting(appContext(), FakeCallLogDataSource(canRead = true))
+    val handler = CallLogHandler(appContext(), FakeCallLogDataSource(canRead = true))
 
     val result = handler.handleCallLogSearch("invalid json")
 
@@ -43,7 +43,7 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
         type = 1,
       )
     val handler =
-      CallLogHandler.forTesting(
+      CallLogHandler(
         appContext(),
         FakeCallLogDataSource(canRead = true, searchResults = listOf(callLog)),
       )
@@ -110,7 +110,7 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
         type = 2,
       )
     val handler =
-      CallLogHandler.forTesting(
+      CallLogHandler(
         appContext(),
         FakeCallLogDataSource(canRead = true, searchResults = listOf(callLog)),
       )
@@ -154,7 +154,7 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
         ),
       )
     val handler =
-      CallLogHandler.forTesting(
+      CallLogHandler(
         appContext(),
         FakeCallLogDataSource(canRead = true, searchResults = callLogs),
       )
@@ -186,7 +186,7 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
         type = 1,
       )
     val handler =
-      CallLogHandler.forTesting(
+      CallLogHandler(
         appContext(),
         FakeCallLogDataSource(canRead = true, searchResults = listOf(callLog)),
       )
@@ -218,7 +218,7 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
         type = 1,
       )
     val handler =
-      CallLogHandler.forTesting(
+      CallLogHandler(
         appContext(),
         FakeCallLogDataSource(canRead = true, searchResults = listOf(callLog)),
       )
@@ -229,16 +229,15 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
     val payload = Json.parseToJsonElement(result.payloadJson ?: error("missing payload")).jsonObject
     val callLogs = payload.getValue("callLogs").jsonArray
     assertEquals(1, callLogs.size)
-    // Verify null values are properly serialized
     val callLogObj = callLogs.first().jsonObject
-    assertTrue(callLogObj.containsKey("number"))
-    assertTrue(callLogObj.containsKey("cachedName"))
+    assertEquals(JsonNull, callLogObj["number"])
+    assertEquals(JsonNull, callLogObj["cachedName"])
   }
 
   @Test
   fun handleCallLogSearch_clampsLimitAndOffsetBeforeSearch() {
     val source = FakeCallLogDataSource(canRead = true)
-    val handler = CallLogHandler.forTesting(appContext(), source)
+    val handler = CallLogHandler(appContext(), source)
 
     val result = handler.handleCallLogSearch("""{"limit":999,"offset":-5}""")
 
@@ -257,7 +256,7 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
   @Test
   fun handleCallLogSearch_mapsSearchFailuresToUnavailable() {
     val handler =
-      CallLogHandler.forTesting(
+      CallLogHandler(
         appContext(),
         FakeCallLogDataSource(
           canRead = true,
@@ -280,12 +279,9 @@ private class FakeCallLogDataSource(
 ) : CallLogDataSource {
   var lastRequest: CallLogSearchRequest? = null
 
-  override fun hasReadPermission(context: Context): Boolean = canRead
+  override fun hasReadPermission(): Boolean = canRead
 
-  override fun search(
-    context: Context,
-    request: CallLogSearchRequest,
-  ): List<CallLogRecord> {
+  override fun search(request: CallLogSearchRequest): List<CallLogRecord> {
     lastRequest = request
     failure?.let { throw it }
     val startIndex = request.offset.coerceAtLeast(0)

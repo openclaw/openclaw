@@ -11,12 +11,16 @@ import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "../../../../src/plugin-sdk/gateway-runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../../../src/state/openclaw-agent-db.js";
 import { loadBundledPluginFacade } from "../../../../src/test-utils/bundled-plugin-public-surface.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../helpers/openclaw-test-instance.js";
+import { createDeferred, withinTest } from "../../../helpers/promise.js";
 
 const MODEL = "openai/gpt-5.6-luna";
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -29,7 +33,6 @@ let instance: OpenClawTestInstance | undefined;
 type AppServerLogEntry = {
   id?: number | string;
   method?: string;
-  params?: unknown;
   result?: unknown;
 };
 
@@ -72,56 +75,47 @@ function readJsonLines(filePath: string): AppServerLogEntry[] {
   }
 }
 
-function readApprovalIdentity(testInstance: OpenClawTestInstance, approvalId: string) {
-  const database = new DatabaseSync(path.join(testInstance.stateDir, "state", "openclaw.sqlite"), {
+function queryApproval(owner: OpenClawTestInstance, sql: string, ...args: string[]) {
+  const database = new DatabaseSync(path.join(owner.stateDir, "state", "openclaw.sqlite"), {
     readOnly: true,
   });
   try {
-    return database
-      .prepare(
-        `SELECT approval.source_agent_id,
-                approval.source_session_key,
-                approval.source_run_id,
-                approval.source_tool_call_id,
-                approval.source_tool_name,
-                binding.source_context_id,
-                binding.source_execution_id
-           FROM operator_approvals AS approval
-           LEFT JOIN operator_approval_execution_identities AS binding
-             ON binding.approval_id = approval.approval_id
-          WHERE approval.approval_id = ?`,
-      )
-      .get(approvalId) as ApprovalIdentityRow | undefined;
+    return database.prepare(sql).get(...args);
   } finally {
     database.close();
   }
 }
 
+function readApprovalIdentity(testInstance: OpenClawTestInstance, approvalId: string) {
+  return queryApproval(
+    testInstance,
+    `SELECT approval.source_agent_id, approval.source_session_key, approval.source_run_id,
+            approval.source_tool_call_id, approval.source_tool_name,
+            binding.source_context_id, binding.source_execution_id
+       FROM operator_approvals AS approval
+       LEFT JOIN operator_approval_execution_identities AS binding
+         ON binding.approval_id = approval.approval_id
+      WHERE approval.approval_id = ?`,
+    approvalId,
+  ) as ApprovalIdentityRow | undefined;
+}
+
 function assertNoGenericDuplicate(testInstance: OpenClawTestInstance, approvalId: string) {
-  const database = new DatabaseSync(path.join(testInstance.stateDir, "state", "openclaw.sqlite"), {
-    readOnly: true,
-  });
-  try {
-    const table = database
-      .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-      .get("execution_decision_facts");
-    if (table) {
-      const row = database
-        .prepare(
-          `SELECT COUNT(*) AS count
-             FROM execution_decision_facts
-            WHERE owner = 'operator_approvals'
-               OR source_ref = (
-                    SELECT resolution_ref
-                      FROM operator_approvals
-                     WHERE approval_id = ?
-                  )`,
-        )
-        .get(approvalId) as { count: number };
-      expect(row.count).toBe(0);
-    }
-  } finally {
-    database.close();
+  const table = queryApproval(
+    testInstance,
+    "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?",
+    "execution_decision_facts",
+  );
+  if (table) {
+    const row = queryApproval(
+      testInstance,
+      `SELECT COUNT(*) AS count FROM execution_decision_facts
+        WHERE owner = 'operator_approvals' OR source_ref = (
+          SELECT resolution_ref FROM operator_approvals WHERE approval_id = ?
+        )`,
+      approvalId,
+    );
+    expect(row?.count).toBe(0);
   }
 }
 
@@ -142,10 +136,6 @@ function requireAllowedOnceReceipt(result: AuditRunInspectResult) {
     },
     provenance: { state: "verified", producer: "operator-approval" },
   });
-  if (!receipt) {
-    throw new Error("audit inspection omitted the operator approval receipt");
-  }
-  return receipt;
 }
 
 function summarizeAppServerLog(filePath: string) {
@@ -157,12 +147,7 @@ function summarizeAppServerLog(filePath: string) {
 }
 
 async function connectApprovalReviewer(testInstance: OpenClawTestInstance) {
-  let resolveConnected!: () => void;
-  let rejectConnected!: (error: Error) => void;
-  const connected = new Promise<void>((resolve, reject) => {
-    resolveConnected = resolve;
-    rejectConnected = reject;
-  });
+  const connected = createDeferred();
   const client = new GatewayClient({
     url: `ws://127.0.0.1:${testInstance.port}`,
     token: testInstance.gatewayToken,
@@ -172,57 +157,61 @@ async function connectApprovalReviewer(testInstance: OpenClawTestInstance) {
     mode: "backend",
     caps: ["plugin-approvals"],
     scopes: ["operator.admin"],
-    onHelloOk: resolveConnected,
-    onConnectError: rejectConnected,
+    onHelloOk: () => connected.resolve(),
+    onConnectError: connected.reject,
     onClose: (code, reason) =>
-      rejectConnected(new Error(`approval reviewer closed (${code}): ${reason}`)),
+      connected.reject(new Error(`approval reviewer closed (${code}): ${reason}`)),
   });
   const readiness = await startGatewayClientWhenEventLoopReady(client, { timeoutMs: 20_000 });
   if (!readiness.ready) {
     client.stop();
     throw new Error("approval reviewer did not reach event-loop readiness");
   }
-  await connected;
+  await connected.promise;
   return client;
+}
+
+async function inspectReceipt(owner: OpenClawTestInstance, runId: string, approvalId: string) {
+  const result = await owner.cli(["audit", "--run", runId, "--explain", "--json"]);
+  expect(result.code, result.stderr).toBe(0);
+  const inspection = JSON.parse(result.stdout) as AuditRunInspectResult;
+  requireAllowedOnceReceipt(inspection);
+  assertNoGenericDuplicate(owner, approvalId);
+  return JSON.stringify(inspection);
 }
 
 describe("Codex native approval receipt", () => {
   it(
     "preserves a native command approval and its exact receipt across Gateway restart",
     { timeout: 180_000 },
-    async () => {
+    async ({ signal }) => {
       const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginFacade<{
         CODEX_APP_SERVER_VERSION: string;
       }>({ pluginId: "codex", artifactBasename: "test-api.js" });
       const fixture = fileURLToPath(
         new URL("./codex-native-approval-app-server.fixture.mjs", import.meta.url),
       );
+      const appServer = {
+        mode: "guardian",
+        command: process.execPath,
+        args: [fixture],
+        requestTimeoutMs: REQUEST_TIMEOUT_MS,
+      };
       instance = await createOpenClawTestInstance({
         name: "qa-codex-native-approval-receipt",
         env: {
           OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
           OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
           OPENCLAW_SKIP_PROVIDERS: undefined,
+          // Native task admission needs the configured owner published by full Gateway startup.
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         },
         config: {
           logging: { audit: { enabled: true, executionIdentity: true } },
           tools: { exec: { mode: "ask" } },
           plugins: {
-            enabled: true,
             allow: ["codex"],
-            entries: {
-              codex: {
-                enabled: true,
-                config: {
-                  appServer: {
-                    mode: "guardian",
-                    command: process.execPath,
-                    args: [fixture],
-                    requestTimeoutMs: REQUEST_TIMEOUT_MS,
-                  },
-                },
-              },
-            },
+            entries: { codex: { enabled: true, config: { appServer } } },
           },
           agents: {
             defaults: {
@@ -231,7 +220,6 @@ describe("Codex native approval receipt", () => {
               workspace: "~/workspace",
               skipBootstrap: true,
               timeoutSeconds: 60,
-              sandbox: { mode: "off" },
             },
           },
         },
@@ -256,6 +244,7 @@ describe("Codex native approval receipt", () => {
         },
         instance.state.agentDir(),
       );
+      await closeOpenClawAgentDatabasesAsync();
       await instance.startGateway();
       const reviewer = await connectApprovalReviewer(instance);
 
@@ -303,65 +292,47 @@ describe("Codex native approval receipt", () => {
           id: approval.id,
           decision: "allow-once",
         });
-        await vi.waitFor(
-          () => {
-            const response = readJsonLines(appServerLogPath).find(
-              (entry) =>
-                entry.id === "approval-private-native-approval" && entry.result !== undefined,
-            );
-            expect(response?.result).toEqual({ decision: "accept" });
-          },
-          { interval: 25, timeout: REQUEST_TIMEOUT_MS },
-        );
         await expect(
-          reviewer.request(
-            "agent.wait",
-            { runId: started.runId, timeoutMs: REQUEST_TIMEOUT_MS },
-            { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
+          withinTest(
+            reviewer.request(
+              "agent.wait",
+              { runId: started.runId, timeoutMs: REQUEST_TIMEOUT_MS },
+              { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
+            ),
+            signal,
           ),
         ).resolves.toMatchObject({ status: "ok" });
+        // The fixture records the decision before sending turn/completed, which agent.wait joins.
+        const response = readJsonLines(appServerLogPath).find(
+          (entry) => entry.id === "approval-private-native-approval" && entry.result !== undefined,
+        );
+        expect(response?.result).toEqual({ decision: "accept" });
 
         const identity = readApprovalIdentity(instance, approval.id);
         expect(identity).toMatchObject({
           source_agent_id: "main",
           source_tool_call_id: PRIVATE_ITEM_ID,
           source_tool_name: "codex_command_approval",
+          source_session_key: "agent:main:c03-native-approval",
+          source_run_id: started.runId,
+          source_context_id: expect.any(String),
+          source_execution_id: expect.any(String),
         });
-        expect(identity?.source_session_key).toBe("agent:main:c03-native-approval");
-        expect(identity?.source_run_id).toBe(started.runId);
-        expect(identity?.source_context_id).toEqual(expect.any(String));
-        expect(identity?.source_execution_id).toEqual(expect.any(String));
         if (!identity?.source_run_id) {
           throw new Error("operator approval omitted the admitted run id");
         }
         const sourceRunId = identity.source_run_id;
 
-        const beforeCli = await instance.cli([
-          "audit",
-          "--run",
-          sourceRunId,
-          "--explain",
-          "--json",
-        ]);
-        expect(beforeCli.code, beforeCli.stderr).toBe(0);
-        const before = JSON.parse(beforeCli.stdout) as AuditRunInspectResult;
-        requireAllowedOnceReceipt(before);
-        const serialized = JSON.stringify(before);
+        const serialized = await inspectReceipt(instance, sourceRunId, approval.id);
         expect(serialized).not.toContain(PRIVATE_COMMAND);
         expect(serialized).not.toContain(PRIVATE_THREAD_ID);
         expect(serialized).not.toContain(PRIVATE_ITEM_ID);
         expect(serialized).not.toContain(process.cwd());
-        assertNoGenericDuplicate(instance, approval.id);
 
         reviewer.stop();
         await instance.stopGateway();
         await instance.startGateway();
-        const afterCli = await instance.cli(["audit", "--run", sourceRunId, "--explain", "--json"]);
-        expect(afterCli.code, afterCli.stderr).toBe(0);
-        const after = JSON.parse(afterCli.stdout) as AuditRunInspectResult;
-        requireAllowedOnceReceipt(after);
-        expect(JSON.stringify(after)).toBe(serialized);
-        assertNoGenericDuplicate(instance, approval.id);
+        expect(await inspectReceipt(instance, sourceRunId, approval.id)).toBe(serialized);
       } finally {
         reviewer.stop();
       }

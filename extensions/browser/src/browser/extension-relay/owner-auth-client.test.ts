@@ -2,13 +2,10 @@ import { once } from "node:events";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, expect, it } from "vitest";
+import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
 import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
 import { randomRelayId } from "./auth-v2-crypto.js";
-import {
-  BrowserRelayAuthV2Authority,
-  parseRelayAuthHello,
-  parseStrictJsonObject,
-} from "./auth-v2.js";
+import { BrowserRelayAuthV2Authority, parseRelayAuthHello } from "./auth-v2.js";
 import { authenticateRelayOwner } from "./owner-auth-client.js";
 import { relayOwnerResource } from "./owner-protocol.js";
 

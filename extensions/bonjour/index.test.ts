@@ -3,10 +3,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   advertiserModuleLoaded: vi.fn(),
-  runtimeModuleLoaded: vi.fn(),
   startGatewayBonjourAdvertiser: vi.fn(async () => ({ stop: vi.fn() })),
-  registerUncaughtExceptionHandler: vi.fn(),
-  registerUnhandledRejectionHandler: vi.fn(),
 }));
 
 vi.mock("./src/advertiser.js", () => {
@@ -16,19 +13,10 @@ vi.mock("./src/advertiser.js", () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/runtime", () => {
-  mocks.runtimeModuleLoaded();
-  return {
-    registerUncaughtExceptionHandler: mocks.registerUncaughtExceptionHandler,
-    registerUnhandledRejectionHandler: mocks.registerUnhandledRejectionHandler,
-  };
-});
-
 const { default: bonjourPlugin } = await import("./index.js");
 
 afterAll(() => {
   vi.doUnmock("./src/advertiser.js");
-  vi.doUnmock("openclaw/plugin-sdk/runtime");
   vi.resetModules();
 });
 
@@ -37,27 +25,18 @@ describe("bonjour plugin entry", () => {
     let discoveryService:
       | Parameters<ReturnType<typeof createTestPluginApi>["registerGatewayDiscoveryService"]>[0]
       | undefined;
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    };
     const api = createTestPluginApi({
-      logger,
       registerGatewayDiscoveryService(service) {
         discoveryService = service;
       },
     });
 
     expect(mocks.advertiserModuleLoaded).not.toHaveBeenCalled();
-    expect(mocks.runtimeModuleLoaded).not.toHaveBeenCalled();
 
     bonjourPlugin.register(api);
 
     expect(discoveryService?.id).toBe("bonjour");
     expect(mocks.advertiserModuleLoaded).not.toHaveBeenCalled();
-    expect(mocks.runtimeModuleLoaded).not.toHaveBeenCalled();
 
     if (!discoveryService) {
       throw new Error("expected bonjour plugin to register a discovery service");
@@ -66,39 +45,24 @@ describe("bonjour plugin entry", () => {
     const stop = vi.fn();
     mocks.startGatewayBonjourAdvertiser.mockResolvedValueOnce({ stop });
 
+    const advertisedOptions = {
+      gatewayPort: 3210,
+      gatewayTlsEnabled: true,
+      gatewayTlsFingerprintSha256: "abc123",
+      gatewayDirectReachable: true,
+      sshPort: 22,
+      tailnetDns: "dev.tailnet.ts.net",
+      cliPath: "/usr/local/bin/openclaw",
+      minimal: false,
+    };
     await expect(
-      discoveryService.advertise({
-        machineDisplayName: "Dev Box",
-        gatewayPort: 3210,
-        gatewayTlsEnabled: true,
-        gatewayTlsFingerprintSha256: "abc123",
-        gatewayDirectReachable: true,
-        sshPort: 22,
-        tailnetDns: "dev.tailnet.ts.net",
-        cliPath: "/usr/local/bin/openclaw",
-        minimal: false,
-      }),
+      discoveryService.advertise({ ...advertisedOptions, machineDisplayName: "Dev Box" }),
     ).resolves.toEqual({ stop });
 
     expect(mocks.advertiserModuleLoaded).toHaveBeenCalledTimes(1);
-    expect(mocks.runtimeModuleLoaded).toHaveBeenCalledTimes(1);
     expect(mocks.startGatewayBonjourAdvertiser).toHaveBeenCalledWith(
-      {
-        instanceName: "Dev Box (OpenClaw)",
-        gatewayPort: 3210,
-        gatewayTlsEnabled: true,
-        gatewayTlsFingerprintSha256: "abc123",
-        gatewayDirectReachable: true,
-        sshPort: 22,
-        tailnetDns: "dev.tailnet.ts.net",
-        cliPath: "/usr/local/bin/openclaw",
-        minimal: false,
-      },
-      {
-        logger,
-        registerUncaughtExceptionHandler: mocks.registerUncaughtExceptionHandler,
-        registerUnhandledRejectionHandler: mocks.registerUnhandledRejectionHandler,
-      },
+      { ...advertisedOptions, instanceName: "Dev Box (OpenClaw)" },
+      api.logger,
     );
   });
 });

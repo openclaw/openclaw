@@ -1,8 +1,5 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-
-const MAX_WATCH_ERROR_MESSAGE_CHARS = 200;
+import { normalizeIMessageFullDiskAccessError } from "../process-diagnostics.js";
 
 type SanitizedIMessageWatchErrorPayload = {
   code?: number;
@@ -23,12 +20,9 @@ export function sanitizeIMessageWatchErrorPayload(
   }
 
   if (typeof payload.message === "string") {
-    const sanitizedMessage = sanitizeTerminalText(payload.message);
-    if (sanitizedMessage) {
-      safe.message =
-        sanitizedMessage.length > MAX_WATCH_ERROR_MESSAGE_CHARS
-          ? `${truncateUtf16Safe(sanitizedMessage, MAX_WATCH_ERROR_MESSAGE_CHARS - 1)}…`
-          : sanitizedMessage;
+    const guidance = normalizeIMessageFullDiskAccessError(payload.message);
+    if (guidance) {
+      safe.message = guidance;
     }
   }
 

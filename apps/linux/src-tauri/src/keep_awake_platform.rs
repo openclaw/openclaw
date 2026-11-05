@@ -8,13 +8,16 @@ mod platform {
     use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
     enum Request {
-        Gnome(u32),
-        Portal(OwnedObjectPath),
+        Gnome {
+            proxy: zbus::Proxy<'static>,
+            cookie: u32,
+        },
+        Portal(zbus::Proxy<'static>),
     }
 
     pub struct Inhibitor {
         request: Option<Request>,
-        connection: zbus::Connection,
+        pub(super) connection: zbus::Connection,
     }
 
     impl Inhibitor {
@@ -54,7 +57,7 @@ mod platform {
                             )
                             .await
                             .map_err(|error| error.to_string())?;
-                        return Ok(Request::Gnome(cookie));
+                        return Ok(Request::Gnome { proxy, cookie });
                     }
                     let token = format!("openclaw_{}", uuid::Uuid::new_v4().simple());
                     let sender = connection
@@ -120,7 +123,17 @@ mod platform {
                             "The desktop portal declined idle inhibition (response {code})."
                         ));
                     }
-                    Ok(Request::Portal(request))
+                    // Keep the release proxy separate so the Response subscription's
+                    // owner-change match still ends with acquisition.
+                    let release_proxy = zbus::Proxy::new(
+                        &connection,
+                        "org.freedesktop.portal.Desktop",
+                        request,
+                        "org.freedesktop.portal.Request",
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                    Ok(Request::Portal(release_proxy))
                 }
                 .await;
                 match result {
@@ -144,50 +157,22 @@ mod platform {
                 return Ok(());
             };
             tauri::async_runtime::block_on(async {
-                let path = match request {
-                    Request::Gnome(cookie) => {
-                        let proxy = zbus::Proxy::new(
-                            &self.connection,
-                            "org.gnome.SessionManager",
-                            "/org/gnome/SessionManager",
-                            "org.gnome.SessionManager",
-                        )
+                match request {
+                    Request::Gnome { proxy, cookie } => proxy
+                        .call::<_, _, ()>("Uninhibit", &(*cookie,))
                         .await
-                        .map_err(|error| error.to_string())?;
-                        return proxy
-                            .call::<_, _, ()>("Uninhibit", &(*cookie,))
-                            .await
-                            .map_err(|error| {
-                                format!("Could not release the GNOME idle-sleep request: {error}")
-                            });
+                        .map_err(|error| {
+                            format!("Could not release the GNOME idle-sleep request: {error}")
+                        }),
+                    Request::Portal(proxy) => {
+                        proxy.call::<_, _, ()>("Close", &()).await.map_err(|error| {
+                            format!("Could not release the desktop idle-sleep request: {error}")
+                        })
                     }
-                    Request::Portal(path) => path,
-                };
-                let proxy = zbus::Proxy::new(
-                    &self.connection,
-                    "org.freedesktop.portal.Desktop",
-                    path.as_str(),
-                    "org.freedesktop.portal.Request",
-                )
-                .await
-                .map_err(|error| error.to_string())?;
-                proxy.call::<_, _, ()>("Close", &()).await.map_err(|error| {
-                    format!("Could not release the desktop idle-sleep request: {error}")
-                })
+                }
             })?;
             self.request = None;
             Ok(())
-        }
-    }
-
-    impl Drop for Inhibitor {
-        fn drop(&mut self) {
-            if let Err(error) = crate::keep_awake::Inhibitor::release(self) {
-                eprintln!("{error}");
-            }
-            // This dedicated connection also scopes the portal request. Disconnect
-            // on shutdown/rollback so a failed Close cannot leave a live owner.
-            let _ = tauri::async_runtime::block_on(self.connection.clone().close());
         }
     }
 }
@@ -240,14 +225,6 @@ mod platform {
             Ok(())
         }
     }
-
-    impl Drop for Inhibitor {
-        fn drop(&mut self) {
-            if let Err(error) = crate::keep_awake::Inhibitor::release(self) {
-                eprintln!("{error}");
-            }
-        }
-    }
 }
 
 #[cfg(target_os = "windows")]
@@ -291,14 +268,6 @@ mod platform {
             Ok(())
         }
     }
-
-    impl Drop for Inhibitor {
-        fn drop(&mut self) {
-            if let Err(error) = crate::keep_awake::Inhibitor::release(self) {
-                eprintln!("{error}");
-            }
-        }
-    }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -317,3 +286,15 @@ mod platform {
 }
 
 pub use platform::Inhibitor;
+
+impl Drop for Inhibitor {
+    fn drop(&mut self) {
+        if let Err(error) = crate::keep_awake::Inhibitor::release(self) {
+            eprintln!("{error}");
+        }
+        // The dedicated connection scopes the portal request. Disconnect on
+        // shutdown/rollback so a failed Close cannot leave a live owner.
+        #[cfg(target_os = "linux")]
+        let _ = tauri::async_runtime::block_on(self.connection.clone().close());
+    }
+}

@@ -22,23 +22,3 @@ export function resolveSubagentRequesterAgentId(
       ? tryResolveLegacyCompatibilityAgentId(cfg)
       : undefined;
 }
-
-/** Materializes the compatibility owner once so every registry selector sees the same tuple. */
-export function backfillSubagentRequesterAgentIds(
-  cfg: OpenClawConfig,
-  entries: Iterable<{ requesterSessionKey: string; requesterAgentId?: string }>,
-): number {
-  let changed = 0;
-  for (const entry of entries) {
-    if (entry.requesterAgentId) {
-      continue;
-    }
-    const requesterAgentId = resolveSubagentRequesterAgentId(cfg, entry);
-    if (!requesterAgentId) {
-      continue;
-    }
-    entry.requesterAgentId = requesterAgentId;
-    changed += 1;
-  }
-  return changed;
-}

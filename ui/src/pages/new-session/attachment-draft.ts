@@ -16,14 +16,6 @@ export class NewSessionAttachmentDraft {
     this.reads = new ChatAttachmentReadLifecycle(notify);
   }
 
-  get pendingReads(): number {
-    return this.reads.pendingReads;
-  }
-
-  get readSignal() {
-    return this.reads.readSignal;
-  }
-
   replace(attachments: ChatAttachment[]) {
     this.attachments = attachments;
     this.onUserChange();
@@ -36,29 +28,17 @@ export class NewSessionAttachmentDraft {
     this.notify();
   }
 
-  updatePending(readSignal: AbortSignal, delta: 1 | -1) {
-    this.reads.updatePending(readSignal, delta);
-  }
-
-  abortReads() {
-    this.reads.abortReads();
-  }
-
   take(): ChatAttachment[] {
-    this.abortReads();
+    this.reads.abortReads();
     const attachments = this.attachments;
     this.attachments = [];
     this.notify();
     return attachments;
   }
 
-  reset(options: { release: boolean }) {
-    this.abortReads();
-    if (options.release) {
-      releaseChatAttachmentPayloads(this.attachments);
-    }
-    this.attachments = [];
-    this.notify();
+  reset() {
+    this.reads.abortReads();
+    this.clearAfterSubmit(true);
   }
 
   clearAfterSubmit(release: boolean) {

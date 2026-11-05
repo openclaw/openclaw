@@ -26,6 +26,7 @@ describe("session lifecycle events", () => {
     const unsubscribe = onSessionIdentityMutation(listener);
     const mutation = {
       agentId: "main",
+      databaseIdentity: Symbol("test-agent-database"),
       kind: "create" as const,
       previous: { sessionKeys: [] },
       current: { sessionId: "session-1", sessionKeys: ["agent:main:external"] },
