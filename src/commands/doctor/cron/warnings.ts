@@ -11,12 +11,13 @@ import {
   resolveModelRefFromString,
 } from "../../../agents/model-selection-shared.js";
 import { normalizeChatChannelId } from "../../../channels/ids.js";
-import { listReadOnlyChannelPluginsForConfig } from "../../../channels/plugins/read-only.js";
+import { listReadOnlyChannelPluginsForConfigAsync } from "../../../channels/plugins/read-only.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronDeliveryPlan } from "../../../cron/delivery-plan.js";
 import type { CronJob } from "../../../cron/types.js";
+import { PluginSetupPreparationRequiredError } from "../../../plugins/plugin-setup-module.js";
 import { runExec } from "../../../process/exec.js";
 import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 
@@ -121,10 +122,10 @@ function canonicalChannelKey(value: string): string {
 }
 
 // Resolve the channel snapshot only when an enabled job pins a concrete delivery target.
-function collectCronDeliveryTargetAdvisory(params: {
+async function collectCronDeliveryTargetAdvisory(params: {
   cfg: OpenClawConfig;
   jobs: Array<Record<string, unknown>>;
-}): string | null {
+}): Promise<string | null> {
   const concreteTargets: Array<{ channel: string; job: Record<string, unknown> }> = [];
   for (const job of params.jobs) {
     // Only an explicit delivery object pins a concrete channel; without one the plan resolves
@@ -144,7 +145,7 @@ function collectCronDeliveryTargetAdvisory(params: {
 
   const availableKeys = new Set<string>();
   // Setup fallback includes configured channels even when no Gateway is running.
-  const plugins = listReadOnlyChannelPluginsForConfig(params.cfg, {
+  const plugins = await listReadOnlyChannelPluginsForConfigAsync(params.cfg, {
     includePersistedAuthState: false,
     includeSetupFallbackPlugins: true,
   });
@@ -181,14 +182,17 @@ function collectCronDeliveryTargetAdvisory(params: {
   ].join("\n");
 }
 
-export function noteCronDeliveryTargetAdvisory(params: {
+export async function noteCronDeliveryTargetAdvisory(params: {
   cfg: OpenClawConfig;
   jobs: Array<Record<string, unknown>>;
-}): void {
+}): Promise<void> {
   let advisory: string | null;
   try {
-    advisory = collectCronDeliveryTargetAdvisory(params);
-  } catch {
+    advisory = await collectCronDeliveryTargetAdvisory(params);
+  } catch (error) {
+    if (error instanceof PluginSetupPreparationRequiredError) {
+      throw error;
+    }
     // Channel resolution is best-effort; never let an advisory break the doctor cron flow.
     return;
   }

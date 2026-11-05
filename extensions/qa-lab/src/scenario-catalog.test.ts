@@ -23,6 +23,15 @@ it("keeps repo-backed scenarios YAML-only", () => {
   expect(listScenarioMarkdownPaths()).toStrictEqual([]);
 });
 
+it("contains the apply-patch parity probe to its QA workspace", () => {
+  expect(readQaScenarioById("runtime-tool-apply-patch").gatewayConfigPatch).toMatchObject({
+    tools: {
+      fs: { workspaceOnly: true },
+      exec: { applyPatch: { workspaceOnly: true } },
+    },
+  });
+});
+
 it("keeps scenario documentation and code references backed by the repository", () => {
   for (const scenario of readQaScenarioPack().scenarios) {
     for (const kind of ["docsRefs", "codeRefs"] as const) {

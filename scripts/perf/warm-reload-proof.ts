@@ -40,7 +40,14 @@ const { values } = parseArgs({
     "rtt-ms": { type: "string", default: "80" },
     "capture-ms": { type: "string", default: "8000" },
     "transcript-late-paint": { type: "boolean", default: false },
+    "dashboard-end-anchor": { type: "boolean", default: false },
+    "dashboard-pane-chrome": { type: "boolean", default: false },
+    "plugin-activation": { type: "boolean", default: false },
+    "details-session-facts": { type: "boolean", default: false },
+    "active-targets": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
+    "cpu-profile": { type: "boolean", default: false },
+    "init-script": { type: "string", multiple: true, default: [] },
     route: { type: "string", default: "both" },
     "audit-report": { type: "string" },
     "paint-audit": { type: "string" },
@@ -52,7 +59,8 @@ if (values.help) {
   --dist dist --ui-root dist/control-ui --output .local/warm-reload-proof
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
-  --transcript-late-paint --reload-after-navigation
+  --transcript-late-paint --plugin-activation --active-targets --reload-after-navigation --cpu-profile
+  --init-script <browser-script.js> (repeatable)
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
 See scripts/perf/warm-reload-proof.md for metric definitions and limitations.`);
@@ -63,10 +71,14 @@ if (values["audit-report"] || values["paint-audit"]) {
     throw new Error("--audit-report and --paint-audit must be supplied together");
   }
   const audited = await applyWarmReloadPaintAudit(values["audit-report"], values["paint-audit"]);
-  const report: { results: Parameters<typeof createWarmReloadComparison>[0] } = JSON.parse(
-    await readFile(audited, "utf8"),
-  );
-  if (report.results.some((result) => result.arm === "base" || result.arm === "candidate")) {
+  const report: {
+    results: Parameters<typeof createWarmReloadComparison>[0];
+    profiled?: boolean;
+  } = JSON.parse(await readFile(audited, "utf8"));
+  if (
+    !report.profiled &&
+    report.results.some((result) => result.arm === "base" || result.arm === "candidate")
+  ) {
     await createWarmReloadComparison(report.results, path.dirname(audited));
   }
   console.info("Wrote audited-report.json beside the immutable capture report");
@@ -83,6 +95,9 @@ const reloads = integer(values.reloads, "--reloads", 0, 100);
 const sessions = integer(values.sessions, "--sessions", 2000, 20000);
 const rttMs = integer(values["rtt-ms"], "--rtt-ms", 0, 1000);
 const captureMs = integer(values["capture-ms"], "--capture-ms", 1000, 60000);
+const extraInitScripts = await Promise.all(
+  values["init-script"].map((file) => readFile(file, "utf8")),
+);
 if (!["both", "chat", "dashboard"].includes(values.route)) {
   throw new Error("--route must be both, chat, or dashboard");
 }
@@ -105,7 +120,7 @@ const buildIdentity = {
 };
 const directory = createControlUiE2eArtifactDir("warm-reload", values.output);
 const stateDir = path.join(directory, "state");
-const viewport = { width: 1720, height: 1180 };
+const viewport = { width: 1720, height: values["dashboard-end-anchor"] ? 1515 : 1180 };
 const revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 
 async function waitForGateway(url: string, child: ChildProcess) {
@@ -205,6 +220,24 @@ async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = f
           });
         const snapshots = await readKeys("snapshots");
         const sidebar = await readKeys("sidebarSnapshots");
+        const sidebarRecords = await Promise.all(
+          sidebar.map(
+            (value) =>
+              new Promise<unknown>((resolve, reject) => {
+                const request = database
+                  .transaction("sidebarSnapshots", "readonly")
+                  .objectStore("sidebarSnapshots")
+                  .get(value);
+                request.addEventListener("success", () => resolve(request.result), { once: true });
+                request.addEventListener(
+                  "error",
+                  () =>
+                    reject(new Error("Unable to read sidebar snapshot", { cause: request.error })),
+                  { once: true },
+                );
+              }),
+          ),
+        );
         const targetKeys = snapshots.filter(
           (value) =>
             typeof value === "string" &&
@@ -257,6 +290,18 @@ async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = f
           ),
           snapshots: snapshots.length,
           sidebarSnapshots: sidebar.length,
+          sidebarRecordBytes: sidebarRecords.map(
+            (value) => new TextEncoder().encode(JSON.stringify(value)).length,
+          ),
+          sidebarHost: {
+            state: document.querySelector("aside.sidebar")?.getAttribute("data-snapshot-state"),
+            saved: document.querySelector("aside.sidebar")?.getAttribute("data-snapshot-saved"),
+            rows: new Set(
+              [...document.querySelectorAll("openclaw-app-sidebar [data-session-key]")].map((row) =>
+                row.getAttribute("data-session-key"),
+              ),
+            ).size,
+          },
         };
       } finally {
         database.close();
@@ -395,7 +440,19 @@ async function captureReload(
   cdp.on("Network.webSocketFrameSent", onSent);
   cdp.on("Network.webSocketFrameReceived", onReceived);
   page.on("pageerror", onError);
+  const profiling = warm && values["cpu-profile"];
+  const timeline: unknown[] = [];
+  const onTrace = ({ value }: { value: unknown[] }) => timeline.push(...value);
   try {
+    if (profiling) {
+      cdp.on("Tracing.dataCollected", onTrace);
+      await cdp.send("Profiler.enable");
+      await cdp.send("Profiler.start");
+      await cdp.send("Tracing.start", {
+        categories: "toplevel,loading,blink.user_timing,devtools.timeline,v8",
+        transferMode: "ReportEvents",
+      });
+    }
     await cdp.send("Page.startScreencast", {
       format: "png",
       maxWidth: viewport.width,
@@ -427,7 +484,12 @@ async function captureReload(
       "firstMainDomMs",
       "firstTranscriptDomMs",
       "firstDashboardContentDomMs",
+      "allBoardWidgetsVisibleMs",
+      "cachedBoardLayoutMs",
       "firstPaintedRowsMs",
+      "bottomParagraphPaintMs",
+      "transcriptTextPaintMs",
+      "pluginsCompleteMs",
       "finalRowsDomMs",
       "helloPublishedMs",
       "helloHandledMs",
@@ -442,7 +504,14 @@ async function captureReload(
       ...probe.loaf,
       ...probe.shifts,
       ...probe.domStates,
+      ...probe.textStates,
       ...probe.animationSamples,
+      ...probe.sidebarFrames,
+      ...probe.transcriptGeometry,
+      ...probe.pluginStates,
+      ...probe.pluginMarks,
+      ...probe.textPaints,
+      ...probe.contextRingFrames,
     ]) {
       entry.atMs += documentOffsetMs;
     }
@@ -534,6 +603,8 @@ async function captureReload(
         `Signed-in admission must yield one top-level document; saw ${documents.length}. Inspect ${outputDir}`,
       );
     }
+    const firstRing = probe.contextRingFrames[0]?.ring;
+    const finalRing = probe.contextRingFrames.at(-1)?.ring;
     const report = {
       warm,
       ...(shortVisit ? { shortVisit } : {}),
@@ -551,6 +622,16 @@ async function captureReload(
       firstAppCandidateFrameMs: candidateFrameAfter(probe.firstAppDomMs),
       firstMainCandidateFrameMs: candidateFrameAfter(probe.firstMainDomMs),
       firstDashboardCandidateFrameMs: candidateFrameAfter(probe.firstDashboardContentDomMs),
+      firstComposerCandidateFrameMs: candidateFrameAfter(probe.contextRingFrames[0]?.atMs ?? null),
+      firstComposerDomHasFinalRing: Boolean(
+        firstRing &&
+        finalRing &&
+        firstRing.width > 0 &&
+        firstRing.height > 0 &&
+        firstRing.opacity === "1" &&
+        firstRing.label === finalRing.label &&
+        firstRing.dashOffset === finalRing.dashOffset,
+      ),
       paintMilestoneMethod: "DOM-correlated candidates; first visible paint requires a pixel audit",
       regions,
       visual,
@@ -588,6 +669,20 @@ async function captureReload(
     );
     return report;
   } finally {
+    if (profiling) {
+      const { profile } = await cdp.send("Profiler.stop");
+      const complete = new Promise<void>((resolve) => {
+        cdp.once("Tracing.tracingComplete", () => resolve());
+      });
+      await cdp.send("Tracing.end");
+      await complete;
+      cdp.off("Tracing.dataCollected", onTrace);
+      await writeFile(path.join(outputDir, "reload.cpuprofile"), JSON.stringify(profile));
+      await writeFile(
+        path.join(outputDir, "trace.json"),
+        JSON.stringify({ traceEvents: timeline }),
+      );
+    }
     await cdp.send("Page.stopScreencast").catch(() => {});
     cdp.off("Page.screencastFrame", onFrame);
     cdp.off("Network.requestWillBeSent", onDocument);
@@ -669,6 +764,11 @@ try {
     uiRoot: servedUiRoot,
     sessions,
     transcriptLatePaint: values["transcript-late-paint"],
+    dashboardEndAnchor: values["dashboard-end-anchor"],
+    dashboardPaneChrome: values["dashboard-pane-chrome"],
+    pluginActivation: values["plugin-activation"],
+    detailsSessionFacts: values["details-session-facts"],
+    activeTargets: values["active-targets"],
     ...(admission
       ? {
           admission: {
@@ -751,20 +851,44 @@ try {
   browser = launched.browser;
   browserConfiguration = launched.configuration;
   if (admission) {
-    // Pause peer JavaScript without hiding the pages, which would clear their viewer declarations.
+    // Keep peers visible and running so their viewer declarations and socket heartbeats stay live.
     for (const peer of admission.peerSessions) {
-      for (const routePath of [fixture.chatPath, fixture.dashboardPath]) {
+      for (const [routePath, target] of [
+        [fixture.chatPath, fixture.fixtureSummary.targets[0]!],
+        [fixture.dashboardPath, fixture.fixtureSummary.targets[1]!],
+      ] as const) {
         const context = await browser.newContext({ viewport, colorScheme: "dark" });
         await context.addCookies([peer.cookie]);
         const page = await context.newPage();
         await page.goto(baseUrl);
         await waitForControlUiGatewayReady(page, 60000);
+        // A rendered header can precede the viewer declaration; wait for its ack.
+        const declared = page.waitForEvent("websocket").then(async (socket) => {
+          const { payload: declaration } = await socket.waitForEvent("framesent", {
+            predicate: ({ payload }) => {
+              const frame: { method?: string; params?: { sessionKeys?: string[] } } = JSON.parse(
+                payload.toString(),
+              );
+              return (
+                frame.method === "sessions.viewers.set" &&
+                frame.params?.sessionKeys?.includes(target.key) === true
+              );
+            },
+            timeout: 60000,
+          });
+          const request: { id: string } = JSON.parse(declaration.toString());
+          await socket.waitForEvent("framereceived", {
+            predicate: ({ payload }) => {
+              const frame: { id?: string; ok?: boolean } = JSON.parse(payload.toString());
+              return frame.id === request.id && frame.ok === true;
+            },
+            timeout: 60000,
+          });
+        });
         await page.goto(`${baseUrl}${routePath}`);
         await waitForControlUiGatewayReady(page, 60000);
+        await declared;
         await page.locator(".chat-pane__header").first().waitFor({ state: "visible" });
-        const cdp = await context.newCDPSession(page);
-        await cdp.send("Debugger.enable");
-        await cdp.send("Debugger.pause");
       }
     }
   }
@@ -806,8 +930,11 @@ try {
           const page = await context.newPage();
           diagnosticPage = page;
           page.setDefaultTimeout(60000);
+          if (extraInitScripts.length) {
+            await page.addInitScript({ content: extraInitScripts.join("\n") });
+          }
           await page.addInitScript({
-            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]});`,
+            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["active-targets"]});`,
           });
           const cdp = await context.newCDPSession(page);
           await cdp.send("Page.enable");
@@ -836,12 +963,6 @@ try {
             await page.goto(handoffUrl.href);
           }
           await waitForControlUiGatewayReady(page, 60000);
-          const operator = values["transcript-late-paint"]
-            ? await evaluateControlUiContext(page, (application) => ({
-                gatewayUrl: application.gateway.connection.gatewayUrl.replace(/\/$/u, ""),
-                userId: application.gateway.snapshot.selfUser?.id,
-              }))
-            : null;
           await page.waitForFunction(() => navigator.serviceWorker.controller !== null, undefined, {
             timeout: 60000,
           });
@@ -872,31 +993,68 @@ try {
             storageTypes: "indexeddb,cache_storage",
           });
           await cdp.send("Network.clearBrowserCache");
-          if (operator && fixture.fixtureSummary.transcriptLatePaint) {
-            if (!operator.userId) {
-              throw new Error("Transcript late-paint fixture requires an identified operator");
-            }
-            await page.evaluate(
-              ({ gatewayUrl, userId, settings }) => {
-                localStorage.setItem("openclaw:sidebar:sessions:grouping", settings.grouping);
-                localStorage.setItem("openclaw:sidebar:sessions:sort-mode", settings.sort);
-                localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
+          await page.evaluate(
+            ({ viewerId, groups, endAnchor, targetKey, anchorFixture }) => {
+              const gatewayUrl = `ws://${location.host}`;
+              if (anchorFixture) {
                 localStorage.setItem(
-                  "openclaw:sidebar:sessions:collapsed-sections",
-                  JSON.stringify(settings.collapsedSections),
+                  `openclaw.control.settings.v1:${gatewayUrl}`,
+                  JSON.stringify({ fontChat: "lora" }),
                 );
-                localStorage.setItem(
-                  `openclaw.control.sidebarSessionOwnerFilter.v1:${gatewayUrl}:${encodeURIComponent(userId!)}`,
-                  settings.ownerFilter,
-                );
-                localStorage.setItem(
-                  `openclaw.control.sidebarEmptyGroups.v1:${gatewayUrl}:user:${encodeURIComponent(userId!)}`,
-                  settings.emptyGroups,
-                );
-              },
-              { ...operator, settings: fixture.fixtureSummary.transcriptLatePaint },
-            );
-          }
+              }
+              if (endAnchor) {
+                const key = `openclaw.control.settings.v1:${gatewayUrl}`;
+                const settings = JSON.parse(localStorage.getItem(key) ?? "{}");
+                settings.sidebarSessionLayouts = {
+                  [targetKey]: {
+                    columns: [
+                      {
+                        id: "side-panel-column",
+                        side: "right",
+                        panels: [
+                          { id: "dashboard", slot: "dashboard" },
+                          { id: "conversation", slot: "conversation" },
+                        ],
+                        activePanelId: "conversation",
+                        height: 360,
+                        width: 320,
+                      },
+                    ],
+                    mainPanelId: "dashboard",
+                    open: true,
+                    dock: "right",
+                    dashboardPresentationOverride: "split",
+                  },
+                };
+                localStorage.setItem(key, JSON.stringify(settings));
+              }
+              localStorage.setItem("openclaw:sidebar:sessions:grouping", "category");
+              localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
+              localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
+              localStorage.setItem(
+                "openclaw:sidebar:sessions:collapsed-sections",
+                JSON.stringify(groups.slice(0, 5).map((group) => `category:${group}`)),
+              );
+              localStorage.setItem(
+                `openclaw.control.sidebarSessionOwnerFilter.v1:${gatewayUrl}:${encodeURIComponent(viewerId)}`,
+                "involving-me",
+              );
+              localStorage.setItem(
+                `openclaw.control.sidebarEmptyGroups.v1:${gatewayUrl}:user:${encodeURIComponent(viewerId)}`,
+                "always",
+              );
+            },
+            {
+              viewerId: fixture.fixtureSummary.viewerId,
+              endAnchor: values["dashboard-end-anchor"] && route === "dashboard",
+              anchorFixture: values["dashboard-end-anchor"],
+              targetKey: fixture.fixtureSummary.targets[1]!.key,
+              groups: Array.from(
+                { length: 97 },
+                (_, index) => `Synthetic group ${String(index + 1).padStart(2, "0")}`,
+              ),
+            },
+          );
           const url = `${baseUrl}${routePath}`;
           results.push({
             arm: arm.name,
@@ -914,6 +1072,21 @@ try {
               ),
             ],
           });
+          // Persist actual disclosure choices, not hand-authored snapshot fields.
+          for (const parent of fixture.fixtureSummary.sidebarParents) {
+            const toggle = page.locator(
+              `[data-child-session-toggle=${JSON.stringify(parent.key)}]`,
+            );
+            await toggle.waitFor({ state: "visible" });
+            if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+              await toggle.click();
+            }
+            for (const key of parent.childKeys) {
+              await page
+                .locator(`.sidebar-session-content [data-session-key=${JSON.stringify(key)}]`)
+                .waitFor({ state: "visible" });
+            }
+          }
           const details = page.locator(".chat-details-toggle:visible");
           if (
             route === "chat" &&
@@ -1031,6 +1204,7 @@ try {
   }
   const report = {
     revision,
+    profiled: values["cpu-profile"],
     buildIdentity,
     dist,
     viewport,
@@ -1070,7 +1244,7 @@ try {
     results,
   };
   await writeFile(path.join(directory, "report.json"), JSON.stringify(report, null, 2));
-  if (values.base) {
+  if (values.base && !values["cpu-profile"]) {
     await createWarmReloadComparison(results, directory);
   }
   console.info(`Retained proof: ${directory}/report.json`);

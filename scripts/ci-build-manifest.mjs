@@ -599,6 +599,13 @@ if (runtimePullRequest && runNodeFull) {
     includeReleaseOnlyRuntimeTests,
     includePrExemptRuntimeTests,
     selectionMode: nodeSelectionMode,
+    adaptiveMarkdown:
+      isCanonicalRepository &&
+      compactPullRequest &&
+      !releaseGate &&
+      !frozenTarget &&
+      !compatibilityTarget &&
+      nodeSelectionMode === "aggressive",
     onSelection: (selection) => nodeSelectionReasons.push(selection),
   });
 }
@@ -730,7 +737,7 @@ const uiWebkitOwners = [
   "ui/src/pages/{cron/view-jobs-filter,plugins/settings-editor,plugins/settings-view}.{ts,tsx,css}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
-  "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*,components/chat-pane-versions-menu*}.{ts,tsx}",
+  "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*}.{ts,tsx}",
   "ui/src/lib/solid-bridge.ts",
   "ui/src/lib/solid-bridge-view.tsx",
   "ui/src/lib/presentation.ts",
@@ -891,19 +898,20 @@ if (runCheckPlan && proposedCheckScope?.types) {
   );
   const compilerPaths = resolveChangedCiTsgoInputs(changedPaths, existsSync);
   if (preserveFullChecks && extensionLintMode && !releaseFastLane && compilerPaths) {
-    const { getChangedPathFacts } = await import(
+    const { getChangedPathFacts, isTestLineAllocationPath } = await import(
       fromTarget("./scripts/lib/changed-path-facts.mjs")
     );
-    // Shared test sources retain every guard family. Compiler and lint owners
-    // still discover all consumers and retain their independent full fallbacks.
+    // Shared tests and numeric allocations retain every guard family, including
+    // allocation validation. Compiler/lint owners still discover all consumers.
     preserveFullChecks = !changedPaths.every((file) => {
       const facts = getChangedPathFacts(file);
       return (
         path.posix.normalize(file) === file &&
         !file.includes("\\") &&
-        ["source", "package", "ui", "extension"].includes(facts.surface) &&
-        facts.isTestOnly &&
-        facts.isChangedLaneTest
+        (isTestLineAllocationPath(file) ||
+          (["source", "package", "ui", "extension"].includes(facts.surface) &&
+            facts.isTestOnly &&
+            facts.isChangedLaneTest))
       );
     });
   }
@@ -1094,7 +1102,7 @@ const postgresConformancePaths = [
   "packages/memory-host-sdk/src/memory-entry-origins.ts",
   "src/config/zod-schema.database.ts",
   "scripts/test-database-conformance*.mjs",
-  "scripts/lib/weighted-test-shards.mts",
+  "scripts/lib/postgres-conformance-shards.mts",
   "config/postgres-conformance-timings.json",
 ];
 const runPostgresConformance =
@@ -1336,9 +1344,17 @@ const nodeTestShards = targetNodeTestShards
     const row = {
       check_name: shard.checkName,
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
+      adaptive_observations:
+        (shard.groups ?? [shard]).some((group) =>
+          group.configs?.includes("test/vitest/vitest.unit-fast.config.ts"),
+        ) || undefined,
       requires_bun:
         !shard.requiresDist &&
-        Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
+        (Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)) ||
+          // Node-hosted packaging proof also launches a pinned Bun child.
+          shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
+            plan.configs?.includes(goToolingConfig),
+          )),
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,
@@ -1950,6 +1966,10 @@ if (hybridHostedEligible) {
     "check-docs": count(manifest.run_check_docs),
     "postgres-conformance": count(manifest.run_postgres_conformance, 3),
     "skills-python": count(manifest.run_skills_python_job),
+    "checks-windows": count(
+      manifest.run_checks_windows,
+      manifest.checks_windows_matrix.include.length,
+    ),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
     "macos-swift": count(manifest.run_macos_swift, 2),
     "ios-build": count(manifest.run_ios_build),
@@ -2125,6 +2145,13 @@ if (process.env.GITHUB_STEP_SUMMARY) {
     );
   }
   if (selectedTestTargets) {
+    const adaptiveOmissions = [
+      ...new Set(
+        nodeSelectionReasons
+          .filter(({ rule }) => rule === "adaptive-qualified-unchanged")
+          .flatMap(({ targets }) => targets),
+      ),
+    ];
     /** @type {Map<string, Set<string>>} */
     const reasons = new Map();
     for (const { rule, targets } of nodeSelectionReasons) {
@@ -2140,6 +2167,9 @@ if (process.env.GITHUB_STEP_SUMMARY) {
       `### PR Node test selection (${nodeSelectionMode})\n\n` +
         `Selected ${selectedTestTargets.length} files; ${changedNodeTestShards?.filter((shard) => !shard.requiresDist).length ?? 0} Node rows. ` +
         "Set repository variable `OPENCLAW_CI_NODE_SELECTION=full` to restore the previous selection.\n\n" +
+        (adaptiveOmissions.length
+          ? `Adaptive Markdown pilot omitted ${adaptiveOmissions.length} unchanged qualified tests. Scheduled and release runs retain the full suite.\n\n<details><summary>Omitted Markdown tests</summary>\n<pre>${adaptiveOmissions.map(escapeSummaryHtml).join("\n")}</pre>\n</details>\n\n`
+          : "") +
         "<details><summary>Selected files and selection rules</summary>\n<pre>" +
         selectedTestTargets
           .map((file) =>

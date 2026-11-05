@@ -130,8 +130,7 @@ export class RelayOwnerClient {
           reject(new Error("Relay owner response timed out"));
           // A timed-out mutation cannot be reused as if it never happened.
           this.ws.terminate();
-        }, 15_000);
-        timer.unref?.();
+        }, 15_000).unref();
         this.ws.send(JSON.stringify({ id, op, ...fields }));
       });
     } finally {

@@ -129,7 +129,7 @@ suite.define(() => {
           await scroller.evaluate((element) => {
             element.scrollTop = 0;
           });
-          await panel.getByRole("button", { name: "View Raw Text", exact: true }).click();
+          await panel.getByRole("button", { name: "View raw text", exact: true }).click();
         }
         expect(await panel.locator("pre").textContent()).toBe(text);
         expect(await panel.locator("script, iframe").count()).toBe(0);

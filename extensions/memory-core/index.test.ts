@@ -5,11 +5,12 @@ import type { AnyAgentTool } from "openclaw/plugin-sdk/memory-core-host-runtime-
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { Value } from "typebox/value";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { buildMemoryPromptSection } from "./src/memory-tool-contract.js";
 import { getMemoryManagerLifecycle, markMemoryIndexingLive } from "./src/memory/lifecycle.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
+import * as intents from "./src/standing-intents.js";
 
 const closeAllMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => ({ manager: null })));
@@ -30,9 +31,7 @@ vi.mock("./src/runtime-provider.js", () => ({
 import plugin from "./index.js";
 
 const hostRuntime = {
-  llm: {
-    acquireLocalService: async () => undefined,
-  },
+  llm: { acquireLocalService: async () => undefined },
   state: {
     openKeyedStore: vi.fn(() => {
       throw new Error("Registration must not open a state store");
@@ -124,17 +123,13 @@ function indexConfig(memory?: string): OpenClawConfig {
 describe("buildPromptSection", () => {
   it("prepares explicitly owned memory tools without resolving the system agent", () => {
     let systemAgentReads = 0;
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          get systemAgent() {
-            systemAgentReads += 1;
-            return { agentId: "unrelated" };
-          },
-        },
-        entries: { main: {}, unrelated: {} },
+    const defaults = {
+      get systemAgent() {
+        systemAgentReads += 1;
+        return { agentId: "unrelated" };
       },
     };
+    const config: OpenClawConfig = { agents: { defaults, entries: { main: {}, unrelated: {} } } };
     const { search, get, promptBuilder } = captureMemoryModelContract(config);
     expect(search.description).toContain("MEMORY.md");
     expect(get.description).toContain("MEMORY.md");
@@ -294,47 +289,52 @@ describe("memory-core plugin runtime registration", () => {
     }
   });
 
+  it("matches intents against the native chat rather than a routed topic id", async () => {
+    const match = vi.spyOn(intents, "matchStandingIntents").mockResolvedValue([]);
+    onTestFinished(() => match.mockRestore());
+    const on = vi.fn<OpenClawPluginApi["on"]>();
+    captureCapability({ on });
+    const hook = on.mock.calls.find(([name]) => name === "before_prompt_build")?.[1];
+    assert(hook, "Expected standing-intent prompt hook");
+    const context = { trigger: "user", agentId: "main", sessionKey: "agent:main:main" };
+    const identity = { chatId: "chat", channelId: "chat:topic:3" };
+    const hookInvocation = { assertActive() {} };
+    await Reflect.apply(hook, undefined, [
+      { prompt: "release", messages: [] },
+      { ...context, ...identity, hookInvocation },
+    ]);
+    expect(match).toHaveBeenCalledWith(expect.objectContaining({ channel: "chat" }));
+  });
+
   it("keeps intent definitions stable and prepares integer arguments for validation", () => {
     const warn = vi.fn();
-    const { tools } = captureCapability({
-      config: {},
-      logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn },
-    });
+    const logger = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn };
+    const { tools } = captureCapability({ config: {}, logger });
     const factory = tools.find(([, options]) => options?.names?.includes("intent"))?.[0];
     assert(factory && "contextVersion" in factory, "Expected v2 intent factory");
     expect(factory.contextVersion).toBe(2);
     const intentFactory = (ctx: { config?: OpenClawConfig }) =>
       factory.create({ ...ctx, assertInvocationCurrent: () => {} });
-
     expect(intentFactory({})).toBeNull();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("runtime config is unavailable"));
-
     const ownerTool = intentFactory({ config: {} }) as AnyAgentTool;
     expect(ownerTool).toMatchObject({ name: "intent" });
     const next = intentFactory({ config: {} }) as AnyAgentTool;
     expect(next.description).toBe(ownerTool.description);
     expect(next.parameters).toBe(ownerTool.parameters);
     expect(next.execute).not.toBe(ownerTool.execute);
-    const prepared = ownerTool.prepareArguments?.({
-      action: "create",
-      maxFires: "3",
-      cooldownSeconds: "0",
-    });
+    const args = { action: "create", maxFires: "3", cooldownSeconds: "0" };
+    const prepared = ownerTool.prepareArguments?.(args);
     expect(prepared).toEqual({ action: "create", maxFires: 3, cooldownSeconds: 0 });
     expect(Value.Check(ownerTool.parameters, prepared)).toBe(true);
-    expect(() => ownerTool.prepareArguments?.({ action: "create", maxFires: "0" })).toThrow(
-      "maxFires must be a positive integer",
-    );
+    const invalid = () => ownerTool.prepareArguments?.({ action: "create", maxFires: "0" });
+    expect(invalid).toThrow("maxFires must be a positive integer");
     expect(ownerTool.description).toContain("system injects the reminder automatically");
     expect(ownerTool.description).toContain("Use scheduled tasks for time-based reminders");
     expect(ownerTool.description).not.toMatch(/\b(?:cron|automations)\b/u);
     expect(ownerTool.parameters).not.toHaveProperty("properties.channelScope");
-    expect(ownerTool.parameters).toMatchObject({
-      properties: {
-        scope: { default: "channel" },
-        senderScope: { default: "sender" },
-      },
-    });
+    expect(ownerTool.parameters).toHaveProperty("properties.scope.default", "channel");
+    expect(ownerTool.parameters).toHaveProperty("properties.senderScope.default", "sender");
   });
 
   // Runs before any case below marks process-wide indexing live.
@@ -368,12 +368,13 @@ describe("memory-core plugin runtime registration", () => {
       markMemoryIndexingLive("main");
       markMemoryIndexingLive("research");
       const config = indexConfig(owner);
-      const { services, backgroundTasks, context } = captureCapability({ config });
+      const { tools, services, backgroundTasks, context } = captureCapability({ config });
       for (const service of services) {
         await service.start(context);
       }
       await Promise.all(backgroundTasks);
       expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+      expect(tools.flatMap(([, options]) => options?.names ?? [])).toEqual(["intent"]);
     },
   );
 

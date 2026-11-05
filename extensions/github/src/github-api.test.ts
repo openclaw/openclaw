@@ -37,6 +37,29 @@ it("keeps slow failed-fetch diagnostics at debug", async () => {
   expect(log.info).not.toHaveBeenCalled();
 });
 
+it.each(["pending", "rejected"])(
+  "reports GitHub rate limits when body cancellation is %s",
+  async (cancellation) => {
+    const cancel = vi.fn(() =>
+      cancellation === "pending"
+        ? new Promise<void>(() => {})
+        : Promise.reject(new Error("synthetic cancellation failure")),
+    );
+    const response = new Response(new ReadableStream({ cancel }), {
+      status: 429,
+      headers: { "retry-after": "60" },
+    });
+    const { fetcher, request } = setup();
+    fetcher.mockResolvedValueOnce(response);
+    await expect(request(publicRepo)).rejects.toMatchObject({
+      statusCode: 429,
+      upstreamStatus: 429,
+      retryable: true,
+    });
+    expect(cancel).toHaveBeenCalledOnce();
+  },
+);
+
 it("normalizes Enterprise REST and GraphQL URLs while preserving the port", async () => {
   const expected = "https://ghe.example.test:8443/api/v3";
   const { baseUrl, graphqlUrl } = resolveGitHubApiUrls(expected + "/");

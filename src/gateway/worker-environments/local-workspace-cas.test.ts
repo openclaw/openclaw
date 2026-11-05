@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize, serialize } from "node:v8";
 import { inflateRawSync } from "node:zlib";
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
@@ -217,6 +217,7 @@ it("shares an unchanged subdirectory pack across different projection roots", ()
       revision: 1,
       action: { kind: "materialize" },
     });
+    assert(loaded.records, "A fresh reader must receive the baseline records");
     expect(decodeLocalWorkspaceTree(loaded.records)).toEqual(records);
   }
 });
@@ -271,7 +272,18 @@ it("sweeps unreachable content while retaining baseline, previous and pending ro
   using db = new DatabaseSync(":memory:");
   db.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"));
   const id = randomUUID();
-  const baseline = tree("a");
+  const baseline = createLocalWorkspaceManifestTree(
+    Array.from({ length: 300 }, (_, index) => [
+      { path: `dir-${index}`, type: "directory" as const },
+      {
+        path: `dir-${index}/entry.txt`,
+        type: "file" as const,
+        mode: 0o644,
+        size: 1,
+        sha256: "a".repeat(64),
+      },
+    ]).flat(),
+  );
   const previous = tree("b");
   const pending = tree("c");
   const abandoned = tree("d");
@@ -323,7 +335,16 @@ it("sweeps unreachable content while retaining baseline, previous and pending ro
   expect(beginLocalWorkspaceSweepInDatabase(db)).toBe(1);
   const epoch = beginLocalWorkspaceSweepInDatabase(db);
   expect(epoch).toBe(2);
+  const packCount = Number(
+    db.prepare("SELECT count(*) AS n FROM local_workspace_tree_packs").get()!.n,
+  );
+  const reads = trackSqliteStatementExecutions(db, ["packs"], (sql) =>
+    /^select\b/i.test(sql) && sql.includes('from "local_workspace_tree_packs"') ? "packs" : null,
+  );
   const candidates = readLocalWorkspaceSweepCandidates(db, epoch);
+  reads.restore();
+  // Every old digest is returned by candidate discovery; traversal already knows its lookup keys.
+  expect(reads.blobBytes.packs).toBe(packCount * 32);
   expect(candidates.packs).toHaveLength(4);
   expect(candidates.paths).toHaveLength(2);
   // A writer reusing content after the snapshot protects it with the current epoch.

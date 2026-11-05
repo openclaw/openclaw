@@ -103,7 +103,7 @@ export async function createWorkerEnvironmentStore(
   async function snapshot(ids?: readonly string[]) {
     const reply = await executeExistingOpenClawStateRead(
       { path: pathname },
-      { type: "workerEnvironments.snapshot", ids },
+      { type: "workerEnvironments.snapshot", input: { ids } },
     );
     assertActive();
     if (!reply) {
@@ -445,6 +445,18 @@ export async function createWorkerEnvironmentStore(
       mutate("workerEnvironments.createIntent", { input }, assertCurrent),
     recordResourceReceipt({ assertCurrent, ...input }: Input<"recordResourceReceipt">) {
       return mutate("workerEnvironments.recordResourceReceipt", { input }, assertCurrent);
+    },
+    beginRetentionOperation({ assertCurrent, ...input }: Input<"beginRetentionOperation">) {
+      return mutate("workerEnvironments.beginRetentionOperation", { input }, assertCurrent);
+    },
+    recordRetentionObservation({ assertCurrent, ...input }: Input<"recordRetentionObservation">) {
+      return mutate("workerEnvironments.recordRetentionObservation", { input }, assertCurrent);
+    },
+    setRetentionRuntimeAdmission({
+      assertCurrent,
+      ...input
+    }: Input<"setRetentionRuntimeAdmission">) {
+      return mutate("workerEnvironments.setRetentionRuntimeAdmission", { input }, assertCurrent);
     },
     ensureNodeEnrollment: (input: string) =>
       mutate("workerEnvironments.ensureNodeEnrollment", { input }),

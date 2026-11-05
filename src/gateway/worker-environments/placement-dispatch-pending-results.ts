@@ -15,7 +15,7 @@ import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.typ
 import {
   matchesWorkspaceResultClaim,
   isCurrentWorkerWorkspacePendingResultOwner,
-} from "./placement-workspace-result.js";
+} from "./placement-workspace-result-owner.js";
 import {
   createWorkerWorkspaceReconcileRequest,
   recoverSessionWorkspaceCheckpoint,
@@ -188,7 +188,8 @@ export async function recoverPendingWorkspaceResults(
                 workspace,
                 assertCurrent: recovery.assertCurrent,
                 authority: pending.repositoryDiskAuthority,
-                hasPendingMove: projection.moves.has(pending.sessionId),
+                move: projection.moves.get(pending.sessionId),
+                currentWorkspace: recovery.workspace,
               });
               return;
             }

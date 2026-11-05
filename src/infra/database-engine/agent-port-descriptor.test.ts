@@ -55,6 +55,20 @@ it.each([37, 38])(
   },
 );
 
+it.each([39, 40])("keeps receipt and deletion-index adoption at schema %s", async (version) => {
+  const descriptor = await loadAgentPortDescriptor(version);
+  const receipt = "session_creation_operations";
+  expect(descriptor.tables.some(({ name }) => name === receipt)).toBe(version === 40);
+  expect(descriptor.expectedCatalog.some((fact) => fact.table === receipt)).toBe(version === 40);
+  expect(descriptor.preData.includes('CREATE TABLE "session_creation_operations"')).toBe(
+    version === 40,
+  );
+  expect(descriptor.postData.includes('"idx_agent_session_input_completions_session_key"')).toBe(
+    version === 40,
+  );
+  expect(descriptor.preData).toContain('"event_json" IS NULL AND "event_zstd" IS NULL');
+});
+
 it.each([21, currentVersion])(
   "migrates only the private v%s copy, retiring legacy usage partitions",
   async (version) => {

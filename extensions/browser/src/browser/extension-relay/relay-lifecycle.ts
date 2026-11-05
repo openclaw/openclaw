@@ -275,24 +275,20 @@ async function ensureDesiredRelay(params: {
   });
 }
 
-/** Start relays for every extension-driver profile (control service startup). */
-export async function startConfiguredExtensionRelays(
-  state: BrowserServerState,
-  resolveProfileByName: (name: string) => ResolvedBrowserProfile | null,
-  onWarn: (message: string) => void,
-): Promise<void> {
+/** Start configured relays before browser requests; individual failures leave Browser control up. */
+export async function startConfiguredExtensionRelays(state: BrowserServerState): Promise<void> {
   for (const [name, profile] of Object.entries(state.resolved.profiles)) {
     if (profile.driver !== "extension") {
       continue;
     }
-    const resolved = resolveProfileByName(name);
+    const resolved = resolveProfile(state.resolved, name);
     if (!resolved) {
       continue;
     }
     try {
       await ensureExtensionRelayForProfile(state, resolved);
     } catch (err) {
-      onWarn(`extension relay for profile "${name}" failed to start: ${String(err)}`);
+      log.warn(`extension relay for profile "${name}" failed to start: ${String(err)}`);
     }
   }
 }

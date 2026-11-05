@@ -1,6 +1,8 @@
+import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { SqliteReadOnlyWorkerMode } from "./sqlite-readonly-worker-protocol.js";
+import { SqliteSnapshotCapacityError } from "./sqlite-snapshot-capacity-error.js";
 
 const { prepare, prepareCopy, createToken, SourceChangedError } = vi.hoisted(() => ({
   prepare: vi.fn(),
@@ -25,22 +27,26 @@ afterEach(() => {
   process.argv = originalArgv;
   process.exitCode = originalExitCode;
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   prepare.mockReset();
   prepareCopy.mockReset();
   createToken.mockReset();
   vi.resetModules();
 });
 
-async function readFailure(stdout: string, mode: SqliteReadOnlyWorkerMode, failure?: string) {
+async function readFailure(
+  stdout: string,
+  mode: SqliteReadOnlyWorkerMode,
+  failure?: string,
+  status: number | null = 0,
+) {
   const { readSqliteReadOnlyWorkerValue, SqliteReadOnlyInspectionContentionError } =
     await import("./sqlite-readonly-worker-protocol.js");
   const { isPrivateDirectoryCreationRefused } = await import("./private-directory-creation.js");
+  const { isSqliteSnapshotCapacityError } = await import("./sqlite-snapshot-capacity-error.js");
   let received: unknown;
   try {
-    readSqliteReadOnlyWorkerValue(
-      { kind: "launched", stdout, stderr: "", status: 0, failure },
-      mode,
-    );
+    readSqliteReadOnlyWorkerValue({ kind: "launched", stdout, stderr: "", status, failure }, mode);
   } catch (error) {
     received = error;
   }
@@ -48,6 +54,7 @@ async function readFailure(stdout: string, mode: SqliteReadOnlyWorkerMode, failu
   return {
     contention: received instanceof SqliteReadOnlyInspectionContentionError,
     refused: isPrivateDirectoryCreationRefused(received),
+    capacity: isSqliteSnapshotCapacityError(received),
   };
 }
 
@@ -56,18 +63,42 @@ type FailureOptions = {
   refused?: boolean;
   contention?: boolean;
   allocationRefused?: boolean;
+  capacity?: boolean;
 };
 async function expectWorkerFailure(
   error: unknown,
   message: string,
-  { contention = false, mode = "async", allocationRefused = false, refused }: FailureOptions = {},
+  {
+    contention = false,
+    mode = "async",
+    allocationRefused = false,
+    refused,
+    capacity = false,
+  }: FailureOptions = {},
 ): Promise<void> {
   if (refused) {
     const { markPrivateDirectoryCreationRefused } = await import("./private-directory-creation.js");
     markPrivateDirectoryCreationRefused(error);
   }
-  process.argv = [process.execPath, "worker", "--openclaw-sqlite-readonly-child", mode, "/db"];
-  const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  vi.stubGlobal(
+    "process",
+    Object.setPrototypeOf(
+      {
+        ...process,
+        argv: [process.execPath, "worker", "--openclaw-sqlite-readonly-child", mode, "/db"],
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+      },
+      process,
+    ),
+  );
+  const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk, ...rest) => {
+    const callback = rest.find((argument) => typeof argument === "function");
+    if (typeof callback === "function") {
+      queueMicrotask(() => callback());
+    }
+    return true;
+  });
   if (mode === "async") {
     prepare.mockRejectedValueOnce(error);
   } else {
@@ -79,15 +110,22 @@ async function expectWorkerFailure(
   await import("./sqlite-readonly-location.worker.js");
   await vi.dynamicImportSettled();
   const prefix =
+    (capacity ? "SQLite snapshot capacity unavailable: " : "") +
     (contention ? "Retryable SQLite inspection contention: " : "") +
     (allocationRefused ? "SQLite snapshot directory creation refused: " : "");
   const stdout = JSON.stringify({ ok: false, message: `${prefix}${message}` });
-  expect(write).toHaveBeenCalledExactlyOnceWith(stdout);
+  expect(write).toHaveBeenCalledExactlyOnceWith(stdout, expect.any(Function));
   expect(process.exitCode).toBe(1);
   expect(await readFailure(stdout, mode)).toEqual({
     contention,
     refused: contention && allocationRefused,
+    capacity,
   });
+  if (capacity) {
+    expect(await readFailure(stdout, mode, "exited unsuccessfully", 1)).toMatchObject({
+      capacity: true,
+    });
+  }
 }
 
 const codedError = (fields: { code?: string; errcode?: number }) =>
@@ -122,6 +160,13 @@ function deepFailure() {
 }
 
 it.each<[unknown, string, FailureOptions?]>([
+  [new SqliteSnapshotCapacityError("full"), "full", { capacity: true }],
+  [new SqliteSnapshotCapacityError("full"), "full", { mode: "sync", capacity: true }],
+  [new SqliteSnapshotCapacityError("full"), "full", { mode: "staging-create", capacity: true }],
+  [
+    new AggregateError([new SqliteSnapshotCapacityError("full")], "cleanup failed"),
+    "cleanup failed",
+  ],
   [
     codedError({ errcode: 5 }),
     "failure (errcode=5)",
@@ -170,3 +215,13 @@ it.each([
     expect(received.refused).toBe(false);
   },
 );
+
+it.each([null, 137])("does not accept a capacity receipt after child status %s", async (status) => {
+  const stdout = JSON.stringify({
+    ok: false,
+    message: "SQLite snapshot capacity unavailable: full",
+  });
+  expect(await readFailure(stdout, "async", "child did not complete", status)).toMatchObject({
+    capacity: false,
+  });
+});
