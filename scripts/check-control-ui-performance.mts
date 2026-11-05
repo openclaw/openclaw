@@ -49,10 +49,11 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Approved named Actions queries (#186057) add 354 B to Chat vs main 079d8d92.
-  // Measured 1,285,870 B plus the existing 192 B headroom; requests stay at 20.
-  chatBootJsGzipBytes: 1_286_062,
-  newBootJsGzipBytes: 797_395,
+  // Sharing Markdown's parked-block helper removes 441–449 KB gzip from non-Chat routes.
+  // Chat pays 429 B in changed compression; measured 1,294,543 B + 192 B headroom.
+  chatBootJsGzipBytes: 1_294_735,
+  // New Session retains its measured 801,486 B + 192 B headroom.
+  newBootJsGzipBytes: 801_678,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -67,20 +68,10 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Lazy automation feed: 308,234 B CSS for 8.35% faster remote readiness,
-  // one fewer request and 9,859 fewer encoded bytes. Retain 64 B build variance.
-  // The lazily loaded Sections editor measures 308,462 B (#186229); Vyctor Brzezowski
-  // approved the increase on 2026-10-28. Retain 64 B build variance.
-  // iOS-style mobile sheet motion (#188162) adds 279 B to a main that already measured
-  // 308,922 B: 309,201 B. Vyctor Brzezowski approved exceeding the budget on 2026-10-30.
-  // Retain 64 B build variance.
-  // Mobile composer controls stay inside the composer: 309,341 B measured.
-  // Same-toolchain main 6494dce5: 319,575 B; prompt panel adds 671 B.
-  // Keep 1 KiB above that measured base without changing startup budgets.
-  totalCssGzipBytes: 320_599,
-  // Rail first frame #190877 adds 65 B; main measured 1,654,023 B (phone-UI batch landed 2026-11-02).
-  // Lead approved the exact raise on 2026-11-02. Retain 64 B build variance.
-  totalCssRawBytes: 1_655_112,
+  // Separately indexed field selectors cut Usage style CPU by 20–24%.
+  // Measured total CSS is 323,426 B gzip / 1,670,773 B raw; retain 64 B headroom.
+  totalCssGzipBytes: 323_490,
+  totalCssRawBytes: 1_670_837,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

@@ -307,6 +307,14 @@ It creates no new backup or witness store and does not authorize migration,
 rollback, startup, or activation. Updates retain their existing safety gates;
 automatic migration acceptance is a separate integration.
 
+### Interrupted while the Gateway restarts
+
+A signal such as Ctrl-C or `SIGTERM` during `restarting` or `verifying` stops the
+updater's readiness wait right away instead of letting it poll until the update
+deadline. The updater then recovers and reports the interruption; a Gateway that
+already came up stays running. Run `openclaw update status`, then
+`openclaw update repair` for any recovery that remains pending.
+
 ### Interrupted state restore
 
 Update commands, including `update repair`, refuse with

@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { LoadedRecord } from "./model.js";
 import type { GateEntry } from "./recall-gate.js";
 
@@ -47,7 +48,7 @@ export function promptLabel(value: unknown, max: number): string | null {
   if (!flat || MARKUP.test(flat) || INSTRUCTION_LIKE.test(flat)) {
     return null;
   }
-  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+  return flat.length > max ? `${truncateUtf16Safe(flat, max - 1).trimEnd()}…` : flat;
 }
 
 type Page = {

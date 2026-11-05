@@ -12,7 +12,10 @@ import {
 } from "../model-catalog/remote-overlay.js";
 import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
+import {
+  recordPreparedModelCatalogReplacement,
+  retirePreparedModelRuntimeGeneration,
+} from "./prepared-model-runtime.lifecycle.js";
 import {
   advancePreparedModelRuntimeOwnerConfig,
   ownerKey,
@@ -328,7 +331,8 @@ async function publishPreparedModelRuntimeCatalogReplacement(
           owner.needsRefresh = true;
         }
       }
-      for (const { owner } of claims) {
+      for (const [index, { owner }] of claims.entries()) {
+        recordPreparedModelCatalogReplacement(owner.snapshot!, candidates[index]!.snapshot!);
         owner.generation += 1;
         retirePreparedModelRuntimeGeneration(owner);
         releasePreparedPluginPublication(owner);

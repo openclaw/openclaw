@@ -29,7 +29,7 @@ import { createChatPaneResourceProps } from "./chat-pane-resource-presentation.t
 import {
   createChatPaneQueuedEditProps,
   createChatPaneSessionActionCallbacks,
-  canDismissChatPendingInputs,
+  createChatPanePendingInputControls,
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
@@ -365,7 +365,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         ? this.captureProgressCardRefreshAction()
         : undefined;
     const props: ChatProps = {
-      canDismissPendingInputs: canDismissChatPendingInputs(mutationAccess, selectedSession, {
+      ...createChatPanePendingInputControls(mutationAccess, selectedSession, {
         nativeConversation,
         participationBlocked: sessionParticipationBlocked,
       }),
@@ -579,7 +579,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onNavigate: (routeId, options) => this.context.navigate(routeId, options),
       onRefresh: this.refreshHistory,
-      onChatScroll: (event) => this.handleTranscriptScroll(event),
       onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
       // Lazy SVG sizing can resize a committed row; re-enter the scroll owner
       // so an active follow lock stays pinned to the latest message.

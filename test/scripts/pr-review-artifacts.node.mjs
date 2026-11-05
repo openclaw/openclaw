@@ -159,6 +159,19 @@ test("preserves type short-circuiting and mixed enum diagnostic order", (t) => {
   ]);
 });
 
+test("a partial nit sweep on a fresh template names how to fix it", (t) => {
+  const f = fixture(t);
+  f.review.nitSweep = { performed: true, status: "none" };
+  const result = f.validate();
+  assert.equal(result.status, 1);
+  assert.deepEqual(result.stdout.trimEnd().split("\n"), [
+    'Invalid nit sweep summary in .local/review.json: nitSweep.summary must be a non-empty string describing the sweep result (for example "No nits."); remove nitSweep if no nit sweep was performed',
+    "1 artifact violations",
+  ]);
+  delete f.review.nitSweep;
+  assert.equal(f.validate().status, 0);
+});
+
 test("empty required summaries and missing finding severity remain invalid", (t) => {
   const f = fixture(t);
   f.review.issueValidation.summary = "";

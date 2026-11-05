@@ -586,7 +586,7 @@ it.each([
   ).toThrow(`${key} ${error}`);
 });
 
-it.each(["agent-id", "error-coercion", "expect"])(
+it.each(["agent-id", "error-coercion", "expect", "stringified-error"])(
   "resolves internal source aliases for %s",
   (subpath) => {
     const aliases = resolveSourcePackageAliasesForVite();

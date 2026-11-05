@@ -25,6 +25,7 @@ import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-stor
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 import type { GenerationWorkerInput } from "./plugin-generation-worker-contract.js";
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { isPluginSourceAcquisitionError } from "./plugin-instance-error.js";
@@ -264,6 +265,32 @@ it("keeps a native-only recovery fork after its worker and admission cache retir
       await recovery.disposeAsync();
       await prepared.artifact.disposeAsync();
     }
+    expect(fs.existsSync(captured)).toBe(false);
+  });
+});
+
+it("keeps a prepared child's native bytes after its source custody retires", async () => {
+  await withWorkerFixture("worker-child-native-custody", async ({ fixture, cache }) => {
+    const companion = path.join(fixture.root, "companion.txt");
+    fs.writeFileSync(companion, "retained native companion");
+    preparePluginNativeAdmissions(fixture.index, cache);
+    let prepared: Awaited<ReturnType<typeof prepare>> | undefined;
+    let captured = "";
+    try {
+      await withPluginGenerationSourceCustody(async () => {
+        prepared = await prepare(fixture);
+      });
+      expect(workersActive()).toBe(true);
+      captured = fs.realpathSync(prepared!.artifact.resolve(fixture.filename));
+      const capturedCompanion = prepared!.artifact.resolve(companion);
+      expectBytes(captured, fixture);
+      expect(fs.readFileSync(capturedCompanion, "utf8")).toBe("retained native companion");
+      expectSource(prepared!.artifact, fixture.entry);
+    } finally {
+      await prepared?.artifact.disposeAsync();
+      await retirePluginCache(cache);
+    }
+    expect(workersActive()).toBe(false);
     expect(fs.existsSync(captured)).toBe(false);
   });
 });

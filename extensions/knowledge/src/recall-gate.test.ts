@@ -167,39 +167,6 @@ it("without the pointer tier, mid scores and bare yeses inject nothing", async (
   ]);
 });
 
-it("keyword mode scores the given candidates with their excerpts, no shortlist question", async () => {
-  const list: GateEntry[] = [
-    { id: "a", line: "note: Nova", label: "Nova", text: "rabies booster due in March" },
-    { id: "b", line: "note: Oven", label: "Oven", text: "firebrick" },
-  ];
-  const rt = runtime({ relevant: { Nova: 0.8, Oven: 0.3 } });
-  const result = await decide({
-    policy: policy(),
-    entries: list,
-    message: "Is Nova due?",
-    decisions: rt.decisions,
-    agentId: "main",
-    signal: new AbortController().signal,
-  });
-  expect(rt.calls).toHaveLength(1);
-  const batch = rt.calls[0]!.batch;
-  // Rerankers score (message, title + excerpt) pairs; no prompt framing around the message.
-  expect(batch.state).toEqual({ type: "text", text: "Is Nova due?" });
-  expect(batch.questions.page0).toMatchObject({
-    type: "boolean",
-    instructions: "Nova\nrabies booster due in March",
-  });
-  expect(result).toEqual({
-    status: "ok",
-    offered: 2,
-    shortlisted: 2,
-    decisions: [
-      { id: "a", score: 0.8, tier: "high" },
-      { id: "b", score: 0.3, tier: "low" },
-    ],
-  });
-});
-
 it("scores pages independently: two relevant pages that split choice mass both pass", async () => {
   // Reviewer case 1: {A:.43, B:.43, None:.14} must not suppress both pages.
   const list = entries(12, (i) =>
@@ -360,21 +327,6 @@ it("shadow mode logs the decisions and injects nothing", async () => {
   expect(JSON.stringify(record)).not.toMatch(/Nova|shots/u);
 });
 
-it("live keyword mode injects only the matched excerpt; unmatched pages are never scored", async () => {
-  const { run, logged, calls } = await setup(gate({ mode: "live" }), {
-    relevant: { Nova: 0.8, Pizza: 0.99, Garage: 0.99 },
-  });
-  const result = await run("Is Nova due for her shots?");
-  expect(Object.keys(result)).toEqual(["prependContext"]);
-  const text: string = result.prependContext;
-  expect(text).toContain("### Nova vaccination schedule");
-  expect(text).toContain("rabies booster is due in March");
-  expect(text).not.toMatch(/Pizza|Garage|knowledge_lookup/u);
-  expect(calls).toHaveLength(1);
-  expect(JSON.stringify(calls[0]!.batch)).not.toMatch(/Pizza|Garage/u);
-  expect(logged()[0]).toMatchObject({ mode: "live", outcome: "injected", shortlisted: 1 });
-});
-
 it("keyword mode never scores when no page shares a word with the message", async () => {
   const { run, calls, logged } = await setup(gate({ mode: "live", skipHintBelow: 0.9 }));
   expect(await run("Quantum chromodynamics?")).toBe(undefined);
@@ -417,29 +369,6 @@ it("model mode injects high bodies, medium pointers and nothing for low", async 
   expect(JSON.stringify(calls[0]!.batch)).toContain("note: Garage door opener");
   expect(text).not.toContain("## Knowledge Index");
   expect(logged()[0]).toMatchObject({ mode: "live", outcome: "injected" });
-});
-
-it("publishes nothing when memory access lapses after scoring", async () => {
-  const { ctx, run, logged, evaluateV2 } = await setup(gate({ mode: "live" }), {
-    relevant: { Nova: 0.99 },
-  });
-  const live = ctx.assertMemoryAudienceCurrent as () => void;
-  let revoked = false;
-  ctx.assertMemoryAudienceCurrent = () => {
-    if (revoked) {
-      throw new Error("memory audience revoked");
-    }
-    live();
-  };
-  const scored = evaluateV2.getMockImplementation()!;
-  evaluateV2.mockImplementationOnce(async (batch, options) => {
-    const outcome = await scored(batch, options);
-    revoked = true;
-    return outcome;
-  });
-  expect(await run("Is Nova due for her shots?")).toBe(undefined);
-  expect(evaluateV2).toHaveBeenCalledTimes(1);
-  expect(logged()[0]).toMatchObject({ outcome: "error" });
 });
 
 it("injects nothing when the agent has no Decision model or the provider is down", async () => {

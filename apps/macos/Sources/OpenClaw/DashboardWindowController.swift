@@ -951,11 +951,11 @@ extension DashboardWindowController {
     }
 
     func navigateBack() {
-        self.activeNavigationWebView.goBack()
+        self.nativeBrowser.goBack(in: self.activeNavigationWebView)
     }
 
     func navigateForward() {
-        self.activeNavigationWebView.goForward()
+        self.nativeBrowser.goForward(in: self.activeNavigationWebView)
     }
 
     fileprivate func closeFocusedPanelOrWindow() {
@@ -1346,6 +1346,8 @@ extension DashboardWindowController {
                     url,
                     navigationType: navigationAction.navigationType,
                     buttonNumber: navigationAction.buttonNumber)
+                // A physical click is a new user navigation; page script cannot fake one.
+                if nativeTab.navigationWasUserActivated { nativeTab.resetAutomaticReloads() }
             }
             // Page-initiated downloads keep their external-browser behavior.
             // The explicit toolbar action owns the native Save dialog.
@@ -1481,9 +1483,9 @@ extension DashboardWindowController {
         self.webView(webView, didFail: navigation, withError: error)
     }
 
-    func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         if self.nativeBrowser.owns(webView) {
-            self.nativeBrowser.navigationDidFail(for: webView, error: error)
+            self.nativeBrowser.navigationDidFail(navigation, for: webView, error: error)
             return
         }
         guard webView === self.webView else { return }
@@ -1508,7 +1510,7 @@ extension DashboardWindowController {
                 message: String(localized: "The dashboard page stopped unexpectedly."),
                 detail: String(localized: "Choose Reload to try loading the dashboard again."))
         } else if self.nativeBrowser.owns(webView) {
-            webView.reload()
+            self.nativeBrowser.webContentProcessDidTerminate(webView)
         }
     }
 

@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasNativeExternalLink, postNativeExternalLink } from "../../app/native-link-routing.ts";
 import { dispatchWidgetPrompt } from "../../components/mcp-app-security.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 
@@ -18,6 +19,19 @@ const STATE_PAYLOAD_MAX_BYTES = 8 * 1024;
 const STATE_COALESCE_WINDOW_MS = 5_000;
 const STATE_RATE_WINDOW_MS = 60_000;
 const STATE_RATE_MAX_ATTEMPTS = 12;
+
+// Spends the page's transient activation the way an opened popup does. WebKit's
+// consume-user-activation clears it in every frame, so the widget frame needs
+// new input before the next open. A detached text input has no picker to show,
+// and showPicker() throws when no activation is left to spend.
+function consumeUserActivation(): boolean {
+  try {
+    document.createElement("input").showPicker();
+  } catch {
+    return false;
+  }
+  return !navigator.userActivation.isActive;
+}
 
 export function isBoardWidgetBridgeRequest(value: unknown): value is BoardWidgetBridgeRequest {
   if (!value || typeof value !== "object") {
@@ -55,6 +69,8 @@ export class BoardWidgetBridgeOwner {
       client: BoardWidgetBridgeGatewayClient;
       rateKey: string;
       confirmPrompt: (text: string) => boolean | Promise<boolean>;
+      /** Whether this widget's own sandbox frame holds live user activation. */
+      widgetActivated: () => Promise<boolean>;
     },
   ) {
     this.options = { ...options };
@@ -121,18 +137,37 @@ export class BoardWidgetBridgeOwner {
     }
     switch (request.method) {
       // Opening a link the user clicked is navigation, not a granted capability,
-      // so this stays outside the tool-grant checks. Opening goes through the
+      // so this stays outside the tool-grant checks. Native hosts take it through
+      // their link owner, because WebKit's popup blocker scopes the click's
+      // gesture to its own task and refuses window.open in this MessagePort task,
+      // although transient user activation survives the hop. Browsers use the
       // Control UI's openExternalUrlSafe owner, which applies noopener/noreferrer
       // regardless of the `rel` a widget wrote. The absolute-http(s) gate here is
-      // deliberately narrower than that shared policy: widget-supplied links must
-      // not reach `blob:`, which the general external-link path allows.
+      // deliberately narrower than both: widget-supplied links must not reach
+      // `blob:`, which the general external-link path allows.
       case "host.open": {
         const url = requiredString(params, "url");
-        if (!/^https?:\/\//i.test(url)) {
+        if (!/^https?:\/\//i.test(url) || !URL.canParse(url)) {
           throw new Error("widget link url is invalid");
         }
-        if (!openExternalUrlSafe(url)) {
-          throw new Error("widget link could not be opened");
+        // Native refusal is terminal; only bridge absence selects the browser.
+        if (hasNativeExternalLink()) {
+          // Both the dashboard and this widget must hold live activation. The
+          // widget-specific query excludes input elsewhere; consumption makes
+          // each gesture single-use, even though native posting skips WebKit's
+          // popup blocker.
+          const activated =
+            navigator.userActivation?.isActive && (await this.options.widgetActivated());
+          // Retirement or reconnect during the query revokes this request.
+          if (options.isCurrent?.() === false) {
+            throw new Error("widget link request is no longer current");
+          }
+          if (!activated || !consumeUserActivation() || !postNativeExternalLink(url)) {
+            throw new Error("widget link could not be opened");
+          }
+        } else {
+          // noopener may return null even after opening; it is not a failure receipt.
+          openExternalUrlSafe(url);
         }
         return { ok: true };
       }
