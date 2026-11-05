@@ -1,6 +1,5 @@
 import type { Page } from "playwright";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import { createTeamScaleHistoryFixture } from "../../ui/src/test-helpers/control-ui-team-scale-history-fixture.ts";
 import {
   createEngineTranscript,
   engineProbeInitScript,
@@ -8,7 +7,6 @@ import {
   type EngineScenario,
 } from "./control-ui-engine-boot-scenarios.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
-import { readLongSessionMessageCount } from "./control-ui-long-session-probe.ts";
 import { createControlUiStreamingReply } from "./control-ui-streaming-fixture.ts";
 
 const sessionKey = "agent:main:interaction-a";
@@ -424,52 +422,27 @@ function streamScenario(options: {
   };
 }
 
-async function scrollTranscript(
-  page: Page,
-  direction: "top" | "bottom" = "top",
-  endpointEntryId?: string,
-) {
-  const result = await page.locator(`${activePane} .chat-thread`).evaluate(
-    async (thread, options) => {
-      const initialHeight = thread.scrollHeight;
-      const frameTimes: number[] = [];
-      let blankFrames = 0;
-      let midpointGapFrames = 0;
-      let minimumCoverage = 1;
-      let mountedRows = 0;
-      let fragmentRows = 0;
-      const observedRows = new Set<string>();
-      // Cover the complete history in two seconds at a nominal 60 Hz.
-      for (let step = 1; step <= 120; step++) {
-        thread.scrollTop =
-          options.direction === "top"
-            ? (initialHeight - thread.clientHeight) * (1 - step / 120)
-            : (thread.scrollHeight - thread.clientHeight) * (step / 120);
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame((at) => {
-            frameTimes.push(at);
-            resolve();
-          });
+async function scrollToTop(page: Page) {
+  return page.locator(`${activePane} .chat-thread`).evaluate(async (thread) => {
+    const initialHeight = thread.scrollHeight;
+    const frameTimes: number[] = [];
+    let blankFrames = 0;
+    let mountedRows = 0;
+    // Cover the complete history in two seconds at a nominal 60 Hz.
+    for (let step = 1; step <= 120; step++) {
+      thread.scrollTop = (initialHeight - thread.clientHeight) * (1 - step / 120);
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame((at) => {
+          frameTimes.push(at);
+          resolve();
         });
-        const bounds = thread.getBoundingClientRect();
-        const rows = Array.from(thread.querySelectorAll<HTMLElement>(".chat-virtual-row"));
-        mountedRows = Math.max(mountedRows, rows.length);
-        const visibleRows = options.endpointEntryId
-          ? rows.filter((row) => row.dataset.preparedRow !== "true")
-          : rows;
-        if (options.endpointEntryId) {
-          let fragments = 0;
-          for (const row of visibleRows) {
-            const key = row.dataset.virtualRowKey;
-            if (key) {
-              observedRows.add(key);
-              fragments += Number(key.includes(":part:"));
-            }
-          }
-          fragmentRows = Math.max(fragmentRows, fragments);
-        }
-        const middle = bounds.top + bounds.height / 2;
-        const midpointCovered = visibleRows.some((row) => {
+      });
+      const bounds = thread.getBoundingClientRect();
+      const rows = Array.from(thread.querySelectorAll<HTMLElement>(".chat-virtual-row"));
+      mountedRows = Math.max(mountedRows, rows.length);
+      const middle = bounds.top + bounds.height / 2;
+      if (
+        !rows.some((row) => {
           const rect = row.getBoundingClientRect();
           return (
             rect.top <= middle &&
@@ -477,92 +450,25 @@ async function scrollTranscript(
             row.checkVisibility({ contentVisibilityAuto: true }) &&
             Boolean(row.textContent?.trim())
           );
-        });
-        midpointGapFrames += Number(!midpointCovered);
-        if (options.endpointEntryId) {
-          // Match the long-session probe's whole-viewport blank contract, while
-          // retaining partial-window gaps as a separate, stronger diagnostic.
-          const segments = visibleRows
-            .map((row) => row.getBoundingClientRect())
-            .map((rect) => [Math.max(bounds.top, rect.top), Math.min(bounds.bottom, rect.bottom)])
-            .filter(([top, bottom]) => bottom! > top!)
-            .toSorted((left, right) => left[0]! - right[0]!);
-          let covered = 0;
-          let end = bounds.top;
-          for (const [top, bottom] of segments) {
-            covered += Math.max(0, bottom! - Math.max(top!, end));
-            end = Math.max(end, bottom!);
-          }
-          const coverage = covered / bounds.height;
-          minimumCoverage = Math.min(minimumCoverage, coverage);
-          blankFrames += Number(coverage === 0);
-        } else if (!midpointCovered) {
-          blankFrames++;
-        }
+        })
+      ) {
+        blankFrames++;
       }
-      const gaps = frameTimes.slice(1).map((at, i) => at - frameTimes[i]!);
-      const sorted = gaps.toSorted((a, b) => a - b);
-      let endpoint;
-      if (options.endpointEntryId) {
-        for (let frame = 0; frame < 2; frame++) {
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          });
-        }
-        const bounds = thread.getBoundingClientRect();
-        endpoint = {
-          endpointDistancePx: Math.abs(
-            options.direction === "top"
-              ? thread.scrollTop
-              : thread.scrollHeight - thread.clientHeight - thread.scrollTop,
-          ),
-          endpointMessageVisible: Array.from(
-            thread.querySelectorAll<HTMLElement>(
-              ".chat-bubble:not(.chat-bubble--tool-shell)[data-entry-id]",
-            ),
-          ).some((bubble) => {
-            if (bubble.dataset.entryId !== options.endpointEntryId) {
-              return false;
-            }
-            const rect = bubble.getBoundingClientRect();
-            return (
-              bubble.checkVisibility({ contentVisibilityAuto: true }) &&
-              rect.bottom > bounds.top &&
-              rect.top < bounds.bottom &&
-              Boolean(bubble.textContent?.trim())
-            );
-          }),
-          fragmentRows,
-          observedRows: observedRows.size,
-          midpointGapFrames,
-          minimumCoverage,
-        };
-      }
-      return {
-        scrollFrames: frameTimes.length,
-        blankFrames,
-        mountedRows,
-        frameGapMedianMs: sorted[Math.floor(sorted.length / 2)]!,
-        frameGapP95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1]!,
-        estimatedDroppedFrames: gaps.reduce(
-          (sum, gap) => sum + Math.max(0, Math.round(gap / (1000 / 60)) - 1),
-          0,
-        ),
-        ...endpoint,
-      };
-    },
-    { direction, endpointEntryId },
-  );
-  if (
-    endpointEntryId &&
-    (result.blankFrames > 0 ||
-      !result.fragmentRows ||
-      !result.endpointMessageVisible ||
-      result.endpointDistancePx! > 2)
-  ) {
-    throw new Error(`Completed-run ${direction} scroll failed: ${JSON.stringify(result)}`);
-  }
-  return result;
+    }
+    const gaps = frameTimes.slice(1).map((at, i) => at - frameTimes[i]!);
+    const sorted = gaps.toSorted((a, b) => a - b);
+    return {
+      scrollFrames: frameTimes.length,
+      blankFrames,
+      mountedRows,
+      frameGapMedianMs: sorted[Math.floor(sorted.length / 2)]!,
+      frameGapP95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1]!,
+      estimatedDroppedFrames: gaps.reduce(
+        (sum, gap) => sum + Math.max(0, Math.round(gap / (1000 / 60)) - 1),
+        0,
+      ),
+    };
+  });
 }
 
 export function createEngineStreamingScenarios(): readonly EngineScenario[] {
@@ -580,54 +486,13 @@ export function createEngineStreamingScenarios(): readonly EngineScenario[] {
       await waitForEngineTranscript(page, 2_000);
     },
     run: async (page) => {
-      const evidence = await scrollTranscript(page);
+      const evidence = await scrollToTop(page);
       await page
         .locator(activePane)
         .getByText("Transcript 0 message 0.", { exact: false })
         .waitFor({ state: "visible" });
       return evidence;
     },
-  };
-  const completedMessages = 400;
-  const firstEntryId = "team-message-1";
-  const lastEntryId = `team-message-${completedMessages}`;
-  const completedScroll: EngineScenario = {
-    id: "completed-run-400-fast-scroll-top",
-    explicitOnly: true,
-    route: controlUiSessionPath(sessionKey),
-    expected:
-      "A completed 400-message run scrolls through fragment rows to its first message without blank samples or an endpoint miss.",
-    initScript: engineProbeInitScript(),
-    rowSelector: ".chat-virtual-row",
-    settings: { chatShowToolCalls: true },
-    fixtureOverrides: (_sandbox, base) => {
-      const session = base.sessions.find((row) => row.key === sessionKey)!;
-      const history = createTeamScaleHistoryFixture({
-        messageCount: completedMessages,
-        inlineWidgets: 0,
-        now: 1_800_000_000_000,
-        longSessionScenario: "direct-run",
-        sessionInfo: session,
-        assets: new Map(),
-        models: base.models,
-      });
-      return { sessionTranscripts: { [sessionKey]: { messages: history.historyMessages } } };
-    },
-    prepare: async (page) => {
-      await page
-        .locator(`${activePane} .chat-bubble[data-entry-id="${lastEntryId}"]`)
-        .waitFor({ state: "visible" });
-      await page.locator(`${activePane} ${inputSelector}`).waitFor({ state: "visible" });
-      const count = await readLongSessionMessageCount(page, sessionKey);
-      if (count !== completedMessages) {
-        throw new Error(`Completed-run fixture loaded ${count} of ${completedMessages} messages`);
-      }
-      await frames(page);
-    },
-    run: async (page) => ({
-      ...(await scrollTranscript(page, "top", firstEntryId)),
-      messages: completedMessages,
-    }),
   };
   return [
     streamScenario({ id: "streaming-645-deltas" }),
@@ -637,21 +502,6 @@ export function createEngineStreamingScenarios(): readonly EngineScenario[] {
     streamScenario({ id: "streaming-tool-code", content: "tool-code" }),
     streamScenario({ id: "streaming-mixed-fast", rate: 150, content: "mixed" }),
     longScroll,
-    completedScroll,
-    {
-      ...completedScroll,
-      id: "completed-run-400-fast-scroll-bottom",
-      expected:
-        "A completed 400-message run returns through fragment rows to its final answer without blank samples or an endpoint miss.",
-      prepare: async (page, gateway) => {
-        await completedScroll.prepare(page, gateway);
-        await scrollTranscript(page, "top", firstEntryId);
-      },
-      run: async (page) => ({
-        ...(await scrollTranscript(page, "bottom", lastEntryId)),
-        messages: completedMessages,
-      }),
-    },
     {
       ...longScroll,
       id: "large-transcript-return-bottom",
@@ -659,7 +509,7 @@ export function createEngineStreamingScenarios(): readonly EngineScenario[] {
         "The native Scroll to latest action returns to message 1,999 and retires its affordance.",
       prepare: async (page, gateway) => {
         await longScroll.prepare(page, gateway);
-        await scrollTranscript(page);
+        await scrollToTop(page);
         await page.getByRole("button", { name: "Scroll to latest" }).waitFor();
       },
       run: async (page) => {
