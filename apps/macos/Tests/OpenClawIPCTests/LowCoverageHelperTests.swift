@@ -88,6 +88,28 @@ struct LowCoverageHelperTests {
         #expect(result.stderr.contains("stderr-1999"))
     }
 
+    @Test(arguments: [#"abc\377"#, #"abc\342\234"#])
+    func `shell executor keeps valid output around malformed utf8`(bytes: String) async {
+        let result = await ShellExecutor.runDetailed(
+            command: ["/bin/sh", "-c", "printf '\(bytes)'; printf '\(bytes)' 1>&2"],
+            cwd: nil,
+            env: nil,
+            timeout: 2)
+        #expect(result.success == true)
+        #expect(result.stdout == "abc\u{FFFD}")
+        #expect(result.stderr == "abc\u{FFFD}")
+    }
+
+    @Test func `shell executor keeps output before a split character on timeout`() async {
+        let result = await ShellExecutor.runDetailed(
+            command: ["/bin/sh", "-c", #"printf 'building \342\234'; sleep 5"#],
+            cwd: nil,
+            env: nil,
+            timeout: 1)
+        #expect(result.timedOut == true)
+        #expect(result.stdout == "building \u{FFFD}")
+    }
+
     @Test func `shell executor finishes when a descendant retains output handles`() async {
         let startedAt = ContinuousClock.now
         let result = await ShellExecutor.runDetailed(
