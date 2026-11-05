@@ -604,7 +604,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     const { promise: finalization, resolve, reject } = createDeferred<FeishuReplyDeliveryResult>();
     pendingStreamingDeliveries.push({
       result,
-      epoch: previewEpoch,
+      epoch: previewCovered ? previewEpoch : -1,
       ...(infoKind ? { infoKind } : {}),
       ...(previewCovered ? { previewCovered } : {}),
       resolve,
@@ -834,7 +834,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     Map<string, Promise<FeishuReplyDeliveryResult>>
   >();
   const creditedRecoveries = new WeakSet<object>();
-  // The assistant message whose block first met a recovery; no later message may credit it.
+  // The message whose covered block first met a recovery (-1 if uncovered); only it may credit.
   const recoveryEpochs = new WeakMap<object, number>();
 
   const ensureVisibleStreamingDelivery = async (

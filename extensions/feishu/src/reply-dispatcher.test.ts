@@ -527,7 +527,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expectSend(sendMessageFeishuMock, { text: "First ", mentions: requiredMentionTargets });
     expectSend(sendMessageFeishuMock, { text: "paragraph.", mentions: requiredMentionTargets }, 1);
   });
-
   const approvalPresentationText = [
     "Plugin bind approval required",
     "Allow Codex to bind this conversation?",
@@ -1071,6 +1070,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["rw", ["Z", ["Z"], null, "BA1.A2.", ["A1.A2."], 1, "BA1.A2.C"], ["Z", "BA1.A2.", "BA1.A2.C"]],
     ["two throws", ["X.", ["X."], 3, "X. X.", ["X."], 3, "X. X. D."], ["X.", "X.", "X. D."]],
     ["next message", [["X."], 2, 3, "X. Y.", ["X."], 3, "X. Y. Z."], ["X.", "X. Y.", "X. Y. Z."]],
+    ["same message", [["X."], 3, "X.", ["X."], 3, "X. Z."], ["X.", "X.", "X. Z."]],
     ["fence", ["~~~py\nx", null, "~~~py\nx y\n~~~\nD."], ["~~~py\nx", "~~~py\ny\n~~~\nD."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
