@@ -68,6 +68,63 @@ describe("terminal resolution", () => {
     resetGeneratedMediaTaskActivityForTests();
   });
 
+  it.each(["compaction", "tool_execution"] as const)(
+    "reports an idle timeout during %s after completed tool work as a failure",
+    async (phase) => {
+      const error = new Error("LLM idle timeout: no response from model");
+      const assistant = emptyAssistant({ stopReason: "aborted", errorMessage: error.message });
+      const attempt = makeEmbeddedRunnerAttempt({
+        terminal: {
+          kind: "timeout",
+          source: "idle",
+          phase,
+          aborted: true,
+          failure: { source: "prompt", error },
+        },
+        assistantTexts: [],
+        currentAttemptAssistant: assistant,
+        lastAssistant: assistant,
+        toolMetas: [{ toolName: "exec", isError: false, replaySafe: false }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      });
+      const input = makeTerminalInput({ attempt });
+      const resolved = await resolveEmbeddedRunTerminal(input);
+      expectComplete(resolved);
+      expect(resolved.result.meta.error).toMatchObject({
+        message: error.message,
+        fallbackSafe: false,
+      });
+      expect(classifyAgentExecResult(resolved.result).status).toBe("error");
+      expect(
+        resolveCronPayloadOutcome({
+          payloads: resolved.result.payloads ?? [],
+          runLevelError: resolved.result.meta.error,
+        }).hasFatalErrorPayload,
+      ).toBe(true);
+      expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+      expect(markEmbeddedRunAuthProfileSuccess).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a final answer recovered after a prompt-timeout race", async () => {
+    const text = "Completed answer after the timeout race.";
+    const assistant = textAssistant(text);
+    const attempt = makeEmbeddedRunnerAttempt({
+      terminal: { kind: "timeout", phase: "prompt", source: "runtime", aborted: true },
+      assistantTexts: [text],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptCompletedAssistant: assistant,
+    });
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({ attempt, recoveredFinalAssistantPayloadsAfterPromptTimeout: [{ text }] }),
+    );
+    expectComplete(resolved);
+    expect(resolved.result.meta.error).toBeUndefined();
+    expect(resolved.result.payloads).toEqual([{ text }]);
+  });
+
   it.each(["failed", "recovered", "cancelled"] as const)(
     "retains observations only for the selected failed attempt (%s)",
     async (selection) => {

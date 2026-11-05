@@ -449,8 +449,9 @@ async function completeEmbeddedRun(
   const terminalAborted = isEmbeddedRunTerminalAbort(terminalOutcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(terminalOutcome);
   const terminalFailed = classifyAgentRunTerminalOutcome(terminalOutcome) === "failure";
+  const terminal = input.attempt.terminal;
   const terminalFailure =
-    projectAgentRunAttemptTerminal(input.attempt.terminal).promptError ??
+    projectAgentRunAttemptTerminal(terminal).promptError ??
     terminalOutcome.error ??
     input.incompleteTurnText ??
     MISSING_REPLY_NOTICE_TEXT;
@@ -460,7 +461,9 @@ async function completeEmbeddedRun(
   // Warning suppression is presentation only: an unrecovered terminal failure
   // must retain error metadata and must not enter successful auth/trace bookkeeping.
   const error =
-    input.incompleteTurnText !== undefined || terminalFailed
+    input.incompleteTurnText !== undefined ||
+    (terminalTimedOut && terminal.kind === "timeout" && terminal.phase !== "prompt") ||
+    terminalFailed
       ? {
           kind: "incomplete_turn" as const,
           message: storageFailureText ?? formatErrorMessage(terminalFailure),
