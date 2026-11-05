@@ -17,6 +17,7 @@ import {
   requireElement,
   resetTranscriptTestDom,
   transcriptSize,
+  transcriptRows,
 } from "./chat-transcript.test-support.ts";
 
 beforeEach(installTranscriptDomMocks);
@@ -67,6 +68,36 @@ it.each([false, true])(
     expect(transcriptSize(container)).toBe(180);
   },
 );
+
+it("defers replacement rows when resize delivery reads a pending native jump", async () => {
+  const frame = stubAnimationFrames();
+  const rows = contentRows(80);
+  const { container, renderRows } = await mountTestTranscript("resize-native-jump", rows);
+  frame();
+  await flushDeferredRowPrune();
+  renderRows(rows);
+  container.scrollTop = 800;
+  container.dispatchEvent(new Event("scroll"));
+  frame();
+  await flushDeferredRowPrune();
+  const before = transcriptRows(container);
+  const outgoing = before[0]!;
+  expect(before.length).toBeLessThan(rows.length);
+  expect(container.querySelector('.chat-virtual-row[data-index="40"]')).toBeNull();
+
+  // Native scrolling can advance before its scroll event. The outgoing row's
+  // observer must not replace its own observed subtree during delivery.
+  container.scrollTop = 4000;
+  emitTranscriptResize(outgoing, 800, 120);
+  expect(transcriptRows(container)).toEqual(before);
+  await flushDeferredRowPrune();
+  expect(transcriptRows(container)).toEqual(before);
+
+  frame();
+  await flushDeferredRowPrune();
+  expect(container.scrollTop).toBe(4000);
+  expect(container.querySelector('.chat-virtual-row[data-index="40"]')).not.toBeNull();
+});
 
 it.each([
   { kind: "accounted", lateChange: 0, deliveredChange: 0 },

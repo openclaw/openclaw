@@ -200,8 +200,9 @@ export function createModelProviderConfigActions(deps: {
     if (!result?.ok || !isCurrent()) {
       return;
     }
-    // A key the provider rejected stays in its form, ready to correct.
-    if (!result.verified) {
+    // A key the provider rejected stays in its form, ready to correct. A check that couldn't
+    // finish says nothing about the key, so the saved key closes its form as before.
+    if (result.rejected) {
       return;
     }
     if (action === "add") {

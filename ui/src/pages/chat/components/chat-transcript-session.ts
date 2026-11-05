@@ -121,6 +121,15 @@ export function createTranscriptPresentation(
   onMeasured?: (row: HTMLElement, height: number) => void,
 ) {
   const redraw = {};
+  let pendingChange: (() => void) | undefined;
+  const flushChange = () => {
+    const commit = pendingChange;
+    if (commit) {
+      pendingChange = undefined;
+      cancelLayout(redraw);
+      commit();
+    }
+  };
   let resizeOffsetSynced = false;
   const readConnectedRows = (): (() => boolean) | null => {
     flushMessageOverflowMeasurements();
@@ -140,14 +149,16 @@ export function createTranscriptPresentation(
 
   const presentation = {
     commitChange(commit: () => void, defer: boolean) {
+      pendingChange = commit;
       if (defer) {
-        scheduleLayout(redraw, () => commit);
+        scheduleLayout(redraw, () => flushChange);
       } else {
-        cancelLayout(redraw);
-        commit();
+        flushChange();
       }
     },
+    flushChange,
     cancelChange() {
+      pendingChange = undefined;
       cancelLayout(redraw);
     },
     measureElement(element: HTMLElement, entry: ResizeObserverEntry | undefined) {
