@@ -508,6 +508,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     };
     const closingPreview = previewText;
     const closingEpoch = previewEpoch;
+    const closingBase = snapshotBaseText;
     const priorClosedPreview = closedPreviewText;
     if (disposition === "closed" && streamingToClose.isActive()) {
       // Provisional, so a card opened while this close is in flight continues after it.
@@ -547,10 +548,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (disposition === "closed") {
           // Only text the provider accepted is shown; a rejected suffix stays for the next card.
           const accepted = finalizationError === undefined || result.content === text;
-          const answer =
+          const retained =
             (finalizedReasoningText
               ? result.content?.split("\n\n---\n\n").pop()
               : result.content) ?? "";
+          // The frozen base belongs to an earlier message; only the receipt past it credits this one.
+          const answer = retained.startsWith(closingBase) ? retained.slice(closingBase.length) : "";
           const body = continuedPreview(closingPreview, priorClosedPreview);
           setClosedPreview(
             result.visibleReplySent && accepted

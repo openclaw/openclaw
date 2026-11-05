@@ -560,7 +560,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect.stringContaining("choice-b"),
     ]);
   });
-
   it("keeps a status-style fallback reply as its authored text", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness();
@@ -584,7 +583,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect.objectContaining({ text: "Status: uptime 3h" }),
     );
   });
-
   it.each([false, true])(
     "retains media and accepted=%s controls after card failure",
     async (acceptedCard) => {
@@ -1075,6 +1073,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["fence crlf", ["```\n```\r\n", null, "```\n```\r\n```\nD"], ["```\n```\r\n", "```\nD"]],
     ["fence cr", ["~~~\rz\n```", null, "~~~\rz\n```\n```\nD"], ["~~~\rz\n```", "~~~\n```\nD"]],
     ["fence ls", ["~~~\u2028\n```", null, "~~~\u2028\n```\n~~~\nD"], ["~~~\u2028\n```", "D"]],
+    ["partial msg", ["A.", 2, "A. B.", true, false, "A. B. C."], ["A.\n\nA. B.", "A. B. C."]],
+    ["partial held", ["A.", 2, "A. B.", true, "A. B. C.", false], ["A.\n\nA. B.", "A. B. C."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1102,7 +1102,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         const shown = { visibleReplySent: true, content, finalTextAccepted: false };
         close.reject(streamingFailure(new Error("no"), shown));
         await expect(options.onIdle?.()).rejects.toThrow("no");
-        if (name !== "cut") {
+        if (name !== "cut" && !name.startsWith("partial")) {
           expectSend(sendStructuredCardFeishuMock, { text: "A." });
           expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
           expect(streamingInstances).toHaveLength(name === "rejection" ? 1 : 2);
