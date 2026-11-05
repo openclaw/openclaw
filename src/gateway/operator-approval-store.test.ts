@@ -11,6 +11,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { withSqliteWriteAdmissionService } from "../infra/sqlite-transaction.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -90,11 +91,12 @@ describe("operator approval store", () => {
     }
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     if (!suiteDatabaseOptions) {
       return;
     }
-    // Completed cases leave workers reusable; only their approval rows are isolated.
+    // Offline fixture writes must retire the prior owner's receipt-maintained view.
+    await closeOpenClawStateDatabaseAsync();
     runOpenClawStateWriteTransaction((database) => {
       const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
       executeSqliteQuerySync(database.db, stateDb.deleteFrom("operator_approvals"));
@@ -185,14 +187,32 @@ describe("operator approval store", () => {
     ).toEqual(["plugin-new"]);
   });
 
-  it("filters an audience before applying the replay limit", async () => {
+  it.each([
+    {
+      name: "filters an audience before applying the replay limit",
+      unrelatedPrefix: "unrelated",
+      unrelatedBindings: { audienceSessionKeys: ["agent:main:other"] },
+      targetId: "target-after-first-page",
+      targetBindings: { audienceSessionKeys: ["agent:main:target"] },
+      selection: { audienceSessionKey: "agent:main:target" },
+    },
+    {
+      name: "filters reviewers before the replay limit",
+      unrelatedPrefix: "unrelated-reviewer",
+      unrelatedBindings: { reviewerDeviceIds: ["unrelated-device"] },
+      targetId: "authorized-after-first-page",
+      targetBindings: { reviewerDeviceIds: ["authorized-device"] },
+      selection: { reviewerDeviceId: "authorized-device" },
+    },
+  ])("$name", async (scenario) => {
+    const { unrelatedPrefix, unrelatedBindings, targetId, targetBindings, selection } = scenario;
     const databaseOptions = getSuiteDatabaseOptions();
     for (let index = 0; index < 256; index += 1) {
-      const id = `unrelated-${String(index).padStart(3, "0")}`;
+      const id = `${unrelatedPrefix}-${String(index).padStart(3, "0")}`;
       expect(
         await insertOperatorApproval({
           approval: approval(id, {
-            audienceSessionKeys: ["agent:main:other"],
+            ...unrelatedBindings,
             createdAtMs: 1_000 + index,
           }),
           databaseOptions,
@@ -201,8 +221,8 @@ describe("operator approval store", () => {
     }
     expect(
       await insertOperatorApproval({
-        approval: approval("target-after-first-page", {
-          audienceSessionKeys: ["agent:main:target"],
+        approval: approval(targetId, {
+          ...targetBindings,
           createdAtMs: 2_000,
         }),
         databaseOptions,
@@ -211,46 +231,46 @@ describe("operator approval store", () => {
 
     expect(
       await listPendingOperatorApprovals({
-        audienceSessionKey: "agent:main:target",
+        ...selection,
         limit: 1,
         nowMs: 3_000,
         databaseOptions,
       }),
-    ).toMatchObject([{ id: "target-after-first-page" }]);
+    ).toMatchObject([{ id: targetId }]);
   });
 
-  it("filters reviewers before the replay limit", async () => {
+  it("maintains ordered session pages from committed receipts until the database closes", async () => {
     const databaseOptions = getSuiteDatabaseOptions();
-    for (let index = 0; index < 256; index += 1) {
-      const id = `unrelated-reviewer-${String(index).padStart(3, "0")}`;
-      expect(
-        await insertOperatorApproval({
-          approval: approval(id, {
-            reviewerDeviceIds: ["unrelated-device"],
-            createdAtMs: 1_000 + index,
-          }),
-          databaseOptions,
-        }),
-      ).toMatchObject({ outcome: "inserted" });
-    }
-    expect(
+    const selection = { audienceSessionKey: "agent:main:target", nowMs: 2_000, databaseOptions };
+    await listPendingOperatorApprovals(selection);
+    using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    // Equal timestamps retain SQLite's UTF-8 binary ID order, including non-BMP IDs.
+    for (const id of ["😀", "\uE000", "a"]) {
       await insertOperatorApproval({
-        approval: approval("authorized-after-first-page", {
-          reviewerDeviceIds: ["authorized-device"],
-          createdAtMs: 2_000,
-        }),
+        approval: approval(id, { audienceSessionKeys: [selection.audienceSessionKey] }),
         databaseOptions,
-      }),
-    ).toMatchObject({ outcome: "inserted" });
-
+      });
+    }
+    await insertOperatorApproval({
+      approval: approval("unrelated", { audienceSessionKeys: ["agent:main:other"] }),
+      databaseOptions,
+    });
     expect(
-      await listPendingOperatorApprovals({
-        reviewerDeviceId: "authorized-device",
-        limit: 1,
-        nowMs: 3_000,
-        databaseOptions,
-      }),
-    ).toMatchObject([{ id: "authorized-after-first-page" }]);
+      (await listPendingOperatorApprovals({ ...selection, limit: 2 })).map((row) => row.id),
+    ).toEqual(["a", "\uE000"]);
+    await forceDenyOperatorApproval({
+      id: "a",
+      reason: "no-route",
+      resolver: { kind: "system", id: null },
+      nowMs: 2_000,
+      databaseOptions,
+    });
+    const expected = ["\uE000", "😀"];
+    expect((await listPendingOperatorApprovals(selection)).map((row) => row.id)).toEqual(expected);
+    expect(reads).not.toHaveBeenCalled();
+    await closeOpenClawStateDatabaseAsync();
+    expect((await listPendingOperatorApprovals(selection)).map((row) => row.id)).toEqual(expected);
+    expect(reads).toHaveBeenCalled();
   });
 
   it.each([

@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { createAssistantMessageEventStream } from "@openclaw/llm-core";
 import { assert, expect, it, vi } from "vitest";
+import { attachInternalToolResultAcknowledgement } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import {
   loadSessionEntry,
@@ -37,7 +39,6 @@ import {
 } from "../../admitted-run-context.js";
 import { isRecordedModelFallbackStop } from "../../model-fallback-stop.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
-import { attachInternalToolResultAcknowledgement } from "../../runtime/internal-hooks.js";
 import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
 import {
   createAssistant,
@@ -108,7 +109,12 @@ type InitialWriterFixture = {
 
 async function withInitialWriter(
   run: (fixture: InitialWriterFixture) => Promise<void>,
-  options: { existing?: boolean; outsideTranscriptWrite?: boolean; incognito?: boolean } = {},
+  options: {
+    existing?: boolean;
+    outsideTranscriptWrite?: boolean;
+    incognito?: boolean;
+    assertSourceCurrent?: () => void;
+  } = {},
 ) {
   await withOpenClawTestState({ label: "initial-session-writer" }, async (state) => {
     const sessionId = randomUUID();
@@ -124,7 +130,13 @@ async function withInitialWriter(
         : path.join(state.agentDir(), "openclaw-agent.sqlite"),
     };
     const controller = new AbortController();
-    const admission = prepareSystemAgentRunAdmission({}, runId, "main", "initial-writer-test");
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      runId,
+      "main",
+      "initial-writer-test",
+      options.assertSourceCurrent,
+    );
     const admissions = [admission];
     let prepared: Transcript | undefined;
     try {
@@ -453,6 +465,31 @@ it("refuses an explicitly stale actor append without replay or persistence", () 
     { existing: true },
   ));
 
+it("checks a prepared transcript target's source once and retains its revocation", async () => {
+  const failure = new Error("operator source revoked");
+  let revoked = false;
+  const assertSourceCurrent = vi.fn(() => {
+    if (revoked) {
+      throw failure;
+    }
+  });
+  await withInitialWriter(
+    async ({ transcript }) => {
+      const assertCommitAllowed = transcript.ownedTranscriptWriteContext.assertCommitAllowed!;
+      assertSourceCurrent.mockClear();
+      assertCommitAllowed();
+      expect(assertSourceCurrent).toHaveBeenCalledOnce();
+      revoked = true;
+      expect(assertCommitAllowed).toThrow("admitted run authority is no longer active");
+      revoked = false;
+      assertSourceCurrent.mockClear();
+      expect(assertCommitAllowed).toThrow("admitted run authority is no longer active");
+      expect(assertSourceCurrent).not.toHaveBeenCalled();
+    },
+    { existing: true, assertSourceCurrent },
+  );
+});
+
 it("refuses a prepared target whose owner closes during lifecycle preparation", () =>
   withInitialWriter(
     async ({ admission, preparedSessionTarget, runParams }) => {
@@ -465,6 +502,24 @@ it("refuses a prepared target whose owner closes during lifecycle preparation", 
         ),
       ).rejects.toThrow("admitted run authority is no longer active");
       expect(arm).not.toHaveBeenCalled();
+    },
+    { existing: true },
+  ));
+
+it("prepares a warm transcript from its admitted database identity without resolving its path", () =>
+  withInitialWriter(
+    async ({ preparedSessionTarget, runParams }) => {
+      using realpath = vi.spyOn(fs.realpathSync, "native");
+      const prepared = await prepareTranscript({ ...runParams, preparedSessionTarget });
+      try {
+        expect(prepared.ownedTranscriptWriteContext.sessionActor?.actor.target).toMatchObject({
+          database: { kind: "file" },
+          sessionKey: runParams.sessionKey,
+        });
+        expect(realpath).not.toHaveBeenCalled();
+      } finally {
+        await prepared.transcriptLifecycle.dispose();
+      }
     },
     { existing: true },
   ));

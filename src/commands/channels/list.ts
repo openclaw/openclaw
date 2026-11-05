@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -6,11 +7,7 @@ import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read
 import { resolveChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import {
-  normalizeRuntimeChannelAccountSnapshots,
-  resolveChannelAccountStatusRows,
-  type RuntimeChannelStatusPayload,
-} from "../../channels/status/read-model.js";
+import { normalizeRuntimeChannelAccountSnapshots } from "../../channels/status/read-model.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolvePluginControlPlaneWorkspace } from "../../plugins/control-plane-workspace.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
@@ -24,13 +21,13 @@ import {
   requireValidChannelConfig,
 } from "./shared.js";
 
-async function readGatewayChannelStatus(): Promise<RuntimeChannelStatusPayload | null> {
+async function readGatewayChannelStatus() {
   try {
-    return (await callGateway({
+    return await callGateway({
       method: "channels.status",
       params: { probe: false, timeoutMs: 5_000 },
       timeoutMs: 5_000,
-    })) as RuntimeChannelStatusPayload;
+    });
   } catch {
     return null;
   }
@@ -169,24 +166,28 @@ export async function channelsListCommand(
 
   for (const plugin of opts.json ? [] : renderedPlugins) {
     const accountIds = accountIdsByPlugin.get(plugin.id) ?? [];
-    let rows: Array<{ snapshot: ChannelAccountSnapshot }>;
+    let snapshots: ChannelAccountSnapshot[];
     if (accountIds.length > 0) {
       const runtimeAccounts = runtimeAccountsByChannel.get(plugin.id) ?? [];
-      rows = await resolveChannelAccountStatusRows({
-        localAccountIds: accountIds,
-        runtimeAccounts,
-        resolveLocalSnapshot: (accountId) =>
-          resolveChannelAccountSnapshot({ plugin, cfg, accountId }),
-      });
+      snapshots = [];
+      for (const accountId of uniqueStrings([
+        ...accountIds,
+        ...runtimeAccounts.map((account) => account.accountId),
+      ])) {
+        snapshots.push(
+          runtimeAccounts.find((account) => account.accountId === accountId) ??
+            (await resolveChannelAccountSnapshot({ plugin, cfg, accountId })),
+        );
+      }
     } else {
       // Unconfigured --all rows still inspect the default account before applying runtime facts.
       const snapshot = await resolveChannelAccountSnapshot({ plugin, cfg, accountId: "default" });
       const runtimeSnapshot = runtimeAccountsByChannel
         .get(plugin.id)
         ?.find((account) => account.accountId === "default");
-      rows = [{ snapshot: runtimeSnapshot ?? snapshot }];
+      snapshots = [runtimeSnapshot ?? snapshot];
     }
-    for (const { snapshot } of rows) {
+    for (const snapshot of snapshots) {
       accountLines.push({ plugin, snapshot, installed: isInstalled(plugin.id) });
     }
   }

@@ -31,3 +31,7 @@ export function createUsageFixture(input: number, output: number, totalTokens: n
 
 /** Shared read-only zero usage for tests that deliberately alias one fixture. */
 export const ZERO_USAGE_FIXTURE: Usage = createZeroUsageFixture();
+
+export function createRuntimeLlmUsageFixture() {
+  return { input: 11, output: 7, cacheRead: 5, cacheWrite: 2, total: 25, cost: { total: 0.0042 } };
+}

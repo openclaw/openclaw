@@ -61,6 +61,15 @@ function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = fa
     }
     return false;
   }
+  if (!sourceData && (Array.isArray(value) || Object.getPrototypeOf(value) === Object.prototype)) {
+    // Native cloning materializes ordinary fields as data properties, including getter results.
+    for (const key of Reflect.ownKeys(value)) {
+      if (containsSharedMemory(Reflect.get(value, key), seen)) {
+        return true;
+      }
+    }
+    return false;
+  }
   if (sourceData && !(value instanceof Error) && !Array.isArray(value)) {
     const prototype = Object.getPrototypeOf(value);
     // Non-plain values retain their native clone semantics. Inspect their
@@ -153,9 +162,24 @@ export function clonePromptHookEvent<T extends { messages: unknown[] }>(
             original && typeof original === "object" && isOwnedTranscriptPayload(original)
               ? original
               : undefined;
-          const entries: [string, unknown][] = Object.entries(message);
-          const envelope = Object.fromEntries(entries);
-          for (const [key, value] of entries) {
+          const envelope: Record<string, unknown> = {};
+          for (const key of Object.getOwnPropertyNames(message)) {
+            // Earlier getters can change which later fields are enumerable own properties.
+            if (!Object.prototype.propertyIsEnumerable.call(message, key)) {
+              continue;
+            }
+            const value: unknown = Reflect.get(message, key);
+            if (key === "__proto__") {
+              // Preserve a literal data field without invoking the prototype setter.
+              Object.defineProperty(envelope, key, {
+                value,
+                enumerable: true,
+                configurable: true,
+                writable: true,
+              });
+            } else {
+              envelope[key] = value;
+            }
             // Projection may replace metadata; only unchanged fields inherit ownership.
             isolate(
               envelope,

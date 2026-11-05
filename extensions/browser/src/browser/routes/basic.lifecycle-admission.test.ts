@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createBrowserRouteContext } from "../server-context.js";
 import { makeBrowserServerState } from "../server-context.test-harness.js";
 import { registerBrowserBasicRoutes } from "./basic.js";
@@ -45,102 +45,72 @@ function createLifecycleRoute(path: string) {
   };
 }
 
-describe("shared lifecycle admission", () => {
-  it.each(["request canceled", "connection canceled", "dashboard retired"])(
-    "rejects a request before mutation when %s",
-    async (reason) => {
-      const route = createLifecycleRoute("/start");
-      const request = new AbortController();
-      const connection = new AbortController();
-      const error = new Error(reason);
-      if (reason !== "dashboard retired") {
-        (reason === "request canceled" ? request : connection).abort(error);
+it.each([
+  ["/start", "request", 0],
+  ["/start", "connection", 0],
+  ["/start", "dashboard", 0],
+  ["/start", "during admission", 401],
+  ["DELETE /profiles/:name", "during admission", 401],
+  ["/stop", "after admission", 200],
+  ["/reset-profile", "after admission", 200],
+  ["DELETE /profiles/:name", "after admission", 200],
+] as const)("%s respects authority revoked %s", async (path, revocation, status) => {
+  const route = createLifecycleRoute(path);
+  let current = true;
+  const admittedWithAuthority: boolean[] = [];
+  route.mutation.mockImplementation(() => admittedWithAuthority.push(current));
+  const retired = new Error("dashboard retired");
+  const response = await route.call({
+    signal: revocation === "request" ? AbortSignal.abort(retired) : undefined,
+    requester: {
+      signal:
+        revocation === "connection" ? AbortSignal.abort(retired) : new AbortController().signal,
+      isCurrent: () => current,
+    },
+    assertCurrent: async () => {
+      if (revocation === "dashboard") {
+        throw retired;
       }
-
-      const response = await route.call({
-        signal: request.signal,
-        requester: { signal: connection.signal, isCurrent: () => true },
-        assertCurrent: async () => {
-          if (reason === "dashboard retired") {
-            throw error;
-          }
-        },
-      });
-
-      expect(response.statusCode).toBeGreaterThanOrEqual(400);
-      if (reason === "dashboard retired") {
-        expect(response.body).toEqual({ error: "Error: dashboard retired" });
+      const revoke = () => {
+        current = false;
+      };
+      if (revocation === "during admission") {
+        revoke();
       }
-      expect(route.mutation).not.toHaveBeenCalled();
+      if (revocation === "after admission") {
+        queueMicrotask(() => queueMicrotask(revoke));
+      }
     },
-  );
-
-  it.each(["/start", "DELETE /profiles/:name"])(
-    "%s rechecks requester authority after dashboard admission",
-    async (path) => {
-      const route = createLifecycleRoute(path);
-      let current = true;
-      const response = await route.call({
-        requester: { signal: new AbortController().signal, isCurrent: () => current },
-        assertCurrent: async () => {
-          current = false;
-        },
-      });
-
-      expect(response.statusCode).toBe(401);
-      expect(route.mutation).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["/stop", "/reset-profile", "DELETE /profiles/:name"])(
-    "%s invokes the admitted operation before yielding its authority check",
-    async (path) => {
-      const route = createLifecycleRoute(path);
-      let current = true;
-      const admittedWithAuthority: boolean[] = [];
-      route.mutation.mockImplementation(() => admittedWithAuthority.push(current));
-
-      const response = await route.call({
-        requester: { signal: new AbortController().signal, isCurrent: () => current },
-        assertCurrent: async () => {
-          queueMicrotask(() =>
-            queueMicrotask(() => {
-              current = false;
-            }),
-          );
-        },
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(admittedWithAuthority).toEqual([true]);
-    },
-  );
+  });
+  if (status) {
+    expect(response.statusCode).toBe(status);
+  } else {
+    expect(response.statusCode).toBeGreaterThanOrEqual(400);
+  }
+  if (revocation === "dashboard") {
+    expect(response.body).toEqual({ error: "Error: dashboard retired" });
+  }
+  expect(admittedWithAuthority).toEqual(status === 200 ? [true] : []);
 });
 
-describe("POST /profiles/import domain filter validation", () => {
-  it.each([
-    ["a non-array string", { domains: "google.com" }, "domains must be an array of domain strings"],
-    [
-      "an array of blanks",
-      { domains: ["   ", ""] },
-      "domains must include at least one non-empty domain",
-    ],
-  ])("fails closed for %s", async (_label, body, message) => {
-    const response = await createLifecycleRoute("/profiles/import").call({ body });
-    expect(response.statusCode).toBe(400);
-    expect(response.body).toMatchObject({ error: message });
+it.each([
+  ["google.com", "domains must be an array of domain strings"],
+  [["   ", ""], "domains must include at least one non-empty domain"],
+])("fails closed for domains=%j", async (domains, message) => {
+  const response = await createLifecycleRoute("/profiles/import").call({ body: { domains } });
+  expect(response.statusCode).toBe(400);
+  expect(response.body).toMatchObject({ error: message });
+});
+
+it("forwards the request abort signal into the import transaction", async () => {
+  const abort = new AbortController();
+  await createLifecycleRoute("/profiles/import").call({
+    body: { into: "imported" },
+    signal: abort.signal,
   });
 
-  it("forwards the request abort signal into the import transaction", async () => {
-    const abort = new AbortController();
-    await createLifecycleRoute("/profiles/import").call({
-      body: { into: "imported" },
-      signal: abort.signal,
-    });
-
-    expect(profilesService.importSystemProfile).toHaveBeenLastCalledWith(
-      expect.objectContaining({ into: "imported" }),
-      { signal: abort.signal },
-    );
-  });
+  expect(profilesService.importSystemProfile).toHaveBeenLastCalledWith(
+    expect.objectContaining({ into: "imported" }),
+    { signal: abort.signal },
+  );
 });

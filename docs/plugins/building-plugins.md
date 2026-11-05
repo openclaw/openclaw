@@ -27,7 +27,7 @@ from npm, or `clawhub:<package>` to select ClawHub explicitly.
 
 - All plugin APIs are [experimental](/plugins/sdk-overview#api-stability).
   Pin your OpenClaw host version and test each version you declare compatible.
-- Node 24.16+ or Node 26.1+, and `npm` or `pnpm`.
+- Node 24.22.1+ or Node 26.12.1+, and `npm` or `pnpm`.
 - TypeScript ESM modules.
 - For in-repo bundled plugin work, clone the repository and run `pnpm install`.
   Source-checkout plugin development is pnpm-only because OpenClaw discovers
@@ -69,7 +69,7 @@ local proof.
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.37"
+    "typebox": "1.4.3"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.24-beta.2"
@@ -345,6 +345,21 @@ start while checkout continues. Plain tool objects default to `"execute"` becaus
 they have no runtime factory. `defineToolPlugin` accepts the same option on each
 tool definition.
 
+To tell the model when and how to use a tool, set `promptGuidance` in the
+registration options. OpenClaw adds that text to the system prompt only while
+one of the registration's named tools is callable in the run, including tools
+found through Tool Search, on every bundled agent harness. A run that denies the
+tool gets no guidance. The registration must name its tools with `name` or
+`names`. Use this instead of a `before_prompt_build` hook for tool guidance:
+that hook adds its text even when the tool is denied.
+
+```typescript
+api.registerTool(createWorkflowTool, {
+  name: "workflow_tool",
+  promptGuidance: "## Workflows\nUse `workflow_tool` for multi-step pipelines.",
+});
+```
+
 Every tool registered with `api.registerTool(...)` must also be declared in the
 plugin manifest:
 
@@ -436,6 +451,7 @@ Oxlint is not type-aware, so it cannot enforce these annotations.
 
 <Check>**package.json** has correct `openclaw` metadata</Check>
 <Check>**openclaw.plugin.json** manifest is present and valid</Check>
+<Check>Manifest declares `reload.turnHandover` if the plugin keeps no per-turn in-memory state ([Reload-safe plugins](/plugins/sdk-runtime#reload-safe-plugins))</Check>
 <Check>Entry point uses `defineChannelPluginEntry` or `definePluginEntry`</Check>
 <Check>All imports use focused `plugin-sdk/<subpath>` paths</Check>
 <Check>Internal imports use local modules, not SDK self-imports</Check>
@@ -446,7 +462,7 @@ Oxlint is not type-aware, so it cannot enforce these annotations.
 
 1. Watch [openclaw/openclaw](https://github.com/openclaw/openclaw/releases) releases (`Watch` > `Releases`). Beta tags look like `v2026.3.N-beta.1`. You can also follow [@openclaw](https://x.com/openclaw) on X for release announcements.
 2. Test your plugin against the beta tag as soon as it appears. The window before stable is typically only a few hours.
-3. Post in your plugin's thread in the `plugin-forum` Discord channel ([discord.gg/clawd](https://discord.gg/clawd)) after testing, with either `all good` or what broke. Create a thread if you do not have one yet.
+3. Post in your plugin's thread in the `plugin-forum` Discord channel ([OpenClaw Discord](https://openclaw.ai/discord?from=docs-plugins-building-plugins)) after testing, with either `all good` or what broke. Create a thread if you do not have one yet.
 4. If something breaks, open or update an issue titled `Beta blocker: <plugin-name> - <summary>` and apply the `beta-blocker` label. Link the issue in your thread.
 5. Open a PR to `main` titled `fix(<plugin-id>): beta blocker - <summary>` and link the issue in both the PR and your Discord thread. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation. Blockers with a PR get merged; blockers without one might ship anyway.
 6. Silence means green. Missing the window usually means your fix lands in the next cycle.

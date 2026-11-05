@@ -9,6 +9,7 @@ import {
   gatewayDatabaseWorkerTestFiles,
   gatewayPluginTestFiles,
 } from "./vitest.gateway-server-paths.mjs";
+import { markdownTestFiles } from "./vitest.markdown-paths.mjs";
 import { pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
 import { isToolingIsolatedTestFile } from "./vitest.tooling-isolated-paths.mjs";
 import { getRepositoryFileInventory } from "./vitest.ui-paths.mjs";
@@ -142,6 +143,7 @@ const broadUnitFastCandidatePatterns = prepareGlobPatterns(
   directoryPrefixForGlob,
 );
 const ownerRoutedUnitTestPatterns = [
+  ...markdownTestFiles,
   // This family proof belongs to the PostgreSQL conformance owner.
   "src/infra/database-engine/port-provider.postgres.test.ts",
   ...gatewayPluginTestFiles,
@@ -177,9 +179,9 @@ const ownerRoutedUnitTestPatterns = [
   // mocks live in a shared helper.
   // Completion custody tests use real session/task SQLite and process-scoped state cleanup.
   "src/agents/agent-harness-completion-delivery.test.ts",
-  "src/agents/agent-harness-completion-ownership.test.ts",
   "src/agents/agent-command.compaction-rotation.test.ts",
   "src/agents/agent-command.embedded-maintenance.test.ts",
+  "src/agents/agent-command.operator-direct-root.test.ts",
   // Source plugin workers retain the agent runtime owner after test extraction.
   "src/agents/code-mode-quickjs.integration.test.ts",
   "src/agents/tool-surface-plan.provider-catalog.integration.test.ts",

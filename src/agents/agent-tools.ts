@@ -31,6 +31,7 @@ import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
 import {
   captureLocalBrowserLoopbackConfig,
   createLocalBrowserLoopbackPreparation,
+  projectAgentToolsExecPolicy,
 } from "./agent-tools.execution-policy.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { captureChildToolAllowlist } from "./agent-tools.inheritance.js";
@@ -55,7 +56,7 @@ import {
   getActiveAgentRingZeroTools,
   mergeAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
-import { isSchedulerSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
+import { isHostSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { resolveAutomationsRunScope } from "./automations-run-scope.js";
 import { registerOneShotExecScopeCleanup } from "./bash-process-control.js";
@@ -77,13 +78,11 @@ import { resolveLocalModelLeanPreserveToolNames } from "./local-model-lean.js";
 import { createMemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import { resolveSessionToolListingClientCaps } from "./openclaw-tools.client-caps.js";
 import { filterToolsByClientCaps } from "./openclaw-tools.js";
-import { filterRequesterYieldTools } from "./openclaw-tools.requester-yield.js";
 import { applySwarmCollectorToolContract } from "./openclaw-tools.swarm.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
 import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "./scheduled-tool-policy.js";
-import { projectEffectiveExecPolicy } from "./session-permission-exec-mode.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import { withLegacySessionCapabilityRead } from "./subagents/spawn/subagent-session-store-legacy.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
@@ -233,11 +232,11 @@ function* assembleOpenClawCodingTools(
   };
   options?.recordToolPrepStage?.("workspace-policy");
   const scheduledExecTarget = options?.scheduledToolPolicy?.execTarget;
-  const effectiveExecPolicy = projectEffectiveExecPolicy({
-    base: execConfig,
-    overrides: options?.exec,
-    permissionPolicy: sessionPermissionPolicy,
-    scheduledExecTarget,
+  const effectiveExecPolicy = projectAgentToolsExecPolicy({
+    options,
+    execConfig,
+    agentId,
+    model: capabilityProfile.model,
   });
   const browserLoopback = createLocalBrowserLoopbackPreparation({
     options,
@@ -302,6 +301,7 @@ function* assembleOpenClawCodingTools(
             }),
             messageProvider: options?.messageProvider,
             currentChannelId: options?.currentChannelId,
+            currentMessagingTarget: options?.currentMessagingTarget,
             currentThreadTs: options?.currentThreadTs,
             channelContext: options?.channelContext,
             accountId: options?.agentAccountId,
@@ -317,19 +317,19 @@ function* assembleOpenClawCodingTools(
           },
           processDefaults: {
             scopeKey,
+            sessionKey: executionSessionKey,
+            agentId: executionAgentId,
+            sessionStore: options?.config?.session?.store,
           },
           recordToolPrepStage: options?.recordToolPrepStage,
         })
       : [];
   const sessionToolAccess = prepareSessionPortalToolAccess({
+    ...options,
     sessionKey: executionSessionKey,
     agentId: executionAgentId,
-    sessionId: options?.sessionId,
-    senderIsOwner: options?.senderIsOwner,
     sandboxed: Boolean(sandbox),
-    runId: options?.runId,
     cronSelfRemoveOnlyJobId,
-    automationReadOnly: options?.forceRestartSafeTools === true,
   });
   const { sessionPortalTarget, cronCreatorAuthorityResolver } = sessionToolAccess;
   // An ingress turn without a self scope gets no automations tool.
@@ -379,6 +379,10 @@ function* assembleOpenClawCodingTools(
     sandboxed: Boolean(sandbox),
     pluginToolAllowlist,
     pluginToolDenylist,
+    // Only the grant's owner reaches tool construction; the grant itself stays in the allowlist.
+    ...(runtimePluginToolGrant
+      ? { runtimePluginToolOwnerId: runtimePluginToolGrant.pluginId }
+      : {}),
     disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
     requesterAgentIdOverride: executionAgentId,
   };
@@ -436,7 +440,6 @@ function* assembleOpenClawCodingTools(
           ringZeroTools,
           yield {
             ...pluginToolOptions,
-            forceRestartSafeTools: options?.forceRestartSafeTools,
             cronSandboxContext: sandbox,
             sessionPortalTarget,
             sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,
@@ -585,7 +588,8 @@ function* assembleOpenClawCodingTools(
         ? completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, undefined, "session"))
         : undefined,
     ownerOnlyDenied: new Set(ownerOnlyCoreToolDenylist),
-    schedulerSystemTurn: isSchedulerSystemTurn(options ?? {}),
+    ownerToolCurrentAssertion: sessionToolAccess.ownerToolCurrentAssertion,
+    hostSystemTurn: isHostSystemTurn(options ?? {}),
   });
   assertMemoryFlushPersistenceToolAvailable(authorizedTools, options?.memoryFlushTools);
   authorizedTools.forEach(bindAssembledAgentToolActionDescriptor);
@@ -642,7 +646,7 @@ function* assembleOpenClawCodingTools(
   };
   const finalizedTools = finalizeAgentTools({
     ...options,
-    tools: filterRequesterYieldTools(authorizedTools, executionSessionKey),
+    tools: authorizedTools,
     wrapBeforeToolCallHook: preparedTools
       ? (tool) =>
           options?.wrapBeforeToolCallHook !== false &&

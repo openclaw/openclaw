@@ -4,6 +4,8 @@ import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { logWarn } from "../logger.js";
+import { monotonicDeadlineAfter, monotonicNow } from "../shared/monotonic-time.js";
+import type { McpToolCatalog, McpToolCatalogDiagnostic } from "./agent-bundle-mcp-catalog.types.js";
 import {
   getSessionMcpRequestSignal,
   runWithSessionMcpRequestSignal,
@@ -17,12 +19,7 @@ import type {
   CreateSessionMcpRuntime,
   ServerMcpRuntime,
 } from "./agent-bundle-mcp-runtime-shared.js";
-import type {
-  McpRequestOptions,
-  McpToolCatalog,
-  McpToolCatalogDiagnostic,
-  SessionMcpRuntime,
-} from "./agent-bundle-mcp-types.js";
+import type { McpRequestOptions, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import {
   getCatalogListTimeoutMs,
   listAllMcpTools,
@@ -128,18 +125,18 @@ function createServerMcpRuntime(
         launchSummary: server.launchSummary,
         message,
       });
-      catalogRetryAfterMs = Date.now();
+      catalogRetryAfterMs = monotonicNow();
     }
   };
   const catalogRetryIsDue = (): boolean =>
-    catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs;
+    catalogRetryAfterMs !== undefined && monotonicNow() >= catalogRetryAfterMs;
   let currentSession: BundleMcpSession | undefined;
   const nativeContextKey = nativeContext
     ? stableStringify({ capabilities: nativeContext.capabilities, roots: nativeContext.roots })
     : undefined;
   let nativeViewCount = 0;
   const nativeChildren = new Set<ServerMcpRuntime>();
-  let awaitSseRecovery = false;
+  let awaitSessionRecovery = false;
   let disposal: Promise<void> | undefined;
   let cleanupFailed = false;
   const pendingDisposals = new Set<Promise<void>>();
@@ -216,7 +213,7 @@ function createServerMcpRuntime(
   ): Promise<T> => {
     const requestSignal = getSessionMcpRequestSignal();
     const tracksFailureBackoff = options?.failureBackoff !== "ignore";
-    const nowMs = Date.now();
+    const nowMs = monotonicNow();
     const backoff = serverBackoff;
     if (
       tracksFailureBackoff &&
@@ -225,7 +222,7 @@ function createServerMcpRuntime(
       nowMs < backoff.retryAfterMs
     ) {
       throw new Error(
-        `bundle-mcp server "${serverName}" is paused after repeated tool failures; retry after ${new Date(backoff.retryAfterMs).toISOString()}`,
+        `bundle-mcp server "${serverName}" is paused after repeated tool failures; retry after ${new Date(Date.now() - nowMs + backoff.retryAfterMs).toISOString()}`,
       );
     }
     if (backoff && backoff.session !== session) {
@@ -252,21 +249,19 @@ function createServerMcpRuntime(
       if (sessionExpired && !requestSignal?.aborted) {
         recycleReason = "expired HTTP session";
       } else if (tracksFailureBackoff && !requestSignal?.aborted) {
-        const failures = recordServerToolFailure(session, nowMs);
+        const failures = recordServerToolFailure(session, monotonicNow());
         if (requests.didTimeout(error) && failures && failures >= BUNDLE_MCP_FAILURE_THRESHOLD) {
           recycleReason = "repeated request timeouts";
         }
       }
       if (recycleReason) {
+        awaitSessionRecovery ||= sessionExpired;
         serverBackoff = undefined;
         scheduleCatalogServerRetry(recycleReason);
-        const timedOut = recycleReason === "repeated request timeouts";
-        logWarn(
-          `bundle-mcp: recycling server "${serverName}" after ${timedOut ? "repeated timeouts" : "an expired HTTP session"}`,
-        );
+        logWarn(`bundle-mcp: recycling server "${serverName}" after ${recycleReason}`);
         void retireSessionIfCurrent(session).catch((retireError: unknown) => {
           logWarn(
-            `bundle-mcp: failed to retire ${timedOut ? "timed-out" : "expired-session"} server "${serverName}": ${redactMcpDiagnosticError(retireError)}`,
+            `bundle-mcp: failed to retire server "${serverName}" after ${recycleReason}: ${redactMcpDiagnosticError(retireError)}`,
           );
         });
       }
@@ -448,7 +443,7 @@ function createServerMcpRuntime(
             !createdSession.retiring &&
             currentSession === createdSession
           ) {
-            awaitSseRecovery ||= createdSession.transportType === "sse";
+            awaitSessionRecovery ||= createdSession.transportType === "sse";
             scheduleCatalogServerRetry("mcp transport closed");
             logWarn(`bundle-mcp: server "${serverName}" closed; next request reconnects`);
           }
@@ -615,10 +610,10 @@ function createServerMcpRuntime(
       catalog = nextCatalog;
       if (!nextCatalog.diagnostics?.length) {
         lastListedCatalog = nextCatalog;
-        awaitSseRecovery = false;
+        awaitSessionRecovery = false;
       }
       catalogRetryAfterMs = nextCatalog.diagnostics?.length
-        ? (startupRetryAfterMs ?? Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS)
+        ? (startupRetryAfterMs ?? monotonicDeadlineAfter(BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS))
         : undefined;
       return nextCatalog;
     } finally {
@@ -668,7 +663,7 @@ function createServerMcpRuntime(
     catalogRetryAfterMs = undefined;
     void loadCatalog(discoveryContext).catch(() => {
       if (!retiredCatalog && catalog === staleCatalog && catalogRetryAfterMs === undefined) {
-        catalogRetryAfterMs = Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS;
+        catalogRetryAfterMs = monotonicDeadlineAfter(BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS);
       }
     });
     return staleCatalog;
@@ -680,7 +675,7 @@ function createServerMcpRuntime(
     const signal = getSessionMcpRequestSignal();
     signal?.throwIfAborted();
     await racePromiseWithAbortSignal(getCatalog(), signal);
-    if (awaitSseRecovery && catalogInFlight) {
+    if (awaitSessionRecovery && catalogInFlight) {
       await racePromiseWithAbortSignal(catalogInFlight, signal);
     }
     return requireConnectedSession();

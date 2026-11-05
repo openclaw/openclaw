@@ -140,11 +140,11 @@ suite.define(() => {
       await initialToggle.waitFor();
       expect(await initialToggle.getAttribute("aria-expanded")).toBe("false");
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
-      // Delegated work keeps the idle parent's ring visible even with children collapsed.
-      await expect
-        .poll(() => parent.locator(".sidebar-child-session-toggle--running").count())
-        .toBe(1);
-      await parent.getByRole("img", { name: "Subagents working", exact: true }).waitFor();
+      // Collapsed child work stays off the idle parent row; expanded child rows show it.
+      expect(await initialToggle.locator(".session-run-spinner").count()).toBe(0);
+      expect(await parent.locator(".sidebar-session-indicator .session-glyph__ring").count()).toBe(
+        0,
+      );
       const accessibility = await context.newCDPSession(page);
       const collapsedTree = await accessibility.send("Accessibility.getFullAXTree");
       const collapsedToggle = collapsedTree.nodes.find(
@@ -152,7 +152,8 @@ suite.define(() => {
           node.role?.value === "button" &&
           node.name?.value === "Show 4 child sessions for Plan release",
       );
-      expect(collapsedToggle?.description?.value).toBe("Active run");
+      expect(collapsedToggle).toBeDefined();
+      expect(collapsedToggle?.description?.value ?? "").toBe("");
       await captureUiProof(suite, page, "child-sessions-collapsed.png");
 
       await parent.getByRole("button", { name: "Show 4 child sessions for Plan release" }).click();
@@ -180,8 +181,6 @@ suite.define(() => {
       await failedChild.getByRole("img", { name: "Failed" }).waitFor();
       await expect.poll(() => childRows.getByRole("img", { name: "Active run" }).count()).toBe(1);
 
-      const childToggle = parent.locator(".sidebar-child-session-toggle--running");
-      expect(await childToggle.count()).toBe(1);
       const expandedTree = await accessibility.send("Accessibility.getFullAXTree");
       const expandedToggle = expandedTree.nodes.find(
         (node) =>
@@ -194,7 +193,7 @@ suite.define(() => {
       for (const child of [staleRunningChild, failedChild]) {
         expect(await child.getByRole("img", { name: "Active run" }).count()).toBe(0);
         expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
-        expect((await child.locator(".session-row-trail").textContent())?.trim()).toBeTruthy();
+        expect(await child.locator(".session-row-trail").count()).toBe(0);
       }
       await captureUiProof(suite, page, "child-sessions-expanded.png");
       await captureUiProof(suite, page, "child-sessions-run-state-precedence.png");
@@ -244,7 +243,7 @@ suite.define(() => {
       );
       await captureUiProof(suite, page, "child-session-menu.png");
       await openSessionMenuSubmenu(page, "Advanced");
-      await page.getByRole("menuitem", { name: "Fork conversation" }).waitFor();
+      await page.getByRole("menuitem", { name: "Fork session" }).waitFor();
       await page.getByRole("menuitem", { name: "Delete…" }).waitFor();
       await page.getByRole("menuitem", { name: "Icon & color", exact: true }).waitFor();
       await page.keyboard.press("Escape");
@@ -320,7 +319,7 @@ suite.define(() => {
           .toBeLessThanOrEqual(0);
       };
       const hiddenActionCounts = async () => ({
-        confirms: await page.locator("openclaw-modal-dialog .exec-approval-actions").count(),
+        confirms: await page.locator("openclaw-modal-actions").count(),
         nativeDialogs: nativeDialogs.length,
         patches: (await gateway.getRequests("sessions.patch")).length,
         personalPins: await sidebar
@@ -462,6 +461,8 @@ suite.define(() => {
       await page.keyboard.press("ContextMenu");
       const menu = page.getByRole("menu", { name: "Actions for Research notes" });
       await menu.waitFor({ state: "visible" });
+      await captureUiProof(suite, page, "session-context-menu.png", menu);
+      expect(await menu.getByText(/^Last active /).count()).toBe(0);
 
       await expect
         .poll(() =>
@@ -923,27 +924,28 @@ suite.define(() => {
       }
 
       // Sections must lay out below the rows above them, not paint over them.
-      const overlaps = await page.evaluate(() => {
-        const rects = [
-          ...document.querySelectorAll(".sidebar-recent-session, .sidebar-recent-sessions__head"),
-        ]
-          .map((element) => {
-            const rect = element.getBoundingClientRect();
-            return { top: rect.top, bottom: rect.bottom };
-          })
-          .filter((rect) => rect.bottom > rect.top)
-          .toSorted((a, b) => a.top - b.top);
-        let bad = 0;
-        let previousBottom: number | undefined;
-        for (const rect of rects) {
-          if (previousBottom !== undefined && rect.top < previousBottom - 2) {
-            bad += 1;
+      const overlaps = () =>
+        page.evaluate(() => {
+          const rects = [
+            ...document.querySelectorAll(".sidebar-recent-session, .sidebar-recent-sessions__head"),
+          ]
+            .map((element) => {
+              const rect = element.getBoundingClientRect();
+              return { top: rect.top, bottom: rect.bottom };
+            })
+            .filter((rect) => rect.bottom > rect.top)
+            .toSorted((a, b) => a.top - b.top);
+          let bad = 0;
+          let previousBottom: number | undefined;
+          for (const rect of rects) {
+            if (previousBottom !== undefined && rect.top < previousBottom - 2) {
+              bad += 1;
+            }
+            previousBottom = rect.bottom;
           }
-          previousBottom = rect.bottom;
-        }
-        return bad;
-      });
-      expect(overlaps).toBe(0);
+          return bad;
+        });
+      await expect.poll(overlaps).toBe(0);
     } finally {
       await context.close();
     }
@@ -992,7 +994,11 @@ suite.define(() => {
         page.locator('.sidebar-recent-session[data-session-key="agent:main:chat-29"]'),
       );
       await viewport.evaluate((element) => element.scrollTo(0, 0));
-      await page.locator('.sidebar-recent-session[data-session-key="agent:main:work-0"]').waitFor();
+      // Coding follows the chat list, so reveal its row through the real viewport.
+      await revealSidebarTarget(
+        viewport,
+        page.locator('.sidebar-recent-session[data-session-key="agent:main:work-0"]'),
+      );
       await captureUiProof(suite, page, "short-window-session-sections.png");
 
       // Sections must stack below each other, not paint over the rows above.
@@ -1042,10 +1048,8 @@ suite.define(() => {
 
   it("keeps sidebar session controls reachable on touch pointers", async () => {
     const context = await suite.browser.newContext({
+      ...createControlUiE2eContextOptions(),
       hasTouch: true,
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
     await installMockGateway(page, {

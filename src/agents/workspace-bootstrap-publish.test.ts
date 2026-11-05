@@ -118,25 +118,19 @@ describe("bootstrap publication atomicity", () => {
     expect(await listTempSiblings(tempDir)).toEqual([]);
   });
 
-  it("rejects observable two-link reads and publishes complete single-link bytes", async () => {
-    const realLink = syncFs.linkSync.bind(syncFs);
-    let concurrentRead: ReturnType<typeof workspace.loadWorkspaceBootstrapFiles> | undefined;
-    vi.spyOn(syncFs, "linkSync").mockImplementation((source, target) => {
-      realLink(source, target);
-      concurrentRead = workspace.loadWorkspaceBootstrapFiles(tempDir);
-    });
-
+  it("rejects hardlinked bootstrap reads and publishes complete single-link bytes", async () => {
     await publishBootstrapFile(agentsPath, "COMPLETE\n");
-    expect(concurrentRead).toBeDefined();
-    const intervalAgents = (await concurrentRead!).find(
-      (file) => file.name === DEFAULT_AGENTS_FILENAME,
-    );
-    // Windows removes the staging link synchronously before this async read resumes.
-    expect(intervalAgents).toMatchObject({
-      content:
-        process.platform === "win32" ? "COMPLETE\n" : "[UNREADABLE: path must not be hardlinked]",
+    expect((await fs.lstat(agentsPath)).nlink).toBe(1);
+    expect(await loadAgents()).toMatchObject({ content: "COMPLETE\n", missing: false });
+
+    const alias = path.join(tempDir, "agents-hardlink");
+    await fs.link(agentsPath, alias);
+    expect((await fs.lstat(agentsPath)).nlink).toBe(2);
+    expect(await loadAgents()).toMatchObject({
+      content: "[UNREADABLE: path must not be hardlinked]",
       missing: false,
     });
+    await fs.unlink(alias);
     expect((await fs.lstat(agentsPath)).nlink).toBe(1);
     expect(await loadAgents()).toMatchObject({ content: "COMPLETE\n", missing: false });
   });
@@ -161,7 +155,7 @@ describe("bootstrap publication atomicity", () => {
     await expect(seedWorkspaceBootstrap({ dir: tempDir, content })).resolves.toBe("already-seeded");
     await expect(
       seedWorkspaceBootstrap({ dir: tempDir, content: Buffer.from("# Different bootstrap\n") }),
-    ).rejects.toThrow("differs from the consented Claw bootstrap");
+    ).rejects.toThrow("differs from the consented Template bootstrap");
 
     const bootstrapPath = path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME);
     expect((await fs.readFile(bootstrapPath)).equals(content)).toBe(true);

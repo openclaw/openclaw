@@ -9,7 +9,6 @@ import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts"
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import * as chatAvatar from "../chat-avatar-view.tsx";
 import { buildCachedChatItems } from "../chat-thread.ts";
-import { ChatNotice } from "./chat-divider.tsx";
 import {
   ActivityGroup,
   MessageGroup as MessageGroupView,
@@ -18,6 +17,7 @@ import {
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import { StreamGroup } from "./chat-message-stream-view.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
+import { ChatNotice } from "./chat-notice-view.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import "./chat-detail-panel.tsx";
 
@@ -33,11 +33,11 @@ export function createChatMessageHarness() {
 
   const mediaSubscribers = new Set<object>();
 
-  const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
+  const renderMarkdownHtml = markdown.toSanitizedMarkdownContent;
 
   const renderStreamingMarkdown = markdownLive.toStreamingMarkdownDomParts;
 
-  const markdownRenderMock = vi.fn<typeof markdown.toSanitizedMarkdownHtml>((value) => value);
+  const markdownRenderMock = vi.fn<typeof markdown.toSanitizedMarkdownContent>((value) => value);
 
   const streamingMarkdownRenderMock = vi.fn<typeof markdownLive.toStreamingMarkdownDomParts>(
     (value) => ["", `<div class="streaming-markdown">${value}</div>`],
@@ -51,7 +51,7 @@ export function createChatMessageHarness() {
   beforeEach(async () => {
     await loadStreamingMarkdown();
     view = document.createElement("div");
-    vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
+    vi.spyOn(markdown, "toSanitizedMarkdownContent").mockImplementation(markdownRenderMock);
     vi.spyOn(markdownLive, "toStreamingMarkdownDomParts").mockImplementation(
       streamingMarkdownRenderMock,
     );

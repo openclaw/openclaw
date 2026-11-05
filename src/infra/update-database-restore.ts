@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -32,6 +33,7 @@ import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 import type { UpdateDatabaseBackup } from "./update-database-backup.js";
 import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
+import type { PluginCohortRecoveryBinding } from "./update-plugin-cohort-schema.js";
 
 async function existingFile(file: string) {
   try {
@@ -126,6 +128,7 @@ export async function restoreUpdateDatabaseBackup(params: {
   env: NodeJS.ProcessEnv;
   assertCurrent: () => void;
   expectedGenerations?: UpdateDatabaseGenerations;
+  pluginCohortRecovery?: PluginCohortRecoveryBinding;
 }): Promise<string[] | null> {
   if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(params.runId)) {
     throw new Error("Database rollback requires its original update run identity.");
@@ -203,7 +206,8 @@ export async function restoreUpdateDatabaseBackup(params: {
             shellEnvFallback: "defer",
           }).readConfigFileSnapshot();
           const { preparePostgresRestore } = await import("../snapshot/database-backup.js");
-          const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}`;
+          // Keep prior recovery preparations intact without occupying a retry's fresh target.
+          const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}-${randomUUID()}`;
           const prepared = await preparePostgresRestore({
             directory: entry.exportDirectory,
             anchorPath: snapshotPath,
@@ -212,6 +216,8 @@ export async function restoreUpdateDatabaseBackup(params: {
             profile: "exact",
             assertCurrent: assertOwned,
             preserveUpdateHistory: entry.path === sharedPath,
+            pluginCohortRecovery:
+              entry.path === sharedPath ? params.pluginCohortRecovery : undefined,
             expectedSource: { storeId: entry.storeId, namespace: entry.namespace },
           });
           sources[sources.indexOf(entry)] = { ...entry, ...prepared, snapshotPath };
@@ -245,6 +251,7 @@ export async function restoreUpdateDatabaseBackup(params: {
                 currentPath: sharedPath,
                 targetPath,
                 stagingRoot,
+                pluginCohortRecovery: params.pluginCohortRecovery,
               },
             }),
             z.object({

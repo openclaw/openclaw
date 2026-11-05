@@ -9,6 +9,7 @@ import {
   createCronJob,
   cronJobsListResponse,
 } from "../../test-helpers/cron.ts";
+import * as gatewayErrors from "../gateway-errors.ts";
 import { createMethodRequest, createStateWithRequest } from "./cron.test-support.ts";
 import {
   addCronJob,
@@ -21,7 +22,7 @@ import {
   updateCronJobsFilter,
 } from "./index.ts";
 import { loadCronRuns, updateCronRunsFilter } from "./runs.ts";
-import { loadCronStatus } from "./state.ts";
+import { loadCronStatus, retireCronStatusFeedback } from "./state.ts";
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
 
@@ -30,6 +31,45 @@ function runEntry(jobId: string, ts: number) {
 }
 
 describe("cron controller", () => {
+  it("retains the accepted page when the latest queued search fails", async () => {
+    const retained = createCronJob("retained", "Retained");
+    const superseded = createDeferred<CronJobsListResult>();
+    const current = createDeferred<CronJobsListResult>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(superseded.promise)
+      .mockReturnValueOnce(current.promise);
+    const state = createStateWithRequest(request, {
+      cronJobs: [retained],
+      cronJobsSnapshotRevision: "accepted",
+      cronJobsTotal: 2,
+      cronJobsHasMore: true,
+      cronJobsNextOffset: 1,
+      cronJobsQuery: "old",
+    });
+    const pending = loadCronJobsPage(state, { tableFilters: true });
+    updateCronJobsFilter(state, { cronJobsQuery: "latest" });
+    await loadCronJobsPage(state, { tableFilters: true });
+    superseded.resolve(cronJobsListResponse([createCronJob("old", "Old result")]));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(state.cronJobs).toEqual([retained]);
+    expect(state.cronJobsSnapshotRevision).toBe("accepted");
+    expect(state.cronJobsTotal).toBe(2);
+    expect(state.cronJobsHasMore).toBe(true);
+    expect(state.cronJobsNextOffset).toBe(1);
+    expect(state.cronLoading).toBe(true);
+    current.reject(new Error("Latest search unavailable"));
+    await pending;
+    expect(state.cronJobs).toEqual([retained]);
+    expect(state.cronJobsError).toBe("Latest search unavailable");
+    expect(state.cronLoading).toBe(false);
+    const latest = createCronJob("latest", "Latest result");
+    request.mockResolvedValueOnce(cronJobsListResponse([latest]));
+    await loadCronJobsPage(state, { tableFilters: true });
+    expect(state.cronJobs).toEqual([latest]);
+    expect(state.cronJobsError).toBeNull();
+  });
+
   it("retires protected inventory and queued page reloads after a forbidden read", async () => {
     const pending = createDeferred<CronJobsListResult>();
     const request = vi.fn(() => pending.promise);
@@ -311,4 +351,39 @@ describe("selected automation runtime refresh", () => {
       expect(state.cronEditingJob).toBe(job);
     },
   );
+});
+
+it("keeps newer action feedback while a permission message is loading", async () => {
+  const formatting = createDeferred();
+  const message = createDeferred<string>();
+  const format = vi
+    .spyOn(gatewayErrors, "formatMissingOperatorReadScopeMessage")
+    .mockImplementationOnce(() => {
+      formatting.resolve();
+      return message.promise;
+    });
+  const denial = new GatewayProtocolRequestError({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.read",
+    details: {
+      code: "MISSING_SCOPE",
+      missingScope: "operator.read",
+      requiredScopes: ["operator.read"],
+    },
+  });
+  const state = createStateWithRequest(vi.fn().mockRejectedValue(denial));
+  const status = { enabled: true, triggersEnabled: true, jobs: 2 };
+  state.cronStatus = status;
+  try {
+    const read = loadCronStatus(state);
+    await formatting.promise;
+    retireCronStatusFeedback(state);
+    state.cronError = "newer action feedback";
+    message.resolve("late permission message");
+    await expect(read).resolves.toBeUndefined();
+    expect(state.cronError).toBe("newer action feedback");
+    expect(state.cronStatus).toBe(status);
+  } finally {
+    format.mockRestore();
+  }
 });

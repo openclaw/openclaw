@@ -28,6 +28,7 @@ import {
 import {
   assertCronCliJobSpec,
   assertCronTimeoutSupported,
+  buildCronCommandShellArgvForGateway,
   parseCronCommandArgv,
   parseCronCommandEnv,
   parseCronNoOutputTimeoutOption,
@@ -126,6 +127,7 @@ export function registerCronEditCommand(cron: Command) {
         `Failure alert channel (${getCronChannelOptions()})`,
       )
       .option("--failure-alert-to <dest>", "Failure alert destination")
+      .option("--failure-alert-thread-id <id>", "Thread ID for failure alerts")
       .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
       .option("--failure-alert-include-skipped", "Count consecutive skipped runs toward alerts")
       .option("--failure-alert-exclude-skipped", "Exclude skips except local-provider outages")
@@ -357,6 +359,7 @@ export function registerCronEditCommand(cron: Command) {
           const scriptPath = readNonBlankString(opts.script);
           const commandShell = readNonBlankString(opts.command);
           const commandArgv = parseCronCommandArgv(opts.commandArgv);
+          const commandEnv = parseCronCommandEnv(opts.commandEnv);
           if (commandShell && commandArgv) {
             throw new CronCliError(
               "Pass command payload either with --command or --command-argv, not both.",
@@ -493,6 +496,7 @@ export function registerCronEditCommand(cron: Command) {
               );
             }
           }
+          let droppedEnvKeys: string[] = [];
           let payload: Record<string, unknown> | undefined;
           if (payloadKind === "systemEvent") {
             payload = { kind: "systemEvent" };
@@ -509,39 +513,33 @@ export function registerCronEditCommand(cron: Command) {
               assignIf(payload, "thinking", parseCronThinkingOption(thinking), Boolean(thinking));
             }
             assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
-            assignIf(
-              payload,
-              "lightContext",
-              opts.lightContext,
-              typeof opts.lightContext === "boolean",
-            );
-            assignIf(
-              payload,
-              "skipIfScratchEmpty",
-              opts.skipIfScratchEmpty,
-              typeof opts.skipIfScratchEmpty === "boolean",
-            );
-            assignIf(
-              payload,
-              "includeReasoning",
-              opts.includeReasoning,
-              typeof opts.includeReasoning === "boolean",
-            );
+            assignIf(payload, "lightContext", opts.lightContext);
+            assignIf(payload, "skipIfScratchEmpty", opts.skipIfScratchEmpty);
+            assignIf(payload, "includeReasoning", opts.includeReasoning);
           } else if (payloadKind === "command") {
-            payload = { kind: "command" };
-            assignIf(payload, "argv", commandArgv, Boolean(commandArgv));
-            assignIf(payload, "argv", ["sh", "-lc", commandShell], Boolean(commandShell));
-            assignIf(payload, "cwd", commandCwd, Boolean(commandCwd));
-            assignIf(
-              payload,
-              "env",
-              parseCronCommandEnv(opts.commandEnv),
-              opts.commandEnv !== undefined,
-            );
-            assignIf(payload, "input", opts.commandInput, hasCommandInput);
-            assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
-            assignIf(payload, "noOutputTimeoutSeconds", noOutputTimeoutSeconds);
-            assignIf(payload, "outputMaxBytes", outputMaxBytes);
+            payload = {
+              kind: "command",
+              argv:
+                commandArgv ??
+                (commandShell
+                  ? await buildCronCommandShellArgvForGateway(commandShell, opts)
+                  : undefined),
+              cwd: commandCwd,
+              env: commandEnv,
+              input: hasCommandInput ? opts.commandInput : undefined,
+              timeoutSeconds,
+              noOutputTimeoutSeconds,
+              outputMaxBytes,
+            };
+            if (commandEnv) {
+              // Diagnostics are best effort; an unavailable snapshot must not block a patch.
+              const existing = (await readExistingCronJob().catch(() => undefined))?.payload;
+              if (existing?.kind === "command") {
+                droppedEnvKeys = Object.keys(existing.env ?? {}).filter(
+                  (key) => !Object.hasOwn(commandEnv, key),
+                );
+              }
+            }
           } else if (payloadKind === "script") {
             payload = { kind: "script" };
             if (scriptPath) {
@@ -644,6 +642,7 @@ export function registerCronEditCommand(cron: Command) {
               "failureAlertAfter",
               "failureAlertChannel",
               "failureAlertTo",
+              "failureAlertThreadId",
               "failureAlertCooldown",
               "failureAlertMode",
               "failureAlertAccountId",
@@ -670,6 +669,9 @@ export function registerCronEditCommand(cron: Command) {
             if (typeof opts.failureAlertChannel === "string") {
               failureAlert.channel =
                 normalizeOptionalLowercaseString(opts.failureAlertChannel) ?? null;
+            }
+            if (typeof opts.failureAlertThreadId === "string") {
+              failureAlert.threadId = normalizeOptionalString(opts.failureAlertThreadId) ?? null;
             }
             if (typeof opts.failureAlertTo === "string") {
               failureAlert.to = normalizeOptionalString(opts.failureAlertTo) ?? null;
@@ -707,6 +709,11 @@ export function registerCronEditCommand(cron: Command) {
             ...(expectedConfigRevision !== undefined ? { expectedConfigRevision } : {}),
           });
           defaultRuntime.writeJson(res);
+          if (droppedEnvKeys.length > 0) {
+            defaultRuntime.error(
+              `warning: --command-env replaces the whole command environment; removed ${droppedEnvKeys.join(", ")}. Repeat every variable you want to keep.`,
+            );
+          }
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
           handleCronCliError(err);

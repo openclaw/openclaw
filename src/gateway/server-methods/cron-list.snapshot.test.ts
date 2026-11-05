@@ -1,5 +1,8 @@
 import { expect, it, vi } from "vitest";
-import { resolveCronListSnapshotRevision } from "../../cron/list-snapshot-revision.js";
+import {
+  resolveCronListSnapshotRevision,
+  resolveCronListSnapshotRows,
+} from "../../cron/list-snapshot-revision.js";
 import * as publicJobs from "../../cron/public-job.js";
 import type { CronListPageOptions } from "../../cron/service/list-page-types.js";
 import type { CronJob } from "../../cron/types.js";
@@ -33,7 +36,10 @@ it("reuses immutable rows across list variants until the owner or default agent 
         const jobs = query ? [job] : [job, other];
         return {
           jobs: jobs.slice(offset, offset + 1),
-          snapshotRevision: resolveCronListSnapshotRevision(jobs),
+          snapshotRevision: resolveCronListSnapshotRevision(
+            jobs,
+            resolveCronListSnapshotRows(jobs),
+          ),
           total: jobs.length,
           offset,
           limit: 1,

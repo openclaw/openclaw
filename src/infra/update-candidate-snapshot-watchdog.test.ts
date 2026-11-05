@@ -8,7 +8,10 @@ import * as commands from "../process/exec.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
-import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
+import {
+  prepareUpdateCandidateStateSnapshot,
+  resolveUpdateCandidateAdmissionTimeoutMs,
+} from "./update-candidate-snapshot.js";
 import { captureUpdateCandidateDeadline } from "./update-candidate-state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -72,12 +75,12 @@ it("coalesces snapshot progress while its receipt is settling", async () => {
   await fs.writeFile(
     worker,
     `
-    import fs from "node:fs";
     let input = "";
     for await (const chunk of process.stdin) input += chunk;
     const request = JSON.parse(input);
+    // Buffer the burst so a full nonblocking stderr pipe cannot truncate it.
     for (let i = 0; i < 256; i++) {
-      fs.writeSync(2, "State schema progress: " + JSON.stringify({phase: "copy-" + i}) + "\\n");
+      process.stderr.write("State schema progress: " + JSON.stringify({phase: "copy-" + i}) + "\\n");
     }
     process.stdout.write(JSON.stringify(request.mode === "inventory"
       ? {databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json"}
@@ -175,6 +178,7 @@ it.each([
         });
       }
       const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 400_000);
+      const perfClock = vi.spyOn(performance, "now").mockReturnValue(Date.now() + 400_000);
       if (settled) {
         controller.abort(new Error("Update validation deadline expired during progress recording"));
       } else {
@@ -183,6 +187,7 @@ it.each([
       pendingReceipt.resolve();
       const result = await operation;
       clock.mockRestore();
+      perfClock.mockRestore();
       expect(result).toMatchObject({
         status: "error",
         phase: "snapshot",
@@ -216,3 +221,16 @@ it.each([
     }
   },
 );
+
+it("sizes candidate admission to measured state within the update step deadline", async () => {
+  const stateDir = await fs.realpath(tempDirs.make("admission-budget-"));
+  const database = path.join(stateDir, "state/openclaw.sqlite");
+  const params = { config: {}, stateDir, env: { OPENCLAW_STATE_DIR: stateDir } };
+  await fs.mkdir(path.dirname(database), { recursive: true });
+  await fs.writeFile(database, "");
+  await fs.truncate(database, 3 * 1024 ** 3);
+  const budget = (stepTimeoutMs: number) =>
+    resolveUpdateCandidateAdmissionTimeoutMs({ ...params, stepTimeoutMs });
+  expect(await budget(Number.MAX_SAFE_INTEGER)).toBeGreaterThan(300_000);
+  expect(await budget(1_800_000)).toBe(1_800_000);
+});

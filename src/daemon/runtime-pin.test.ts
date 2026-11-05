@@ -6,6 +6,7 @@ import { resolveDaemonInstallRuntimeInputs } from "../commands/daemon-install-pl
 import { resolveGatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { resolvePinnedDaemonRuntimePath } from "./runtime-paths.js";
 import { buildNodeServiceEnvironment, buildServiceEnvironment } from "./service-env.js";
+import { standaloneManifestFixture } from "./standalone-manifest.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 
@@ -46,14 +47,7 @@ describe.skipIf(process.platform === "win32")("runtime pin executable boundary",
     fs.mkdirSync(path.join(root, "runtime"));
     fs.writeFileSync(
       path.join(root, "manifest.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        mode: "aot",
-        executable: { path: "bun" },
-        runtime: { path: "runtime" },
-        openclaw: { version: "2026.10.25" },
-        bun: { version: "1.4.4" },
-      }),
+      JSON.stringify(standaloneManifestFixture("aot", "bun", "2026.10.25", "1.4.4")),
     );
     const env = {
       NODE_OPTIONS: "--require=/nonexistent/fixture.js",

@@ -1,3 +1,4 @@
+import type { ModelCatalogEntry } from "../../../api/types.ts";
 import {
   formatRawProviderLabel,
   providerDisplayLabel,
@@ -5,7 +6,6 @@ import {
 import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";
-import type { ModelRuntimeEntry } from "../../../lib/model-runtime-choice.ts";
 
 registerModelControlsEnglish();
 
@@ -19,7 +19,7 @@ export type ChatModelPickerOption = {
   contextTokens?: number;
   contextWindow?: number;
   disabled?: boolean;
-  unavailableReason?: ModelRuntimeEntry["unavailableReason"];
+  unavailableReason?: ModelCatalogEntry["unavailableReason"];
   isDefault: boolean;
   label: string;
   provider: string;
@@ -44,11 +44,14 @@ export function isModelPickerOptionSelected(
   );
 }
 
-export function formatModelContextMeta(option: ChatModelPickerOption): string {
+export function formatModelContextMeta(
+  option: ChatModelPickerOption,
+  translate: typeof t = t,
+): string {
   const active = option.contextTokens;
   const maximum = option.contextWindow;
   if (active && maximum && active < maximum) {
-    return t("chat.modelControls.contextActiveAndMax", {
+    return translate("chat.modelControls.contextActiveAndMax", {
       active: formatContextTokenCapacity(active),
       maximum: formatContextTokenCapacity(maximum),
     });
@@ -68,7 +71,9 @@ export type ChatModelPickerTargetGroup = {
   completion: { promise: Promise<ChatModelPickerTargetGroup["options"]> };
 };
 
-export function formatModelLabel(option: ChatModelPickerOption): string {
+export function formatModelLabel(
+  option: Pick<ChatModelPickerOption, "label" | "provider">,
+): string {
   const prefixes = [
     formatRawProviderLabel(option.provider),
     providerDisplayLabel(option.provider),

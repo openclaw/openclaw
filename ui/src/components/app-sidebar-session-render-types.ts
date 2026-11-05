@@ -12,13 +12,11 @@ import type {
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { ContributionsElement } from "../plugins/control-ui-contributions.solid.tsx";
-import type {
-  CatalogSessionMenuRequest,
-  SidebarSessionCatalog,
-} from "./app-sidebar-session-catalogs.ts";
+import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
 import type { SessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
 import type {
   SidebarSessionProjection,
@@ -28,6 +26,7 @@ import "./menu-surface.ts";
 import type {
   SidebarRecentSession,
   SidebarToolActivity,
+  SidebarSessionSortMode,
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
@@ -62,7 +61,7 @@ export interface SessionListHost {
   readonly sessionData: Pick<
     SessionDataOwner,
     | "childSessionErrorsByParent"
-    | "dismissSessionMutationError"
+    | "dismissSessionListError"
     | "loadMoreSessionCatalog"
     | "loadMoreSidebarSessions"
     | "presenceInstanceId"
@@ -70,7 +69,7 @@ export interface SessionListHost {
     | "refreshSessionCatalogs"
     | "retryChildSessions"
     | "sessionCatalogRefreshStatus"
-    | "sessionMutationError"
+    | "sessionListError"
     | "visibleSessionLimits"
   >;
   readonly sessionsGrouping: SidebarSessionsGrouping;
@@ -105,6 +104,7 @@ export interface SessionListHost {
     | "catalogMenu"
     | "catalogMenuView"
     | "catalogViewMenuPosition"
+    | "closeSessionMenu"
     | "openCatalogViewMenu"
     | "openSessionGroupMenu"
     | "openSessionMenu"
@@ -137,26 +137,15 @@ export interface SessionListHost {
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
   toggleSessionChildren(session: SidebarRecentSession): void;
   toggleSessionPin(session: SidebarRecentSession): void;
-  toggleSessionMenu(
-    session: SidebarRecentSession,
-    trigger: HTMLElement,
-    catalogMenu?: CatalogSessionMenuRequest,
-  ): void;
+  toggleSessionMenu(session: SidebarRecentSession, trigger: HTMLElement): void;
   showMoreChildren(sessionKey: string): void;
   toggleSection(sectionId: string): void;
   expandedAgentId(): string;
-  /** Unadmitted New session handoff; presentation only, never a saved selection. */
-  pendingSessionCreate():
-    | Readonly<{
-        creation: Readonly<{ sessionKey: string }>;
-        displayName?: string;
-        category?: string;
-      }>
-    | undefined;
   readNewSessionAccess(): SessionMethodAccess;
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void;
   setVisibleSessionLimit(sectionId: string, limit: number): void;
+  resetVisibleSessionLimit(sectionId: string): void;
   clearSessionSelection(): void;
 }
 
@@ -182,6 +171,8 @@ export type SessionCatalogGroupsParams = {
 export type RenderableSessionSection = SidebarVisibleSections["sections"][number];
 export type SidebarSessionListHost = SessionListHost & {
   readonly sidebarAgentsMode: "chip" | "roster";
+  effectiveSessionsGrouping(): SidebarSessionsGrouping;
+  effectiveSessionSortMode(): SidebarSessionSortMode;
   readonly sessionData: SessionListHost["sessionData"] &
     Pick<
       SessionDataOwner,
@@ -194,6 +185,10 @@ export type SidebarSessionListHost = SessionListHost & {
       | "loadingMoreSessionCatalogIds"
     >;
   projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
+  resolvePersonalGroupSession?(key: string): SidebarRecentSession | undefined;
+  readonly collapsedPersonalSessionGroups: ReadonlySet<string>;
+  togglePersonalSessionGroup(id: string): void;
+  personalGroupSessionRows(group: PersonalSessionGroup): SidebarRecentSession[];
   reconciledSidebarZone(): {
     entries: readonly SidebarZoneEntry[];
     sessionRows: ReadonlyMap<string, SidebarRecentSession>;

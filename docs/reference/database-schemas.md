@@ -1,5 +1,5 @@
 ---
-summary: "OpenClaw SQLite database locations, schema versions, integrity checks, and downgrade recovery"
+summary: "OpenClaw database locations, schema versions, integrity checks, and downgrade recovery"
 read_when:
   - Diagnosing a newer database schema error
   - Checking database compatibility before an update or downgrade
@@ -9,7 +9,12 @@ read_when:
 title: "Database schemas"
 ---
 
-OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; agent stores also support the [PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. Doctor supports owner-supplied consecutive forward migrations for PostgreSQL state and agent schemas, with exact predecessor backups. Older OpenClaw builds refuse databases written by a newer schema.
+OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; shared state and agent stores also support the [PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. Doctor supports owner-supplied consecutive forward migrations for PostgreSQL state and agent schemas, with exact predecessor backups. Older OpenClaw builds refuse databases written by a newer schema.
+
+Linux [durable background exec](/gateway/background-process) stores its restart
+ownership facts in the first-use `durable_background_processes` shared-state table.
+See [durable process storage](/reference/database-schemas/layout#durable-background-processes)
+for fields, retention, and upgrade behavior.
 
 For runtime contributors, start with
 [database access in workers](/reference/database-schemas/worker-access): execution
@@ -59,6 +64,8 @@ physical shared database's process-owned facts. Journal writers publish pending,
 completed, and removed status at commit through the existing worker fact transport;
 rollback preserves the previous status. Session admission reuses this fact and the
 deletion owner's queue closure instead of reading the journal on every turn.
+Unrelated first-use feature tables do not invalidate these per-agent row facts or
+cancel admitted runs. Journal changes and database retirement still revoke authority.
 Synchronous runtime guards reuse the same committed fact rather than copying the
 shared database for each check. Guards inside a native transaction still read
 that transaction's current journal, including its uncommitted changes.
@@ -70,6 +77,10 @@ Gateway lease directly in a read-only worker instead of copying the shared
 database. Fresh or unverifiable owners still prevent startup; Doctor's schema
 repair admission keeps its private snapshot on SQLite. PostgreSQL maintenance
 inspects the lease through an admitted state reader without a file snapshot.
+Synchronous CLI startup diagnostics also read the current lease directly when
+the exact SQLite database has a verified live owner. This bounded read does not
+copy the database; artifact-preserving inspection and Doctor's schema repair
+admission still use private snapshots.
 
 Borrowed worker transactions obtain their initial host grant before `BEGIN
 IMMEDIATE`; writes with domain or publication facts still revalidate those facts
@@ -196,16 +207,32 @@ retains the physical database's completed validation facts for later opens in th
 same process. Explicit retirement closes the host identity descriptor only after
 all sibling native handles have drained, preserving their POSIX locks.
 
-Shared-state commands load their registered domain directly. The remaining command
+Shared-state commands, including sandbox registry reads, load their registered domain directly. The remaining command
 runtime loads only when an operation needs it, so workers serving registered
 operations alone do not retain unrelated command modules. Preparation still
 finishes before synchronous database execution; writer admission and receipts
 stay with their existing owners.
 
 The shared-state reader pool keeps its first worker warm for the normal handle
-idle timeout. Surplus readers retire after 30 seconds idle and restart on demand.
+idle timeout. Surplus readers initially retire after 30 seconds idle and restart on demand.
+When demand returns within five minutes of that retirement, one replacement
+reader stays warm for up to 90 idle seconds to avoid repeated startup work.
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
+
+On Linux, transcript and shared-state SQLite readers sample `/proc/thread-self/io` at entry
+and completion. An operation that incurs at least 64 MiB of kernel-accounted
+storage reads emits one `heavy SQLite reader operation` warning through the
+existing logger, including `operation`, `readBytes`, `elapsedMs`, and worker IDs.
+The context retains the last transaction's existing session/row diagnostics,
+the outer `readerOperation`, and the agent ID for transcript workers. Nested
+owners share the outer measurement rather than counting the bytes twice.
+These are physical reads charged to the executing thread across the whole
+operation (including preparation), not logical SQLite bytes or per-file totals;
+page-cache hits contribute zero. Completed and failed operations are measured;
+a forcibly terminated worker cannot report its unfinished operation. Missing
+procfs accounting and non-Linux platforms leave diagnostics unchanged. No
+configuration, persistent counters, or background summary timer is added.
 
 If a shared-state writer worker is lost, its logical leases retire even while
 idle. Retirement joins dispatched commands but does not wait for external
@@ -221,9 +248,10 @@ flushes the remaining batch. Fresh checkpoints remain untouched, and a failed or
 canceled scan leaves uncommitted derived totals for the next refresh. Persisted
 rollups, partitions, schemas, and report totals keep their existing format.
 
-Transcript history and search lanes likewise retire surplus workers after 30
-seconds idle. Each lane keeps one worker until its existing five-minute idle
-retirement, which waits for logical reader leases to be released. Surplus
+Transcript history and search lanes use the same 30-second surplus timeout and
+90-second warm timeout for one recurring burst worker. Each lane keeps one worker
+until its existing five-minute idle retirement, which waits for logical reader
+leases to be released. Surplus
 retirement preserves those leases and waits for active tasks; a later concurrent
 read starts another worker on demand.
 
@@ -489,6 +517,27 @@ reader job. Open the page that matches your task and stay there.
 | [Agent schema history](/reference/database-schemas/agent-schema-history)                       | Per-agent database schema versions, their changes, and their first releases.                             |
 | [State schema history](/reference/database-schemas/state-schema-history)                       | Shared state database schema versions, their changes, and their first releases.                          |
 | [Integrity, troubleshooting, and recovery](/reference/database-schemas/integrity-and-recovery) | Integrity checks, common database errors, and the supported downgrade recovery path.                     |
+
+## Selective session dependency recovery
+
+Use `openclaw database restore-session-dependencies --input <directory> --sha256 <request-sha256>` only while the Gateway is stopped. The command acquires exclusive local state custody and refuses a serving owner. It repairs an existing session's selected skill revision and repository checkpoint without restoring the full database.
+
+The private input directory contains:
+
+- `request.json`: version 1, `sourceSha256`, current canonical `profileId`, `agentId`, `sessionKey`, exact `sessionId`, `skillId`, `skillRevision`, and `workspaceId`.
+- `shared.sqlite`: a closed single-file current-schema capture; no WAL, SHM, or journal companions.
+- `skill-revision/`: the selected immutable library tree, including `SKILL.md`.
+- `workspace.git/`: the selected checkpoint store with its original `refs/openclaw/worker-results/...` ref.
+
+The request checksum selects the request bytes; its source checksum selects the database capture. Skill and checkpoint content must match their recorded content hashes. Existing session IDs and dependency pins must still match. The current profile catalog must already resolve the historical skill owner to the selected canonical profile: the command never imports identities or merges profiles from history.
+
+This command accepts profile-owned, nonremoved skill entries. Team-owned skills, removed entries, and historical fork formats are not silently converted. Mirrored recovery restores checkpoint contents, not optional GitHub publication companion metadata.
+
+For a retained repository, add `retained: { "expectedSha256": "<sha256>" }` to the sealed request and include `expected.sqlite`: a closed current-schema capture of the destination taken while offline. Both images must use the current state schema. The expected image selects complete current environment, placement, and workspace records (or their absence); changed live records refuse repair. The source must have no unfinished workspace result, placement move, or running session tool operation. Its profile must match current configuration.
+
+Retained repair restores exact resource custody, not execution authority. It keeps the original disk receipt and workspace epoch, advances the placement generation, clears turn claims and worker credentials, and sets retained runtime readiness to false. It never recreates node pairing, roles, or grants. Ordinary explicit wake must revalidate the provider receipt, current paired node, and current runtime. A disk-only source may have no checkpoint artifact; it never falls back to a stale mirrored checkpoint. A successful retained repair changes the expected records, so inspect and seal a new destination image before another repair.
+
+Missing skills return as private, disabled entries. Existing permissions, current revisions, credentials, roles, and defaults are never restored or overwritten. Current profile and skill ownership are rechecked before artifact publication and inside the database transaction; a foreign or reassigned owner is refused without publishing new artifacts. Immutable artifacts publish before database pointers; a later database conflict may leave verified, unreachable artifacts, so the same request can be retried. Conflicting rows or checkpoint stores are refused rather than replaced. No setup script or worker is executed.
 
 ## Related
 

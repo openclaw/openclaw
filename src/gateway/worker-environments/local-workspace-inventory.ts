@@ -3,13 +3,20 @@ import { createHash } from "node:crypto";
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { splitNullBuffer } from "../../agents/worktrees/git-path-inventory.js";
 import { requireGitBuffer } from "../../agents/worktrees/git.js";
+import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
+import type {
+  LocalWorkspaceManifestValue,
+  LocalWorkspaceProjection,
+} from "./local-workspace-store.types.js";
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
+import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
-export function decodeLocalWorkspaceGitPaths(listed: Buffer): string[] {
+function decodeLocalWorkspaceGitPaths(listed: Buffer): string[] {
   if (!isUtf8(listed)) {
     throw new Error(
       "Local sandbox source paths must be UTF-8; rename the invalid Git path before retrying",
@@ -44,7 +51,7 @@ export async function admitLocalWorkspaceSourcePaths(params: {
 /** Ignore changes are source edits, not authority to enroll canonical-only bytes. */
 export async function selectLocalWorkspaceCanonicalPaths(params: {
   root: string;
-  admittedPaths: string;
+  admittedPaths?: readonly string[];
   // Reuse authoritative host inputs read earlier in this operation.
   preparedPaths?: ReadonlySet<string>;
   baselinePaths?: ReadonlySet<string>;
@@ -64,8 +71,10 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
     params.assertCurrent();
     // Only the host owns this index; the guest has independent Git metadata. A
     // host can deliberately admit a new path with git add, even if it is ignored.
-    const admitted = parseLocalWorkspaceSourcePaths(params.admittedPaths);
-    paths = new Set<string>([...admitted, ...decodeLocalWorkspaceGitPaths(listed)]);
+    paths = new Set(params.admittedPaths);
+    for (const entryPath of decodeLocalWorkspaceGitPaths(listed)) {
+      paths.add(entryPath);
+    }
   }
   if (params.baselinePaths) {
     for (const entryPath of params.baselinePaths) {
@@ -83,14 +92,68 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
   return paths;
 }
 
-/** Git archives omit accepted ignored leaves and empty directories; retain that overlay separately. */
-export async function captureLocalWorkspaceArchiveBaseline(params: {
+export async function prepareLocalWorkspaceBuildInputs(params: {
+  worktree: Pick<ManagedWorktreeRecord, "path" | "repoRoot" | "removedAt" | "snapshotRef">;
+  projection: Pick<LocalWorkspaceProjection, "source_paths_json" | "baseline_ref">;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+  retainSourcePaths: (sourcePaths: string) => Promise<void>;
+}) {
+  const { worktree, projection, signal, assertCurrent } = params;
+  const admitted = parseLocalWorkspaceSourcePaths(projection.source_paths_json);
+  const paths =
+    worktree.removedAt === undefined
+      ? await selectLocalWorkspaceCanonicalPaths({
+          root: worktree.path,
+          admittedPaths: admitted,
+          signal,
+          assertCurrent,
+        })
+      : new Set(admitted);
+  const retained = buildCacheInputPaths(paths);
+  if (worktree.snapshotRef && projection.baseline_ref) {
+    const archived = await requireGitBuffer(
+      worktree.repoRoot,
+      ["ls-tree", "-r", "-z", "--name-only", worktree.snapshotRef],
+      { signal, beforeRun: assertCurrent },
+    );
+    assertCurrent();
+    // Older archives lost later index membership. The snapshot owns these exact
+    // inputs, including derived-looking names, but not future directory contents.
+    for (const entryPath of buildCacheInputPaths(decodeLocalWorkspaceGitPaths(archived))) {
+      retained.add(entryPath);
+      paths.add(entryPath);
+    }
+  }
+  // Keep acquired input custody when later recovery no longer has the checkout or archive.
+  if (retained.size) {
+    const admittedCount = admitted.length;
+    const known = new Set(admitted);
+    for (const entryPath of retained) {
+      if (!known.has(entryPath)) {
+        admitted.push(entryPath);
+      }
+    }
+    if (admitted.length > admittedCount) {
+      await params.retainSourcePaths(JSON.stringify(admitted));
+    }
+  }
+  return {
+    paths,
+    retained: [...retained],
+  };
+}
+
+type ArchiveBaselineInput = {
   root: string;
   snapshotCommit: string;
   manifest: WorkerWorkspaceManifest;
-  signal: AbortSignal;
+  signal?: AbortSignal;
   assertCurrent: () => void;
-}) {
+};
+
+/** Git archives omit accepted ignored leaves and empty directories; retain that overlay separately. */
+async function selectArchiveManifest(params: ArchiveBaselineInput) {
   const { signal, assertCurrent } = params;
   if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(params.snapshotCommit)) {
     throw new Error("Invalid archive snapshot commit");
@@ -115,11 +178,59 @@ export async function captureLocalWorkspaceArchiveBaseline(params: {
       directories.add(parent);
     }
   }
-  const base = serializeWorkerWorkspaceManifest({
+  if (
+    entries.length === params.manifest.entries.length &&
+    directories.size === (params.manifest.directories?.length ?? 0) &&
+    params.manifest.directories?.every((directory) => directories.has(directory)) !== false
+  ) {
+    return params.manifest;
+  }
+  return {
     ...params.manifest,
     entries,
     directories: [...directories].toSorted(),
-  });
-  const baseRef = "sha256:" + createHash("sha256").update(base).digest("hex");
-  return { rawManifest: base, manifestRef: baseRef };
+  };
+}
+
+function archiveDocument(manifest: WorkerWorkspaceManifest) {
+  const rawManifest = serializeWorkerWorkspaceManifest(manifest);
+  return {
+    rawManifest,
+    manifestRef: "sha256:" + createHash("sha256").update(rawManifest).digest("hex"),
+  };
+}
+
+export async function captureLocalWorkspaceArchiveBaseline(params: ArchiveBaselineInput) {
+  return archiveDocument(await selectArchiveManifest(params));
+}
+
+/** The worker consumes admitted nodes; full receipt bytes are needed only for an overlay. */
+export async function prepareLocalWorkspaceArchive(params: {
+  root: string;
+  snapshotCommit: string;
+  records: ReadonlyMap<string, LocalWorkspaceManifestRecord>;
+  baseCommit: string;
+  buildCacheInputs: string[];
+}): Promise<Extract<LocalWorkspaceManifestValue, { kind: "archive" }>> {
+  const manifest: WorkerWorkspaceManifest = {
+    version: 1,
+    baseCommit: params.baseCommit,
+    buildCacheInputs: params.buildCacheInputs,
+    entries: [],
+    directories: [],
+  };
+  for (const { node } of params.records.values()) {
+    if (node.type !== "directory") {
+      manifest.entries.push(node);
+    } else if (node.path !== "") {
+      manifest.directories!.push(node.path);
+    }
+  }
+  const base = await selectArchiveManifest({ ...params, manifest, assertCurrent: () => undefined });
+  return base === manifest
+    ? { kind: "archive" }
+    : {
+        kind: "archive",
+        overlay: { base: archiveDocument(base), accepted: archiveDocument(manifest) },
+      };
 }

@@ -76,14 +76,18 @@ export function resolveMemoryEmbeddingProviderRequirement(params: {
   const configuredProvider = (
     agentEntry?.memory?.search?.provider ?? params.cfg.memory?.search?.provider
   )?.trim();
-  if (params.settings.provider === "none" || configuredProvider === "none") {
+  if (params.settings.provider === "none" || configuredProvider?.toLowerCase() === "none") {
     return { mode: "fts-only", provider: params.settings.provider };
   }
   const adapterTransport = resolveEmbeddingProviderAdapterTransport(
     params.settings.provider,
     params.cfg,
   );
-  if (!configuredProvider || configuredProvider === "auto" || adapterTransport === "local") {
+  if (
+    !configuredProvider ||
+    configuredProvider.toLowerCase() === "auto" ||
+    adapterTransport === "local"
+  ) {
     return { mode: "optional", provider: params.settings.provider };
   }
   return {
@@ -103,7 +107,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected embeddingBootstrapFailure?: MemoryEmbeddingBootstrapDebug;
   protected providerRetirementPromise: Promise<void> = Promise.resolve();
   protected providersPendingRetirement = new Set<EmbeddingProvider>();
-  protected activeBackgroundSearchSyncs = new Set<Promise<void>>();
+  protected activeBackgroundCleanup = new Set<Promise<void>>();
   protected indexIdentityDirty = false;
   private primaryRecoveryPromise: Promise<void> | null = null;
   private primaryRecoveryRetryAt = 0;
@@ -116,7 +120,6 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       background?: boolean;
     },
   ): Promise<void>;
-  protected abstract syncPublishedIndexInBackground(params: { reason: string }): Promise<void>;
 
   protected async syncBackground(params: MemorySyncParams): Promise<void> {
     if (this.closing || this.closed) {
@@ -342,6 +345,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
             provider: candidate,
             cacheKeyData: result.runtime?.cacheKeyData,
             aliases: result.runtime?.indexIdentityAliases,
+            documentPrefix: this.settings.inputFormat?.document,
           }).some(
             (identity) =>
               identity.provider === meta.provider &&
@@ -638,11 +642,9 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         this.managerIdleWaiters.add(resolve);
       });
     }
-    // Search-time maintenance writes through this manager's published connection,
-    // so every manager, including a transient CLI request, drains it before closing.
-    // The search result is already returned; only teardown waits.
-    while (this.activeBackgroundSearchSyncs.size > 0) {
-      await Promise.all(Array.from(this.activeBackgroundSearchSyncs));
+    // Source cleanup outlives retrieval but must finish before its connection closes.
+    while (this.activeBackgroundCleanup.size > 0) {
+      await Promise.all(Array.from(this.activeBackgroundCleanup));
     }
   }
 

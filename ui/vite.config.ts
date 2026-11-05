@@ -14,7 +14,7 @@ import {
   type ResolveModulePreloadDependenciesFn,
   type UserConfig,
 } from "vite";
-import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
+import { peleClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";
 import {
   CONTROL_UI_BUILD_ID_ATTRIBUTE,
@@ -81,12 +81,15 @@ const controlUiPrecompressedAssetExtensions = new Set([
 ]);
 
 const compressBrotli = promisify(brotliCompress);
-// Small-asset sidecars waste entries in the installed package's updater budget.
-const CONTROL_UI_PRECOMPRESS_MIN_BYTES = 4096;
+// Each optional-asset sidecar is an entry in the installed package's updater
+// budget (shipped updaters refuse trees over 50,000). Boot assets and CSS keep
+// sidecars at any size; deferred route and locale-namespace chunks below this
+// size are served uncompressed and then come from the service-worker cache.
+const CONTROL_UI_PRECOMPRESS_MIN_BYTES = 16 * 1024;
 
 function isControlUiPrecompressedAsset(fileName: string) {
   return (
-    fileName.startsWith("assets/") &&
+    (fileName === "sw.js" || fileName.startsWith("assets/")) &&
     controlUiPrecompressedAssetExtensions.has(path.extname(fileName).toLowerCase())
   );
 }
@@ -94,7 +97,7 @@ function isControlUiPrecompressedAsset(fileName: string) {
 export async function createControlUiPrecompressedAssetVariants(
   fileName: string,
   source: string | Uint8Array,
-  startupAssets: ReadonlySet<string> = new Set(),
+  bootAssets: ReadonlySet<string> = new Set(),
 ): Promise<Array<{ fileName: string; source: Buffer }>> {
   if (!isControlUiPrecompressedAsset(fileName)) {
     return [];
@@ -103,7 +106,7 @@ export async function createControlUiPrecompressedAssetVariants(
   if (
     body.byteLength < CONTROL_UI_PRECOMPRESS_MIN_BYTES &&
     path.extname(fileName).toLowerCase() !== ".css" &&
-    !startupAssets.has(fileName)
+    !bootAssets.has(fileName)
   ) {
     return [];
   }
@@ -111,14 +114,18 @@ export async function createControlUiPrecompressedAssetVariants(
     {
       fileName: `${fileName}.br`,
       source: await compressBrotli(body, {
-        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 10 },
+        // Spend maximum compression effort only where it shortens the first load.
+        params: {
+          [zlibConstants.BROTLI_PARAM_QUALITY]:
+            fileName === "sw.js" || bootAssets.has(fileName) ? 11 : 10,
+        },
       }),
     },
     {
       fileName: `${fileName}.gz`,
       // Pinned WASM keeps gzip bytes independent of the host zlib and CPU.
-      // Level 11 retains nearly all of level 12's savings at lower build-time cost.
-      source: Buffer.from(gzip(body, 11)),
+      // Prefer maximum gzip effort for shipped assets; benchmark the added build cost.
+      source: Buffer.from(gzip(body, 12)),
     },
   ];
   return variants.filter((variant) => variant.source.byteLength < body.byteLength);
@@ -354,6 +361,8 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
     sourcePackageAlias("normalization-core", "agent-id"),
     sourcePackageAlias("normalization-core", "code-points"),
+    sourcePackageAlias("normalization-core", "error-coercion"),
+    sourcePackageAlias("normalization-core", "expect"),
     sourcePackageAlias("normalization-core", "grapheme"),
     sourcePackageAlias("normalization-core", "json-coercion"),
     sourcePackageAlias("normalization-core", "json-schema"),
@@ -366,6 +375,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "stable-stringify"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
+    sourcePackageAlias("normalization-core", "stringified-error"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core", "uuid"),
     sourcePackageAlias("normalization-core"),
@@ -437,6 +447,7 @@ export async function refreshControlUiBuildOutput(
   buildInfo: ControlUiBuildInfo = resolveControlUiBuildInfo(),
   bootAssets?: string[],
   publicDir: string | false = path.join(here, "public"),
+  consumedInputs?: Set<string>,
 ) {
   const publicContent = publicDir ? collectControlUiPublicAssets(publicDir) : undefined;
   const publicAssets = publicContent?.paths ?? [];
@@ -490,10 +501,13 @@ export async function refreshControlUiBuildOutput(
   // Embed only build-owned HTML, never a fetched Gateway document (which may
   // contain identity, route metadata, or an HTTP login response). The measured
   // route graph also warms assets loaded before the first worker controls a tab.
-  const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(
-    path.join(here, "src/app-route-paths.ts"),
-    { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } },
-  );
+  const routePath = path.join(here, "src/app-route-paths.ts");
+  const { module: routes, dependencies: routeDependencies } = await runnerImport<
+    typeof import("./src/app-route-paths.ts")
+  >(routePath, { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } });
+  for (const file of [routePath, ...routeDependencies]) {
+    consumedInputs?.add(file);
+  }
   const offlineShell = {
     routes: routes.APP_ROUTE_PATHS,
     routePrefixes: routes.APP_ROUTE_OFFLINE_PREFIXES,
@@ -535,17 +549,20 @@ export async function refreshControlUiBuildOutput(
       // Inventory must work before compression sidecars have been written.
       deferredSize.count++;
       deferredSize.rawBytes += assetSource.byteLength;
-      deferredSize.gzipBytes += gzip(assetSource, 11).byteLength;
+      deferredSize.gzipBytes += gzip(assetSource, 12).byteLength;
       return {
         path: file,
         integrity: "sha256-" + createHash("sha256").update(assetSource).digest("base64"),
       };
     });
   // Same-commit source rebuilds must not pair a new document with an old shell.
-  const { module: csp } = await runnerImport<typeof import("../src/gateway/control-ui-csp.ts")>(
-    path.join(repoRoot, "src/gateway/control-ui-csp.ts"),
-    { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } },
-  );
+  const cspPath = path.join(repoRoot, "src/gateway/control-ui-csp.ts");
+  const { module: csp, dependencies: cspDependencies } = await runnerImport<
+    typeof import("../src/gateway/control-ui-csp.ts")
+  >(cspPath, { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } });
+  for (const file of [cspPath, ...cspDependencies]) {
+    consumedInputs?.add(file);
+  }
   const offlineBuild = {
     ...offlineShell,
     deferredAssets,
@@ -568,6 +585,11 @@ export async function refreshControlUiBuildOutput(
     .replace(offlinePlaceholder, () => `const OFFLINE_BOOT = ${JSON.stringify(offlineBuild)};`);
   fs.mkdirSync(buildOutDir, { recursive: true });
   fs.writeFileSync(swPath, updated);
+  // Identity refresh rewrites the worker after asset precompression. Its sidecars
+  // must describe this final worker, including the current offline inventory.
+  for (const variant of await createControlUiPrecompressedAssetVariants("sw.js", updated)) {
+    fs.writeFileSync(path.join(buildOutDir, variant.fileName), variant.source);
+  }
   return deferredSize;
 }
 
@@ -579,14 +601,20 @@ function controlUiPrecompressedAssetsPlugin(): Plugin {
       if (!buildOutDir) {
         this.error("Control UI build requires an output directory");
       }
-      const startupAssets = new Set(
-        extractControlUiStartupAssetPaths(
+      const routes = collectControlUiBootAssets(bundle);
+      // Small route chunks cost real transfer time too. Reuse the preload graph
+      // without creating sidecars for every optional chunk in the installation.
+      const bootAssets = new Set([
+        ...extractControlUiStartupAssetPaths(
           selectControlUiRoutePreloads(
             fs.readFileSync(path.join(buildOutDir, "index.html"), "utf8"),
             null,
           ),
         ),
-      );
+        ...routes.chat,
+        ...routes.new,
+        ...routes.login,
+      ]);
       const logger = this.environment.logger;
       let completed = 0;
       let sidecars = 0;
@@ -600,7 +628,7 @@ function controlUiPrecompressedAssetsPlugin(): Plugin {
         const variants = await createControlUiPrecompressedAssetVariants(
           output.fileName,
           source,
-          startupAssets,
+          bootAssets,
         );
         if (variants.length === 0) {
           return;
@@ -623,15 +651,20 @@ function controlUiPrecompressedAssetsPlugin(): Plugin {
       const outputs = Object.values(bundle).filter((output) =>
         isControlUiPrecompressedAsset(output.fileName),
       );
-      for (let index = 0; index < outputs.length; index += 4) {
-        // Bound native compression memory and join every writer before failed-build cleanup.
-        const results = await Promise.allSettled(
-          outputs.slice(index, index + 4).map(compressAsset),
-        );
-        for (const result of results) {
-          if (result.status === "rejected") {
-            throw result.reason;
-          }
+      let nextOutput = 0;
+      const compressNext = async () => {
+        while (nextOutput < outputs.length) {
+          await compressAsset(outputs[nextOutput++]!);
+        }
+      };
+      // Keep four native jobs busy without waiting for the slowest file in each batch.
+      // Join every writer before failed-build cleanup.
+      const results = await Promise.allSettled(
+        Array.from({ length: Math.min(4, outputs.length) }, compressNext),
+      );
+      for (const result of results) {
+        if (result.status === "rejected") {
+          throw result.reason;
         }
       }
       logger.info(`Control UI precompression complete: ${completed} assets (${sidecars} sidecars)`);
@@ -679,6 +712,14 @@ function controlUiBuildOutputPlugin(
         if (!buildOutDir) {
           this.error("Control UI build requires an output directory");
         }
+        const bootAssets = collectControlUiBootAssets(bundle);
+        const deferred = await refreshControlUiBuildOutput(
+          buildOutDir,
+          buildInfo,
+          [...bootAssets.chat, ...bootAssets.new, ...bootAssets.login],
+          publicDir,
+          copiedInputs,
+        );
         const inputs = [...new Set([...this.getModuleIds(), ...copiedInputs])]
           .map((file) => file.split("?")[0])
           .filter((file): file is string => Boolean(file && path.isAbsolute(file)))
@@ -691,13 +732,6 @@ function controlUiBuildOutputPlugin(
           )
           .toSorted();
         fs.writeFileSync(path.join(buildOutDir, ".build-inputs.json"), JSON.stringify(inputs));
-        const bootAssets = collectControlUiBootAssets(bundle);
-        const deferred = await refreshControlUiBuildOutput(
-          buildOutDir,
-          buildInfo,
-          [...bootAssets.chat, ...bootAssets.new, ...bootAssets.login],
-          publicDir,
-        );
         this.environment.logger.info(
           `Control UI deferred offline inventory: ${deferred.count} assets, ${deferred.rawBytes} B raw, ${deferred.gzipBytes} B gzip`,
         );
@@ -763,7 +797,30 @@ export default function controlUiViteConfig(
       ? createControlUiDevGateway(process.env.OPENCLAW_UI_DEV_GATEWAY_URL)
       : undefined;
   const staticImports = new Map<string, readonly string[]>();
+  const styledChunks = new Set<string>();
+  const parallelStyleTargets = new Set<string>();
+  let composerMenuChunk: string | undefined;
+  let composerSubviewChunk: string | undefined;
+  const parallelStyleEntries = [
+    "/ui/src/pages/config/config-page.tsx",
+    "/ui/src/pages/cron/cron-page.tsx",
+    "/ui/src/pages/sessions/sessions-page.tsx",
+    "/ui/src/pages/usage/usage-page.tsx",
+    "/ui/src/components/board/board-view.tsx",
+    "/ui/src/pages/chat/components/chat-sidebar-region.runtime.tsx",
+  ];
   const copiedInputs = new Set<string>();
+  const collectStaticImports = (entry: string) => {
+    const loaded = new Set<string>();
+    const imports = [...(staticImports.get(entry) ?? [])];
+    for (const dependency of imports) {
+      if (!loaded.has(dependency)) {
+        loaded.add(dependency);
+        imports.push(...(staticImports.get(dependency) ?? []));
+      }
+    }
+    return loaded;
+  };
   const resolveModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
     filename,
     deps,
@@ -774,24 +831,32 @@ export default function controlUiViteConfig(
     }
     // The executing importer has already loaded its whole static JS graph.
     // Keep the lazy target, its other dependencies, and Vite's CSS preloads.
-    const loaded = new Set<string>();
-    const imports = [...(staticImports.get(context.hostId) ?? [])];
-    for (const dependency of imports) {
-      if (!loaded.has(dependency)) {
-        loaded.add(dependency);
-        imports.push(...(staticImports.get(dependency) ?? []));
+    const loaded = collectStaticImports(context.hostId);
+    // Vite removes CSS before calling this hook. Chunk metadata tells us when
+    // its stylesheet wait would otherwise delay fetching the target script.
+    // Keep optional artwork behind its existing wait so it cannot compete
+    // with foreground data on a slow connection.
+    const waitsForStyles =
+      parallelStyleTargets.has(filename) &&
+      (styledChunks.has(filename) ||
+        [...collectStaticImports(filename)].some((dep) => styledChunks.has(dep)));
+    // Warm the deep menu alongside its root import, without evaluating it or
+    // making every route download it. Selection then needs no serial fetch.
+    const candidates = new Set(deps);
+    if (filename === composerMenuChunk && composerSubviewChunk) {
+      candidates.add(composerSubviewChunk);
+      for (const dependency of collectStaticImports(composerSubviewChunk)) {
+        candidates.add(dependency);
       }
     }
-    // Without stylesheet waits, import() immediately fetches its own target.
-    // Keep the target preload when CSS would otherwise delay that request.
-    const waitsForStyles = deps.some((dep) => dep.endsWith(".css"));
-    return deps.filter((dep) => !loaded.has(dep) && (waitsForStyles || dep !== filename));
+    const dependencies = [...candidates].filter((dep) => !loaded.has(dep) && dep !== filename);
+    return waitsForStyles && !loaded.has(filename) ? [filename, ...dependencies] : dependencies;
   };
   return {
     base,
     worker: {
       format: "iife",
-      plugins: () => [mermaidClassicBundlePlugin()],
+      plugins: () => [peleClassicBundlePlugin()],
       rolldownOptions: {
         output: { codeSplitting: false },
       },
@@ -820,7 +885,9 @@ export default function controlUiViteConfig(
       ],
     },
     build: {
-      target: ["chrome147", "firefox150", "safari26.2"],
+      // iOS Safari is listed separately: desktop Safari alone lets the CSS minifier drop
+      // WebKit prefixes that only iOS reads, such as -webkit-text-size-adjust.
+      target: ["chrome147", "firefox150", "safari26.2", "ios26.2"],
       outDir: options.outDir ?? outDir,
       emptyOutDir: true,
       // The canonical sidecar performance report already measures shipped compressed bytes.
@@ -849,27 +916,63 @@ export default function controlUiViteConfig(
       host: devGateway ? "127.0.0.1" : true,
       port: 5173,
       strictPort: true,
-      // Chokidar selects FSEvents before reading its environment override on macOS.
-      ...(usePolling ? { watch: { usePolling: true } } : {}),
+      // FSEvents can delay or drop SSD edits under load. Native fs.watch keeps HMR
+      // prompt without polling the source tree; retain the explicit polling opt-in.
+      ...(process.platform === "darwin"
+        ? { watch: { useFsEvents: false, usePolling } }
+        : usePolling
+          ? { watch: { usePolling: true } }
+          : {}),
       ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [
       controlUiSolidPlugin(),
-      mermaidClassicBundlePlugin(),
+      peleClassicBundlePlugin(),
       controlUiIsolatedDesktopRuntimePlugin(),
       {
         name: "control-ui-static-import-preloads",
         generateBundle(_options, bundle) {
           staticImports.clear();
+          styledChunks.clear();
+          parallelStyleTargets.clear();
+          composerMenuChunk = undefined;
+          composerSubviewChunk = undefined;
           for (const chunk of Object.values(bundle)) {
             if (chunk.type === "chunk") {
               staticImports.set(chunk.fileName, chunk.imports);
+              for (const id of chunk.moduleIds) {
+                const source = id.replaceAll("\\", "/");
+                if (
+                  source.endsWith(
+                    "/ui/src/pages/chat/components/chat-composer-plus-menu-content.tsx",
+                  )
+                ) {
+                  composerMenuChunk = chunk.fileName;
+                }
+                if (
+                  source.endsWith(
+                    "/ui/src/pages/chat/components/chat-composer-plus-menu-subview.tsx",
+                  )
+                ) {
+                  composerSubviewChunk = chunk.fileName;
+                }
+              }
+              if (chunk.viteMetadata?.importedCss.size) {
+                styledChunks.add(chunk.fileName);
+              }
+              if (
+                chunk.moduleIds.some((id) =>
+                  parallelStyleEntries.some((entry) => id.replaceAll("\\", "/").endsWith(entry)),
+                )
+              ) {
+                parallelStyleTargets.add(chunk.fileName);
+              }
             }
           }
         },
       },
       controlUiSocialCardPlugin(),
-      controlUiLocaleModulesPlugin(),
+      controlUiLocaleModulesPlugin(copiedInputs),
       controlUiPluginDistributionsPlugin(repoRoot, copiedInputs),
       controlUiBootPreloadsPlugin(),
       controlUiNavigationPreloadsPlugin(),

@@ -1,12 +1,15 @@
 import { describe, expect, test } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
+import { saveCronJobsStore } from "../../cron/store.js";
+import { recordCronRun } from "../../cron/store/run-history.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createCronCreatorAuthorityRunScope,
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
 } from "../cron-creator-authority-grant.js";
+import { historyRecord } from "./cron-read.test-support.js";
 import {
   createParams,
   platformId,
@@ -60,6 +63,139 @@ function captureAuthority(
 }
 
 describe("cron handler inference binding persistence", () => {
+  it("replaces a stored account with an explicit native CLI login without replacing the job", async ({
+    fixture,
+  }) => {
+    await fixture.setCreator(platformId);
+    const client = createCronCallerClient("main", "work", sessionKey);
+    const params = createParams();
+    await fixture.invoke(
+      "cron.add",
+      { ...params, payload: { ...params.payload, toolsAllow: ["read"] } },
+      client,
+    );
+    const original = await fixture.reload();
+    expect(original.scheduledToolPolicy).toMatchObject({ mode: "account" });
+    const originalBinding = original.inferenceBinding!;
+    // Existing jobs can record an account without a runtime. Seed only that persisted shape.
+    delete originalBinding.runtime;
+    await fixture.stop();
+    await saveCronJobsStore(fixture.storePath, { version: 1, jobs: [original] });
+    await recordCronRun(
+      historyRecord(
+        {
+          ts: Date.now(),
+          jobId: original.id,
+          action: "finished",
+          status: "ok",
+          summary: "Previous result",
+        },
+        fixture.storePath,
+        "main",
+        "previous-run",
+      ),
+    );
+    const before = await fixture.reload();
+    const history = await fixture.invoke("cron.runs", { id: original.id });
+    await fixture.setClaudeRuntime();
+    await updateModel(fixture, original.id, "anthropic/claude-opus-4-6");
+    expect((await fixture.reload()).inferenceBinding).toEqual(originalBinding);
+
+    await updateModel(fixture, original.id, "anthropic/claude-opus-4-6@anthropic:claude-cli");
+    const adopted = await fixture.reload();
+    expect(adopted.inferenceBinding).toBeUndefined();
+    expect(adopted.runtimeAuthority).toBeUndefined();
+    expect(adopted).toMatchObject({
+      id: before.id,
+      createdAtMs: before.createdAtMs,
+      owner: before.owner,
+      schedule: before.schedule,
+      delivery: before.delivery,
+      sourceConversation: before.sourceConversation,
+      scheduledToolPolicy: before.scheduledToolPolicy,
+      payload: { toolsAllow: ["read"], model: "anthropic/claude-opus-4-6@anthropic:claude-cli" },
+    });
+    expect(await fixture.invoke("cron.runs", { id: original.id })).toEqual(history);
+    expect(await fixture.resolveAuth(originalBinding)).toMatchObject({ profileId: platformId });
+    await fixture.invoke("cron.update", {
+      id: original.id,
+      patch: { payload: { kind: "agentTurn", model: null } },
+    });
+    const inherited = await fixture.reload();
+    expect(inherited.inferenceBinding).toBeUndefined();
+    expect(inherited.payload).not.toHaveProperty("model");
+    expect(inherited.scheduledToolPolicy).toEqual(before.scheduledToolPolicy);
+    expect(await fixture.invoke("cron.runs", { id: original.id })).toEqual(history);
+  });
+
+  it.for([
+    ["anthropic:missing", false],
+    ["google-gemini-cli:default", false],
+    ["anthropic:claude-cli", true],
+  ] as const)(
+    "preserves the job on rejected account %s (recorded runtime: %s)",
+    async ([profile, retainRuntime], { fixture }) => {
+      await fixture.invoke("cron.add", createParams());
+      const original = await fixture.reload();
+      if (!retainRuntime) {
+        delete original.inferenceBinding!.runtime;
+        await fixture.stop();
+        await saveCronJobsStore(fixture.storePath, { version: 1, jobs: [original] });
+      }
+      const before = await fixture.reload();
+      await fixture.setClaudeRuntime();
+      await fixture.invoke(
+        "cron.update",
+        {
+          id: original.id,
+          patch: { payload: { kind: "agentTurn", model: `anthropic/claude-opus-4-6@${profile}` } },
+        },
+        null,
+        { expectedSuccess: false },
+      );
+      expect(await fixture.reload()).toEqual(before);
+    },
+  );
+
+  it.for(["current", `session:${sessionKey}`])(
+    "rejects native adoption when %s would resume on another runtime after clearing the binding",
+    async (sessionTarget, { fixture }) => {
+      await fixture.setCreator(platformId);
+      await fixture.setClaudeRuntime("anthropic:work");
+      await fixture.invoke("cron.add", {
+        ...modelParams("anthropic/claude-opus-4-6@anthropic:work", sessionTarget),
+        sessionKey,
+      });
+      const before = await fixture.reload();
+      expect(before.inferenceBinding).toMatchObject({
+        runtime: "claude-cli",
+        provider: "anthropic",
+      });
+      await upsertSessionEntryCore(
+        { sessionKey, agentId: "main" },
+        {
+          agentRuntimeOverride: "openclaw",
+          modelOverride: "claude-opus-4-6",
+          providerOverride: "anthropic",
+          modelOverrideSource: "user",
+        },
+      );
+      const failure = await fixture.invoke(
+        "cron.update",
+        {
+          id: before.id,
+          patch: {
+            payload: { kind: "agentTurn", model: "anthropic/claude-opus-4-6@anthropic:claude-cli" },
+          },
+        },
+        null,
+        { expectedSuccess: false },
+      );
+      expect(failure).toMatchObject({ message: expect.stringContaining("runtime openclaw") });
+      expect(await fixture.reload()).toEqual(before);
+    },
+  );
+
   it.for([
     ["native", "absent"],
     ["worker", "absent"],
@@ -284,6 +420,7 @@ describe("cron handler inference binding persistence", () => {
         version: 1,
         ...binding(profileId, "auto", requirement),
         authorizationId: expect.stringMatching(/^[a-f0-9]{64}$/),
+        runtime: "openclaw",
       });
       const originalBinding = created.inferenceBinding;
       await fixture.changeDefaults(other);
@@ -304,6 +441,7 @@ describe("cron handler inference binding persistence", () => {
         version: 1,
         ...binding(other, "user", requirement === "api-key" ? "subscription" : "api-key"),
         authorizationId: expect.stringMatching(/^[a-f0-9]{64}$/),
+        runtime: "openclaw",
       });
       expect(adopted.inferenceBinding?.authorizationId).not.toBe(originalBinding?.authorizationId);
     },

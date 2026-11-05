@@ -20,7 +20,10 @@ import {
   SessionsGoalClearParamsSchema,
   SessionsGoalUpdateParamsSchema,
 } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
-import { SessionReactionEventSchema } from "../../../packages/gateway-protocol/src/schema/sessions-reactions.js";
+import {
+  MessageReactionSummarySchema,
+  SessionReactionEventSchema,
+} from "../../../packages/gateway-protocol/src/schema/sessions-reactions.js";
 import {
   SessionPermissionModeSchema,
   SessionRowSchema,
@@ -29,6 +32,7 @@ import {
 import {
   SessionNarrationEventSchema,
   SessionObserverDigestSchema,
+  SessionsFilesGetResultSchema,
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { TalkVoiceChangeEventSchema } from "../../../packages/gateway-protocol/src/schema/talk-voice.js";
 import { readTranscriptDisplayPosition } from "../../../src/chat/transcript-display-position.js";
@@ -108,6 +112,28 @@ const board = {
     },
   ],
 };
+const actionsQuery = {
+  name: "main-ci",
+  bindingId: "github.actions.runs",
+  params: {
+    repository: "owner/repo",
+    workflow: null,
+    branch: "🐚".repeat(255),
+    status: "🐚".repeat(32),
+    created: null,
+    perPage: 30,
+    excludePullRequests: true,
+  },
+  fields: ["id", "conclusion"],
+};
+const boardWithQuery = (query: unknown) => ({
+  ...board,
+  widgets: [{ ...board.widgets[0], declared: { queries: [query] } }],
+});
+const queryBoard = boardWithQuery(actionsQuery);
+const queryParamsWithoutWorkflow = Object.fromEntries(
+  Object.entries(actionsQuery.params).filter(([key]) => key !== "workflow"),
+);
 const recovery = {
   action: "use-native-permissions",
   sessionId: "session-1",
@@ -117,7 +143,10 @@ const recovery = {
 };
 const duplicateDecisions = {
   ...approval,
-  presentation: { ...approval.presentation, allowedDecisions: ["allow-once", "allow-once"] },
+  presentation: {
+    ...approval.presentation,
+    allowedDecisions: ["allow-once", "allow-once", "deny"],
+  },
 };
 const historySchema = Type.Object(
   {
@@ -132,6 +161,7 @@ const history = {
   pendingInputs: { items: [], total: 0 },
   sessionInfo: { key: "s", kind: "direct", sessionId: "session-1" },
 };
+const fileReadMetadataSchema = Type.Pick(SessionsFilesGetResultSchema, ["root", "source"]);
 const invalidOwner = { key: "s", kind: "direct", owner: { actor: { type: "unknown" } } };
 
 describe("standalone browser protocol validation", () => {
@@ -161,8 +191,13 @@ describe("standalone browser protocol validation", () => {
   it.each`
     name                                       | schema                                                        | valid                                                                                       | invalid
     ${"isBoardSnapshot"}                       | ${BoardSnapshotSchema}                                        | ${board}                                                                                    | ${{ ...board, tabs: [], widgets: [{}] }}
+    ${"isBoardSnapshot"}                       | ${BoardSnapshotSchema}                                        | ${queryBoard}                                                                               | ${boardWithQuery({ ...actionsQuery, params: queryParamsWithoutWorkflow })}
+    ${"isBoardSnapshot"}                       | ${BoardSnapshotSchema}                                        | ${queryBoard}                                                                               | ${boardWithQuery({ ...actionsQuery, params: { ...actionsQuery.params, perPage: 31 } })}
+    ${"isBoardSnapshot"}                       | ${BoardSnapshotSchema}                                        | ${queryBoard}                                                                               | ${boardWithQuery({ ...actionsQuery, fields: ["head_sha"] })}
+    ${"isBoardSnapshot"}                       | ${BoardSnapshotSchema}                                        | ${queryBoard}                                                                               | ${boardWithQuery({ ...actionsQuery, params: { ...actionsQuery.params, actor: "other" } })}
     ${"isSessionParticipantIdentity"}          | ${SessionParticipantIdentitySchema}                           | ${{ type: "remote", pluginId: "slack", domain: "workspace", idKind: "user", id: "user-1" }} | ${{ type: "profile", id: "profile-1", displayName: "Extra field" }}
     ${"isSessionReactionEvent"}                | ${SessionReactionEventSchema}                                 | ${reaction}                                                                                 | ${{ ...reaction, reactions: [{ emoji: "👍", count: 0, identities: [] }] }}
+    ${"isMessageReactionSummary"}              | ${MessageReactionSummarySchema}                               | ${{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }}                                  | ${{ emoji: "👍", count: 0, identities: [] }}
     ${"isTalkVoiceChangeEvent"}                | ${TalkVoiceChangeEventSchema}                                 | ${{ ...voice, phase: "requested" }}                                                         | ${{ ...voice, phase: "ready" }}
     ${"isAgentActivityItem"}                   | ${AgentActivityItemSchema}                                    | ${activity}                                                                                 | ${{ ...activity, startedAt: Infinity }}
     ${"isAgentRuntimeRestrictionErrorDetails"} | ${AgentRuntimeRestrictionErrorDetailsSchema}                  | ${{ ...restriction, recovery }}                                                             | ${{ ...restriction, recovery: { action: "use-native-permissions", sessionId: "session-1" } }}
@@ -176,11 +211,13 @@ describe("standalone browser protocol validation", () => {
     ${"isSessionDeviceFolder"}                 | ${createFields.deviceFolder}                                  | ${{ deviceId: "device-1", path: "/work" }}                                                  | ${{ deviceId: "device-1", path: "" }}
     ${"isSessionRepository"}                   | ${createFields.repository}                                    | ${{ url: "https://example.test/repo.git" }}                                                 | ${{ url: "https://example.test/repo.git", unexpected: 1 }}
     ${"isSessionFastMode"}                     | ${createFields.fastMode}                                      | ${"ultrafast"}                                                                              | ${"fast"}
+    ${"isSessionCyberAccessProgram"}           | ${createFields.cyberAccessProgram}                            | ${"daybreak_blue"}                                                                          | ${"unknown"}
     ${"isSessionTitleSource"}                  | ${createFields.titleSource}                                   | ${"😀".repeat(1000)}                                                                        | ${"😀".repeat(1001)}
     ${"isSessionPermissionMode"}               | ${SessionPermissionModeSchema}                                | ${"guarded"}                                                                                | ${"unrestricted"}
     ${"isSessionToolOverrides"}                | ${SessionToolOverridesSchema}                                 | ${{ mcpToolsDeny: { server: ["tool"] } }}                                                   | ${{ mcpToolsDeny: { server: [123] } }}
+    ${"isSessionFileReadMetadata"}             | ${fileReadMetadataSchema}                                     | ${{ source: { workspaceId: "repository", root: null, fileRoot: null } }}                    | ${{ source: { workspaceId: "repository", root: null, fileRoot: 42 } }}
     ${"isChatHistoryState"}                    | ${historySchema}                                              | ${history}                                                                                  | ${{ stateRevision: { sessionInfo: "session-1" }, sessionInfo: invalidOwner }}
-    ${"isChatTranscriptMetadata"}              | ${Type.Pick(SessionRowSchema, CHAT_TRANSCRIPT_METADATA_KEYS)} | ${{ key: "s", kind: "direct", owner: { actor: { type: "human" } } }}                        | ${invalidOwner}
+    ${"isChatTranscriptMetadata"}              | ${Type.Pick(SessionRowSchema, CHAT_TRANSCRIPT_METADATA_KEYS)} | ${{ key: "s", kind: "direct", contextTokens: 32768, owner: { actor: { type: "human" } } }}  | ${invalidOwner}
     ${"isProgressCard"}                        | ${ProgressCardSchema}                                         | ${{ ...progress, steps: [{ step: "Ship", status: "pending" }] }}                            | ${{ ...progress, steps: [{ step: "Ship", status: "unknown" }] }}
   `(
     "preserves canonical $name acceptance and rejection",

@@ -16,6 +16,7 @@ const payloadKeys = [
   "source_repository",
   "source_commit",
 ];
+const registryReadbackWindowMs = 5 * 60_000;
 
 function validatePublication(value) {
   if (
@@ -74,14 +75,25 @@ export async function recordPublication(packageName, tarball, sourceCommit, outp
 
 async function dispatchPublication(publication, token) {
   const spec = `${publication.package_name}@${publication.package_version}`;
+  // npm may answer 404 for a just-published version until replication settles;
+  // poll only that status, within a bounded window, before reporting failure.
+  const deadline = Date.now() + registryReadbackWindowMs;
   let registry;
-  try {
-    registry = await fetch(
-      `https://registry.npmjs.org/${encodeURIComponent(publication.package_name)}/${encodeURIComponent(publication.package_version)}`,
-      { redirect: "error", signal: AbortSignal.timeout(30_000) },
-    );
-  } catch {
-    throw new Error(`Exact registry readback failed for ${spec}; no notification sent.`);
+  for (let delayMs = 5_000; ; delayMs = Math.min(delayMs * 2, 30_000)) {
+    try {
+      registry = await fetch(
+        `https://registry.npmjs.org/${encodeURIComponent(publication.package_name)}/${encodeURIComponent(publication.package_version)}`,
+        { redirect: "error", signal: AbortSignal.timeout(30_000) },
+      );
+    } catch {
+      throw new Error(`Exact registry readback failed for ${spec}; no notification sent.`);
+    }
+    if (registry.status !== 404 || Date.now() + delayMs > deadline) {
+      break;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
   }
   if (!registry.ok) {
     throw new Error(`Exact registry readback returned HTTP ${registry.status} for ${spec}.`);

@@ -75,30 +75,39 @@ function ensure(
 }
 
 describe("fresh sandbox container cleanup", () => {
-  it.each(["image", "create", "start"])("fences effects after %s revocation", async (stage) => {
-    let current = true;
-    mockEngine(async (effect) => {
-      if (effect === stage) {
-        await Promise.resolve();
-        current = false;
+  it.each(["reservation", "create", "start"])(
+    "fences effects after %s revocation",
+    async (stage) => {
+      let current = true;
+      if (stage === "reservation") {
+        registryMocks.updateRegistry.mockImplementationOnce(async () => {
+          await Promise.resolve();
+          current = false;
+        });
       }
-    });
-    const assertCurrent = () => {
-      if (!current) {
-        throw new Error("runtime revoked");
-      }
-    };
-    const pending = ensure(
-      { scopeKey: "revoked", workspaceSource: "managed-worktree", assertCurrent },
-      "echo should-not-run",
-    );
-    await expect(pending).rejects.toThrow("runtime revoked");
-    const forbidden = new Set([
-      "exec",
-      ...(stage === "image" ? ["create", "start"] : stage === "create" ? ["start"] : []),
-    ]);
-    expect(effects().filter((effect) => forbidden.has(effect))).toEqual([]);
-  });
+      mockEngine(async (effect) => {
+        if (effect === stage) {
+          await Promise.resolve();
+          current = false;
+        }
+      });
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("runtime revoked");
+        }
+      };
+      const pending = ensure(
+        { scopeKey: "revoked", workspaceSource: "managed-worktree", assertCurrent },
+        "echo should-not-run",
+      );
+      await expect(pending).rejects.toThrow("runtime revoked");
+      const forbidden = new Set([
+        "exec",
+        ...(stage === "reservation" ? ["create", "start"] : stage === "create" ? ["start"] : []),
+      ]);
+      expect(effects().filter((effect) => forbidden.has(effect))).toEqual([]);
+    },
+  );
 
   it.each([
     ["create", "allocation response lost"],

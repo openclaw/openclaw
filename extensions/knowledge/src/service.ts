@@ -6,12 +6,12 @@ import type {
 } from "openclaw/plugin-sdk/feature-plugin";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { Check } from "typebox/value";
-import { featurePrincipal, type VaultAccess } from "./access.js";
+import { featurePrincipal, toolGrant, type VaultAccess } from "./access.js";
 import { attachWorkspaceFile } from "./attachment-file.js";
 import { SinceInput, LastSeenInput } from "./chronicle-contract.js";
 import { emptyChronicle } from "./chronicle.js";
 import { contract } from "./contract.js";
-import { buildKnowledgeLearnGuidance, KNOWLEDGE_LEARN_TOOL_NAMES } from "./learn-guidance.js";
+import { knowledgeLearnContribution } from "./learn-guidance.js";
 import {
   RECORD_MAX_BYTES,
   BODY_INPUT_MAX_CHARS,
@@ -44,6 +44,7 @@ type StoreHandlers = Omit<
   Handlers,
   | "stores_snapshot"
   | "stores_change"
+  | "stores_grant"
   | "stores_change_status"
   | "agent_query"
   | "agent_action"
@@ -53,10 +54,12 @@ const WRITE_TOOLS = new Set([
   "knowledge_remember",
   "knowledge_relink",
   "knowledge_edit_body",
+  "knowledge_extract_section",
   "knowledge_reconcile_evidence",
   "knowledge_save_page",
   "knowledge_correct",
   "knowledge_withdraw",
+  "knowledge_supersede",
   "knowledge_merge",
   "knowledge_unmerge",
   "knowledge_recall",
@@ -109,25 +112,27 @@ export function createKnowledgeService(
       providerRuntime: createKnowledgeMemoryRuntime(stores),
       recallToolNames: ["knowledge_grep", "knowledge_lookup", "knowledge_record"],
       // Every agent has an effective store, so every agent gets the guidance.
+      // A read-only owner grant keeps save guidance out of that conversation's
+      // prompt; its write tools still refuse. The session key only selects
+      // guidance here, never access.
       promptBuilder: (params) =>
         buildKnowledgeMemoryPrompt({
           ...params,
-          availableTools: policy.writesEnabled
-            ? params.availableTools
-            : new Set([...params.availableTools].filter((t) => !WRITE_TOOLS.has(t))),
+          availableTools:
+            policy.writesEnabled &&
+            !(params.agentSessionKey && stores.grantFor(params.agentSessionKey) === "read")
+              ? params.availableTools
+              : new Set([...params.availableTools].filter((t) => !WRITE_TOOLS.has(t))),
         }),
       // The selected provider owns persistence through the host-completed resolver;
       // write-disabled installs suppress Memory Core's append-only file plan with an explicit null.
       providerFlushPlanResolver: () =>
         policy.writesEnabled ? buildKnowledgeMemoryFlushPlan() : null,
-      // Write-disabled installs contribute no /learn guidance; Skill Workshop still can.
-      ...(policy.writesEnabled
-        ? {
-            learnToolNames: KNOWLEDGE_LEARN_TOOL_NAMES,
-            learnGuidanceBuilder: buildKnowledgeLearnGuidance,
-          }
-        : {}),
     });
+  }
+  // Write-disabled installs contribute no /learn guidance; Skill Workshop still can.
+  if (policy.writesEnabled && typeof api.registerLearnContribution === "function") {
+    api.registerLearnContribution(knowledgeLearnContribution);
   }
   if (typeof api.on === "function") {
     registerMemoryIndexHook(api, stores);
@@ -144,13 +149,19 @@ export function createKnowledgeService(
     async start(ctx) {
       stores.start();
       if (ctx?.scheduler) {
-        await maintenance.start(ctx.scheduler, ctx.getCron);
+        await maintenance.start(ctx.scheduler);
       }
     },
+    // A maintenance pass writes through the registry, so the registry closes only
+    // after the pass has settled; the stores are fenced immediately.
     stop() {
-      stores.stop();
+      return stores.stop(maintenance.stop());
     },
   });
+  // Instance disposal runs after the host drains admitted calls. Knowledge ends
+  // for good and resolves only once its workers have exited and maintenance has
+  // stopped, so a replacement generation never opens a store this one holds.
+  api.lifecycle?.onDispose?.(() => stores.dispose(maintenance.stop()));
 
   /** Handlers bound to one operator viewing selection. Tools always resolve
    * their store from the host audience; `agent` only applies to operators. */
@@ -167,7 +178,13 @@ export function createKnowledgeService(
         throw new Error("Knowledge writes are disabled.");
       }
       const opened = await stores.open(
-        featurePrincipal(context, policy.operatorRead, write, agent ?? stores.defaultAgent()),
+        featurePrincipal(
+          context,
+          policy.operatorRead,
+          write,
+          agent ?? stores.defaultAgent(),
+          stores.grantFor,
+        ),
         { provision: context.source === "tool" },
         stores.incarnation,
       );
@@ -248,6 +265,7 @@ export function createKnowledgeService(
       annotate: agentChange("annotate"),
       reconcile_evidence: agentChange("reconcileEvidence"),
       edit_body: agentChange("editBody"),
+      extract_section: agentChange("extractSection"),
       timeline: (input, context) =>
         call("timeline", false, () => emptyChronicle(input))(input, context),
       chronicle_day: (input, context) =>
@@ -348,21 +366,25 @@ export function createKnowledgeService(
       create_relationship: authored("createRelationship"),
       correct: agentChange("correct"),
       withdraw: agentChange("withdraw"),
+      supersede: agentChange("supersede"),
       merge: agentChange("merge"),
       unmerge: agentChange("unmerge"),
-      recall: (input, context) => {
+      recall: async (input, context) => {
         if (context.source !== "tool") {
-          return Promise.reject(
-            new Error(
-              "Automatic recall approval is available only through an owner-private agent tool call; browser and operator actions are not allowed.",
-            ),
+          throw new Error(
+            "Automatic recall approval is available only through an agent tool call; browser and operator actions are not allowed.",
           );
         }
-        if (context.tool.memoryAudience?.kind !== "owner-private") {
-          return Promise.reject(
-            new Error(
-              "Automatic recall approval requires the owner's private memory audience; conversation audiences are not allowed.",
-            ),
+        // The owner's own conversations approve recall, and so do conversations
+        // the owner let save to private knowledge; a read-only grant refuses
+        // below like any other save. Grants load with the registry.
+        await stores.ensure();
+        if (
+          context.tool.memoryAudience?.kind !== "owner-private" &&
+          !toolGrant(context, stores.grantFor)
+        ) {
+          throw new Error(
+            "Automatic recall approval requires the owner's private memory audience or an owner grant to read and save private knowledge.",
           );
         }
         return use(context, true, (runtime, access) =>
@@ -385,7 +407,13 @@ export function createKnowledgeService(
       })),
       status: async (_, context) => {
         const opened = await stores.open(
-          featurePrincipal(context, policy.operatorRead, false, agent ?? stores.defaultAgent()),
+          featurePrincipal(
+            context,
+            policy.operatorRead,
+            false,
+            agent ?? stores.defaultAgent(),
+            stores.grantFor,
+          ),
           { provision: false },
           stores.incarnation,
         );
@@ -404,6 +432,16 @@ export function createKnowledgeService(
             recordResponseBytes: RECORD_RESPONSE_MAX_BYTES,
           },
         };
+        // Whether this caller may write here: the plugin gate plus its own grant.
+        const canWrite =
+          policy.writesEnabled &&
+          ((context.source === "tool" && toolGrant(context, stores.grantFor) !== "read") ||
+            (context.source === "session-action" &&
+              Boolean(
+                context.action.client?.scopes.some(
+                  (s: string) => s === "operator.write" || s === "operator.admin",
+                ),
+              )));
         const notReady = (
           agentId: string,
           store: Exclude<StoreState, "ready">,
@@ -415,7 +453,10 @@ export function createKnowledgeService(
           agent: agentId,
           store,
           scope: "private",
-          writesEnabled: false,
+          // A never-written store is created by the caller's first Knowledge tool
+          // call, so it reports the access that call will have. Any other
+          // non-ready store cannot take writes.
+          writesEnabled: store === "unprovisioned" && canWrite,
           live: "stopped" as const,
           records: 0,
           validRecords: 0,
@@ -454,15 +495,6 @@ export function createKnowledgeService(
         if (scope === "private") {
           runtime.live.ensureWatching();
         }
-        const canWrite =
-          policy.writesEnabled &&
-          (context.source === "tool" ||
-            (context.source === "session-action" &&
-              Boolean(
-                context.action.client?.scopes.some(
-                  (s: string) => s === "operator.write" || s === "operator.admin",
-                ),
-              )));
         return {
           ...base,
           checkedAt: catalog.checkedAt,

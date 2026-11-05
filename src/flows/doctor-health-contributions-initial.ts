@@ -104,6 +104,7 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: params.runGatewayConfigHealth,
     }),
     createDoctorHealthContribution("doctor:database-engine", "Database engines", {
+      updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
         description: "Selected database engines, physical store health, and recovery guidance.",
         async detect(ctx) {
@@ -594,7 +595,11 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
     }),
     createDoctorHealthContribution("doctor:legacy-cron", "Legacy cron", {
-      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab", "core/doctor/legacy-cron-store"],
+      healthCheckIds: [
+        "core/doctor/legacy-whatsapp-crontab",
+        "core/doctor/legacy-cron-store",
+        "core/doctor/cron-inference-accounts",
+      ],
       run: runLegacyCronHealth,
     }),
     createDoctorHealthContribution("doctor:sandbox", "Sandbox", {

@@ -34,11 +34,19 @@ type PullRequest = Record<"url" | "state" | "body" | "headSha" | "headRef" | "ba
   userId: number;
 };
 
+export type RepositoryPublicationSourceHistory = (
+  baseCommit: string,
+  baseTree: string,
+  git: (args: string[], input?: string | Buffer) => string,
+) => string;
+
 export async function createRepositoryPublicationFixture(
   checkpoint: Mock,
   requestedRef?: string | { kind: "commit" },
   session = { sessionId: SESSION_ID, sessionKey: SESSION_KEY },
   baseFiles: Record<string, string> = {},
+  initialCheckpoint = true,
+  sourceHistory?: RepositoryPublicationSourceHistory,
 ) {
   // Only the mock GitHub service accesses this object store. The broker still
   // rejects every Git command and receives only the normalized checkpoint.
@@ -79,7 +87,7 @@ export async function createRepositoryPublicationFixture(
     return git(["write-tree"]);
   };
   const emptyTree = git(["mktree"], "");
-  const baseTree = writeTree(
+  const initialTree = writeTree(
     emptyTree,
     Object.entries(baseFiles).map(([file, content]) => ({
       path: file,
@@ -90,10 +98,12 @@ export async function createRepositoryPublicationFixture(
   const baseParent = Object.keys(baseFiles).length
     ? git(["commit-tree", emptyTree], "fixture prior base\n")
     : undefined;
-  const baseCommit = git(
-    ["commit-tree", baseTree, ...(baseParent ? ["-p", baseParent] : [])],
+  const initialCommit = git(
+    ["commit-tree", initialTree, ...(baseParent ? ["-p", baseParent] : [])],
     "fixture base\n",
   );
+  const baseCommit = sourceHistory?.(initialCommit, initialTree, git) ?? initialCommit;
+  const baseTree = git(["rev-parse", baseCommit + "^{tree}"]);
   const sourceRef = typeof requestedRef === "string" ? requestedRef : requestedRef && baseCommit;
   const store = getSessionRepositoryWorkspaceStore();
   let workspace = await store.create({
@@ -126,6 +136,7 @@ export async function createRepositoryPublicationFixture(
     content: string | null,
     suffix: string,
     changes: Record<string, string | null> = {},
+    accept = true,
   ) => {
     const bytes = Buffer.from(content ?? "");
     const sha = git(["hash-object", "-w", "--stdin"], bytes);
@@ -149,16 +160,18 @@ export async function createRepositoryPublicationFixture(
     const publicationDigest = "sha256:" + createHash("sha256").update(raw).digest("hex");
     const ref = "refs/openclaw/worker-results/" + suffix;
     payloads.set(ref, { publicationStagingRoot, publicationDigest });
-    workspace = await store.acceptCheckpoint({
-      workspaceId: workspace.workspaceId,
-      expectedRevision: workspace.revision,
-      checkpointRef: ref,
-      manifestHash: "sha256:" + createHash("sha256").update(suffix).digest("hex"),
-      assertCurrent: () => {},
-    });
+    if (accept) {
+      workspace = await store.acceptCheckpoint({
+        workspaceId: workspace.workspaceId,
+        expectedRevision: workspace.revision,
+        checkpointRef: ref,
+        manifestHash: "sha256:" + createHash("sha256").update(suffix).digest("hex"),
+        assertCurrent: () => {},
+      });
+    }
     return { ref, sha, workspaceTree };
   };
-  const first = await capture("accepted first\n", "first");
+  const first = await capture("accepted first\n", "first", {}, initialCheckpoint);
   checkpoint.mockReset();
   checkpoint.mockImplementation(
     async (
@@ -235,6 +248,27 @@ export async function createRepositoryPublicationFixture(
       });
     }
     if (endpoint.includes("/compare/")) {
+      if (endpoint.includes("per_page=100")) {
+        const [source, head] = endpoint.split("/compare/")[1]!.split("?")[0]!.split("...");
+        const sourceCommits = git([
+          "rev-list",
+          "--parents",
+          "--reverse",
+          "--topo-order",
+          source + ".." + head,
+        ])
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            const [sha, ...parents] = line.split(" ");
+            return { sha, parents: parents.map((parent) => ({ sha: parent })) };
+          });
+        const page = Number(new URLSearchParams(endpoint.split("?")[1]).get("page"));
+        return jsonResult({
+          total_commits: sourceCommits.length,
+          commits: sourceCommits.slice((page - 1) * 100, page * 100),
+        });
+      }
       const source = endpoint.split("/compare/")[1]!.split("...")[0]!;
       expect(endpoint).toContain("..." + runtime.baseHead);
       if (source !== baseCommit) {

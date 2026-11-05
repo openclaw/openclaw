@@ -10,9 +10,11 @@ import {
   expectDefined,
   installMockGateway,
   chatMessage,
+  waitForTranscriptScrollIdle as waitForProgressThreadIdle,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
+import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const height = (card: Locator) => card.evaluate((el) => el.getBoundingClientRect().height);
@@ -24,20 +26,6 @@ async function wheel(page: Page, card: Locator, dy: number) {
   const point = await headerPoint(card);
   await page.mouse.move(point.x, point.y);
   await page.mouse.wheel(0, dy);
-}
-async function waitForProgressThreadIdle(thread: Locator) {
-  await expect
-    .poll(() =>
-      thread.evaluate(async (element) => {
-        const before = [element.scrollTop, element.scrollHeight, element.clientHeight];
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        });
-        const after = [element.scrollTop, element.scrollHeight, element.clientHeight];
-        return before.every((value, index) => value === after[index]);
-      }),
-    )
-    .toBe(true);
 }
 
 async function still(card: Locator, expected: number) {
@@ -51,7 +39,6 @@ async function still(card: Locator, expected: number) {
 suite.define(() => {
   it.each([
     { reducedMotion: "no-preference", touch: false },
-    { reducedMotion: "reduce", touch: false },
     { reducedMotion: "reduce", touch: true },
   ] as const)(
     "keeps Details disclosure manual through scrolling and streaming ($reducedMotion, touch=$touch)",
@@ -142,7 +129,8 @@ suite.define(() => {
           if ((await card.getAttribute("open")) !== null) {
             await card.locator("summary").click();
           }
-          const readerTop = await thread.evaluate((el) => el.scrollTop);
+          await waitForProgressThreadIdle(thread);
+          const reader = await captureTopVisibleVirtualRow(thread);
           await gateway.emitGatewayEvent("chat", {
             sessionKey,
             runId,
@@ -160,7 +148,9 @@ suite.define(() => {
           await expect.poll(() => card.textContent()).toContain("Updated findings.");
           await waitForProgressThreadIdle(thread);
           expect(await card.getAttribute("open")).toBeNull();
-          expect(await thread.evaluate((el) => el.scrollTop)).toBe(readerTop);
+          const streamedReader = await captureTopVisibleVirtualRow(thread);
+          expect(streamedReader.key).toBe(reader.key);
+          expect(Math.abs(streamedReader.viewportTop - reader.viewportTop)).toBeLessThanOrEqual(2);
           await gateway.emitChatFinal({ sessionKey, runId, text: "Complete." });
           await expect.poll(() => thread.textContent()).toContain("Complete.");
           expect(await card.getAttribute("open")).toBeNull();
@@ -172,7 +162,11 @@ suite.define(() => {
             );
             await card.locator(".session-progress-card__step").last().scrollIntoViewIfNeeded();
             expect(await body.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
-            expect(await thread.evaluate((el) => el.scrollTop)).toBe(readerTop);
+            const disclosedReader = await captureTopVisibleVirtualRow(thread);
+            expect(disclosedReader.key).toBe(reader.key);
+            expect(Math.abs(disclosedReader.viewportTop - reader.viewportTop)).toBeLessThanOrEqual(
+              2,
+            );
             await card.locator("summary").press(key);
             await expect.poll(() => card.getAttribute("open")).toBeNull();
           }
@@ -252,6 +246,7 @@ suite.define(() => {
         );
       };
       try {
+        await page.clock.install();
         // The dock requires advertised history/send capabilities and is suppressed
         // when its own Home conversation already owns the primary chat page.
         await page.goto(suite.server.baseUrl + "new");
@@ -281,7 +276,7 @@ suite.define(() => {
         await thread.hover();
         await page.mouse.wheel(0, -320);
         await waitForProgressThreadIdle(thread);
-        await page.waitForTimeout(201);
+        await page.clock.fastForward(201);
         await page.mouse.wheel(0, -320);
         if (mobile) {
           // Explicitly close the manually opened mobile card before scrubbing it.

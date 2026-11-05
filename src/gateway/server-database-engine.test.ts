@@ -1,5 +1,5 @@
 import type { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   installDatabaseEngineSelection,
   type DatabaseEngineSelection,
@@ -13,16 +13,11 @@ const observed = vi.hoisted(() => ({ workers: [] as Worker[] }));
 
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
-  return {
-    ...actual,
-    Worker: class extends actual.Worker {
-      constructor(...args: ConstructorParameters<typeof actual.Worker>) {
-        super(...args);
-        observed.workers.push(this);
-      }
-    },
-  };
+  const { observeWorkerConstructors } = await import("../../test/helpers/worker-observer.js");
+  return observeWorkerConstructors(actual, observed.workers);
 });
+
+beforeEach(resetDatabaseEngineSelectionForTest);
 
 afterEach(async () => {
   await closePostgresPool();

@@ -3,15 +3,13 @@ import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import { describe, expect, it } from "vitest";
 import { createOpenAICompletionsTransportStreamFn } from "../../../packages/ai/src/transports/openai-completions-transport.js";
 import { materializeRuntimeConfig } from "../../config/materialize.js";
-import type {
-  ModelCompatConfig,
-  ModelDefinitionConfig,
-  ModelProviderConfig,
-} from "../../config/types.models.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ModelCompatConfig } from "../../config/zod-schema.model-compat.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { model as makeCatalogModel } from "../model-catalog-fixtures.test-support.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
@@ -26,14 +24,9 @@ const catalogRoute = { api: "openai-responses", baseUrl: "https://catalog.exampl
 const anthropicRoute = { api: "anthropic-messages", baseUrl: "https://catalog.example" } as const;
 const customRoute = { ...catalogRoute, baseUrl: "https://custom.example/v1" };
 const catalogCompat: ModelCompatConfig = { codeMode: "preferred", supportsTemperature: false };
-const configuredModel: ModelDefinitionConfig = {
-  id: "model",
-  name: "Configured model",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+const configuredModel: ModelDefinitionConfig = makeCatalogModel("model", "Configured model", {
   maxTokens: 4096,
-};
+});
 
 function providerConfig(
   route: Pick<ModelProviderConfig, "api" | "baseUrl">,

@@ -11,8 +11,10 @@ const rawTextCases: [string, string][] = [
   ],
   ["<script></scr<!-- -->ipt><p>Secret data</p></script><p>Visible sibling</p>", "Visible sibling"],
 ];
-const definitionList = "<dl><dt>Region</dt><dd>EMEA</dd><dt>Units</dt><dd>120</dd></dl>";
-const definitionText = "Region\nEMEA\nUnits\n120";
+const definitionList =
+  "<dl><dt>Region</dt><dd>EMEA</dd><dt>Units</dt><dd>120</dd><dt>Examples</dt><dd>Use <code>[report](draft)</code> and <code>![alt](image.png)</code>.</dd><dd>Type `value` exactly.</dd><dd># Ticket 42</dd><dd>1. Version</dd></dl>";
+const definitionText =
+  "Region\nEMEA\nUnits\n120\nExamples\nUse [report](draft) and ![alt](image.png).\nType `value` exactly.\n# Ticket 42\n1. Version";
 
 describe("web-fetch-utils", () => {
   it("removes complete balanced link destinations without leaking URL suffixes", async () => {
@@ -31,7 +33,7 @@ describe("web-fetch-utils", () => {
 
   it.each(["~~~", "~~~~"])("preserves literal text inside %s fences", (fence) => {
     const code =
-      "# heading\n- literal\n1. literal\n[label](https://example.com)\n`value`\n```literal```\n    two  spaces";
+      "# heading\n- literal\n1. literal\n[label](https://example.com)\n`value`\n```literal```\n    two  spaces\n\\*raw\\*";
     expect(markdownToText(`Before\n\n${fence}text\n${code}\n${fence}\n\nAfter`)).toBe(
       `Before\n\n${code}\n\nAfter`,
     );
@@ -42,6 +44,21 @@ describe("web-fetch-utils", () => {
     expect(markdownToText(`\`\`\`text\n${fence}\n\`\`\`\n${fence}\n# heading\n${fence}`)).toBe(
       `${fence}\n\n# heading`,
     );
+  });
+
+  it.each([
+    [
+      "Use `![alt](image.png)` and ``[label](https://example.com)``; read [guide](https://example.com).",
+      "Use ![alt](image.png) and [label](https://example.com); read guide.",
+    ],
+    ["`# not a heading`\nNext line", "# not a heading\nNext line"],
+    ["`- not a list`\nNext line", "- not a list\nNext line"],
+    ["cost is 5` per unit", "cost is 5` per unit"],
+    ["Use `before ```x``` after`.", "Use before ```x``` after."],
+    ["![alt](image`1.png) and `code`.", "and code."],
+    ["keep `\\*raw\\*` literal", "keep \\*raw\\* literal"],
+  ])("renders inline code literally: %s", (markdown, expected) => {
+    expect(markdownToText(markdown)).toBe(expected);
   });
 
   it.each<[string, string, ("text" | "markdown")?]>([
@@ -128,16 +145,21 @@ describe("web-fetch-utils", () => {
     expect(htmlToMarkdown(html)).toEqual({ text, title });
   });
 
-  it("separates HTML table cells and preserves preformatted code whitespace", () => {
-    const html =
-      "<article><table><thead><tr><th>Region</th><th>Units</th><th>Change</th></tr></thead><tbody><tr><td>EMEA</td><td>120</td><td>15</td></tr><tr><td>APAC</td><td>98</td><td>7</td></tr></tbody></table><pre><code>def f(x):\n    if x:\n        return 1\n    return 0</code></pre><p>Done after the example code.</p></article>";
+  it("preserves table cells, linked preformatted text and longer fences in both modes", async () => {
+    const code =
+      'curl https://example.com\n  /path\n  --header X\ndef f(x):\n    marker = "```"\n    if x:\n        return 1\n    return 0';
+    const html = `<article><table><thead><tr><th>Region</th><th>Units</th><th>Change</th></tr></thead><tbody><tr><td>EMEA</td><td>120</td><td>15</td></tr><tr><td>APAC</td><td>98</td><td>7</td></tr></tbody></table><pre><code>${code.replace("https://example.com\n  /path", '<a href="https://example.com">https://example.com\n  /path</a>')}</code></pre><p>Done after the example code.</p></article>`;
     const rendered = htmlToMarkdown(html).text;
-
+    const fence = "````";
     expect(rendered).toContain("Region | Units | Change");
     expect(rendered).toContain("EMEA | 120 | 15");
     expect(rendered).toContain("APAC | 98 | 7");
-    expect(rendered).toContain("```\ndef f(x):\n    if x:\n        return 1\n    return 0\n```");
-    expect(rendered).toMatch(/```\n\nDone after the example code\./);
+    expect(rendered).toContain(`${fence}\n${code}\n${fence}`);
+    expect(rendered).toMatch(/````\n\nDone after the example code\./);
+    expect(htmlToMarkdown("<pre>x</pre>").text).toBe("```\nx\n```");
+    await expect(extractText(html)).resolves.toBe(
+      `Region | Units | Change\nEMEA | 120 | 15\nAPAC | 98 | 7\n\n${code}\n\nDone after the example code.`,
+    );
   });
 
   it.each([
@@ -151,18 +173,6 @@ describe("web-fetch-utils", () => {
     renderedText(html).toBe(expected);
   });
 
-  it("keeps links inside preformatted blocks literal in basic extraction", async () => {
-    const html =
-      '<pre>curl <a href="https://example.com">https://example.com\n  /path</a>\n  --header X</pre>';
-
-    expect(htmlToMarkdown(html).text).toBe(
-      "```\ncurl https://example.com\n  /path\n  --header X\n```",
-    );
-    await expect(extractText(html)).resolves.toBe(
-      "curl https://example.com\n  /path\n  --header X",
-    );
-  });
-
   it.each([
     ["&lt;p>Keep&#0;openclaw-pre-bad&#0; tail&lt;/p>", "Keep\u0000openclaw-pre-bad\u0000 tail"],
     ["&lt;p>Keep&#0;openclaw-pre-0&#0; tail&lt;/p>", "Keep\u0000openclaw-pre-0\u0000 tail"],
@@ -174,18 +184,6 @@ describe("web-fetch-utils", () => {
     const rendered = htmlToMarkdown(`${html}<pre>x</pre>`).text;
     expect(rendered).toContain(marker);
     expect(rendered).toContain("```\nx\n```");
-  });
-
-  it("round-trips longer fences through basic HTML text extraction", async () => {
-    const marker = "`".repeat(3);
-    const code = `def summarize():
-    marker = "${marker}"
-    return marker`;
-    const html = `<article><table><thead><tr><th>Region</th><th>Units</th><th>Change</th></tr></thead><tbody><tr><td>EMEA</td><td>120</td><td>15</td></tr></tbody></table><pre><code>${code}</code></pre><p>Done after the example code.</p></article>`;
-
-    await expect(extractText(html)).resolves.toBe(
-      `Region | Units | Change\nEMEA | 120 | 15\n\ndef summarize():\n    marker = "${marker}"\n    return marker\n\nDone after the example code.`,
-    );
   });
 
   it("resyncs raw-text openers from repeated unterminated quoted tags", () => {
@@ -202,7 +200,9 @@ describe("web-fetch-utils", () => {
     ["```js\n# heading", "# heading"],
     [`${nulPrefix}${"```x```\n".repeat(5_000)}`, `${nulPrefix}${"x\n".repeat(5_000)}`.trim()],
     ["Install steps:\r\n\r\n- Download\r\n- Run", "Install steps:\n\nDownload\nRun"],
-  ])("preserves fence literals and line endings (case %#)", (markdown, expected) => {
+    ["\\*terms\\* and \\[report\\](draft)", "*terms* and [report](draft)"],
+    ["\\# Ticket 42\n5 \\* 3", "# Ticket 42\n5 * 3"],
+  ])("renders literal Markdown text (case %#)", (markdown, expected) => {
     expect(markdownToText(markdown)).toBe(expected);
   });
 

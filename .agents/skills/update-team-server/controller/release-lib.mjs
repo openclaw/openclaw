@@ -2788,10 +2788,14 @@ function transcriptPreservationFailure(database, sessionKey, sessionId, windowKe
 
 function sessionPreservationWarnings() {
   const diagnostics = [];
+  const reasonCounts = new Map();
   let count = 0;
   return {
     record(tuple, ordinal, failure) {
       count += 1;
+      const reason = !tuple[5] ? "missing-session-id" : !tuple[6] ? "missing-window-key" :
+        !tuple[7] ? "missing-generation" : `${failure.live}/${failure.archive}`;
+      reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
       // History may retire during an update. Keep diagnostics bounded and private,
       // while database access, schema and identity failures still abort verification.
       if (diagnostics.length >= 8) return;
@@ -2805,7 +2809,8 @@ function sessionPreservationWarnings() {
     },
     finish() {
       if (count) {
-        process.stderr.write(`WARNING HISTORY_PRESERVATION_GAPS count=${count} shown=${diagnostics.length} historical-bytes=unverified continuation=allowed\n`);
+        const reasons = Object.fromEntries([...reasonCounts].sort(([left], [right]) => left.localeCompare(right)));
+        process.stderr.write(`WARNING HISTORY_PRESERVATION_GAPS count=${count} shown=${diagnostics.length} historical-bytes=unverified continuation=allowed reasonCounts=${JSON.stringify(reasons)}\n`);
         for (const diagnostic of diagnostics)
           process.stderr.write(`HISTORY_PRESERVATION_GAP diagnostic=${JSON.stringify(diagnostic)}\n`);
       }
@@ -4748,6 +4753,7 @@ try {
       result = JSON.stringify({
         suspensionId: suspensionToken(args[0], "suspension lease identity"),
         target: { pid, processInstanceId: suspensionToken(args[2], "handoff process instance") },
+        commit: true,
       });
       break;
     }
@@ -4755,14 +4761,13 @@ try {
       const response = jsonArgument(args[0]);
       suspensionObject(response, ["status", "suspensionId", "expiresAtMs"], "Gateway handoff result");
       if (
-        response.status !== "armed" ||
+        response.status !== "committed" ||
         response.suspensionId !== suspensionToken(args[1], "expected handoff suspension") ||
         !Number.isSafeInteger(response.expiresAtMs) ||
-        response.expiresAtMs !== integer(args[2], "expected handoff expiry") ||
-        response.expiresAtMs <= Date.now() + 5_000
+        response.expiresAtMs !== integer(args[2], "expected handoff expiry")
       )
-        reject("Gateway handoff did not arm the exact unexpired suspension");
-      result = "ARMED";
+        reject("Gateway handoff did not commit the exact suspension");
+      result = "COMMITTED";
       break;
     }
     case "suspension-offer": {

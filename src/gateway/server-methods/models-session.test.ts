@@ -41,12 +41,12 @@ import {
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { buildGatewaySessionRow } from "../session-utils-row.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
   connectChatMetadataAccount,
   createChatMetadataOwner,
   createOpenAIChatMetadataConfig,
 } from "./chat-metadata-runtime.test-support.js";
-import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 import { modelsHandlers } from "./models.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
@@ -137,6 +137,7 @@ function fixture(state: OpenClawTestState) {
     client,
     clients,
     snapshot,
+    context,
     invalidateSnapshot: () => {
       snapshotCurrent = false;
     },
@@ -194,14 +195,24 @@ async function duringCatalog(
   params: Record<string, unknown>,
   change: () => Promise<void> | void,
   overrides?: Parameters<typeof f.request>[1],
+  beforeCatalog = false,
 ) {
   const entered = createDeferred();
   const release = createDeferred();
-  f.readPrepared.mockImplementationOnce(async () => {
+  const read = async () => {
     entered.resolve();
     await release.promise;
     return f.snapshot;
-  });
+  };
+  if (beforeCatalog) {
+    // A catalog preparation is drained by database close; hold before admitting it.
+    f.context.readPreparedModelsList = async () => {
+      await read();
+      return undefined;
+    };
+  } else {
+    f.readPrepared.mockImplementationOnce(read);
+  }
   const pending = f.request(params, overrides);
   void pending.catch(() => {});
   try {
@@ -349,6 +360,8 @@ it.each([
         f.invalidateSnapshot();
       }
     },
+    undefined,
+    change === "same-file reopen",
   );
   if (change === "selected patch" || change === "unselected model") {
     if (change === "selected patch") {

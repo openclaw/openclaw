@@ -7,6 +7,7 @@ import {
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindGatewayDeviceRevocation } from "./device-revocation.js";
+import { repositoryChatDispatchCredentialReader } from "./repository-dispatch.js";
 import { withGatewayWorkerSessionAdmission } from "./server-worker-placement-dispatch-admission.js";
 import { ensureSessionWorkspaceForPlacement } from "./session-lifecycle-preparation.js";
 import type { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
@@ -71,6 +72,18 @@ export function createRequiredWorkerSessionPreparation(options: {
             });
           },
         );
+        const readNativeCredential =
+          preparation?.readNativeCredential ??
+          repositoryChatDispatchCredentialReader(
+            {
+              sessionId: identity.sessionId,
+              sessionKey: identity.sessionKey!,
+              agentId: identity.agentId!,
+            },
+            { profileId: required, executionMode: "worker-turn", runSetupScript: false },
+            // The dispatch owner retains source custody after the preparation scope returns.
+            assertPolicyCurrent,
+          );
         const placement = await options.dispatch.ensurePlacement({
           request: {
             sessionId: identity.sessionId,
@@ -80,6 +93,7 @@ export function createRequiredWorkerSessionPreparation(options: {
             executionMode: "worker-turn",
             requiredProfile: required,
             runSetupScript: false,
+            readNativeCredential,
             devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
           },
           assertCurrent,

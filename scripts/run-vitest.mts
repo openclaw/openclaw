@@ -1034,7 +1034,7 @@ export async function runVitest(
     }
     return;
   }
-  if (argv.some((arg) => arg === "--isolated-image" || arg.startsWith("--isolated-image="))) {
+  if (argv.some((arg) => /^--isolated-(?:image|runtime)(?:=|$)/u.test(arg))) {
     const { parseIsolatedVitestArgs, runIsolatedVitest } =
       await import("./lib/vitest-isolated.mts");
     const isolated = parseIsolatedVitestArgs(argv);
@@ -1044,6 +1044,7 @@ export async function runVitest(
         isolated.image,
         isolated.args,
         env,
+        isolated.runtime,
       );
       return;
     }
@@ -1135,7 +1136,12 @@ export async function runVitest(
         (canonicalSelection &&
           (relativeConfig === "test/vitest/vitest.ui-e2e.config.ts" ||
             relativeConfig === "test/vitest/vitest.extension-browser.config.ts" ||
-            shouldUseRuntimeOnlyVitestWorkers(relativeConfig, vitestArgs, invocationEnv))) ||
+            shouldUseRuntimeOnlyVitestWorkers(
+              relativeConfig,
+              vitestArgs,
+              invocationEnv,
+              execution?.options.testNamePattern,
+            ))) ||
           (canonicalRootRun && relativeConfig === "test/vitest/vitest.ui-e2e-prebuilt.config.ts")
           ? "runtime"
           : "full",

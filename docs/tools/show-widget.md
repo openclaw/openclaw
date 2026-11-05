@@ -24,7 +24,7 @@ non-code visualizations that belong together.
 
 For HTML widgets, OpenClaw core validates `widget_code` by parsing every inline JavaScript `<script>` (classic and module), skipping scripts with `src` or a non-JavaScript `type`, then wraps it once in the standard HTML document. Core rejects the call with the line and column of the first syntax error, so a widget with a broken script is never hosted. For an inline client, core stores that document as a Canvas document and returns a preview handle. The Control UI reads the document over its authenticated Gateway connection and renders it through the dedicated-origin, double-iframe sandbox used by dashboard widgets and MCP Apps. In the Control UI, conversation readers, including guests, can view its saved inline widgets. [Public conversation links](/web/urls#public-session-transcripts) show the same saved inline widgets read-only in a sandboxed frame, without prompts or host APIs. New widgets appear automatically when their result is saved; conversation access is checked again when loading them. The widget frame does not need its own login session. iOS, Android, macOS, and Linux Quick Chat use isolated web views. Full chat clients restore the widget after history reload. Quick Chat keeps the widget for its active reply.
 
-Syntax-error snippets and parser messages preserve complete Unicode code points when clipped to their existing UTF-16 limits.
+Unchanged scripts reuse their syntax validation even when the surrounding markup changes. Large scripts are validated in a background worker. Syntax-error snippets and parser messages preserve complete Unicode code points when clipped to their existing UTF-16 limits.
 
 Channel plugins can register a contextual presenter behind the same core tool. In a configured Discord session, core hands the composed document to the Discord presenter, which stores it and posts the Activity button in the current channel. The model still makes one `show_widget` call. There is no transport-specific widget tool or content kind.
 
@@ -45,7 +45,10 @@ OpenClaw exposes `show_widget` only when the originating Gateway client declares
 
 An agent-turn automation bound to a persistent session and carrying a server-authored scheduled tool policy may explicitly allow `show_widget` without an inline client. That scheduled surface is pinned-only: every call requires `pin: true`, writes to the bound session dashboard, and cannot set `presentation.target`. Detached cron-run sessions, ordinary capless channel runs, and scheduled jobs without an explicit tool cap remain excluded. The originating-client capability remains mandatory for inline presentation.
 
-When the Gateway automatically resumes an interrupted Control UI turn after a restart, the recovered turn can also create or update pinned dashboard widgets without a connected browser. Recovery uses the same pinned-only surface: set `pin: true` and omit `presentation.target`. Inline previews still require a new turn from a client that declares `inline-widgets`. The resumed turn does not inherit a browser connection or device presentation rights.
+A post-restart input uses the session's current authority and tool policy. It does
+not inherit an old browser connection or device presentation rights. Inline
+previews still require a connected client with `inline-widgets`; use the normal
+pinned-widget surface only when the current turn is authorized to do so.
 
 A `status: "pinned"` tool result means the widget is on the session dashboard. Open that dashboard tab in the Control UI, or use `dashboard` with `action: "focus_tab"` and the saved widget's `tabId` when the tool is available. Widget hosting URLs are internal rendering resources and should not be opened in the Browser panel to substitute for widget presentation.
 
@@ -175,7 +178,7 @@ The core `show_widget` tool also accepts these optional dashboard placement fiel
 - `size`: one of `sm`, `md`, `lg`, `xl`, or `full`.
 - `presentation.frame`: pinned dashboard frame: `card`, `full-bleed`, or `frameless`.
 - `after`: sibling widget name after which to place the widget.
-- `capabilities`: access requested by a pinned widget. `netOrigins` contains exact HTTPS origins. `tools` contains `prompt`, an allowlisted read binding, or an exact `cron.trigger:<jobId>` action.
+- `capabilities`: access requested by a pinned widget. `netOrigins` contains exact HTTPS origins. `tools` contains `prompt`, an allowlisted read binding, or an exact `cron.trigger:<jobId>` action. `queries` contains up to eight complete named GitHub Actions queries for live sharing with session readers.
 
 An inline result includes a Canvas preview handle, so the Control UI and supported native apps render the widget directly from the tool call and restore it after history reload. A successful current-channel presentation returns a generic message receipt describing what became visible. Pinned results retain the board widget name so the Control UI does not offer a duplicate pin after transcript reload.
 
@@ -190,6 +193,11 @@ If current-channel presentation fails, core falls back inline only when the orig
 ## Native dashboard reports
 
 Use a report for a pinned summary made of text, metrics, tables, simple charts, and links. Provide the report object directly in `report`:
+
+For saved results from an authenticated service, have an authorized agent select
+the results and publish a report. Session readers then consume saved session data
+without receiving live query authority. Existing HTML widgets are not converted
+automatically.
 
 ```json
 {
@@ -311,7 +319,7 @@ Accepted prompts appear in the transcript as regular user messages and start a n
 
 Pinned HTML widgets expose one ticket-bound host API. An explicit [session permission mode](/gateway/permission-modes) determines how declared capabilities are approved: **Full access** grants them immediately. **Workspace** uses an AI reviewer and rejects anything it does not allow. **Guarded** shows an **Allow** / **Reject** card. **Read only** rejects them. Without an explicit session mode, the equivalent configured exec approval policy applies.
 
-To inspect a widget's approved network origins and host tools, hover over its
+To inspect a widget's approved network origins, host tools, and named queries, hover over its
 **Granted** badge or reach the badge with **Tab**. **Escape** dismisses the
 capabilities tooltip; **Enter** reopens it without changing the grant.
 
@@ -319,10 +327,11 @@ capabilities tooltip; **Enter** reopens it without changing the grant.
 - `openclaw.prompt.send(text)` requires transient user activation and posts a visible composer message. Declaring and receiving the `prompt` tool grant skips the extra per-click confirmation. Validation, focus checks, and rate limits still apply.
 - `openclaw.state.emit(payload)` adds a session notice. Payloads are capped at 8 KiB, and identical client emissions within five seconds are coalesced.
 - `openclaw.data.read(bindingId, params?)` resolves only at the Gateway. Core bindings are `sessions.list`, `usage.status`, `usage.cost`, `cron.list`, `cron.status`, `agents.list`, `health`, and the repository-scoped `github.actions.runs` binding below.
+- `openclaw.data.query(queryName)` runs a declared and approved named GitHub Actions query. Session readers can use this API; they cannot supply query parameters or use the flexible `data.read` API with the same view ticket.
 - `openclaw.action.run(actionId, params?)` invokes an operator-granted plugin dashboard action verb through its write-scoped Gateway method.
 - `openclaw.cron.trigger(jobId)` runs an existing job now only when the exact `cron.trigger:<jobId>` capability was granted.
 
-OpenClaw forwards user-clicked links to `http` or `https` destinations to the Control UI host. The host opens a new tab with `noopener` and `noreferrer`. Forwarding covers a primary click on a `target="_blank"` link and a middle-button click on any link, matching how links behave elsewhere in the Control UI. A widget's own `preventDefault` still cancels the click. The widget sandbox never grants popup permission, and script-initiated `window.open` does not work.
+OpenClaw forwards user-clicked links to `http` or `https` destinations to the Control UI host. The host opens a new tab with `noopener` and `noreferrer`. Forwarding covers a primary click on a `target="_blank"` link and a middle-button click on any link, matching how links behave elsewhere in the Control UI. A widget's own `preventDefault` still cancels the click. The widget sandbox never grants popup permission, and script-initiated `window.open` does not work. In the macOS app, the native external-link handler opens the default browser instead. Native refusal is not retried as a browser popup. If an admitted link-opening request fails validation, authorization, or posting, the widget shows a failure notice and remains usable. Disconnects and widget retirement use the existing connection and lifecycle presentation. Sending a request to macOS does not confirm that the browser launched.
 
 Popup blocking comes from the iframe sandbox permissions. Widgets can define their own `open` function, such as a dialog helper, without colliding with an OpenClaw global. Host APIs remain under `window.openclaw`, with `sendPrompt` retained as a legacy helper.
 
@@ -335,52 +344,84 @@ Disabled plugins are not advertised.
 
 ### Read GitHub Actions runs
 
-With a usable connected agent GitHub identity, use the host binding instead of
-fetching GitHub directly from widget code. For example, give `show_widget` this
-input, replacing `owner/repo` in both places:
+With a usable connected agent GitHub identity, declare a named query when live
+refresh is required. For example, give `show_widget` this input, replacing
+`owner/repo`:
 
 ```json
 {
   "title": "Workflow runs",
   "name": "workflow-runs",
   "pin": true,
-  "capabilities": { "tools": ["github.actions.runs:owner/repo"] },
-  "widget_code": "<pre id='runs'>Loading…</pre><script>openclaw.data.read('github.actions.runs',{repository:'owner/repo',perPage:20}).then(data=>{document.getElementById('runs').textContent=data.workflow_runs.map(run=>run.display_title+': '+(run.conclusion||run.status)).join('\\n')}).catch(error=>{document.getElementById('runs').textContent=String(error)});</script>"
+  "capabilities": {
+    "queries": [
+      {
+        "name": "main-ci",
+        "bindingId": "github.actions.runs",
+        "params": {
+          "repository": "owner/repo",
+          "workflow": "ci.yml",
+          "branch": "main",
+          "status": null,
+          "created": null,
+          "perPage": 20,
+          "excludePullRequests": true
+        },
+        "fields": ["display_title", "status", "conclusion"]
+      }
+    ]
+  },
+  "widget_code": "<pre id='runs'>Loading…</pre><script>openclaw.data.query('main-ci').then(data=>{document.getElementById('runs').textContent=data.workflow_runs.map(run=>run.display_title+': '+(run.conclusion||run.status)).join('\\n')}).catch(error=>{document.getElementById('runs').textContent=String(error)});</script>"
 }
 ```
 
 The read runs in the pinned dashboard after approval, not the inline preview.
 No `netOrigins` declaration or token is needed. Repository names are
-case-insensitive and grants use lowercase spelling. A grant for one repository
-cannot read another. Granting only `https://api.github.com` network access does
-not authorize this binding.
+case-insensitive and normalized to lowercase. The approval covers the complete
+stored query: repository, workflow, branch, filters, result limit, pull-request
+handling, and returned fields. All parameters are required; `null` explicitly
+means all workflows or branches, or no status/date filter. Changing any query
+definition requires renewed approval under the existing session policy, even
+when the HTML is unchanged or the query is narrower.
+
+Session readers send only the view ticket and query name. The Gateway resolves
+the approved definition and rejects runtime overrides. Existing
+`github.actions.runs:owner/repo` tool grants authorize flexible reads only for
+callers with general Gateway read access; they do not approve named queries or
+allow session readers to call `openclaw.data.read`. Network-origin grants do not
+authorize either form.
 
 Direct browser fetches to `api.github.com` do not inherit the agent's login and
 share GitHub's anonymous IP quota. Existing widgets using `fetch` should replace
-that call with the binding and replace their GitHub `netOrigins` declaration with
-the repository-scoped tool grant. Check the effective account in **Agent settings
+that call with a named query and replace their GitHub `netOrigins` declaration
+with the complete query declaration. Check the effective account in **Agent settings
 → Tools → GitHub account**. Administrators can also reach it from **Settings →
-Profile → GitHub connections**.
+Profile → GitHub accounts**.
 
 For refreshable widgets, keep the last successful data and a separate error
 element. Clear the error after a successful read, and keep result containers in
 the document so later refreshes can recover. Show a **Refresh** control for an
 immediate retry.
 
-**Approval shares Actions metadata with the widget and its session audience,
-including metadata from private repositories accessible to the selected agent
-identity.** The host selects the agent override, then the configured System
+**Approval shares the selected Actions fields with the widget and its session
+audience, including future matching results and metadata from private
+repositories accessible to the selected agent identity.** It does not require
+each reader to have GitHub access. The host selects the agent override, then the configured System
 identity, then native GitHub authentication. It never uses the Control UI
 preview credential or a human's publication-only **My GitHub** connection.
 A configured but unavailable identity blocks the request with reconnect guidance.
 It does not retry anonymously or fall through to another account.
 
-Before saving an HTML widget declaring this binding, the Gateway
+Before saving an HTML widget declaring a named query or this binding, the Gateway
 verifies the selected identity. An unavailable identity or retired caller fails
 without replacing an existing widget, creating a pending grant, or broadcasting
 a change. Reconnect the agent's GitHub identity in Settings and retry. Pinning
 does not query Actions or verify repository permission. Those checks happen on
 read. Ordinary widgets and MCP App tool names do not trigger this identity check.
+
+The flexible `openclaw.data.read('github.actions.runs', params)` API remains
+available with general Gateway read access and the exact repository tool grant.
+Its parameter contract is:
 
 | Parameter             | Contract                                                                                                                                                                               |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -393,17 +434,25 @@ read. Ordinary widgets and MCP App tool names do not trigger this identity check
 | `excludePullRequests` | Boolean; default `true`. GitHub omits embedded pull-request objects, not pull-request-triggered runs.                                                                                  |
 
 Other fields, including identity overrides, URLs, headers, and methods, are
-rejected. The result keeps GitHub's `{ total_count, workflow_runs }` fields.
+rejected. The flexible result keeps GitHub's `{ total_count, workflow_runs }` fields.
 Each run contains only `id`, `name`, `display_title`, `head_branch`, `status`,
 `conclusion`, `html_url`, `run_started_at`, `created_at`, `updated_at`, `event`,
 `workflow_id`, and `run_attempt`. No credentials or raw repository objects are
-returned. The upstream response is capped at 1 MiB and the projected run list
+returned. Named queries return only their approved `fields` from this list;
+`total_count` is also available as an explicit field selection. The
+`workflow_runs` array remains present, with unselected run fields omitted.
+Selecting only `total_count` leaves empty objects in that array. The cache's
+`stale` flag remains lifecycle metadata outside the field selection.
+The upstream response is capped at 1 MiB and the projected run list
 at 30 entries. Successful reads are cached for about 30 seconds within the
-current Gateway, board identity, credential, repository, and filter scope.
+current Gateway, credential, repository, and filter scope. Each named query
+applies its approved field selection before delivery.
 After that, a read returns the last successful result with `stale: true` while
 one background request refreshes it. Display a refreshing indicator when this
 flag is present. The next read uses the replacement result once it is ready.
 First reads and changes to the credential or filters still wait for GitHub.
+Every delivery, including a cached result, rechecks current session visibility,
+the view ticket, widget revision, approved query definition, and grant revocation.
 
 Rate limits, access denial, unavailable identity, and upstream failure return
 sanitized guidance. A failed background refresh logs that guidance and removes

@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { preparePluginDoctorMigrationBackupResources } from "./doctor-contract-registry.js";
+import { preparePluginDoctorMigrationBackupResources } from "./doctor-contract-preparation.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";

@@ -153,6 +153,7 @@ export function scheduleGatewayHandlerPrewarm(params: {
   scheduleNext();
 
   return {
+    name: "handler-prewarm",
     stop: () => {
       stopped = true;
       return idleTask?.stop();

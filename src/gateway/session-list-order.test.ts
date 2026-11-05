@@ -62,4 +62,59 @@ describe("sortAndLimitSessionEntries", () => {
       input.filter(([, entry]) => entry.pinnedAt !== undefined).length,
     );
   });
+
+  it("reads each activity sort key once rather than once per comparison", () => {
+    let reads = 0;
+    const input = entries();
+    for (const [, entry] of input) {
+      const value = entry.lastActivityAt;
+      Object.defineProperty(entry, "lastActivityAt", {
+        get() {
+          reads++;
+          return value;
+        },
+      });
+    }
+    const expected = input
+      .toSorted((a, b) => compareSessionEntryPairs(a, b, "activity"))
+      .slice(0, 200);
+    reads = 0;
+    expect(sortAndLimitSessionEntries(input, 200, "activity")).toEqual(expected);
+    expect(reads).toBe(input.length);
+  });
+
+  it("matches the ordering contract over randomized timestamps, ties, pins, and missing clocks", () => {
+    let seed = 225;
+    const random = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0);
+    for (let trial = 0; trial < 16; trial++) {
+      const input: SessionEntryPair[] = Array.from({ length: 257 }, (_, index) => {
+        const clock = () =>
+          random() % 7 === 0 ? undefined : 1_790_000_000_000 + (random() % 5) * 86_400_000;
+        const kind = random() % 3 === 0 ? "subagent" : "dashboard";
+        return [
+          `agent:main:${kind}:${random() % 31}`,
+          {
+            sessionId: `random-${trial}-${index}`,
+            updatedAt: clock() ?? 0,
+            createdAt: clock(),
+            lastActivityAt: clock(),
+            lastInteractionAt: clock(),
+            pinnedAt: clock(),
+            sidebarRoot: random() % 5 === 0,
+            spawnedBy: random() % 5 === 0 ? "agent:main:main" : undefined,
+            parentSessionKey:
+              random() % 2 === 0 ? "agent:main:main" : "agent:main:dashboard:parent",
+          },
+        ];
+      });
+      for (const sortBy of ["updatedAt", "activity", "lastInteractionAt"] as const) {
+        const expected = input.toSorted((a, b) => compareSessionEntryPairs(a, b, sortBy));
+        for (const limit of [1, 200, 201, undefined]) {
+          expect(sortAndLimitSessionEntries(input, limit, sortBy)).toEqual(
+            limit === undefined ? expected : expected.slice(0, limit),
+          );
+        }
+      }
+    }
+  });
 });

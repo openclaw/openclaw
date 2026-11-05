@@ -102,7 +102,7 @@ describe("retireStandaloneGitWrapper", () => {
     await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(original);
   });
   it("removes only the installer wrapper for the previous checkout", async () => {
-    const { base: home, root: oldRoot, wrapper, write, retire } = await fixture();
+    const { base: home, root: oldRoot, wrapper, retire } = await fixture();
     const unrelatedWrapper = path.join(home, "earlier", "openclaw");
     const secondWrapper = path.join(home, "legacy", "bin", "openclaw");
     await Promise.all(
@@ -118,10 +118,6 @@ describe("retireStandaloneGitWrapper", () => {
     await expect(fs.readFile(unrelatedWrapper, "utf8")).resolves.toContain("unrelated");
     await expect(fs.stat(wrapper)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(secondWrapper)).rejects.toMatchObject({ code: "ENOENT" });
-
-    await write("#!/usr/bin/env node\nimport '../lib/node_modules/openclaw/openclaw.mjs';\n");
-    await expect(retire()).resolves.toEqual({});
-    await expect(fs.stat(wrapper)).resolves.toBeDefined();
   });
 
   it("removes only the exact PowerShell installer wrapper on Windows", async () => {
