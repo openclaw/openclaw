@@ -12,7 +12,6 @@ import {
 import { collectTerminalAssistantText } from "./attempt-results.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
-import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 
 const CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN = 4;
@@ -82,7 +81,7 @@ export function emitCodexTerminalAssistantSnapshot(
   params: EmbeddedRunAttemptParams,
   result: EmbeddedRunAttemptResult,
   snapshot: {
-    streamState: CodexAttemptActiveTurn["streamState"];
+    streamState: { eventEmitted: boolean; needsTerminalSnapshot: boolean };
     finalAborted: boolean;
     finalPromptError: unknown;
     assistantTranscriptIdempotencyKey?: string;
