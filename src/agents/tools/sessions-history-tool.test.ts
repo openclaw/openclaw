@@ -296,6 +296,7 @@ it("keeps accepted inputs separate, bounded, and addressable by their own cursor
     runId: "do-not-expose-correlation",
     state: "interrupted",
     acceptedAt: 1_700_000_000_000,
+    steerNow: { status: "available", tools: ["exec"] },
     message: {
       role: "user",
       content: `OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789 ${"queued input ".repeat(1000)}`,
@@ -321,6 +322,7 @@ it("keeps accepted inputs separate, bounded, and addressable by their own cursor
   expect(Buffer.byteLength(JSON.stringify(details.pendingInputs))).toBeLessThanOrEqual(4096);
   expect(JSON.stringify(details.pendingInputs)).not.toContain("sk-or-v1-abcdef0123456789");
   expect(JSON.stringify(details.pendingInputs)).not.toContain("do-not-expose-correlation");
+  expect(JSON.stringify(details.pendingInputs)).not.toContain("steerNow");
   expect(details.contentRedacted).toBe(false);
   expect(details.bytes).toBeLessThanOrEqual(80 * 1024);
   expect(Value.Check(tool.outputSchema!, details)).toBe(true);

@@ -90,7 +90,7 @@ export const ChatPendingInputsPageSchema = closedObject({
       cancelledByUser: Type.Optional(Type.Literal(true)),
       steerNow: Type.Optional(
         closedObject({
-          status: Type.Union([Type.Literal("available"), Type.Literal("blocked")]),
+          status: Type.Enum(["available", "blocked"]),
           tools: Type.Array(NonEmptyString),
         }),
       ),
@@ -279,13 +279,7 @@ export const ChatSteerNowParamsSchema = closedObject({
 });
 
 export const ChatSteerNowResultSchema = closedObject({
-  status: Type.Union([
-    Type.Literal("interrupted"),
-    Type.Literal("idle"),
-    Type.Literal("blocked"),
-    Type.Literal("settled"),
-    Type.Literal("unavailable"),
-  ]),
+  status: Type.Enum(["interrupted", "idle", "blocked", "settled", "unavailable"]),
   tools: Type.Array(NonEmptyString),
 });
 

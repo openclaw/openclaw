@@ -21,10 +21,9 @@ import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import {
   buildPendingInputQueueItems,
-  dismissChatPendingInputs,
   getChatPendingInputs,
   isPendingInputDismissHidden,
-  sendPendingSteerNow,
+  mutateChatPendingInput,
 } from "./chat-pending-inputs.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
@@ -233,7 +232,7 @@ export function createChatViewFrame(
   const historyState = props.historyState;
   const dismissPendingInput =
     props.connected && props.canDismissPendingInputs && historyState
-      ? (inputId: string) => void dismissChatPendingInputs(historyState, [inputId])
+      ? (inputId: string) => void mutateChatPendingInput(historyState, { kind: "dismiss", inputId })
       : undefined;
   const questionState = getTranscriptState(props.paneId);
   const openImage = props.onOpenImage
@@ -293,7 +292,7 @@ export function createChatViewFrame(
     onDismissPendingInput: dismissPendingInput,
     onSteerNow:
       props.connected && props.canSteerNow && historyState
-        ? (runId: string) => void sendPendingSteerNow(historyState, runId)
+        ? (runId: string) => void mutateChatPendingInput(historyState, { kind: "steer", runId })
         : undefined,
     onCompanionSelection:
       props.canSend && !props.suggestionComposer && props.onCompanionStageAttachment

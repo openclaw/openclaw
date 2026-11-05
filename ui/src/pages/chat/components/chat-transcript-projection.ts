@@ -530,9 +530,11 @@ export function projectChatTranscript(
         liveStatusSignature(item),
         item.key === liveItem?.key ? resolveLiveStream : undefined,
         ...transcriptContextDependencies(item, loadedReplySources, props),
-        ...groups.flatMap((group) =>
-          group.messages.map(({ message }) => pendingSteerForMessage(message)),
-        ),
+        ...(pendingSteerForMessage
+          ? groups.flatMap((group) =>
+              group.messages.map(({ message }) => pendingSteerForMessage(message)),
+            )
+          : []),
         // Durable drafts can restore the same map under a new callback generation.
         hasQuestions ? asyncQuestions.drafts : undefined,
         hasQuestions ? asyncQuestionGeneration : undefined,
