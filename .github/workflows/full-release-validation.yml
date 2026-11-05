@@ -2587,6 +2587,8 @@ jobs:
     if: always()
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 720
+    env:
+      RELEASE_STATE_SCRIPT: &release_state_script ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}
     outputs:
       state: ${{ steps.state.outputs.state }}
     steps:
@@ -2631,7 +2633,7 @@ jobs:
           FULL_RELEASE_STATE_PATH: ${{ runner.temp }}/full-release-decision/full-release-decision.json
         run: &full_release_state |
           set -euo pipefail
-          node scripts/full-release-validation-state.mjs "$FULL_RELEASE_STATE_MODE"
+          node "$RELEASE_STATE_SCRIPT" "$FULL_RELEASE_STATE_MODE"
 
       - name: Upload release decision
         if: always() && steps.state.outputs.state != ''
@@ -2667,6 +2669,8 @@ jobs:
     if: always()
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 720
+    env:
+      RELEASE_STATE_SCRIPT: *release_state_script
     outputs:
       state: ${{ steps.state.outputs.state }}
       normal_ci_conclusion: ${{ steps.state.outputs.normalCi_conclusion }}
@@ -2684,6 +2688,8 @@ jobs:
           sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      - *qualification_evidence_verifier_checkout
 
       - name: Download immutable release execution plan
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -2786,6 +2792,12 @@ jobs:
     if: always()
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 10
+    env:
+      RELEASE_STATE_SCRIPT: *release_state_script
+      NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
+      NPM_QUALIFICATION_RESULT: ${{ needs.qualify_npm_package.result }}
+      PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
+      DOCKER_PREPARATION_RESULT: ${{ needs.prepare_docker_release.result }}
     steps:
       - name: Require qualified publication artifacts
         if: inputs.rerun_group == 'all'
@@ -2862,7 +2874,7 @@ jobs:
           DIAGNOSTIC_DRAIN_ATTEMPTS_PATH: ${{ runner.temp }}/full-release-diagnostic-attempts
           RELEASE_DECISION_PATH: ${{ runner.temp }}/full-release-decision/full-release-decision.json
           DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
-        run: node scripts/full-release-validation-state.mjs select
+        run: node "$RELEASE_STATE_SCRIPT" select
 
       - name: Verify exact release state artifacts
         env:
@@ -2872,7 +2884,7 @@ jobs:
           RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           RELEASE_DECISION_PATH: ${{ runner.temp }}/full-release-decision/full-release-decision.json
           DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
-        run: node scripts/full-release-validation-state.mjs verify
+        run: node "$RELEASE_STATE_SCRIPT" verify
 
       # Exact IDs from the sealed plan prevent verification from drifting to a newer upload.
       # Parent-owned candidate plans are rejected before same-parent continuation.
@@ -2978,6 +2990,7 @@ jobs:
       - name: Write release validation manifest
         if: ${{ success() }}
         env:
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
           TARGET_REF: ${{ startsWith(github.ref, 'refs/heads/release-ci/') && needs.resolve_target.outputs.sha || inputs.ref }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
@@ -3010,7 +3023,7 @@ jobs:
           PREPARED_DOCKER_ARTIFACT_NAME: ${{ needs.prepare_docker_release.outputs.prepared_artifact_name }}
           PREPARED_DOCKER_MANIFEST_SHA256: ${{ needs.prepare_docker_release.outputs.prepared_manifest_sha256 }}
           OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
-        run: node scripts/full-release-validation-state.mjs write-manifest
+        run: node "$RELEASE_STATE_SCRIPT" write-manifest
 
       - name: Validate release validation manifest
         env:
@@ -3021,7 +3034,7 @@ jobs:
           RELEASE_DECISION_PATH: ${{ runner.temp }}/full-release-decision/full-release-decision.json
           DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
           RELEASE_VALIDATION_MANIFEST_PATH: ${{ runner.temp }}/full-release-validation/full-release-validation-manifest.json
-        run: node scripts/full-release-validation-state.mjs validate-manifest
+        run: node "$RELEASE_STATE_SCRIPT" validate-manifest
 
       - name: Upload release validation manifest
         if: ${{ success() }}

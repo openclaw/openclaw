@@ -9045,7 +9045,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(releaseChecksWorkflow).toContain(
       "codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}",
     );
-    expect(workflow).toContain("full-release-validation-state.mjs verify");
+    expect(workflow).toContain('node "$RELEASE_STATE_SCRIPT" verify');
     expect(workflow).toContain(
       'gh_with_retry api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}" --jq .sha',
     );
@@ -9101,7 +9101,7 @@ test "$package_manager" = "pnpm@12.1.0"
       "Release impact: selected execution failures are blocking",
     ]);
     expect(summaryStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
-    expect(summaryStep.run).toBe("node scripts/full-release-validation-state.mjs verify");
+    expect(summaryStep.run).toBe('node "$RELEASE_STATE_SCRIPT" verify');
     const manifestStep = workflowStep(
       workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary"),
       "Write release validation manifest",
@@ -9109,7 +9109,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(manifestStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
     expect(manifestStep.env?.STABLE_SOAK_WAIVER).toBeUndefined();
     expect(manifestStep.env?.GH_TOKEN).toBe("${{ github.token }}");
-    expect(manifestStep.run).toBe("node scripts/full-release-validation-state.mjs write-manifest");
+    expect(manifestStep.run).toBe('node "$RELEASE_STATE_SCRIPT" write-manifest');
   });
 
   it("routes publication controls through the trusted shared gate", () => {
@@ -9394,7 +9394,7 @@ test "$package_manager" = "pnpm@12.1.0"
       FULL_RELEASE_STATE_MODE: "drain",
     });
     expectTextToIncludeAll(decisionStep.run, [
-      'node scripts/full-release-validation-state.mjs "$FULL_RELEASE_STATE_MODE"',
+      'node "$RELEASE_STATE_SCRIPT" "$FULL_RELEASE_STATE_MODE"',
     ]);
     expect(planInputsStep.run).toContain("FULL_RELEASE_PLAN_INPUTS_JSON");
     expect(planInputsStep.env).toMatchObject({
@@ -9460,7 +9460,7 @@ test "$package_manager" = "pnpm@12.1.0"
       path: "${{ runner.temp }}/full-release-diagnostic-attempts",
       pattern: "full-release-diagnostics-${{ github.run_id }}-*",
     });
-    expect(selectState.run).toBe("node scripts/full-release-validation-state.mjs select");
+    expect(selectState.run).toBe('node "$RELEASE_STATE_SCRIPT" select');
     expect(summary.needs).toEqual(expect.arrayContaining(["release_decision", "diagnostic_drain"]));
     for (const jobId of [
       "normal_ci",
@@ -9482,7 +9482,6 @@ test "$package_manager" = "pnpm@12.1.0"
     const manifest = workflowStep(summary, "Write release validation manifest");
     const evidenceDispatch = workflowStep(summary, "Request release evidence update");
 
-    expect(manifest.env).not.toHaveProperty("TARGET_SHA");
     expect(manifest.env).not.toHaveProperty("NORMAL_CI_RUN_ID");
     expect(manifest.env).not.toHaveProperty("EVIDENCE_REUSE");
     expect(manifest.run).not.toContain("needs.evidence_reuse.outputs");
@@ -14028,12 +14027,12 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       NPM_TELEGRAM_SCENARIO: "${{ inputs.npm_telegram_scenario }}",
       SKIP_PACKAGE_TELEGRAM_E2E: "${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}",
     });
-    expect(manifestStep.run).toBe("node scripts/full-release-validation-state.mjs write-manifest");
+    expect(manifestStep.run).toBe('node "$RELEASE_STATE_SCRIPT" write-manifest');
     expect(verificationStep.env).toMatchObject({
       RELEASE_PROFILE: "${{ inputs.release_profile }}",
       RERUN_GROUP: "${{ inputs.rerun_group }}",
     });
-    expect(verificationStep.run).toBe("node scripts/full-release-validation-state.mjs verify");
+    expect(verificationStep.run).toBe('node "$RELEASE_STATE_SCRIPT" verify');
     expectTextToIncludeAll(dispatchStep.run, [
       'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-npm-telegram"',
       'dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"',
@@ -14055,7 +14054,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "cancel-in-progress: false",
       "FULL_RELEASE_PLAN_INPUTS_JSON",
       "full-release-validation-policy.mjs",
-      "full-release-validation-state.mjs verify",
+      'node "$RELEASE_STATE_SCRIPT" verify',
       'FAIL_FAST: "false"',
       "NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}",
     ]);
