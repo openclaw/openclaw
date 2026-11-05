@@ -226,9 +226,10 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       if (!traceContext?.spanId || runtime.activeTrustedSpans.has(traceContext.spanId)) {
         return;
       }
-      // Stamp identity at span start: a shutdown or reload before the terminal
-      // event would otherwise export this span outside the conversation grouping.
-      runtime.addRunAttrs(attrs, evt);
+      // Core-logged dispatch events are untrusted and stop at the guard above, so
+      // the ordinary message span is created by the terminal message.processed
+      // event, which stamps session identity there. Never mutate `attrs` here:
+      // the metrics SDK retains the object passed to add().
       runtime.trackInternalOrTrustedSpan(
         evt,
         metadata,

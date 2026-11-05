@@ -313,10 +313,6 @@ export async function gatherDispatchRequest(
     });
     logMessageDispatchStarted({
       channel,
-      // Pair the divergence-guarded lifecycle session id (see lifecycleSessionId
-      // above) so trace backends can group this span; undefined for a session
-      // entry that does not exist yet at dispatch start.
-      sessionId: lifecycleSessionId,
       sessionKey: acpDispatchSessionKey,
       source: "replyResolver",
     });
@@ -331,8 +327,6 @@ export async function gatherDispatchRequest(
     }
     logMessageDispatchCompleted({
       channel,
-      // Same divergence-guarded lifecycle session id as the started event.
-      sessionId: lifecycleSessionId,
       sessionKey: acpDispatchSessionKey,
       source: "replyResolver",
       durationMs: Date.now() - agentDispatchStartedAt,
