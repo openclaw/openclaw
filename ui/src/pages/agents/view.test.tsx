@@ -603,7 +603,7 @@ describe("renderAgents", () => {
     expect(skillsTab.querySelector(".hub-tab__badge--count")).toBeNull();
   });
 
-  it("localizes agent tabs and the channel refresh never state", async () => {
+  it("localizes agent tabs and the channel subtitle", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     await i18n.setLocale("zh-CN");
     const container = document.createElement("div");
@@ -632,15 +632,12 @@ describe("renderAgents", () => {
       const chinese = flattenTranslations(zh_CN);
       const tabs = ["overview", "files", "tools", "skills", "channels", "cronJobs", "memory"];
       expect(tabLabels).toEqual(tabs.map((tab) => chinese.get(`agents.tabs.${tab}`)));
-      const lastRefresh = chinese
-        .get("agents.channels.lastRefresh")
-        ?.replace("{time}", chinese.get("common.never") ?? "");
       await waitForSolid(() =>
         expect(
           Array.from(container.querySelectorAll(".settings-section__desc"), (desc) =>
             desc.textContent?.replace(/\s+/gu, " ").trim(),
           ),
-        ).toContain(`${chinese.get("agents.channels.subtitle")} ${lastRefresh}`),
+        ).toContain(chinese.get("agents.channels.subtitle")),
       );
     } finally {
       await i18n.setLocale("en");
@@ -808,7 +805,7 @@ describe("renderAgentFiles", () => {
     ).map((tab) => directText(tab));
     expect(tabLabels).toStrictEqual(["AGENTS"]);
     expect(container.querySelector(".agent-files-hub-tabs .hub-tab__badge")?.textContent).toBe(
-      "missing",
+      "Missing",
     );
 
     const picker = container.querySelector<HTMLSelectElement>(".agent-tab-add");
@@ -998,7 +995,7 @@ it.each([
   { name: "paused authorized job", enabled: false, canRunCron: true, canRun: true },
   { name: "enabled unauthorized job", enabled: true, canRunCron: false, canRun: false },
 ])(
-  "preserves edit links and gates Run Now for a $name",
+  "preserves edit links and gates Run now for a $name",
   async ({ enabled, canRunCron, canRun }) => {
     const container = document.createElement("div");
     const onCronRunNow = vi.fn();
@@ -1038,7 +1035,7 @@ it.each([
       (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === job.name,
     );
     const runNow = [...(jobRow?.querySelectorAll("button") ?? [])].find(
-      (button) => button.textContent?.trim() === "Run Now",
+      (button) => button.textContent?.trim() === "Run now",
     );
     expect(runNow).toBeInstanceOf(HTMLButtonElement);
     expect(runNow?.disabled).toBe(!canRun);

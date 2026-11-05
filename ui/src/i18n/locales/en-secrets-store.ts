@@ -4,15 +4,13 @@ import { en } from "./en.ts";
 const enSecretsStore = {
   secretsStore: {
     name: "Name",
-    access: "Access",
     accessMode: "Access mode",
     value: "Value",
     allowedHosts: en.secretsStore.allowedHosts,
     allowedHostsPlaceholder: en.secretsStore.allowedHostsPlaceholder,
     allowedHostsHint:
       "Exact hostnames only, one per line or comma-separated. No wildcards or ports.",
-    noAllowedHosts: "None",
-    updated: "Last updated",
+    empty: "No secrets yet.",
     by: "{time} by {name}",
     actions: "Actions",
     add: "Add",
@@ -31,7 +29,9 @@ const enSecretsStore = {
     detect: "Protect credential-like names automatically",
     detected: "{count} protected secrets detected",
     detectedOne: "{count} protected secret detected",
-    unavail: "Gateway/admin required.",
+    unavailableOffline: "Connect to the Gateway to manage secrets.",
+    unavailableAdmin: "Administrator access is required to manage secrets.",
+    unavailableGateway: "Update the Gateway to manage secrets here.",
     badName: "Use SERVICE_API_KEY.",
     tooLarge: "Max 64 KiB.",
     savedProtected:

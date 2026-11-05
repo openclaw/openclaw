@@ -359,7 +359,9 @@ it("keeps the autosaved inspection when an older optional catalog completes", as
   );
   await page.updateComplete;
   const rows = () =>
-    [...page.querySelectorAll(".plugin-capability__copy strong")].map((row) => row.textContent);
+    [...page.querySelectorAll(".plugin-capabilities .settings-row__title")].map(
+      (row) => row.textContent,
+    );
   expect(rows()).toEqual(["Current skill"]);
 
   catalog.resolve(discoveryDetail(plugin));
@@ -515,7 +517,7 @@ it.each(["disabled", "needs-setup"] as const)(
 
     await waitForSolid(() =>
       expect(
-        [...page.querySelectorAll(".plugin-capability__static strong")].map((row) =>
+        [...page.querySelectorAll(".plugin-capabilities .settings-row__title")].map((row) =>
           row.textContent?.trim(),
         ),
       ).toContain("board_create"),

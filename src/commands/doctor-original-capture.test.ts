@@ -136,6 +136,44 @@ it.each(["ancestry-unverified", "missing-capture"] as const)(
   },
 );
 
+it("keeps failed unsealed update evidence without warning or taking another capture", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const driver = readUpdateRunDriver();
+    expect(driver).toBeDefined();
+    const run = createUpdateRun({ trigger: "cli", origin: { driver } });
+    vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+      complete: true,
+      pids: new Set([process.pid]),
+    });
+    const directory = path.join(
+      resolveUpdateCaptureRoot(fs.realpathSync(state.stateDir)),
+      run.runId,
+    );
+    fs.mkdirSync(path.join(directory, "payload"), { recursive: true });
+    fs.writeFileSync(path.join(directory, ".openclaw-private-update-capture"), "failed capture");
+    fs.writeFileSync(path.join(directory, "payload", "0"), "original bytes");
+    const capture = vi.spyOn(baselineCapture, "captureUpdateRecoveryBaseline");
+
+    const result = await preserveDoctorOriginalState({
+      ...captureDefaults(),
+      env: { ...state.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+      writeAuthority: {
+        inputHash: "0".repeat(64),
+        assertCurrent() {},
+        originalRecoveryCapture: { runId: run.runId, installRoot: process.cwd() },
+      },
+    });
+
+    expect(result.findings).not.toContainEqual(
+      expect.objectContaining({ checkId: "core/doctor/recovery-capture" }),
+    );
+    expect(result.warnings).toEqual([]);
+    expect(fs.existsSync(directory)).toBe(true);
+    expect(fs.existsSync(path.join(directory, "payload", "0"))).toBe(true);
+    expect(capture).not.toHaveBeenCalled();
+  });
+});
+
 it("keeps one sealed container capture, skips repeats, and still retires old captures", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const marker = state.path("activation-capture-marker");

@@ -140,7 +140,7 @@ The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
 without a saved choice starts with **My sessions**, except guests: a role that can
 only view other people's sessions and has no general read access (the role
-[Visitor Access](/gateway/team-server#invite-guests) requires) starts with **Involving me**.
+[Visitor Access](/start/multiplayer#invite-guests) requires) starts with **Involving me**.
 A saved choice always wins. Before a profile is identified,
 or when the connection has no durable profile, the list shows **All owners**.
 Identifying the profile restores its saved choice or the default for that role.
@@ -340,44 +340,44 @@ reordering and steering retain their normal behavior.
 
 ## Systems workspace
 
-Open **Pages → Systems**, or visit `/systems`, to inspect the Gateway, worker
-environments, and paired devices available to your connection. Use the pin button
+Open **Pages → Systems**, or visit `/systems`, to inspect this computer, cloud
+devices, and paired devices available to your connection. Use the pin button
 beside Systems in Pages, or drag it into the rail, to keep a personal shortcut.
 
 While Systems is open, select **Sessions** in the rail to show its contextual
-machine list in place of conversations. Pages and Users remain separate views.
+device list in place of conversations. Pages and Users remain separate views.
 The middle list scrolls independently of the rail; the sidebar header and the
 rail’s bottom controls stay fixed. Returning to conversations restores their
-sidebar scroll position. Navigation changes this context; background machine or
+sidebar scroll position. Navigation changes this context; background device or
 session activity does not switch your workspace.
 
-Use **Filter & sort machines** beside the search field to sort each group
+Use **Filter & sort devices** beside the search field to sort each group
 alphabetically, online first (the default), or offline first. Choose **All**,
 **Online**, or **Offline** to filter by reported status; search narrows that
 selection further. Starting, stopping, and error states remain visible under
-**All**. Filtering does not change the machine open in the workspace. These
+**All**. Filtering does not change the device open in the workspace. These
 choices stay in place when you leave Systems and return on the same connection.
 
-The machine list excludes cloud workers whose teardown is complete, including
+The device list excludes cloud workers whose teardown is complete, including
 retained records from archived sessions and failed starts with no allocated
-machine. Workers awaiting cleanup remain visible. Archiving stops running cloud
+device. Workers awaiting cleanup remain visible. Archiving stops running cloud
 workers through the normal workspace-reconciliation flow; failed placements keep
 their existing cleanup retries and recovery history.
 
 Select a desktop-capable system to open the existing Desktop viewer in the main
 workspace. It uses the same connection, control, sizing, and fullscreen behavior
 as the Desktop panel. Headless and offline entries remain inspectable instead
-of opening an empty desktop. Pairing, desktop enablement, and operator permissions
+of opening an empty desktop. Pairing, desktop enablement, and access permissions
 still apply; opening Systems does not grant additional access.
 
 System details use reported facts. A connected device is not necessarily the
-machine running a session, and unavailable measurements are not shown as zero.
+device running a session, and unavailable measurements are not shown as zero.
 The telemetry and backup overview reserves its space while those readings load,
 so the desktop and Backups stay in place. It summarizes the three volumes with
-the highest used percentage and reserves unused rows for machines with fewer
+the highest used percentage and reserves unused rows for devices with fewer
 volumes. **+N more volumes in Details** opens every volume and its history.
 **Backup details** opens the complete backup outcomes, schedules, and storage
-locations, even when no machine is selected. The overview does not scroll;
+locations, even when no device is selected. The overview does not scroll;
 turning off statistics keeps a compact backup area.
 See [Cloud Worker Desktop](/gateway/cloud-workers/desktop) for worker desktop
 enablement and sizing.

@@ -304,7 +304,10 @@ export class ShellNavigationOwner {
     }
     this.synchronizeSessionUrl();
     if (routeState.routeId && !isSettingsNavigationRoute(routeState.routeId)) {
-      this.host.settingsSearchQuery = "";
+      // The embedded list is this search's home, so its results survive Back.
+      if (routeState.routeId !== "settings") {
+        this.host.settingsSearchQuery = "";
+      }
       this.host.lastWorkspaceLocation = {
         routeId: routeState.routeId,
         pathname: routeState.location?.pathname ?? "",

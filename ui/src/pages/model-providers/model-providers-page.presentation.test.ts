@@ -56,7 +56,7 @@ it.each(["edit", "add"] as const)(
     await waitForProviders(page);
     if (mode === "edit") {
       const row = await expandProvider(page, "openai");
-      row.querySelector<HTMLButtonElement>('button[aria-label="Set API key: OpenAI"]')!.click();
+      row.querySelector<HTMLButtonElement>('button[aria-label="Replace API key: OpenAI"]')!.click();
     } else {
       await openApiKeyProvider(page, "anthropic");
     }

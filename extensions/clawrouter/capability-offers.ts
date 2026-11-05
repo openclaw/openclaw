@@ -18,6 +18,7 @@ import { normalizeClawRouterApiBaseUrl } from "./base-url.js";
 export type ClawRouterCapabilityOffer = {
   providerId: string;
   endpoint: string;
+  path: string;
   url: string;
   routeKind: "native" | "manifest" | "unified";
   methods: string[];
@@ -164,6 +165,7 @@ export function readClawRouterCapabilityOffers(
       result.push({
         providerId,
         endpoint,
+        path,
         url,
         routeKind,
         methods: route.methods.filter((method): method is string => typeof method === "string"),
@@ -181,6 +183,8 @@ export async function fetchClawRouterCapabilityOffers(params: {
   timeoutMs: () => number;
   signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
+  /** Require a recent proxy-key observation for consumers without model-scoped grants. */
+  requireFreshProxyCatalog?: boolean;
 }): Promise<ClawRouterCapabilityOffer[]> {
   params.signal?.throwIfAborted();
   const remaining = createProviderOperationTimeoutResolver({
@@ -191,7 +195,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
     defaultTimeoutMs: 5_000,
   });
   const { context } = params;
-  const { response, release } = await fetchWithTimeoutGuarded(
+  const { response, release, finalUrl } = await fetchWithTimeoutGuarded(
     context.baseUrl.replace(/\/+$/u, "") + "/catalog",
     { method: "GET", headers: context.headers, signal: params.signal },
     remaining(),
@@ -216,6 +220,23 @@ export async function fetchClawRouterCapabilityOffers(params: {
       maxBytes: 1024 * 1024,
       timeoutMs: remaining,
     });
+    if (params.requireFreshProxyCatalog) {
+      const catalog = asOptionalRecord(body);
+      const scope = asOptionalRecord(catalog?.scope);
+      const observedAt =
+        typeof catalog?.observedAt === "string" ? Date.parse(catalog.observedAt) : Number.NaN;
+      const age = Date.now() - observedAt;
+      if (
+        !Number.isFinite(age) ||
+        age < -5_000 ||
+        age > 60_000 ||
+        scope?.authType !== "proxy_key" ||
+        !normalizeOptionalString(scope.credentialId) ||
+        finalUrl !== context.baseUrl.replace(/\/+$/u, "") + "/catalog"
+      ) {
+        throw new Error("ClawRouter capability catalog has a stale or invalid proxy-key scope");
+      }
+    }
     remaining();
     params.signal?.throwIfAborted();
     return readClawRouterCapabilityOffers(body, context.baseUrl);
