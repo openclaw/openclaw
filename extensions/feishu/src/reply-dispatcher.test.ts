@@ -224,7 +224,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       note: "Agent: agent | Model: gpt-5.6-luna | Provider: openai",
     });
   });
-
   it.each(["reply_payload_sending", "message_sending"])(
     "suppresses all pre-hook CardKit previews when %s is registered",
     async (hookName) => {
@@ -395,7 +394,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.onReplyStart?.();
     expect(addTypingIndicatorMock).not.toHaveBeenCalled();
   });
-
   it.each([
     {
       name: "topic root",
@@ -1073,8 +1071,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["catch msg", [["F."], 3, 2, "F. Y.", ["F."], 3, "F. Y. Z."], ["F.", "F. Y.", "F. Y. Z."]],
     ["gap msg", ["A2.X.", ["A2."], ["X."], 3, 2, "X.", ["X."], 3, "X.Z."], ["A2.X.", "X.", "X.Z."]],
     ["fence", ["~~~a\nx", null, "~~~a\nxy", null, "~~~a\nxy\n~~~\nD"], ["~~~a\nx", "~~~a\ny", "D"]],
-    ["fence cut", ["~~~\nx\n~~", null, "~~~\nx\n~~~\nD"], ["~~~\nx\n~~", "D"]],
+    ["fence cut", ["~~~\nx\n~~", null, "~~~\nx\n~~~\n\nD"], ["~~~\nx\n~~", "D"]],
     ["fence info", ["```a", null, "```a`b\nc"], ["```a", "`b\nc"]],
+    ["fence inner", ["~~~\n```\n    ~", null, "~~~\n```\n    ~~~"], ["~~~\n```\n    ~", "~~~\n~~"]],
+    ["fence text", ["````\n```\n``", null, "````\n```\n````y"], ["````\n```\n``", "````\n``y"]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
