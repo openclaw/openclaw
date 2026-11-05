@@ -386,6 +386,7 @@ try {
   cfg.plugins.entries.github = { ...cfg.plugins.entries.github, enabled: false };
   if (values["standing-advisories"]) {
     const id = "postpass-advisory";
+    const peers = ["synthetic-a", "synthetic-b"];
     const pluginRoot = path.join(scratch, id);
     fs.mkdirSync(pluginRoot);
     fs.writeFileSync(
@@ -408,7 +409,11 @@ try {
             schema: {
               type: "object",
               additionalProperties: false,
-              properties: { enabled: { type: "boolean" }, dmPolicy: { const: "allowlist" } },
+              properties: {
+                enabled: { type: "boolean" },
+                dmPolicy: { const: "allowlist" },
+                allowFrom: { type: "array", items: { type: "string" } },
+              },
             },
           },
         },
@@ -459,8 +464,8 @@ export default { id: "postpass-advisory", register(api) { api.registerChannel({ 
     );
     cfg.plugins.allow = [...(cfg.plugins.allow ?? []), id];
     cfg.plugins.load = { paths: [...(cfg.plugins.load?.paths ?? []), pluginRoot] };
-    cfg.plugins.entries[id] = { enabled: true, config: { peers: ["synthetic-a", "synthetic-b"] } };
-    cfg.channels[id] = { enabled: true, dmPolicy: "allowlist" };
+    cfg.plugins.entries[id] = { enabled: true, config: { peers } };
+    cfg.channels[id] = { enabled: true, dmPolicy: "allowlist", allowFrom: peers };
     cfg.session = { ...cfg.session, dmScope: "main" };
     cfg.bindings = [...(cfg.bindings ?? []), { agentId: "qa", match: { channel: id } }];
     // Doctor inspects authenticated LAN config; the proof Gateway still binds loopback below.
