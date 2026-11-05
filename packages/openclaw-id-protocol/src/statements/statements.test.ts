@@ -190,6 +190,7 @@ describe("membership snapshot at the caps", () => {
         role: "operator" as const,
         peer_keys: Array.from({ length: MAX_MEMBER_PEER_KEYS }, iroh),
       })),
+      protocols: { statement: [1], descriptor: [1] },
       issued_at: vectors.now,
     };
     return signStatement("MembershipSnapshot", body, await generateEd25519Signer());
