@@ -154,7 +154,7 @@ describe("logInboundMediaFailure", () => {
       }),
     );
 
-    expect(records.filter((record) => record.subsystem === "telegram/media")[0]).toMatchObject({
+    expect(records.find((record) => record.subsystem === "telegram/media")).toMatchObject({
       code: "EEXIST",
     });
   });
