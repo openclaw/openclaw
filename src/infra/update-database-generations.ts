@@ -114,6 +114,26 @@ function readWalIndexHeader(pathname: string): Buffer | null {
   }
 }
 
+/** A non-writing open can create a zero-commit WAL index and the last close removes it. */
+function sameWalCommitPublication(
+  before: Buffer | null,
+  after: Buffer | null,
+  generation: SqliteFileGeneration,
+) {
+  if (before === null ? after === null : after?.equals(before)) {
+    return true;
+  }
+  const appeared = before ?? after;
+  // iChange and the last commit checksum stay zero until a commit is published.
+  return (
+    (before === null || after === null) &&
+    !generation.journal &&
+    (generation.wal?.size ?? 0n) === 0n &&
+    appeared?.readUInt32LE(8) === 0 &&
+    appeared.readBigUInt64LE(24) === 0n
+  );
+}
+
 type DatabaseGenerationObservation = {
   generation: string | null;
   physical: string | null;
@@ -193,7 +213,7 @@ export function readUnchangedUpdateDatabaseGeneration(
   const after = readWalIndexHeader(pathname);
   verifyGenerationFamily(pathname, entries, current);
   if (
-    (before === null ? after !== null : !after?.equals(before)) ||
+    !sameWalCommitPublication(before, after, current) ||
     (current.wal && current.wal.size > 0n && after?.[12] !== 1)
   ) {
     throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
@@ -257,7 +277,7 @@ export function readUpdateDatabaseGeneration(
       verifyGenerationFamily(pathname, entries, current);
       if (
         !sameSqliteFileGeneration(generation, current) ||
-        (before === null ? after !== null : !after?.equals(before)) ||
+        !sameWalCommitPublication(before, after, current) ||
         (generation.wal && generation.wal.size > 0n && after?.[12] !== 1)
       ) {
         throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
