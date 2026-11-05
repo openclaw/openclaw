@@ -327,6 +327,28 @@ describe("agent group thread dispatch", () => {
     expect(digest).not.toContain("Working on it");
   });
 
+  it("keeps emoji whole when a display name or sibling reply hits the thread cap", async () => {
+    const name = `${"N".repeat(79)}😀`;
+    const reply = `Bob ${"a".repeat(3995)}😀tail`;
+    const cfg = config({ agents: ["alice", "bob"], maxRounds: 2, maxTurns: 4 });
+    cfg.agents = {
+      entries: {
+        alice: { identity: { name, emoji: "🦉" } },
+        bob: { identity: { name: "Bob" } },
+      },
+    };
+    const run = await completed({
+      cfg,
+      reply: (_turn, index) => (index === 0 ? [reply] : []),
+    });
+    const digest = run.turns[3]?.ctx.BodyForAgent ?? "";
+    expect(digest).toContain(`${"N".repeat(79)} (alice)`);
+    expect(digest).toContain(`Bob ${"a".repeat(3995)}`);
+    expect(digest).not.toContain("😀");
+    expect(digest).not.toContain("tail");
+    expect(digest).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+  });
+
   it("keeps continuation reply targets physical and transcript identities distinct", async () => {
     const context: Partial<MsgContext> = {
       AccountId: "work",
