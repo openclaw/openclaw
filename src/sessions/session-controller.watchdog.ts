@@ -21,7 +21,7 @@ type SessionWatchdogProgress = "semantic" | "transport" | "source_arrival" | "fi
 const executionDeadline = (execution: OwnedExecution) =>
   execution.getDeadlineAtMs ? execution.getDeadlineAtMs() : execution.deadlineAtMs;
 export type SessionWatchdogWait = {
-  close(): void;
+  close: () => void;
   updateDeadline(deadlineAtMs: number): void;
 };
 export type SessionControllerWatchdogAttempt = {
