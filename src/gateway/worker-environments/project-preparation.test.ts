@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ import {
 } from "./project-preparation.test-support.js";
 import { createProjectSetupScript } from "./project-setup-script.js";
 import { prepareWorkerProjectSnapshot, workerProjectSeedKey } from "./workspace-git-base.js";
+import { workspaceStatIdentity } from "./workspace-hash-memo.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -442,6 +443,10 @@ cat input.txt >> "$HOME/count"
     await requireGit(f.repository, ["commit", "--quiet", "-m", "bulk A"]);
     const a = await snapshot(f.repository);
     const preparedA = (await prepare(f, { project: a })).preparedWorkspace!;
+    // The copied index must match the copied files, or the next forced checkout rewrites all of them.
+    await requireGit(preparedA.workspaceDir, ["diff-files", "--quiet"]);
+    const unchangedFile = path.join(preparedA.workspaceDir, "bulk.bin");
+    const unchangedIdentity = await fs.stat(unchangedFile);
     await fs.writeFile(path.join(preparedA.workspaceDir, "build/retained"), "retained-build-A");
     await fs.writeFile(path.join(preparedA.homeDir, "cached"), "retained-home-A");
     await fs.writeFile(path.join(f.repository, "input.txt"), "changed B\n");
@@ -468,6 +473,7 @@ cat input.txt >> "$HOME/count"
     expect(preparedB.preparationKey).not.toBe(preparedA.preparationKey);
     expect(preparedB.sourceManifestRef).not.toBe(preparedA.sourceManifestRef);
     expect(await requireGit(preparedB.workspaceDir, ["rev-parse", "HEAD"])).toBe(b.baseCommit);
+    expect((await fs.stat(unchangedFile)).ino).toBe(unchangedIdentity.ino);
     expect(await readText(preparedB.workspaceDir, "input.txt")).toBe("changed B\n");
     expect(await readText(preparedB.workspaceDir, "generated")).toBe("tracked B\n");
     expect(await readText(preparedB.workspaceDir, "build/retained")).toBe("retained-build-A");
@@ -564,6 +570,21 @@ cat input.txt >> "$HOME/count"
     expect(completed.entries.some((entry) => entry.path === "generated/result")).toBe(true);
     expect(await readText(f.seed, "input.txt")).toBe("prepared base\n");
     expect(await readText(a.workspaceDir, "input.txt")).toBe("prepared base\nbuilt\n");
+    const savedHashes = JSON.parse(
+      await readText(
+        a.homeDir,
+        ".openclaw-worker",
+        "manifests",
+        `${a.preparedManifestRef.slice(7)}.memo`,
+      ),
+    );
+    expect(savedHashes).toContainEqual([
+      workspaceStatIdentity(
+        "worker",
+        await fs.stat(path.join(a.workspaceDir, "input.txt"), { bigint: true }),
+      ),
+      createHash("sha256").update("prepared base\nbuilt\n").digest("hex"),
+    ]);
     expect((await prepare(f)).preparedWorkspace).toEqual(a);
     expect(await readText(a.homeDir, "count")).toBe("prepared base\nbuilt\n");
     await fs.writeFile(path.join(f.repository, "input.txt"), "changed B\n");
