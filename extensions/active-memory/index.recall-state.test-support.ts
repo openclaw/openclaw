@@ -15,9 +15,7 @@ export function createRecallStateFixture() {
     },
     expireCacheAfter(ttlMs: number) {
       const lookup = recallState.getCachedResult;
-      // Cache expiry runs on elapsed time, so advance the fake timer instead of the wall clock.
-      const elapsedNow = () => performance.now();
-      const expiredAt = elapsedNow() + ttlMs;
+      const expiredAt = performance.now() + ttlMs;
       return vi.spyOn(recallState, "getCachedResult").mockImplementation((cacheKey) => {
         using _ = vi.spyOn(performance, "now").mockReturnValue(expiredAt);
         return lookup(cacheKey);
