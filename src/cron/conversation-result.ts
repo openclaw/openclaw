@@ -13,6 +13,8 @@ export type CronConversationResultParams = {
   runStartedAt: number;
   conversation: { sessionKey: string; sessionId: string; lifecycleRevision?: string };
   payloads: ReplyPayload[];
+  /** The execution already recorded this result in the destination's model history. */
+  modelAlreadyRecorded?: boolean;
   signal?: AbortSignal;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
 };
@@ -33,6 +35,7 @@ export async function commitCronConversationResult(
       lifecycleRevision: params.conversation.lifecycleRevision,
     },
     payloads: params.payloads,
+    modelAlreadyRecorded: params.modelAlreadyRecorded,
     idempotencyKey: `cron-current-completion:${runId}`,
     provenance: { kind: "cron", jobId: params.jobId, runId },
     config: params.config,

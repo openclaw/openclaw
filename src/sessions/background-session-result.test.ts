@@ -27,6 +27,7 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { commitCronConversationResult } from "../cron/conversation-result.js";
 import {
   armGatewaySuspendHandoff,
   getGatewaySuspendStatus,
@@ -92,6 +93,51 @@ async function createTarget() {
 const lookupCall = { role: "assistant", content: [{ type: "toolCall", id: "lookup-call" }] };
 const lookupResult = { role: "toolResult", toolCallId: "lookup-call", isError: false };
 const automationResult = { role: "assistant", model: "automation-result" };
+
+it("keeps a settled cron mirror visible without replaying it after the next request", async () => {
+  const target = await createTarget();
+  const manager = await SessionManager.openAsync(target.scope);
+  const requests: Message[][] = [];
+  streamMocks.streamSimple.mockImplementation((model, context) => {
+    requests.push(structuredClone(context.messages));
+    return createAssistantResultStream(createAssistant(model, "Scheduled check completed"));
+  });
+  const { session } = await createTestSession({ sessionManager: manager });
+  await withSessionTurn(target, async () => {
+    await session.prompt("First scheduled check");
+    expect(
+      await commitCronConversationResult({
+        config: target.config,
+        agentId: target.agentId,
+        jobId: "job-1",
+        runStartedAt: 1000,
+        conversation: { sessionKey: target.sessionKey, ...target.generation },
+        payloads: [{ text: "Scheduled check completed" }],
+        modelAlreadyRecorded: true,
+        deliveryAttemptFence: null,
+      }),
+    ).toEqual({ ok: true });
+  });
+  await withSessionTurn(target, () => session.prompt("Check for new feedback now"));
+  expect(requests).toHaveLength(2);
+  expect(requests[1]?.at(-1)).toMatchObject({
+    role: "user",
+    content: [{ type: "text", text: "Check for new feedback now" }],
+  });
+  expect(requests[1]).not.toContainEqual(expect.objectContaining(automationResult));
+  const messages = (await loadTranscriptEvents(target.scope)).map(readTranscriptEventMessage);
+  expect(messages).toContainEqual(
+    expect.objectContaining({
+      ...automationResult,
+      content: [{ type: "text", text: "Scheduled check completed" }],
+      excludeFromContext: true,
+    }),
+  );
+  const reopened = await SessionManager.openAsync(target.scope);
+  expect(reopened.buildSessionContext().messages).not.toContainEqual(
+    expect.objectContaining(automationResult),
+  );
+});
 
 it("deduplicates background output without breaking live or replayed tool results", async ({
   signal,

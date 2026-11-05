@@ -291,6 +291,10 @@ it.for([
             progress && !nativeOnly ? [[{ type: "text", text: summary }]] : [],
           );
           if (progress) {
+            for (const fact of facts.filter((message) => message?.model === "automation-result")) {
+              expect(fact).toMatchObject({ excludeFromContext: true });
+              expect(fact?.openclawModelPlacement).toBeUndefined();
+            }
             expect(outcome).toMatchObject({
               summary,
               delivered: !notificationDisabled && !deliveryFails,
