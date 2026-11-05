@@ -3,7 +3,11 @@ import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigFile } from "../config/config.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
+import {
+  deleteSessionEntryLifecycle,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -57,14 +61,19 @@ test("guest dictation crosses the real WebSocket authorization boundary", async 
   setUserProfileRole(other.id, "guest");
   const close = vi.fn();
   let receivedAudio = 0;
+  let configure: (() => Promise<boolean>) | undefined;
+  let connect: (() => Promise<void>) | undefined;
+  let transcribeImmediately = true;
   const createSession = vi.fn(
     (
       request: import("../realtime-transcription/provider-contexts.js").RealtimeTranscriptionSessionCreateRequest,
     ) => ({
-      connect: async () => {},
+      connect: () => connect?.() ?? Promise.resolve(),
       sendAudio: () => {
         receivedAudio += 1;
-        request.onTranscript?.("guest dictation transcript");
+        if (transcribeImmediately) {
+          request.onTranscript?.("guest dictation transcript");
+        }
       },
       close,
       isConnected: () => true,
@@ -78,6 +87,7 @@ test("guest dictation crosses the real WebSocket authorization boundary", async 
       id: "dictation-fixture",
       label: "Dictation fixture",
       isConfigured: () => true,
+      isConfiguredAsync: () => configure?.() ?? Promise.resolve(true),
       createSession,
     },
   });
@@ -186,6 +196,165 @@ test("guest dictation crosses the real WebSocket authorization boundary", async 
       expect((await rpcReq(ws, "talk.session.close", { sessionId })).ok).toBe(true);
       expect(createSession).toHaveBeenCalledTimes(1);
       expect(close).toHaveBeenCalledTimes(1);
+      let generation = 0;
+      const revokeSession = () =>
+        deleteSessionEntryLifecycle({
+          agentId: "main",
+          storePath: resolveDefaultSessionStorePath("main"),
+          target: { canonicalKey: ownKey, storeKeys: [ownKey] },
+          archiveTranscript: false,
+        });
+      const replaceSession = async (owner: string) => {
+        await revokeSession();
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: ownKey },
+          {
+            sessionId: `dictation-generation-${++generation}`,
+            updatedAt: Date.now(),
+            createdVia: "operator",
+            createdActor: { type: "human", source: "profile", id: owner },
+            visibility: "shared",
+          },
+        );
+      };
+      const start = () =>
+        rpcReq<{ sessionId: string }>(ws, "talk.session.create", {
+          sessionKey: ownKey,
+          mode: "transcription",
+          transport: "gateway-relay",
+          brain: "none",
+        });
+      // Changing the canonical owner during provider discovery must prevent
+      // provider creation, not merely reject a later append request.
+      const configuring = Promise.withResolvers<void>();
+      const configured = Promise.withResolvers<boolean>();
+      configure = () => {
+        configuring.resolve();
+        return configured.promise;
+      };
+      const pendingStartup = start();
+      await configuring.promise;
+      await replaceSession(other.id);
+      configured.resolve(true);
+      expect((await pendingStartup).ok).toBe(false);
+      expect(createSession).toHaveBeenCalledTimes(1);
+      configure = undefined;
+      await replaceSession(guest.id);
+
+      // Session access does not grant access to another connection's relay.
+      const foreign = await openWs(port, {
+        origin,
+        "x-forwarded-for": "203.0.113.8",
+        "x-forwarded-proto": "https",
+        "x-forwarded-user": "dictation@example.com",
+      });
+      try {
+        expect(
+          (
+            await connectReq(foreign, {
+              skipDefaultAuth: true,
+              prePairDevice: true,
+              scopes: ["operator.sessions.write"],
+              client: CONTROL_UI_CLIENT,
+              deviceIdentityPath: path.join(identityDir, "foreign", "client", "credentials.sqlite"),
+            })
+          ).ok,
+        ).toBe(true);
+        expect((await rpcReq(foreign, "talk.catalog", { sessionKey: ownKey })).ok).toBe(true);
+        const owned = await start();
+        expect(owned.ok).toBe(true);
+        expect(
+          (
+            await rpcReq(foreign, "talk.session.appendAudio", {
+              sessionId: owned.payload!.sessionId,
+              audioBase64: "AAA=",
+            })
+          ).ok,
+        ).toBe(false);
+        expect(receivedAudio).toBe(1);
+        expect(
+          (
+            await rpcReq(ws, "talk.session.close", {
+              sessionId: owned.payload!.sessionId,
+            })
+          ).ok,
+        ).toBe(true);
+      } finally {
+        foreign.terminate();
+      }
+
+      const delivered: string[] = [];
+      const collect = (data: Parameters<typeof rawDataToString>[0]) => {
+        delivered.push(rawDataToString(data));
+      };
+      ws.on("message", collect);
+      try {
+        // The RPC returns while connect is pending. Neither readiness nor a
+        // late transcript may escape after the session owner changes.
+        const connecting = Promise.withResolvers<void>();
+        const connected = Promise.withResolvers<void>();
+        connect = () => {
+          connecting.resolve();
+          return connected.promise;
+        };
+        const delayed = await start();
+        expect(delayed.ok).toBe(true);
+        await connecting.promise;
+        const pendingProvider = createSession.mock.calls.at(-1)![0];
+        await replaceSession(other.id);
+        delivered.length = 0;
+        connected.resolve();
+        pendingProvider.onTranscript!("invalid startup transcript");
+        await rpcReq(ws, "talk.config", {});
+        expect(delivered.join(" ")).not.toContain("invalid startup transcript");
+        expect(delivered.join(" ")).not.toContain('"type":"session.ready"');
+        expect(
+          (
+            await rpcReq(ws, "talk.session.appendAudio", {
+              sessionId: delayed.payload!.sessionId,
+              audioBase64: "AAA=",
+            })
+          ).ok,
+        ).toBe(false);
+        expect(receivedAudio).toBe(1);
+        connect = undefined;
+        await replaceSession(guest.id);
+
+        transcribeImmediately = false;
+        const transcribing = await start();
+        expect(transcribing.ok).toBe(true);
+        expect(
+          (
+            await rpcReq(ws, "talk.session.appendAudio", {
+              sessionId: transcribing.payload!.sessionId,
+              audioBase64: "AAA=",
+            })
+          ).ok,
+        ).toBe(true);
+        expect(receivedAudio).toBe(2);
+        const pendingTranscript = createSession.mock.calls.at(-1)![0];
+        await revokeSession();
+        expect(
+          (
+            await rpcReq(ws, "talk.session.appendAudio", {
+              sessionId: transcribing.payload!.sessionId,
+              audioBase64: "AAA=",
+            })
+          ).ok,
+        ).toBe(false);
+        expect(receivedAudio).toBe(2);
+        delivered.length = 0;
+        pendingTranscript.onTranscript!("reassigned session transcript");
+        pendingTranscript.onPartial?.("reassigned session partial");
+        // This round trip is a delivery barrier, not a timer-based absence check.
+        await rpcReq(ws, "talk.config", {});
+        expect(delivered.join(" ")).not.toContain("reassigned session transcript");
+        expect(delivered.join(" ")).not.toContain("reassigned session partial");
+        await replaceSession(guest.id);
+        transcribeImmediately = true;
+      } finally {
+        ws.off("message", collect);
+      }
       const revoked = await rpcReq(ws, "talk.session.create", {
         sessionKey: ownKey,
         mode: "transcription",
@@ -194,8 +363,8 @@ test("guest dictation crosses the real WebSocket authorization boundary", async 
       const afterRevocation: string[] = [];
       ws.on("message", (data) => afterRevocation.push(rawDataToString(data)));
       setUserProfileRole(guest.id, "none");
-      expect(createSession).toHaveBeenCalledTimes(2);
-      createSession.mock.calls[1]![0].onTranscript!("revoked dictation must not be delivered");
+      expect(createSession).toHaveBeenCalledTimes(5);
+      createSession.mock.calls.at(-1)![0].onTranscript!("revoked dictation must not be delivered");
       expect(await waitForWsClose(ws, 3000)).toBe(true);
       expect(afterRevocation.join(" ")).not.toContain("revoked dictation must not be delivered");
     } finally {

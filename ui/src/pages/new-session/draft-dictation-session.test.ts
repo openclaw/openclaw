@@ -1,7 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import { readStoredOutboxStore, storageTargetForComposer } from "../../lib/chat/outbox-store.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createDraftFixture, resetSubmissionMocks } from "./draft-submission-flow.test-support.ts";
 
 afterEach(resetSubmissionMocks);
@@ -61,7 +63,7 @@ it("does not reuse a prepared session after its creation selection changes", asy
   expect(create).toHaveBeenCalledTimes(2);
 });
 
-async function interruptPreparedSend() {
+async function interruptPreparedSend(retryStatus: "started" | "timeout" | "error" = "started") {
   const interrupted = createDeferred<unknown>();
   let sends = 0;
   const { flow, context, request, gateway } = createDraftFixture({
@@ -72,7 +74,7 @@ async function interruptPreparedSend() {
       }
       return ++sends === 1
         ? interrupted.promise
-        : { runId: "retried-first-turn", status: "started" };
+        : { runId: "retried-first-turn", status: retryStatus, stopReason: "restart" };
     },
   });
   const create = vi.mocked(context.sessions.createResult);
@@ -133,5 +135,36 @@ it.each(["reset", "selection", "client"] as const)(
     expect(flow.sessionStartup.dictationSessionKey()).toBeUndefined();
     expect(create).toHaveBeenCalledOnce();
     expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+  },
+);
+
+it.each(["timeout", "error"] as const)(
+  "retains the dictated turn for recovery when interrupted first-send retry returns %s",
+  async (status) => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { flow, context, create } = await interruptPreparedSend(status);
+    const resumed = flow.sessionStartup.resume();
+    expect(resumed.kind).toBe("resume");
+    if (resumed.kind !== "resume") {
+      throw new Error("Expected the interrupted startup to resume");
+    }
+    await flow.submit(resumed);
+    expect(create).toHaveBeenCalledOnce();
+    const target = storageTargetForComposer({
+      settings: context.gateway.connection,
+      client: context.gateway.snapshot.client,
+    });
+    const stored = readStoredOutboxStore(sessionStorage, target);
+    expect(Object.values(stored.sessions).flatMap((session) => session.queue ?? [])).toEqual([
+      expect.objectContaining({
+        text: "Retain the prepared target on retry.",
+        sendState: "failed",
+        sendError: expect.any(String),
+        sessionKey: "agent:main:prepared-retry",
+        sendAttempts: 1,
+      }),
+    ]);
+    expect(flow.message).toBe("");
+    expect(context.navigateAndWait).toHaveBeenCalled();
   },
 );

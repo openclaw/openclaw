@@ -285,14 +285,3 @@ describe("DirectDictationControl", () => {
     expect(onMessage).not.toHaveBeenCalled();
   });
 });
-
-it("prepares a target for session writers with read access but no Talk authority", () => {
-  const client = createTestGatewayClient(vi.fn());
-  Object.defineProperty(client, "auth", {
-    value: { role: "operator", scopes: ["operator.read", "operator.sessions.write"] },
-  });
-  const prepareSession = vi.fn(async () => "agent:main:prepared-draft");
-  const { control } = fixture({ getClient: () => client, prepareSession });
-  control.prepare("new-guest-draft");
-  expect(dictationHarness.options?.prepareSession).toBe(prepareSession);
-});

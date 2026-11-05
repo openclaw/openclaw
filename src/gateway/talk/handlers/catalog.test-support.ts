@@ -73,7 +73,8 @@ vi.mock("../../../tts/tts.js", async () => ({
   synthesizeSpeech: mocks.synthesizeSpeech,
 }));
 
-vi.mock("../../../talk/provider-registry.js", () => ({
+vi.mock("../../../talk/provider-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../talk/provider-registry.js")>()),
   canonicalizeRealtimeVoiceProviderId: mocks.canonicalizeRealtimeVoiceProviderId,
   getRealtimeVoiceProvider: (providerId: string | undefined) =>
     mocks
@@ -82,7 +83,10 @@ vi.mock("../../../talk/provider-registry.js", () => ({
   listRealtimeVoiceProviders: mocks.listRealtimeVoiceProviders,
 }));
 
-vi.mock("../../../realtime-transcription/provider-registry.js", () => ({
+vi.mock("../../../realtime-transcription/provider-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../realtime-transcription/provider-registry.js")
+  >()),
   canonicalizeRealtimeTranscriptionProviderId: mocks.canonicalizeRealtimeTranscriptionProviderId,
   getRealtimeTranscriptionProvider: mocks.getRealtimeTranscriptionProvider,
   listRealtimeTranscriptionProviders: mocks.listRealtimeTranscriptionProviders,
@@ -96,7 +100,8 @@ vi.mock("../../sessions-resolve.js", () => ({
   ) => consume(mocks.resolveSessionKeyFromResolveParams(params)),
 }));
 
-vi.mock("../../../talk/provider-resolver.js", () => ({
+vi.mock("../../../talk/provider-resolver.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../talk/provider-resolver.js")>()),
   isRealtimeVoiceProviderConfiguredAsync: mocks.isRealtimeVoiceProviderConfiguredAsync,
   resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveConfiguredRealtimeVoiceProviderAsync,
   resolveRealtimeVoiceProviderCapabilitiesAsync:

@@ -416,6 +416,9 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         }
         const assertCurrent = () => {
           requester.assertCurrent();
+          // Retain the admitted session authority, not only its routing facts:
+          // provider callbacks can arrive after deletion, replacement, or revocation.
+          sessionMutationAuthorization?.assertCurrent();
           if (target) {
             target.assertCurrent(context.getRuntimeConfig());
           }
@@ -440,15 +443,22 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
               requestedModel: normalizeOptionalString(params.model),
               defaultModel: transcriptionConfig.model,
             });
-        sessionMutationAuthorization?.assertCurrent();
         assertCurrent();
-        const session = createTalkTranscriptionRelaySession({
-          context,
-          connId,
-          assertCurrent,
-          ...(target ? { sessionKey: target.canonicalKey } : {}),
-          ...resolution,
-        });
+        const releaseAuthority = sessionMutationAuthorization?.retain?.();
+        let session: ReturnType<typeof createTalkTranscriptionRelaySession>;
+        try {
+          session = createTalkTranscriptionRelaySession({
+            context,
+            connId,
+            assertCurrent,
+            releaseAuthority,
+            ...(target ? { sessionKey: target.canonicalKey } : {}),
+            ...resolution,
+          });
+        } catch (error) {
+          releaseAuthority?.();
+          throw error;
+        }
         rememberUnifiedTalkSession(session.transcriptionSessionId, {
           kind: "transcription-relay",
           connId,

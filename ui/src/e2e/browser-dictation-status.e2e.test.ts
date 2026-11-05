@@ -143,12 +143,18 @@ suite.define(() => {
       await captureComposer(page, "guest-dictation-transcript.png");
     }));
 
-  it("creates one new guest session for dictation and sends into the same session", () =>
+  it.each([
+    { role: "guest", scopes: ["operator.sessions.write"] },
+    {
+      role: "session writer with operator read",
+      scopes: ["operator.read", "operator.sessions.write"],
+    },
+  ])("creates one new $role session for dictation and sends into the same session", ({ scopes }) =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const key = "agent:main:guest-dictation-draft";
       const { gateway, textarea, admit, emit, close } = await openDictation(page, {
         route: "new",
-        operatorScopes: ["operator.sessions.write"],
+        operatorScopes: scopes,
         operatorSessionCap: "view",
         methodResponses: {
           "sessions.create": { key, initialRun: { status: "idle" } },
@@ -177,7 +183,8 @@ suite.define(() => {
       expect((await gateway.getRequests("chat.send")).map((request) => request.params)).toEqual([
         expect.objectContaining({ sessionKey: key, message: "Start with this dictated task." }),
       ]);
-    }));
+    }),
+  );
 
   it.each([false, true])(
     "dictates during a running turn and sends explicitly (wait for completion: %s)",

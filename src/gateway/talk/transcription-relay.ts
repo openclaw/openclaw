@@ -51,6 +51,7 @@ type TranscriptionRelaySession = {
   connId: string;
   sessionKey?: string;
   context: GatewayRequestContext;
+  assertCurrent: () => void;
   sttSession:
     | ReturnType<RealtimeTranscriptionProviderPlugin["createSession"]>
     | ReturnType<typeof createTalkFileTranscriptionSession>;
@@ -59,6 +60,7 @@ type TranscriptionRelaySession = {
   cleanupTimer: ReturnType<typeof setTimeout>;
   receivedAudio: boolean;
   draining: boolean;
+  releaseAuthority?: () => void;
 };
 
 type CreateTalkTranscriptionRelaySessionParams = {
@@ -66,6 +68,7 @@ type CreateTalkTranscriptionRelaySessionParams = {
   connId: string;
   sessionKey?: string;
   assertCurrent: () => void;
+  releaseAuthority?: () => void;
 } & (
   | {
       provider: RealtimeTranscriptionProviderPlugin;
@@ -159,6 +162,7 @@ function closeTranscriptionSession(
   } finally {
     // Provider teardown may throw, but the owner-visible terminal event must
     // still complete so disconnect cleanup cannot leave ambiguous state.
+    session.releaseAuthority?.();
     broadcastToOwner(session, {
       type: "close",
       reason,
@@ -168,6 +172,15 @@ function closeTranscriptionSession(
         final: true,
       }),
     });
+  }
+}
+
+function assertTranscriptionAuthority(session: TranscriptionRelaySession): void {
+  try {
+    session.assertCurrent();
+  } catch (error) {
+    closeTranscriptionSession(session, "error");
+    throw error;
   }
 }
 
@@ -242,10 +255,9 @@ export function createTalkTranscriptionRelaySession(
       return undefined;
     }
     try {
-      params.assertCurrent();
+      assertTranscriptionAuthority(relay);
       return relay;
     } catch {
-      closeTranscriptionSession(relay, "error");
       return undefined;
     }
   };
@@ -304,6 +316,7 @@ export function createTalkTranscriptionRelaySession(
     connId: params.connId,
     sessionKey: params.sessionKey,
     context: params.context,
+    assertCurrent: params.assertCurrent,
     sttSession,
     talk,
     expiresAtMs,
@@ -315,6 +328,7 @@ export function createTalkTranscriptionRelaySession(
     }, TRANSCRIPTION_SESSION_TTL_MS).unref(),
     receivedAudio: false,
     draining: false,
+    releaseAuthority: params.releaseAuthority,
   };
   relayRef.current = relay;
   transcriptionSessions.set(transcriptionSessionId, relay);
@@ -379,6 +393,7 @@ export function sendTalkTranscriptionRelayAudio(params: {
   }
   const session = getTranscriptionSession(params.transcriptionSessionId, params.connId);
   const audio = decodeTalkRelayAudioBase64(params.audioBase64, "Transcription Talk");
+  assertTranscriptionAuthority(session);
   const turnId = ensureTranscriptionTurn(session);
   try {
     session.sttSession.sendAudio(audio);
@@ -418,6 +433,7 @@ export function stopTalkTranscriptionRelaySession(params: {
     closeTranscriptionSession(session, "completed");
     return;
   }
+  assertTranscriptionAuthority(session);
   if (turnId) {
     broadcastToOwner(session, {
       type: "transcript",

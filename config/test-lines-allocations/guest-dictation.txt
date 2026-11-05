@@ -1,0 +1,3 @@
+# Guest dictation: authenticated WebSocket authorization/revocation, relay lifetime,
+# editable existing/new-chat flows, and persisted first-send retry recovery.
+1206

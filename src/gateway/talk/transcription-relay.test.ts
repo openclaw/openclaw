@@ -247,6 +247,32 @@ describe("talk transcription gateway relay", () => {
     }
   });
 
+  it.each(["append", "finalize"] as const)(
+    "rejects %s after the retained session authority is revoked",
+    async (operation) => {
+      const sttSession = createSttSessionMock();
+      const { context } = createBroadcastContext();
+      const assertCurrent = vi.fn();
+      const { session } = createRelay(context, sttSession, "conn-1", {}, undefined, assertCurrent);
+      await Promise.resolve();
+      sendAudio(session);
+      assertCurrent.mockImplementation(() => {
+        throw new Error("revoked session");
+      });
+
+      expect(() =>
+        operation === "append"
+          ? sendAudio(session)
+          : stopTalkTranscriptionRelaySession({
+              transcriptionSessionId: session.transcriptionSessionId,
+              connId: "conn-1",
+            }),
+      ).toThrow("revoked session");
+      expect(sttSession.sendAudio).toHaveBeenCalledTimes(1);
+      expect(sttSession.close).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each(["synchronous", "asynchronous", "prior-final"] as const)(
     "delivers a %s provider final before gracefully closing an active transcription turn",
     async (delivery) => {
@@ -638,6 +664,27 @@ describe("talk transcription gateway relay", () => {
 });
 
 describe("transcription live authority", () => {
+  it("releases retained session authority once when the relay closes", async () => {
+    const { context, logGateway } = createBroadcastContext();
+    const releaseAuthority = vi.fn();
+    const session = createTalkTranscriptionRelaySession({
+      context,
+      connId: "conn-authority",
+      provider: createTranscriptionProvider(createSttSessionMock()),
+      providerConfig: {},
+      assertCurrent: () => {},
+      releaseAuthority,
+    });
+    expect(releaseAuthority).not.toHaveBeenCalled();
+    await stopTalkTranscriptionRelaySession({
+      transcriptionSessionId: session.transcriptionSessionId,
+      connId: "conn-authority",
+      discard: true,
+    });
+    cleanupTalkConnection("conn-authority", logGateway);
+    expect(releaseAuthority).toHaveBeenCalledTimes(1);
+  });
+
   it("closes instead of delivering a transcript after authority is revoked", async () => {
     const { context, events } = createBroadcastContext();
     const stt = createSttSessionMock();

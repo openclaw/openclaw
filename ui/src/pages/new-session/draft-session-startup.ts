@@ -7,7 +7,11 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { SessionCreateOutcome, SessionCreateParams } from "../../lib/sessions/create.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { normalizeChatSendAck } from "../chat/chat-send-ack.ts";
+import {
+  formatTerminalChatSendAckError,
+  isTerminalFailureChatSendAck,
+  normalizeChatSendAck,
+} from "../chat/chat-send-ack.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 
 registerNewSessionSetupEnglish();
@@ -122,6 +126,12 @@ export class DraftSessionStartup {
       ),
       runId,
     );
+    if (isTerminalFailureChatSendAck(ack)) {
+      return {
+        key: created.key,
+        initialRun: { status: "rejected", error: formatTerminalChatSendAckError(ack, "chat") },
+      };
+    }
     return { key: created.key, initialRun: { status: "started", runId: ack.runId } };
   }
 

@@ -1,4 +1,4 @@
-import { asOptionalRecord, filterStringRecord } from "@openclaw/normalization-core/record-coerce";
+import { filterStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveActiveTalkProviderConfig } from "../../../config/talk.js";
 import type { TalkProviderConfig } from "../../../config/types.gateway.js";
@@ -38,26 +38,25 @@ export function resolveTalkVoiceId(
 }
 
 export function withTalkBaseTtsSpeakerSelectionCompat(
-  baseTts: Record<string, unknown>,
+  baseTts: TtsConfig,
   talkProvider?: { provider: { id: string; aliases?: readonly string[] }; apiKey?: unknown },
-): Record<string, unknown> {
-  const next = withSpeakerSelectionCompat(baseTts);
-  const providers = asOptionalRecord(baseTts.providers);
-  if (providers) {
-    next.providers = Object.fromEntries(
-      Object.entries(providers).map(([providerId, providerConfig]) => {
-        const normalized = withSpeakerSelectionCompat(asOptionalRecord(providerConfig) ?? {});
-        // Talk-owned overrides must shield provider normalization from a cold global TTS ref.
-        if (
-          typeof talkProvider?.apiKey === "string" &&
-          providerMatchesId(talkProvider.provider, providerId) &&
-          typeof normalized.apiKey === "object"
-        ) {
-          normalized.apiKey = talkProvider.apiKey;
-        }
-        return [providerId, normalized];
-      }),
-    );
+): TtsConfig {
+  const next: TtsConfig = { ...baseTts, ...withSpeakerSelectionCompat(baseTts) };
+  if (baseTts.providers) {
+    const providers: TtsProviderConfigMap = {};
+    for (const [providerId, providerConfig] of Object.entries(baseTts.providers)) {
+      const normalized = { ...providerConfig, ...withSpeakerSelectionCompat(providerConfig) };
+      // Talk-owned overrides must shield provider normalization from a cold global TTS ref.
+      if (
+        typeof talkProvider?.apiKey === "string" &&
+        providerMatchesId(talkProvider.provider, providerId) &&
+        typeof normalized.apiKey === "object"
+      ) {
+        normalized.apiKey = talkProvider.apiKey;
+      }
+      providers[providerId] = normalized;
+    }
+    next.providers = providers;
   }
   return next;
 }
@@ -86,14 +85,14 @@ export function buildTalkTtsConfig(
   }
 
   const providerConfig = withSpeakerSelectionFallbackCompat(resolved.config);
-  const baseTts = withTalkBaseTtsSpeakerSelectionCompat(asOptionalRecord(config.tts) ?? {}, {
+  const baseTts = withTalkBaseTtsSpeakerSelectionCompat(config.tts ?? {}, {
     provider: speechProvider,
     apiKey: providerConfig.apiKey,
-  }) as TtsConfig;
+  });
   const resolvedProviderConfig =
     speechProvider.resolveTalkConfig?.({
       cfg: config,
-      baseTtsConfig: baseTts as Record<string, unknown>,
+      baseTtsConfig: baseTts,
       talkProviderConfig: providerConfig,
       timeoutMs: baseTts.timeoutMs ?? 30_000,
     }) ?? providerConfig;
@@ -102,7 +101,7 @@ export function buildTalkTtsConfig(
     auto: "always",
     provider,
     providers: {
-      ...((asOptionalRecord(baseTts.providers) ?? {}) as TtsProviderConfigMap),
+      ...baseTts.providers,
       [provider]: resolvedProviderConfig,
     },
   };
