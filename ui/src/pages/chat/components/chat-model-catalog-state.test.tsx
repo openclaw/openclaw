@@ -17,8 +17,8 @@ it.each([
   ["ready", true, ["openai", "clawrouter"], "refresh", "Refreshing models for OpenAI, Clawrouter…"],
   ["loading", false, ["clawrouter"], "loading", "Loading models…"],
   ["ready", false, ["clawrouter"], "loading", "Loading models…"],
-  ["error", true, ["clawrouter"], "settled", "Some models could not be refreshed."],
-  ["offline", true, ["clawrouter"], "settled", "Offline"],
+  ["error", true, ["clawrouter"], "settled", "Couldn’t refresh some models."],
+  ["offline", true, ["clawrouter"], "settled", "Disconnected"],
   ["ready", false, undefined, "setup", "No models available"],
 ] as const)(
   "presents %s with options=%s and pending=%j",
@@ -140,7 +140,7 @@ it.each([
 
 // Missing-auth may mean disabled plugin or missing pin, not just signed out.
 it.each([
-  ["anthropic", "claude-cli", "Claude Code isn't ready. If signed out, run claude auth login."],
+  ["anthropic", "claude-cli", "Claude CLI isn’t ready. If signed out, run claude auth login."],
   ["openai", undefined, "No models available"],
 ] as const)(
   "explains an empty picker of missing-auth %s rows (runtime %s)",

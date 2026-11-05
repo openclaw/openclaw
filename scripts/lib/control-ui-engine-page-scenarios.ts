@@ -199,20 +199,6 @@ function disclosure(selector: string): PageAction {
     },
   };
 }
-function refresh(selector: string, method: string): PageAction {
-  return {
-    label: `Refresh ${method}`,
-    run: async (page, gateway) => {
-      const before = (await gateway.getRequests(method)).length;
-      await page.locator(selector).first().click();
-      await gateway.waitForRequest(method, { after: before });
-      await frames(page);
-      await page.locator(`${selector}:enabled`).first().waitFor({ state: "visible" });
-      assert.equal(await page.locator('.agents-toolbar [role="alert"]').count(), 0);
-      return { refreshRequests: (await gateway.getRequests(method)).length - before };
-    },
-  };
-}
 const configPage = (): PageDefinition => ({
   ready: "openclaw-config-page .settings-page",
   action: {
@@ -297,18 +283,47 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   agents: {
-    ready: "openclaw-agents-page .agents-refresh-btn:enabled",
-    action: refresh(".agents-refresh-btn", "agents.list"),
+    ready: "openclaw-agents-page .agent-identity-editor",
+    completion: [{ selector: "openclaw-agents-page .agents-refresh-btn:enabled", minimum: 1 }],
+    action: {
+      label: "Refresh the agent roster, opening the phone action menu when needed",
+      run: async (page, gateway) => {
+        const before = (await gateway.getRequests("agents.list")).length;
+        const button = page.locator(".agents-refresh-btn").filter({ visible: true }).first();
+        if (await button.count()) {
+          await button.click();
+        } else {
+          await page.locator(".agents-page-menu__trigger").click();
+          await page
+            .locator('[role="menu"]:popover-open')
+            .getByRole("menuitem", { name: "Refresh", exact: true })
+            .click();
+        }
+        await gateway.waitForRequest("agents.list", { after: before });
+        await frames(page);
+        await page.locator("openclaw-agents-page .agents-refresh-btn:enabled").waitFor({
+          state: "attached",
+        });
+        assert.equal(await page.locator('.agents-toolbar [role="alert"]').count(), 0);
+        return { refreshRequests: (await gateway.getRequests("agents.list")).length - before };
+      },
+    },
   },
   approvals: {
-    ready: ".approval-history-table tbody tr",
-    rows: { selector: ".approval-history-table tbody tr", minimum: 100 },
+    ready: ".approval-history-table tbody tr, .approval-log > .approval-log__row",
+    rows: {
+      selector: ".approval-history-table tbody tr, .approval-log > .approval-log__row",
+      minimum: 100,
+    },
     action: {
       label: "Load the next 100 approval-history records",
       run: async (page) => {
         await page.locator('openclaw-approvals-page button:text-is("Load more")').click();
         await page.waitForFunction(
-          () => document.querySelectorAll(".approval-history-table tbody tr").length === 200,
+          () =>
+            document.querySelectorAll(
+              ".approval-history-table tbody tr, .approval-log > .approval-log__row",
+            ).length === 200,
         );
         await frames(page);
         return { historyRows: 200 };
@@ -371,7 +386,20 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   connection: {
     ready: "openclaw-connection-page .settings-page",
-    action: disclosure("openclaw-connection-page details"),
+    action: {
+      label: "Reveal the Gateway secret field",
+      run: async (page) => {
+        const toggle = page.locator(
+          'openclaw-connection-page button[aria-label="Toggle secret visibility"]',
+        );
+        await toggle.click();
+        await page
+          .locator('openclaw-connection-page input[aria-label="Gateway secret"][type="text"]')
+          .waitFor({ state: "visible" });
+        await frames(page);
+        return { opened: true };
+      },
+    },
   },
   custodian: {
     ready: "openclaw-custodian-page .custodian-surface",
@@ -695,12 +723,19 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   secrets: {
-    ready: "openclaw-secrets-page .secrets-store__table tbody tr",
-    rows: { selector: "openclaw-secrets-page .secrets-store__table tbody tr", minimum: 200 },
+    ready:
+      "openclaw-secrets-page .secrets-store__table tbody tr, openclaw-secrets-page .secrets-store__list .secrets-store__row",
+    rows: {
+      selector:
+        "openclaw-secrets-page .secrets-store__table tbody tr, openclaw-secrets-page .secrets-store__list .secrets-store__row",
+      minimum: 200,
+    },
     action: {
       label: "Open the first secret's row menu and edit its metadata",
       run: async (page) => {
-        const row = page.locator(".secrets-store__table tbody tr").first();
+        const row = page
+          .locator(".secrets-store__table tbody tr, .secrets-store__list .secrets-store__row")
+          .first();
         const name = (await row.locator(".secrets-store__name").textContent())?.trim();
         await row.locator(".secrets-store__menu-trigger").click();
         await page
@@ -774,9 +809,13 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   systems: {
-    ready: '.systems-workspace button[aria-label="Machine details"]:enabled',
+    ready:
+      '.systems-workspace button:is([aria-label="Machine details"], [aria-label="Device details"]):enabled',
     rows: { selector: ".systems-mobile-picker option:not(:disabled)", minimum: 61 },
-    action: click('.systems-workspace button[aria-label="Machine details"]', ".systems-details"),
+    action: click(
+      '.systems-workspace button:is([aria-label="Machine details"], [aria-label="Device details"])',
+      ".systems-details",
+    ),
   },
   terminal: {
     ready:
@@ -865,7 +904,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     ...configPage(),
     completion: [
       { selector: "openclaw-config-page .settings-row", minimum: quantity.advancedRows },
-      { selector: 'openclaw-config-page .settings-page[aria-busy="true"]', minimum: 0, maximum: 0 },
+      { selector: 'openclaw-config-page [aria-busy="true"]', minimum: 0, maximum: 0 },
       {
         selector:
           "openclaw-config-page input, openclaw-config-page select, openclaw-config-page textarea, openclaw-config-page button",
@@ -882,12 +921,12 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
       run: async (page) => {
         const card = page.locator("openclaw-mcp-servers-card");
         await card.getByRole("button", { name: "Add server", exact: true }).click();
-        const form = card.locator(".mcp-server-form");
+        const form = page.locator(".mcp-server-form");
         await form.locator('input[name="mcp-name"]:enabled').waitFor({ state: "visible" });
         await form.locator('input[name="mcp-target"]:enabled').waitFor({ state: "visible" });
         assert.equal(
-          await form.locator('select[name="mcp-transport"]').inputValue(),
-          "streamable-http",
+          await form.locator('input[type="radio"][value="streamable-http"]').isChecked(),
+          true,
         );
         await frames(page);
         return { addServerForm: true };
@@ -895,21 +934,28 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   memory: {
-    ready: ".memory-overview__hero-copy h2",
+    ready: ":is(.memory-overview__hero-copy, .memory-overview__status-copy) h2",
     action: {
       label: "Refresh the memory engine status",
       run: async (page, gateway) => {
         const before = (await gateway.getRequests("doctor.memory.status")).length;
-        await page.locator(".memory-overview__hero-actions button").click();
+        await page
+          .locator(":is(.memory-overview__hero-actions, .memory-overview__status-action) button")
+          .click();
         await gateway.waitForRequest("doctor.memory.status", {
           after: before,
           match: { agentId: "main" },
         });
         await page
-          .locator(".memory-overview__hero-copy h2")
+          .locator(":is(.memory-overview__hero-copy, .memory-overview__status-copy) h2")
           .getByText("Memory is awake", { exact: true })
           .waitFor();
-        assert.equal(await page.locator(".memory-overview__hero-error").count(), 0);
+        assert.equal(
+          await page
+            .locator(".memory-overview__hero-error, .memory-overview__status-error")
+            .count(),
+          0,
+        );
         await frames(page);
         return { statusRefreshed: true };
       },
@@ -946,7 +992,10 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   infrastructure: configPage(),
   updates: configPage(),
-  "ai-agents": configPage(),
+  "ai-agents": {
+    ...configPage(),
+    completion: [{ selector: 'openclaw-config-page [aria-busy="true"]', minimum: 0, maximum: 0 }],
+  },
   sessions: {
     ready: ".sessions-table .session-data-row",
     source: requiredScenario(interactionScenarios, "sessions-search"),

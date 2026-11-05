@@ -579,6 +579,8 @@ export type SessionControllerMailboxClaim = {
   retryBeforeExecution?: boolean;
 };
 
+type FollowupSummaryEntry = { source: FollowupRun; line: string };
+
 /** All runnable inputs, including direct native producers, share this ordered owner. */
 export type SessionControllerMailbox = {
   readonly key: string;
@@ -603,14 +605,11 @@ export type SessionControllerMailbox = {
   cap: number;
   dropPolicy: "old" | "new" | "summarize";
   droppedCount: number;
-  summaryLines: string[];
-  summarySources: FollowupRun[];
+  summaryEntries: FollowupSummaryEntry[];
   activeSummarySources: Set<FollowupRun>;
   summaryElisions: Array<{
     contextKey: string;
-    count: number;
-    sources: FollowupRun[];
-    summaryLines: string[];
+    entries: FollowupSummaryEntry[];
     sourceRefs: Map<FollowupRun, FollowupRun>;
   }>;
   lastRun?: FollowupRun["run"];

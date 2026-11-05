@@ -4,6 +4,7 @@ import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
 import type { GatewayStatusProps } from "../../components/gateway-status.ts";
+import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
@@ -19,9 +20,8 @@ import { ChatAvatar } from "./chat-avatar-view.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
-import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
 import { MessageMarkdown } from "./components/chat-message-text-view.tsx";
-import { ChatPaneHeader, ChatPaneIncognitoNotice } from "./components/chat-pane-header.tsx";
+import { ChatPaneHeader } from "./components/chat-pane-header.tsx";
 import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
 import { ChatPaneMobileHeader } from "./components/chat-pane-mobile-header.tsx";
 import { ChatWorkingIndicator } from "./components/chat-working-indicator.tsx";
@@ -243,6 +243,7 @@ function PendingSessionCreateContent(
       composer: {
         paneId: composerId,
         sessionKey: props.sessionKey,
+        incognito: isIncognitoSessionKey(props.sessionKey),
         currentAgentId: agentId,
         assistantName:
           displayName ?? agent?.identity?.name ?? agent?.name ?? t("agentChip.newAgent"),
@@ -300,9 +301,6 @@ function PendingSessionCreateContent(
                 </button>
               }
             />
-            <Show when={view().header.incognito}>
-              <ChatPaneIncognitoNotice />
-            </Show>
           </Show>
         </div>
         <section class="chat" data-region="main" aria-busy={view().submitting ? "true" : "false"}>
@@ -328,7 +326,7 @@ function PendingSessionCreateContent(
           </div>
         </section>
       </div>
-      <ChatImageLightbox
+      <ImageLightboxItemView
         item={(() => {
           imageRevision();
           return image;

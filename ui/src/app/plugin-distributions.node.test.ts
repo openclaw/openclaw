@@ -20,7 +20,7 @@ afterEach(async () => {
 
 const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
 const at = (...parts: string[]) => path.join(root, ...parts);
-const revision = "03ddfbeb5328d7bb5e6f1563118bf420ace8d09d7a33e241bbb59e95233ccc36";
+const revision = "090b805b36a98a3aaaba33328b9e0219d830d2e7f40a70a034994ecb26392bd1";
 const viteOptions = {
   configFile: false as const,
   publicDir: false as const,
@@ -53,7 +53,7 @@ async function fixture() {
     ["chunk-1.js", "export const message = 'Deferred Workboard';"],
     ["index.css", ".workboard { color: green; }"],
     ["index.js", "export default { id: 'workboard', load: () => import('./chunk-1.js') };"],
-    ["large.js", `export const message = "${"Large workboard asset ".repeat(200)}";`],
+    ["large.js", `export const message = "${"Large workboard asset ".repeat(800)}";`],
     ["small.css", ".workboard { color: green; }\n".repeat(8)],
   ] as const;
   const hash = createHash("sha256");
@@ -137,6 +137,26 @@ it("publishes the complete immutable generation with only useful eligible sideca
   expect(source).toContain(revisions[0]);
   expect(source).toContain("import.meta.url");
   expect(source).not.toContain("ROLLUP_FILE_URL");
+});
+
+it("invalidates packaged revisions when only the panel artwork changes", async () => {
+  const { pluginRoot } = await fixture();
+  const manifestPath = path.join(pluginRoot, "openclaw.plugin.json");
+  const manifest = JSON.parse(await readText(manifestPath));
+  manifest.controlUi.panelIcon = "panel.svg";
+  await fs.writeFile(manifestPath, JSON.stringify(manifest));
+  const iconPath = path.join(pluginRoot, "panel.svg");
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>';
+  await fs.writeFile(iconPath, svg);
+  const inputs = new Set<string>();
+  await compile(inputs);
+  const output = at("ui-output/assets/plugins/workboard");
+  const first = await fs.readdir(output);
+  await fs.writeFile(iconPath, svg.replace('r="8"', 'r="4"'));
+  await compile();
+  expect(await fs.readdir(output)).not.toEqual(first);
+  expect(inputs.has(iconPath)).toBe(true);
 });
 
 it.each(["missing", "changed"])("rejects a generation with a %s deferred chunk", async (kind) => {

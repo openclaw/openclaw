@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { formatDecisionSummary } from "../../packages/media-understanding-common/src/format.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { ProviderHttpError } from "../agents/provider-http-errors.js";
 import type { MsgContext } from "../auto-reply/templating.js";
@@ -13,7 +14,6 @@ import type {
 } from "../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { formatDecisionSummary } from "./runner.entries.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 

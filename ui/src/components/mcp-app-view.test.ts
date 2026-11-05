@@ -112,7 +112,9 @@ describe("mcp-app-view localization", () => {
       await view.updateComplete;
       await vi.advanceTimersByTimeAsync(15_000);
       await view.updateComplete;
-      expect(view.querySelector(".error")?.textContent).toContain("timed out");
+      expect(view.querySelector(".error")?.textContent).toContain(
+        "This app took too long to load. Try again.",
+      );
       view.querySelector<HTMLButtonElement>(".error button")!.click();
       await vi.advanceTimersByTimeAsync(0);
       await view.updateComplete;
@@ -137,7 +139,7 @@ describe("mcp-app-view localization", () => {
     expect(view.querySelector("iframe")).toBe(frame);
     expect(transport.close).not.toHaveBeenCalled();
     await expect(bridge.updateModelContextHandler!({ structuredContent: {} })).rejects.toThrow(
-      "gateway unavailable",
+      "Couldn’t connect this app. Reconnect and try again.",
     );
     pendingContext.resolve({ state: null });
     expect(await rejected).toMatchObject({ name: "AbortError" });
@@ -245,7 +247,7 @@ describe("mcp-app-view localization", () => {
     await view.updateComplete;
     const dialog = confirmation(view);
     expect(dialog!.textContent).toContain("Parts library");
-    expect(dialog!.textContent).toContain("Send this message to the assistant?");
+    expect(dialog!.textContent).toContain("Send this message to the agent?");
     const previewElement = [...dialog!.querySelectorAll<HTMLElement>("[title]")].find(
       (element) => element.title === preview,
     )!;
@@ -847,7 +849,7 @@ describe("mcp-app-view localization", () => {
       );
       await expect
         .poll(() => view.querySelector(".error")?.textContent)
-        .toContain("MCP App sandbox URL is invalid");
+        .toContain("Couldn’t load this app. Check its URL and try again.");
       expect(view.querySelector("iframe")).toBeNull();
     },
   );

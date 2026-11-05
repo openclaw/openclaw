@@ -22,7 +22,10 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-d
 import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
-import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import {
+  trackDoctorPreflightCache,
+  useDoctorConfigPreflightHome,
+} from "./doctor-config-preflight.test-support.js";
 import { prepareLegacyConfigMigrationRuntime } from "./doctor/shared/legacy-config-migrate.test-support.js";
 
 const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
@@ -54,6 +57,7 @@ afterAll(() => restoreMigrationRuntime?.());
 
 function createPluginConfig(pluginId: string, config?: Record<string, string>, paths?: string[]) {
   return {
+    meta: { migrations: { skillWorkshopPlugin: true as const } },
     gateway: { mode: "local" as const },
     plugins: {
       allow: [pluginId],
@@ -126,8 +130,10 @@ function makeFixture(home: string, pluginId: string) {
   };
 }
 
-function doctor(options: Parameters<typeof runDoctorConfigPreflight>[0] = {}) {
-  return runDoctorConfigPreflight({ ...doctorOptions, ...options });
+async function doctor(options: Parameters<typeof runDoctorConfigPreflight>[0] = {}) {
+  return trackDoctorPreflightCache(
+    await runDoctorConfigPreflight({ ...doctorOptions, ...options }),
+  );
 }
 
 function expectPending(pluginId: string, details: Record<string, unknown> = {}) {
@@ -321,9 +327,13 @@ module.exports.stateMigrations = ${JSON.stringify(actions)}.map(action => ({
             },
           ],
         });
-        await doctor();
+        const result = await doctor();
         expect((await f.read()).plugins).toEqual(config.plugins);
         if (source === "absent") {
+          expect(result.configChanged).toBe(true);
+          expect(result.snapshot.config.plugins?.entries?.[f.pluginId]?.config).toEqual({
+            enabled: false,
+          });
           expect(readDeferredPluginMigrations({ includeDeferred: true })).toEqual([]);
         } else {
           f.pending({ requiresStateMigration: true });
@@ -702,6 +712,52 @@ module.exports.stateMigrations = ${JSON.stringify(actions)}.map(action => ({
       expect(checked.valid).toBe(true);
     }));
 
+  it("promotes heartbeat config when update Doctor rewrites only retained obligation guidance", () =>
+    withFixture(async (f) => {
+      await f.stateless();
+      const config = {
+        ...f.config({ region: "us-en" }, [f.root]),
+        agents: {
+          defaults: { heartbeat: { agentId: "main", every: "30m" } },
+          entries: { main: { workspace: path.join(f.home, "workspace") } },
+        },
+      };
+      await f.write(config);
+      await recordDeferredPluginMigrations({
+        pending: [
+          {
+            pluginId: f.pluginId,
+            reason:
+              "Package convergence must wait until the updating parent releases its install records.",
+            command: "openclaw update repair",
+            requiresStateMigration: true,
+            configPaths: [["plugins", "entries", f.pluginId, "config"]],
+          },
+        ],
+      });
+      await seedInstalledPluginIndex(
+        {
+          [f.pluginId]: { source: "path", sourcePath: f.root, installPath: f.root },
+        },
+        { config },
+      );
+
+      await withEnvAsync(updating, async () => {
+        const result = await doctor();
+        expect(result.snapshot.valid).toBe(true);
+        f.pending({
+          requiresStateMigration: true,
+          command: "openclaw doctor --fix",
+          reason: expect.stringContaining("has not confirmed"),
+        });
+        expect(await f.read()).not.toHaveProperty("agents.defaults.heartbeat");
+        expect((await f.read()).plugins.entries[f.pluginId].config).toEqual({ region: "us-en" });
+        // update repair invokes the same candidate Doctor with the same parent markers.
+        expect((await doctor()).snapshot.valid).toBe(true);
+      });
+      expect((await withEnvAsync(notUpdating, () => doctor())).snapshot.valid).toBe(true);
+    }));
+
   it.each(["public-setup-full-detector", "broken"] as const)(
     "inspects retained obligations through the %s contract",
     (contract) =>
@@ -732,7 +788,7 @@ module.exports.stateMigrations = ${JSON.stringify(actions)}.map(action => ({
         await fs.unlink(path.join(f.root, "doctor-contract-api.cjs"));
         await f.stateless();
         const original = await f.raw();
-        await doctor(prepared);
+        expect((await doctor(prepared)).configChanged).toBe(false);
         expect(readDeferredPluginMigrations()).toEqual([]);
         expect(note).toHaveBeenCalledWith(
           '- Plugin "fixture" version "1.0.0": no plugin migration contract. No migration ran; existing data and settings have been kept.',

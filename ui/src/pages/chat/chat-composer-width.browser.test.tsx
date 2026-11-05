@@ -104,7 +104,7 @@ describe("composer border width control", () => {
     expect(shell.getBoundingClientRect().width).toBe(1081);
   });
 
-  it("keeps callback-only updates off the geometry path and uses the latest callback", async () => {
+  it("measures width changes but skips edge geometry for callback-only updates and uses the latest callback", async () => {
     await page.viewport(1440, 900);
     const f = fixture();
     await settled();
@@ -125,6 +125,14 @@ describe("composer border width control", () => {
     await settled();
     expect(onWidthChange).toHaveBeenCalledWith("1061px");
     expect(f.width()).toBe("1061px");
+    inputRead.mockClear();
+    f.setWidth("900px");
+    expect(inputRead).toHaveBeenCalled();
+    await settled();
+    f.edge().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(onWidthChange).toHaveBeenCalledWith("880px");
+    shellRead.mockRestore();
+    inputRead.mockRestore();
   });
 
   it("resets width to the opening preference and leaves no observer-owned handle after unmount", async () => {

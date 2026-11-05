@@ -1,4 +1,8 @@
-import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
+import {
+  isSettingsNavigationRoute,
+  isSettingsTakeover,
+  pageTitleForRoute,
+} from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
@@ -6,6 +10,7 @@ import type { SettingsSidebarFallbackProps } from "../components/settings-sideba
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { settingsParentTarget } from "../lib/settings-navigation.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.tsx";
 import { isTemplatesAvailable } from "../pages/templates/availability.ts";
@@ -17,7 +22,11 @@ import type { ApplicationRuntime } from "./bootstrap.ts";
 import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
-import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
+import {
+  isMobileNavLayout,
+  shouldFloatShellHeader,
+  shouldMergeChatChrome,
+} from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeEmbedHost, nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import {
@@ -35,6 +44,7 @@ import {
 import { resolveProfileAppearancePrefs } from "./server-prefs-profile.ts";
 import { NAV_WIDTH_MAX, normalizeCatalogOpenTarget } from "./settings.ts";
 import type { ShellLayoutOwner } from "./shell-layout-owner.ts";
+import { currentThemeBranding } from "./theme-branding.ts";
 
 export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElements {
   mobileGatewayStatus: GatewayStatusProps | null;
@@ -119,6 +129,15 @@ export function readShellView(host: ShellViewHost) {
           context.basePath,
         )
       : null;
+  const workboardLayout =
+    activeRoute === "workboard" ||
+    (activePluginRef !== null &&
+      (gatewaySnapshot.hello?.controlUiTabs ?? []).some(
+        (tab) =>
+          tab.pluginId === activePluginRef.pluginId &&
+          tab.id === activePluginRef.id &&
+          tab.placement === "route:workboard",
+      ));
   // Onboarding renders without any navigation chrome, so the settings takeover
   // must not reserve its sidebar column (the grid would stay off-center).
   const nativeEmbed = isNativeEmbedHost();
@@ -144,6 +163,23 @@ export function readShellView(host: ShellViewHost) {
     routeId: activeRoute,
     onboarding,
   });
+  const floatingHeader =
+    !nativeEmbed &&
+    shouldFloatShellHeader({
+      mobileNavLayout,
+      routeId: activeRoute,
+      onboarding,
+    });
+  const backTarget =
+    floatingHeader && settingsTakeover
+      ? settingsParentTarget(activeRoute, host.routeState.location, context.basePath)
+      : null;
+  const floatingBack = backTarget
+    ? () => {
+        const { routeId, ...location } = backTarget;
+        host.shellNavigation.navigate(routeId, location);
+      }
+    : undefined;
   // Drawer navigation always opens expanded; the tab's desktop collapse state
   // stays in memory for when the viewport returns to the desktop layout.
   // Settings needs expanded navigation, so the collapse state pauses there too.
@@ -257,8 +293,11 @@ export function readShellView(host: ShellViewHost) {
       : 0,
     onRetry: callbacks.retryGateway,
   };
+  // The floating refresh notice takes the badge's place below the phone header.
   const mobileGatewayStatus = () =>
-    mobileNavLayout && !navDrawerOpen() && !nativeEmbed ? gatewayStatus : null;
+    mobileNavLayout && !navDrawerOpen() && !nativeEmbed && !controlUiRefreshRequired
+      ? gatewayStatus
+      : null;
   const floatingUpdateCard = {
     get navigationSurfaceHidden() {
       return navigationSurfaceHidden();
@@ -287,6 +326,7 @@ export function readShellView(host: ShellViewHost) {
         host.shellNavigation.navigate("settings");
       }
     },
+    onEscape: nativeEmbed ? undefined : () => host.shellNavigation.leaveSettingsLevel(),
     canAdmin: operatorAccess.canAdmin,
     nativeDeviceSettings: context.nativeDeviceSettings,
   };
@@ -308,6 +348,7 @@ export function readShellView(host: ShellViewHost) {
     homePanelAvailable,
     custodianPanelAvailable,
     activeRoute,
+    workboardLayout,
     sessionRoute,
     workbenchRoute:
       !host.routeState.routeFailed &&
@@ -325,6 +366,14 @@ export function readShellView(host: ShellViewHost) {
     mobileNavLayout,
     nativeWebChrome,
     mergedChatChrome,
+    floatingHeader,
+    floatingBack,
+    get pageTitle() {
+      // The brand alone: "Ask OpenClaw" has no centered room beside History's three-button pill.
+      return activeRoute === "custodian"
+        ? currentThemeBranding().brandName
+        : pageTitleForRoute(activeRoute, context.nativeDeviceSettings?.snapshot);
+    },
     get navCollapsed() {
       return navCollapsed();
     },
