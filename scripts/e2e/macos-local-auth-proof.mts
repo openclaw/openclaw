@@ -280,24 +280,6 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
     result.serviceSnapshotHasRefKey = snapshot.includes("GW_PROOF_CREDENTIAL=");
     assert.equal(result.serviceSnapshotHasCredential, !typedToken);
     assert.equal(result.serviceSnapshotHasRefKey, !shorthand);
-    const readinessDeadline = Date.now() + 90_000;
-    let ready = false;
-    while (Date.now() < readinessDeadline) {
-      try {
-        const response = await fetch(`http://127.0.0.1:${port}/healthz`, {
-          signal: AbortSignal.timeout(1_000),
-        });
-        ready = response.ok;
-      } catch {
-        /* A service still starting has no HTTP listener yet. */
-      }
-      if (ready) {
-        break;
-      }
-      await delay(1_000);
-    }
-    result.serviceReady = ready;
-    assert.ok(ready, "The actual installed Gateway did not become ready");
     const phases = scenario.upgrade ? ["stable", "candidate"] : ["candidate"];
     for (const phase of phases) {
       if (scenario.upgrade && phase === "candidate") {
@@ -359,6 +341,26 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
           path.join(root, name, "OpenClaw.app"),
         ]);
       }
+      // Attach-only observations require the installed service to be ready,
+      // including after replacing it during a manual upgrade.
+      const readinessDeadline = Date.now() + 90_000;
+      let ready = false;
+      while (Date.now() < readinessDeadline) {
+        try {
+          const response = await fetch(`http://127.0.0.1:${port}/healthz`, {
+            signal: AbortSignal.timeout(1_000),
+          });
+          ready = response.ok;
+        } catch {
+          /* A service still starting has no HTTP listener yet. */
+        }
+        if (ready) {
+          break;
+        }
+        await delay(1_000);
+      }
+      result.serviceReady = ready;
+      assert.ok(ready, "The actual installed Gateway did not become ready");
       const protocolLog = path.join(state, "gateway.jsonl");
       const protocolOffset = fs.existsSync(protocolLog)
         ? fs.readFileSync(protocolLog, "utf8").length
