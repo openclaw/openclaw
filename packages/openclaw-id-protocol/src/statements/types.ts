@@ -193,8 +193,9 @@ export type MembershipSnapshotBody = {
   owner_peer_keys: IrohEndpointKey[];
   members: SnapshotMember[];
   /**
-   * The versions this Gateway accepts. Signed by K_gw and only trusted from a snapshot that
-   * passed `assessFreshness`, so Discovery cannot strip a newer version or replay an old list.
+   * The versions this Gateway accepts. Signed by K_gw and only used from a snapshot that passed
+   * `assessFreshness`, so Discovery cannot edit it. It can still replay an older list a client
+   * has not seen; the Gateway refusing unlisted versions is what keeps that harmless.
    */
   protocols: ProtocolVersions;
   issued_at: UnixSeconds;

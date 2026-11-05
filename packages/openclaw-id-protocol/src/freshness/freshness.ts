@@ -58,8 +58,8 @@ export type FreshnessAssessment = {
   verdict:
     /**
      * Fresh evidence. `protocols` is the Gateway's signed version list from that snapshot: the
-     * only input `selectVersion` may use. Without fresh evidence a client stays on the versions
-     * every supported Gateway accepts (the oldest it implements).
+     * only input `selectVersion` may use. Without fresh evidence there is no list; the Gateway's
+     * own enforcement is what keeps a client off a version it refuses (docs/versioning.md).
      */
     | { ok: true; fresh: true; snapshotAge: number; protocols: ProtocolVersions }
     | { ok: true; fresh: false; gap: FreshnessGap }

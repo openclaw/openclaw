@@ -59,7 +59,7 @@ export type VersionSelection<V extends number> =
 /**
  * Picks the highest version both sides implement. `advertised` must come from a Gateway-signed
  * snapshot that passed `assessFreshness` (MembershipSnapshot `protocols`); a list from anywhere
- * else could be stripped by Discovery to force an older version.
+ * else could be edited by Discovery.
  */
 export function selectVersion<V extends number>(
   advertised: readonly number[],
