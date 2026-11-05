@@ -419,7 +419,7 @@ async function openTerminalSessionWithSource(
             context.resolveTerminalLaunchPolicy(refreshedLaunch.plan.agentId).ok &&
             authorizeTerminalNodeCommand(context, relay.plan.nodeId, relay.plan.command).ok &&
             !deadline.controller.signal.aborted &&
-            Date.now() < deadline.expiresAtMs
+            performance.now() < deadline.expiresAtMs
           );
         },
         command: relay.plan.command,
