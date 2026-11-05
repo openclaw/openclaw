@@ -157,4 +157,23 @@ describe("decodeRerankDecision", () => {
       topic: { type: "choice", choice: "pay", probabilities: { net: 0.4, pay: 0.6, none: 0.6 } },
     });
   });
+
+  it("keeps reserved question IDs and choice labels as own keys", () => {
+    const questions: DecisionBatchV2["questions"] = JSON.parse(
+      '{"__proto__":{"type":"boolean","instructions":"Router manual"},' +
+        '"topic":{"type":"choice","criteria":{"__proto__":null,"constructor":null}}}',
+    );
+    const answers = decodeRerankDecision(planRerankDecision(text(questions))!, [[0.7, 0.2, 0.9]]);
+    expect(Object.getPrototypeOf(answers)).toBe(Object.prototype);
+    expect(Object.keys(answers)).toEqual(["__proto__", "topic"]);
+    expect(Object.getOwnPropertyDescriptor(answers, "__proto__")?.value).toEqual({
+      type: "boolean",
+      probabilityTrue: 0.7,
+    });
+    const topic = answers.topic;
+    expect(topic?.type === "choice" && Object.entries(topic.probabilities ?? {})).toEqual([
+      ["__proto__", 0.2],
+      ["constructor", 0.9],
+    ]);
+  });
 });

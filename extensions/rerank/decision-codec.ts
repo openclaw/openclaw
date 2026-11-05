@@ -193,17 +193,19 @@ export function decodeRerankDecision(
   plan: RerankPlan,
   scores: readonly (readonly number[])[],
 ): Record<string, DecisionAnswerV2> {
-  const answers: Record<string, DecisionAnswerV2> = {};
-  const choices = new Map<string, Record<string, number>>();
+  // Maps until the end: question IDs and choice labels are caller data (even
+  // `__proto__`), and Object.fromEntries defines own properties for every key.
+  const answers = new Map<string, DecisionAnswerV2>();
+  const choices = new Map<string, Map<string, number>>();
   const sorts = new Map<string, { id: string; score: number; position: number }[]>();
   plan.slots.forEach((requestSlots, request) => {
     requestSlots.forEach((slot, position) => {
       const score = scores[request]![position]!;
       if (slot.kind === "boolean") {
-        answers[slot.question] = { type: "boolean", probabilityTrue: score };
+        answers.set(slot.question, { type: "boolean", probabilityTrue: score });
       } else if (slot.kind === "choice") {
-        const probabilities = choices.get(slot.question) ?? {};
-        probabilities[slot.label] = score;
+        const probabilities = choices.get(slot.question) ?? new Map<string, number>();
+        probabilities.set(slot.label, score);
         choices.set(slot.question, probabilities);
       } else {
         const ranked = sorts.get(slot.question) ?? [];
@@ -214,20 +216,26 @@ export function decodeRerankDecision(
   });
   for (const [question, probabilities] of choices) {
     let choice: string | null = null;
-    for (const [label, score] of Object.entries(probabilities)) {
-      if (choice === null || score > probabilities[choice]!) {
+    let best = -Infinity;
+    for (const [label, score] of probabilities) {
+      if (choice === null || score > best) {
         choice = label;
+        best = score;
       }
     }
-    answers[question] = { type: "choice", choice, probabilities };
+    answers.set(question, {
+      type: "choice",
+      choice,
+      probabilities: Object.fromEntries(probabilities),
+    });
   }
   for (const [question, ranked] of sorts) {
-    answers[question] = {
+    answers.set(question, {
       type: "sort",
       order: ranked
         .toSorted((a, b) => b.score - a.score || a.position - b.position)
         .map(({ id }) => id),
-    };
+    });
   }
-  return answers;
+  return Object.fromEntries(answers);
 }

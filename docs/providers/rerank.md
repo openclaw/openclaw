@@ -73,8 +73,9 @@ it as the Decision model:
 - The plugin declares the model as Decision-only; it is never offered as a chat
   model.
 
-To run several rerank servers, add one provider entry per server with its own
-`baseUrl` and model list.
+The plugin serves one provider entry, `rerank`, so it points at one server. List
+every model that server hosts under `models.providers.rerank.models`. Other
+provider IDs (for example `rerank-home`) are not handled by this plugin.
 
 ## What a reranker can answer
 
