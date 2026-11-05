@@ -369,6 +369,14 @@ must be labeled diagnostic, not a performance result.
 
 ## Compare two UI builds
 
+For a foreground-window diagnostic, add `--headed`. The rig launches its own
+Chromium and brings the captured tab to the foreground before each navigation;
+it never attaches to an existing browser. Calibration runs in the same mode.
+The default remains headless for quiet-host comparisons. `domStates` records
+sidebar and transcript row counts, Details section count, header and composer
+presence, and the critical frame, so regional mount stages can be correlated
+with the delivered PNGs. These DOM milestones do not establish painted pixels.
+
 Run one command on a quiet, fixed-instance Crabbox lease:
 
 ```sh

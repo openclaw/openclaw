@@ -47,6 +47,7 @@ const { values } = parseArgs({
     "active-targets": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
+    headed: { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
     route: { type: "string", default: "both" },
     "audit-report": { type: "string" },
@@ -60,6 +61,7 @@ if (values.help) {
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
   --transcript-late-paint --plugin-activation --active-targets --reload-after-navigation --cpu-profile
+  --headed (foreground Chromium window for diagnostic paint-holding captures)
   --init-script <browser-script.js> (repeatable)
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
@@ -326,6 +328,7 @@ async function captureReload(
   shortVisit?: ShortVisit,
 ) {
   await mkdir(outputDir, { recursive: true });
+  await page.bringToFront();
   const oldAnimationSample = warm
     ? await page.evaluate(() => {
         const data: ReturnType<typeof installWarmReloadBrowserProbe> = Reflect.get(
@@ -847,7 +850,7 @@ try {
   await fixture.prepareGateway((method, params) =>
     runCli(["gateway", "call", method, "--json", "--params", JSON.stringify(params)]),
   );
-  const launched = await launchWarmReloadBrowser();
+  const launched = await launchWarmReloadBrowser(!values.headed);
   browser = launched.browser;
   browserConfiguration = launched.configuration;
   if (admission) {

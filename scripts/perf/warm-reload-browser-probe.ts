@@ -69,7 +69,16 @@ export function installWarmReloadBrowserProbe(
       found?: boolean;
     }>,
     shifts: [] as Array<{ atMs: number; value: number }>,
-    domStates: [] as Array<{ atMs: number; rows: number; sidebarRows: number; board: boolean }>,
+    domStates: [] as Array<{
+      atMs: number;
+      rows: number;
+      sidebarRows: number;
+      board: boolean;
+      detailsSections: number;
+      header: boolean;
+      composer: boolean;
+      critical: boolean;
+    }>,
     sidebarFrames: [] as Array<{
       atMs: number;
       host: boolean;
@@ -635,9 +644,20 @@ export function installWarmReloadBrowserProbe(
       data.finalRowsDomMs = performance.now();
     }
     previousRows = rowSignature;
-    const state = `${rows}/${sidebarRows}/${board}`;
+    const regions = {
+      rows,
+      sidebarRows,
+      board,
+      detailsSections: document.querySelectorAll(
+        ".chat-details section.chat-details-session, .chat-details [data-details-group]",
+      ).length,
+      header: Boolean(document.querySelector(".chat-pane__header")),
+      composer: Boolean(document.querySelector(".agent-chat__input")),
+      critical: Boolean(document.querySelector("#openclaw-boot-shell, .connect-splash--skeleton")),
+    };
+    const state = JSON.stringify(regions);
     if (state !== previous) {
-      data.domStates.push({ atMs: performance.now(), rows, sidebarRows, board });
+      data.domStates.push({ atMs: performance.now(), ...regions });
       previous = state;
     }
     for (const [selector, name, reason, maxWidth] of [

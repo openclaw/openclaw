@@ -23,13 +23,13 @@ async function browserArguments(browser: Browser) {
   }
 }
 
-/** Playwright disables PaintHolding by default; use full headless Chrome and verify the cutover. */
-export async function launchWarmReloadBrowser() {
+/** Playwright disables PaintHolding by default; use full Chrome and verify the cutover. */
+export async function launchWarmReloadBrowser(headless = true) {
   let probe: Browser | undefined, browser: Browser | undefined;
   try {
     probe = await chromium.launch({
       channel: "chromium",
-      headless: true,
+      headless,
       args: ["--enable-automation"],
     });
     const original = await browserArguments(probe);
@@ -44,7 +44,7 @@ export async function launchWarmReloadBrowser() {
     probe = undefined;
     browser = await chromium.launch({
       channel: "chromium",
-      headless: true,
+      headless,
       ignoreDefaultArgs: original.filter((argument) =>
         /^--(?:en|dis)able-features=/u.test(argument),
       ),
@@ -63,14 +63,14 @@ export async function launchWarmReloadBrowser() {
         throw new Error(`Paint-holding setup changed unexpected ${name} members`);
       }
     }
-    if (!effective.includes("--headless")) {
-      throw new Error("Paint-holding proof requires headless Chromium");
+    if (effective.includes("--headless") !== headless) {
+      throw new Error("Paint-holding browser visibility differs from the requested mode");
     }
     return {
       browser,
       configuration: {
         channel: "chromium",
-        headless: true,
+        headless,
         version: browser.version(),
         executable: path.basename(effective[0] ?? ""),
         enabledFeatures: enabled,
@@ -163,6 +163,7 @@ export async function calibrateWarmReloadPaintHolding(
       });
       try {
         const page = await context.newPage();
+        await page.bringToFront();
         const cdp = await context.newCDPSession(page);
         await cdp.send("Page.enable");
         await page.goto(`http://127.0.0.1:${options.port}/old`, { timeout: 4000 });
