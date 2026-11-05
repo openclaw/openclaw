@@ -18,7 +18,7 @@ export class TranscriptInitialRange {
   preparingEnd = false;
   private tailRows: number;
   private rows: readonly TranscriptRow[] = [];
-  private hasRetainedRows = false;
+  private hasIdleDomRows = false;
   private hasPrewarmRows = false;
   // Completed text rows have no widget custody. Retain their keyed DOM while
   // keeping inactive rows outside the visible range's flow.
@@ -119,12 +119,12 @@ export class TranscriptInitialRange {
   presentation(rows: readonly TranscriptRow[]) {
     if (this.rows !== rows) {
       this.rows = rows;
-      this.hasRetainedRows = false;
+      this.hasIdleDomRows = false;
       this.hasPrewarmRows = false;
       for (const row of rows) {
         this.hasPrewarmRows ||= Boolean(row.prewarm || row.retainDom);
-        if (row.retainDom) {
-          this.hasRetainedRows = true;
+        if (row.retainDom && !row.prewarm) {
+          this.hasIdleDomRows = true;
           break;
         }
       }
@@ -377,7 +377,7 @@ export class TranscriptInitialRange {
     if (
       this.cancelPreparation ||
       !this.hasPrewarmRows ||
-      (!this.hasRetainedRows && this.rows.at(-1)?.streaming) ||
+      (!this.hasIdleDomRows && this.rows.at(-1)?.streaming) ||
       this.preparingEnd ||
       this.pending ||
       this.tailRows > 0 ||
@@ -387,13 +387,13 @@ export class TranscriptInitialRange {
     }
     const materializeRow = materialize && !this.preparingRowKey;
     const idlePrewarmLimit =
-      this.scrollSample.time && this.hasRetainedRows
+      this.scrollSample.time && this.hasIdleDomRows
         ? IDLE_PREWARM_ROW_LIMIT
         : INITIAL_PREWARM_ROW_LIMIT;
     const idleRange = this.virtualizer().range;
     if (
       idleRange &&
-      (this.viewportOnly || !this.hasRetainedRows || this.idleMeasureStep > PREPARED_ROW_LIMIT) &&
+      (this.viewportOnly || !this.hasIdleDomRows || this.idleMeasureStep > PREPARED_ROW_LIMIT) &&
       performance.now() - this.scrollSample.time >= 100
     ) {
       const sampledDirection = this.scrollSample.direction;
@@ -422,7 +422,7 @@ export class TranscriptInitialRange {
       if (
         this.preparingEnd ||
         !this.hasPrewarmRows ||
-        (!this.hasRetainedRows && this.rows.at(-1)?.streaming) ||
+        (!this.hasIdleDomRows && this.rows.at(-1)?.streaming) ||
         !this.canPrepare() ||
         !range ||
         !virtualizer.scrollElement ||
@@ -488,7 +488,7 @@ export class TranscriptInitialRange {
       const rendered = new Set(virtualizer.getVirtualItems().map((row) => row.key));
       // Before reader navigation, keep warming out of the native scroll geometry.
       const nearGeometryPending =
-        this.hasRetainedRows && !this.viewportOnly && this.idleMeasureStep <= PREPARED_ROW_LIMIT;
+        this.hasIdleDomRows && !this.viewportOnly && this.idleMeasureStep <= PREPARED_ROW_LIMIT;
       if (prewarm && !moving) {
         // Measure nearby prepared rows before spending idle slices on distant HTML.
         const warmLimit = nearGeometryPending ? PREPARED_ROW_LIMIT : idlePrewarmLimit;
@@ -507,7 +507,9 @@ export class TranscriptInitialRange {
           }
           // Ordinary rows warm data only; retaining their trees doubled mixed-session DOM.
           const mode =
-            row.retainDom && this.idleStep <= PREPARED_ROW_LIMIT ? "fragment" : "idle-html";
+            row.retainDom && !row.prewarm && this.idleStep <= PREPARED_ROW_LIMIT
+              ? "fragment"
+              : "idle-html";
           if (!rendered.has(row.key) && (row.prewarm || row.retainDom) && this.prewarmRow) {
             const warmed = this.prewarmRow(index, mode);
             if (warmed === undefined) {
@@ -690,7 +692,7 @@ export class TranscriptInitialRange {
 
   releaseRows(): void {
     this.rows = [];
-    this.hasRetainedRows = false;
+    this.hasIdleDomRows = false;
     this.hasPrewarmRows = false;
   }
 

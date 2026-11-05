@@ -136,7 +136,7 @@ describe("long completed runs", () => {
     const frames = framesOf(chain);
     expect(frames).toHaveLength(runs);
     const index = indexFor(chain);
-    const preparation = { retainDom: retained, prewarm: windowed && !retained };
+    const preparation = { retainDom: windowed, prewarm: windowed && !retained };
     for (const [run, frame] of frames.entries()) {
       const suffix = run === 0 ? "" : `-${run}`;
       const first = index.messageRowKeysById.get(`step-0${suffix}`);

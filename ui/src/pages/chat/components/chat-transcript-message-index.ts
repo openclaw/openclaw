@@ -334,7 +334,7 @@ export function projectTranscriptIndex(
   return indexes(chain, cacheKey, (): TranscriptIndex => {
     // Smaller transcripts scroll more cheaply without repeatedly mounting fragments.
     let sourceCount = 0;
-    const retainFrameFragments = chain.transcriptItems.some((item) => {
+    const prepareIdleFrameFragments = chain.transcriptItems.some((item) => {
       for (const group of chatItemGroups(item)) {
         sourceCount += group.messages.length;
         if (sourceCount > 512) {
@@ -394,10 +394,10 @@ export function projectTranscriptIndex(
           : [item];
       for (const rowItem of rendered) {
         // Rich work sources include their Markdown and paired tool output.
-        // Medium histories warm fragment data without mounting offscreen trees.
-        // Larger split runs retain their existing advance materialization.
+        // Medium histories warm data while idle and retain visited fragments.
+        // Larger split runs also materialize unseen rows while idle.
         const fragment = rowItem.kind === "agent-run-frame" && Boolean(rowItem.fragment);
-        const retainDom = fragment && retainFrameFragments;
+        const retainDom = fragment;
         const estimatedSize =
           rowItem.kind === "agent-run-frame" && rowItem.fragment
             ? rowItem.parts.reduce(
@@ -415,7 +415,7 @@ export function projectTranscriptIndex(
           ...row(rowItem),
           estimatedSize,
           retainDom,
-          prewarm: rowItem.kind === "group" || (fragment && !retainFrameFragments),
+          prewarm: rowItem.kind === "group" || (fragment && !prepareIdleFrameFragments),
         });
       }
       if (item.kind === "work-group" && expandedToolCards.get(item.key)) {

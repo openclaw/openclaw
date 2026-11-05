@@ -45,7 +45,7 @@ async function transcriptFixture(
   initialOffset: number | null = 0,
   idlePreparation = false,
   plainFirstRow = false,
-  ordinary: boolean | "retained" = false,
+  ordinary: boolean | "retained" | "data-only" = false,
   viewportHeight = 600,
   completedFrame: boolean | "toolCall" = false,
   retainStride = 1,
@@ -95,14 +95,18 @@ async function transcriptFixture(
       );
     }
   };
-  const rows: TranscriptRow<number>[] = Array.from({ length: 256 }, (_, index) => ({
-    kind: "item",
-    key: `fragment:${index}`,
-    item: index,
-    estimatedSize: index === 0 && plainFirstRow ? undefined : 100,
-    retainDom: ordinary !== true && !(index === 0 && plainFirstRow) && index % retainStride === 0,
-    prewarm: Boolean(ordinary),
-  }));
+  const rows: TranscriptRow<number>[] = Array.from({ length: 256 }, (_, index) => {
+    const retainDom =
+      ordinary !== true && !(index === 0 && plainFirstRow) && index % retainStride === 0;
+    return {
+      kind: "item",
+      key: `fragment:${index}`,
+      item: index,
+      estimatedSize: index === 0 && plainFirstRow ? undefined : 100,
+      retainDom,
+      prewarm: Boolean(ordinary) && (!retainDom || ordinary === "data-only"),
+    };
+  });
   const groups = ordinary
     ? rows.map((_, index) =>
         createMessageGroup(
@@ -295,6 +299,21 @@ async function transcriptFixture(
     },
   };
 }
+
+it("warms medium row data without mounting unseen DOM while idle", async () => {
+  const view = await transcriptFixture(0, true, false, "data-only");
+  const initialRows = new Set(
+    transcriptRows(view.container).map((row) => row.dataset.virtualRowKey),
+  );
+  for (let turn = 0; turn < 160; turn++) {
+    await view.idle(10, 1);
+    await view.frame(2, false);
+  }
+  expect(prewarmGroupedMessage(view.groups[9]!.messages[0]!.message, {}, "html")).toBe(false);
+  expect(
+    transcriptRows(view.container).filter((row) => !initialRows.has(row.dataset.virtualRowKey)),
+  ).toEqual([]);
+});
 
 it("bounds initial HTML warming and keeps distant rows out of the DOM", async () => {
   const view = await transcriptFixture(0, true, false, "retained");
