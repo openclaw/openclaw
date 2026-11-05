@@ -92,8 +92,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     if (this.connected && !this.offsetState.pendingInteractionAnchor) {
       if (
         !this.offsetState.touchActive &&
-        this.prependAnchor.messageKey !== null &&
-        this.prependAnchor.update(this.virtualizer, this.readerAnchor.rowsMeasured())
+        this.prependAnchor.update(this.virtualizer, this.readerAnchor.rowsMeasured)
       ) {
         this.offsetState.syncNativeOffset?.();
         this.presentation.commitChange(this.invalidate, true);
@@ -164,6 +163,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   readonly prependAnchor = new TranscriptPrependAnchor(
     this.messageElements.elements,
     this.recordEndLayoutCorrection,
+    () => this.presentation.measureRows(),
   );
   private candidateMessageRowKeysById: ReadonlyMap<string, string> = new Map();
   private candidateMessageRowsByKey: ReadonlyMap<string, string> = new Map();
@@ -188,7 +188,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       (element, entry) => this.presentation.measureElement(element, entry),
       (effect) => this.renderer.queueAfterCommit(effect),
       () => this.presentation.measureRowsWithoutScrollAdjustment(),
-      (indexes) => this.readerAnchor.rowsMeasured(indexes),
+      this.readerAnchor.rowsMeasured,
       (index, mode) => this.renderer.prewarmRow(index, mode),
       // Coalesce completion with measured geometry instead of mounting a second
       // range in the ResizeObserver delivery's microtask checkpoint.

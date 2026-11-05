@@ -66,7 +66,7 @@ export class TranscriptReaderAnchor {
   ) {}
 
   /** Native receipts and the active range must describe the same measurement batch. */
-  rowsMeasured(indexes?: readonly number[]): boolean {
+  readonly rowsMeasured = (indexes?: readonly number[]): boolean => {
     const { virtualizer } = this.host;
     const rows = virtualizer.getVirtualItems();
     const required = indexes
@@ -85,7 +85,7 @@ export class TranscriptReaderAnchor {
         row?.isConnected === true && height !== undefined && Math.abs(height - item.size) < 0.5
       );
     });
-  }
+  };
 
   /** Restoration, scroll commands, prepend and disclosure anchors place the reader themselves. */
   private positionOwned(): boolean {
