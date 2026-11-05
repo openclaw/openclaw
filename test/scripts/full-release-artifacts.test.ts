@@ -835,6 +835,24 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     expect(result.apiCalls[`repos/${REPOSITORY}/${path}`]).toBe(reads);
   });
 
+  it.each([false, true])(
+    "keeps incomplete live job pages pending without hiding identity changes: %s",
+    (changedIdentity) => {
+      const test = fixture();
+      test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+        total_count: 2,
+        jobs: [{ ...test.jobs[0], ...(changedIdentity ? { head_sha: "c".repeat(40) } : {}) }],
+      });
+      test.collect(
+        "receipt",
+        { FIXTURE_STOP_ON_WAIT: "true" },
+        changedIdentity
+          ? "Artifact producer job identity changed"
+          : "Fixture reached another artifact poll",
+      );
+    },
+  );
+
   it.each([
     ["failed unrelated qualifier", {}, { ...completed, conclusion: "failure" }, false, ""],
     ["failed raw job", { conclusion: "failure" }, {}, false, JOB_MISMATCH],
