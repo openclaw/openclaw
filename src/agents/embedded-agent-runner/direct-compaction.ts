@@ -7,6 +7,7 @@ import {
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { hasModelFallbackStop } from "../failover-error.js";
+import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import { executePreparedCompactionSession } from "./compaction-session-execution.js";
 import {
   prepareDirectCompactionAttempt,
@@ -16,15 +17,13 @@ import {
   buildPreparedCompactionRuntime,
   type PreparedCompactionCleanup,
 } from "./prepared-compaction-runtime.js";
-import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export async function compactEmbeddedAgentSessionDirectOnce(
   params: PreparedCompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  const { markSessionActivityCompaction, clearSessionActivityCompaction } = await import(
-    "../../logging/diagnostic-run-activity.js"
-  );
+  const { markSessionActivityCompaction, clearSessionActivityCompaction } =
+    await import("../../logging/diagnostic-run-activity.js");
   const compactionOwner = {
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
