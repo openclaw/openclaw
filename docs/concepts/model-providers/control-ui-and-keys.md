@@ -17,6 +17,11 @@ the saved profile. Environment-provided keys remain managed by the Gateway
 process environment. The page distinguishes saved accounts from API keys managed in config or the
 environment without revealing keys.
 Use **Test access** to check whether a provider account can use its models.
+Saving or replacing an API key runs the same check right away. If the provider
+rejects the key, the key stays saved, the form stays open with the reason, and
+you can paste a different key. If the check can't finish (for example, the
+provider returns a server error or times out), the key stays saved and you can
+retry with **Test access**.
 You can view Models without admin access, but only admins can change model settings.
 
 Saving a key and refreshing the catalog are separate outcomes. If refresh fails,

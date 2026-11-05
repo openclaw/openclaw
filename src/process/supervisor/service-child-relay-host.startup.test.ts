@@ -1,9 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { nextEventLoopTurn } from "../../../test/helpers/promise.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { firstMockArg } from "./adapters/child.test-support.js";
 import { encodeServiceChildMessage } from "./service-child-protocol.js";
+import { closeStub, relayPeer } from "./service-child-relay-host.fixture.test-support.js";
 import { createServiceChildRelayAdapter } from "./service-child-relay-host.js";
 import { createWritableRelayChild } from "./service-child-relay-host.test-support.js";
 
@@ -16,6 +18,46 @@ vi.mock("node:child_process", async (importOriginal) => ({
 afterEach(() => {
   mocks.spawn.mockReset();
   vi.restoreAllMocks();
+});
+
+it("does not launch after the relay closes during target preparation", async () => {
+  mockProcessPlatform("darwin");
+  const stub = createWritableRelayChild();
+  mocks.spawn.mockReturnValue(stub.child);
+  const preparing = createDeferredCore();
+  const release = createDeferredCore();
+  const writes = vi.spyOn(stub.control, "write");
+  const { adapter, ready } = await createServiceChildRelayAdapter({
+    command: "synthetic-command",
+    args: [],
+    stdinMode: "pipe-closed",
+    oomScoreWrapperSelected: false,
+    prepareTargetSpawn: async () => {
+      preparing.resolve();
+      await release.promise;
+    },
+  });
+  const outcome = ready.catch((error: unknown) => error);
+  try {
+    const { emit } = relayPeer(stub);
+    emit({ type: "prepared" });
+    await preparing.promise;
+    emit({ type: "closing", reason: "lineage-lost" });
+    await nextEventLoopTurn();
+    release.resolve();
+    await nextEventLoopTurn();
+    expect(writes.mock.calls.some(([chunk]) => String(chunk).includes('"type":"launch"'))).toBe(
+      false,
+    );
+  } finally {
+    release.resolve();
+    closeStub(stub);
+    stub.stdout.end();
+    stub.stderr.end();
+    await outcome;
+    await adapter.waitForExtinction().catch(() => undefined);
+    adapter.dispose();
+  }
 });
 
 it("joins failed POSIX startup cleanup before returning the original executable error", async () => {

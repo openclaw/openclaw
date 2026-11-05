@@ -400,6 +400,12 @@ pass. An explicit `openclaw doctor` continues to run the full pass. This correct
 must be in the candidate Doctor; the installed updater must already support
 retirement-only requests. Older updaters keep their existing full-pass selection.
 
+Standing advice about a custom Codex executable or enabled Computer Use remains
+visible in Doctor output and update warnings without preventing that narrow pass.
+Invalid inline command arguments, unfinished repairs, and access-policy warnings
+still require the full pass. This distinction must be in the candidate Doctor;
+it does not require another updater change.
+
 When a retirement-only request needs the full pass, the candidate Doctor writes a
 fixed `Retirement-only Doctor widened:` reason to stderr. Updated updaters retain
 that reason in the step diagnostics and compacted update history. The candidate
