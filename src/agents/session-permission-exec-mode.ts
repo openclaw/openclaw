@@ -3,6 +3,7 @@ import {
   type ExecMode,
   type ExecSecurity,
   type ExecTarget,
+  resolveExecModeFromPolicy,
   resolveExecPolicyForMode,
 } from "../infra/exec-approvals-core.js";
 import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
@@ -87,16 +88,66 @@ export function resolveSessionPermissionExecPolicy(
   return { mode: security === base.security && ask === base.ask ? mode : undefined, security, ask };
 }
 
+// Strictest first; matches the documented permission-mode ladder.
+const EXEC_MODE_RANK = {
+  deny: 0,
+  allowlist: 1,
+  ask: 2,
+  auto: 3,
+  full: 4,
+} as const satisfies Record<ExecMode, number>;
+
+/** Pick the strictest configured model ceiling, if any. */
+export function strictestExecMode(modes: readonly (ExecMode | undefined)[]): ExecMode | undefined {
+  let strictest: ExecMode | undefined;
+  for (const mode of modes) {
+    if (mode && (!strictest || EXEC_MODE_RANK[mode] < EXEC_MODE_RANK[strictest])) {
+      strictest = mode;
+    }
+  }
+  return strictest;
+}
+
+/**
+ * A model ceiling acts like that configured mode whenever it is stricter.
+ * Unset security resolves to unrestricted host exec downstream, so it ranks as full.
+ */
+function applyExecModeCeiling<
+  T extends { mode?: ExecMode; security?: ExecSecurity; ask?: ExecAsk },
+>(
+  policy: T,
+  ceiling: ExecMode | undefined,
+): T | { mode: ExecMode; security: ExecSecurity; ask: ExecAsk } {
+  if (!ceiling) {
+    return policy;
+  }
+  const current =
+    policy.mode ??
+    (policy.security
+      ? resolveExecModeFromPolicy({ security: policy.security, ask: policy.ask ?? "off" })
+      : "full");
+  if (EXEC_MODE_RANK[current] <= EXEC_MODE_RANK[ceiling]) {
+    return policy;
+  }
+  const { security, ask } = resolveExecPolicyForMode(ceiling);
+  return { mode: ceiling, security, ask };
+}
+
 /** Pure final projection shared by local tool construction and worker dispatch. */
 export function projectEffectiveExecPolicy(params: {
   base: { host?: ExecTarget; mode?: ExecMode; security?: ExecSecurity; ask?: ExecAsk };
   overrides?: { host?: ExecTarget; mode?: ExecMode; security?: ExecSecurity; ask?: ExecAsk };
   permissionPolicy?: Pick<PreparedSessionPermissionPolicy, "mode">;
   scheduledExecTarget?: ScheduledToolPolicyContext["execTarget"];
+  /** `tools.byProvider[...].exec.mode` for the turn's model; applied after every other layer. */
+  modelExecCeiling?: ExecMode;
 }) {
-  const policy = params.permissionPolicy
-    ? resolveSessionPermissionExecPolicy(params.permissionPolicy, params.overrides)
-    : applyExecPolicyLayer(params.base, params.overrides);
+  const policy = applyExecModeCeiling(
+    params.permissionPolicy
+      ? resolveSessionPermissionExecPolicy(params.permissionPolicy, params.overrides)
+      : applyExecPolicyLayer(params.base, params.overrides),
+    params.modelExecCeiling,
+  );
   const target = params.scheduledExecTarget;
   const host = params.overrides?.host ?? params.base.host;
   return {

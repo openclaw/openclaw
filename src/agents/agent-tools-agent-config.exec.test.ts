@@ -14,6 +14,7 @@ import { createSessionConversationTestRegistry } from "../test-utils/session-con
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { getFinishedSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { EXEC_AUTO_REVIEW_GUIDANCE } from "./bash-tools.descriptions.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 
@@ -212,6 +213,48 @@ describe("Agent-specific exec tool defaults", () => {
         agentId: "main",
       }).approvalRunningNoticeMs,
     ).toBe(0);
+  });
+
+  describe("tools.byProvider exec ceiling", () => {
+    const ceilingConfig = (mode: "deny" | "auto"): OpenClawConfig => ({
+      tools: {
+        exec: { host: "gateway", mode: "full" },
+        byProvider: { "local-llm/small": { exec: { mode } } },
+      },
+    });
+    const toolsForModel = (config: OpenClawConfig, modelProvider: string, modelId: string) =>
+      createOpenClawCodingTools({
+        config,
+        sessionKey: "agent:main:main",
+        modelProvider,
+        modelId,
+        exec: { backgroundMs: 0, notifyOnExit: false },
+        ...createTempAgentDirs(`ceiling-${modelProvider}-${modelId}`),
+      });
+
+    it("denies exec only for the capped model", async () => {
+      const config = ceilingConfig("deny");
+      await expect(
+        requireExecTool(toolsForModel(config, "local-llm", "small")).execute("capped", {
+          command: "echo capped",
+        }),
+      ).rejects.toThrow("exec denied");
+      const other = await requireExecTool(toolsForModel(config, "anthropic", "big")).execute(
+        "uncapped",
+        { command: "echo uncapped" },
+      );
+      expect(other.details).toMatchObject({ status: "completed" });
+    });
+
+    it("puts only the capped model behind the exec reviewer", () => {
+      const config = ceilingConfig("auto");
+      expect(requireExecTool(toolsForModel(config, "local-llm", "small")).description).toContain(
+        EXEC_AUTO_REVIEW_GUIDANCE,
+      );
+      expect(requireExecTool(toolsForModel(config, "anthropic", "big")).description).not.toContain(
+        EXEC_AUTO_REVIEW_GUIDANCE,
+      );
+    });
   });
 
   it("should run exec synchronously when process is denied", async () => {

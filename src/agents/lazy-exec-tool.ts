@@ -1,5 +1,6 @@
 import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ExecMode } from "../infra/exec-approvals-core.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { captureExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -19,6 +20,8 @@ import {
   execSchema as execExecutionSchema,
 } from "./bash-tools.schemas.js";
 import { createExecToolExecutionTimeoutResolver } from "./exec-tool-timeout.js";
+import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
+import { strictestExecMode } from "./session-permission-exec-mode.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -106,6 +109,26 @@ export function createLazyExecTool(
 }
 
 /** Resolve global and per-agent exec defaults before runtime-only overrides. */
+/**
+ * `tools.byProvider[...].exec.mode` for one model. Global and agent entries both
+ * bind as ceilings, so the stricter one wins.
+ */
+export function resolveModelExecCeiling(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+  modelProvider?: string;
+  modelId?: string;
+}): ExecMode | undefined {
+  const cfg = params.cfg;
+  const model = { modelProvider: params.modelProvider, modelId: params.modelId };
+  const agentByProvider =
+    cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.byProvider : undefined;
+  return strictestExecMode([
+    resolveProviderToolPolicy({ ...model, byProvider: cfg?.tools?.byProvider })?.exec?.mode,
+    resolveProviderToolPolicy({ ...model, byProvider: agentByProvider })?.exec?.mode,
+  ]);
+}
+
 export function resolveExecToolConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
   const cfg = params.cfg;
   const globalExec = cfg?.tools?.exec;
