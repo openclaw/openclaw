@@ -173,6 +173,10 @@ it("applies the aggregate byte budget before hydrating omitted message bodies", 
       await expect(SessionManager.openModelContextAsync(scope)).rejects.toThrow(
         "Model context exceeds",
       );
+      expect(
+        (await SessionManager.openModelContextAsync(scope, { limits: null })).buildSessionContext()
+          .messages,
+      ).toEqual(full);
       const hydrated = new Set<string>();
       const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
       const parse = JSON.parse;
@@ -192,7 +196,6 @@ it("applies the aggregate byte budget before hydrating omitted message bodies", 
         spy.mockRestore();
         decompress.mockRestore();
       }
-      expect(messages.length).toBeGreaterThan(0);
       expect(messages.length).toBeLessThan(full.length);
       expect(messages).toEqual(full.slice(-messages.length));
       expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(4 * 1024 * 1024);

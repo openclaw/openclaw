@@ -116,13 +116,13 @@ export function readSessionTranscriptModelContextAsync<T>(
   admission?: UserTurnTranscriptAdmissionReceipt,
   signal?: AbortSignal,
   through?: TranscriptEntryAnchor,
-  limits?: SessionModelContextLimits,
+  limits?: SessionModelContextLimits | null,
   consumeSynchronously = false,
 ): Promise<T> {
   const capturedTarget = { ...target };
   const capturedAdmission = admission ? snapshotTranscriptTurnAdmission(admission) : undefined;
   const capturedThrough = through ? snapshotTranscriptEntryAnchor(through) : undefined;
-  const capturedLimits = limits ? { ...limits } : undefined;
+  const capturedLimits = limits ? { ...limits } : limits;
   const accept = async (
     scope: SessionTranscriptRuntimeTarget,
     context: SessionTranscriptModelContext,

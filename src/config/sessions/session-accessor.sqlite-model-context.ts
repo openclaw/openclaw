@@ -241,7 +241,7 @@ function modelContextBatchSql(requests: readonly ModelContextRequest[]) {
 export function readSessionTranscriptModelContext(
   scope: SessionTranscriptReadScope,
   through?: TranscriptEntryAnchor,
-  limits?: SessionModelContextLimits,
+  limits?: SessionModelContextLimits | null,
 ): SessionTranscriptModelContext {
   if (
     limits &&
@@ -291,7 +291,7 @@ function withTranscriptContextSnapshot<T>(
   scope: SessionTranscriptReadScope,
   read: (snapshot: TranscriptContextSnapshot) => T,
   through?: TranscriptEntryAnchor,
-  limits?: SessionModelContextLimits,
+  limits?: SessionModelContextLimits | null,
 ): { found: true; value: T } | { found: false } {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   return withOpenClawAgentDatabaseReadOnly(

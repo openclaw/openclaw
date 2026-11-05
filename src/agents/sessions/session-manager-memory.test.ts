@@ -169,16 +169,16 @@ it("cancels context reads without preventing the next read", async () => {
   expect(context.buildSessionContext()).toEqual(manager.buildSessionContext());
 });
 
-it("keeps a completed-turn snapshot while a later rewrite invalidates its anchor for new reads", async () => {
+it("keeps a full completed-turn snapshot while a later rewrite invalidates its anchor for new reads", async () => {
   const { context: readContext, manager } = await fixture("completed-context");
-  await manager.appendMessageAsync(userMessage("completed question", 1));
+  await manager.appendMessageAsync(userMessage("completed question".repeat(600_000), 1));
   const terminal = await manager.appendMessageWithTranscriptAnchorAsync(
     assistantText("completed answer"),
   );
   assert(terminal.anchor, "Missing completed-turn anchor");
   const expected = manager.buildSessionContext();
   await manager.appendMessageAsync(userMessage("later question", 2));
-  const context = await readContext({ through: terminal.anchor });
+  const context = await readContext({ through: terminal.anchor, limits: null });
   expect(context.buildSessionContext()).toEqual(expected);
   await manager.removeTrailingEntriesAsync((entry) => entry.type === "message");
   expect(context.buildSessionContext()).toEqual(expected);

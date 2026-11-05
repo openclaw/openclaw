@@ -72,13 +72,13 @@ export function projectSessionModelContext(
     ) => Map<ContextEntry, SessionTreeEntry>;
     readModelEntrySizes: (requests: readonly ModelContextRequest[]) => Map<ContextEntry, number>;
   },
-  limits?: SessionModelContextLimits,
+  limits?: SessionModelContextLimits | null,
 ): SessionTranscriptModelContext {
   const requests = prepared?.requests ?? collectSessionModelContextRequests(entries);
   const pending = collectSessionPendingBackgroundResultRequests(entries);
   // Full reads must fail before hydration rather than silently change replay semantics.
   if (
-    !limits &&
+    limits === undefined &&
     (requests.length + pending.length > 20_000 ||
       [...readModelEntrySizes([...requests, ...pending]).values()].reduce(
         (total, bytes) => total + bytes,

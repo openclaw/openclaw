@@ -196,6 +196,10 @@ pass explicit `maxBytes` and `maxEvents` budgets. Explicit limits select a bound
 recent context, so they do not guarantee a full-history read. Async reads retain
 admission, anchor, and cancellation checks.
 
+Callers that require the complete selected context for replay or reconciliation
+can explicitly pass `limits: null`. This opts out of the implicit ceiling and
+retains full-read memory costs; background model views should use bounded limits.
+
 For a temporary model-only view, callers may explicitly add
 `toolResultOverflow: "omit"` to `limits`. Under byte pressure, the reader replaces
 tool-result bodies with omission notices before selecting a bounded suffix, so

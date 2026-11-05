@@ -637,7 +637,7 @@ export class SessionManager extends SessionManagerBranching {
       cwd?: string;
       admission?: UserTurnTranscriptAdmissionReceipt;
       through?: TranscriptEntryAnchor;
-      limits?: SessionModelContextLimits;
+      limits?: SessionModelContextLimits | null;
     } = {},
   ): SessionManager {
     prepareSessionManagerSync("openModelContext", target);
@@ -647,7 +647,7 @@ export class SessionManager extends SessionManagerBranching {
     return SessionManager.fromSelectedEntries(context.events, options.cwd, context.version);
   }
 
-  /** Detached model view; implicit full reads reject above 8 MiB or 20000 events. */
+  /** Detached model view; implicit reads reject above 8 MiB or 20000 events. Null opts into full replay. */
   static async openModelContextAsync(
     target: SessionTranscriptRuntimeTarget,
     options: {
@@ -655,7 +655,7 @@ export class SessionManager extends SessionManagerBranching {
       admission?: UserTurnTranscriptAdmissionReceipt;
       signal?: AbortSignal;
       through?: TranscriptEntryAnchor;
-      limits?: SessionModelContextLimits;
+      limits?: SessionModelContextLimits | null;
     } = {},
   ): Promise<SessionManager> {
     return readSessionManagerModelContextAsync(target, options, (context) =>

@@ -42,7 +42,10 @@ export type SessionActorMemoryHistoryReads = ProjectionReads &
       output: SessionTranscriptContextSnapshot;
     };
     "session.history.context": {
-      input: Target & { through?: TranscriptEntryAnchor; limits?: SessionModelContextLimits };
+      input: Target & {
+        through?: TranscriptEntryAnchor;
+        limits?: SessionModelContextLimits | null;
+      };
       output: SessionTranscriptModelContext;
     };
     "session.history.raw-delta": {

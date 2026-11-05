@@ -225,6 +225,7 @@ export async function gateWorkerTurnInput(
           await SessionManager.openModelContextAsync(transcriptTarget, {
             admission: recorder?.getAdmissionReceipt(),
             signal: turn.abortSignal,
+            limits: null,
           })
         ).buildSessionContext().messages,
       ),
@@ -314,6 +315,7 @@ export async function readWorkerTurnInputContext(
     ? await SessionManager.openModelContextAsync(transcriptTarget, {
         admission,
         signal: turn.abortSignal,
+        limits: null,
       })
     : await withSessionTranscriptHydrationCaller("worker-input", () =>
         SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal),
@@ -323,7 +325,10 @@ export async function readWorkerTurnInputContext(
   // Reuse the fenced read's source watermark. Later writes still face the commit fence.
   if (admission && manager.getTranscriptSnapshotVersion()?.rawSeq !== admission.rawSeq) {
     const current = await withoutSessionTranscriptReadFence(() =>
-      SessionManager.openModelContextAsync(transcriptTarget, { signal: turn.abortSignal }),
+      SessionManager.openModelContextAsync(transcriptTarget, {
+        signal: turn.abortSignal,
+        limits: null,
+      }),
     );
     assertCurrent();
     const branch = current.getBranch();

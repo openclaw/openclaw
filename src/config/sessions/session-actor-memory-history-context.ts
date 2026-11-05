@@ -73,7 +73,7 @@ export function readSessionActorMemoryContext(
   window: SessionActorMemoryWindow,
   scope: SessionActorMemoryHistoryScope,
   through?: TranscriptEntryAnchor,
-  limits?: SessionModelContextLimits,
+  limits?: SessionModelContextLimits | null,
 ): SessionTranscriptModelContext {
   if (
     limits &&
