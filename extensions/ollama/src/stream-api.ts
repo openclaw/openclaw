@@ -1,4 +1,5 @@
 export { parseNdjsonStream } from "./stream-ndjson.js";
+export type { OllamaStreamTransport } from "./stream.runtime.js";
 export {
   createConfiguredOllamaCompatStreamWrapper,
   isOllamaCompatProvider,

@@ -1,17 +1,20 @@
 export {
   buildAssistantMessage,
   buildOllamaChatRequest,
-  createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
-  isOllamaCompatProvider,
   OLLAMA_NATIVE_BASE_URL,
-  parseNdjsonStream,
+  type OllamaStreamTransport,
   resolveOllamaBaseUrlForRun,
+} from "./src/stream.runtime.js";
+export {
+  createConfiguredOllamaCompatStreamWrapper,
+  isOllamaCompatProvider,
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "./src/stream-api.js";
+} from "./src/stream-compat.js";
+export { parseNdjsonStream } from "./src/stream-ndjson.js";
 export {
   createOllamaEmbeddingProvider,
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
