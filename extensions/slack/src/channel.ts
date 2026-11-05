@@ -40,7 +40,6 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
@@ -54,14 +53,15 @@ import { slackApprovalCapability } from "./approval-native.js";
 import { createSlackActions } from "./channel-actions.js";
 import { resolveSlackChannelType, resolveSlackConversationInfo } from "./channel-type.js";
 import { getSlackWriteClient } from "./client.js";
+import { slackConversationBindings } from "./conversation-binding-route.js";
 import { slackConversationRouteOwners } from "./conversation-route-owner.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { resolveSlackEnterpriseUserTeamId } from "./enterprise-user-route.js";
 import { formatSlackError } from "./errors.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
-import { isSlackWorkspaceInstallation } from "./installation-identity-state.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { slackMentionAdapter } from "./mention-adapter.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { SlackProbe } from "./probe.js";
 import { normalizeSlackReplyPayload, resolveSlackReplyBlocks } from "./reply-blocks.js";
@@ -330,10 +330,7 @@ export const slackPlugin = createChatChannelPlugin<ResolvedSlackAccount, SlackPr
         return null;
       },
     },
-    conversationBindings: {
-      isCurrentConversationBindingSupported: ({ accountId }) =>
-        isSlackWorkspaceInstallation(accountId),
-    },
+    conversationBindings: slackConversationBindings,
     messaging: {
       ...slackConversationRouteOwners,
       targetPrefixes: ["slack"],
@@ -665,17 +662,7 @@ export const slackPlugin = createChatChannelPlugin<ResolvedSlackAccount, SlackPr
         });
       },
     },
-    mentions: {
-      stripPatterns: ({ ctx }) => {
-        const preparedPatterns = ctx.ChannelContext?.chat?.mentionStripPatterns;
-        const exactPatterns = Array.isArray(preparedPatterns)
-          ? preparedPatterns.flatMap((pattern) =>
-              typeof pattern === "string" ? [escapeRegExp(pattern)] : [],
-            )
-          : [];
-        return [...exactPatterns, "<@[^>\\s]+>"];
-      },
-    },
+    mentions: slackMentionAdapter,
   },
   pairing: {
     idLabel: "slackUserId",

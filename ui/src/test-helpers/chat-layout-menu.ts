@@ -69,7 +69,8 @@ export async function openChatPanels(
     await mobileHeader(pane).waitFor({ state: "visible" });
     const trigger = panelsToggle(pane, true);
     if (await trigger.isVisible()) {
-      if (!(await pane.locator(".chat-mobile-host").isVisible())) {
+      // A closing sheet is already hidden while it slides out; only an open one counts.
+      if (!(await pane.locator(".chat-mobile-host:not([hidden])").isVisible())) {
         await trigger.click();
       }
       return trigger;
@@ -98,7 +99,7 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
   await waitForPanelLayout(pane);
   const matches = (label: string) => (typeof name === "string" ? name === label : name.test(label));
   const mobile = await mobileHeader(pane).isVisible();
-  const host = pane.locator(".chat-mobile-host");
+  const host = pane.locator(".chat-mobile-host:not([hidden])");
   const side = pane.locator('[data-region-header="side"]');
   const toggle = panelsToggle(pane, mobile);
 

@@ -15,6 +15,7 @@ import { hasNodeErrorCode } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
+import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
 import { measureUpdateStateFiles, withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import {
   readUpdateCandidatePluginCodeLinks,
@@ -30,6 +31,10 @@ import {
   UpdateCandidateSnapshotInventorySchema,
   UpdateCandidateStateSnapshotSchema,
 } from "./update-candidate-state.js";
+import {
+  createUpdateStateResultPath,
+  readUpdateStateResult,
+} from "./update-candidate-state.result.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { UpdateCaptureSpaceError } from "./update-capture-space.js";
 import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
@@ -132,6 +137,21 @@ async function measureInitialUpdateSnapshotState(params: InitialSnapshotParams) 
   };
 }
 
+/**
+ * Candidate admission inspects these stores from a staged package, so its allowance follows
+ * measured state like the rehearsal's checks. The update step deadline stays the outer bound.
+ */
+export async function resolveUpdateCandidateAdmissionTimeoutMs(
+  params: InitialSnapshotParams & { stepTimeoutMs: number },
+): Promise<number> {
+  const bytes = await measureInitialUpdateSnapshotState(params).then(
+    ({ size }) => size.bytes,
+    () => 0,
+  );
+  const { timeoutMs } = resolveSqliteInspectionBudget("update admission", params.stateDir, bytes);
+  return Math.min(params.stepTimeoutMs, timeoutMs);
+}
+
 export async function assessInitialUpdateSnapshotCapacity(
   params: InitialSnapshotParams,
 ): Promise<UpdateStepResult> {
@@ -181,7 +201,7 @@ export async function assessInitialUpdateSnapshotCapacity(
     let warnings: string[] = [];
     if (params.backupDirectory) {
       try {
-        const backup = await checkUpdateDatabaseBackupSpace(params.backupDirectory, size);
+        const backup = await checkUpdateDatabaseBackupSpace(params.backupDirectory, size, params);
         diagnostics.push(...backup.diagnostics);
         warnings = backup.warnings;
       } catch (error) {
@@ -391,6 +411,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         budgetSignal = signal;
         signal.throwIfAborted();
         params.assertCurrent?.();
+        const resultPath = createUpdateStateResultPath(directory);
         const result = await runUtf8CommandWithTimeout(
           [
             params.nodeRunner ?? process.execPath,
@@ -405,6 +426,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
           {
             input: JSON.stringify({
               ...request,
+              resultPath,
               includeLocalStoreVersions: true,
               includeClientCredentialStoreVersion: true,
               streamProgress: true,
@@ -455,7 +477,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         ) {
           throw new Error(diagnostics.stderr() || result.stderr);
         }
-        return JSON.parse(result.stdout) as unknown;
+        return JSON.parse(await readUpdateStateResult(result.stdout, resultPath)) as unknown;
       },
     ).then(
       (value) => ({ value }),

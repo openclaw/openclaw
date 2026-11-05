@@ -206,7 +206,37 @@ export function normalizeLegacyToolResultId(
   if (resultName && callName && resultName !== callName) {
     return message;
   }
-  return { ...message, toolCallId: toolCall.id, isError: true };
+  return { ...message, toolCallId: toolCall.id };
+}
+
+/** Adjacent, ordered results need no repair; reject extras that could replace earlier results. */
+export function isToolUseResultPairingCanonical(messages: readonly AgentMessage[]): boolean {
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object" || message.role === "toolResult") {
+      return false;
+    }
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      continue;
+    }
+    for (const block of message.content) {
+      const call = readToolCall(block);
+      if (!call) {
+        continue;
+      }
+      const result = messages[++index];
+      if (
+        message.stopReason === "error" ||
+        message.stopReason === "aborted" ||
+        result?.role !== "toolResult" ||
+        extractToolResultId(result) !== call.id ||
+        normalizeToolResultName(result, call.name) !== result
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 /** Classifies call/result ownership without reordering or synthesizing transcript messages. */
@@ -248,9 +278,10 @@ export function classifyToolUseResultPairing(
     }
   }
 
+  const pending = createToolCallOccurrenceQueue<ToolCallOccurrence>();
   for (const frame of frameRecords) {
     const { occurrences } = frame;
-    const pending = createToolCallOccurrenceQueue<ToolCallOccurrence>();
+    pending.clear();
     for (const occurrence of occurrences) {
       pending.add(occurrence.id, occurrence);
     }

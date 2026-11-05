@@ -409,7 +409,7 @@ describe("Team activation handoff ordering and prepared recovery", () => {
     const result = runOwner(f, ["--interrupt-after-drain"]);
     assert.equal(result.status, 0, result.stderr + events(f));
     const log = events(f);
-    assert.ok(log.indexOf("handoff.armed") >= 0 && log.indexOf("handoff.armed") < log.indexOf("service.system.stop"), log);
+    assert.ok(log.indexOf("handoff.committed") >= 0 && log.indexOf("handoff.committed") < log.indexOf("service.system.stop"), log);
     assert.ok(log.indexOf("service.system.stop") < log.indexOf("pointer.current.inactive"), log);
     assert.ok(log.indexOf("pointer.current.inactive") < log.indexOf("service.system.start"), log);
     assert.doesNotMatch(log, /pointer\.current\.active|service\.system\.restart/);
@@ -1686,6 +1686,41 @@ describe("Team history gaps warn without blocking deployment", () => {
     const preserved = verify();
     assert.equal(preserved.stdout.trim(), "SESSIONS_PRESERVED");
     assert.doesNotMatch(preserved.stderr, /HISTORY_PRESERVATION/);
+  });
+  test("history reason counts include failures beyond the private detail cap", t => {
+    const f = makeReleaseFixture(t), db = new DatabaseSync(f.agentDatabasePath);
+    db.exec("DELETE FROM session_nodes");
+    for (let index = 0; index < 27; index++) {
+      const session = `history-window-${index}`, key = `agent:controller-test-agent:history-${String(index).padStart(2, "0")}`;
+      db.prepare("INSERT INTO session_nodes VALUES (?, ?, ?, ?, NULL)")
+        .run(key, session, JSON.stringify({ sessionId: session, updatedAt: 1 }), 1);
+      db.prepare("INSERT INTO session_windows VALUES (?, ?)").run(session, key);
+      if (index >= 20) db.prepare("INSERT INTO transcript_rewrite_watermarks VALUES (?, ?)")
+        .run(session, `history-generation-${index}`);
+    }
+    db.close();
+    const witness = releaseProof(f, "session-preservation-witness", f.initial, f.initial, f.databasePath);
+    const changed = new DatabaseSync(f.agentDatabasePath);
+    changed.exec("DELETE FROM transcript_rewrite_watermarks"); changed.close();
+    const result = spawnSync(process.execPath,
+      [f.library, "session-preservation-verify", f.initial, f.initial, f.databasePath],
+      { env: f.env, input: witness, encoding: "utf8", timeout: 30_000 });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "SESSIONS_HISTORY_WARNING count=27");
+    assert.match(result.stderr, /WARNING HISTORY_PRESERVATION_GAPS count=27 shown=8 historical-bytes=unverified continuation=allowed/);
+    const summary = / reasonCounts=(\{[^\n]+\})\n/.exec(result.stderr);
+    assert.ok(summary, "warning summary must account for every gap reason");
+    assert.deepEqual(JSON.parse(summary[1]), {
+      "exact-owner-generation-missing/exact-tuple-missing": 7,
+      "missing-generation": 20,
+    });
+    const details = [...result.stderr.matchAll(/HISTORY_PRESERVATION_GAP diagnostic=(.+)/g)]
+      .map(([, value]) => JSON.parse(value));
+    assert.equal(details.length, 8);
+    assert.ok(details.every(detail => detail.captured.generation === "null"));
+    assert.doesNotMatch(result.stderr, /agent:controller-test-agent:history-|history-window-|history-generation-/);
+    assert.equal(result.stderr.includes(f.agentDatabasePath), false);
   });
   for (const fault of ["table-missing", "witness-replaced", "database-replaced"]) test(`${fault} remains fatal and retains the exact journal`, t => {
     const f = failedReleaseFixture(t, true), original = originalWitness(f), journal = readFileSync(f.journal);

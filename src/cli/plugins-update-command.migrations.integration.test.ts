@@ -164,7 +164,7 @@ it.each([
                 ? { listener: { port: 57597, host: "${LISTENER_HOST}" } }
                 : { oldPort: 57597 }),
               label: "kept",
-              ...(scenario === "env-reference" ? { oldHost: "${LISTENER_HOST}" } : {}),
+              ...(is("env-reference", "include") ? { oldHost: "${LISTENER_HOST}" } : {}),
             }),
           },
         },
@@ -532,6 +532,20 @@ it.each([
         }
       }
       const applyRuntime = vi.fn();
+      const expectedNextRecords = installScenario
+        ? {
+            ...nextRecords,
+            [pluginId]: {
+              ...nextRecords[pluginId],
+              sourceSnapshotDigests: {
+                [pluginId]: {
+                  contentDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+                  dependencyClosureDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+                },
+              },
+            },
+          }
+        : nextRecords;
       const command = installScenario
         ? (async () => {
             const prepared = await configIo.readConfigFileSnapshotForWrite();
@@ -567,7 +581,7 @@ it.each([
         expect(auditRefused).toBe(true);
         expect(savedSettings()).toEqual({ listener: { port: 57597 }, label: "kept" });
         expect(pending()).toEqual([]);
-        expect(await records()).toEqual(superseded ? newerRecords : nextRecords);
+        expect(await records()).toEqual(superseded ? newerRecords : expectedNextRecords);
         expect(payload.commit).toHaveBeenCalledTimes(1);
         expect(payload.rollback).not.toHaveBeenCalled();
         expect(gateway.call).not.toHaveBeenCalled();
@@ -627,7 +641,7 @@ it.each([
         ...(inactive || pendingState ? { oldPort: 57597 } : {}),
         listener: {
           port: 57597,
-          ...(scenario === "env-reference" || ready ? { host: "${LISTENER_HOST}" } : {}),
+          ...(is("env-reference", "include") || ready ? { host: "${LISTENER_HOST}" } : {}),
         },
         label: "kept",
       });
@@ -640,7 +654,7 @@ it.each([
       expect(pending()).toEqual(
         inactive || pendingState ? beforePending : retainsOther ? [unrelated] : [],
       );
-      expect(await records()).toEqual(nextRecords);
+      expect(await records()).toEqual(expectedNextRecords);
       if (inactive) {
         expect(plugins.entries[pluginId].enabled).toBe(false);
       }

@@ -20,6 +20,7 @@ import {
 } from "./github-publication.test-support.js";
 import { listRepositoryGitHubPublicationsInDatabase } from "./github-repository-publication-read.worker.js";
 import { readRepositoryGitHubPublicationInDatabase } from "./github-repository-publication-store.worker.js";
+import { captureCheckpoint } from "./github-repository-publication-workspace.js";
 import {
   createRepositoryPublicationFixture,
   observeRepositoryCommands,
@@ -30,6 +31,7 @@ import {
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
+import { bindRepositoryDiskForTest } from "./worker-environments/repository-disk-authority.test-support.js";
 
 const readReceipt = (requestId: string) =>
   readRepositoryGitHubPublicationInDatabase(openOpenClawStateDatabase().db, requestId);
@@ -125,6 +127,33 @@ function claimReceipt(
 
 installGitHubPublicationTestHarness();
 afterEach(() => vi.unstubAllGlobals());
+
+it("preserves a pinned publication but refuses new publication from a disk repository mirror", async () => {
+  const f = await repositoryFixture();
+  const published = await f.publish("before-disk-binding");
+  const row = readReceipt(published.requestId)!;
+  expect(row.checkpoint_ref).toBe(f.first.ref);
+  await bindRepositoryDiskForTest(f.workspace, SESSION_ID);
+  const selected = await captureCheckpoint(
+    row,
+    () => {},
+    async (facts) => facts,
+    {
+      assertCustody() {},
+      assertAction() {},
+      prepareSource: async () => {
+        throw new Error("Unexpected source acquisition");
+      },
+    },
+  );
+  expect(selected).toMatchObject({
+    checkpoint_ref: f.first.ref,
+    workspace_tree: f.first.workspaceTree,
+  });
+  const effects = [...f.runtime.effects];
+  await expect(f.publish("after-disk-binding")).rejects.toThrow("requires a fresh snapshot");
+  expect(f.runtime.effects).toEqual(effects);
+});
 
 it.each(["shared", "personal"] as const)(
   "retains the accepted %s PR response after publication authority closes",

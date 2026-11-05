@@ -13,8 +13,8 @@ import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { recordSkillFileHost } from "../skill-file-host.js";
 import { writeSkill as writeSkillDocument } from "../test-support/e2e-test-helpers.js";
+import { resolveWorkshopSkillsDir } from "../test-support/workshop-config.test-support.js";
 import type { ExplicitSkillSelection } from "../types.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import {
   materializeSkillResources as materialize,
   prepareSkillResourceDelivery as prepare,
@@ -142,7 +142,7 @@ it("keeps Gateway and workspace rewrites separate when their source paths collid
 
 it("delivers Gateway Workshop files without a live workspace binding", async () => {
   const config = {
-    plugins: { enabled: false },
+    plugins: { allow: ["skill-workshop"] },
     agents: { entries: { main: { agentDir: path.join(f.gateway, "agent") } } },
   };
   const workshop = resolveWorkshopSkillsDir(config, "main");

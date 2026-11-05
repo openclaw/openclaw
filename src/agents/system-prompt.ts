@@ -55,10 +55,6 @@ import { filterProjectScopedCuratedContextFiles } from "./project-memory-bootstr
 import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 import {
-  buildSkillWorkshopPromptSection,
-  SKILL_WORKSHOP_TOOL_NAME,
-} from "./skill-workshop-prompt.js";
-import {
   buildProjectContextSection,
   isBootstrapContextFile,
   prepareContextFilesForPrompt,
@@ -86,6 +82,7 @@ import type {
   SilentReplyPromptMode,
   SystemPromptRuntimeInfo,
 } from "./system-prompt.types.js";
+import { listToolPromptGuidance } from "./tool-prompt-guidance.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { buildUiPresentationPrompt } from "./ui-presentation-prompt.js";
 import { buildProactiveSubagentOrchestrationSection } from "./ultra-orchestration.js";
@@ -527,9 +524,10 @@ export function buildAgentSystemPrompt(params: {
     deferredToolsDirectlyCallable: params.deferredToolsDirectlyCallable,
   });
   params.onRenderedSkillsPrompt?.(renderedSkillsPrompt);
-  const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
-    ? buildSkillWorkshopPromptSection()
-    : [];
+  const toolGuidanceSection = listToolPromptGuidance(availableTools).flatMap((section) => [
+    section,
+    "",
+  ]);
   const memorySection =
     isMinimal || params.includeMemorySection === false
       ? []
@@ -615,7 +613,7 @@ export function buildAgentSystemPrompt(params: {
       providerSectionOverrides.execution_bias ||
         (!isMinimal && [
           "## Execution Bias",
-          "- Actionable request: act now.",
+          "- Actionable request: act now. Explicit skill workflow gates override this bias; user instructions, prior authorization, safety, and tool policy remain authoritative.",
           "- Requested action with an available tool: do it. Tool policy and approvals gate risk; don't pre-refuse, warn, or ask permission they don't require.",
           "- Non-final turn: advance with tools, or ask one blocking decision.",
           "- Continue to done/real blocker; no plan-only finish when tools can act.",
@@ -733,7 +731,7 @@ export function buildAgentSystemPrompt(params: {
     ...careSection,
     ...buildOpenClawControlSection({ hasOpenClaw, hasGateway, hasExec, restartCommandsEnabled }),
     ...skillsSection,
-    ...skillWorkshopSection,
+    ...toolGuidanceSection,
     ...memorySection,
     params.modelAliasLines &&
       params.modelAliasLines.length > 0 &&

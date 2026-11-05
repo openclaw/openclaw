@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { automaticallyCleanUpdateRecovery } from "../cli/update-cli/automatic-cleanup.js";
@@ -46,6 +47,7 @@ import {
 } from "./doctor-migration-backup-artifacts.js";
 import { useDoctorSessionSqliteTestFixture } from "./doctor-session-sqlite.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
+import { cleanupCompletedUpdateRecovery } from "./update-automatic-cleanup.js";
 import { createMissingConfigRecoveryManifest } from "./update-recovery-manifest.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -153,7 +155,7 @@ function originalBytes(fixture: Awaited<ReturnType<typeof recoveryFixture>>) {
 function expectOriginals(originals: Map<string, Buffer>) {
   for (const [file, contents] of originals) {
     expect(fs.existsSync(file), file).toBe(true);
-    expect(fs.readFileSync(file)).toEqual(contents);
+    expectBytesEqual(fs.readFileSync(file), contents, file);
   }
 }
 function warning(detail: string) {
@@ -239,7 +241,7 @@ it.each([false, true])(
     expect(identity.ino).toBe(String(fs.statSync(source, { bigint: true }).ino));
     if (differentContent) {
       expect(result.steps.at(-1)?.advisory?.message).toContain("destination device changed");
-      expect(fs.readFileSync(backup)).toEqual(original);
+      expectBytesEqual(fs.readFileSync(backup), original, backup);
     } else {
       expect(identity.dev).toBe(String(fs.statSync(source, { bigint: true }).dev));
       expect(identity.sha256).toBe(createHash("sha256").update(original).digest("hex"));
@@ -326,6 +328,182 @@ it("runs retirement in the owning Gateway worker while retaining pending recover
   }
 });
 
+it("allows its current Gateway owner to mutate a recovery destination during retirement", async () => {
+  const fixture = await recoveryFixture();
+  const originals = new Map(
+    fixture.target.completedMoves
+      .filter((move) => move.artifact?.classification !== "protected")
+      .map((move) => [move.archivePath, fs.readFileSync(move.archivePath)]),
+  );
+  const protectedOriginals = new Map(
+    fixture.target.completedMoves
+      .filter((move) => move.artifact?.classification === "protected")
+      .map((move) => [move.archivePath, fs.readFileSync(move.archivePath)]),
+  );
+  fs.writeFileSync(
+    fixture.store.configPath,
+    `${JSON.stringify({ agents: { defaults: { workspace: "/existing-workspace" } } })}\n`,
+  );
+  const configBefore = fs.readFileSync(fixture.store.configPath);
+  let sessionsBefore: Record<string, unknown>[];
+  let transcriptBefore: Record<string, unknown>[];
+  {
+    using database = new DatabaseSync(fixture.target.sqlitePath, { readOnly: true });
+    sessionsBefore = database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all();
+    transcriptBefore = database
+      .prepare("SELECT * FROM transcript_events ORDER BY session_id, seq")
+      .all();
+  }
+  const { runId } = capturedRun(now, "succeeded");
+  await closeOpenClawStateDatabaseAsync();
+  const owner = acquireGatewayStateOwner({
+    databasePath: resolveOpenClawStateSqlitePath(env),
+    payload: {
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      configPath: env.OPENCLAW_CONFIG_PATH!,
+      role: "gateway",
+      processNamespace: readGatewayLockProcessNamespace(),
+    },
+  });
+  let mutated = false;
+  try {
+    const result = await cleanupGatewayUpdateRecovery(runId, env, () => {
+      const claimed = fixture.target.completedMoves.some((move) => {
+        const disposal = readSessionSqliteMigrationManifest(
+          fixture.manifestPath,
+        )!.targets[0]!.completedMoves.find((current) => current.archivePath === move.archivePath)
+          ?.artifact?.disposal;
+        return disposal?.state === "pending-disposal" && fs.existsSync(disposal.claimPath);
+      });
+      if (!mutated && claimed) {
+        using database = new DatabaseSync(fixture.target.sqlitePath);
+        database.exec(
+          "CREATE TABLE live_gateway_write(value TEXT); INSERT INTO live_gateway_write VALUES ('current owner')",
+        );
+        mutated = true;
+      }
+    });
+    expect(mutated).toBe(true);
+    expect(result?.advisory).toBeUndefined();
+    for (const file of originals.keys()) {
+      expect(fs.existsSync(file), file).toBe(false);
+    }
+    for (const [file, contents] of protectedOriginals) {
+      expectBytesEqual(fs.readFileSync(file), contents, file);
+    }
+    expectBytesEqual(fs.readFileSync(fixture.store.configPath), configBefore, "Gateway config");
+    using database = new DatabaseSync(fixture.target.sqlitePath, { readOnly: true });
+    expect(database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all()).toEqual(
+      sessionsBefore,
+    );
+    expect(
+      database.prepare("SELECT * FROM transcript_events ORDER BY session_id, seq").all(),
+    ).toEqual(transcriptBefore);
+    expect(database.prepare("SELECT value FROM live_gateway_write").get()).toEqual({
+      value: "current owner",
+    });
+  } finally {
+    owner.release();
+  }
+});
+
+it("keeps retiring when its current Gateway owner writes during a destination check", async () => {
+  const fixture = await recoveryFixture();
+  const originals = fixture.target.completedMoves
+    .filter((move) => move.artifact?.classification !== "protected")
+    .map((move) => move.archivePath);
+  const { runId } = capturedRun(now, "succeeded");
+  await closeOpenClawStateDatabaseAsync();
+  const owner = acquireGatewayStateOwner({
+    databasePath: resolveOpenClawStateSqlitePath(env),
+    payload: {
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      configPath: env.OPENCLAW_CONFIG_PATH!,
+      role: "gateway",
+      processNamespace: readGatewayLockProcessNamespace(),
+    },
+  });
+  // The live Gateway commits between the destination stat and anything read after it.
+  const lstat = fs.lstatSync;
+  let writes = 0;
+  vi.spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: fs.StatOptions) => {
+    const stat = lstat(file, options);
+    if (file === fixture.target.sqlitePath && options?.bigint) {
+      using database = new DatabaseSync(fixture.target.sqlitePath);
+      database.exec(`CREATE TABLE live_gateway_write_${++writes}(value TEXT)`);
+    }
+    return stat;
+  }) as typeof fs.lstatSync);
+  try {
+    const result = await cleanupCompletedUpdateRecovery(runId, env, () => {});
+    expect(writes).toBeGreaterThan(1);
+    expect(result?.advisory).toBeUndefined();
+    for (const file of originals) {
+      expect(fs.existsSync(file), file).toBe(false);
+    }
+  } finally {
+    owner.release();
+  }
+});
+
+it("stops owned retirement when its recovery destination file is replaced", async () => {
+  const fixture = await recoveryFixture();
+  const originals = new Map(
+    fixture.target.completedMoves
+      .filter((move) => move.artifact?.classification !== "protected")
+      .map((move) => [move.archivePath, fs.readFileSync(move.archivePath)]),
+  );
+  const { runId } = capturedRun(now, "succeeded");
+  await closeOpenClawStateDatabaseAsync();
+  const owner = acquireGatewayStateOwner({
+    databasePath: resolveOpenClawStateSqlitePath(env),
+    payload: {
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      configPath: env.OPENCLAW_CONFIG_PATH!,
+      role: "gateway",
+      processNamespace: readGatewayLockProcessNamespace(),
+    },
+  });
+  let replaced = false;
+  try {
+    const result = await cleanupGatewayUpdateRecovery(runId, env, () => {
+      const claimed = fixture.target.completedMoves.some((move) => {
+        const disposal = readSessionSqliteMigrationManifest(
+          fixture.manifestPath,
+        )!.targets[0]!.completedMoves.find((current) => current.archivePath === move.archivePath)
+          ?.artifact?.disposal;
+        return disposal?.state === "pending-disposal" && fs.existsSync(disposal.claimPath);
+      });
+      if (!replaced && claimed) {
+        const replacement = `${fixture.target.sqlitePath}.replacement`;
+        fs.copyFileSync(fixture.target.sqlitePath, replacement);
+        fs.renameSync(replacement, fixture.target.sqlitePath);
+        replaced = true;
+      }
+    });
+    expect(replaced).toBe(true);
+    expect(result?.advisory?.message).toContain("Recovery destination database changed");
+    for (const [file, contents] of originals) {
+      const move = readSessionSqliteMigrationManifest(
+        fixture.manifestPath,
+      )!.targets[0]!.completedMoves.find((current) => current.archivePath === file)!;
+      const disposal = move.artifact!.disposal;
+      const retained = fs.existsSync(file)
+        ? file
+        : disposal.state === "pending-disposal" && fs.existsSync(disposal.claimPath)
+          ? disposal.claimPath
+          : undefined;
+      expect(retained, file).toBeDefined();
+      expectBytesEqual(fs.readFileSync(retained!), contents, file);
+    }
+  } finally {
+    owner.release();
+  }
+});
+
 it.each(["before-first-effect", "claim-publication", "first-unlink"] as const)(
   "stops migration-original retirement when its physical owner is replaced after %s",
   async (phase) => {
@@ -390,7 +568,7 @@ it.each(["before-first-effect", "claim-publication", "first-unlink"] as const)(
       const retained = remaining();
       expect(retained).toHaveLength(phase === "first-unlink" ? 1 : 2);
       for (const { original, retained: file } of retained) {
-        expect(fs.readFileSync(file)).toEqual(originals.get(original));
+        expectBytesEqual(fs.readFileSync(file), originals.get(original)!, file);
       }
       if (phase !== "first-unlink") {
         expectOriginals(originals);
@@ -443,8 +621,10 @@ it("does not retire artifacts when another process owns live state", async () =>
         throw new Error("Foreign owner exited before acquiring its lock");
       }),
     ]);
+    vi.spyOn(performance, "now").mockReturnValueOnce(5).mockReturnValue(29);
     const result = await automaticallyCleanUpdateRecovery(second, env);
     expect(result?.advisory?.message).toMatch(/owner|ownership|Gateway/);
+    expect(result?.durationMs).toBe(24);
     expect(fs.existsSync(original)).toBe(true);
     expect(getUpdateRun(second, { env })?.status).toBe("succeeded");
   } finally {

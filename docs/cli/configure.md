@@ -19,6 +19,8 @@ Use `openclaw onboard` or `openclaw setup` for the full guided first-run journey
 
 Before `openclaw configure` changes local credentials or configuration, OpenClaw compares the selected CLI state/config paths with the local Gateway or its installed service. A proven mismatch stops before the write. A remote Gateway or an authenticated path that cannot be verified produces a warning instead.
 
+On Windows, this comparison ignores letter case, including for directories that do not exist yet.
+
 This comparison also applies when `OPENCLAW_HOME` relocates the CLI's default state directory. The installed service's recorded environment determines its paths, including while the Gateway is stopped. The CLI's path overrides do not replace them. If the service definition or its recorded paths cannot be verified, OpenClaw warns and leaves configuration available. Inspect the service with `openclaw gateway status --deep` before relying on local changes to reach it.
 
 `--section <section>`: repeatable section filter. Available sections:
@@ -63,7 +65,15 @@ Reconfiguring trusted-proxy mode defaults the loopback prompt to the existing op
 ## Model section
 
 <Note>
-**Model** includes a multi-select for the explicit `agents.defaults.modelPolicy.allow` list (what shows up in `/model` and the model picker). Provider-scoped setup choices merge their selected models into the existing list instead of replacing unrelated providers already in the config. Per-model aliases and parameters remain under `agents.defaults.models`. Those entries do not restrict model overrides by themselves.
+**Model** includes a multi-select of the provider's models. Configure never creates a model allowlist:
+
+- **No `modelPolicy.allow` yet:** the prompt is **Fallback models**. It starts from your primary model and fallbacks, and the models you select become fallbacks. `/model` and the model picker already show the models of every provider with working auth.
+- **An existing `modelPolicy.allow`** (for the defaults or the selected agent): the prompt is **Models in /model picker**. It starts from the models that list already allows, wildcards included. Your selection replaces the provider's entries in that list, and unrelated providers stay as they are.
+  - Configure writes exact `provider/model` refs. It never adds a `<provider>/*` wildcard on its own, because a picker can show fewer models than the provider has.
+  - An existing `<provider>/*` stays while every model shown for that provider stays selected.
+  - Saving credentials for a provider adds `<provider>/*` when the list hides all of that provider's models.
+
+Per-model aliases and parameters stay under `agents.defaults.models`. Configure does not add selected models to that map, and those entries do not restrict model overrides by themselves.
 
 Re-running provider auth from configure preserves an existing `agents.defaults.model.primary`, even when the provider's auth step returns a config patch with its own recommended default model. Adding or reauthing a provider makes its models available without taking over your current primary model. Use `openclaw models auth login --provider <id> --set-default` or `openclaw models set <model>` to intentionally change the default model.
 </Note>

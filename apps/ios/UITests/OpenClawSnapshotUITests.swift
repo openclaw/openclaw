@@ -134,10 +134,22 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTAssertEqual(input.value as? String, focusProbe)
             self.clearTextField(input)
             XCTAssertEqual(input.value as? String, "")
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+            // Dismiss through the transcript gutter, not a diagram that opens its preview on tap.
+            let gutterPoint = app.scrollViews["chat-transcript"]
+                .coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.05)).screenPoint
+            // The layout stays stationary until this tap. Avoid resolving the transcript during synthesis.
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            let originPoint = origin.screenPoint
+            origin.withOffset(CGVector(
+                dx: gutterPoint.x - originPoint.x,
+                dy: gutterPoint.y - originPoint.y)).tap()
             if keyboard.exists {
                 XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3))
             }
+            XCTAssertFalse(app.buttons["Close diagram preview"].exists)
+            let diagram = app.buttons["Mermaid diagram"]
+            XCTAssertTrue(diagram.waitForExistence(timeout: 8))
+            XCTAssertTrue(diagram.isHittable)
         }
     }
 
@@ -854,6 +866,43 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "stop-guard-deliberate-stop-cancelled-response")
     }
 
+    func testTextDraftKeepsStopAvailableDuringActiveResponse() throws {
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-text-draft-stop-active-response"),
+            additionalArguments: ["--openclaw-hold-initial-chat-run"])
+
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Keep this response running.")
+        let send = app.buttons["chat-send-message"]
+        self.waitForEnabled(send)
+        send.tap()
+
+        let stop = app.buttons["Stop response"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 8))
+        self.waitForEnabled(stop)
+        input.tap()
+        input.typeText("Keep this follow-up draft")
+        self.attachScreenshot(named: "text-draft-during-active-response")
+        XCTAssertTrue(stop.exists, "Drafting must keep the current response stoppable")
+        XCTAssertTrue(stop.isHittable)
+        XCTAssertTrue(send.exists)
+        self.assertMinimumTouchTarget(stop)
+        self.assertNoHorizontalOverlap([stop, send])
+
+        stop.tap()
+        XCTAssertTrue(stop.waitForNonExistence(timeout: 8))
+        XCTAssertEqual(input.value as? String, "Keep this follow-up draft")
+        self.waitForEnabled(send)
+        send.tap()
+        XCTAssertTrue(app.staticTexts["Keep this follow-up draft"].waitForExistence(timeout: 8))
+    }
+
     func testVoiceNoteDraftKeepsStopAvailableDuringActiveResponse() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone voice-note composer proof only")
         self.launchApp(
@@ -983,6 +1032,12 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         work.tap()
+        let result = app.buttons["chat-tool-activity-fixture-long-review"]
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        result.tap()
+        let earlier = app.staticTexts.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "Earlier response context.")).firstMatch
+        XCTAssertTrue(earlier.waitForExistence(timeout: 5))
         // A visible text leaf can be unhittable inside its accessible message container.
         // This setup needs the reply's pixels in the viewport, not a tap target.
         for _ in 0..<12 where !latestSeededReply.exists || !transcript.frame.contains(latestSeededReply.frame) {
@@ -1198,6 +1253,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY)
         self.assertElementHasRenderedContent(latest, named: "final reply with work collapsed")
         work.tap()
+        let result = app.buttons["chat-tool-activity-fixture-long-review"]
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        result.tap()
         XCTAssertTrue(earlier.waitForExistence(timeout: 5))
         self.attachScreenshot(named: "completed-work-expanded")
         let workLabel = work.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
@@ -1361,6 +1419,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.",
         ]
         XCTAssertTrue(assistant.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["chat-message-actions"].exists)
         assistant.press(forDuration: 0.8)
         XCTAssertTrue(assistant.exists)
         XCTAssertTrue(app.otherElements["chat-composer-surface"].exists)
@@ -2150,7 +2209,7 @@ extension OpenClawSnapshotUITests {
     }
 
     private func agentIdentity(in app: XCUIApplication) -> XCUIElement {
-        app.otherElements.matching(identifier: "chat-agent-identity").firstMatch
+        app.buttons.matching(identifier: "chat-agent-identity").firstMatch
     }
 
     private func readinessMarker(in app: XCUIApplication) -> XCUIElement {

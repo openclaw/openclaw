@@ -2,7 +2,11 @@ import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { serializedJsonArrayBytes } from "./serialized-json.js";
 import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
 import { captureSessionRowGeneration, type SessionRowGeneration } from "./session-row-identity.js";
-import { sessionRowEncodingBytes } from "./session-row-serialization.js";
+import {
+  registerSerializedSessionRow,
+  serializeSessionRow,
+  sessionRowEncodingBytes,
+} from "./session-row-serialization.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 // Selection and presentation have separate keys: 512 slots cover 256 complete queries.
@@ -41,17 +45,40 @@ function selectionRefs(value: SessionEntrySelection | SessionListFilteredEntries
   );
 }
 
-class SelectionPartitions extends WeakMap<object, SessionListFilteredEntries> {
+class SelectionPartitions extends Map<object, SessionListFilteredEntries> {
   refs = 0;
-  count = 0;
 
   override set(key: object, value: SessionListFilteredEntries) {
     const previous = this.get(key);
     this.refs += selectionRefs(value) - (previous ? selectionRefs(previous) : 0);
-    this.count += Number(!previous);
-    // Dead weak keys may overestimate retention until view eviction. Never undercount
-    // old partition arrays by scanning or trying to predict garbage collection.
     return super.set(key, value);
+  }
+
+  override delete(key: object) {
+    const previous = this.get(key);
+    if (previous) {
+      this.refs -= selectionRefs(previous);
+    }
+    return super.delete(key);
+  }
+}
+
+export function retainCurrentSessionListPartitions(
+  retained: Map<object, SessionListFilteredEntries>,
+  partitions: Iterable<{ revision: object; entries: { size: number } }>,
+) {
+  // Only current nonempty partitions can be reused. Retire obsolete values and
+  // their charges together, without waiting for revision tokens to be collected.
+  const revisions = new Set<object>();
+  for (const partition of partitions) {
+    if (partition.entries.size) {
+      revisions.add(partition.revision);
+    }
+  }
+  for (const revision of retained.keys()) {
+    if (!revisions.has(revision)) {
+      retained.delete(revision);
+    }
   }
 }
 
@@ -224,7 +251,7 @@ export class SessionListViewCache {
       view.key.length * 2 +
       rowRefs * 8 +
       entryRefs * 48 +
-      (view.partitions?.count ?? 0) * 64 +
+      (view.partitions?.size ?? 0) * 64 +
       (view.rowHistory?.length ?? 0) * 160 +
       (view.encodedBytes ?? 0);
     retainedRefs += refs - view.refs;
@@ -283,7 +310,11 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       facts: Fact[];
       bytes: number;
       rawBytes: number;
-      packed?: { row: GatewaySessionRow; keys: string[] };
+      packed?: {
+        row: GatewaySessionRow;
+        keys: string[];
+        prefix?: { json: string; utf8Bytes: number; retainedBytes: number };
+      };
     }
   >();
   const share = (sessions: T[]) => {
@@ -346,7 +377,8 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
         Object.assign(rows[recipients]!, candidate.fact);
         continue;
       }
-      const key = recipients.join(",");
+      // All-row recipient sets are identical within this response.
+      const key = recipients.length === sessions.length ? "" : recipients.join(",");
       const group = groups.get(key);
       if (group) {
         Object.assign(group.fact, candidate.fact);
@@ -374,16 +406,33 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       }
       // The immutable source owns values; only field order and response-local fact indexes
       // can change its packed bytes. Retain one layout, never a cache of list shapes.
+      const sameKeys = previous && previous.keys.length === keyCount;
       if (
-        previous &&
-        previous.keys.length === keyCount &&
+        sameKeys &&
         previous.row.sharedFacts?.length === row.sharedFacts?.length &&
         (row.sharedFacts?.every((ref, position) => ref === previous.row.sharedFacts?.[position]) ??
           true)
       ) {
         rows[index] = previous.row;
       } else {
-        retained.packed = { row, keys: Object.keys(row) };
+        let prefix: NonNullable<typeof previous>["prefix"];
+        if (sameKeys && row.sharedFacts) {
+          // Packing appends numeric fact indexes last. All preceding fields and their
+          // order still belong to the same immutable source; only replace that array.
+          if (previous.prefix === undefined) {
+            const encoded = serializeSessionRow(previous.row);
+            const json = encoded.slice(0, encoded.lastIndexOf("["));
+            previous.prefix = {
+              json,
+              utf8Bytes: Buffer.byteLength(json),
+              retainedBytes: encoded.length * 2,
+            };
+          }
+          prefix = previous.prefix;
+          const suffix = JSON.stringify(row.sharedFacts) + "}";
+          registerSerializedSessionRow(row, prefix.json + suffix, prefix.utf8Bytes + suffix.length);
+        }
+        retained.packed = { row, keys: sameKeys ? previous.keys : Object.keys(row), prefix };
       }
     }
     return { sessions: rows, sharedFacts };
@@ -395,7 +444,10 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       return retained
         ? retained.bytes +
             Math.max(0, retained.rawBytes - sessionRowEncodingBytes(row)) +
-            (retained.packed ? sessionRowEncodingBytes(retained.packed.row) : 0)
+            (retained.packed
+              ? sessionRowEncodingBytes(retained.packed.row) +
+                (retained.packed.prefix?.retainedBytes ?? 0)
+              : 0)
         : 0;
     },
   };

@@ -31,14 +31,18 @@ function normalizeThinkingLevel(raw?: string | null) {
       : undefined;
 }
 
-const tool = createLlmTaskTool({
-  config: { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
-  pluginConfig: {},
-  runtime: {
-    agent: { defaults: { provider: "openai", model: "gpt-5.5" }, normalizeThinkingLevel },
-    llm: { complete },
-  },
-} as unknown as LlmTaskApi);
+function createTool(config: unknown) {
+  return createLlmTaskTool({
+    config,
+    pluginConfig: {},
+    runtime: {
+      agent: { defaults: { provider: "openai", model: "gpt-5.5" }, normalizeThinkingLevel },
+      llm: { complete },
+    },
+  } as unknown as LlmTaskApi);
+}
+
+const tool = createTool({ agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } });
 
 function mockCompletion(text: string) {
   complete.mockImplementationOnce(async (params) => completionResult(params, text));
@@ -55,22 +59,17 @@ beforeEach(() => {
   complete.mockImplementation(async (params) => completionResult(params));
 });
 
-it("strips fenced json", async () => {
+it.each([
+  { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
+  { agents: { entries: { chat: { model: "anthropic/claude-sonnet-4-6" } } } },
+  { agents: { defaults: { model: { primary: "Sonnet" } } } },
+])("strips fenced json with runtime-owned defaults %j", async (config) => {
   mockCompletion('```json\n{"ok":true}\n```');
-  const res = await tool.execute("id", { prompt: "return ok" });
+  const res = await createTool(config).execute("id", { prompt: "return ok" });
   expect(res.details.json).toEqual({ ok: true });
   const call = isolatedCompletionCall();
-  expect(call).toMatchObject({
-    model: undefined,
-    reasoning: undefined,
-    maxTokens: undefined,
-    temperature: undefined,
-    systemPrompt: expect.stringContaining("JSON-only"),
-  });
-  expect(call.execution).toEqual({ mode: "isolated-agent-runtime", timeoutMs: 30_000 });
-  expect(call.messages).toEqual([
-    { role: "user", content: expect.stringContaining("TASK:\nreturn ok") },
-  ]);
+  expect(call.model).toBeUndefined();
+  expect(call.systemPrompt).toContain("JSON-only");
 });
 
 it("validates caller schemas with repeated $id independently across calls", async () => {

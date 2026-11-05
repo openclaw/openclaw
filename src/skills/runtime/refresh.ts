@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { observeOwnedDirectory } from "../../infra/owned-directory-observation.js";
@@ -68,6 +68,8 @@ type Source = {
   unavailable?: boolean;
   watchDirectories?: string[];
   observations: Map<string, ReturnType<typeof observeOwnedDirectory>>;
+  /** Why a reset removed this registration; a config refresh is not a shutdown. */
+  retiredBy?: "refresh" | "shutdown";
 };
 type DiscoveryState = {
   catalog: Map<string, Skill>;
@@ -118,13 +120,17 @@ function pool() {
       new WorkerTaskPool({
         workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.skillsDiscovery),
         workerClass: "singleton",
-        idleTimeoutMs: 0,
       }),
   ));
 }
 
 function observeSource(source: Source) {
-  if (!source.watch || !source.watchDirectories) {
+  // A read retains its selection, but passive observation follows the active config.
+  if (
+    !source.watch ||
+    !source.watchDirectories ||
+    getRuntimeConfigSnapshot()?.skills?.load?.watch === false
+  ) {
     return;
   }
   const directories = new Set(source.watchDirectories);
@@ -140,9 +146,9 @@ function observeSource(source: Source) {
       // One recursive workspace handle still reports edits in each selected subtree.
       const watchRoot =
         process.platform === "win32"
-          ? ([source.workspaceDir, source.selection.request.executionWorkspaceDir]
+          ? [source.workspaceDir, source.selection.request.executionWorkspaceDir]
               .filter((root): root is string => Boolean(root && isPathInside(root, directory)))
-              .toSorted((a, b) => a.length - b.length)[0] ?? path.dirname(directory))
+              .toSorted((a, b) => a.length - b.length)[0]
           : undefined;
       source.observations.set(
         directory,
@@ -332,10 +338,21 @@ function readRegisteredSource({ key, source }: Awaited<ReturnType<typeof registe
   return source.sources;
 }
 
-async function publishRegisteredSource(registration: Awaited<ReturnType<typeof registerSource>>) {
+async function publishRegisteredSource(
+  registration: Awaited<ReturnType<typeof registerSource>>,
+  retried = false,
+): Promise<WorkspaceSkillSources> {
   const { source } = registration;
   if (source.dirty || !source.sources) {
-    await scanDirtySources();
+    await scanDirtySources().catch((error: unknown) => {
+      if (source.retiredBy !== "refresh") {
+        throw error;
+      }
+    });
+  }
+  // A config refresh replaces registrations mid-read; publish the same selection once more.
+  if (!retried && source.retiredBy === "refresh") {
+    return publishRegisteredSource(await registerSource(source.selection, source.watch), true);
   }
   return readRegisteredSource(registration);
 }
@@ -553,6 +570,7 @@ async function resetSkillsDiscoverySources(
   }
   for (const source of state.sources.values()) {
     closeSource(source);
+    source.retiredBy = retireWorker ? "shutdown" : "refresh";
   }
   state.sources.clear();
   state.plans.clear();

@@ -1,11 +1,14 @@
 import type { IncomingMessage } from "node:http";
 import { runInNewContext, Script } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
 import { SANDBOX_HOST_PATH } from "../agents/sandbox-host.js";
-import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
+import {
+  createSandboxHostHttpServer,
+  createSandboxHostHttpRequestHandler,
+} from "./mcp-app-sandbox-http.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const representationHeaders = (response: Response) =>
@@ -37,7 +40,12 @@ async function withSandboxHost(run: (origin: string) => Promise<void>) {
   await run(await listenLoopback(server));
 }
 
-function bootSandbox(bootstrap: string, origin: string, parentOrigin = "https://control.example") {
+function bootSandbox(
+  bootstrap: string,
+  origin: string,
+  parentOrigin = "https://control.example",
+  globals: Record<string, unknown> = {},
+) {
   const posted: unknown[][] = [];
   const frames: { srcdoc: string }[] = [];
   const parent = { postMessage: (...args: unknown[]) => posted.push(args) };
@@ -54,6 +62,7 @@ function bootSandbox(bootstrap: string, origin: string, parentOrigin = "https://
     addEventListener: (_name: string, listener: typeof receive) => (receive = listener),
   };
   runInNewContext(bootstrap, {
+    ...globals,
     URL,
     window: Object.assign(window, { self: window }),
     location,
@@ -76,6 +85,7 @@ function bootSandbox(bootstrap: string, origin: string, parentOrigin = "https://
     posted,
     frames,
     receive: (data: unknown) => receive({ source: parent, origin: parentOrigin, data }),
+    dispatch: (event: unknown) => receive(event),
   };
 }
 
@@ -175,6 +185,50 @@ describe("MCP App sandbox HTTP origin", () => {
     });
   });
 
+  it("answers parent activation queries with its own activation and never relays widget answers", async () => {
+    await withSandboxHost(async (origin) => {
+      const shell = await (await fetch(new URL(buildMcpAppSandboxPath(), origin))).text();
+      const bootstrap = expectDefined(
+        [...shell.matchAll(/<script>([\s\S]*?)<\/script>/gu)].at(-1)?.[1],
+        "sandbox bootstrap script",
+      );
+      for (const isActive of [true, false]) {
+        const { posted, frames, receive, dispatch } = bootSandbox(bootstrap, origin, undefined, {
+          navigator: { userActivation: { isActive } },
+        });
+        const inner = { postMessage: vi.fn() };
+        Object.assign(expectDefined(frames.at(-1), "widget frame"), { contentWindow: inner });
+        posted.length = 0;
+        receive({
+          jsonrpc: "2.0",
+          method: "ui/notifications/sandbox-activation-query",
+          params: { id: "query" },
+        });
+        expect(posted).toEqual([
+          [
+            {
+              jsonrpc: "2.0",
+              method: "ui/notifications/sandbox-activation",
+              params: { id: "query", active: isActive },
+            },
+            "https://control.example",
+          ],
+        ]);
+        expect(inner.postMessage).not.toHaveBeenCalled();
+        // Widget code cannot answer for the proxy through its relay.
+        dispatch({
+          source: inner,
+          origin: "null",
+          data: {
+            method: "ui/notifications/sandbox-activation",
+            params: { id: "query", active: true },
+          },
+        });
+        expect(posted).toHaveLength(1);
+      }
+    });
+  });
+
   it("rejects other paths, methods, and malformed policy", () => {
     expect(request("/", "GET").res.statusCode).toBe(404);
     expect(request(buildMcpAppSandboxPath(), "POST").res.statusCode).toBe(404);
@@ -189,4 +243,12 @@ describe("MCP App sandbox HTTP origin", () => {
     }
     expect(request("http://[", "GET").res.statusCode).toBe(400);
   });
+});
+
+it("rejects a malformed resource request without an unhandled URL exception", async () => {
+  const { res, end } = makeMockHttpResponse();
+  const handler = createSandboxHostHttpRequestHandler({ clients: new Set() });
+  await handler({ url: "http://[", method: "GET" } as IncomingMessage, res);
+  expect(res.statusCode).toBe(400);
+  expect(end).toHaveBeenCalledWith("Bad Request");
 });

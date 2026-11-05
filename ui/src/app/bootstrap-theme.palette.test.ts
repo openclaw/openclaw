@@ -107,3 +107,28 @@ it.each(["superseded", "disposed"])("ignores a %s palette completion", (state) =
   expect(snapshots).not.toHaveBeenCalled();
   expect(document.documentElement.dataset.themeMode).toBe("light");
 });
+
+it.each([false, true])(
+  "publishes Board preferences without reapplying or retiring the palette (pending: %s)",
+  (pending) => {
+    if (pending) {
+      patchSettings({ theme: "tide", themeMode: "dark" });
+    }
+    snapshots.mockClear();
+    const palette = theme.appliedPalette;
+    const rootWrites = vi.spyOn(document.documentElement, "setAttribute");
+    const styleWrites = vi.spyOn(document.documentElement.style, "setProperty");
+    patchSettings({ boardSessionViews: { example: { activeTabId: "reports" } } });
+    expect(snapshots).toHaveBeenCalledOnce();
+    expect(theme.settings.boardSessionViews?.example?.activeTabId).toBe("reports");
+    expect(theme.appliedPalette).toBe(palette);
+    expect(rootWrites).not.toHaveBeenCalled();
+    expect(styleWrites).not.toHaveBeenCalled();
+    if (pending) {
+      pendingPalette().dispatchEvent(new Event("load"));
+      expect(theme.appliedPalette?.theme).toBe("tide");
+      expect(document.documentElement.dataset.themeMode).toBe("dark");
+      expect(snapshots).toHaveBeenCalledTimes(2);
+    }
+  },
+);
