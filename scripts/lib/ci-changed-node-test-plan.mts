@@ -421,8 +421,8 @@ function isIndependentMarkdownCompanion(file: string, cwd: string): boolean {
     return false;
   }
   const config = resolveCompleteCanonicalNodeTestConfig(file, buildVitestRunPlans([file], cwd));
-  // Each config runs in its own process; unit-fast shares the Markdown worker.
-  return config !== undefined && config !== "test/vitest/vitest.unit-fast.config.ts";
+  // Companions must execute outside the Markdown worker.
+  return config !== undefined && config !== "test/vitest/vitest.markdown.config.ts";
 }
 
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
