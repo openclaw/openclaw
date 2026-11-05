@@ -20,7 +20,7 @@ describe("decodeDataUrl", () => {
     const input = `data:image/png;base64,${Buffer.alloc(bytes).toString("base64")}`;
     if (extraBytes) {
       expect(() => decodeDataUrl(input, { maxBytes: MAX_IMAGE_BYTES })).toThrow(
-        "Invalid data URL: payload exceeds size limit.",
+        "Invalid data URL: payload exceeds size limit (",
       );
     } else {
       expect(decodeDataUrl(input, { maxBytes: MAX_IMAGE_BYTES }).buffer.byteLength).toBe(bytes);

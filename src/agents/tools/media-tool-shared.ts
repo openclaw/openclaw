@@ -567,42 +567,51 @@ export async function loadMediaToolReferences<T>(params: {
       );
     }
     let media: LoadedToolReferenceMedia;
-    if (reference.isDataUrl) {
-      const { decodeDataUrl } = await import("./image-tool.helpers.js");
-      params.signal?.throwIfAborted();
-      media = decodeDataUrl(resolvedInput, { maxBytes: params.maxBytes });
-    } else {
-      const { loadWebMedia } = await import("../../media/web-media.js");
-      params.signal?.throwIfAborted();
-      workspaceReadiness?.assertCurrent();
-      const timeout =
-        params.toolName === "music_generate" && !params.sandbox
-          ? buildTimeoutAbortSignal({
-              timeoutMs: 30_000,
-              operation: "music-generate.reference-fetch",
-              ...(params.signal ? { signal: params.signal } : {}),
-              ...(reference.isHttpUrl ? { url: resolvedPath ?? resolvedInput } : {}),
-            })
-          : undefined;
-      try {
-        media = await loadWebMedia(resolvedPath ?? resolvedInput, {
-          maxBytes: params.maxBytes,
-          ...(params.sandbox
-            ? {
-                sandboxValidated: true,
-                readFile: createSandboxBridgeReadFile({ sandbox: params.sandbox }),
-              }
-            : { localRoots, ssrfPolicy: params.ssrfPolicy }),
-          ...(params.toolName === "image_generate" && reference.isHttpUrl
-            ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS }
-            : {}),
-          ...(timeout?.signal || params.signal
-            ? { requestInit: { signal: timeout?.signal ?? params.signal } }
-            : {}),
-        });
-      } finally {
-        timeout?.cleanup();
+    try {
+      if (reference.isDataUrl) {
+        const { decodeDataUrl } = await import("./image-tool.helpers.js");
+        params.signal?.throwIfAborted();
+        media = decodeDataUrl(resolvedInput, { maxBytes: params.maxBytes });
+      } else {
+        const { loadWebMedia } = await import("../../media/web-media.js");
+        params.signal?.throwIfAborted();
+        workspaceReadiness?.assertCurrent();
+        const timeout =
+          params.toolName === "music_generate" && !params.sandbox
+            ? buildTimeoutAbortSignal({
+                timeoutMs: 30_000,
+                operation: "music-generate.reference-fetch",
+                ...(params.signal ? { signal: params.signal } : {}),
+                ...(reference.isHttpUrl ? { url: resolvedPath ?? resolvedInput } : {}),
+              })
+            : undefined;
+        try {
+          media = await loadWebMedia(resolvedPath ?? resolvedInput, {
+            maxBytes: params.maxBytes,
+            ...(params.sandbox
+              ? {
+                  sandboxValidated: true,
+                  readFile: createSandboxBridgeReadFile({ sandbox: params.sandbox }),
+                }
+              : { localRoots, ssrfPolicy: params.ssrfPolicy }),
+            ...(params.toolName === "image_generate" && reference.isHttpUrl
+              ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS }
+              : {}),
+            ...(timeout?.signal || params.signal
+              ? { requestInit: { signal: timeout?.signal ?? params.signal } }
+              : {}),
+          });
+        } finally {
+          timeout?.cleanup();
+        }
       }
+    } catch (error) {
+      params.signal?.throwIfAborted();
+      // Generated outputs share this cap, so name the input that failed.
+      const message = `${params.expectedKind} reference ${loaded.length + 1} could not be loaded: ${error instanceof Error ? error.message : String(error)}`;
+      throw error instanceof ToolInputError
+        ? new ToolInputError(message)
+        : new Error(message, { cause: error });
     }
     params.signal?.throwIfAborted();
     if (media.kind !== params.expectedKind) {
