@@ -6,6 +6,7 @@ export const gatewayPluginTestFiles = [
   "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
   "test/plugins/crabbox-allocation-authority.gateway.test.ts",
+  "test/plugins/crabbox-setup-authority.gateway.test.ts",
   "test/plugins/team-reports-http.gateway.test.ts",
 ];
 

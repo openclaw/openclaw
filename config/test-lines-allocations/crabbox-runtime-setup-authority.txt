@@ -1,2 +1,3 @@
-# Two real environment-profile revocation regressions for setup dispatch.
-46
+# Real Gateway ownership, profile I/O, process effects, retry and cleanup regressions.
+369
+# Existing allocation-authority enrollment fixture: 4 added lines.
