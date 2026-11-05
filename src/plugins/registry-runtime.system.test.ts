@@ -31,8 +31,11 @@ const host = vi.hoisted(() => ({
 }));
 // mock-isolation: Exercise registry-owned system authority without reading sessions or starting model work.
 vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
-  captureSessionEventTargetForHost: host.capture,
   enqueueSessionEventForHost: host.enqueue,
+}));
+// mock-isolation: Capture stays at its owning target boundary after lazy loading.
+vi.mock("../auto-reply/reply/session-event-target.js", () => ({
+  captureSessionEventTargetForHost: host.capture,
 }));
 
 function fixture() {
@@ -46,12 +49,17 @@ function fixture() {
 }
 
 const target = { agentId: "main", sessionKey: "agent:main:main" };
-function pendingEvent(system: ReturnType<typeof fixture>["system"]) {
+async function pendingEvent(system: ReturnType<typeof fixture>["system"]) {
   system.enqueueSessionEvent("Completed", target);
   const forwarded = host.enqueue.mock.calls[0]?.[1] as SessionEventOptions;
   const pending = createDeferredCore<SessionEventTarget>();
-  host.capture.mockReturnValueOnce(pending.promise);
+  const started = createDeferredCore();
+  host.capture.mockImplementationOnce(() => {
+    started.resolve();
+    return pending.promise;
+  });
   const capture = system.captureSessionEventTarget(target.agentId, target.sessionKey);
+  await started.promise;
   return async (error: string) => {
     pending.resolve({ sessionId: "original", generation: "process" });
     await expect(capture).rejects.toThrow(error);
@@ -61,7 +69,7 @@ function pendingEvent(system: ReturnType<typeof fixture>["system"]) {
 
 it("revokes a pending capture and retained event effects with the plugin instance", async () => {
   const { builder, record, system } = fixture();
-  const assertRevoked = pendingEvent(system);
+  const assertRevoked = await pendingEvent(system);
   revokePluginRecord(builder.registry, record);
   await assertRevoked("system owner is no longer active");
   expect(() => system.enqueueSessionEvent("Late", target)).toThrow("runtime is no longer active");
@@ -73,7 +81,7 @@ it.each(["context", "binding", "removed"] as const)(
     const { runtime, system } = fixture();
     let context = {} as GatewayRequestContext;
     bindGatewayContextResolver(runtime, () => context);
-    const assertRevoked = pendingEvent(system);
+    const assertRevoked = await pendingEvent(system);
     if (replacement === "context") {
       context = {} as GatewayRequestContext;
     } else if (replacement === "binding") {

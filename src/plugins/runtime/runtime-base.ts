@@ -20,7 +20,9 @@ function unavailable(method: string): () => never {
 }
 
 /** Host-owned facades survive later path-loaded runtime materialization unchanged. */
-export function createRuntimeBase(): PluginRuntimeBase {
+export function createRuntimeBase(
+  enqueueForHost: Parameters<typeof createRuntimeSystem>[0],
+): PluginRuntimeBase {
   let system: PluginRuntime["system"] | undefined;
   return {
     capabilities: Object.freeze([
@@ -48,7 +50,7 @@ export function createRuntimeBase(): PluginRuntimeBase {
       openChannelIngressDrain: unavailable("openChannelIngressDrain"),
     },
     get system() {
-      return (system ??= createRuntimeSystem());
+      return (system ??= createRuntimeSystem(enqueueForHost));
     },
   };
 }
