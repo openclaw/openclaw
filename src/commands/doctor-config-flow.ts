@@ -34,7 +34,7 @@ import { createWorkspaceAliasMigrationRepair } from "./doctor-workspace-alias.js
 import { createDoctorChangesPanelSink } from "./doctor/changes-panel-sink.js";
 import { cronCodexRuntimePolicyTargetKey } from "./doctor/cron/store-migration.js";
 import * as notes from "./doctor/emit-notes.js";
-import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
+import { doctorConfigRevision, finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import {
   applyLegacyCompatibilityStep,
   applyRetiredConfigStep,
@@ -698,14 +698,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...finalized,
     cfg,
     heartbeatMigrationSource: preRetiredConfigState.candidate,
-    ...(shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
-      ? {
-          confirmedConfigSource: {
-            path: snapshot.path,
-            hash: snapshot.hash ?? hashConfigRaw(snapshot.raw),
-          },
-        }
-      : {}),
+    confirmedConfigSource:
+      shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
+        ? doctorConfigRevision(snapshot)
+        : finalized.confirmedConfigSource,
     ...(referenceSource ? { referenceSource } : {}),
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,
