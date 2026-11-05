@@ -19,7 +19,10 @@
         },
         "action": {
           "description": "Select one action. For action=\"send\", provide message or another send payload; fields for other actions do not count as send content.",
-          "enum": ["react", "send"],
+          "enum": [
+            "react",
+            "send"
+          ],
           "type": "string"
         },
         "asDocument": {
@@ -44,7 +47,12 @@
                 "type": "string"
               },
               "type": {
-                "enum": ["image", "audio", "video", "file"],
+                "enum": [
+                  "image",
+                  "audio",
+                  "video",
+                  "file"
+                ],
                 "type": "string"
               }
             },
@@ -180,7 +188,9 @@
           "type": "string"
         }
       },
-      "required": ["action"],
+      "required": [
+        "action"
+      ],
       "type": "object"
     },
     "name": "message",
@@ -210,7 +220,10 @@
                 "type": "string"
               },
               "encoding": {
-                "enum": ["utf8", "base64"],
+                "enum": [
+                  "utf8",
+                  "base64"
+                ],
                 "type": "string"
               },
               "mimeType": {
@@ -220,7 +233,10 @@
                 "type": "string"
               }
             },
-            "required": ["name", "content"],
+            "required": [
+              "name",
+              "content"
+            ],
             "type": "object"
           },
           "maxItems": 50,
@@ -232,17 +248,25 @@
         },
         "cleanup": {
           "description": "Hidden session cleanup; delete snapshots and removes its managed worktree through session cleanup. visible=true always keeps the session.",
-          "enum": ["delete", "keep"],
+          "enum": [
+            "delete",
+            "keep"
+          ],
           "type": "string"
         },
         "completionTarget": {
           "description": "parent: return substantive results in a private requester turn; no automatic channel delivery. After sessions_yield, the parent must receive the internal result even when no external reply is needed. For external replies only, exactly NO_REPLY as the entire final answer stays silent; a literal leading NO_REPLY newline suppresses that line only. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently. Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
-          "enum": ["parent"],
+          "enum": [
+            "parent"
+          ],
           "type": "string"
         },
         "context": {
           "description": "Native: explicit context=\"isolated\" starts clean; context=\"fork\" copies requester transcript and requires the same agent. Omitted context is isolated.",
-          "enum": ["isolated", "fork"],
+          "enum": [
+            "isolated",
+            "fork"
+          ],
           "type": "string"
         },
         "cwd": {
@@ -251,7 +275,11 @@
         },
         "cyberAccessProgram": {
           "description": "Child OpenAI cyber Access (Blue=daybreak_blue, Red=daybreak_red). Omit: same-agent, same-model child keeps requester Access. Child run fails if its account/model lacks the program. Subagent only.",
-          "enum": ["standard", "daybreak_blue", "daybreak_red"],
+          "enum": [
+            "standard",
+            "daybreak_blue",
+            "daybreak_red"
+          ],
           "type": "string"
         },
         "expectsCompletionMessage": {
@@ -287,7 +315,9 @@
         },
         "mode": {
           "description": "\"run\" one-shot. Visible sessions accept omitted/default \"run\" and remain persistent.",
-          "enum": ["run"],
+          "enum": [
+            "run"
+          ],
           "type": "string"
         },
         "model": {
@@ -304,7 +334,9 @@
                   "type": "string"
                 }
               },
-              "required": ["kind"],
+              "required": [
+                "kind"
+              ],
               "type": "object"
             },
             {
@@ -331,7 +363,10 @@
                   "type": "string"
                 }
               },
-              "required": ["kind", "profileId"],
+              "required": [
+                "kind",
+                "profileId"
+              ],
               "type": "object"
             }
           ],
@@ -348,7 +383,9 @@
         },
         "runtime": {
           "description": "Runtime; visible=true and managed worktrees require \"subagent\".",
-          "enum": ["subagent"],
+          "enum": [
+            "subagent"
+          ],
           "type": "string"
         },
         "runTimeoutSeconds": {
@@ -358,7 +395,10 @@
         },
         "sandbox": {
           "description": "\"inherit\" parent sandbox policy; \"require\" fails unless child is sandboxed.",
-          "enum": ["inherit", "require"],
+          "enum": [
+            "inherit",
+            "require"
+          ],
           "type": "string"
         },
         "task": {
@@ -394,7 +434,9 @@
           "type": "string"
         }
       },
-      "required": ["task"],
+      "required": [
+        "task"
+      ],
       "type": "object"
     },
     "name": "sessions_spawn",
@@ -489,7 +531,10 @@
                           "type": "string"
                         }
                       },
-                      "required": ["start", "end"],
+                      "required": [
+                        "start",
+                        "end"
+                      ],
                       "type": "object"
                     },
                     {
@@ -551,7 +596,10 @@
                               "type": "string"
                             }
                           },
-                          "required": ["mode", "to"],
+                          "required": [
+                            "mode",
+                            "to"
+                          ],
                           "type": "object"
                         },
                         {
@@ -563,7 +611,10 @@
                     "directPolicy": {
                       "anyOf": [
                         {
-                          "enum": ["allow", "block"],
+                          "enum": [
+                            "allow",
+                            "block"
+                          ],
                           "type": "string"
                         },
                         {
@@ -635,7 +686,11 @@
                     },
                     "mode": {
                       "description": "Delivery mode",
-                      "enum": ["none", "announce", "webhook"],
+                      "enum": [
+                        "none",
+                        "announce",
+                        "webhook"
+                      ],
                       "type": "string"
                     },
                     "target": {
@@ -723,7 +778,10 @@
                           "type": "boolean"
                         },
                         "mode": {
-                          "enum": ["announce", "webhook"],
+                          "enum": [
+                            "announce",
+                            "webhook"
+                          ],
                           "type": "string"
                         },
                         "to": {
@@ -818,7 +876,11 @@
                     },
                     "kind": {
                       "description": "Payload kind",
-                      "enum": ["systemEvent", "agentTurn", "script"],
+                      "enum": [
+                        "systemEvent",
+                        "agentTurn",
+                        "script"
+                      ],
                       "type": "string"
                     },
                     "lightContext": {
@@ -935,7 +997,13 @@
                     },
                     "kind": {
                       "description": "Schedule kind",
-                      "enum": ["at", "every", "cron", "stream", "event"],
+                      "enum": [
+                        "at",
+                        "every",
+                        "cron",
+                        "stream",
+                        "event"
+                      ],
                       "type": "string"
                     },
                     "match": {
@@ -948,7 +1016,10 @@
                     },
                     "mode": {
                       "description": "Stream output: line accepts every line; match uses the match regex without a trigger script",
-                      "enum": ["line", "match"],
+                      "enum": [
+                        "line",
+                        "match"
+                      ],
                       "type": "string"
                     },
                     "options": {
@@ -1007,7 +1078,9 @@
                           "type": "string"
                         }
                       },
-                      "required": ["script"],
+                      "required": [
+                        "script"
+                      ],
                       "type": "object"
                     },
                     {
@@ -1017,7 +1090,10 @@
                 },
                 "wakeMode": {
                   "description": "Wake timing",
-                  "enum": ["now", "next-heartbeat"],
+                  "enum": [
+                    "now",
+                    "next-heartbeat"
+                  ],
                   "type": "string"
                 }
               },
@@ -1034,7 +1110,10 @@
             },
             "mode": {
               "description": "Wake mode for action=\"wake\" (default next-heartbeat)",
-              "enum": ["now", "next-heartbeat"],
+              "enum": [
+                "now",
+                "next-heartbeat"
+              ],
               "type": "string"
             },
             "offset": {
@@ -1076,7 +1155,10 @@
             },
             "runMode": {
               "description": "Run mode for action=\"run\": omitted defaults to \"due\"; use \"force\" to trigger now.",
-              "enum": ["due", "force"],
+              "enum": [
+                "due",
+                "force"
+              ],
               "type": "string"
             },
             "sessionKey": {
@@ -1098,7 +1180,9 @@
               "type": "integer"
             }
           },
-          "required": ["action"],
+          "required": [
+            "action"
+          ],
           "type": "object"
         },
         "name": "automations",
@@ -1142,7 +1226,9 @@
               "type": "integer"
             }
           },
-          "required": ["action"],
+          "required": [
+            "action"
+          ],
           "type": "object"
         },
         "name": "gateway",
@@ -1198,11 +1284,19 @@
               "type": "integer"
             },
             "delivery": {
-              "enum": ["system", "overlay", "auto"],
+              "enum": [
+                "system",
+                "overlay",
+                "auto"
+              ],
               "type": "string"
             },
             "desiredAccuracy": {
-              "enum": ["coarse", "balanced", "precise"],
+              "enum": [
+                "coarse",
+                "balanced",
+                "precise"
+              ],
               "type": "string"
             },
             "deviceId": {
@@ -1219,7 +1313,11 @@
             },
             "facing": {
               "description": "camera_snap: front/back/both; camera_clip: front/back only.",
-              "enum": ["front", "back", "both"],
+              "enum": [
+                "front",
+                "back",
+                "both"
+              ],
               "type": "string"
             },
             "fps": {
@@ -1268,7 +1366,11 @@
               "type": "string"
             },
             "notificationAction": {
-              "enum": ["open", "dismiss", "reply"],
+              "enum": [
+                "open",
+                "dismiss",
+                "reply"
+              ],
               "type": "string"
             },
             "notificationKey": {
@@ -1285,12 +1387,21 @@
               "type": "number"
             },
             "priority": {
-              "enum": ["passive", "active", "timeSensitive"],
+              "enum": [
+                "passive",
+                "active",
+                "timeSensitive"
+              ],
               "type": "string"
             },
             "ptzOperation": {
               "description": "camera_ptz operation. Call status before any control operation. status and home accept no axes; set uses absolute axes; move uses axis deltas. Never guess unsupported axes.",
-              "enum": ["status", "set", "move", "home"],
+              "enum": [
+                "status",
+                "set",
+                "move",
+                "home"
+              ],
               "type": "string"
             },
             "quality": {
@@ -1324,7 +1435,9 @@
               "type": "number"
             }
           },
-          "required": ["action"],
+          "required": [
+            "action"
+          ],
           "type": "object"
         },
         "name": "nodes",
@@ -1399,7 +1512,9 @@
               "type": "string"
             }
           },
-          "required": ["sessionKey"],
+          "required": [
+            "sessionKey"
+          ],
           "type": "object"
         },
         "name": "sessions_history",
@@ -1451,7 +1566,14 @@
             },
             "kinds": {
               "items": {
-                "enum": ["main", "group", "cron", "hook", "node", "other"],
+                "enum": [
+                  "main",
+                  "group",
+                  "cron",
+                  "hook",
+                  "node",
+                  "other"
+                ],
                 "type": "string"
               },
               "type": "array"
@@ -1486,7 +1608,11 @@
             },
             "relationship": {
               "description": "Relation to the authenticated requesting user; unavailable without a trusted user identity.",
-              "enum": ["owned", "created", "involving"],
+              "enum": [
+                "owned",
+                "created",
+                "involving"
+              ],
               "type": "string"
             },
             "search": {
@@ -1532,7 +1658,9 @@
               "type": "string"
             }
           },
-          "required": ["query"],
+          "required": [
+            "query"
+          ],
           "type": "object"
         },
         "name": "sessions_search",
@@ -1591,7 +1719,9 @@
               "type": "boolean"
             }
           },
-          "required": ["message"],
+          "required": [
+            "message"
+          ],
           "type": "object"
         },
         "name": "sessions_send",
@@ -1603,7 +1733,11 @@
         "inputSchema": {
           "properties": {
             "action": {
-              "enum": ["list", "wait", "cancel"],
+              "enum": [
+                "list",
+                "wait",
+                "cancel"
+              ],
               "type": "string"
             },
             "recentMinutes": {
@@ -1653,7 +1787,9 @@
               "type": "integer"
             }
           },
-          "required": ["text"],
+          "required": [
+            "text"
+          ],
           "type": "object"
         },
         "name": "tts",
@@ -1667,7 +1803,10 @@
             "extractMode": {
               "default": "markdown",
               "description": "Extract as markdown/text.",
-              "enum": ["markdown", "text"],
+              "enum": [
+                "markdown",
+                "text"
+              ],
               "type": "string"
             },
             "maxChars": {
@@ -1680,7 +1819,9 @@
               "type": "string"
             }
           },
-          "required": ["url"],
+          "required": [
+            "url"
+          ],
           "type": "object"
         },
         "name": "web_fetch",
@@ -1748,7 +1889,9 @@
               "type": "string"
             }
           },
-          "required": ["query"],
+          "required": [
+            "query"
+          ],
           "type": "object"
         },
         "name": "web_search",
