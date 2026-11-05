@@ -136,6 +136,10 @@ reload mode, hook policy changes hot-reload the existing plugin runtime.
   `before_prompt_build`, `before_model_request`, `heartbeat_prompt_contribution`,
   and durable next-turn injections. It defaults to allowed, but does not grant
   conversation access. The first three hooks therefore need both permissions.
+- `before_model_request` is off by default for every plugin, bundled ones
+  included. It also needs `plugins.entries.<id>.hooks.allowModelRequest: true`;
+  without it the registration is ignored and the plugin reports a warning
+  naming that key.
 - These are specific registration gates, not a sandbox or a universal filter
   for every hook that can see message data. Install only plugins you trust.
 
@@ -236,6 +240,7 @@ hooks, which cannot protect the raw durable ingress payload.
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Plugin loads but the handler never runs    | Use `api.on` for typed names, inspect `openclaw plugins inspect <id> --runtime --json`, and check diagnostics for blocked registrations. Runtime inspection loads the plugin in the inspecting process; use `openclaw plugins reload <id>` after code changes. |
 | Conversation hook is blocked               | Set `plugins.entries.<id>.hooks.allowConversationAccess: true`; for prompt hooks, also check that `allowPromptModification` is not `false`. These keys belong under `hooks`, not the plugin's `config`.                                                        |
+| `before_model_request` never runs          | Set `plugins.entries.<id>.hooks.allowModelRequest: true` in addition to the conversation and prompt permissions. The hook is off by default.                                                                                                                   |
 | Hook works for one runtime or trigger only | Check the runtime boundary and `eligibleTriggers`. Missing context fields are not proof of a different sender, agent, or authorization state.                                                                                                                  |
 | Persistence rewrite has no effect          | Return `{ message }` synchronously. An `async` handler's result is ignored.                                                                                                                                                                                    |
 | A timed-out hook still performs work       | Timeout ends the host's await, not plugin work. Pass available abort signals through I/O and bound plugin-owned work yourself.                                                                                                                                 |
