@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { selectBrowserGatewayConnectAuth } from "../api/gateway-connect-plan.ts";
 import { createBrowserPairSession } from "../lib/browser-pair.ts";
 import { loadDeviceAuthToken } from "../lib/nodes/index.ts";
 // Preloaded so the gate's lazy card import resolves within one fake-timer settle.
@@ -215,6 +216,34 @@ describe("browser pairing", () => {
     await vi.advanceTimersByTimeAsync(2_100);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(pair.onApproved).toHaveBeenCalledWith("ws://gateway.example");
+  });
+
+  it("connects with the approved token for this page when storage rejects writes", async () => {
+    const url = "ws://blocked-storage.example";
+    // A store that refuses writes, like a full quota or blocked site data.
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      },
+      removeItem: () => {},
+    });
+    stubReplies(json(started), json(approved));
+    const pair = session();
+    await pair.start(url);
+    await settle();
+    expect(pair.onApproved).toHaveBeenCalledWith(url);
+    // The next connect selects the received token even though nothing was persisted.
+    const auth = selectBrowserGatewayConnectAuth(
+      { url, token: "", password: "", bootstrapToken: "" },
+      { role: "operator", deviceId: "0123456789abcdef" },
+      false,
+      false,
+    );
+    expect(auth).toMatchObject({
+      resolvedDeviceToken: "device-token",
+      usingStoredDeviceToken: true,
+    });
   });
 
   it("offers pairing only for the Gateway serving this page", () => {

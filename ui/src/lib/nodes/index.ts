@@ -70,7 +70,15 @@ function parseDeviceAuthStore(raw: string | null): DeviceAuthStore | null {
   }
 }
 
+// Page-lifetime copies of stores the browser refused to persist, matching the
+// in-memory device identity: a credential this page received stays usable here.
+const unpersistedStores = new Map<string, DeviceAuthStore>();
+
 function readStore(gatewayUrl: string): DeviceAuthStore | null {
+  const unpersisted = unpersistedStores.get(deviceAuthStorageKey(gatewayUrl));
+  if (unpersisted) {
+    return unpersisted;
+  }
   try {
     const storage = getSafeLocalStorage();
     const scopedKey = deviceAuthStorageKey(gatewayUrl);
@@ -102,12 +110,18 @@ function readStore(gatewayUrl: string): DeviceAuthStore | null {
 }
 
 function writeStore(gatewayUrl: string, store: DeviceAuthStore) {
+  const key = deviceAuthStorageKey(gatewayUrl);
   try {
     const storage = getSafeLocalStorage();
-    storage?.setItem(deviceAuthStorageKey(gatewayUrl), JSON.stringify(store));
+    if (!storage) {
+      throw new Error("localStorage unavailable");
+    }
+    storage.setItem(key, JSON.stringify(store));
+    unpersistedStores.delete(key);
     removeLegacyDeviceAuthStore(storage);
   } catch {
-    // localStorage can be unavailable in private or embedded contexts.
+    // localStorage can be unavailable or full in private or embedded contexts.
+    unpersistedStores.set(key, store);
   }
 }
 

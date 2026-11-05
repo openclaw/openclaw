@@ -8,7 +8,11 @@ import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.j
 import { buildBrowserPairPayload, type BrowserPairAction } from "../shared/browser-pair.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { CONTROL_UI_OPERATOR_SCOPES } from "./control-ui-bootstrap-contract.js";
-import { issueOperatorToken, loadDeviceIdentity } from "./device-authz.test-helpers.js";
+import { loadDeviceIdentity } from "./device-authz.test-helpers.js";
+import {
+  captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+} from "./device-revocation.js";
 import { CONTROL_UI_CLIENT, openWs, originForPort } from "./server.auth.test-helpers.js";
 import {
   connectOk,
@@ -356,43 +360,43 @@ describe("browser device-code pairing", () => {
     },
   );
 
-  it("issues nothing when the administrator is revoked while approval is queued", async () => {
+  it("refuses a queued approval once its administrator is revoked", async () => {
     const browser = newBrowser();
     const { requestId, code } = await start(browser);
     const before = readFinalEffect(requestId);
-    const admin = await issueOperatorToken({
-      name: `browser-pair-revoked-admin-${browserCount}`,
-      approvedScopes: ["operator.admin"],
-    });
-    const revokedAdmin = await harness.openWs();
-    await connectOk(revokedAdmin, {
-      skipDefaultAuth: true,
-      deviceToken: admin.token,
-      deviceIdentityPath: admin.identityPath,
-      scopes: ["operator.admin"],
-    });
-
-    // Both requests park behind the pairing lock in this order, so the revocation
-    // commits first and the approval reaches its final effect with authority gone.
-    let revocation: ReturnType<typeof rpcReq> | undefined;
-    let approval: ReturnType<typeof rpcReq> | undefined;
-    await withDevicePairingLock(async () => {
-      revocation = rpcReq(adminSocket, "device.token.revoke", {
-        deviceId: admin.deviceId,
-        role: "operator",
-      });
-      await delay(100);
-      approval = decide(code, requestId, "approve", revokedAdmin);
-      await delay(100);
+    // The live revocation owner every Gateway request checks; device.token.revoke
+    // publishes into it right after its commit, before closing the caller's sockets.
+    const gateway = {};
+    const adminDeviceId = `browser-pair-revoked-admin-${browserCount}`;
+    const caller = captureGatewayDeviceRevocation(
+      gateway,
+      { deviceId: adminDeviceId, role: "operator" },
+      () => true,
+    );
+    const held = Promise.withResolvers<void>();
+    const locked = Promise.withResolvers<void>();
+    const holder = withDevicePairingLock(async () => {
+      locked.resolve();
+      await held.promise;
     }, "browser-pair-authority-test");
-
-    expect((await revocation)?.ok).toBe(true);
-    const outcome = await Promise.race([
-      approval?.catch(() => null),
-      delay(2_000).then(() => null),
-    ]);
-    revokedAdmin.close();
-    expect(outcome?.ok ?? false).toBe(false);
+    await locked.promise;
+    // Queued behind another pairing write, then the administrator is revoked.
+    const approval = decideBrowserPairRequest({
+      code,
+      requestId,
+      decision: "approve",
+      callerScopes: ["operator.admin"],
+      assertCurrent: () => {
+        if (!caller.isCurrent()) {
+          throw new Error("Gateway requester authority changed");
+        }
+      },
+    });
+    invalidateGatewayDeviceRevocation(gateway, adminDeviceId, "operator");
+    held.resolve();
+    await holder;
+    await expect(approval).rejects.toThrow("Gateway requester authority changed");
+    caller.release();
     expect(readFinalEffect(requestId)).toEqual(before);
     expect(before).toMatchObject(untouched);
     expect((await collect(browser, requestId)).body).toEqual({ status: "pending" });
@@ -441,5 +445,33 @@ describe("browser device-code pairing", () => {
     expect(refused.status).toBe(429);
     expect(refused.headers.get("retry-after")).toBeTruthy();
     expect(await refused.json()).toEqual({ error: "rate_limited" });
+  });
+
+  it("lets a waiting browser collect after filing spent its source's budget", async () => {
+    const limited = await startGateway(1);
+    const port = limited.port;
+    const admin = await limited.openWs();
+    try {
+      await connectOk(admin, { token: "secret", scopes: ["operator.admin"] });
+      const browser = newBrowser();
+      const filed = await post("start", signedBody(browser, "start"), { port });
+      expect(filed.status).toBe(200);
+      const { requestId, code } = (await filed.json()) as Started;
+      // Filing is still limited per source.
+      expect((await post("start", signedBody(newBrowser(), "start"), { port })).status).toBe(429);
+
+      expect((await decide(code, requestId, "approve", admin)).ok).toBe(true);
+      const collected = await post("collect", signedBody(browser, "collect", requestId), { port });
+      expect(collected.status).toBe(200);
+      expect(await collected.json()).toMatchObject({ status: "approved", role: "operator" });
+
+      // Collect requests that prove nothing still spend and respect their own budget.
+      const forged = { ...signedBody(browser, "collect", requestId), signature: "forged" };
+      expect((await post("collect", forged, { port })).status).toBe(400);
+      expect((await post("collect", forged, { port })).status).toBe(429);
+    } finally {
+      admin.close();
+      await limited.close();
+    }
   });
 });

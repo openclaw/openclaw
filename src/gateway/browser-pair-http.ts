@@ -13,7 +13,11 @@ import {
 } from "../infra/device-pairing-browser-code.js";
 import { buildBrowserPairPayload, type BrowserPairAction } from "../shared/browser-pair.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR, type AuthRateLimiter } from "./auth-rate-limit.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR,
+  AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR_COLLECT,
+  type AuthRateLimiter,
+} from "./auth-rate-limit.js";
 import { readJsonBodyOrError, sendJson } from "./http-common.js";
 import { getHeader } from "./http-header-value.js";
 import { resolveAcceptedBrowserOrigin } from "./origin-check.js";
@@ -97,11 +101,15 @@ export async function handleBrowserPairHttpRequest(params: {
     return true;
   }
 
+  const scope =
+    action === "start"
+      ? AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR
+      : AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR_COLLECT;
   await withSerializedRateLimitAttempt({
     ip: clientIp,
-    scope: AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR,
+    scope,
     run: async () => {
-      const rateCheck = rateLimiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR);
+      const rateCheck = rateLimiter?.check(clientIp, scope);
       if (rateCheck && !rateCheck.allowed) {
         if (rateCheck.retryAfterMs > 0) {
           res.setHeader("Retry-After", String(Math.ceil(rateCheck.retryAfterMs / 1000)));
@@ -112,14 +120,14 @@ export async function handleBrowserPairHttpRequest(params: {
       const body = parseBody(rawBody);
       const publicKey = body ? verifyBrowserPairProof(action, body) : null;
       if (!body || !publicKey) {
-        rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR);
+        rateLimiter?.recordFailure(clientIp, scope);
         sendJson(res, 400, { error: "invalid_request" });
         return;
       }
       const context = captureOpenClawStateWorkerContext();
       if (action === "start") {
         // Every filed request spends budget: rows are bounded per Gateway, not per source.
-        rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR);
+        rateLimiter?.recordFailure(clientIp, scope);
         const started = await startBrowserPairRequest({
           context,
           deviceId: body.deviceId,
@@ -153,7 +161,7 @@ export async function handleBrowserPairHttpRequest(params: {
         publicKey,
       });
       if (collected.status === "unknown") {
-        rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR);
+        rateLimiter?.recordFailure(clientIp, scope);
         sendJson(res, 404, { error: "not_found" });
         return;
       }

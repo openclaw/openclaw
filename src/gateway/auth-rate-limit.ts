@@ -31,8 +31,10 @@ export const AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN = "bootstrap-token";
 // throttled before they can queue unbounded writes behind the shared DB lock.
 export const AUTH_RATE_LIMIT_SCOPE_DEVICE_JOIN = "device-join";
 // Public browser pairing writes one bounded row per request, so filing requests
-// is budgeted per source and collect misses share the same lockout.
+// is budgeted per source. Collect has its own budget spent only by invalid or
+// unknown requests, so filing cannot lock a waiting browser out of its answer.
 export const AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR = "browser-pair";
+export const AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR_COLLECT = "browser-pair-collect";
 // Public watchOS challenge issuance is throttled separately from credential
 // failures so challenge floods cannot displace legitimate device handshakes.
 export const AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE = "watch-challenge";
