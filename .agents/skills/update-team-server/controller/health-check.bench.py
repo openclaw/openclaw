@@ -71,7 +71,7 @@ def main():
         release.mkdir(parents=True)
         state = root / "runtime-state"
         state.mkdir()
-        database = state / "roboclaw-agent.sqlite"
+        database = state / "synthetic-agent.sqlite"
         with database.open("wb") as stream:
             stream.truncate(35 * 1024**3)
         sessions = state / "sessions"
