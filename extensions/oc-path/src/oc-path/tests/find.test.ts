@@ -416,21 +416,21 @@ describe("findOcPaths — Markdown", () => {
   });
 
   it.each([
-    ["name.absent", false],
-    ["name.*", false],
-    ["*.absent", false],
-    ["**.absent", false],
-    ["{name,absent}.absent", false],
-    ["[name=value].absent", false],
-    ["name.**", true],
-    ["**.name", true],
-    ["**.{name,absent}.**", true],
-    ["**.[name=value].**", true],
-    ["**.**", true],
-  ])("matches the complete terminal field pattern %s", (field, matches) => {
+    [["{absent,*}", "{absent,[name=value]}", "{absent,{name,other}}"], true],
+    [["{absent,**}.name", "name.{absent,**}"], true],
+    [['{absent,"*","**"}', "{absent,[name=other]}"], false],
+    [["{name,*}.absent", "{name,*}.{name,*}"], false],
+    [[Array(32).fill("{**,{**}}").join(".") + ".name"], true],
+    [["name.absent", "name.*", "*.absent", "**.absent"], false],
+    [["{name,absent}.absent", "[name=value].absent"], false],
+    [["name.**", "**.name", "**.**"], true],
+    [["**.{name,absent}.**", "**.[name=value].**"], true],
+  ] as const)("matches complete terminal field patterns %j", (fields, matches) => {
     const ast = parseMd("## Settings\n- name: value\n");
-    const out = find(ast, `oc://notes.md/settings/*/${field}`);
-    expect(leafValues(out)).toEqual(matches ? ["value"] : []);
+    for (const field of fields) {
+      const out = find(ast, `oc://notes.md/settings/*/${field}`);
+      expect(leafValues(out), field).toEqual(matches ? ["value"] : []);
+    }
   });
 
   it("keeps item nodes when a recursive wildcard consumes the item slot", () => {
