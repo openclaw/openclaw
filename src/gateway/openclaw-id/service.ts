@@ -263,6 +263,8 @@ export function createOpenClawIdService(params: {
 
   // Publishes the descriptor and a fresh snapshot; best effort, never authority.
   const publish = async (enrollmentCode?: string): Promise<PublishOutcome | undefined> => {
+    // Captured on admission: a stop while this prepares cancels it, and a later start cannot adopt it.
+    const signal = lifecycle.signal;
     const config = params.getConfig();
     if (!isOpenClawIdEnabled(config)) {
       return undefined;
@@ -278,14 +280,10 @@ export function createOpenClawIdService(params: {
       import("./gateway-key.js"),
     ]);
     const { signer } = await loadGatewaySigner(params.getStateDir());
-    if (!isOpenClawIdEnabled(params.getConfig())) {
+    if (signal.aborted || !isOpenClawIdEnabled(params.getConfig())) {
       return undefined;
     }
-    const client = createDiscoveryClient({
-      baseUrl: config.discoveryUrl,
-      signer,
-      signal: lifecycle.signal,
-    });
+    const client = createDiscoveryClient({ baseUrl: config.discoveryUrl, signer, signal });
     const { reconcileRegistration } = await import("./registration-recovery.js");
     const recoveryFailure = await reconcileRegistration(owner, client);
     // Recovery persisted the account before publication; consume the authority's current record.
@@ -415,6 +413,7 @@ export function createOpenClawIdService(params: {
       events,
       log: params.log,
       target: async () => {
+        const signal = lifecycle.signal;
         const config = params.getConfig();
         const record = (await getAuthority()).current();
         if (!config?.discoveryUrl || !record?.discovery.owner_account_id) {
@@ -425,13 +424,12 @@ export function createOpenClawIdService(params: {
           import("./gateway-key.js"),
         ]);
         const { signer } = await loadGatewaySigner(params.getStateDir());
+        if (signal.aborted) {
+          return undefined;
+        }
         return {
           clawId: record.claw_id,
-          client: createDiscoveryClient({
-            baseUrl: config.discoveryUrl,
-            signer,
-            signal: lifecycle.signal,
-          }),
+          client: createDiscoveryClient({ baseUrl: config.discoveryUrl, signer, signal }),
         };
       },
     });
@@ -451,6 +449,7 @@ export function createOpenClawIdService(params: {
 
   // Reads the Discovery mailbox once the claw is registered there.
   const startMailbox = async () => {
+    const signal = lifecycle.signal;
     const config = params.getConfig();
     const record = await (await getAuthority()).load();
     if (
@@ -470,11 +469,11 @@ export function createOpenClawIdService(params: {
       ]);
     const owner = await getAuthority();
     const { signer } = await loadGatewaySigner(params.getStateDir());
-    const client = createDiscoveryClient({
-      baseUrl: config.discoveryUrl,
-      signer,
-      signal: lifecycle.signal,
-    });
+    // A reader started for a stopped lifetime would also block the next lifetime's reader.
+    if (signal.aborted || mailbox) {
+      return;
+    }
+    const client = createDiscoveryClient({ baseUrl: config.discoveryUrl, signer, signal });
     mailbox = startMailboxReader({
       clawId: record.claw_id,
       client,
@@ -533,16 +532,16 @@ export function createOpenClawIdService(params: {
     if (!request.enrollmentCode || !request.name) {
       return refusal("malformed", "a link code and a claw name are required");
     }
+    const signal = lifecycle.signal;
     const [{ createDiscoveryClient }, { loadGatewaySigner }] = await Promise.all([
       import("./discovery-client.js"),
       import("./gateway-key.js"),
     ]);
     const { signer } = await loadGatewaySigner(params.getStateDir());
-    const client = createDiscoveryClient({
-      baseUrl: config.discoveryUrl,
-      signer,
-      signal: lifecycle.signal,
-    });
+    if (signal.aborted) {
+      return refusal("off", "remote access was turned off");
+    }
+    const client = createDiscoveryClient({ baseUrl: config.discoveryUrl, signer, signal });
     try {
       const checked = await client.checkClawName(request.enrollmentCode, request.name);
       // The binding is only usable on a single label under the loader domain.

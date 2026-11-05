@@ -2,13 +2,28 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 import { createOpenClawIdService } from "./service.js";
 
-const config = {
+// Lets a test hold the Gateway key load, the last step before the Discovery request.
+const signerLoad = vi.hoisted(() => ({ gate: undefined as Promise<void> | undefined }));
+vi.mock("./gateway-key.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gateway-key.js")>();
+  return {
+    ...actual,
+    loadGatewaySigner: async (stateDir: string) => {
+      await signerLoad.gate;
+      return await actual.loadGatewaySigner(stateDir);
+    },
+  };
+});
+
+let config: GatewayOpenClawIdConfig = {
   enabled: true,
   loaderDomain: "crabd.test",
   discoveryUrl: "https://discovery.example.test",
 };
+const enabledConfig = config;
 
 let stateDir: string;
 let fetchSpy: ReturnType<typeof vi.spyOn>;
@@ -29,6 +44,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  signerLoad.gate = undefined;
+  config = enabledConfig;
   fetchSpy.mockRestore();
   rmSync(stateDir, { recursive: true, force: true });
 });
@@ -100,5 +117,29 @@ describe("OpenClaw ID claw name check", () => {
         name: "studio",
       }),
     ).toMatchObject({ ok: false, code: "code_invalid" });
+  });
+
+  it("sends nothing when remote access is turned off while the request is prepared", async () => {
+    const service = serviceAnswering({
+      name: "studio",
+      account_tag: "k7x2q",
+      hostname: "studio-k7x2q.crabd.test",
+      available: true,
+    });
+    let release!: () => void;
+    signerLoad.gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const pending = service.checkClawName("local_operator", {
+      enrollmentCode: "ABCDE-FGHJK",
+      name: "studio",
+    });
+    config = { enabled: false };
+    await service.reconcileRuntimePolicy();
+    release();
+
+    expect(await pending).toMatchObject({ ok: false, code: "off" });
+    // The link code never leaves the Gateway once the operator turned remote access off.
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
