@@ -328,8 +328,13 @@ suite.define(() => {
             .toEqual(expected);
         for (const [index, [trigger, action]] of steps.entries()) {
           if (compact) {
-            if (index === 0) {
-              // Boot with the clock ticking; later actions run under the paused clock.
+            if (index === 0 || trigger === "reconnect") {
+              // Boot and reconnect wait for transport transitions in real time. Polling
+              // virtual time against them races the reconnect backoff and opening deadline,
+              // so they run with the clock ticking; other actions run under the paused clock.
+              if (index > 0) {
+                await page.clock.resume();
+              }
               await action();
               await pauseVirtualClock(page);
             } else {
