@@ -35,7 +35,10 @@ import type { PublishOutcome } from "./publisher.js";
 import { signOutTunnelPeer } from "./remote-signout.js";
 import { appliedConfigKey, resolveSettings, sameSettings } from "./service-settings.js";
 import { createTokenBindingPublisher } from "./service-token-bindings.js";
-import { setOpenClawIdTunnelPrincipalResolver } from "./tunnel-principal.js";
+import {
+  setOpenClawIdTunnelPrincipalLookup,
+  setOpenClawIdTunnelPrincipalResolver,
+} from "./tunnel-principal.js";
 import type { TunnelRuntime } from "./tunnel-runtime.js";
 import type { TunnelSupervisorStatus } from "./tunnel-supervisor.js";
 
@@ -198,6 +201,7 @@ export function createOpenClawIdService(params: {
     mailbox?.stop();
     mailbox = undefined;
     setOpenClawIdTunnelPrincipalResolver(undefined);
+    setOpenClawIdTunnelPrincipalLookup(undefined);
     setOpenClawIdClawOriginResolver(undefined);
     await current?.stop();
   };
@@ -485,6 +489,8 @@ export function createOpenClawIdService(params: {
       }
       return principal;
     });
+    // HTTP requests recheck their admitted device against this before acting.
+    setOpenClawIdTunnelPrincipalLookup((peerKey) => owner.currentPeer(peerKey));
     setOpenClawIdClawOriginResolver(() => clawOriginOfRecord(owner.current()));
   };
 
