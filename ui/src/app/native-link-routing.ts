@@ -105,7 +105,7 @@ export function hasNativeExternalLink(): boolean {
 
 export function postNativeExternalLink(url: string): boolean {
   const poster = getNativeLinkPoster();
-  return !!poster && postNativeLink(poster, url);
+  return poster ? postNativeLink(poster, url) : false;
 }
 
 export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}) {
