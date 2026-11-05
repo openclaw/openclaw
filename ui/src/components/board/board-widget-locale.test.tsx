@@ -74,6 +74,7 @@ it("keeps mixed named-query approval details localized when the locale changes",
       'repository="owner/repo"; workflow="ci.yml"; branch="main"; status=null; created=null; perPage=1; excludePullRequests=true',
     );
     expect(surface.textContent).toContain("fields=id, conclusion");
+    expect(surface.textContent).toContain("utilise les identifiants de l’agent");
     expect(surface.textContent).toContain(
       "partage les résultats privés sélectionnés et les résultats futurs avec les lecteurs de la session",
     );

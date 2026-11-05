@@ -98,6 +98,12 @@ function createScenario(index: number, scenario: (typeof cases)[number]) {
     held: createDeferredCore(),
     releaseRead: createDeferredCore(),
     requesterDelivered: createDeferredCore(),
+    closed: createDeferredCore<{
+      code: number;
+      reason: string;
+      connected: boolean | undefined;
+      requestError: unknown;
+    }>(),
     failed: createDeferredCore<never>(),
     receipt: undefined as SpawnReceipt | undefined,
     releaseDrain: undefined as (() => void) | undefined,
@@ -215,7 +221,6 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
   const cleanups: Array<() => Promise<unknown>> = [];
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>>;
-
   const receive = (recipient: string) => (event: { event?: string; payload?: unknown }) => {
     const payload = asOptionalRecord(event.payload);
     const target = scenarios.find((scenario) => scenario.sessionKey === payload?.sessionKey);
@@ -414,6 +419,20 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
           path: state.statePath("test-devices", String(index), "client", "credentials.sqlite"),
         }),
         onEvent: receive(scenario.email),
+        onClose: (code, reason) => {
+          if (scenario.gate !== "enqueue") {
+            return;
+          }
+          const closingClient = clients.get(scenario.email);
+          const connected = closingClient?.connected;
+          const deniedRequest = closingClient?.request("users.self", {}).then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+          void Promise.resolve(deniedRequest).then((requestError) =>
+            scenario.closed.resolve({ code, reason, connected, requestError }),
+          );
+        },
       });
       clients.set(scenario.email, client);
       cleanups.push(() => disconnectGatewayClient(client));
@@ -571,12 +590,13 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
             scenario.releaseDrain?.();
             const drained = await wait(waitForGatewayActiveWork(30_000));
             expect(drained.drained, JSON.stringify(drained.snapshot.blockers)).toBe(true);
-            // Role revocation invalidates the existing transport, not only its next RPC.
+            // Revocation closes the socket; a retained connection still orders publications by RPC.
             if (scenario.gate === "enqueue") {
-              await wait(vi.waitFor(() => expect(client.connected).toBe(false)));
-              await expect(client.request("users.self", {})).rejects.toThrow(
-                "gateway not connected",
-              );
+              const closed = await wait(scenario.closed.promise);
+              expect([closed.code, closed.reason]).toEqual([4001, "gateway policy changed"]);
+              expect(closed.connected).toBe(false);
+              expect(closed.requestError).toBeInstanceOf(Error);
+              expect((closed.requestError as Error).message).toContain("gateway not connected");
             } else {
               await client.request("users.self", {});
             }

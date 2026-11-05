@@ -713,6 +713,10 @@
       "types": "./dist/plugin-sdk/reply-payload.d.ts",
       "default": "./dist/plugin-sdk/reply-payload.js"
     },
+    "./plugin-sdk/agent-lifecycle": {
+      "types": "./dist/plugin-sdk/agent-lifecycle.d.ts",
+      "default": "./dist/plugin-sdk/agent-lifecycle.js"
+    },
     "./plugin-sdk/agent-media-payload": {
       "types": "./dist/plugin-sdk/agent-media-payload.d.ts",
       "default": "./dist/plugin-sdk/agent-media-payload.js"
@@ -2119,6 +2123,7 @@
     "release:publish-preflight": "node --import ./scripts/tsx.mjs scripts/release-publish-preflight.mts",
     "release:stable": "node --import ./scripts/tsx.mjs scripts/release-stable.mts",
     "release:version": "node --import ./scripts/tsx.mjs scripts/release-version.ts",
+    "release:watch": "node --import ./scripts/tsx.mjs scripts/release-watch.mts",
     "runtime-sidecars:check": "node --import ./scripts/tsx.mjs scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import ./scripts/tsx.mjs scripts/generate-runtime-sidecar-paths-baseline.ts --write",
     "sqlite:sessions-schema:check": "node --import ./scripts/tsx.mjs scripts/generate-sqlite-session-schema-baseline.ts --check",

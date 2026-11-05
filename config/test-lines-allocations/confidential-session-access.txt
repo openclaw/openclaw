@@ -1,5 +1,5 @@
 # Confidential-session ACL: creator/selected/outsider wire, HTTP, child and revocation regressions.
 # Includes canonical access snapshots, native restart readiness/FIFO, admitted ACP discovery and owning fixture repairs.
-# Exact net LF vs pinned main cc595f5c; temporary Goal diagnostics removed, shared scalar unchanged.
+# Exact net LF vs pinned main 13398270; transport-close snapshot preserves negative proof across reconnect.
 # Source-scope justification and measured focused costs are retained for MAIN PR-body review.
-3112
+3131

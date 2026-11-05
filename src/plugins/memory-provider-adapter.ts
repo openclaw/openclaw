@@ -29,8 +29,15 @@ function legacyCoverageWarning(status: MemoryProviderStatus): string | undefined
   }
   const providerState = status.custom?.providerState;
   if (providerState && typeof providerState === "object" && "mode" in providerState) {
-    // A lazy manager with embeddings explicitly disabled has nothing semantic to initialize.
-    if (providerState.mode === "pending" && status.requestedProvider !== "none") {
+    // Pending describes this manager's initialization, not stored vector coverage.
+    // Empty and complete indexes remain usable before embeddings initialize.
+    const indexState = status.vector?.index?.state;
+    if (
+      providerState.mode === "pending" &&
+      status.requestedProvider !== "none" &&
+      indexState !== "complete" &&
+      indexState !== "empty"
+    ) {
       return "Memory embeddings are pending. Search results may be incomplete.";
     }
     if (

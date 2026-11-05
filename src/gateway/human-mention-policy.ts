@@ -407,6 +407,7 @@ export function createHumanMentionPolicy(params: {
       client: GatewayClient | null,
       input: UsersMentionableParams,
       prepared?: Pick<PreparedMentionContext, "readTarget" | "readRanking">,
+      displayProfileIds?: readonly string[],
     ): Result<UsersMentionableResult, ErrorShape> {
       const cfg = params.getRuntimeConfig();
       const context = resolveContext(client, input, cfg, prepared);
@@ -447,7 +448,9 @@ export function createHumanMentionPolicy(params: {
       const query = input.query?.trim().toLocaleLowerCase() ?? "";
       const users = eligibleDirectory.users.filter(
         (candidate) =>
-          candidate.profileId !== profile.profileId &&
+          (displayProfileIds
+            ? displayProfileIds.includes(candidate.profileId)
+            : candidate.profileId !== profile.profileId) &&
           (!query ||
             candidate.displayName.toLocaleLowerCase().includes(query) ||
             candidate.logins.some((login) => login.toLocaleLowerCase().includes(query))),

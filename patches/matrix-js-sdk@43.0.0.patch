@@ -43,6 +43,40 @@ diff --git a/lib/client.js b/lib/client.js
      });
  
      // re-emit the events emitted by the crypto impl
+diff --git a/lib/http-api/utils.js b/lib/http-api/utils.js
+--- a/lib/http-api/utils.js
++++ b/lib/http-api/utils.js
+@@ -22,9 +22,11 @@ import { ConnectionError, HTTPError, MatrixError, MatrixSafetyError, MatrixSafet
+ // Ponyfill for https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout
+ export function timeoutSignal(ms) {
+   const controller = new AbortController();
+-  setTimeout(() => {
++  const timer = setTimeout(() => {
+     controller.abort();
+   }, ms);
++  // Like AbortSignal.timeout, a request deadline must not keep a finished Node process alive.
++  timer?.unref?.();
+   return controller.signal;
+ }
+ export function anySignal(signals) {
+diff --git a/lib/rust-crypto/rust-crypto.js b/lib/rust-crypto/rust-crypto.js
+--- a/lib/rust-crypto/rust-crypto.js
++++ b/lib/rust-crypto/rust-crypto.js
+@@ -1743,7 +1743,13 @@ export class RustCrypto extends TypedEventEmitter {
+     const processEvent = async evt => {
+       // Process only verification event
+       if (isVerificationEvent(event)) {
+-        await this.onKeyVerificationEvent(evt);
++        // Callers start this without awaiting it. A stopped client's crypto store can
++        // reject here; report it instead of leaving an unhandled rejection.
++        try {
++          await this.onKeyVerificationEvent(evt);
++        } catch (e) {
++          this.logger.warn(`Failed to process in-room verification event ${evt.getId()}`, e);
++        }
+       }
+     };
+ 
 diff --git a/lib/sync.js b/lib/sync.js
 --- a/lib/sync.js
 +++ b/lib/sync.js
@@ -137,6 +171,42 @@ diff --git a/src/client.ts b/src/client.ts
          });
  
          // re-emit the events emitted by the crypto impl
+diff --git a/src/http-api/utils.ts b/src/http-api/utils.ts
+--- a/src/http-api/utils.ts
++++ b/src/http-api/utils.ts
+@@ -30,9 +30,13 @@ import {
+ // Ponyfill for https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout
+ export function timeoutSignal(ms: number): AbortSignal {
+     const controller = new AbortController();
+-    setTimeout(() => {
++    const timer: ReturnType<typeof setTimeout> | number = setTimeout(() => {
+         controller.abort();
+     }, ms);
++    // Like AbortSignal.timeout, a request deadline must not keep a finished Node process alive.
++    if (typeof timer === "object") {
++        timer.unref?.();
++    }
+ 
+     return controller.signal;
+ }
+diff --git a/src/rust-crypto/rust-crypto.ts b/src/rust-crypto/rust-crypto.ts
+--- a/src/rust-crypto/rust-crypto.ts
++++ b/src/rust-crypto/rust-crypto.ts
+@@ -2141,7 +2141,13 @@ export class RustCrypto extends TypedEventEmitter<RustCryptoEvents, CryptoEventH
+         const processEvent = async (evt: MatrixEvent): Promise<void> => {
+             // Process only verification event
+             if (isVerificationEvent(event)) {
+-                await this.onKeyVerificationEvent(evt);
++                // Callers start this without awaiting it. A stopped client's crypto store can
++                // reject here; report it instead of leaving an unhandled rejection.
++                try {
++                    await this.onKeyVerificationEvent(evt);
++                } catch (e) {
++                    this.logger.warn(`Failed to process in-room verification event ${evt.getId()}`, e);
++                }
+             }
+         };
+ 
 diff --git a/src/sync.ts b/src/sync.ts
 --- a/src/sync.ts
 +++ b/src/sync.ts

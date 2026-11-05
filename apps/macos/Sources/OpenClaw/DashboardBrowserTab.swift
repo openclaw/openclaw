@@ -13,6 +13,10 @@ final class DashboardBrowserTab {
         case retired
     }
 
+    /// Content-process exits recovered by automatic reload since the user last navigated.
+    /// Finished loads do not restore it: a page that crashes after each reload would loop.
+    static let automaticReloadLimit = 2
+
     let webView: WKWebView
     let requestedURL: URL
     var representedURL: URL?
@@ -25,6 +29,7 @@ final class DashboardBrowserTab {
     /// created, so a shown failure keeps the URL that Reload retries.
     private(set) var failedURL: URL?
     private(set) var failureView: DashboardBrowserFailureView?
+    private var automaticReloads = 0
     private var requestAliasPhase: RequestAliasPhase = .awaitingNavigation
 
     init(websiteDataStore: WKWebsiteDataStore, requestedURL: URL) {
@@ -108,6 +113,17 @@ final class DashboardBrowserTab {
         self.failureView?.removeFromSuperview()
         self.failureView = nil
         self.failedURL = nil
+    }
+
+    /// Returns whether a content-process exit may reload automatically.
+    func consumeAutomaticReload() -> Bool {
+        guard self.automaticReloads < Self.automaticReloadLimit else { return false }
+        self.automaticReloads += 1
+        return true
+    }
+
+    func resetAutomaticReloads() {
+        self.automaticReloads = 0
     }
 
     func observeNavigationState(onChange: @escaping @MainActor () -> Void) {
