@@ -1,2 +1,2 @@
-6
-# Cold process-state regression extends supporting-file reconciliation coverage.
+11
+# Cold process-state reconciliation and failed-refresh stale-copy regressions.

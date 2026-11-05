@@ -478,6 +478,9 @@ export async function syncWorkspaceSkills(params: {
           if (entry.skill.source === "openclaw-library") {
             throw error;
           }
+          if (incrementalDestinations.has(path.basename(destinationPath))) {
+            await removeSyncedSkillPath(target, path.basename(destinationPath), assertCurrent);
+          }
           copyFailed = true;
           const message = error instanceof Error ? error.message : JSON.stringify(error);
           skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);

@@ -562,8 +562,9 @@ describe("syncWorkspaceSkills", () => {
     },
   );
 
-  it("does not publish a manifest when a refreshed copy fails", async () => {
-    const { source, target } = await setupSkills();
+  it.each([false, true])("discards failed copies with cold sync state=%s", async (cold) => {
+    const { source, target: initialTarget } = await setupSkills();
+    const target = cold ? await newDir("restarted-target") : initialTarget;
     const sourceSkill = skillPath(source, "alpha");
     await writeSkill(sourceSkill, "alpha", "Alpha skill");
     await fs.writeFile(path.join(sourceSkill, "asset.txt"), "before");
@@ -572,7 +573,10 @@ describe("syncWorkspaceSkills", () => {
       ...syncOptions(source, target),
       skillsSnapshot: firstSnapshot,
     };
-    await syncWorkspaceSkills(syncParams);
+    await syncWorkspaceSkills({ ...syncParams, ...syncOptions(source, initialTarget) });
+    if (cold) {
+      await fs.rename(skillPath(initialTarget), skillPath(target));
+    }
 
     await fs.writeFile(path.join(sourceSkill, "asset.txt"), "after");
     await refreshSkillsDiscovery({ workspaceDir: source });
@@ -593,6 +597,7 @@ describe("syncWorkspaceSkills", () => {
 
     const manifestPath = skillPath(target, ".openclaw-sync.json");
     expect(await exists(manifestPath)).toBe(false);
+    expect(await exists(skillPath(target, "alpha"))).toBe(false);
     await syncWorkspaceSkills({ ...syncParams, skillsSnapshot: secondSnapshot });
     expect(await exists(manifestPath)).toBe(true);
     expect(await readText(skillPath(target, "alpha", "asset.txt"))).toBe("after");
