@@ -2,8 +2,13 @@
 // fact (e.g. content_filter) instead of collapsing it into a generic message;
 // the generic string is classified as a transient timeout by failover and
 // triggers pointless model rotation.
-import type { Model } from "@openclaw/llm-core";
+import type {
+  AssistantMessageEventStreamLike,
+  SimpleStreamOptions,
+  Model,
+} from "@openclaw/llm-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { recoverAfterTransportDrop } from "../../../../src/agents/embedded-agent-runner/run/attempt-recovery.test-support.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { isResponsesOutputLimitToolCallError } from "../providers/openai-responses-terminal-usage.js";
 
@@ -11,12 +16,14 @@ type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
 
 const sseState = vi.hoisted(() => ({
   outcomes: [] as Array<Error | SdkResponse>,
+  signal: undefined as AbortSignal | undefined,
 }));
 
 vi.mock("openai", () => {
   class MockOpenAI {
     responses = {
-      create: () => {
+      create: (_params: unknown, options?: { signal?: AbortSignal }) => {
+        sseState.signal = options?.signal;
         const outcome = sseState.outcomes.shift() ?? new Error("Unexpected SSE request");
         return {
           withResponse: async () => {
@@ -70,6 +77,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.useRealTimers();
+  sseState.signal = undefined;
   configureAiTransportHost(initialHost);
 });
 
@@ -445,4 +454,138 @@ describe("managed Responses transport terminal errors", () => {
       }
     },
   );
+});
+
+function queueStream(events: () => AsyncIterable<unknown>) {
+  sseState.outcomes.push({ data: events(), response: new Response(null, { status: 200 }) });
+}
+
+function queueEvents(...events: unknown[]) {
+  queueStream(async function* () {
+    yield* events;
+  });
+}
+
+function run(options: SimpleStreamOptions & OpenAIResponsesOptions = {}) {
+  return createOpenAIResponsesTransportStreamFn()(
+    model,
+    { messages: [], tools: [] },
+    { apiKey: "test-key", transport: "sse", ...options },
+  );
+}
+
+async function collect(stream: AssistantMessageEventStreamLike) {
+  return {
+    events: await (async () => {
+      const events: string[] = [];
+      for await (const event of stream) events.push(event.type);
+      return events;
+    })(),
+    result: await stream.result(),
+  };
+}
+
+function outputItem<T>(phase: "added" | "done", item: T, output_index = 0) {
+  return { type: `response.output_item.${phase}`, output_index, item };
+}
+
+function argumentDelta(item_id: string, delta: string, output_index = 0) {
+  return { type: "response.function_call_arguments.delta", output_index, item_id, delta };
+}
+
+function completedResponse<T>(id: string, output: T[], fields: Record<string, unknown> = {}) {
+  return { type: "response.completed", response: { id, status: "completed", output, ...fields } };
+}
+
+function wireCall(id: string, name: string, args = "{}") {
+  return {
+    type: "function_call" as const,
+    id: `fc_${id}`,
+    call_id: `call_${id}`,
+    name,
+    arguments: args,
+  };
+}
+
+it("aborts whitespace argument churn and recovers through the same-model retry owner", async () => {
+  let emittedDeltas = 0;
+  let closed = false;
+  const call = wireCall("churn", "exec", "");
+  queueStream(async function* () {
+    try {
+      yield outputItem("added", call);
+      yield argumentDelta(call.id, '{"code":"return 1;');
+      for (let index = 0; index < 40; index++) {
+        emittedDeltas += 1;
+        yield argumentDelta(call.id, " \r\r\n".repeat(256));
+      }
+      yield completedResponse("resp_churn", [{ ...call, arguments: '{"code":"return 1;"}' }]);
+    } finally {
+      closed = true;
+    }
+  });
+
+  const { events, result } = await collect(await run());
+  expect(result).toMatchObject({ stopReason: "error", errorCode: "degenerate_output" });
+  expect(emittedDeltas).toBe(32);
+  expect(closed).toBe(true);
+  expect(sseState.signal).toMatchObject({
+    aborted: true,
+    reason: { code: "degenerate_output" },
+  });
+  expect(events).not.toContain("toolcall_end");
+  expect(logWarn).toHaveBeenCalledWith(
+    "openai-transport",
+    expect.stringContaining("abortReason=degenerate_output"),
+    undefined,
+  );
+  expect(JSON.stringify(logWarn.mock.calls)).not.toContain("return 1;");
+
+  vi.useFakeTimers();
+  const recovering = recoverAfterTransportDrop({
+    assistant: result,
+    noTools: true,
+    replaySafe: true,
+  });
+  await vi.advanceTimersByTimeAsync(10_000);
+  const recovered = await recovering;
+  expect(recovered.recovery).toMatchObject({
+    action: "retry",
+    lastRetryFailoverReason: "server_error",
+  });
+  expect(recovered.onAgentEvent).toHaveBeenCalledWith(
+    expect.objectContaining({
+      stream: "run_status",
+      data: expect.objectContaining({ phase: "retrying", retryAttempt: 1 }),
+    }),
+  );
+  vi.useRealTimers();
+  const retryCall = wireCall("retry", "exec", '{"code":"return 1;"}');
+  queueEvents(outputItem("added", retryCall), completedResponse("resp_retry", [retryCall]));
+  expect((await collect(await run())).result).toMatchObject({
+    stopReason: "toolUse",
+    content: [{ type: "toolCall", arguments: { code: "return 1;" } }],
+  });
+});
+
+it("accepts 200 KiB of arguments with whitespace runs interrupted by code", async () => {
+  const call = wireCall("large", "exec", "");
+  const codeChunk = `${" ".repeat(1023)};`;
+  const code = codeChunk.repeat(200);
+  const args = JSON.stringify({ code });
+  queueStream(async function* () {
+    yield outputItem("added", call);
+    yield argumentDelta(call.id, '{"code":"');
+    for (let index = 0; index < 200; index++) {
+      yield argumentDelta(call.id, codeChunk);
+    }
+    yield argumentDelta(call.id, '"}');
+    yield completedResponse("resp_large", [{ ...call, arguments: args }]);
+  });
+  const { result } = await collect(await run());
+  expect(result).toMatchObject({
+    stopReason: "toolUse",
+    content: [{ type: "toolCall", arguments: { code } }],
+  });
+  expect(sseState.signal?.aborted).toBe(false);
 });

@@ -427,7 +427,7 @@ export function summarizeResponsesPayload(params: unknown): string {
   return parts.join(" ");
 }
 
-export function summarizeOpenAITransportError(error: unknown): string {
+export function summarizeOpenAITransportError(error: unknown, signal?: AbortSignal): string {
   if (!error || typeof error !== "object") {
     return `type=${typeof error} message=${safeDebugValue(error)}`;
   }
@@ -436,7 +436,7 @@ export function summarizeOpenAITransportError(error: unknown): string {
     record.cause && typeof record.cause === "object"
       ? (record.cause as Record<string, unknown>)
       : undefined;
-  return [
+  const parts = [
     `name=${safeDebugValue(record.name)}`,
     `status=${safeDebugValue(record.status)}`,
     `code=${safeDebugValue(record.code)}`,
@@ -444,5 +444,36 @@ export function summarizeOpenAITransportError(error: unknown): string {
     `causeName=${safeDebugValue(cause?.name)}`,
     `causeCode=${safeDebugValue(cause?.code)}`,
     `message=${error instanceof Error ? error.message : safeDebugValue(error)}`,
-  ].join(" ");
+  ];
+  if (signal?.aborted) {
+    const reason = isRecord(signal.reason) ? signal.reason : undefined;
+    let abortReason = reason?.name === "TimeoutError" ? "request_deadline" : "caller_abort";
+    // Only classify the request signal; provider errors can echo message/tool content.
+    switch (reason?.code ?? reason?.name) {
+      case "LlmIdleTimeoutError":
+        abortReason = "idle_timeout";
+        break;
+      case "LlmNoProgressError":
+        abortReason = "no_progress";
+        break;
+      case "FirstStreamEventTimeoutError":
+        abortReason = "first_event_timeout";
+        break;
+      case "OPENCLAW_SESSION_WATCHDOG":
+        abortReason = "session_watchdog";
+        break;
+      case "degenerate_output":
+        abortReason = "degenerate_output";
+        break;
+      case "OPENCLAW_RESTART_ABORT":
+      case "ERR_STALE_GATEWAY_LIFECYCLE":
+        abortReason = "restart";
+        break;
+      case "AGENT_RUN_SUPERSEDED_ABORT":
+        abortReason = "superseded";
+        break;
+    }
+    parts.push(`abortReason=${abortReason}`);
+  }
+  return parts.join(" ");
 }
