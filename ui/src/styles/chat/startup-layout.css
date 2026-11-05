@@ -736,8 +736,6 @@ div.chat-thread:where(.chat-thread--annotations) {
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
-  font: inherit;
-  cursor: var(--cursor-action);
 }
 
 .chat-pane__agent-avatar {
