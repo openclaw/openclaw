@@ -28,6 +28,15 @@ import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 
 const loadTelegramActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.js"));
 
+// readTelegramChatId reads these spellings ahead of the canonical target (core already folds
+// channelId into it). Forum topic actions have no provider-side chat binding, so declaring them
+// lets normalization and the shared cross-context guard judge the chat the handler will use.
+const TELEGRAM_NATIVE_CHAT_TARGET_ALIASES = ["chatId", "chat_id", "channel_id"];
+const forumTopicTargetAliases = {
+  aliases: TELEGRAM_NATIVE_CHAT_TARGET_ALIASES,
+  deliveryTargetAliases: TELEGRAM_NATIVE_CHAT_TARGET_ALIASES,
+};
+
 async function handleTelegramRuntimeAction(
   ...args: Parameters<typeof import("./action-runtime.js").handleTelegramAction>
 ): ReturnType<typeof import("./action-runtime.js").handleTelegramAction> {
@@ -207,6 +216,8 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     react: { aliases: ["messageId"], deliveryTargetAliases: [] },
     edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
     delete: { aliases: ["messageId"], deliveryTargetAliases: [] },
+    "topic-create": forumTopicTargetAliases,
+    "topic-edit": forumTopicTargetAliases,
   },
   prepareSendPayload: async ({ ctx, to, payload }) => {
     rejectTelegramNativeButtonParams(ctx.params);

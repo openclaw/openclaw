@@ -148,6 +148,7 @@ describe("runMessageAction core send routing", () => {
     action?: ChannelMessageActionName;
     params: Record<string, unknown>;
     denied?: boolean;
+    conflict?: boolean;
     boundToChat?: boolean;
   }>([
     { name: "the chat id with the current topic id", params: { threadId: "42" } },
@@ -243,6 +244,47 @@ describe("runMessageAction core send routing", () => {
       params: { target: "-1001234567890:topic:42", threadId: "99", name: "Renamed" },
       denied: true,
     },
+    // Telegram reads chatId, chat_id and channel_id ahead of the target, so they must agree.
+    {
+      name: "a rename through the current topic target and another chatId",
+      action: "topic-edit",
+      params: { target: "-1001234567890:topic:42", threadId: "42", chatId: "-1009999999999" },
+      conflict: true,
+    },
+    {
+      name: "a rename through the current topic target and another channel_id",
+      action: "topic-edit",
+      params: { target: "-1001234567890:topic:42", threadId: "42", channel_id: "-1009999999999" },
+      conflict: true,
+    },
+    {
+      name: "a rename through another chatId alone",
+      action: "topic-edit",
+      params: { target: undefined, threadId: "42", chatId: "-1009999999999" },
+      denied: true,
+    },
+    {
+      name: "a rename through the current topic target and the same chatId",
+      action: "topic-edit",
+      params: {
+        target: "-1001234567890:topic:42",
+        threadId: "42",
+        chatId: "-1001234567890:topic:42",
+      },
+    },
+    {
+      name: "a new topic through another chatId alone from a turn bound to the chat",
+      action: "topic-create",
+      params: { target: undefined, chatId: "-1009999999999", name: "New topic" },
+      boundToChat: true,
+      denied: true,
+    },
+    {
+      name: "a new topic through the chatId of the chat its turn is bound to",
+      action: "topic-create",
+      params: { target: undefined, chatId: "-1001234567890", name: "New topic" },
+      boundToChat: true,
+    },
   ])("judges a restricted Telegram turn's request for $name", async (scenario) => {
     const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
       pluginId: "telegram",
@@ -287,7 +329,11 @@ describe("runMessageAction core send routing", () => {
         ),
       );
     }
-    const expected = scenario.denied ? "message_cross_context_denied" : "allowed";
+    const expected = scenario.conflict
+      ? `Error: Action ${scenario.action} received conflicting target and delivery alias values.`
+      : scenario.denied
+        ? "message_cross_context_denied"
+        : "allowed";
     expect(outcomes).toEqual([expected, expected]);
   });
 
