@@ -143,12 +143,12 @@ async function createAcquisitionPeer(behavior: PeerBehavior) {
   acquisitionFixture.observeClient = (client) => {
     clients.push(client);
     closeEvents.push(
-      new Promise<void>((resolve) =>
+      new Promise<void>((resolve) => {
         client.once("close", () => {
           closed.add(client);
           resolve();
-        }),
-      ),
+        });
+      }),
     );
     client.on("error", (error) => {
       errors.push(error);
@@ -167,12 +167,12 @@ async function createAcquisitionPeer(behavior: PeerBehavior) {
   server.on("connection", (socket) => {
     sockets.add(socket);
     closeEvents.push(
-      new Promise<void>((resolve) =>
+      new Promise<void>((resolve) => {
         socket.once("close", () => {
           sockets.delete(socket);
           resolve();
-        }),
-      ),
+        });
+      }),
     );
   });
   server.on("upgrade", (request, socket, head) => {
@@ -342,6 +342,7 @@ function withPeerState(
         throw new AggregateError(
           [callbackFailure.reason, reason],
           "Acquisition state cleanup failed",
+          { cause: reason },
         );
       }
       throw reason;
@@ -424,7 +425,7 @@ export async function verifyCompositeAcquisition(
       const ownedSelector = helper === "raw" ? "synthetic-owned-token" : String(peer.port);
       const previousSelector = process.env[selector];
       context.signal.throwIfAborted();
-      const started =
+      const started: Promise<unknown> =
         helper === "GatewayClient"
           ? startGatewayWithClient({
               port: peer.port,
