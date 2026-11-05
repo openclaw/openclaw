@@ -1,8 +1,10 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import {
   projectModelCatalogAccessPrograms,
+  resolveCyberAccessProgramForProvider,
   resolveModelCatalogAccessPrograms,
+  resolveTurnCyberAccessProgram,
 } from "./model-catalog-access-programs.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 
@@ -156,3 +158,47 @@ it.each(["openclaw", "codex"])(
     ).toEqual({});
   },
 );
+
+it("applies a saved Daybreak choice only to OpenAI turns", () => {
+  expect(resolveCyberAccessProgramForProvider("daybreak_blue", "anthropic")).toEqual({
+    program: "standard",
+    notApplied: "daybreak_blue",
+  });
+  expect(resolveCyberAccessProgramForProvider("daybreak_red", "claude-cli")).toEqual({
+    program: "standard",
+    notApplied: "daybreak_red",
+  });
+  expect(resolveCyberAccessProgramForProvider("daybreak_blue", "OpenAI")).toEqual({
+    program: "daybreak_blue",
+  });
+  // Codex CLI is still an OpenAI model; its runtime keeps the explicit unsupported error.
+  expect(resolveCyberAccessProgramForProvider("daybreak_blue", "codex-cli")).toEqual({
+    program: "daybreak_blue",
+  });
+  expect(resolveCyberAccessProgramForProvider("standard", "anthropic")).toEqual({
+    program: "standard",
+  });
+  expect(resolveCyberAccessProgramForProvider(undefined, "anthropic")).toEqual({
+    program: undefined,
+  });
+});
+
+it("notifies a non-OpenAI Access downgrade once per scope and model", () => {
+  const notify = vi.fn();
+  const scope = `test:${Math.random()}`;
+  const turn = (provider: string, model: string) =>
+    resolveTurnCyberAccessProgram({
+      program: "daybreak_blue",
+      provider,
+      model,
+      noticeScope: scope,
+      notify,
+    });
+  expect(turn("anthropic", "claude-opus-5-5")).toBe("standard");
+  expect(turn("anthropic", "claude-opus-5-5")).toBe("standard");
+  expect(turn("openai", "gpt-6.1-sol")).toBe("daybreak_blue");
+  expect(notify).toHaveBeenCalledOnce();
+  expect(notify).toHaveBeenCalledWith(
+    "Daybreak Blue applies only to OpenAI models, so anthropic/claude-opus-5-5 used Standard access. Your Daybreak Blue choice is kept for when this chat returns to an OpenAI model.",
+  );
+});

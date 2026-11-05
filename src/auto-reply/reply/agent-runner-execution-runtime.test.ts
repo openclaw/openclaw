@@ -115,6 +115,24 @@ it.each(["standard", "daybreak_blue", "daybreak_red"] as const)(
   },
 );
 
+it.each(["daybreak_blue", "daybreak_red"] as const)(
+  "runs a non-OpenAI chat CLI turn as Standard with a saved %s choice",
+  async (cyberAccessProgram) => {
+    state.isCliProviderMock.mockReturnValue(true);
+    selectFallback("claude-cli", "opus");
+    state.runCliAgentMock.mockResolvedValueOnce(createRunResult("final"));
+    const result = await runTurn({
+      followupRun: createFollowupRun({
+        provider: "claude-cli",
+        model: "opus",
+        cyberAccessProgram,
+      }),
+    });
+    expect(result.kind).toBe("success");
+    expect(state.runCliAgentMock).toHaveBeenCalledOnce();
+  },
+);
+
 it.each([false, true])("routes a CLI runtime with observed ownership %s", async (observed) => {
   const model = observed ? "claude-sonnet-4-6" : "gpt-5.4";
   cliBackendsTesting.setDepsForTest({
