@@ -18,6 +18,7 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-repair.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -62,7 +63,6 @@ import {
 import { createUpdateDoctorDatabaseWriteCapture } from "./update-doctor-result.js";
 import { readUpdateRunDriver } from "./update-run-driver.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
-import { readUpdateRecoveryAdmissionFactsAsync } from "./update-run-recovery-admission.js";
 import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
@@ -491,7 +491,11 @@ it.each(
         ).toHaveLength(shape === "retained WAL" || shape === "retained journal" ? 4 : 2);
         await openOpenClawStateDatabaseForDoctor({ env });
         resolveDoctorUpdateAdmission(env).assertCurrent();
-        await readUpdateRecoveryAdmissionFactsAsync({ env });
+        await executeExistingOpenClawStateRead(
+          { env },
+          { type: "updateRuns.recoveryAdmission" },
+          { current: true, live: shape === "clean" },
+        );
         const result = await migrateLegacyExecApprovals({
           env,
           stateDir,
