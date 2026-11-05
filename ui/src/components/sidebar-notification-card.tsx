@@ -20,7 +20,6 @@ export function SidebarDismissButton(props: {
         class="sidebar-issues-panel__dismiss"
         aria-label={label()}
         aria-busy={props.dismissing ? "true" : undefined}
-        title={props.dismissing ? t("attention.mentions.dismissing") : label()}
         disabled={props.disabled || props.dismissing}
         onClick={(event: Event) => {
           event.preventDefault();

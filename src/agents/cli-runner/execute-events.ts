@@ -28,10 +28,11 @@ import { extractToolErrorMessage, prepareToolResult } from "../embedded-agent-to
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
+import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { cliAssistantItemId } from "./assistant-identity.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
-import { normalizeCliToolName, stripOpenClawMcpToolPrefix } from "./tool-policy.js";
+import { normalizeCliToolName } from "./tool-policy.js";
 import { recordCliTrajectoryEvent } from "./trajectory.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -68,6 +69,7 @@ export function createCliEventHandlers(params: {
   };
   let observedCliActivity = false;
   let compactionActive = false;
+  let compactionClosed = false;
   let onCompactionActiveChange: (() => void) | undefined;
   const signaledPhases = new Set<"tool_execution_started" | "assistant_output_started">();
   const signalExecutionPhase = (phase: "tool_execution_started" | "assistant_output_started") => {
@@ -433,6 +435,19 @@ export function createCliEventHandlers(params: {
   };
   const emitCliCompaction = (event: CliCompactionDelta) => {
     observedCliActivity = true;
+    // Claude Code resends its `compacting` status every 30 s while one compaction
+    // runs. The activity above feeds the watchdog; publish only the first start.
+    if (event.phase === "start" && compactionActive) {
+      return;
+    }
+    // Claude Code closes one successful compaction with a status `compact_result`
+    // and an automatic `compact_boundary`. Drop that one repeat; ends without a
+    // start (boundary-only streams) still publish.
+    if (event.phase === "end" && compactionClosed) {
+      compactionClosed = false;
+      return;
+    }
+    compactionClosed = event.phase === "end" && event.completed && compactionActive;
     // Native compaction is silent but busy: the no-output watchdog reads this
     // between phase boundaries, so an end event must always clear the flag,
     // even for a failed compaction (`completed: false`).

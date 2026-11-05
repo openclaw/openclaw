@@ -15,6 +15,7 @@ import {
   fetchClawHubPackageArtifact,
   fetchClawHubPackageDetail,
   fetchClawHubPackageVersion,
+  fetchClawHubTemplatesOverview,
   listClawHubPackages,
   searchClawHubPackages,
   type ClawHubPackageDetail,
@@ -60,6 +61,10 @@ export type ClawHubTemplateCatalogEntry = {
   installs: number;
   featuredAt?: number;
   updatedAtMs: number;
+};
+export type ClawHubTemplateCatalogOverview = {
+  featured: ClawHubTemplateCatalogEntry[];
+  sections: Array<{ category: string; entries: ClawHubTemplateCatalogEntry[] }>;
 };
 export type ClawHubTemplateCatalogDetail = ClawHubTemplateCatalogEntry & {
   version: string;
@@ -327,6 +332,43 @@ export async function listClawHubTemplates(
   );
 }
 
+/** Only an unavailable endpoint or an explicitly incomplete overview uses legacy shelves. */
+export async function readClawHubTemplatesOverview(
+  params: ClawHubFetchOptions & { limit?: number } = {},
+): Promise<ClawHubTemplateCatalogOverview | undefined> {
+  const result = await fetchClawHubTemplatesOverview(params);
+  if (isJsonObject(result) && result.complete === false) {
+    return undefined;
+  }
+  if (
+    !isJsonObject(result) ||
+    result.complete !== true ||
+    !Array.isArray(result.featured) ||
+    !Array.isArray(result.sections) ||
+    !result.sections.every(
+      (section) =>
+        isJsonObject(section) &&
+        typeof section.category === "string" &&
+        Array.isArray(section.items),
+    )
+  ) {
+    throw new ClawHubSourceError(
+      "clawhub_catalog_invalid",
+      "ClawHub returned a malformed Template overview.",
+    );
+  }
+  const limit = params.limit ?? 8;
+  return {
+    featured: projectPublicEntries(result.featured, params.baseUrl).slice(0, limit),
+    sections: result.sections.map((section) => ({
+      category: section.category,
+      entries: projectPublicEntries(section.items, params.baseUrl)
+        .toSorted(rankByInstalls)
+        .slice(0, limit),
+    })),
+  };
+}
+
 export async function searchClawHubTemplates(
   params: ClawHubFetchOptions & { query: string; limit?: number; category?: string },
 ): Promise<ClawHubTemplateCatalogEntry[]> {
@@ -443,7 +485,7 @@ async function readClawHubTemplateContents(
       archivePath: download.archivePath,
       tempDirPrefix: "openclaw-template-catalog-",
       timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
-      rootMarkers: ["package.json", "CLAW.md", "template.json"],
+      rootMarkers: ["package.json", "CLAW.md"],
       onExtracted: async (rootDir) => {
         const verified = await readVerifiedArtifactSource({
           sourceRoot: rootDir,
@@ -619,7 +661,7 @@ export async function withResolvedClawHubSource<T>(
       archivePath: download.archivePath,
       tempDirPrefix: "openclaw-template-source-",
       timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
-      rootMarkers: ["package.json", "CLAW.md", "template.json"],
+      rootMarkers: ["package.json", "CLAW.md"],
       onExtracted: async (rootDir) => {
         const artifactSource = await readVerifiedArtifactSource({
           sourceRoot: rootDir,

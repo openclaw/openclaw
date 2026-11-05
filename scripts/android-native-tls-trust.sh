@@ -101,6 +101,8 @@ PY
     done < "$state/eligible-zygotes.txt"
     ;;
   cleanup)
+    # Reconnect within the caller's cleanup deadline before touching device state.
+    adb_task wait-for-device
     # Stop and uninstall the task app, including DeviceIdentityStore test state.
     adb_task shell am force-stop ai.openclaw.app.debug
     adb_task uninstall ai.openclaw.app.debug.test > "$state/uninstall-test.txt" 2>&1 || true

@@ -79,13 +79,11 @@ describe("AppSidebar session section visibility", () => {
     expect(threads).toBeNull();
 
     const toolbar = sidebar.querySelector(".sidebar-session-toolbar");
-    expect(toolbar?.querySelector(".sidebar-recent-sessions__label-text")?.textContent).toBe(
-      "Sessions",
-    );
+    expect(toolbar?.querySelector(".sidebar-panel-header__title")?.textContent).toBe("Sessions");
     const filter = toolbar?.querySelector<HTMLButtonElement>(".sidebar-session-sort");
     expect(filter).not.toBeNull();
     expect(filter?.getAttribute("aria-label")).toBe("Filter & sort · Active");
-    expect(sidebar.querySelector('.sidebar-rail [aria-label="New conversation"]')).not.toBeNull();
+    expect(sidebar.querySelector('.sidebar-rail [aria-label="New session"]')).not.toBeNull();
     filter?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();

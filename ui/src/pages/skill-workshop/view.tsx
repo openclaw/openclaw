@@ -6,6 +6,7 @@ import type {
 } from "@openclaw/gateway-protocol";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
+import { ErrorDetails } from "../../components/config-error.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
@@ -18,6 +19,7 @@ import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-worksh
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import "../../styles/chat/text.css";
 import "../../styles/carapace-control-ui.css";
@@ -78,6 +80,25 @@ export function archivedWorkshopSkills(list: SkillsWorkshopListResult) {
 }
 
 export function SkillWorkshopView(props: { view: WorkshopView; reads: WorkshopReads }) {
+  // Turning the plugin on replaces the focused button with the Workshop; keep focus in the panel.
+  createPendingFocus(
+    () => {
+      const plugin = props.view().plugin;
+      return plugin?.status === "off" && plugin.enabling
+        ? "enabling"
+        : (plugin?.status ?? "loaded");
+    },
+    {
+      requested: (next, previous) => previous === "enabling" && next === "loaded",
+      focus: () => {
+        const panel = document.getElementById(PLUGINS_HUB_PANEL_ID);
+        if (panel && (!document.activeElement || document.activeElement === document.body)) {
+          panel.tabIndex = -1;
+          panel.focus({ preventScroll: true });
+        }
+      },
+    },
+  );
   return (
     <>
       <PluginsHubHeader
@@ -87,42 +108,44 @@ export function SkillWorkshopView(props: { view: WorkshopView; reads: WorkshopRe
       <SettingsWorkspace>
         <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-skill-workshop">
           <SettingsPage wide carapace>
-            <Toolbar view={props.view} />
-            <For
-              each={[
-                props.view().learningError,
-                props.view().modeError,
-                props.view().actionError,
-              ].filter(Boolean)}
-            >
-              {(message) => <ErrorBanner message={message ?? ""} />}
-            </For>
-            {props.view().error && (
-              <ErrorBanner
-                message={`${t("skillWorkshop.loadError")} ${props.view().error}`}
-                onRetry={props.view().onRetry}
-              />
-            )}
-            <Loading
-              on={props.reads.listRequest()}
-              fallback={!props.view().snapshot && <SettingsLoadingSkeleton carapace />}
-            >
-              <Errored
-                fallback={(error, reset) => (
-                  <ErrorBanner
-                    message={`${t("skillWorkshop.loadError")} ${formatUiError(error())}`}
-                    onRetry={() => {
-                      props.view().onRetry();
-                      reset();
-                    }}
-                  />
-                )}
+            <Show when={!props.view().plugin} fallback={<PluginUnavailable view={props.view} />}>
+              <Toolbar view={props.view} />
+              <For
+                each={[
+                  props.view().learningError,
+                  props.view().modeError,
+                  props.view().actionError,
+                ].filter(Boolean)}
               >
-                {props.reads.list() && null}
-              </Errored>
-            </Loading>
-            <Show when={props.view().snapshot}>
-              <Library view={props.view} reads={props.reads} />
+                {(message) => <ErrorBanner message={message ?? ""} />}
+              </For>
+              {props.view().error && (
+                <ErrorBanner
+                  message={`${t("skillWorkshop.loadError")} ${props.view().error}`}
+                  onRetry={props.view().onRetry}
+                />
+              )}
+              <Loading
+                on={props.reads.listRequest()}
+                fallback={!props.view().snapshot && <SettingsLoadingSkeleton carapace />}
+              >
+                <Errored
+                  fallback={(error, reset) => (
+                    <ErrorBanner
+                      message={`${t("skillWorkshop.loadError")} ${formatUiError(error())}`}
+                      onRetry={() => {
+                        props.view().onRetry();
+                        reset();
+                      }}
+                    />
+                  )}
+                >
+                  {props.reads.list() && null}
+                </Errored>
+              </Loading>
+              <Show when={props.view().snapshot}>
+                <Library view={props.view} reads={props.reads} />
+              </Show>
             </Show>
           </SettingsPage>
         </div>
@@ -131,10 +154,94 @@ export function SkillWorkshopView(props: { view: WorkshopView; reads: WorkshopRe
   );
 }
 
-function ErrorBanner(props: { message: string; onRetry?: () => void }) {
+/** The Gateway serves no Workshop methods: explain why, and turn the plugin on when allowed. */
+function PluginUnavailable(props: { view: WorkshopView }) {
+  const state = () => props.view().plugin;
+  const off = () => {
+    const current = state();
+    return current?.status === "off" ? current : undefined;
+  };
+  const failure = () => {
+    const current = state();
+    return current?.status === "error" ? current : undefined;
+  };
+  const message = () => {
+    const status = state()?.status;
+    return status === "missing"
+      ? t("skillWorkshop.plugin.missing")
+      : status === "failed"
+        ? t("skillWorkshop.plugin.failed")
+        : status === "reload"
+          ? t("skillWorkshop.plugin.reload")
+          : props.view().pluginsDisabled
+            ? t("skillWorkshop.plugin.pluginsDisabled")
+            : props.view().access.canEnablePlugin
+              ? t("skillWorkshop.plugin.offBody")
+              : t("skillWorkshop.plugin.needsAdmin");
+  };
+  return (
+    <Show when={state()?.status !== "checking"} fallback={<SettingsLoadingSkeleton carapace />}>
+      <Show
+        when={failure()}
+        fallback={
+          <div class="sw-empty sw-plugin-off oc-settings-group settings-group">
+            <span class="sw-empty__icon" aria-hidden="true">
+              <Icon name="wandSparkles" />
+            </span>
+            <Show when={off()}>
+              <strong class="sw-empty__title">{t("skillWorkshop.plugin.offTitle")}</strong>
+            </Show>
+            <p>{message()}</p>
+            <Show when={off()}>
+              {(current) => (
+                <Show when={props.view().access.canEnablePlugin && !props.view().pluginsDisabled}>
+                  {/* aria-disabled keeps focus on the button while the Gateway works. */}
+                  <button
+                    type="button"
+                    class="btn primary"
+                    aria-disabled={current().enabling ? "true" : undefined}
+                    aria-busy={current().enabling ? "true" : undefined}
+                    onClick={() => props.view().onEnablePlugin()}
+                  >
+                    {current().enabling
+                      ? t("skillWorkshop.plugin.enabling")
+                      : t("skillWorkshop.plugin.enable")}
+                  </button>
+                </Show>
+              )}
+            </Show>
+            <Show when={state()?.status === "reload"}>
+              <button type="button" class="btn primary" onClick={() => location.reload()}>
+                {t("common.reload")}
+              </button>
+            </Show>
+            <Show when={off()?.error} keyed>
+              {(error) => (
+                <ErrorBanner message={t("skillWorkshop.plugin.enableFailed")} error={error} />
+              )}
+            </Show>
+          </div>
+        }
+      >
+        {(current) => (
+          <ErrorBanner
+            message={t("skillWorkshop.plugin.checkFailed")}
+            error={current().error}
+            onRetry={props.view().onRetryPlugin}
+          />
+        )}
+      </Show>
+    </Show>
+  );
+}
+
+function ErrorBanner(props: { message: string; error?: unknown; onRetry?: () => void }) {
   return (
     <div class="callout danger oc-banner oc-banner-error" role="alert">
-      <span>{props.message}</span>
+      <span>
+        {props.message}
+        {props.error != null && <ErrorDetails error={props.error} />}
+      </span>
       {props.onRetry && (
         <button
           type="button"

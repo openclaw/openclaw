@@ -438,6 +438,14 @@ const CronJobRuntimeFeedbackProperties = {
 /** Scheduler-maintained state for the latest run/delivery outcome. */
 export const CronJobStateSchema = closedObject({
   nextRunAtMs: Type.Optional(CronDateTimestampMsSchema),
+  admissionDeferred: Type.Optional(
+    closedObject({
+      reason: Type.String(),
+      sinceMs: CronDateTimestampMsSchema,
+      attempts: Type.Integer({ minimum: 1 }),
+      retryAtMs: CronDateTimestampMsSchema,
+    }),
+  ),
   scheduleActivatedAtMs: Type.Optional(CronDateTimestampMsSchema),
   runningAtMs: Type.Optional(CronDateTimestampMsSchema),
   lastRunAtMs: Type.Optional(CronDateTimestampMsSchema),
@@ -475,6 +483,7 @@ export const CronJobStateSchema = closedObject({
 
 const CronJobStatePatchSchema = closedObject(
   Type.Omit(CronJobStateSchema, [
+    "admissionDeferred",
     "scheduleActivatedAtMs",
     "lastMeaningfulResult",
     "lastDiagnostics",

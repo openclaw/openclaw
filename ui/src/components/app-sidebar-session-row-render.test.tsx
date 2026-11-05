@@ -332,7 +332,7 @@ it.each([undefined, 1])(
   },
 );
 
-it("keeps hidden child background activity off the idle parent's own glyph", () => {
+it("keeps hidden child activity off the idle parent row", () => {
   const { dom } = mountRow(
     { icon: "book", unread: true },
     {
@@ -342,7 +342,7 @@ it("keeps hidden child background activity off the idle parent's own glyph", () 
     },
   );
   expect(dom.query(".sidebar-session-indicator .session-glyph__ring")).toBeNull();
-  expect(dom.query(".sidebar-child-session-toggle .session-run-spinner")).not.toBeNull();
+  expect(dom.query(".sidebar-child-session-toggle .session-run-spinner")).toBeNull();
   expect(dom.all('[aria-label="Unread"]')).toHaveLength(1);
   expect(dom.query(".sidebar-recent-session__link")?.getAttribute("aria-describedby")).toBeNull();
 });

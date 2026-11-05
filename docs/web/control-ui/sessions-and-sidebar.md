@@ -44,11 +44,13 @@ Pages always hides dashboards from
 archived sessions and has no archive toggle. To find archived sessions in the
 sidebar, use the **Sessions** filter instead. Hover or focus an icon for its name.
 The active agent's avatar sits at the top of the rail and opens the agent menu;
-in team mode it opens the workspace menu. The accented **+**, labeled **New conversation**,
+in team mode it opens the workspace menu. The accented **+**, labeled **New session**,
 sits directly below the avatar, separated from navigation by a divider. It stays in
 the same place in Pages, Sessions, and Users, even when the list is collapsed.
 It opens New session for the selected agent; in team mode, choose an agent from
 its menu first. Command-palette search sits below the three view buttons.
+Search failures show **Couldn’t search sessions. Try again.**, rather than an empty result.
+If message search is unavailable, the palette still shows matching session titles and details.
 Click the selected Pages or Sessions view again to collapse its list, or press ⌘B on
 Mac or Ctrl+B on Windows/Linux. Clicks use the normal sidebar animation; the
 keyboard shortcut opens or closes navigation immediately. Reduced-motion preferences
@@ -70,7 +72,7 @@ the account-menu badge. The `dev` channel never shows new-update notifications.
 Home toggles the Home panel and shows the active agent’s Home activity and attention state.
 Home navigation and agent switching remain available before a Home session has loaded.
 For roles with `sessions.others: "none"`, opening Home first checks whether the
-Gateway can resolve that conversation. An unavailable Home offers **New conversation**
+Gateway can resolve that conversation. An unavailable Home offers **New session**
 without repeatedly requesting its transcript or sidebar ancestry. Home sessions
 that the caller can access still open normally; session visibility does not change.
 Home stays a navigation root regardless of its stored session ancestry.
@@ -114,8 +116,8 @@ participation and mentions. External catalog entries appear in **Involving me**
 only when their adopted OpenClaw conversation is in the Gateway-filtered list.
 Shared or imported catalog access alone does not establish involvement; use
 **All owners** to browse those sources. The separate filter button controls the
-remaining session filters. New conversation stays in the rail rather than moving
-into this header. In mobile chat, open navigation to reach **New conversation**
+remaining session filters. New session stays in the rail rather than moving
+into this header. In mobile chat, open navigation to reach **New session**
 in the rail; the conversation header reserves its two right-hand controls for
 **Session actions** and **Panels**. Other mobile pages keep an equivalent **+** in
 the page topbar while the drawer is closed. Opening the drawer moves that action
@@ -140,8 +142,12 @@ The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
 without a saved choice starts with **My sessions**, except guests: a role that can
 only view other people's sessions and has no general read access (the role
-[Visitor Access](/gateway/team-server#invite-guests) requires) starts with **Involving me**.
-A saved choice always wins. Before a profile is identified,
+[Visitor Access](/start/multiplayer#invite-guests) requires) starts with **Involving me**.
+A saved choice wins unless a newly authenticated connection restricts access to
+other people's activity. An old filter for someone else then changes to
+**Involving me**, and the browser saves the recovered choice. Explicit choices
+made on that connection remain selected and show any server refusal.
+Before a profile is identified,
 or when the connection has no durable profile, the list shows **All owners**.
 Identifying the profile restores its saved choice or the default for that role.
 During reconnection, a known profile's title and filter stay in place until identity
@@ -340,44 +346,44 @@ reordering and steering retain their normal behavior.
 
 ## Systems workspace
 
-Open **Pages → Systems**, or visit `/systems`, to inspect the Gateway, worker
-environments, and paired devices available to your connection. Use the pin button
+Open **Pages → Systems**, or visit `/systems`, to inspect this computer, cloud
+devices, and paired devices available to your connection. Use the pin button
 beside Systems in Pages, or drag it into the rail, to keep a personal shortcut.
 
 While Systems is open, select **Sessions** in the rail to show its contextual
-machine list in place of conversations. Pages and Users remain separate views.
+device list in place of conversations. Pages and Users remain separate views.
 The middle list scrolls independently of the rail; the sidebar header and the
 rail’s bottom controls stay fixed. Returning to conversations restores their
-sidebar scroll position. Navigation changes this context; background machine or
+sidebar scroll position. Navigation changes this context; background device or
 session activity does not switch your workspace.
 
-Use **Filter & sort machines** beside the search field to sort each group
+Use **Filter & sort devices** beside the search field to sort each group
 alphabetically, online first (the default), or offline first. Choose **All**,
 **Online**, or **Offline** to filter by reported status; search narrows that
 selection further. Starting, stopping, and error states remain visible under
-**All**. Filtering does not change the machine open in the workspace. These
+**All**. Filtering does not change the device open in the workspace. These
 choices stay in place when you leave Systems and return on the same connection.
 
-The machine list excludes cloud workers whose teardown is complete, including
+The device list excludes cloud workers whose teardown is complete, including
 retained records from archived sessions and failed starts with no allocated
-machine. Workers awaiting cleanup remain visible. Archiving stops running cloud
+device. Workers awaiting cleanup remain visible. Archiving stops running cloud
 workers through the normal workspace-reconciliation flow; failed placements keep
 their existing cleanup retries and recovery history.
 
 Select a desktop-capable system to open the existing Desktop viewer in the main
 workspace. It uses the same connection, control, sizing, and fullscreen behavior
 as the Desktop panel. Headless and offline entries remain inspectable instead
-of opening an empty desktop. Pairing, desktop enablement, and operator permissions
+of opening an empty desktop. Pairing, desktop enablement, and access permissions
 still apply; opening Systems does not grant additional access.
 
 System details use reported facts. A connected device is not necessarily the
-machine running a session, and unavailable measurements are not shown as zero.
+device running a session, and unavailable measurements are not shown as zero.
 The telemetry and backup overview reserves its space while those readings load,
 so the desktop and Backups stay in place. It summarizes the three volumes with
-the highest used percentage and reserves unused rows for machines with fewer
+the highest used percentage and reserves unused rows for devices with fewer
 volumes. **+N more volumes in Details** opens every volume and its history.
 **Backup details** opens the complete backup outcomes, schedules, and storage
-locations, even when no machine is selected. The overview does not scroll;
+locations, even when no device is selected. The overview does not scroll;
 turning off statistics keeps a compact backup area.
 See [Cloud Worker Desktop](/gateway/cloud-workers/desktop) for worker desktop
 enablement and sizing.
@@ -408,17 +414,17 @@ groups by agent. Reset leaves those hidden preferences unchanged. It also preser
 a saved Person grouping while owner data temporarily makes that choice unavailable.
 
 In **Show all agents**, compact agent rows show a muted preview of the agent's
-most recent available assistant reply across its visible, non-archived sessions.
+most recent available agent reply across its visible, non-archived sessions.
 A newer user message does not replace that preview. Agents without an available
-assistant reply keep a name-only row. The top-level roster does not show the
+agent reply keep a name-only row. The top-level roster does not show the
 session list's empty-filter hint.
 
 Choose **Pin** in an agent's options menu to move it into the icon section above
 the roster. Hover or focus its avatar to read the full name and a short preview
-of its latest assistant reply. Select the avatar to open its main chat, or use
-**Sessions** in its options menu to browse its conversations. The menu also
+of its latest agent reply. Select the avatar to open its main session, or use
+**Sessions** in its options menu to browse its sessions. The menu also
 offers **Settings** and a confirmed **Delete** action when permitted. Create a
-new conversation from the Sessions page. **Unpin** returns
+new session from the Sessions page. **Unpin** returns
 the agent to the roster. Agent pins are saved in this browser profile.
 
 Switching to the all-agents roster or another navigation view, or closing
@@ -490,9 +496,9 @@ Pending questions and approvals show their specific request when you tap, hover,
 
 The top rail button becomes a neutral workspace identity with the configured Gateway display name, or **OpenClaw**, in its accessible label, and a small static OpenClaw mark in place of the agent avatar. Both modes use the same menu. The **Show all** tile groups the configured agents’ own avatars and appears only with multiple agents. Each compact agent row has a settings gear that opens its settings without selecting it. The menu starts with **Create new agent**, followed by **Show all** and the agent rows. **Create new agent** opens a dialog to name the agent and choose or generate its avatar. Submitting immediately opens the named agent’s chat and selects its row at the top of the list. OpenClaw verifies inference before saving the agent and its greeting (“Hi, I’m Scout. Happy to help.”) or enabling replies; a failed check explains the problem without creating an agent. The agent then asks you to choose one of four roles and, after your selection, asks for more detail about what you want to achieve. Messages remain in that chat when you leave and return, and the latest created agent stays first after a reload. Help stays in the account menu. Choose an agent row to leave team mode with that agent selected. The session header keeps the owner-filter title, **Filter & sort**, and one **+** control; search and the view buttons stay in the rail.
 
-Agent avatars use the same precedence throughout the dashboard: an identity image (a data or same-origin URL), then the identity emoji, then a generated face. The face is stable for the agent ID, including after a rename, and uses crisp vector artwork in the sidebar, switcher, New conversation menu, identity chips, and chat. Configured workspace images also appear beside assistant replies after authenticated loading. A missing or failed image reveals the emoji or generated face. System agents always use the OpenClaw product mark, including in onboarding and custodian conversations; they never use a generated face. People keep their own profile images and initials.
+Agent avatars use the same precedence throughout the dashboard: an identity image (a data or same-origin URL), then the identity emoji, then a generated face. The face is stable for the agent ID, including after a rename, and uses crisp vector artwork in the sidebar, switcher, New session menu, identity chips, and chat. Configured workspace images also appear beside assistant replies after authenticated loading. A missing or failed image reveals the emoji or generated face. System agents always use the OpenClaw product mark, including in onboarding and custodian conversations; they never use a generated face. People keep their own profile images and initials.
 
-In both sidebar modes, **Home** stays at the bottom of the rail, not in Pages. Click a group header's avatar or name to open that agent's main chat; its separate expand/collapse control folds the group without navigating. The top **+**, labeled **New conversation**, opens a small agent menu with each agent's avatar and name, in the same order as the groups. Choosing an agent opens `/new?agent=<id>`. Each group's **+** opens that link directly. It appears when the header is hovered or contains keyboard focus, and stays available on touch devices. Turning team mode off restores chip mode and its direct **New conversation** button; Home remains in the rail.
+In both sidebar modes, **Home** stays at the bottom of the rail, not in Pages. Click a group header's avatar or name to open that agent's main chat; its separate expand/collapse control folds the group without navigating. The top **+**, labeled **New session**, opens a small agent menu with each agent's avatar and name, in the same order as the groups. Choosing an agent opens `/new?agent=<id>`. Each group's **+** opens that link directly. It appears when the header is hovered or contains keyboard focus, and stays available on touch devices. Turning team mode off restores chip mode and its direct **New session** button; Home remains in the rail.
 
 Choosing **Show all** defaults the shared page scope to **All agents**. Choosing a named agent tile leaves team mode and scopes pages to that agent. This sets a default once when the mode changes: you can select an individual agent afterward, and page navigation preserves your choice. Automations, Dashboards, Sessions, and Usage support all-agent views. Mixed-agent lists identify the agent on each row with an avatar and name where needed. Each identity chip includes the agent ID in its tooltip and screen-reader label, such as `Molty (agent:main)`, so agents with the same display name remain distinguishable. If no name is available, the label uses `agent:<id>`. In Settings, the agent selector below the sidebar title keeps the same target across Agents, Models, Memory, and Skills; global settings remain global. Skill Workshop uses the agent selected through chat. Open an agent's main chat from its group header to select it for Skill Workshop. Chat actions still target the conversation's agent.
 
@@ -638,12 +644,14 @@ A pinned parent is a single rail shortcut. Its indented child tree and expand/co
 
 The root menu keeps everyday actions together: **Pin/Unpin**, **Rename**, **Mark as unread/read**, **Copy link**, **Assign to…**, **Move to group**, and **Archive/Restore**. Assignment appears only when the eligible directory contains more than one person or agent, including yourself; online presence does not determine eligibility. The sidebar also offers **Snooze/Wake session** beside Archive. A session with children has one **Archive session** submenu with **Session only** and **Archive session and children…**; the latter still confirms the affected conversations.
 
-**Advanced** contains **Icon & color**, **Fork conversation**, **Copy details**, **Open in**, the **Send messages** and **Receive messages** preferences, and **Delete** at the bottom. Personal **Hide/Show in Involving me** is prominent only when opening the menu from an **Involving me** list; elsewhere it stays in Advanced, subject to the same multi-user availability. On phones, submenus replace the current menu page and **Back** returns to their parent.
+**Advanced** contains **Icon & color**, **Fork session**, **Copy details**, **Open in**, the **Send messages** and **Receive messages** preferences, and **Delete** at the bottom. Personal **Hide/Show in Involving me** is prominent only when opening the menu from an **Involving me** list; elsewhere it stays in Advanced, subject to the same multi-user availability. On phones, submenus replace the current menu page and **Back** returns to their parent.
 
 - In the sidebar session menu, **Snooze** offers **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, when more than one hour away), **Tomorrow** (09:00 local), and **Next week** (next Monday at 09:00 local). On Sundays, Next week is omitted because it matches Tomorrow. Each preset shows its wake time in your locale. Active sessions eligible for pinning can be snoozed, except protected main and sentinel sessions; archived and nested child sessions cannot. A child moved to the top level can be snoozed. A snoozed session offers **Wake session** instead.
 - **Icon & color** opens one picker with color swatches, an icon grid, and **Reset to default**. It stays open while you change both; the sidebar reflects your changes.
 - **Move to group** includes **New group** and **Remove from group**. **Assign to** stays on the root menu when more than one eligible owner is available ([session ownership](/concepts/multi-user#assigning-an-owner)).
-- **Fork conversation** creates a separate conversation; while a run is active, it forks from the last completed message. Forks of local folder and project sessions keep that workspace, so existing file references continue to open. **Fork from here** keeps the same local workspace as well.
+  On phones, **Search groups** matches canonically equivalent accented names
+  without changing the stored group name; an unaccented query remains distinct.
+- **Fork session** creates a separate session; while the agent is replying, it forks from the last completed message. Forks of local folder and project sessions keep that workspace, so existing file references continue to open. **Fork from here** keeps the same local workspace as well.
 - **Copy link** copies the session link in one step. **Advanced → Copy details** offers the preview link, conversation text as Markdown, and the session ID, without duplicating the common session link. The link requires normal Gateway authentication and session access; copying it does not grant access. Markdown loads the available conversation history, not just the messages currently visible. Both copied Markdown and `/export` downloads retain the conversation's sender labels, so messages from different participants remain distinguishable. Records without exportable text, such as tool calls without text output, are omitted.
 - In the Control UI, `/export` and `/export-session` load the available conversation history before downloading Markdown through your browser, even when older messages have not been scrolled into view. If history cannot be read completely or the conversation changes while paging, the export fails instead of downloading a partial file; retry the command. These commands take no file path. An argument leaves the draft intact and shows how to retry. The server-side HTML export available through other clients keeps its separate workspace-path behavior.
 - The chat header's **Session sharing** control manages authenticated teammate visibility and membership. For a saved, non-incognito session, its creator or a Gateway admin can also enable world-readable, read-only public access.
@@ -660,7 +668,7 @@ the search; Arrow Down and Enter let you select a matching owner.
 ### Share a session publicly
 
 1. Open the saved session and select **Session sharing** in the chat header. In the compact header menu, select **Session sharing** there instead.
-2. Under **Public access**, select **Enable public access…**, review the warning, then select **Make public**.
+2. Under **Link sharing**, enable **Anyone with the link**, review **Make this session public?**, then select **Make public**.
 3. Select **Copy public link** to copy the normal thread URL. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
 4. Open that same URL in a signed-out browser to verify the read-only conversation and **Log in** button. Signing in returns to the thread with your existing permissions. New user and assistant text, including progress updates, becomes visible to public readers automatically.
 5. Return to **Session sharing** and select **Disable public access** to stop anonymous reads. The same URL then returns an unavailable page to signed-out readers. Enabling access again makes that URL public again; disabling access cannot recall saved copies.
@@ -681,11 +689,11 @@ and login-proxy configuration, see
 
 Hover a cloud session in the sidebar to see its provider and profile. When known, a compact line below them shows the operating system, machine class, vCPU count, and memory in GB. The placement badge tooltip includes the same machine details; unavailable fields are omitted.
 
-A selected session running on a worker shows a quiet **Runs on Cloud** chip in the chat header. Connections with `operator.write` can choose **Move session…** to continue on the Gateway or an eligible paired device, and can use **Stop cloud worker…** through the write-scoped `sessions.reclaim` lifecycle. Moving to a configured cloud profile requires `operator.admin`. Cloud rows are filtered against all execution modes advertised by each profile: the same bundled Crabbox profile is selectable for OpenClaw `worker-turn` and Codex `remote-exec`, while a genuinely single-mode profile stays disabled for the other runtime. Profiles with multiple machine classes show a machine picker. Leaving the Move session picker untouched omits a size override; explicitly selecting a class, including the displayed default, sends that class. Choosing a different class on the current profile resizes the session. The confirmation explains that an active turn is interrupted and never replayed; OpenClaw reconciles the workspace before activating the destination. While the durable operation is in progress, the chip shows **Moving to…**. If recovery is blocked, the chip exposes the bounded error after reconnect so the action never fails silently.
+A selected session running on a worker shows a quiet **Runs on Cloud** chip in the **Chat** header. Connections with `operator.write` can choose **Move session…** to continue on the Gateway or an eligible paired device, and can use **Stop cloud device…** through the write-scoped `sessions.reclaim` lifecycle. Moving to a configured cloud profile requires `operator.admin`. Cloud rows are filtered against all execution modes advertised by each profile: the same bundled Crabbox profile is selectable for OpenClaw `worker-turn` and Codex `remote-exec`, while a genuinely single-mode profile stays disabled for the other runtime. Profiles with multiple device classes show a device picker. Leaving the Move session picker untouched omits a size override; explicitly selecting a class, including the displayed default, sends that class. Choosing a different class on the current profile resizes the session. The confirmation explains that an active turn is interrupted and never replayed; OpenClaw reconciles the workspace before activating the destination. While the durable operation is in progress, the chip shows **Moving to…**. If recovery is blocked, the chip exposes the bounded error after reconnect so the action never fails silently.
 
-You can send a message while an existing worker session is provisioning or preparing its workspace. The accepted message shows **Received · waiting for worker setup** and starts automatically once that worker is ready. Stop, Move, and Restart keep their own admission controls; cancelled or interrupted input is not silently started on a different destination. The unsent draft in the New Session flow remains separate from accepted input.
+You can send a message while an existing worker session is provisioning or preparing its workspace. The accepted message shows **Received · setting up device** and starts automatically once that worker is ready. Stop, Move, and Restart keep their own admission controls; cancelled or interrupted input is not silently started on a different destination. The unsent draft in the New Session flow remains separate from accepted input.
 
-During the initial handoff, the chat placement menu and stop confirmation use the selected destination: **Stop device worker…** for explicit or automatic paired-device placement, **Stop cloud worker…** for a cloud profile, or neutral **Stop worker…** when the target is unknown; all use `sessions.reclaim`. A destination retained for retry after a failed startup does not label a later restart.
+During the initial handoff, the placement menu on **Chat** and stop confirmation use the selected destination: **Stop device worker…** for explicit or automatic paired-device placement, **Stop cloud device…** for a cloud profile, or neutral **Stop worker…** when the target is unknown; all use `sessions.reclaim`. A destination retained for retry after a failed startup does not label a later restart.
 
 ### Session icons
 
@@ -877,7 +885,7 @@ For device and cloud sessions, the submitted prompt also starts background namin
 
 For a remote target, the Control UI creates the repository or managed-worktree session with an empty initial message and no `execNode`, dispatches it by exact `deviceId`, `autoDevice: true`, or `profileId` (plus an optional cloud machine class), waits for active placement, and then sends the first message and attachments with the same request key used by recovery to prevent duplicate sends. Explicit and automatic device dispatch require `operator.write`; cloud profile dispatch requires `operator.admin`. The composer footer chooses the new session's model and reasoning level.
 
-Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Fast-mode controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the open picker and accessible label. Narrow composers, including split panes in wider windows, use compact controls so each picker stays independently clickable. Effort uses a gauge in these layouts whose needle reflects the current level, with a lightning badge when Fast mode is active. In chat, Fast mode stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
+Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Speed controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the open picker and accessible label. Narrow composers, including split panes in wider windows, use compact controls so each picker stays independently clickable. The Effort control and its menu show the effective level without a default badge. While the chat inherits that level, the control's accessible name reads, for example, "Effort: Default (High)". Effort uses a gauge in these layouts whose needle reflects the current level, with a lightning badge when Fast or Ultrafast speed is active. In chat, **Speed** stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
 
 The model picker initially opens with the selected model’s provider section expanded and other provider sections collapsed. Closing and reopening the same picker preserves your provider expansion choices and clears the search. Reloading the page initializes provider sections from the selected model again. Search the model picker by model name, model ID, provider, or provider/model reference. Your search stays applied as the model catalog refreshes. Press **Escape** to clear a nonempty search while keeping the picker open; press it again to close the picker and return focus to its trigger.
 
@@ -971,7 +979,7 @@ For a GitHub Enterprise deployment, configure `gateway.github.host` and `gateway
 }
 ```
 
-Use the Effort menu to choose Fast Mode before creating a session. New Session persists that choice before the first local or remote turn starts.
+Use the Effort menu to choose a **Speed** before creating a session. New Session persists that choice before the first local or remote turn starts.
 
 Refreshing sessions after an initial `/think` command finishes updates chat's Effort setting.
 
