@@ -297,6 +297,23 @@
     0 4px 18px rgb(0 0 0 / 6%);
 }
 
+/* Incognito belongs to the session, so it frames the whole composer: a dashed
+   edge says "this box keeps nothing" without borrowing a warning or accent
+   color. Light mode draws its resting edge as a box-shadow ring, so the ring is
+   dropped here in favor of a real dashed border in every theme, focus and dictation
+   state; this block stays after the dictation rules so it wins their ties. */
+:root .agent-chat__input[data-incognito="true"],
+:root .agent-chat__input--dictating[data-incognito="true"]:focus-within,
+:root
+  .agent-chat__input[data-incognito="true"]:has(
+    .agent-chat__composer-combobox > :is(textarea, input):focus
+  ) {
+  border-style: dashed;
+  /* Same edge as the /new Incognito composer, so sending keeps the frame. */
+  border-color: color-mix(in srgb, var(--text-strong) 22%, transparent);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 5%);
+}
+
 .agent-chat__input--prefill-attention {
   animation: chat-composer-prefill-attention 600ms ease-out;
 }
@@ -891,8 +908,14 @@
 
 /* Capture variants below own their hover fill independently of the primary action. */
 .chat-send-btn:hover:not(:disabled) {
-  background: var(--primary-hover);
+  background: var(--chat-send-hover-bg);
+  color: var(--chat-send-foreground);
   box-shadow: 0 2px 12px var(--accent-glow);
+}
+
+.chat-send-btn:active:not(:disabled, .chat-send-btn--voice, .chat-send-btn--stop) {
+  background: var(--chat-send-active-bg);
+  color: var(--chat-send-foreground);
 }
 
 /* Outline (not box-shadow) so the hover rules' higher-specificity box-shadow
@@ -928,12 +951,18 @@
   box-shadow: none;
 }
 
-/* Hover steps the fill toward the surface's own far end rather than reaching for
-   --primary-hover, which several themes leave at the base value and would render
-   as no feedback at all. */
-.agent-chat__input .chat-send-btn:hover:not(:disabled) {
-  background: var(--chat-send-hover-bg, color-mix(in srgb, var(--primary) 86%, var(--text-strong)));
+/* The accent owner pairs every interactive fill with its readable ink. */
+.agent-chat__input
+  .chat-send-btn:hover:not(:disabled, .chat-send-btn--voice, .chat-send-btn--stop) {
+  background: var(--chat-send-hover-bg);
+  color: var(--chat-send-foreground);
   box-shadow: none;
+}
+
+.agent-chat__input
+  .chat-send-btn:active:not(:disabled, .chat-send-btn--voice, .chat-send-btn--stop) {
+  background: var(--chat-send-active-bg);
+  color: var(--chat-send-foreground);
 }
 
 .agent-chat__input .chat-send-btn:disabled {

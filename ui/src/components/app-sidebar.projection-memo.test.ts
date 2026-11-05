@@ -128,6 +128,24 @@ async function update(sidebar: Sidebar, change: (() => void) | Partial<Sidebar>)
 }
 
 describe("sidebar projection memo", () => {
+  it("keeps a saved group collapsed when opening its top-level session", async () => {
+    const storageKey = "openclaw:sidebar:sessions:collapsed-sections";
+    const saved = JSON.stringify(["category:Alpha"]);
+    localStorage.setItem(storageKey, saved);
+    const current = session("alpha", { category: "Alpha" });
+    const { sidebar } = await mount([current]);
+
+    await update(sidebar, { activeRouteId: "chat", sessionKey: current.key });
+
+    const group = sidebar.querySelector('[data-session-section="category:Alpha"]');
+    expect(group).not.toBeNull();
+    expect(
+      group?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(group?.querySelector(".sidebar-recent-session")).toBeNull();
+    expect(localStorage.getItem(storageKey)).toBe(saved);
+  });
+
   it("reuses a held roster without enumerating it for each navigation read", async () => {
     const first = session("first");
     const { sidebar } = await mount([first]);

@@ -27,8 +27,14 @@ import { createPageRequestDelay } from "../../lib/page-request.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
+import { observeWindowResize } from "../../lib/reactive/window-resize.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
-import { searchTemplates, type TemplateCatalogEntry } from "./templates-catalog-client.ts";
+import {
+  readTemplatesOverview,
+  searchTemplates,
+  type TemplateCatalogEntry,
+} from "./templates-catalog-client.ts";
 import "../../styles/agents-home.css";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
@@ -91,6 +97,40 @@ function TemplateCard(props: {
         <p class="agents-home__template-summary">{props.entry.summary}</p>
       </Show>
     </article>
+  );
+}
+
+function TemplateCatalogSkeleton() {
+  let grid!: HTMLDivElement;
+  const [count, setCount] = createSignal(4);
+  const measure = createLayoutMeasurement(
+    () => count(),
+    () => {
+      const card = grid.firstElementChild?.getBoundingClientRect();
+      if (!card?.height) {
+        return undefined;
+      }
+      const style = getComputedStyle(grid);
+      const columns = style.gridTemplateColumns.split(" ").length;
+      const gap = Number.parseFloat(style.rowGap) || 0;
+      const available = window.innerHeight - grid.getBoundingClientRect().top;
+      const rows = Math.max(1, Math.ceil((available + gap) / (card.height + gap)));
+      return () => setCount(columns * rows);
+    },
+    { targets: () => [grid], fonts: true },
+  );
+  onSettled(() => observeWindowResize(window, measure));
+  return (
+    <div
+      ref={(element) => (grid = element)}
+      class="plugin-catalog-grid"
+      role="status"
+      aria-label={t("templatesCatalog.loading")}
+    >
+      <Repeat count={count()}>
+        {() => <div class="agents-home__template-skeleton" aria-hidden="true" />}
+      </Repeat>
+    </div>
   );
 }
 
@@ -224,6 +264,27 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
                       const sections: TemplateSection[] = [];
                       return { entries: [], featured: [], sections };
                     }
+                    if (overview) {
+                      const catalog = await readTemplatesOverview(
+                        current.scope.client,
+                        SECTION_SIZE,
+                      );
+                      if (!current.isCurrent()) {
+                        return { entries: [], featured: [], sections: [] };
+                      }
+                      if (catalog) {
+                        return {
+                          entries: [],
+                          featured: catalog.featured,
+                          sections: templateCategories.slice(1).flatMap((category) => {
+                            const entries = catalog.sections.find(
+                              (section) => section.category === category[0],
+                            )?.entries;
+                            return entries?.length ? [{ category, entries }] : [];
+                          }),
+                        };
+                      }
+                    }
                     const [entries, featured, sections] = await Promise.all([
                       overview
                         ? Promise.resolve([])
@@ -270,21 +331,7 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
                         </div>
                       )}
                     >
-                      <Loading
-                        fallback={
-                          <div
-                            class="plugin-catalog-grid"
-                            role="status"
-                            aria-label={t("templatesCatalog.loading")}
-                          >
-                            <Repeat count={4}>
-                              {() => (
-                                <div class="agents-home__template-skeleton" aria-hidden="true" />
-                              )}
-                            </Repeat>
-                          </div>
-                        }
-                      >
+                      <Loading fallback={<TemplateCatalogSkeleton />}>
                         <Show
                           when={
                             gateway.connected &&
@@ -294,7 +341,13 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
                             result().sections.length === 0
                           }
                         >
-                          <p class="agents-home__template-empty">{t("templatesCatalog.empty")}</p>
+                          <p class="agents-home__template-empty">
+                            {t(
+                              view.query.trim() || view.category
+                                ? "templatesCatalog.empty"
+                                : "templatesCatalog.emptyUnfiltered",
+                            )}
+                          </p>
                         </Show>
                         <Show when={overview && result().featured.length > 0}>
                           <CatalogDiscoverySection

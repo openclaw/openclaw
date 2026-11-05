@@ -1,11 +1,46 @@
 import type { MockGatewayWindow } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { frames, navigation } from "./control-ui-interaction-navigation.ts";
+import { interactionScenarios } from "./control-ui-interaction-scenarios.ts";
 import { workboardResourceRoute } from "./control-ui-workboard-resource-fixture.ts";
 
 /** Native owner updates exercise style invalidation without replacing the document. */
 export function createEngineStyleScenarios(): readonly EngineScenario[] {
+  const typing = interactionScenarios.find(({ id }) => id === "chat-typing");
+  if (!typing) {
+    throw new Error("Missing shared chat typing scenario");
+  }
   return [
+    {
+      ...typing,
+      id: "chat-typing-prefocused",
+      explicitOnly: true,
+      prepare: async (page, gateway) => {
+        await typing.prepare(page, gateway);
+        await page
+          .locator(".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea")
+          .focus();
+        await frames(page);
+      },
+    },
+    {
+      ...typing,
+      id: "menu-spacing-submenu",
+      explicitOnly: true,
+      viewports: ["desktop"],
+      expected: "The session menu and nested appearance controls retain their row spacing.",
+      run: async (page) => {
+        const trigger = page.locator(".chat-header-session-menu__trigger");
+        await trigger.focus();
+        await trigger.press("Enter");
+        await page.getByRole("menuitem", { name: "Advanced", exact: true }).hover();
+        await page.getByRole("menuitem", { name: "Icon & color", exact: true }).hover();
+        await page.locator(".session-menu__appearance:visible").waitFor();
+        await page.getByRole("button", { name: "Blue", exact: true }).waitFor();
+        await frames(page);
+        return { visibleMenus: await page.locator(".oc-menu:visible").count() };
+      },
+    },
     {
       id: "workboard-style-cycles",
       explicitOnly: true,

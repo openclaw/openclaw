@@ -94,7 +94,11 @@ function AddProvider(props: ModelProvidersViewProps) {
               disabled={disabled() || !props.addProviderId || !props.addProviderKey.trim()}
               onClick={() => props.onAddProvider()}
             >
-              {busy() ? t("modelProviders.saving") : t("modelProviders.add.save")}
+              {props.busy["check:add"]
+                ? t("modelProviders.apiKey.checking")
+                : busy()
+                  ? t("modelProviders.saving")
+                  : t("modelProviders.add.save")}
             </button>
           </openclaw-modal-actions>
         </div>
@@ -146,11 +150,14 @@ function ModelReadiness(props: ModelProvidersViewProps) {
   );
 }
 
-function renderProviderNoticeRow(text: string) {
+function renderProviderNoticeRow(text: string, detail?: string) {
   return (
     <div class="settings-row" role="alert">
       <div class="settings-row__text">
         <span class="settings-row__desc provider-usage__error">{text}</span>
+        <Show when={detail && detail !== text}>
+          <span class="settings-row__desc">{detail}</span>
+        </Show>
       </div>
     </div>
   );
@@ -248,7 +255,7 @@ function ProviderAccess(props: ModelProvidersViewProps) {
         <Show when={props.error}>
           {(error) => (
             <SettingsGroup>
-              {renderProviderNoticeRow(error())}
+              {renderProviderNoticeRow(t("modelProviders.configUnavailable"), error())}
               <button
                 type="button"
                 class="btn btn--sm"

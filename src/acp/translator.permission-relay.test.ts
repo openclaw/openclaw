@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { AcpGatewayAgent } from "./translator.js";
@@ -46,7 +46,7 @@ async function createHarness(
   params: {
     sessions?: string[];
     allowedDecisions?: string[];
-    requestPermission?: ReturnType<typeof vi.fn>;
+    requestPermission?: Mock;
     resolveApproval?: (params?: Record<string, unknown>) => unknown;
   } = {},
 ) {

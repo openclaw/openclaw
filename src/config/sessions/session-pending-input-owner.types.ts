@@ -23,7 +23,7 @@ export type SessionPendingInputOwner = Omit<
   promotedOwner?: SessionPendingInputOwner;
   /** Prompt authority is revoked; this owner still holds terminal disposition custody. */
   settling?: true;
-  finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
+  finish: (disposition: Exclude<SessionPendingInputState, "queued">, userInitiated?: true) => void;
   /** Host-only staged retry custody; inbound dedupe spends it once. */
   dedupeRetryAvailable?: true;
   /** Graceful shutdown leaves this accepted input for the session's ordinary FIFO. */
