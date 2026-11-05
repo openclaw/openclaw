@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import type { ProviderMessage, ProviderModel } from "../provider-types.js";
 import type { AssistantMessage, Message, Model, ToolResultMessage } from "../types.js";
@@ -270,4 +270,32 @@ describe("transformMessages", () => {
       expect(messages).toEqual(original);
     },
   );
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+it("keeps missing sync and delayed async replay timestamps stable", () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+  const messages: Message[] = [
+    {
+      ...makeAssistant(
+        [
+          { type: "toolCall", id: "sync", name: "lookup", arguments: {} },
+          { type: "toolCall", id: "async", name: "lookup", arguments: {}, async: true },
+        ],
+        "toolUse",
+      ),
+      timestamp: 0,
+    },
+    { ...makeAssistant([{ type: "text", text: "later fragment" }], "stop"), timestamp: 3 },
+  ];
+  const first = transformMessages(messages, model);
+  clock.mockReturnValue(2_000);
+  const next = transformMessages(structuredClone(messages), model);
+  expect(next).toEqual(first);
+  expect(next.filter((message) => message.role === "toolResult")).toMatchObject([
+    { toolCallId: "sync", timestamp: 0, isError: true },
+    { toolCallId: "async", timestamp: 0, isError: true },
+  ]);
+  expect(messages.map(({ role }) => role)).toEqual(["assistant", "assistant"]);
 });

@@ -1,5 +1,5 @@
 import type { AgentMessage } from "../runtime/index.js";
-import { repairToolUseResultPairing } from "../session-transcript-repair.js";
+import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 
 export function splitPreservedRecentTurns(params: {
@@ -64,7 +64,7 @@ export function splitPreservedRecentTurns(params: {
   // Preserving recent assistant turns can orphan downstream toolResult messages.
   // Repair pairings here so compaction summarization doesn't trip strict providers.
   return {
-    summarizableMessages: repairToolUseResultPairing(summarizableMessages).messages,
+    summarizableMessages: sanitizeToolUseResultPairing(summarizableMessages),
     preservedMessages,
   };
 }
