@@ -283,7 +283,7 @@ describe("chat pane composer controls", () => {
       cached: true,
       connected: false,
       error: "metadata unavailable",
-      message: "Offline",
+      message: "Disconnected",
     },
     {
       label: "failed with a snapshot",

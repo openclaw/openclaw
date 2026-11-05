@@ -190,6 +190,12 @@ The policy is: **squashed/merged first, then by age including unsaved data**. Cl
 
 Creation reserves a persisted slot before preparing files. Name and owner checks happen at that reservation; materialization, ignored-file provisioning, and setup then run independently of other creates. Publication atomically replaces the pending slot with a live record. Concurrent requests for the same owner wait and reuse its completed checkout. Capacity admission waits for an in-progress creation when its slot prevents admission; pending checkouts are never eviction candidates.
 
+Sandbox projection preparation uses its existing worktree's mutation lease, so a cold
+dependency build does not hold global creation capacity. Preparations of the same
+template still share one build. Disk reservations account for concurrent writes;
+a preparation waiting for disk capacity releases its worktree and projection leases
+before retrying.
+
 Full Git checkout materialization can continue beyond five minutes while Git
 reports progress. Five minutes without output stops the checkout with a retryable
 error; cancellation still stops it immediately. A single large file or a silent
@@ -200,6 +206,12 @@ The `managed worktree preparation` log reports `errorClass` and `errorPhase`
 when preparation throws, including the innermost failed timed phase. Failures
 outside a timed phase use `unattributed`. The receipt omits error messages and
 command output.
+
+Lease acquisition appears separately as `allocationWait` for global slot admission,
+`mutationWait` for checkout custody, and `capacityWait` for disk reservations.
+These durations also appear in slow-chat diagnostics under `worktree.<kind>`.
+`reservation` measures the protected allocation work after acquisition. Phases
+can overlap, so their sum is not the total preparation duration.
 
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 
@@ -569,12 +581,20 @@ Idle cleanup preserves an outer worktree containing a nested Git repository or l
 OpenClaw applies these cleanup rules:
 
 - At run end, it removes a worktree without Git force only when `git status --porcelain` is empty and `git log HEAD --not --remotes --oneline` finds no unpushed commits. It also checks the captured contents for edits hidden by index flags. Otherwise it retains the checkout and records why.
-- Background cleanup snapshots and removes unlocked Workboard- and session-owned worktrees idle for more than 7 days, even when dirty. Session worktrees whose owner is archived or absent are eligible without waiting 7 days. Failed owner lookups defer idle cleanup. Run `openclaw worktrees gc` to request cleanup and see its progress.
+- Background cleanup snapshots and removes unlocked Workboard- and session-owned worktrees idle for more than 7 days, even when dirty. A stable per-worktree delay of up to one additional hour spreads age-based expiry. Session worktrees whose owner is archived or absent are eligible without waiting 7 days. Failed owner lookups defer idle cleanup. Run `openclaw worktrees gc` to request cleanup and see its progress.
 - The same background owner enforces `worktreeMaxCount`, default `4096`, using the [capacity eviction policy](#capacity-and-eviction). Manual worktrees and unsaved data are eligible when enforcing the cap.
 - Snapshot records remain restorable for 30 days. Cleanup then deletes the snapshot ref and registry row.
 - Live owner leases protect active runs from eviction. Ordinary idle cleanup also preserves foreign or unrecognized Git worktree locks.
 
 Maintenance works in small batches with a time budget, yields between batches, and resumes from its previous position until the sweep finishes; the batch size is not an hourly removal limit. Filesystem scans, lossless checks, and nested-repository inspection run in the Git worker. The Gateway request starts or observes the same background job instead of waiting for the entire fleet to be inspected; `openclaw worktrees gc` reports that owner's progress. Health summaries include each eviction reason and any live-owner refusal.
+
+Gateway idle cleanup starts at most one removal attempt per minute, including
+across archive-triggered sweeps. On Linux, high recent IO pressure or slow btrfs
+commits pause admission for five minutes before checking again. Missing kernel
+counters retain the minute pacing. Waiting releases no snapshots and holds no
+checkout or session mutation custody; the existing live checks still run after
+the wait. Capacity eviction and explicit single-worktree removal retain their
+existing policies.
 
 Cleanup progress and JSON output report `eligibleCount` (removal candidates that passed initial policy and checkout checks), `deferredCount`, and `failedCount`. These are running totals for the current sweep, not a prediction of the next sweep: final authority checks can still defer an eligible removal. Deferred and failed totals count dispositions across all cleanup stages, even when the 64-entry issue detail list is full. Protected checkouts contribute to deferred totals. Retiring an orphan record while preserving its files is reported separately in `orphansRetired` and `retiredCheckoutPaths`; it does not count as a successful checkout deletion.
 
@@ -584,7 +604,7 @@ Each cleanup pass batches session-owner activity and worker-placement reads in d
 
 Cleanup remembers protected checkouts' deferral reasons and fingerprints instead of repeating unchanged inspections. Managed activity, registry lifecycle changes, and observed checkout or HEAD changes invalidate those decisions. Run `openclaw worktrees gc --retry-deferred` to force another inspection after repairing files or Git metadata. Remembered idle-cleanup protection never exempts a checkout from cap eviction. The nullable derived-state column is added on database admission without a schema-version change; older builds ignore these dispositions and resume their previous inspection behavior. Snapshot retention remains 30 days.
 
-A Git timeout records its removal stage, elapsed milliseconds, attempt count, and next retry time in the existing revision-bound cleanup disposition. Automatic retries wait two hours initially, then double up to 24 hours; passes inside that window skip checkout inventory work. This backoff survives Gateway restarts. An explicit `--retry-deferred` bypasses the wait, while owner activity or a new registry lifecycle invalidates the old disposition. Existing rows require no migration; builds that understand only the deferral reason retain their existing protection behavior. Slow-removal log lines include the checkout path, stage durations, tracked and non-ignored untracked counts when available, and the deferral decision. A timeout during deletion preserves the pending snapshot and prevents a new run from using the potentially partial checkout; use the recovery procedure below.
+A Git timeout or a workspace result exceeding its total byte limit records its removal stage, elapsed milliseconds, attempt count, and next retry time in the existing revision-bound cleanup disposition. Automatic retries wait two hours initially, then double up to 24 hours; passes inside that window skip checkout inventory work. This backoff survives Gateway restarts. An explicit `--retry-deferred` bypasses the wait, while owner activity or a new registry lifecycle invalidates the old disposition. Existing rows require no migration; builds that understand only the deferral reason retain their existing protection behavior. Slow-removal log lines include the checkout path, stage durations, tracked and non-ignored untracked counts when available, and the deferral decision. A timeout during deletion preserves the pending snapshot and prevents a new run from using the potentially partial checkout; use the recovery procedure below.
 
 Missing or corrupt Git objects also use this persisted backoff. One failed idle-cleanup attempt pauses further idle snapshots for the shared repository, including sibling checkouts in the same sweep. Pack consolidation independently verifies only the bounded batch it may retire; missing snapshot objects do not force a full repository integrity scan or block healthy packs. A damaged selected pack stops that batch without deleting its sources. Checkouts remain protected until the objects needed by their snapshots are available locally. Cleanup reports the repository needing repair and preserves the checkouts. Restore missing objects or repair the clone, then run `openclaw worktrees gc --retry-deferred` to retry immediately. The existing cleanup revision invalidates the remembered failure when its worktree's owner or lifecycle changes; no database migration is required. Explicit removal and capacity eviction retain their existing policies.
 
@@ -873,6 +893,9 @@ session storage or ownership, and sandbox mode, cancel the current job before it
 next mutation. Start a new job to use the updated settings.
 
 Without a running local Gateway, `openclaw worktrees gc` runs cleanup to completion under exclusive local state ownership and returns the completed summary. Offline mode cannot poll Gateway jobs with `--job`. The CLI includes partial results and recovery locations in its output and exits nonzero for partial cleanup.
+
+An empty or offline `--job` selector and an unreadable exact-state request report
+their specific input error and exit with code 1 before cleanup or removal.
 
 ## Gateway methods
 

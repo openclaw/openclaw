@@ -31,7 +31,12 @@ import {
 } from "./access.ts";
 import { loadWorkshopSnapshot, type WorkshopMutation, type WorkshopSnapshot } from "./api.ts";
 import { SKILL_WORKSHOP_LEARNING_PROMPT } from "./learning-prompt.ts";
-import { resolveWorkshopMode, setWorkshopMode, type SkillWorkshopMode } from "./mode.ts";
+import {
+  arePluginsDisabled,
+  resolveWorkshopMode,
+  setWorkshopMode,
+  type SkillWorkshopMode,
+} from "./mode.ts";
 import { WorkshopPluginAvailabilityOwner } from "./plugin-availability.ts";
 import type { WorkshopViewerResult } from "./view-shared.tsx";
 import {
@@ -98,6 +103,7 @@ class SkillWorkshopPageState {
       sync();
       return () => {
         stops.forEach((stop) => stop());
+        this.plugin.dispose();
         this.scope?.abort.abort();
         this.scope?.retire();
         this.scope = null;
@@ -112,6 +118,10 @@ class SkillWorkshopPageState {
     const installed = isSkillWorkshopInstalled(snapshot);
     // Without the plugin there is nothing to load; a catalog that gains it reloads here.
     this.plugin.sync(installed ? null : connected);
+    if (!installed && connected) {
+      // The off panel needs `plugins.enabled` to know whether turning Workshop on can work.
+      void context.runtimeConfig.ensureLoaded();
+    }
     const client = installed ? connected : null;
     const agentId = client ? resolveWorkshopAgentId(context) : null;
     if (client === (this.scope?.client ?? null) && agentId === (this.scope?.agentId ?? null)) {
@@ -481,6 +491,7 @@ class SkillWorkshopPageState {
       plugin: this.plugin.state,
       onEnablePlugin: () => void this.plugin.enable(),
       onRetryPlugin: this.plugin.retry,
+      pluginsDisabled: arePluginsDisabled(context.runtimeConfig),
       snapshot: this.snapshot,
       error: context.runtimeConfig.state.configSnapshot
         ? null

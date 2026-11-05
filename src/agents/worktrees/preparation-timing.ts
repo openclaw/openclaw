@@ -57,6 +57,14 @@ type PreparationPhase =
 type TemplateState = "warm" | "cold" | "unavailable" | "reused";
 type TemplateDetails = {
   reason?: string;
+  missReason?:
+    | "no-generation"
+    | "commit-changed"
+    | "backend-changed"
+    | "content-changed"
+    | "invalid";
+  priorSourceCommit?: string;
+  requestedSourceCommit?: string;
   backend?: string;
   cloneBytes?: number;
   errorCode?: string;
