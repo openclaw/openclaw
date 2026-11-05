@@ -290,7 +290,7 @@ it.each(["open", "draining", "pending restart"] as const)(
     await waitForRoots();
     expect(attempts).toBe(1);
     if (admission === "open") {
-      expect(abandoned).not.toHaveBeenCalled();
+      expect(abandoned).toHaveBeenCalledOnce();
     }
   },
 );
