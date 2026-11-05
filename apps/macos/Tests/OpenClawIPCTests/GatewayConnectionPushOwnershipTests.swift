@@ -195,7 +195,7 @@ extension GatewayConnectionControlTests {
     }
 
     @Test(arguments: ["profileless", "color", "theme"]) @MainActor
-    func `chat-only connection refreshes saved Gateway accent without overriding a profile`(
+    func `native chat inherits Gateway appearance after clearing a profile with Talk loaded`(
         profile: String) async throws
     {
         try await TestIsolation.withIsolatedState {
@@ -203,6 +203,7 @@ extension GatewayConnectionControlTests {
             let source = GatewayConnectionEndpointSource(endpoint: GatewayConnection.EndpointSnapshot(
                 config: (URL(string: "ws://127.0.0.1:49229")!, nil, nil), routeAuthority: nil, revision: 1))
             let accent = LockIsolated<String?>("#aa0000")
+            let profileAccent = LockIsolated<String?>(profileless ? nil : profile == "theme" ? "theme" : "#123456")
             let session = GatewayTestWebSocketSession(taskFactory: {
                 GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
                     guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message),
@@ -224,12 +225,19 @@ extension GatewayConnectionControlTests {
                             "payload":{"status":"no_durable_identity"}}
                             """.utf8)
                         } else {
-                            let selected = profile == "theme" ? "theme" : "#123456"
+                            let selected = profileAccent.value.map { "\"\($0)\"" } ?? "null"
                             response = Data("""
                             {"type":"res","id":"\(id)","ok":true,
-                            "payload":{"status":"ok","entries":{"ui.accent":"\(selected)"}}}
+                            "payload":{"status":"ok","entries":{"ui.accent":\(selected)}}}
                             """.utf8)
                         }
+                    case "talk.config":
+                        // The wire response already resolves the personal preference into ui.seamColor.
+                        let resolved = profileAccent.value ?? accent.value
+                        let ui = resolved.flatMap { $0 == "theme" ? nil : "\"ui\":{\"seamColor\":\"\($0)\"}" } ?? ""
+                        response = Data("""
+                        {"type":"res","id":"\(id)","ok":true,"payload":{"config":{\(ui)}}}
+                        """.utf8)
                     default:
                         response = GatewayWebSocketTestSupport.okResponseData(id: id)
                     }
@@ -274,6 +282,19 @@ extension GatewayConnectionControlTests {
                 .event(EventFrame(type: "event", event: "config.changed")), socketGeneration: 1)
             try await TestWait.observed("theme default") { state.seamColorHex == nil }
             #expect(state.effectiveAccentHex == (profile == "color" ? "#123456" : nil))
+
+            accent.withValue { $0 = "#aa0000" }
+            await connection._test_handlePush(
+                .event(EventFrame(type: "event", event: "config.changed")), socketGeneration: 1)
+            try await TestWait.observed("Gateway accent before Talk loads") { state.seamColorHex == "#aa0000" }
+            let talk = TalkModeRuntime(gateway: connection)
+            await talk.reloadConfig()
+            profileAccent.withValue { $0 = nil }
+            await connection._test_handlePush(
+                .event(EventFrame(type: "event", event: "users.prefs.changed")), socketGeneration: 1)
+            try await TestWait.observed("cleared personal preference") { state.profileAccent == .inherited }
+            // No config.changed follows a profile edit: the cached Gateway fallback must stay intact.
+            #expect(state.effectiveAccentHex == "#aa0000")
             await control.disconnect()
         }
     }
