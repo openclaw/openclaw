@@ -1,0 +1,2 @@
+# Reject redaction-sentinel object keys at the JSONC and JSONL emit boundary, matching the YAML guard.
+23

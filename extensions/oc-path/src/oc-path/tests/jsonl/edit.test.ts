@@ -122,3 +122,14 @@ describe("JSONL edits", () => {
     expect(ast.raw).toBe(original);
   });
 });
+
+describe("setJsonlOcPath — sentinel keys", () => {
+  it("rejects a redaction sentinel used as an object key", () => {
+    const value = {
+      kind: "object" as const,
+      entries: [{ key: "__OPENCLAW_REDACTED__", value: { kind: "number" as const, value: 1 } }],
+    };
+
+    expect(() => edit('{"old":1}\n', "oc://log/$last/old", value)).toThrow(/__OPENCLAW_REDACTED__/);
+  });
+});
