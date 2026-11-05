@@ -206,6 +206,7 @@ it("bounds declaration keys and separates every ownership dimension and action",
 const instructions = {
   autoFix: [
     "must not merge or close the PR",
+    "keep this recurring job enabled after successful remediation",
     'github_publish with {action: "edit"}',
     "without pullRequestUrl or publishingSessionKey",
     "read the captured target through the existing authenticated repository workflow",

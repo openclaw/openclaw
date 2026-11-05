@@ -1,2 +1,2 @@
-142
+143
 # App issuer/status request lifetime, public-only read cleanup, automation target/blocker guidance, and accurate App capability presentation.

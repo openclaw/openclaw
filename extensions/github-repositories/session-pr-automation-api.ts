@@ -70,7 +70,7 @@ function automationMessage(target: CiAutomationTarget, option: CiAutomationOptio
   ];
 
   const stopOwnJob =
-    "After verifying that this PR is merged or closed, stop this automation using the automations tool to remove only your exact current job id. The scheduled-run self-cleanup grant permits self-removal, not arbitrary job updates or changes to sibling jobs. Do not claim it stopped unless removal succeeds.";
+    "After verifying that this PR is merged or closed, stop this automation using the automations tool to remove only your exact current job id. If the PR remains open or draft, keep this recurring job enabled after successful remediation, addressed comments, passing CI, or a quiet check; finish only this occurrence. The scheduled-run self-cleanup grant permits self-removal after the verified terminal result, not arbitrary job updates or changes to sibling jobs. Do not claim it stopped unless removal succeeds.";
   const actions: Record<CiAutomationOption, string[]> = {
     autoFix: [
       stopOwnJob,
