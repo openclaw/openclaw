@@ -98,6 +98,12 @@ active release, an admin merge is allowed for a release-tooling PR in exactly
 that situation. Red `main` still gets fixed, in parallel by a separate lane,
 never on the release's critical path.
 
+Follow the [FRV wall-time loop](../release-openclaw-ci/SKILL.md#keep-frv-off-the-idle-path):
+start remote validation promptly, repair failures as diagnostics drain, and
+minimize downtime between cycles. Include every known non-flake fix affecting
+the next run rather than knowingly carrying failures forward; overlap useful
+local checks with remote validation. This guides scheduling, not new gates.
+
 The operating objectives are approximately 20 minutes to seal validation and
 publication within an hour, not measured guarantees. Source-only children start
 alongside artifact producers; candidate consumers start as soon as the candidate

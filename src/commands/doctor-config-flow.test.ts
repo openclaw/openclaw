@@ -137,6 +137,7 @@ vi.mock("./doctor/shared/stale-oauth-profile-shadows.js", () => ({
 vi.mock("../plugins/setup-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/setup-registry.js")>();
   return {
+    ...actual,
     resolvePluginSetupCliBackend: vi.fn(() => undefined),
     resolvePluginSetupRegistry: vi.fn(() => ({
       providers: [],
@@ -146,7 +147,7 @@ vi.mock("../plugins/setup-registry.js", async (importOriginal) => {
       diagnostics: [],
     })),
     resolvePluginSetupAutoEnableReasons: actual.resolvePluginSetupAutoEnableReasons,
-    runPluginSetupConfigMigrations: vi.fn(({ config }: { config: unknown }) => ({
+    runPluginSetupConfigMigrations: vi.fn(async ({ config }: { config: unknown }) => ({
       config,
       changes: [],
     })),
@@ -155,12 +156,12 @@ vi.mock("../plugins/setup-registry.js", async (importOriginal) => {
 
 // mock-isolation: Keep channel plugin loading and registry initialization outside config-flow repair coordination.
 vi.mock("./doctor/shared/channel-doctor.js", () => ({
-  collectChannelDoctorCompatibilityMutations: vi.fn(() => []),
+  collectChannelDoctorCompatibilityMutations: vi.fn(async () => []),
   collectChannelDoctorMutableAllowlistWarnings: vi.fn(() => []),
   collectChannelDoctorPreviewWarnings: vi.fn(async () => []),
   collectChannelDoctorRepairMutations: vi.fn(async () => []),
   collectChannelDoctorStaleConfigMutations: vi.fn(async () => []),
-  createChannelDoctorEmptyAllowlistPolicyHooks: vi.fn(() => ({
+  createChannelDoctorEmptyAllowlistPolicyHooks: vi.fn(async () => ({
     extraWarningsForAccount: () => [],
     shouldSkipDefaultEmptyGroupAllowlistWarning: ({ channelName }: { channelName: string }) =>
       channelName === "googlechat" || channelName === "telegram",
@@ -790,13 +791,13 @@ describe("doctor config flow", () => {
     plannedActions,
   });
 
-  it.each<[string, Partial<DoctorConfigPreflightResult>, boolean, boolean?]>([
-    ["settled retirement", {}, true],
-    ["missing config", {}, false, false],
-    ["another config repair", { configChanged: true }, false],
-    ["unfinished state migration", { stateMigrationUnsettled: true }, false],
-    ["unbound discovery", { postSessionPluginMigrationPlanBound: false }, false],
-    ["bound absent plan", { postSessionPluginMigration: undefined }, true],
+  it.each<[string, Partial<DoctorConfigPreflightResult>, string | undefined, boolean?]>([
+    ["settled retirement", {}, undefined],
+    ["missing config", {}, "config-missing", false],
+    ["another config repair", { configChanged: true }, "preflight-config-changed"],
+    ["unfinished state migration", { stateMigrationUnsettled: true }, "state-migration-unsettled"],
+    ["unbound discovery", { postSessionPluginMigrationPlanBound: false }, "session-plan-unbound"],
+    ["bound absent plan", { postSessionPluginMigration: undefined }, undefined],
     [
       "conditional session work",
       {
@@ -805,7 +806,7 @@ describe("doctor config flow", () => {
           [{ pluginId: "example", id: "session-repair" }],
         ),
       },
-      true,
+      undefined,
     ],
     [
       "refused session plan",
@@ -816,10 +817,10 @@ describe("doctor config flow", () => {
           refusal: { code: "step-refused", message: "Incomplete session discovery" },
         }),
       },
-      false,
+      "session-plan-refused",
     ],
-    ["unsettled preflight", { preflightLegacyStateConfig: undefined }, false],
-    ["repair warning", { warnings: ["Unfinished repair"] }, false],
+    ["unsettled preflight", { preflightLegacyStateConfig: undefined }, "preflight-unsettled"],
+    ["repair warning", { warnings: ["Unfinished repair"] }, "repair-warning"],
   ])(
     "admits retirement with bound session work: %s",
     async (_name, facts, expected, exists = true) => {
@@ -835,7 +836,7 @@ describe("doctor config flow", () => {
       };
       mockRepair({ modelRetirementRepairRan: true, modelRetirementOnly: true });
       await using result = await runConfig({ config, exists, repair: true });
-      expect(result.retirementOnly).toBe(expected);
+      expect([result.retirementOnly, result.retirementOnlyBlocker]).toEqual([!expected, expected]);
     },
   );
 });

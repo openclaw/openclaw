@@ -75,6 +75,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
     signal?: AbortSignal;
   }): Promise<PluginInstanceDisposalResult>;
   resume(): void;
+  onResume(wake: () => void): () => void;
 }
 
 export type PluginInvocationBinding = {

@@ -41,7 +41,7 @@ struct ESPSetupGatewayPreviewTests {
                 if revokeDuringRPC {
                     await MainActor.run {
                         model.setOperatorConnected(false)
-                        model.setOperatorConnected(true)
+                        model.setOperatorConnected(true, scopes: ["operator.admin"])
                     }
                 }
                 let reply = try JSONSerialization.data(withJSONObject: [
@@ -57,7 +57,7 @@ struct ESPSetupGatewayPreviewTests {
                 onConnected: {},
                 onDisconnected: { _ in },
                 onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
-            model.setOperatorConnected(true)
+            model.setOperatorConnected(true, scopes: ["operator.admin"])
             let route = try #require(await model.operatorSession.currentRoute())
             if revokeDuringRPC {
                 await #expect(throws: ESPSetupError.self) {
@@ -70,7 +70,7 @@ struct ESPSetupGatewayPreviewTests {
                 ])
                 try await preview.authorize(appModel: model)
                 DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "operator", gatewayID: stableID)
-                model.refreshOperatorAdminScopeFromStore()
+                model.setOperatorConnected(true, scopes: [])
                 await #expect(throws: ESPSetupError.self) { try await preview.authorize(appModel: model) }
             }
             #expect(await model.operatorSession.currentRoute() == route)

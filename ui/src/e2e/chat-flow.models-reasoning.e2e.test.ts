@@ -383,7 +383,7 @@ suite.define(() => {
     await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
     await page.getByRole("button", { name: "Send message" }).click();
 
-    await page.locator(".chat-queue").getByText("Applying chat settings").waitFor({
+    await page.locator(".chat-queue").getByText("Applying session settings").waitFor({
       timeout: 10_000,
     });
     await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });

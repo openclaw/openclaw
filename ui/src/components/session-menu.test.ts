@@ -473,7 +473,7 @@ describe("session menu", () => {
     expect(onAction).not.toHaveBeenCalled();
     const submenu = await openSubmenu(menu, "Move to group");
     expect(
-      menuItem(submenu, returnsToGroups ? "Move back to Groups" : "Remove from group"),
+      menuItem(submenu, returnsToGroups ? "Move back to groups" : "Remove from group"),
     ).toBeDefined();
     const research = menuItem(submenu, "Research");
     expect(research.getAttribute("aria-checked")).toBe("true");

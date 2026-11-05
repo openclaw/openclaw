@@ -193,8 +193,8 @@ function trailingActivationNameCandidates(
     if (!startToken || !endToken?.[0]) {
       break;
     }
-    const startIndex = startToken.index ?? 0;
-    const endIndex = (endToken.index ?? 0) + endToken[0].length;
+    const startIndex = startToken.index;
+    const endIndex = endToken.index + endToken[0].length;
     if (!/^\s*(?:[,.:;!?-]+\s*)?$/.test(text.slice(endIndex))) {
       break;
     }

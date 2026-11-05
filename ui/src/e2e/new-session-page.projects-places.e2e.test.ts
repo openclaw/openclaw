@@ -145,14 +145,14 @@ suite.define(() => {
       await gateway.waitForRequest("system.info");
       const trigger = page.locator("#new-session-where-trigger");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
-        late === "system info" ? "Local" : "QA-Gateway",
+        late === "system info" ? "This computer" : "QA-Gateway",
       );
       const place = page.locator(".oc-popover.new-session-page__where-popover");
       const local = place.locator('[data-value="gateway"]');
       await trigger.click();
       await local.waitFor();
       if (late === "recovery scope") {
-        await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on your gateway");
+        await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on this computer");
         const catalogRequests = (await gateway.getRequests("environments.list")).length;
         await page.evaluate(() => window.dispatchEvent(new Event("test-release-recovery-scope")));
         await waitForGatewayRecoveryScope(page);
@@ -167,18 +167,18 @@ suite.define(() => {
       const pathInput = page.locator("input.new-session-page__browser-path");
       await pathInput.fill("");
       if (late === "system info") {
-        await pollAttribute(pathInput, "placeholder").toBe("Gateway · local");
+        await pollAttribute(pathInput, "placeholder").toBe("This computer");
         await gateway.resolveDeferred("system.info", systemInfo);
-        await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on your gateway");
+        await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on this computer");
       }
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("QA-Gateway");
-      await pollAttribute(pathInput, "placeholder").toBe("Gateway · QA-Gateway");
+      await pollAttribute(pathInput, "placeholder").toBe("This computer · QA-Gateway");
 
       await page.keyboard.press("Escape");
       await replaceGatewayClient(page);
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("QA-Gateway");
       await trigger.click();
-      await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on your gateway");
+      await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on this computer");
     },
   );
 

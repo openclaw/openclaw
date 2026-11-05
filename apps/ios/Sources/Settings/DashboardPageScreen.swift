@@ -42,19 +42,7 @@ struct DashboardPageScreen: View {
 
     @ViewBuilder private var root: some View {
         let config = self.appModel.activeGatewayConnectConfig
-        if config?.ingressAuthorization != nil {
-            VStack(spacing: 12) {
-                Text("This Dashboard needs a browser session. Native chat and Gateway settings remain available.")
-                    .font(OpenClawType.body)
-                Button {
-                    self.navigationPath.append(.gateway)
-                } label: {
-                    Text("Open Gateway settings").font(OpenClawType.subheadSemiBold)
-                }
-            }
-            .padding()
-            .navigationTitle(self.title)
-        } else if SettingsHubScreen.usesDashboard(
+        if SettingsHubScreen.usesDashboard(
             isOperatorConnected: self.appModel.isOperatorGatewayConnected,
             hasOperatorAdminScope: self.appModel.hasOperatorAdminScope,
             isDemoMode: self.appModel.isAppleReviewDemoModeEnabled,
@@ -71,7 +59,8 @@ struct DashboardPageScreen: View {
                     if let route = SettingsHubScreen.route(for: panel) {
                         self.navigationPath.append(route)
                     }
-                })
+                },
+                openGateway: { self.navigationPath.append(.gateway) })
                 .navigationTitle(self.title)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {

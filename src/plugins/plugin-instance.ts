@@ -4,7 +4,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { releasePluginCacheInstance, withPluginCache, type PluginCache } from "./plugin-cache.js";
-import { createPluginBackgroundRunner } from "./plugin-instance-background.js";
+import { createPluginBackgroundRunner, createResumeSignal } from "./plugin-instance-background.js";
 import { createPluginInstanceBindings } from "./plugin-instance-bindings.js";
 import {
   PluginInstanceDrainTimeoutError,
@@ -73,6 +73,7 @@ export class PluginInstance {
   private readonly consumers = new Map<object, PluginInstanceConsumerState>();
   private readonly cleanups = new Map<() => void | Promise<void>, "plugin" | "module">();
   private readonly waiters = new Set<() => void>();
+  readonly onResume = createResumeSignal();
   private readonly bindings = createPluginInstanceBindings({
     instance: this,
     enter: (token, run) => this.enter(token, run),
@@ -619,7 +620,11 @@ export class PluginInstance {
   }
 
   resume(): void {
-    this.accepting ||= !this.disposal && !this.controller.signal.aborted && !this.owner?.revoked;
+    if (this.accepting || this.disposal || this.controller.signal.aborted || this.owner?.revoked) {
+      return;
+    }
+    this.accepting = true;
+    this.onResume.notify();
   }
 
   dispose(

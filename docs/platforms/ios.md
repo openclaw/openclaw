@@ -68,6 +68,8 @@ and Gateway permissions are unchanged.
 
 Open **Settings** in the sidebar to use the same Dashboard settings pages as the
 web and macOS apps. A connected operator session with `operator.admin` is required.
+Access comes from the current connection's accepted scopes, including when
+authenticated ingress does not issue a reusable Gateway token.
 The toolbar's **Gateway** button opens the native connection screen, including
 setup, paired Gateways, manual connection, and advanced connection options.
 The sidebar footer also provides Gateway access: **Add Gateway** when none are
@@ -186,11 +188,14 @@ expires while you are signing in, scan a fresh code. An
 invalid or used setup code is a Gateway pairing error and does not require a new
 Access login.
 
-Native pairing, chat, and authenticated media use the Access session. Embedded
-Dashboard pages and widgets display an explanation with native Gateway settings
-available; browser-session support for those surfaces is separate. The share
-extension asks you to send from OpenClaw for an Access-protected Gateway. Access
-credentials are not exported to Apple Watch or cloud workers.
+Native pairing, chat, and authenticated media use the Access session. When the
+native Gateway is connected with operator admin access, embedded Dashboard pages
+reuse the current Access session and native Gateway authorization. The Gateway's
+Control UI must support native app sign-in; update the Gateway if the Dashboard
+cannot connect, or open native Gateway settings to recover the connection. Access
+sign-in alone does not grant operator admin access or replace Gateway pairing.
+The share extension asks you to send from OpenClaw for an Access-protected
+Gateway. Access credentials are not exported to Apple Watch or cloud workers.
 
 ## Sessions
 
@@ -302,7 +307,7 @@ Gateway has not been configured yet, run `openclaw onboard` first so setup-code
 creation has a token or password auth path.
 
 2. Open the [Control UI](/web/control-ui), select **Nodes**, and click
-   **Pair device** on the **Devices** page. Full access is recommended
+   **Connect a device** on the **Devices** page. Full access is recommended
    and selected by default; choose Limited access only when you want to omit
    administrative Gateway controls, then click **Create setup code**.
 
@@ -791,7 +796,7 @@ same iOS limits as Talk started inside the app.
 
 - `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (camera/screen commands require it).
 - Pairing prompt never appears: run `openclaw devices list` and approve manually.
-- `Gateway setup incomplete`: the Gateway did not provide both node and operator credentials. Generate a new iPhone setup code from **Devices -> Pair device** in the Control UI or `openclaw qr`, then scan it in **Settings -> Gateway**. Automatic reconnect stays paused until you retry setup; this is not a device-storage error.
+- `Gateway setup incomplete`: the Gateway did not provide both node and operator credentials. Generate a new iPhone setup code from **Devices -> Connect a device** in the Control UI or `openclaw qr`, then scan it in **Settings -> Gateway**. Automatic reconnect stays paused until you retry setup; this is not a device-storage error.
 - If setup cannot safely replace the Gateway's offline data, it stops before applying the replacement credentials. The setup code and manual endpoint stay available. Resolve the device-storage problem, then retry.
 - Watch shows no iPhone state: confirm the iPhone reports `watchPaired: true`
   and `watchAppInstalled: true` in `watch.status`. If pairing is false, pair the
