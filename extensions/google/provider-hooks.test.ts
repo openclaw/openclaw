@@ -35,6 +35,74 @@ describe("GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn", () => {
       | undefined;
     expect(capturedConfig?.thinkingConfig).toEqual(expected);
   });
+
+  it.each([
+    {
+      name: "sets service_tier=priority when fastMode is true on google-interactions",
+      provider: "google",
+      api: "google-interactions",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      extraParams: { fastMode: true },
+      expectedServiceTier: "priority",
+    },
+    {
+      name: "evaluates dynamic fastMode function per request",
+      provider: "google",
+      api: "google-interactions",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      extraParams: { fastMode: () => true },
+      expectedServiceTier: "priority",
+    },
+    {
+      name: "omits service_tier when fastMode is false",
+      provider: "google",
+      api: "google-interactions",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      extraParams: { fastMode: false },
+      expectedServiceTier: undefined,
+    },
+    {
+      name: "lets explicit serviceTier override fastMode",
+      provider: "google",
+      api: "google-interactions",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      extraParams: { fastMode: true, serviceTier: "flex" },
+      expectedServiceTier: "flex",
+    },
+    {
+      name: "does not set service_tier on google-generative-ai",
+      provider: "google",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      extraParams: { fastMode: true },
+      expectedServiceTier: undefined,
+    },
+    {
+      name: "does not set service_tier on google-vertex",
+      provider: "google-vertex",
+      api: "google-vertex",
+      baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",
+      extraParams: { fastMode: true },
+      expectedServiceTier: undefined,
+    },
+  ])("$name", ({ provider, api, baseUrl, extraParams, expectedServiceTier }) => {
+    const capture = createCapturedThinkingConfigStream();
+    const wrapped = GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn({
+      provider,
+      modelId: "gemini-2.5-flash",
+      extraParams,
+      streamFn: capture.streamFn,
+    });
+
+    void wrapped(
+      { api, provider, id: "gemini-2.5-flash", baseUrl } as never,
+      { messages: [] } as never,
+      {},
+    );
+
+    const payload = capture.getCapturedPayload() as { service_tier?: unknown } | undefined;
+    expect(payload?.service_tier).toBe(expectedServiceTier);
+  });
 });
 
 describe("GOOGLE_GEMINI_PROVIDER_HOOKS.classifyFailoverReason", () => {
