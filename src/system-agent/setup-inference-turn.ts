@@ -178,6 +178,9 @@ export async function runSetupInferenceTurn(params: {
         authProfileStateMode: "read-only",
         allowAuthProfileFallback: false,
         retryConnectionErrors: false,
+        // One-shot verification behind a blocking dialog: report the provider's answer
+        // instead of spending the chat turn's ~90 s backoff ladder on 5xx/429/overload.
+        retryTransientErrors: false,
         preparedModelRuntimeMode: "isolated-read-only",
         ...(harness === "codex" ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(harness ? { agentHarnessRuntimeOverride: harness } : {}),
