@@ -1,0 +1,3 @@
+33
+# Source f8306b2e27a4cc48e3e702d59cf837c9913850c6; Preserve completed exec exit status/stdout when a detached daemon outlives cleanup. Report unresolved cleanup separately and retain its custody; do not replace the finished command result with a cleanup failure. Runtime scope: src/agents/bash-tools.exec-runtime.ts. Include corresponding focused regression tests only.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.
