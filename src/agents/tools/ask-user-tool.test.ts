@@ -16,7 +16,6 @@ import {
   settleAskUserPromptDelivery,
   waitForAskUserPromptReady,
 } from "./ask-user-tool.js";
-import { createDeploymentQuestion } from "./ask-user-tool.test-support.js";
 
 type SentPrompt = Parameters<
   NonNullable<Parameters<typeof createAskUserTool>[0]["questionPrompt"]>["send"]
