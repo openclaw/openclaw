@@ -124,7 +124,7 @@ reload mode, hook policy changes hot-reload the existing plugin runtime.
 
 - Non-bundled plugins need explicit
   `plugins.entries.<id>.hooks.allowConversationAccess: true` for
-  `before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`,
+  `before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`, `before_model_request`,
   `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
   `agent_end`, `before_agent_run`, and `before_channel_ingress`. Bundled plugins are allowed unless this
   option is explicitly `false`.
@@ -133,9 +133,9 @@ reload mode, hook policy changes hot-reload the existing plugin runtime.
   the effective conversation-access policy allows it; see the
   [session lifecycle contract](/plugins/hooks/reference#hook-catalog).
 - `allowPromptModification: false` blocks `agent_turn_prepare`,
-  `before_prompt_build`, `heartbeat_prompt_contribution`, and durable next-turn
-  injections. It defaults to allowed, but does not grant conversation access.
-  The first two hooks therefore need both permissions.
+  `before_prompt_build`, `before_model_request`, `heartbeat_prompt_contribution`,
+  and durable next-turn injections. It defaults to allowed, but does not grant
+  conversation access. The first three hooks therefore need both permissions.
 - These are specific registration gates, not a sandbox or a universal filter
   for every hook that can see message data. Install only plugins you trust.
 
@@ -167,6 +167,7 @@ plugin instance and reruns registration with the new settings.
 | Sanitize a channel event before durable ingress    | `before_channel_ingress` → `{ event }`                                      |
 | Add context or narrow tools for a turn             | `before_prompt_build`                                                       |
 | Gate model input on a supported runner             | `before_agent_run` → `{ outcome: "block", reason, message? }`               |
+| Rewrite or withhold the final provider request     | `before_model_request` → `{ payload }`                                      |
 | Block a tool or request approval                   | `before_tool_call`                                                          |
 | Rewrite the full outgoing reply, including media   | `reply_payload_sending`                                                     |
 | Rewrite outgoing text or cancel a send             | `message_sending`                                                           |
@@ -296,6 +297,7 @@ resolve here.
 - <a id="debug-runtime-hooks"></a>[Debug runtime hooks](/plugins/hooks/prompt-and-session#debug-runtime-hooks)
 - <a id="prompt-and-model-hooks"></a>[Prompt and model hooks](/plugins/hooks/prompt-and-session#prompt-and-model-hooks)
 - <a id="authorized-prompt-enrichment"></a>[Authorized prompt enrichment](/plugins/hooks/prompt-and-session#authorized-prompt-enrichment)
+- <a id="final-model-request-policy"></a>[Final model request policy](/plugins/hooks/prompt-and-session#final-model-request-policy)
 - <a id="session-extensions-and-next-turn-injections"></a>[Session extensions and next-turn injections](/plugins/hooks/prompt-and-session#session-extensions-and-next-turn-injections)
 
 ### Message and delivery hooks
