@@ -102,9 +102,55 @@ function shouldPreserveTelegramListBoundarySpacing(previous: string, next: strin
   );
 }
 
+/**
+ * Detects a numbered line that is the next sibling item of the same ordered list
+ * as the bullet's parent item. Inserting the boundary there would sit between two
+ * items of one list, so markdown-it marks the whole list loose and renders a
+ * paragraph gap after every item with nested content. The bullet must sit at or
+ * past the parent item's content column for CommonMark to already nest it.
+ */
+function isBulletNestedInsideOrderedSibling(
+  previousLines: readonly string[],
+  previousBullet: string,
+  next: string,
+): boolean {
+  const bulletIndent = /^([ \t]*)[•*+-][ \t]+\S/.exec(previousBullet)?.[1]?.length;
+  const nextMatch = /^([ \t]*)(\d+)([.)])([ \t]+)\S/.exec(next);
+  if (bulletIndent === undefined || !nextMatch) {
+    return false;
+  }
+  const nextIndent = nextMatch[1]?.length ?? 0;
+  const delimiter = nextMatch[3] ?? "";
+  for (let index = previousLines.length - 1; index >= 0; index -= 1) {
+    const line = previousLines[index] ?? "";
+    if (line.trim() === "") {
+      return false;
+    }
+    const lineIndent = line.length - line.trimStart().length;
+    if (lineIndent < nextIndent) {
+      return false;
+    }
+    if (lineIndent > nextIndent) {
+      continue;
+    }
+    const itemMatch = /^([ \t]*)(\d+)([.)])([ \t]+)\S/.exec(line);
+    if (!itemMatch || itemMatch[3] !== delimiter) {
+      return false;
+    }
+    const contentColumn =
+      (itemMatch[1]?.length ?? 0) +
+      (itemMatch[2]?.length ?? 0) +
+      (itemMatch[3]?.length ?? 0) +
+      (itemMatch[4]?.length ?? 0);
+    return bulletIndent >= contentColumn;
+  }
+  return false;
+}
+
 function preserveTelegramListBoundarySpacing(markdown: string): string {
   // Preserve literal fence examples and indented code when separating prose lists.
   let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
+  const previousLines: string[] = [];
   let previousLine = "";
   let previousOffset = 0;
   let offset = 0;
@@ -114,8 +160,10 @@ function preserveTelegramListBoundarySpacing(markdown: string): string {
       const normalizedLine = line.replace(/\r$/, "");
       const insertBoundary =
         shouldPreserveTelegramListBoundarySpacing(previousLine, normalizedLine) &&
+        !isBulletNestedInsideOrderedSibling(previousLines, previousLine, normalizedLine) &&
         !isInsideCode(previousOffset, (codeRegions ??= findCodeRegions(markdown))) &&
         !isInsideCode(offset, codeRegions);
+      previousLines.push(normalizedLine);
       previousLine = normalizedLine;
       previousOffset = offset;
       offset += line.length + 1;

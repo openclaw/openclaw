@@ -154,6 +154,32 @@ describe("Telegram formatting", () => {
     },
   );
 
+  it.each([".", ")"])(
+    "keeps nested sub-bullets attached to their ordered item using %s",
+    (marker) => {
+      const input = `1${marker} Install\n   - run setup\n   - check version\n2${marker} Configure\n   - edit config\n3${marker} Start`;
+      const expected =
+        "1. Install\n  • run setup\n  • check version\n2. Configure\n  • edit config\n3. Start";
+
+      expect(markdownToTelegramHtml(input)).toBe(expected);
+      expect(chunkHtml(input)).toEqual([expected]);
+    },
+  );
+
+  it("still separates a shallow bullet block from the next numbered section", () => {
+    const input = "10. Install\n - run setup\n11. Configure";
+    const expected = "10. Install\n\n• run setup\n\n11. Configure";
+
+    expect(markdownToTelegramHtml(input)).toBe(expected);
+    expect(chunkHtml(input)).toEqual([expected]);
+  });
+
+  it("still separates bullet blocks when the numbered delimiters differ", () => {
+    const input = "1) Install\n   - run setup\n2. Configure";
+
+    expect(markdownToTelegramHtml(input)).toContain("• run setup\n\n2. Configure");
+  });
+
   it("splits long multiline html text without breaking balanced tags", () => {
     const chunks = splitTelegramHtmlChunks(`<b>${"A\n".repeat(2500)}</b>`, 4000);
     expectBounded(chunks, 4000);

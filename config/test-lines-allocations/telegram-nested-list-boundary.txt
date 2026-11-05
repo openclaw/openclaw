@@ -1,0 +1,2 @@
+# Nested ordered-item sub-bullet spacing regressions for the Telegram formatter (issue #193528).
+26
