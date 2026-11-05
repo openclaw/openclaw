@@ -664,11 +664,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   // Reinstallation must also repair caches emitted by stable releases without losing plugin commands.
   if (shell === "powershell" && process.platform === "win32") {
     const { buffer } = await readRegularFile({ filePath: await fs.realpath(cachePath) });
-    const [first, second, third] = buffer;
-    const hasBom =
-      (first === 0xef && second === 0xbb && third === 0xbf) ||
-      (first === 0xff && second === 0xfe) ||
-      (first === 0xfe && second === 0xff);
+    const hasBom = /^(efbbbf|fffe|feff)/u.test(buffer.subarray(0, 3).toString("hex"));
     if (!hasBom && buffer.some((byte) => byte > 0x7f)) {
       decodeUtf8Input(buffer, `Completion cache ${cachePath}`);
       await publishOutputFileAtomically({
