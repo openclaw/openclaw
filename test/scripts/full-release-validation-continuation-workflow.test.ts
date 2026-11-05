@@ -521,16 +521,22 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
       expect.arrayContaining([
         "prepare_npm_package",
         "qualify_npm_package",
+        "prepare_plugin_npm",
         "prepare_docker_release",
       ]),
     );
-    // 2026.9.x prepares plugin npm at publication; the FRV parent has no plugin npm gate.
-    expect(source).not.toContain("prepare_plugin_npm");
+    expect(
+      step("release_execution_plan", "Seal immutable release execution plan").env,
+    ).toMatchObject({
+      PLUGIN_NPM_REQUIRED: "${{ needs.resolve_target.outputs.plugin_npm_preflight_required }}",
+      PLUGIN_NPM_PREPARATION_RESULT: "${{ needs.prepare_plugin_npm.result }}",
+    });
     for (const jobName of ["release_decision", "diagnostic_drain"]) {
       expect(workflow.jobs[jobName]?.needs).toEqual(
         expect.arrayContaining([
           "prepare_npm_package",
           "qualify_npm_package",
+          "prepare_plugin_npm",
           "prepare_docker_release",
         ]),
       );

@@ -1,5 +1,5 @@
 name: Plugin NPM Release
-run-name: ${{ github.event_name == 'workflow_dispatch' && (inputs.preflight_only && inputs.trusted_publisher_preflight && format('Plugin NPM Trusted Publisher Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || inputs.preflight_only && format('Plugin NPM Artifact Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || format('Plugin NPM Release [{0}] {1}', inputs.npm_dist_tag, inputs.ref)) || format('Plugin NPM Release [default] {0}', github.sha) }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && (inputs.preflight_only && inputs.trusted_publisher_preflight && format('Plugin NPM Trusted Publisher Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || inputs.preflight_only && inputs.dispatch_id != '' && format('Plugin NPM Artifact Preflight [{0}] {1} ({2})', inputs.npm_dist_tag, inputs.ref, inputs.dispatch_id) || inputs.preflight_only && format('Plugin NPM Artifact Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || format('Plugin NPM Release [{0}] {1}', inputs.npm_dist_tag, inputs.ref)) || format('Plugin NPM Release [default] {0}', github.sha) }}
 
 on:
   schedule:
@@ -58,6 +58,16 @@ on:
       ref:
         description: Exact commit SHA reachable from main/release ancestry or the canonical extended-stable branch
         required: true
+        type: string
+      dispatch_id:
+        description: Optional immutable parent dispatch identity for exact run recovery
+        required: false
+        default: ""
+        type: string
+      qualification_inputs_json:
+        description: Original admitted FRV inputs for artifact-only candidate qualification
+        required: false
+        default: ""
         type: string
       plugins:
         description: Comma-separated plugin package names to publish when publish_scope=selected
@@ -179,7 +189,7 @@ jobs:
           package-manager-cache: false
 
       - name: Verify trusted preflight or recovery tooling identity
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.qualification_inputs_json == ''
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_FULL_REF: ${{ github.ref }}
@@ -194,8 +204,67 @@ jobs:
             --workflow-sha "$WORKFLOW_SHA" \
             --allow-prevalidated-ref
 
+      - name: Verify admitted artifact-only qualification
+        id: qualification
+        if: inputs.qualification_inputs_json != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALIFICATION_INPUTS_JSON: ${{ inputs.qualification_inputs_json }}
+          PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
+          TRUSTED_PUBLISHER_PREFLIGHT: ${{ inputs.trusted_publisher_preflight }}
+          PREPARED_ARTIFACT: ${{ inputs.prepared_artifact }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          RELEASE_CANDIDATE_BRANCH: ${{ inputs.release_candidate_branch }}
+          SOURCE_SHA: ${{ inputs.ref }}
+          RESOLVED_SOURCE_SHA: ${{ steps.ref.outputs.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_REF: ${{ github.ref_name }}
+          PUBLISH_SCOPE: ${{ inputs.publish_scope }}
+          RELEASE_PLUGINS: ${{ inputs.plugins }}
+          NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { decodePublicationDispatchEnvelope } from './.release-tooling/scripts/lib/full-release-publication-inputs.mjs';
+          import { verifyQualificationAdmission } from './.release-tooling/scripts/release-qualification-admission.mjs';
+          const env = process.env;
+          if (env.PREFLIGHT_ONLY !== 'true' || env.TRUSTED_PUBLISHER_PREFLIGHT !== 'false' ||
+              env.PREPARED_ARTIFACT || env.RELEASE_PUBLISH_RUN_ID || env.RELEASE_PUBLISH_RUN_ATTEMPT ||
+              env.RELEASE_CANDIDATE_BRANCH) {
+            throw new Error('Candidate admission authorizes artifact-only qualification, never publication or OIDC.');
+          }
+          const inputs = JSON.parse(env.QUALIFICATION_INPUTS_JSON);
+          const envelope = decodePublicationDispatchEnvelope(inputs.trusted_workflow_json);
+          if (!envelope.qualificationAdmission || inputs.rerun_group !== 'all' ||
+              env.SOURCE_SHA !== env.RESOLVED_SOURCE_SHA || env.SOURCE_SHA !== env.WORKFLOW_SHA ||
+              envelope.trustedWorkflow?.sha !== env.WORKFLOW_SHA ||
+              envelope.trustedWorkflow?.ref !== env.WORKFLOW_REF ||
+              envelope.trustedWorkflow?.fullRef !== `refs/heads/${env.WORKFLOW_REF}`) {
+            throw new Error('Plugin qualification requires the exact admitted C=Q workflow and source.');
+          }
+          verifyQualificationAdmission({
+            descriptor: envelope.qualificationAdmission,
+            repository: env.GITHUB_REPOSITORY,
+            candidateSha: env.SOURCE_SHA,
+            qualificationSha: env.WORKFLOW_SHA,
+            workflowRef: env.WORKFLOW_REF,
+            inputs,
+          });
+          const selection = envelope.publicationSelection;
+          if (!selection || selection.pluginPublishScope === 'none' ||
+              selection.pluginPublishScope !== env.PUBLISH_SCOPE ||
+              selection.plugins.join(',') !== env.RELEASE_PLUGINS ||
+              (selection.npmDistTag === 'extended-stable' ? 'extended-stable' : 'default') !== env.NPM_DIST_TAG) {
+            throw new Error('Plugin qualification selection differs from admitted publication inputs.');
+          }
+          appendFileSync(env.GITHUB_OUTPUT, 'admitted=true\n');
+          NODE
+
       - name: Validate ref is on a trusted publish branch
         env:
+          CANDIDATE_QUALIFICATION_ADMITTED: ${{ steps.qualification.outputs.admitted }}
           REQUIRE_NPM_PUBLISH_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && (!inputs.preflight_only || inputs.trusted_publisher_preflight) }}
           NPM_DIST_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag || 'default' }}
           PREFLIGHT_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only || false }}
@@ -350,6 +419,9 @@ jobs:
                   f"refs/remotes/origin/{extended_branch}",
               ):
                   fail(f"Extended-stable plugin source must equal the exact {extended_branch} branch tip.")
+              # Q may diverge from main only after independent P admission above.
+              if os.environ.get("CANDIDATE_QUALIFICATION_ADMITTED") == "true":
+                  raise SystemExit(0)
               # Nonpublishing preflight still accepts the canonical branch or main.
               if os.environ["WORKFLOW_REF"] in (f"refs/heads/{extended_branch}", "refs/heads/main"):
                   raise SystemExit(0)
@@ -360,6 +432,9 @@ jobs:
 
           if candidate_branch.strip():
               fail("release_candidate_branch is only valid for extended-stable publication.")
+
+          if os.environ.get("CANDIDATE_QUALIFICATION_ADMITTED") == "true":
+              raise SystemExit(0)
 
           run_git(
               workspace,

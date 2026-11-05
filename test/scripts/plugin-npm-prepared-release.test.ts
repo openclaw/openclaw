@@ -227,6 +227,21 @@ async function packedPluginFixture(runtime = true) {
   return { root, entry, source, evidence, tarballName, tarballPath };
 }
 
+describe("candidate plugin preparation identity", () => {
+  it("names artifacts for exact release-ci producers without admitting arbitrary refs", () => {
+    const candidate = {
+      ...producer,
+      workflowHeadBranch: `release-ci/${producer.workflowSha.slice(0, 12)}-123`,
+    };
+    expect(preparedNpmArtifactName(sourceSha, candidate)).toBe(
+      `plugin-npm-prepared-${sourceSha}-${producer.runId}-${producer.runAttempt}`,
+    );
+    expect(() =>
+      preparedNpmArtifactName(sourceSha, { ...candidate, workflowHeadBranch: "topic/unreviewed" }),
+    ).toThrow("trusted workflow run and attempt");
+  });
+});
+
 describe("prepared plugin npm publication", () => {
   it("seals the full selection, including previously published packages", () => {
     const manifest = createPreparedNpmRelease(preparation());

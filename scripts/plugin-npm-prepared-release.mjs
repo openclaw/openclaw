@@ -62,7 +62,7 @@ function normalizeProducer(value) {
       Number.isSafeInteger(value.runAttempt) &&
       value.runAttempt > 0 &&
       typeof value.workflowHeadBranch === "string" &&
-      /^(?:main|release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33|release-publish\/[a-f0-9]{12}-[1-9][0-9]*)$/u.test(
+      /^(?:main|release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33|release-ci\/[a-f0-9]{12}-[1-9][0-9]*|release-publish\/[a-f0-9]{12}-[1-9][0-9]*)$/u.test(
         value.workflowHeadBranch,
       ),
     "Prepared npm producer must bind an exact trusted workflow run and attempt.",
