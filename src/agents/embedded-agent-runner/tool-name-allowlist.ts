@@ -1,6 +1,6 @@
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { ClientToolDefinition } from "../command/shared-types.js";
 import type { AgentTool } from "../runtime/index.js";
-import type { ClientToolDefinition } from "./run/params.js";
 
 /**
  * OpenClaw built-in tools that remain present in the embedded runtime even when
@@ -23,5 +23,6 @@ export function collectRegisteredToolNames(tools: Array<{ name?: string }>): Set
 }
 
 export function toSessionToolAllowlist(allowedToolNames: Iterable<string>): string[] {
-  return [...new Set(allowedToolNames)].toSorted((a, b) => a.localeCompare(b));
+  // oxlint-disable-next-line unicorn/no-array-sort -- The materialized set array is private.
+  return [...new Set(allowedToolNames)].sort((a, b) => a.localeCompare(b));
 }

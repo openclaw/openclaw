@@ -9,6 +9,16 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
+it.skipIf(process.platform === "win32").each([
+  ["plugins/root", "plugins/root/nested/Entry.js", "nested/Entry.js"],
+  ["/plugins/root/", "/plugins/root/./nested/../Entry.js", "Entry.js"],
+  ["/plugins/root", "/plugins/root", ""],
+  ["/plugins/root", "/plugins/root/../outside/Entry.js", undefined],
+  ["/plugins/root", "/plugins/root-other/Entry.js", undefined],
+])("preserves relative source containment for %s and %s", (root, target, expected) => {
+  expect(relativePluginPathInsideRootSync(root, target)).toBe(expected);
+});
+
 function installWindowsPathFixture(params: {
   root: string;
   canonicalRoot?: string;

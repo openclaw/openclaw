@@ -67,7 +67,13 @@ type ResetMessageWindowCacheEntry = {
   generation: string | undefined;
   indexedSeq: number;
 } & (
-  | { window: ResetMessageWindow | null }
+  | {
+      window: ResetMessageWindow | null;
+      stats?: {
+        version: CurrentTranscriptProjection["version"];
+        value: Readonly<SessionTranscriptContextStats>;
+      };
+    }
   | { controls: readonly UnindexedTranscriptNavigation[] }
 );
 
@@ -209,7 +215,6 @@ function readLatestActiveBoundaryMetadataByType(
   eventType: "compaction" | "reset",
   beforeRawSeq?: number,
 ) {
-  const db = getActiveTranscriptKysely(projection.database);
   const preparedReset = projection.latestIndexedReset;
   const indexed =
     eventType === "reset" &&
@@ -218,13 +223,7 @@ function readLatestActiveBoundaryMetadataByType(
       ? (preparedReset ?? undefined)
       : executeSqliteQueryTakeFirstSync(
           projection.database.db,
-          db
-            .selectFrom("session_transcript_active_events as active")
-            .innerJoin("transcript_event_identities as identity", (join) =>
-              join
-                .onRef("identity.session_id", "=", "active.session_id")
-                .onRef("identity.seq", "=", "active.event_seq"),
-            )
+          selectActiveTranscriptIdentityRows(projection.database)
             .select([
               "active.active_position",
               "identity.event_id",
@@ -546,7 +545,7 @@ export function* iterateVisibleMessageRange(
             endExclusive: range.endExclusive,
           });
     for (const row of rows) {
-      yield parseActiveTranscriptMessageRow(row);
+      yield parseActiveTranscriptMessageRow(row, projection);
     }
   }
 }
@@ -652,9 +651,21 @@ export function readVisibleTranscriptStats(
     const { eventCount, sizeBytes } = projection.contextMetadata;
     return { eventCount, sizeBytes, boundaryActivePosition: -1 };
   }
-  const window = freshBoundary
-    ? findLatestResetMessageWindow(projection, "context")
-    : resolveTranscriptBoundaryWindow(projection, "context");
+  const key = `${projection.database.path}\0${projection.resolved.sessionId}\0context`;
+  const cacheable = !freshBoundary && !hasUncommittedSqliteWrites(projection.database.db);
+  const cached = cacheable ? resetMessageWindowCache.get(key) : undefined;
+  const stats = cached && "window" in cached ? cached.stats : undefined;
+  if (
+    cached?.database === projection.database.db &&
+    stats &&
+    stats.version.generation === projection.version.generation &&
+    stats.version.rawSeq === projection.version.rawSeq &&
+    stats.version.updatedAt === projection.version.updatedAt
+  ) {
+    return stats.value;
+  }
+  // Metadata-only rewrites retain generation and positions but can change retained-prefix bytes.
+  const window = findLatestResetMessageWindow(projection, "context");
   const base = selectActiveTranscriptEventRows(projection.database)
     .select((eb) => [
       eb.fn.countAll<number>().as("event_count"),
@@ -668,9 +679,19 @@ export function readVisibleTranscriptStats(
     projection.database.db,
     window ? base.where("active.active_position", ">", window.boundaryActivePosition) : base,
   );
-  return {
+  const result = Object.freeze({
     eventCount: (row?.event_count ?? 0) + (window?.contextPrefixEventCount ?? 0),
     sizeBytes: (row?.size_bytes ?? 0) + (window?.contextPrefixSizeBytes ?? 0),
     boundaryActivePosition: window?.boundaryActivePosition ?? -1,
-  };
+  });
+  if (cacheable) {
+    cacheResetMessageWindow(key, {
+      database: projection.database.db,
+      generation: projection.generation,
+      indexedSeq: projection.state.indexedSeq,
+      window,
+      stats: { version: { ...projection.version }, value: result },
+    });
+  }
+  return result;
 }

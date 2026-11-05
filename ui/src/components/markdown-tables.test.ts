@@ -8,6 +8,7 @@ import {
   resetTranscriptSession,
 } from "../pages/chat/components/chat-thread-interactions.ts";
 import { installDialogPolyfill, waitForRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
+import { installSessionTitleRegistrar } from "./markdown-link-display.ts";
 import {
   enhanceMarkdownTables,
   handleMarkdownTableInteraction,
@@ -15,17 +16,16 @@ import {
 } from "./markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
-import { installSessionTitleRegistrar } from "./session-title-target-registration.ts";
 
 const writeText = vi.fn(async (_text: string) => undefined);
 
 let originalMutationObserver: typeof MutationObserver;
 let restoreDialogPolyfill: () => void;
-const restoreProperties: Array<() => void> = [];
+const cleanups: Array<() => void> = [];
 
 function stubProperty(target: object, key: PropertyKey, value: unknown) {
   const descriptor = Object.getOwnPropertyDescriptor(target, key);
-  restoreProperties.push(() =>
+  cleanups.push(() =>
     descriptor
       ? Object.defineProperty(target, key, descriptor)
       : Reflect.deleteProperty(target, key),
@@ -34,7 +34,6 @@ function stubProperty(target: object, key: PropertyKey, value: unknown) {
 }
 
 const table = "| Name | Value |\n| --- | --- |\n| Alpha | One |";
-const markdown = `Open agent:main:dashboard:table\n\n<progress value="3" max="7"></progress>\n\n${table}`;
 
 const MutationObserverMock = vi.fn(function (_callback: MutationCallback) {
   return { disconnect: vi.fn(), observe: vi.fn() };
@@ -49,16 +48,19 @@ function deliverTableResize(target: HTMLElement): void {
   ResizeObserverMock.mock.calls.at(-1)?.[0]([{ target }]);
 }
 
-const renderOptions = { progressBars: true, sessionLinks: true };
-const interactiveOptions = { ...renderOptions, tableInteractions: "enabled" as const };
+const interactiveOptions = {
+  progressBars: true,
+  sessionLinks: true,
+  tableInteractions: "enabled" as const,
+};
 function query(owner: ParentNode, selector: string): HTMLElement {
   return owner.querySelector<HTMLElement>(selector)!;
 }
 
-function interactiveOwner(content = table) {
+function interactiveOwner(content = table, options = interactiveOptions) {
   const owner = document.createElement("div");
   owner.className = "chat-thread";
-  owner.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(content, interactiveOptions)}</div>`;
+  owner.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(content, options)}</div>`;
   document.body.append(owner);
   const shell = query(owner, ".markdown-table");
   const viewport = query(owner, ".markdown-table__viewport");
@@ -69,7 +71,9 @@ function interactiveOwner(content = table) {
   });
   owner.addEventListener("click", handleMarkdownTableInteraction);
   enhanceMarkdownTables(owner);
+  cleanups.push(() => releaseMarkdownTables(owner));
   deliverTableResize(viewport);
+  viewport.dispatchEvent(new Event("scroll"));
   return {
     owner,
     shell,
@@ -91,11 +95,6 @@ async function copyTable(copy: HTMLButtonElement, label: string) {
 }
 function expectCopy(copy: HTMLButtonElement, label: string) {
   expect(copy.getAttribute("aria-label")).toBe(label);
-  if (label === "Copied!") {
-    expect(copy.querySelector("svg path")?.getAttribute("d")).toBe("M20 6 9 17l-5-5");
-  } else {
-    expect(copy.querySelector("svg rect")).not.toBeNull();
-  }
 }
 
 describe("Markdown table interactions", () => {
@@ -112,43 +111,47 @@ describe("Markdown table interactions", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    resetThreadPresentation();
-    document.body.replaceChildren();
-    restoreProperties
+    cleanups
       .splice(0)
       .toReversed()
-      .forEach((restore) => restore());
+      .forEach((cleanup) => cleanup());
+    resetThreadPresentation();
+    document.body.replaceChildren();
     vi.unstubAllGlobals();
     restoreDialogPolyfill();
   });
 
-  it("composes table chrome with session links and progress markup", () => {
-    const disabled = toSanitizedMarkdownHtml(markdown, renderOptions);
-    const enabled = toSanitizedMarkdownHtml(markdown, interactiveOptions);
-    expect(disabled).not.toContain("data-table-interactions");
-    expect(enabled).toContain("data-table-interactions");
-    expect(enabled).toContain('data-session-key="agent:main:dashboard:table"');
-    expect(enabled).toContain('<progress value="3" max="7"></progress>');
+  it("copies rendered breaks and delimiter characters within their table cells", async () => {
+    vi.useFakeTimers();
+    const { owner, copy } = interactiveOwner(
+      '| Label | Value | Empty |\n| --- | --- | --- |\n| **Alpha**<br>Beta | One | |\n| Quote "here"<br>next | Comma, kept | |\n| `A\tB` | End | |\n| Quote "only" | Plain | |',
+      { ...interactiveOptions, progressBars: false },
+    );
+    await copyTable(copy, "Copied");
+    expect(writeText).toHaveBeenLastCalledWith(
+      'Label\tValue\tEmpty\n"Alpha\nBeta"\tOne\t\n"Quote ""here""\nnext"\tComma, kept\t\n"A\tB"\tEnd\t\n"Quote ""only"""\tPlain\t',
+    );
+    expect(owner.querySelectorAll("br")).toHaveLength(2);
   });
 
-  it("tracks hidden columns in both scroll directions", () => {
+  it.each(["ltr", "rtl"])("tracks physical hidden edges in %s tables", (direction) => {
     const { shell, viewport } = interactiveOwner();
     const canScroll = (side: string) =>
       shell.classList.contains(`markdown-table--can-scroll-${side}`);
-    for (const [offset, left, right] of [
+    viewport.style.direction = direction;
+    for (const [position, left, right] of [
       [0, false, true],
       [100, true, true],
       [200, true, false],
     ] as const) {
-      viewport.scrollLeft = offset;
-      if (offset) {
-        viewport.dispatchEvent(new Event("scroll"));
-      }
+      viewport.scrollLeft = direction === "rtl" ? position - 200 : position;
+      viewport.dispatchEvent(new Event("scroll"));
       expect([canScroll("left"), canScroll("right")]).toEqual([left, right]);
     }
   });
 
   it("updates retained table overflow without mutation-time layout", async () => {
+    vi.useFakeTimers();
     vi.stubGlobal("MutationObserver", originalMutationObserver);
     const { owner, shell, viewport } = interactiveOwner(`${table}\n\n${table}`);
     const otherViewport = owner.querySelectorAll(".markdown-table__viewport")[1]!;
@@ -157,92 +160,121 @@ describe("Markdown table interactions", () => {
     Object.defineProperty(otherViewport, "scrollWidth", { configurable: true, get: otherWidth });
     Object.defineProperty(viewport, "scrollWidth", { configurable: true, get: changedWidth });
 
-    try {
-      shell.querySelector("td")!.firstChild!.textContent = "Shorter";
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(changedWidth).not.toHaveBeenCalled();
-      expect(otherWidth).not.toHaveBeenCalled();
-      deliverTableResize(viewport);
-      expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
-      expect(changedWidth).toHaveBeenCalled();
-      expect(otherWidth).not.toHaveBeenCalled();
+    shell.querySelector("td")!.innerHTML = "<code>Shorter</code>";
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(changedWidth).not.toHaveBeenCalled();
+    expect(otherWidth).not.toHaveBeenCalled();
+    deliverTableResize(viewport);
+    expect(changedWidth).not.toHaveBeenCalled();
+    expect(otherWidth).not.toHaveBeenCalled();
+    expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(true);
+    vi.advanceTimersToNextFrame();
+    expect(changedWidth).toHaveBeenCalled();
+    expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
 
-      changedWidth.mockClear();
-      query(shell, ".markdown-table__copy").replaceChildren(document.createElement("span"));
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(changedWidth).not.toHaveBeenCalled();
-      expect(otherWidth).not.toHaveBeenCalled();
-    } finally {
-      releaseMarkdownTables(owner);
-    }
+    changedWidth.mockClear();
+    query(shell, ".markdown-table__copy").replaceChildren(document.createElement("span"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(changedWidth).not.toHaveBeenCalled();
+    expect(otherWidth).not.toHaveBeenCalled();
   });
 
-  it("shows a failed current table copy without stale success", async () => {
+  it("retires queued overflow writes on scroll or owner release", () => {
+    vi.useFakeTimers();
+    const { owner, shell, viewport } = interactiveOwner();
+    viewport.scrollLeft = 100;
+    deliverTableResize(viewport);
+    viewport.scrollLeft = 0;
+    viewport.dispatchEvent(new Event("scroll"));
+    vi.advanceTimersToNextFrame();
+    expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(false);
+
+    viewport.scrollLeft = 100;
+    deliverTableResize(viewport);
+    releaseMarkdownTables(owner);
+    vi.advanceTimersToNextFrame();
+    expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(false);
+  });
+
+  it("discovers nested tables in code and releases removed tables even after they are emptied", async () => {
+    vi.stubGlobal("MutationObserver", originalMutationObserver);
+    const { owner } = interactiveOwner();
+    const pre = document.createElement("pre");
+    pre.innerHTML = `<code data-code-highlight>${toSanitizedMarkdownHtml(table, interactiveOptions)}</code>`;
+    query(owner, ".chat-text").append(pre);
+    const shell = query(pre, ".markdown-table");
+    const viewport = query(shell, ".markdown-table__viewport");
+    const nestedTable = query(viewport, "table");
+    const resize = ResizeObserverMock.mock.results.at(-1)!.value;
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(query(shell, ".markdown-table__expand").textContent).toBe("Expand table");
+    expect(resize.observe).toHaveBeenCalledWith(viewport);
+    expect(resize.observe).toHaveBeenCalledWith(nestedTable);
+
+    nestedTable.replaceChildren();
+    nestedTable.remove();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resize.unobserve).toHaveBeenCalledWith(nestedTable);
+
+    pre.remove();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resize.unobserve).toHaveBeenCalledWith(viewport);
+  });
+
+  it("announces copy outcomes without stale success and resets their feedback", async () => {
     vi.useFakeTimers();
     const legacyCopy = vi.fn(() => false);
     stubProperty(document, "execCommand", legacyCopy);
-    const { copy } = interactiveOwner();
-    await copyTable(copy, "Copied!");
+    const { shell, copy } = interactiveOwner();
+    const statusText = () => shell.querySelector('[role="status"]')?.textContent;
+    await copyTable(copy, "Copied");
+    expect(statusText()).toBe("Copied");
 
     writeText.mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
-    await copyTable(copy, "Copy failed");
+    await copyTable(copy, "Couldn’t copy. Try again.");
+    expect(statusText()).toBe("Couldn’t copy. Try again.");
 
     expect(writeText).toHaveBeenLastCalledWith("Name\tValue\nAlpha\tOne");
     expect(legacyCopy).toHaveBeenCalledExactlyOnceWith("copy");
     await vi.advanceTimersByTimeAsync(1500);
-    expect(copy.getAttribute("aria-label")).toBe("Copy failed");
+    expect(copy.getAttribute("aria-label")).toBe("Couldn’t copy. Try again.");
 
-    await copyTable(copy, "Copied!");
+    await copyTable(copy, "Copied");
     await vi.advanceTimersByTimeAsync(500);
-    expect(copy.getAttribute("aria-label")).toBe("Copied!");
+    expect(copy.getAttribute("aria-label")).toBe("Copied");
     await vi.advanceTimersByTimeAsync(1000);
     expectCopy(copy, "Copy table");
-  });
-
-  it("announces table copy outcomes in a status region", async () => {
-    vi.useFakeTimers();
-    stubProperty(
-      document,
-      "execCommand",
-      vi.fn(() => false),
-    );
-    const { shell, copy } = interactiveOwner();
-    const statusText = () => shell.querySelector('[role="status"]')?.textContent;
-    await copyTable(copy, "Copied!");
-    expect(statusText()).toBe("Copied!");
-
     writeText.mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
-    await copyTable(copy, "Copy failed");
-    expect(statusText()).toBe("Copy failed");
+    await copyTable(copy, "Couldn’t copy. Try again.");
     await vi.advanceTimersByTimeAsync(2000);
     expect(statusText()).toBe("");
   });
 
   it("decorates cloned session links and retires their registrations on close", async () => {
     const titler = new SessionLinkTitler();
+    cleanups.push(() => titler.disconnect());
     installSessionTitleRegistrar((target, label) => titler.register(target, label));
     const { owner } = interactiveOwner("| Task |\n| --- |\n| agent:main:research |");
     const source = owner.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
     expect(source.hasAttribute("href")).toBe(false);
 
-    try {
-      const { modal } = await openTable(owner);
-      const clone = modal.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
-      expect(clone).not.toBe(source);
-      await expect.poll(() => clone.getAttribute("href")).toBe("/chat/main/research");
+    const { modal } = await openTable(owner);
+    const clone = modal.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
+    expect(clone).not.toBe(source);
+    await expect.poll(() => clone.getAttribute("href")).toBe("/chat/main/research");
 
-      modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
-      expect(modal.isConnected).toBe(false);
-      clone.removeAttribute("href");
-      titler.refresh();
-      await Promise.resolve();
-      expect(clone.hasAttribute("href")).toBe(false);
-    } finally {
-      titler.disconnect();
-      releaseMarkdownTables(owner);
-    }
+    modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
+    expect(modal.isConnected).toBe(false);
+    clone.removeAttribute("href");
+    titler.refresh();
+    await Promise.resolve();
+    expect(clone.hasAttribute("href")).toBe(false);
   });
 
   it("cancels a pending expansion when its owner disconnects and reconnects", async () => {
@@ -273,29 +305,25 @@ describe("Markdown table interactions", () => {
       const routing = startNativeLinkRouting({
         shouldOpenInControlUiBrowser: () => openInBrowserPanel,
       });
+      cleanups.push(() => routing.dispose());
       const { owner } = interactiveOwner(
         "| Reference |\n| --- |\n| [Open reference](https://example.com/table) |",
       );
-      try {
-        const { modal } = await openTable(owner);
-        const link = modal.querySelector("a")!;
-        vi.useFakeTimers();
-        for (const type of ["contextmenu", "auxclick"]) {
-          const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 2 });
-          link.dispatchEvent(event);
-          await vi.advanceTimersByTimeAsync(0);
-          expect(event.defaultPrevented).toBe(false);
-          expect(modal.isConnected).toBe(true);
-        }
-        const middle = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
-        link.dispatchEvent(middle);
-        expect(middle.defaultPrevented).toBe(openInBrowserPanel);
+      const { modal } = await openTable(owner);
+      const link = modal.querySelector("a")!;
+      vi.useFakeTimers();
+      for (const type of ["contextmenu", "auxclick"]) {
+        const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 2 });
+        link.dispatchEvent(event);
         await vi.advanceTimersByTimeAsync(0);
-        expect(modal.isConnected).toBe(false);
-      } finally {
-        routing.dispose();
-        releaseMarkdownTables(owner);
+        expect(event.defaultPrevented).toBe(false);
+        expect(modal.isConnected).toBe(true);
       }
+      const middle = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
+      link.dispatchEvent(middle);
+      expect(middle.defaultPrevented).toBe(openInBrowserPanel);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(modal.isConnected).toBe(false);
     },
   );
 

@@ -176,11 +176,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     DEFAULT_ACCOUNT_ID;
   const originChannelId =
     params.command.channelId ?? normalizeChatChannelId(resolveCommandSurfaceChannel(params));
-  const originAccountId = resolveChannelAccountId({
-    cfg: params.cfg,
-    ctx: params.ctx,
-    command: params.command,
-  });
+  const originAccountId = resolveChannelAccountId(params);
   const plugin = getChannelPlugin(channelId);
 
   if (parsed.action === "list") {

@@ -143,19 +143,18 @@ export function resolveAutoMediaKeyProviders(params: {
     return prioritized;
   }
   const configured = resolveConfiguredImageProviderIds(params.cfg);
-  const merged = [...prioritized];
   for (const providerId of configured.filter(isExecutionAliasProvider)) {
-    const canonicalIndex = merged.indexOf(normalizeMediaProviderId(providerId));
+    const canonicalIndex = prioritized.indexOf(normalizeMediaProviderId(providerId));
     if (canonicalIndex >= 0) {
-      merged.splice(canonicalIndex, 0, providerId);
+      prioritized.splice(canonicalIndex, 0, providerId);
     } else {
-      merged.unshift(providerId);
+      prioritized.unshift(providerId);
     }
   }
   for (const providerId of configured.filter((id) => !isExecutionAliasProvider(id))) {
-    merged.push(providerId);
+    prioritized.push(providerId);
   }
-  return uniqueStrings(merged);
+  return uniqueStrings(prioritized);
 }
 
 /** Returns whether provider metadata declares native PDF document input support. */
@@ -163,11 +162,8 @@ export function providerSupportsNativePdfDocument(params: {
   providerId: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): boolean {
-  const registry =
-    params.providerRegistry ??
-    buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
+  const registry = buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
   return provider?.nativeDocumentInputs?.includes("pdf") ?? false;
 }

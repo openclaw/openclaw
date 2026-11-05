@@ -86,12 +86,22 @@ export function createWorkspaceMemoryFileClient(options: {
         maintain("commitContent", { ...params, filePath: host(params.filePath) }),
       resolveDreamsPath: async () => gateway(await maintain("resolveDreamsPath")),
       readDreams: (file) => maintain("readDreams", host(file)),
-      writeDreams: (file, content, assertCurrent) =>
+      writeDreams: (file, content, assertCurrent, workspaceFileMode) =>
         call(
-          { operation: "maintenance", method: "writeDreams", args: [host(file), content] },
+          {
+            operation: "maintenance",
+            method: "writeDreams",
+            args: [host(file), content, ...(workspaceFileMode ? [workspaceFileMode] : [])],
+          },
           assertCurrent,
         ),
-      replaceReport: (file, content) => maintain("replaceReport", host(file), content),
+      replaceReport: (file, content, workspaceFileMode) =>
+        maintain(
+          "replaceReport",
+          host(file),
+          content,
+          ...(workspaceFileMode ? [workspaceFileMode] : []),
+        ),
       appendCorpus: (file, content, assertCurrent) =>
         call(
           { operation: "maintenance", method: "appendCorpus", args: [host(file), content] },

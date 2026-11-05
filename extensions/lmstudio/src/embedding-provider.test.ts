@@ -150,10 +150,7 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       .fn()
       .mockResolvedValueOnce({ release: firstRelease })
       .mockResolvedValueOnce({ release: secondRelease });
-    let resolveSecond: (value: number[]) => void = () => {};
-    const secondResult = new Promise<number[]>((resolve) => {
-      resolveSecond = resolve;
-    });
+    const { promise: secondResult, resolve: resolveSecond } = Promise.withResolvers<number[]>();
     const remoteEmbed = vi
       .fn()
       .mockRejectedValueOnce(new Error("first query failed"))

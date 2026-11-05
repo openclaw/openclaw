@@ -90,14 +90,20 @@ export class ModelSetupWizardRunner {
   private session: WizardSession | null = null;
   private retirementGeneration = 0;
   private authLabel: string | undefined;
+  private authBrandId: string | undefined;
   private pendingSignIn:
     | { kind: ProviderLoginOption["kind"]; window: WindowProxy | null }
     | undefined;
 
   constructor(private readonly options: WizardRunnerOptions) {}
 
-  prepareSignIn(kind: ProviderLoginOption["kind"] | "install" | "custom", label: string): void {
+  prepareSignIn(
+    kind: ProviderLoginOption["kind"] | "install" | "custom",
+    label: string,
+    brandId?: string,
+  ): void {
     this.authLabel = label;
+    this.authBrandId = brandId;
     this.pendingSignIn?.window?.close();
     const browser = kind === "oauth" || kind === "device-code";
     this.pendingSignIn = {
@@ -223,6 +229,7 @@ export class ModelSetupWizardRunner {
     label: string,
   ): Promise<ModelSetupWizardCompletion | null> {
     this.authLabel = label;
+    this.authBrandId = undefined;
     return this.startSession(params.runtimeId, "openclaw.setup.runtime.start", params);
   }
 
@@ -429,13 +436,15 @@ export class ModelSetupWizardRunner {
     this.session?.abortController.abort();
     this.session = null;
     this.authLabel = undefined;
+    this.authBrandId = undefined;
     this.setState({ phase: "idle" });
   }
 
   fail(message: string): void {
-    const label = this.authLabel;
+    const { authLabel, authBrandId } = this;
     this.close();
-    this.authLabel = label;
+    this.authLabel = authLabel;
+    this.authBrandId = authBrandId;
     this.setState({ phase: "error", message });
   }
 
@@ -743,6 +752,9 @@ export class ModelSetupWizardRunner {
     clearTimeout(this.session?.externalInputTimer);
     if (this.authLabel) {
       state.authLabel = this.authLabel;
+    }
+    if (this.authBrandId) {
+      state.authBrandId = this.authBrandId;
     }
     this.currentState = state;
     this.options.onChange(state);

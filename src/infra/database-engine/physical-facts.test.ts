@@ -50,6 +50,7 @@ describe.skipIf(!connection)("PostgreSQL physical admission", () => {
         db.exec("CREATE TABLE anchor_identity (id TEXT)");
         admitSqliteSchema(db);
       },
+      { connection: connection! },
     );
     try {
       const result = await conformanceWorkerResult<PhysicalFactsTestResult>(worker, "Catalog");

@@ -101,9 +101,24 @@ export async function executeCliProcess(params: {
     runId: runParams.runId,
     classifyErrorCode: context.backendResolved.classifyErrorCode,
   };
+  // buildCliArgs emits this option only for an actual checkpointed resume.
+  const resumeAtArg =
+    params.useResume && runParams.cliSessionResumeAt ? params.backend.resumeAtArg : undefined;
+  const resumeCheckpointId = params.useResume ? runParams.cliSessionResumeAt : undefined;
   const createOutputFailoverError = (output: CliOutput): FailoverError | undefined => {
     if (!output.errorText) {
       return undefined;
+    }
+    // The CLI can report a rejected resume checkpoint as a structured result
+    // error instead of a process exit failure; classify it before the generic
+    // provider-reason mapping so recovery sees the invalidated session.
+    const resumeAtError = resolveCliResumeAtError(
+      output.errorText,
+      { resumeCheckpointId },
+      failoverContext,
+    );
+    if (resumeAtError) {
+      return resumeAtError;
     }
     const message = formatCliOutputError(output, {
       runId: outputErrorContext.runId,
@@ -133,9 +148,6 @@ export async function executeCliProcess(params: {
       rawError: output.errorText,
     });
   };
-  // buildCliArgs emits this option only for an actual checkpointed resume.
-  const resumeAtArg =
-    params.useResume && runParams.cliSessionResumeAt ? params.backend.resumeAtArg : undefined;
   const hasJsonlOutput = params.outputMode === "jsonl";
   const eventDelivery =
     runParams.sourceReplyDeliveryMode === "message_tool_only" ||
@@ -373,7 +385,7 @@ export async function executeCliProcess(params: {
         if (runParams.abortSignal?.aborted || params.events.hasObservedCliActivity()) {
           throw error;
         }
-        throw resolveCliResumeAtError(error, resumeAtArg, failoverContext) ?? error;
+        throw resolveCliResumeAtError(error, { resumeAtArg }, failoverContext) ?? error;
       });
     } else {
       const supervisor = getProcessSupervisor();
@@ -427,7 +439,9 @@ export async function executeCliProcess(params: {
               cwd: context.cwd ?? context.workspaceDir,
               env: params.env,
               input: params.stdin ?? "",
-              secretInput: context.preparedBackend.secretInput,
+              secretInput: runParams.nativeAuthOnly
+                ? undefined
+                : context.preparedBackend.secretInput,
               captureOutput: false,
               onStdout: consumeStdout,
               onStderr: consumeStderr,
@@ -620,6 +634,9 @@ export async function executeCliProcess(params: {
       candidates: [stderr, readStdout(), stderrDiagnostic, stdoutDiagnostic],
       retryEmptyFailure,
       resumeAtArg: retryEmptyFailure ? resumeAtArg : undefined,
+      // The checkpoint guard names the exact uuid this run sent, so it stays
+      // safe after observed CLI activity (a rejection result record counts).
+      resumeCheckpointId,
     });
   }
 

@@ -7,6 +7,8 @@ import {
   clearLiveCatalogCacheForTests,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const providerAuthRuntimeMocks = vi.hoisted(() => ({
@@ -51,10 +53,11 @@ async function buildCatalog(providers: unknown[]) {
     finalUrl: "https://clawrouter.example/v1/catalog",
     release: async () => undefined,
   });
+  const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(fetchGuard);
+  onTestFinished(() => guardedFetch.mockRestore());
   return await buildClawRouterProviderConfig({
     apiKey: "fixture-key",
     baseUrl: "https://clawrouter.example",
-    fetchGuard,
   });
 }
 
@@ -125,6 +128,45 @@ describe("ClawRouter native model facts", () => {
     clearLiveCatalogCacheForTests();
   });
 
+  it("sends Mistral's native completion fields through the router", async () => {
+    const catalog = await buildCatalog([
+      {
+        ...catalogProvider("mistral", "mistral-large-latest", ["llm.chat"]),
+        openaiCompatible: true,
+      },
+    ]);
+    const row = catalog.models[0];
+    if (!row || row.api !== "openai-completions") {
+      throw new Error("missing routed Mistral model");
+    }
+    const model: Model = {
+      ...row,
+      provider: "clawrouter",
+      api: row.api,
+      baseUrl: row.baseUrl ?? catalog.baseUrl,
+      input: ["text"],
+    };
+    const registered = await registerSingleProviderPlugin(plugin);
+    const wrapped = registered.wrapStreamFn?.({
+      provider: "clawrouter",
+      modelId: model.id,
+      streamFn: streamSimple,
+    });
+    if (!wrapped) {
+      throw new Error("missing ClawRouter stream wrapper");
+    }
+    const body = await captureRequestBody(() =>
+      wrapped(
+        model,
+        { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+        { apiKey: "fixture-key", maxTokens: 64 },
+      ),
+    );
+    expect(body).toMatchObject({ model: "mistral/mistral-large-latest", max_tokens: 64 });
+    expect(body).not.toHaveProperty("max_completion_tokens");
+    expect(body).not.toHaveProperty("store");
+  });
+
   it("gives routed OpenAI and Claude rows the native facts for the same upstream model", async () => {
     const provider = await buildCatalog([
       catalogProvider("openai", "gpt-6.1-sol", ...RESPONSES, [], {
@@ -158,10 +200,11 @@ describe("ClawRouter native model facts", () => {
       codeMode: "capable",
       mediaInput: { image: { maxSidePx: 1568 } },
     });
-    // The service catalog keeps ownership of the route's reasoning contract.
+    // The service catalog owns route-level reasoning and tool-strictness contracts.
     expect(provider.models.find(({ id }) => id === "openai/gpt-6.1-sol")?.compat).toEqual({
       codeMode: "preferred",
       supportsTemperature: false,
+      supportsStrictMode: true,
       supportsReasoningEffort: true,
       supportedReasoningEfforts: ["low", "high"],
     });
@@ -186,9 +229,51 @@ describe("ClawRouter native model facts", () => {
       "openai/gpt-6-unknown",
     ]);
     for (const model of provider.models) {
-      expect(model.compat, model.id).toBeUndefined();
+      // Strictness support belongs to the routed API, not inherited model identity.
+      expect(model.compat, model.id).toEqual(
+        model.api === "openai-responses" ? { supportsStrictMode: true } : undefined,
+      );
       expect(model.mediaInput, model.id).toBeUndefined();
     }
+  });
+
+  it("names routed rows with the family their bundled catalog declares for the same model", async () => {
+    const google: [string[], Array<[string, string]>] = [
+      ["llm.stream"],
+      [["/v1beta/models/${model}:streamGenerateContent", "google.generate_content"]],
+    ];
+    const provider = await buildCatalog([
+      catalogProvider("anthropic", "claude-opus-5-5", ...MESSAGES),
+      catalogProvider("openai", "gpt-6.1-sol", ...RESPONSES),
+      catalogProvider("google-gemini", "gemini-3.5-flash", ...google),
+      // Not in the bundled catalog: the developer is not inferred from the id or provider.
+      catalogProvider("anthropic", "claude-opus-6", ...MESSAGES),
+      // Another wire API is another route contract, so it inherits no identity facts.
+      catalogProvider("openai", "gpt-6-astra", ["llm.chat"]),
+      catalogProvider("acme", "claude-opus-5-5", ...MESSAGES),
+    ]);
+    const families = Object.fromEntries(provider.models.map(({ id, family }) => [id, family]));
+    const declared = (pluginId: "openai" | "anthropic" | "google") =>
+      (
+        JSON.parse(
+          fs.readFileSync(new URL(`../${pluginId}/openclaw.plugin.json`, import.meta.url), "utf8"),
+        ) as { modelCatalog: { providers: Record<string, { family?: string }> } }
+      ).modelCatalog.providers[pluginId]?.family;
+
+    expect(families).toEqual({
+      "anthropic/claude-opus-5-5": declared("anthropic"),
+      "openai/gpt-6.1-sol": declared("openai"),
+      "google-gemini/gemini-3.5-flash": declared("google"),
+      "anthropic/claude-opus-6": undefined,
+      "openai/gpt-6-astra": undefined,
+      "acme/claude-opus-5-5": undefined,
+    });
+    // Pin the oracle so a manifest edit cannot make both sides vacuously empty.
+    expect([declared("anthropic"), declared("openai"), declared("google")]).toEqual([
+      "anthropic",
+      "openai",
+      "google",
+    ]);
   });
 
   it("resolves routed Claude models with the native image limits used for compression", async () => {
@@ -307,14 +392,7 @@ describe("ClawRouter native model facts", () => {
             api: "anthropic-messages",
             provider: "clawrouter",
             model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsageFixture(),
             stopReason: "stop",
             timestamp: 1,
           },

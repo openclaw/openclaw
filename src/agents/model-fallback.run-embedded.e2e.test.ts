@@ -1,8 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
-import type { ModelFallbackAvailability } from "./agent-scope.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -15,7 +15,9 @@ import { createFallbackE2eMocks } from "./model-fallback.e2e.test-support.js";
 import { createModelFallbackAttemptMocks } from "./model-fallback.run-embedded.attempts.test-support.js";
 import {
   CLOUDFLARE_502_ERROR_PAYLOAD,
+  createEmbeddedFallbackEntryRunner,
   type EmbeddedAttemptParams,
+  embeddedParams,
   LONG_RATE_LIMIT_ERROR_MESSAGE,
   makeModelFallbackConfig,
   NO_ENDPOINTS_FOUND_ERROR_MESSAGE,
@@ -34,10 +36,6 @@ import {
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
-const observedModelRoutingProvenance: Array<{
-  stage: "initial" | "fallback";
-  fallbackReason?: string;
-}> = [];
 const fallbackMocks = createFallbackE2eMocks((params) => runEmbeddedAttemptMock(params));
 const { suspendSessionMock, computeBackoffMock, sleepWithAbortMock } = fallbackMocks;
 vi.mock("./models-config.js", () => ({
@@ -49,51 +47,33 @@ type TestRunEmbeddedAgent = (
   params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
 ) => ReturnType<ProductionRunEmbeddedAgent>;
 let runEmbeddedAgent: TestRunEmbeddedAgent;
-let runEmbeddedAgentWithPreparedAdmission: ProductionRunEmbeddedAgent;
 let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
-let runEmbeddedAgentEntry: typeof import("./embedded-agent-runner/run-entry.js").runEmbeddedAgentEntry;
+let runEmbeddedEntryFallback: ReturnType<typeof createEmbeddedFallbackEntryRunner>;
 let captureRoutingDecisionWork: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").captureRoutingDecisionWork;
-let createModelRoutingTestAdmission: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").createModelRoutingTestAdmission;
 
 beforeAll(async () => {
   fallbackMocks.install();
-  runEmbeddedAgentWithPreparedAdmission = (await import("./embedded-agent-runner/run.js"))
+  const runEmbeddedAgentWithPreparedAdmission = (await import("./embedded-agent-runner/run.js"))
     .runEmbeddedAgent;
   runEmbeddedAgent = wrapRunWithTestPreparedAdmission(runEmbeddedAgentWithPreparedAdmission);
   ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
-  ({ runEmbeddedAgentEntry } = await import("./embedded-agent-runner/run-entry.js"));
-  ({ captureRoutingDecisionWork, createModelRoutingTestAdmission } =
-    await import("./test-helpers/model-routing-decision-e2e-fixtures.js"));
+  const { runEmbeddedAgentEntry } = await import("./embedded-agent-runner/run-entry.js");
+  const routing = await import("./test-helpers/model-routing-decision-e2e-fixtures.js");
+  captureRoutingDecisionWork = routing.captureRoutingDecisionWork;
+  runEmbeddedEntryFallback = createEmbeddedFallbackEntryRunner({
+    runEmbeddedAgent: runEmbeddedAgentWithPreparedAdmission,
+    runEmbeddedAgentEntry,
+    createModelRoutingTestAdmission: routing.createModelRoutingTestAdmission,
+  });
 });
 
 beforeEach(() => {
   resetFallbackSkipCacheForTest();
-  observedModelRoutingProvenance.length = 0;
   runEmbeddedAttemptMock.mockReset();
   fallbackMocks.clear();
 });
 
 type Workspace = { agentDir: string; workspaceDir: string };
-const enqueue: NonNullable<Parameters<TestRunEmbeddedAgent>[0]["enqueue"]> = async (task) =>
-  await task();
-function embeddedParams(
-  { agentDir, workspaceDir, runId, sessionKey }: Workspace & { runId: string; sessionKey: string },
-  config: OpenClawConfig,
-  sessionId = `session:${runId}`,
-) {
-  return {
-    agentDir,
-    workspaceDir,
-    runId,
-    sessionKey,
-    sessionId,
-    config,
-    prompt: "hello",
-    authProfileIdSource: "auto" as const,
-    timeoutMs: 5_000,
-    enqueue,
-  };
-}
 async function runEmbeddedFallback(
   workspace: Workspace,
   name: string,
@@ -134,79 +114,6 @@ async function runEmbeddedFallback(
         abortSignal: params.abortSignal,
       }),
   });
-}
-
-async function runEmbeddedEntryFallback(
-  workspace: Workspace,
-  name: string,
-  options: {
-    runId?: string;
-    config?: OpenClawConfig;
-    fallbacksOverride?: string[];
-    modelFallbackAvailability?: ModelFallbackAvailability;
-    onFallbackStep?: (step: ModelFallbackStepFields) => void;
-  } = {},
-) {
-  const { agentDir, workspaceDir } = workspace;
-  const { fallbacksOverride, modelFallbackAvailability, onFallbackStep } = options;
-  const runId = options.runId ?? `run:${name}`;
-  const sessionKey = `agent:test:${name}`;
-  const cfg = options.config ?? makeModelFallbackConfig();
-  setRuntimeConfigSnapshot(cfg, cfg);
-  const sessionId = `session:${runId}`;
-  const preparedRunAdmission = createModelRoutingTestAdmission({
-    cfg: { ...cfg, logging: { audit: { executionIdentity: true } } },
-    runId,
-    boundary: "model-fallback-e2e",
-  });
-  try {
-    return await runEmbeddedAgentEntry({
-      selection: {
-        cfg,
-        provider: "openai",
-        model: "mock-1",
-        agentDir,
-        manifestPlugins: [],
-        fallbacksOverride,
-      },
-      identity: {
-        runId,
-        agentId: "test",
-        sessionId,
-        sessionKey,
-      },
-      harness: {
-        workspaceDir,
-        sessionKey,
-        preparation: { kind: "direct" },
-        resolveRuntimeOverride: () => undefined,
-        resolveContextEngineHost: (provider, model) => ({
-          id: `embedded-e2e:${provider}/${model}`,
-          label: "embedded runner e2e",
-          capabilities: [],
-        }),
-      },
-      behavior: { kind: "maintenance" },
-      sessionOverride: { kind: "preserve" },
-      onFallbackStep,
-      runCandidate: (provider, model, attemptOptions) => {
-        observedModelRoutingProvenance.push(attemptOptions.modelRoutingProvenance);
-        return runEmbeddedAgentWithPreparedAdmission({
-          ...embeddedParams({ ...workspace, runId, sessionKey }, cfg, sessionId),
-          preparedRunAdmission,
-          ...(modelFallbackAvailability ? { modelFallbackAvailability } : {}),
-          provider,
-          model,
-          modelRoutingProvenance: attemptOptions.modelRoutingProvenance,
-          isFinalFallbackAttempt: attemptOptions.isFinalFallbackAttempt,
-          contextEngineLogicalTurnLease: attemptOptions.contextEngineLogicalTurnLease,
-          onContextEngineTurnCandidate: attemptOptions.onContextEngineTurnCandidate,
-        });
-      },
-    });
-  } finally {
-    preparedRunAdmission.close();
-  }
 }
 
 const {
@@ -328,11 +235,17 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it.each(["thrown", "assistant"] as const)(
-    "does not replay %s transcript turn assertions through retries or model fallback",
-    async (surface) => {
+  it.each(
+    [
+      "Session transcript keyed user is outside the current turn: old-input",
+      'Transcript idempotency key "channel-user:v1:conflicting-input" conflicts with the admitted message.',
+    ].flatMap((errorMessage) =>
+      (["thrown", "assistant"] as const).map((surface) => ({ surface, errorMessage })),
+    ),
+  )(
+    "does not replay $surface transcript turn assertions through retries or model fallback: $errorMessage",
+    async ({ surface, errorMessage }) => {
       await withDefaultAuth(async ({ agentDir, workspaceDir }) => {
-        const errorMessage = "Session transcript keyed user is outside the current turn: old-input";
         runEmbeddedAttemptMock.mockImplementation(async (params) => {
           if (surface === "thrown") {
             throw new Error(errorMessage);
@@ -402,6 +315,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
 
   it("keeps fallback enabled for auto-selected routes and traces the winning execution", async () => {
     await withDefaultAuth(async ({ agentDir, workspaceDir }) => {
+      using diagnostics = vi.spyOn(diagnosticLogger, "error").mockImplementation(() => {});
       mockPrimaryOverloadedThenFallbackSuccess();
       const { decisionWork, result } = await captureRoutingDecisionWork(() =>
         runEmbeddedEntryFallback({ agentDir, workspaceDir }, "execution-trace-fallback", {
@@ -445,10 +359,10 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           decision: { reasonCode: "overloaded" },
         },
       ]);
-      expect(observedModelRoutingProvenance).toMatchObject([
-        { stage: "initial" },
-        { stage: "fallback", fallbackReason: "overloaded" },
-      ]);
+      expect(diagnostics).not.toHaveBeenCalledWith(
+        expect.stringContaining("lane task error:"),
+        expect.any(Object),
+      );
     });
   });
 
@@ -526,16 +440,9 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
   });
 
   it.each(["assistant", "prompt"] as const)(
-    "exhausts bounded recovery on organization TPM exhaustion from %s before fallback",
+    "advances from %s TPM exhaustion when the provider floor exceeds the fallback window",
     async (source) => {
       await withDefaultAuth(async ({ agentDir, workspaceDir }) => {
-        let initialCooldownUntil: number | undefined;
-        // The writer owns its clock; observe its first window before later failure marks.
-        sleepWithAbortMock.mockImplementationOnce(async () => {
-          const initial = (await readFallbackUsageStats(agentDir))["openai:p1"];
-          expect((initial?.cooldownUntil ?? 0) - (initial?.lastRateLimitAt ?? 0)).toBe(90_000);
-          initialCooldownUntil = initial?.cooldownUntil;
-        });
         const message =
           "429 Rate limit reached for mock-1 in organization org-example on tokens per min (TPM): Limit 10000, Used 9900, Requested 200. Please try again in 90s.";
         const config = makeModelFallbackConfig();
@@ -564,16 +471,13 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           });
         const result = await run("first");
         expect(result.result.payloads?.[0]?.text).toContain("fallback ok");
-        const expectedModels = [...Array<string>(10).fill("mock-1"), "mock-2"];
+        const expectedModels = ["mock-1", "mock-2"];
         expect(recordedAttempts().map((attempt) => attempt.modelId)).toEqual(expectedModels);
-        expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual(
-          Array<number>(9).fill(90_000),
-        );
+        expect(sleepWithAbortMock).not.toHaveBeenCalled();
         const stats = (await readFallbackUsageStats(agentDir))["openai:p1"];
         expect(stats).toMatchObject({ cooldownReason: "rate_limit", cooldownModel: "mock-1" });
         // Each 429 restates the provider's 90s: the window follows the latest one and never grows.
         expect(stats?.cooldownUntil).toBe((stats?.lastRateLimitAt ?? 0) + 90_000);
-        expect(stats?.cooldownUntil).toBeGreaterThanOrEqual(initialCooldownUntil ?? Infinity);
         expect(stats?.failureCounts).toBeUndefined();
 
         runEmbeddedAttemptMock.mockClear();
@@ -581,9 +485,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         const next = await run("during-cooldown");
         expect(next.result.payloads?.[0]?.text).toContain("fallback ok");
         expect(recordedAttempts().map((attempt) => attempt.modelId)).toEqual(expectedModels);
-        expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual(
-          Array<number>(9).fill(90_000),
-        );
+        expect(sleepWithAbortMock).not.toHaveBeenCalled();
       });
     },
   );

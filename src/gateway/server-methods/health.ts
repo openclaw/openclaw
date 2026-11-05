@@ -3,6 +3,7 @@ import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public
 import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { readGatewayMaintenanceWork } from "../../infra/gateway-active-work.js";
+import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { prepareStatusSummary } from "../../status/summary.js";
 import { buildContextEngineHealthSummary } from "../health/context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
@@ -54,8 +55,7 @@ export const healthHandlers: GatewayRequestHandlers = {
   health: async ({ respond, context, params, client }) => {
     const { getHealthCache, refreshHealthSnapshot, logHealth } = context;
     const wantsProbe = params?.probe === true;
-    const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-    const includeSensitive = scopes.includes(ADMIN_SCOPE);
+    const includeSensitive = client?.connect.scopes?.includes(ADMIN_SCOPE) ?? false;
     const now = Date.now();
     const cached = getHealthCache();
     let cachedDiffersFromRuntime = false;
@@ -85,8 +85,10 @@ export const healthHandlers: GatewayRequestHandlers = {
         ...cachedState
       } = cached;
       // The queue owner reuses health facts until a write receipt or claim expiry invalidates them.
-      const deliveryQueues = await buildDeliveryQueueHealthSummary();
-      const contextEngines = await buildContextEngineHealthSummary();
+      const [deliveryQueues, contextEngines] = await settleCurrentReadPreparations([
+        buildDeliveryQueueHealthSummary(),
+        buildContextEngineHealthSummary(),
+      ] as const);
       // A reset sampler has no current window; never revive the cached reading.
       const eventLoop = getEventLoopHealth?.();
       respond(
@@ -130,7 +132,7 @@ export const healthHandlers: GatewayRequestHandlers = {
     });
   },
   status: async ({ respond, client, params, context }) => {
-    const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const scopes = client?.connect.scopes ?? [];
     const hostDesktopStatus = await context.hostDesktopService?.status();
     const prepared = await prepareStatusSummary({
       includeSensitive: scopes.includes(ADMIN_SCOPE),

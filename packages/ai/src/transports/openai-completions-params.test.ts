@@ -196,6 +196,7 @@ describe("OpenAI completions output budgets", () => {
         { maxTokens: 0 },
       ),
       64_000,
+      "max_tokens",
     );
     expectBudget(
       request(
@@ -229,6 +230,7 @@ describe("OpenAI completions output budgets", () => {
         emptyContext("你好世界".repeat(1_000)),
       ),
       4_999,
+      "max_tokens",
     );
     expectBudget(
       request(proxy, undefined, {
@@ -263,6 +265,40 @@ describe("OpenAI completions output budgets", () => {
 });
 
 describe("OpenAI completions reasoning", () => {
+  it.each<"direct" | "managed">(["direct", "managed"])(
+    "honors model off mappings on configured Z.AI routes (%s)",
+    (mode) => {
+      const scalarSupport: (boolean | undefined)[] = [undefined, false, true];
+      for (const supportsReasoningEffort of scalarSupport) {
+        const model = makeCompletionsModel({
+          provider: "custom",
+          baseUrl: "https://api.z.ai/api/paas/v4",
+          thinkingLevelMap: { off: "none" },
+          compat: { supportsReasoningEffort },
+        });
+        const params = requestMode(mode, model, { reasoningEffort: "off" });
+        expectField(
+          params,
+          "thinking",
+          mode === "direct" || supportsReasoningEffort !== true ? { type: "disabled" } : undefined,
+        );
+        expectField(
+          params,
+          "reasoning_effort",
+          mode === "managed" && supportsReasoningEffort ? "none" : undefined,
+        );
+        for (const off of [undefined, null]) {
+          const unsupported = requestMode(
+            mode,
+            { ...model, thinkingLevelMap: { off } },
+            { reasoningEffort: "off" },
+          );
+          expect(unsupported).not.toHaveProperty("thinking");
+          expect(unsupported).not.toHaveProperty("reasoning_effort");
+        }
+      }
+    },
+  );
   it.each(["direct", "managed"] as const)(
     "honors declared off efforts for inferred custom Z.AI (%s)",
     (mode) => {
@@ -295,7 +331,7 @@ describe("OpenAI completions reasoning", () => {
   );
 
   it.each(["direct", "managed"] as const)(
-    "omits inferred Z.AI off controls but preserves other custom contracts (%s)",
+    "preserves binary off contracts without inventing scalar effort (%s)",
     (mode) => {
       for (const [baseUrl, thinkingFormat] of [
         ["https://api.z.ai/api/paas/v4", "zai"],
@@ -311,7 +347,7 @@ describe("OpenAI completions reasoning", () => {
           });
           const params = requestMode(mode, model, { reasoningEffort: "off" });
           const hasOffContract = explicit || thinkingFormat !== "zai";
-          if (hasOffContract && (mode === "direct" || thinkingFormat === "together")) {
+          if (hasOffContract) {
             expect(params).toMatchObject(
               thinkingFormat === "together"
                 ? { reasoning: { enabled: false } }
@@ -321,13 +357,20 @@ describe("OpenAI completions reasoning", () => {
             expect(params).not.toHaveProperty("thinking");
             expect(params).not.toHaveProperty("reasoning");
           }
-          if (
-            mode === "managed" &&
-            (thinkingFormat === "deepseek" || (explicit && thinkingFormat === "zai"))
-          ) {
-            expect(params.reasoning_effort).toBe("none");
-          } else {
-            expect(params).not.toHaveProperty("reasoning_effort");
+          expect(params).not.toHaveProperty("reasoning_effort");
+          if (mode === "managed" && thinkingFormat !== "together") {
+            const enabledOptions: (OpenAICompletionsOptions | undefined)[] = [
+              undefined,
+              { reasoningEffort: "high" },
+            ];
+            for (const options of enabledOptions) {
+              const enabled = requestMode(
+                mode,
+                { ...model, compat: { ...model.compat, supportsReasoningEffort: false } },
+                options,
+              );
+              expect(enabled).not.toHaveProperty("thinking");
+            }
           }
         }
       }

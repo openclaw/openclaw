@@ -1,139 +1,99 @@
-import type { TSchema } from "typebox";
-import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
-  GatewayErrorDetailCodes,
-  GatewayErrorDetailsSchema,
   normalizeUiAppearancePreference as normalize,
   UI_APPEARANCE_PREFERENCE_KEYS as keys,
-  UserPrefsLimitExceededErrorDetailsSchema,
-  UserProfileSchema,
-  UsersPrefsChangedEventSchema,
-  UsersPrefsGetResultSchema,
-  UsersPrefsSetResultSchema,
-  validateUsersPrefsGetParams as getPrefs,
-  validateUsersPrefsSetParams as setPrefs,
-  validateUsersSetRoleParams as setRole,
 } from "../index.js";
+import * as S from "../index.js";
+import { validation } from "./protocol-validation.test-support.js";
+import { accepts, rejects } from "./schema.test-support.js";
 
-function check(schema: TSchema, expected: boolean, value: unknown) {
-  expect(Value.Check(schema, value)).toBe(expected);
-}
+const getPrefs = validation(S.validateUsersPrefsGetParams);
+const setPrefs = validation(S.validateUsersPrefsSetParams);
+const setRole = validation(S.validateUsersSetRoleParams);
 
 describe("user preference protocol schemas", () => {
-  it("normalizes only supported profile appearance values and canonicalizes accent colors", () => {
-    expect(normalize(keys.theme, "absolutely")).toBe("absolutely");
-    expect(normalize(keys.themeMode, "system")).toBe("system");
+  it.each([
+    [keys.theme, ["absolutely"], ["unsupported", 42]],
+    [keys.themeMode, ["system"], ["automatic"]],
+    [keys.accent, ["theme"], ["#abc", "#12345g", { color: "#123456" }]],
+    [keys.fontUi, ["geist", "system"], ["theme"]],
+    [keys.fontChat, ["lora"], ["unknown-font", { family: "lora" }]],
+    [
+      keys.tabIcon,
+      [
+        "default",
+        "agent",
+        "agent:rounded",
+        "agent:circle",
+        "lobster:crimson",
+        `lobster:${"a".repeat(48)}`,
+      ],
+      [
+        "agent:square",
+        "agent:circle\n",
+        "lobster:",
+        "lobster:Crimson",
+        "lobster:crimson\n",
+        "lobster:../crimson",
+        "lobster:https://example.com/icon.png",
+        `lobster:${"a".repeat(49)}`,
+        " agent ",
+        { mode: "custom", image: {} },
+      ],
+    ],
+  ] as const)(
+    "normalizes supported %s values and rejects malformed preferences",
+    (key, accepted, rejected) => {
+      for (const value of accepted) {
+        expect(normalize(key, value)).toBe(value);
+      }
+      for (const value of rejected) {
+        expect(normalize(key, value)).toBeUndefined();
+      }
+    },
+  );
+  it("canonicalizes accent colors", () => {
     expect(normalize(keys.accent, "#A1b2C3")).toBe("#a1b2c3");
-    expect(normalize(keys.accent, "theme")).toBe("theme");
-    expect(normalize(keys.fontUi, "geist")).toBe("geist");
-    expect(normalize(keys.fontChat, "lora")).toBe("lora");
-    expect(normalize(keys.fontUi, "system")).toBe("system");
-
-    for (const tabIcon of [
-      "default",
-      "agent",
-      "agent:rounded",
-      "agent:circle",
-      "lobster:crimson",
-      `lobster:${"a".repeat(48)}`,
-    ]) {
-      expect(normalize(keys.tabIcon, tabIcon)).toBe(tabIcon);
-    }
-
-    for (const [key, value] of [
-      [keys.theme, "unsupported"],
-      [keys.themeMode, "automatic"],
-      [keys.accent, "#abc"],
-      [keys.accent, "#12345g"],
-      [keys.accent, { color: "#123456" }],
-      [keys.theme, 42],
-      [keys.fontUi, "theme"],
-      [keys.fontChat, "unknown-font"],
-      [keys.fontUi, "Geist, sans-serif"],
-      [keys.fontChat, { family: "lora" }],
-      [keys.tabIcon, "custom"],
-      [keys.tabIcon, "agent:square"],
-      [keys.tabIcon, "agent:triangle"],
-      [keys.tabIcon, "agent:circle\n"],
-      [keys.tabIcon, "lobster:"],
-      [keys.tabIcon, "lobster:Crimson"],
-      [keys.tabIcon, "lobster:crimson\n"],
-      [keys.tabIcon, "lobster:../crimson"],
-      [keys.tabIcon, "lobster:https://example.com/icon.png"],
-      [keys.tabIcon, `lobster:${"a".repeat(49)}`],
-      [keys.tabIcon, "Agent"],
-      [keys.tabIcon, " agent "],
-      [keys.tabIcon, null],
-      [keys.tabIcon, 42],
-      [keys.tabIcon, ["agent"]],
-      [keys.tabIcon, { mode: "default" }],
-      [keys.tabIcon, { mode: "agent" }],
-      [keys.tabIcon, { mode: "custom", image: {} }],
-    ] as const) {
-      expect(normalize(key, value)).toBeUndefined();
-    }
   });
 
   it("bounds profile preference change events to their owning profile and written keys", () => {
-    check(UsersPrefsChangedEventSchema, true, {
+    accepts(S.UsersPrefsChangedEventSchema, {
       profileId: "profile-1",
       keys: [keys.accent, keys.fontUi, keys.fontChat],
     });
-    check(UsersPrefsChangedEventSchema, false, { profileId: "", keys: [] });
-    check(UsersPrefsChangedEventSchema, false, {
-      profileId: "profile-1",
-      keys: Array.from({ length: 33 }, (_, index) => `key-${index}`),
-    });
+    rejects(
+      S.UsersPrefsChangedEventSchema,
+      { profileId: "", keys: [] },
+      { profileId: "profile-1", keys: Array.from({ length: 33 }, (_, index) => `key-${index}`) },
+    );
   });
 
   it("bounds self-scoped preference requests", () => {
     const entries = Object.fromEntries(
       Array.from({ length: 32 }, (_, index) => [`key-${index}`, { index }]),
     );
-    expect(getPrefs({})).toBe(true);
-    expect(getPrefs({ keys: Object.keys(entries) })).toBe(true);
-    expect(setPrefs({ entries })).toBe(true);
-    expect(setPrefs({ entries: {}, expectedEntries: entries })).toBe(true);
-    expect(setPrefs({ entries: {}, expectedEntries: { missing: null } })).toBe(true);
-    expect(setPrefs({ entries: {}, expectedEntries: { ...entries, overflow: true } })).toBe(false);
-    expect(setPrefs({ entries: { deleted: null } })).toBe(true);
-    expect(getPrefs({ keys: [...Object.keys(entries), "overflow"] })).toBe(false);
-    expect(getPrefs({ keys: ["same", "same"] })).toBe(false);
-    expect(setPrefs({ entries: { ...entries, overflow: true } })).toBe(false);
-  });
-
-  it("exposes typed per-profile quota details", () => {
-    const details = {
-      code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
-      limit: 128,
-      currentCount: 128,
-    };
-    check(GatewayErrorDetailsSchema, true, details);
-    check(UserPrefsLimitExceededErrorDetailsSchema, true, details);
-  });
-
-  it("keeps no-identity results distinct from successful values", () => {
-    check(UsersPrefsGetResultSchema, true, { status: "no_durable_identity" });
-    check(UsersPrefsGetResultSchema, true, { status: "ok", entries: { theme: "claw" } });
-    check(UsersPrefsSetResultSchema, true, { status: "ok" });
-    check(UsersPrefsSetResultSchema, true, { status: "conflict" });
-    check(UsersPrefsSetResultSchema, true, { status: "no_durable_identity" });
+    getPrefs.accepts({}, { keys: Object.keys(entries) });
+    setPrefs.accepts(
+      { entries },
+      { entries: {}, expectedEntries: entries },
+      { entries: {}, expectedEntries: { missing: null } },
+      { entries: { deleted: null } },
+    );
+    getPrefs.rejects({ keys: [...Object.keys(entries), "overflow"] }, { keys: ["same", "same"] });
+    setPrefs.rejects(
+      { entries: {}, expectedEntries: { ...entries, overflow: true } },
+      { entries: { ...entries, overflow: true } },
+    );
   });
 
   it("accepts bounded role assignments and explicit role removal", () => {
-    expect(setRole({ profileId: "profile-1", role: "guest" })).toBe(true);
-    expect(setRole({ profileId: "profile-1", role: null })).toBe(true);
-
-    for (const invalid of [
-      { profileId: "profile-1" },
-      { profileId: "profile-1", role: "" },
-      { profileId: "profile-1", role: "   " },
-      { profileId: "profile-1", role: "x".repeat(129) },
-      { profileId: "profile-1", role: "guest", scopes: ["operator.admin"] },
-    ]) {
-      expect(setRole(invalid)).toBe(false);
-    }
+    const profile = { profileId: "profile-1" };
+    setRole.accepts({ ...profile, role: "guest" }, { ...profile, role: null });
+    setRole.rejects(
+      profile,
+      ...["", "   ", "x".repeat(129)].map((role) => Object.assign({}, profile, { role })),
+      { ...profile, role: "guest", scopes: ["operator.admin"] },
+    );
   });
 
   it("keeps profile roles additive and preserves role-free profile payloads", () => {
@@ -149,8 +109,7 @@ describe("user preference protocol schemas", () => {
       hasAvatar: false,
     };
 
-    check(UserProfileSchema, true, profile);
-    check(UserProfileSchema, true, { ...profile, role: "guest" });
-    check(UserProfileSchema, false, { ...profile, role: null });
+    accepts(S.UserProfileSchema, profile, { ...profile, role: "guest" });
+    rejects(S.UserProfileSchema, { ...profile, role: null });
   });
 });

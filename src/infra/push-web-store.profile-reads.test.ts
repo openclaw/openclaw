@@ -15,10 +15,7 @@ import {
   type WebPushMutationGuard,
 } from "./push-web-store.js";
 import { webPushOperations } from "./push-web-store.worker.js";
-import {
-  runWithSqliteWorkerStateContext,
-  type SqliteWorkerStateContext,
-} from "./sqlite-worker-state-context.js";
+import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 const admission = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) => ({
@@ -39,7 +36,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 let database: OpenClawStateDatabase;
 let stateDir: string;
-let env: SqliteWorkerStateContext["environment"];
+let env = { OPENCLAW_STATE_DIR: "" };
 const runtime = { open: () => database, stateOptions: () => ({ path: database.path, env }) };
 beforeEach(() => {
   stateDir = tempDirs.make("web-push-profile-reads-");
@@ -172,12 +169,10 @@ it("refuses a worker preference update after the previously admitted profile is 
       guard,
     }),
   ).rejects.toThrow("profile binding changed");
-  expect(
-    database.db
-      .prepare(
-        "SELECT preferences_json, updated_at_ms FROM web_push_subscriptions WHERE subscription_id = ?",
-      )
-      .get("subscription"),
-  ).toEqual({ preferences_json: null, updated_at_ms: 1 });
+  expect(database.db.prepare("SELECT * FROM web_push_subscriptions").get()).toMatchObject({
+    subscription_id: "subscription",
+    preferences_json: null,
+    updated_at_ms: 1,
+  });
   expect(admission.request).not.toHaveBeenCalled();
 });

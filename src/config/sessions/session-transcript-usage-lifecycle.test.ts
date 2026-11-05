@@ -7,25 +7,81 @@ import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { withSessionCostUsageWorkerDatabases } from "../../infra/session-cost-usage-worker-scope.js";
 import type { UsageCostWorkerInput } from "../../infra/session-cost-usage-worker.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { costReadLane, rotateDatabaseWorkers } from "./session-transcript-worker-resources.js";
+import {
+  costReadLane,
+  costRefreshLane,
+  rotateDatabaseWorkers,
+} from "./session-transcript-worker-resources.js";
+
+function usageRequest(operation: UsageCostWorkerInput["operation"]) {
+  const { database } = input();
+  const request: UsageCostWorkerInput = {
+    kind: "usage-cost",
+    location: {
+      agentId: database.agentId,
+      databasePath: database.path,
+      storePath: database.path,
+      env: {},
+    },
+    databases: [database],
+    archiveStorePaths: [database.path],
+    stores: [{ agentId: database.agentId, storePath: database.path, database }],
+    operation,
+  };
+  return { database, request };
+}
+
+it.each(["read", "refresh"] as const)(
+  "preserves the usage %s idle deadline when its outer scope finishes later",
+  async (kind) => {
+    const lane = kind === "read" ? costReadLane : costRefreshLane;
+    const { database, request } = usageRequest(
+      kind === "read" ? { kind: "inventory" } : { kind: "refresh", pricingFingerprint: "test" },
+    );
+    const taskFinished = createDeferredCore();
+    const finishScope = createDeferredCore();
+    const value =
+      kind === "read" ? { kind: "inventory", files: [] } : { kind: "refresh", changed: false };
+    nativePosts.observe = (worker, message) => {
+      if (!message.input) {
+        return;
+      }
+      queueMicrotask(() => {
+        worker.emit("message", {
+          status: "ok",
+          taskId: message.taskId,
+          value: { ok: true, value, closedDatabases: [database] },
+        });
+      });
+    };
+    const scope = withSessionCostUsageWorkerDatabases([database], async (owner) => {
+      await owner.run(request, {});
+      taskFinished.resolve();
+      await finishScope.promise;
+    });
+    try {
+      await awaitGateBeforeSettlement(taskFinished.promise, scope, "Usage task did not finish");
+      await vi.advanceTimersByTimeAsync(20_000);
+      finishScope.resolve();
+      await scope;
+      await vi.advanceTimersByTimeAsync(70_000 - 1);
+      expect(lane.pool.getSnapshot().workers).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(lane.pool.getSnapshot().workers).toBe(0);
+      expect(lane.native).toBe(false);
+    } finally {
+      finishScope.resolve();
+      await scope;
+      await rotateDatabaseWorkers(lane);
+      nativePosts.observe = undefined;
+    }
+  },
+);
 
 it.each([false, true])(
   "retains usage registration through native cleanup retry (retry fails=%s)",
   async (retryFails) => {
-    const { database } = input();
-    const request: UsageCostWorkerInput = {
-      kind: "usage-cost",
-      location: {
-        agentId: database.agentId,
-        databasePath: database.path,
-        storePath: database.path,
-        env: {},
-      },
-      databases: [database],
-      archiveStorePaths: [database.path],
-      stores: [{ agentId: database.agentId, storePath: database.path, database }],
-      operation: { kind: "inventory" },
-    };
+    const { database, request } = usageRequest({ kind: "inventory" });
     const posted = createDeferredCore<NativeWorker>();
     const retryStarted = createDeferredCore();
     const allowExit = createDeferredCore();
@@ -75,7 +131,6 @@ it.each([false, true])(
       expect(observed.unregister).not.toHaveBeenCalled();
       allowExit.resolve();
       const failure = await outcome;
-      expect(failure).toBeInstanceOf(AggregateError);
       if (!(failure instanceof AggregateError)) {
         throw new Error("Expected original usage failure and its native cleanup error");
       }

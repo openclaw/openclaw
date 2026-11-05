@@ -13,7 +13,6 @@ import { isProfileInCooldown } from "../../src/agents/auth-profiles/usage-state.
 import { handleEmbeddedAssistantFailure } from "../../src/agents/embedded-agent-runner/run/assistant-failure.js";
 import { makeAssistantFailureInput } from "../../src/agents/embedded-agent-runner/run/assistant-failure.test-support.js";
 import { createEmbeddedRunFailoverRetryController } from "../../src/agents/embedded-agent-runner/run/failover-retry-controller.js";
-import { resolveEmbeddedRunAttemptTerminalState } from "../../src/agents/embedded-agent-runner/run/terminal-outcome.js";
 import { makeProviderModelFixture } from "../../src/agents/test-helpers/provider-model-fixture.js";
 import { withPluginMetadataSnapshotScope } from "../../src/plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginManifestRegistryCore } from "../../src/plugins/manifest-registry.js";
@@ -70,15 +69,9 @@ type ErrorFixture = {
 };
 
 async function runThroughFailureRecovery(
-  {
-    provider,
-    providerOwner,
-    fixture,
-  }: {
-    provider: string;
-    providerOwner?: ProviderPlugin;
-    fixture: ErrorFixture;
-  },
+  provider: string,
+  fixture: ErrorFixture,
+  providerOwner?: ProviderPlugin,
   snapshot = availabilitySnapshot,
 ) {
   return withPluginMetadataSnapshotScope(
@@ -110,12 +103,7 @@ async function runThroughFailureRecovery(
       } finally {
         await closeHttpServer(server);
       }
-      expect(assistant).toMatchObject({
-        stopReason: "error",
-        provider,
-        model: MODEL_ID,
-        errorCode: String(fixture.code),
-      });
+      expect(assistant).toMatchObject({ stopReason: "error", errorCode: String(fixture.code) });
       expect(assistant.errorMessage).toContain(fixture.message);
       if (fixture.metadata) {
         expect(assistant.errorMessage).toContain(fixture.metadata.raw);
@@ -129,29 +117,18 @@ async function runThroughFailureRecovery(
             [profileId]: createApiKeyCredential(provider, "synthetic-test-key"),
           });
           await state.writeAuthProfiles(profileStore);
-          const sessionId = `session:${provider}:${fixture.code}`;
           const input = makeAssistantFailureInput(assistant, {
             profileId,
             fallbackConfigured: false,
           });
           const { runInput, preparedRuntime, runtime, normalizedAttempt } = input;
-          Object.assign(runInput.runParams, {
-            runId: `run:${provider}:${fixture.code}`,
-            sessionId,
-            sessionKey: `agent:main:${provider}:${fixture.code}`,
-            sessionFile: `${agentDir}/session.jsonl`,
-            workspaceDir: agentDir,
-            prompt: "hello",
-            config: {},
-          });
+          runInput.runParams.sessionFile = `${agentDir}/session.jsonl`;
+          runInput.runParams.config = {};
           const suspensionReasons: string[] = [];
-          const controllerRunInput = Object.assign(runInput, {
-            agentDir,
-            globalLane: "qwen-dashscope-throttle-test",
-            suspendForFailure: ({ reason }: { reason: string }) => {
-              suspensionReasons.push(reason);
-            },
-          });
+          runInput.agentDir = agentDir;
+          runInput.suspendForFailure = ({ reason }) => {
+            suspensionReasons.push(reason);
+          };
           runtime.thinkLevel = "off";
           const controllerRuntime = Object.assign(preparedRuntime, {
             attemptedThinking: new Set([runtime.thinkLevel]),
@@ -162,17 +139,16 @@ async function runThroughFailureRecovery(
             advanceAttemptAuthProfile: async () => false,
           });
           normalizedAttempt.attempt.messagesSnapshot = [assistant];
-          normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
-            attempt: normalizedAttempt.attempt,
-            assistant,
-          });
           input.providerOwner = providerOwner;
           input.getThinkLevel = () => "off";
-          input.suspensionSessionId = sessionId;
           input.failover = createEmbeddedRunFailoverRetryController({
-            runInput: controllerRunInput,
+            runInput: {
+              ...runInput,
+              startedAtMs: Date.now(),
+              globalLane: "qwen-dashscope-throttle-test",
+            },
             preparedRuntime: controllerRuntime,
-            getSessionId: () => sessionId,
+            getSessionId: () => runInput.runParams.sessionId,
           });
           let failureReason: unknown;
           try {
@@ -203,21 +179,21 @@ async function runThroughFailureRecovery(
 
 function expectFailureState(
   result: Awaited<ReturnType<typeof runThroughFailureRecovery>>,
-  reason: "rate_limit" | "billing",
-  openRouter: boolean,
+  reason: "rate_limit" | "overloaded" | "auth" | "billing",
+  provider: string,
 ): void {
   const billing = reason === "billing";
-  const managedThrottle = openRouter && !billing;
-  // These throttles carry no provider retry timing, so a rate limit blocks no model.
+  const transient = reason === "rate_limit" || reason === "overloaded";
+  const openRouter = provider === "openrouter";
   expect.soft(result).toMatchObject({
     failureReason: reason,
-    affectedModelBlocked: billing,
-    otherModelBlocked: billing,
+    affectedModelBlocked: !transient,
+    otherModelBlocked: !transient,
   });
   if (openRouter) {
     expect.soft(result.suspensionReasons).toEqual([billing ? "manual" : "quota_exhausted"]);
   }
-  if (managedThrottle) {
+  if ((openRouter || provider === selfManagedProvider) && transient) {
     expect.soft(result.usage).toBeUndefined();
     return;
   }
@@ -227,8 +203,13 @@ function expectFailureState(
           disabledReason: "billing",
           disabledUntil: expect.any(Number),
         }
-      : { lastRateLimitAt: expect.any(Number) },
+      : transient
+        ? { lastRateLimitAt: expect.any(Number) }
+        : { cooldownReason: reason, cooldownUntil: expect.any(Number) },
   );
+  if (provider === selfManagedProvider) {
+    return;
+  }
   for (const key of billing
     ? ["cooldownReason"]
     : ["cooldownReason", "cooldownUntil", "disabledReason", "disabledUntil"]) {
@@ -243,34 +224,20 @@ const snapshot = createPluginMetadataSnapshotFixture({
   ],
 });
 it.each([
-  { status: 429, message: "Too many requests", reason: "rate_limit", transient: true },
-  { status: 503, message: "Provider overloaded", reason: "overloaded", transient: true },
-  { status: 401, message: "Invalid API key", reason: "auth", transient: false },
-  { status: 402, message: "Insufficient credits", reason: "billing", transient: false },
+  { status: 429, message: "Too many requests", reason: "rate_limit" },
+  { status: 503, message: "Provider overloaded", reason: "overloaded" },
+  { status: 401, message: "Invalid API key", reason: "auth" },
+  { status: 402, message: "Insufficient credits", reason: "billing" },
 ] as const)(
   "self-managed provider policy after HTTP $status",
-  async ({ status, message, reason, transient }) => {
+  async ({ status, message, reason }) => {
     const result = await runThroughFailureRecovery(
-      {
-        provider: selfManagedProvider,
-        fixture: { status, code: status, message },
-      },
+      selfManagedProvider,
+      { status, code: status, message },
+      undefined,
       snapshot,
     );
-    expect(result).toMatchObject({
-      failureReason: reason,
-      affectedModelBlocked: !transient,
-      otherModelBlocked: !transient,
-    });
-    if (transient) {
-      expect(result.usage).toBeUndefined();
-    } else {
-      expect(result.usage).toMatchObject(
-        reason === "billing"
-          ? { disabledReason: reason, disabledUntil: expect.any(Number) }
-          : { cooldownReason: reason, cooldownUntil: expect.any(Number) },
-      );
-    }
+    expectFailureState(result, reason, selfManagedProvider);
   },
 );
 const quotaCode = "insufficient_quota";
@@ -297,17 +264,16 @@ it.each([
 ] as const)(
   "%s %s (%s) classifies as %s",
   async (...[provider, code, message, reason, metadata]) => {
-    const result = await runThroughFailureRecovery({
+    const result = await runThroughFailureRecovery(
       provider,
-      providerOwner:
-        provider === "openai"
-          ? undefined
-          : requireRegisteredProvider(
-              registeredProviders.get(provider === "openrouter" ? "openrouter" : "qwen") ?? [],
-              provider,
-            ),
-      fixture: { status: 429, code, message, ...(metadata ? { metadata } : {}) },
-    });
-    expectFailureState(result, reason, provider === "openrouter");
+      { status: 429, code, message, ...(metadata ? { metadata } : {}) },
+      provider === "openai"
+        ? undefined
+        : requireRegisteredProvider(
+            registeredProviders.get(provider === "openrouter" ? "openrouter" : "qwen") ?? [],
+            provider,
+          ),
+    );
+    expectFailureState(result, reason, provider);
   },
 );

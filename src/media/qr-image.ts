@@ -75,7 +75,8 @@ export async function writeQrPngTempFile(
   const workspace = await tempWorkspace({ rootDir: opts.tmpRoot, prefix: dirPrefix });
   const dirPath = workspace.dir;
   try {
-    const filePath = await workspace.write(fileName, png);
+    const filePath = workspace.path(fileName);
+    await workspace.store.write(path.basename(filePath), png, { durable: false });
     return {
       filePath,
       dirPath,

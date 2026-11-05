@@ -18,10 +18,7 @@ import {
   acquireGatewayTestWebSocket,
   closeGatewayTestWebSocket,
 } from "../../../test/helpers/gateway-websocket.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../../test/helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
 import { prepareDirectCompactionAttempt } from "../../agents/embedded-agent-runner/direct-compaction-preparation.js";
 import {
   buildPreparedCompactionRuntime,
@@ -54,6 +51,7 @@ import { setTestEnvValue } from "../../test-utils/env.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import { writeToolCallResponse } from "../gateway-provider-fixture.test-support.js";
 import { startGatewayServer } from "../server.js";
 import { startClaimedGateway } from "../test-helpers.listener.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
@@ -270,29 +268,7 @@ describe("Gateway pinned manual library read", () => {
                 arguments: JSON.stringify(call.args),
                 status: "completed",
               };
-              writeOpenAiResponsesSse(response, [
-                {
-                  type: "response.output_item.added",
-                  output_index: 0,
-                  item: { ...item, status: "in_progress", arguments: "" },
-                },
-                {
-                  type: "response.function_call_arguments.done",
-                  item_id: item.id,
-                  output_index: 0,
-                  arguments: item.arguments,
-                },
-                { type: "response.output_item.done", output_index: 0, item },
-                {
-                  type: "response.completed",
-                  response: {
-                    id: `resp_${call.id}`,
-                    status: "completed",
-                    output: [item],
-                    usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
-                  },
-                },
-              ]);
+              writeToolCallResponse(response, item, `resp_${call.id}`, 10, 10);
             })().catch((error: unknown) => {
               providerErrors.push(error);
               response.writeHead(500).end(String(error));

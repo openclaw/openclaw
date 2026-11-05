@@ -1,5 +1,6 @@
 import { createEffect } from "solid-js";
 import type { AppSidebarMethods } from "../components/app-sidebar.tsx";
+import { scheduleLayout } from "../lib/layout-frame.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import {
   ControlUiReadiness,
@@ -42,6 +43,11 @@ async function settleShellReadiness(
     if (!sidebar.isConnected || !customElements.get("openclaw-app-sidebar")) {
       return { kind: "loading", navigationVisible: true };
     }
+    await sidebar.updateComplete;
+    // Windowed rows publish after the shared geometry reads, then commit through Solid.
+    await new Promise<void>((resolve) => {
+      scheduleLayout(resolve, () => () => resolve());
+    });
     await sidebar.updateComplete;
   }
   const outlet = shell.routeOutlet;

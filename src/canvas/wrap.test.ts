@@ -1,7 +1,46 @@
 import { createHash } from "node:crypto";
 import { runInNewContext } from "node:vm";
 import { expect, it, vi } from "vitest";
-import { buildWidgetDocument } from "./wrap.js";
+import { buildWidgetDocument, WIDGET_SIZE_CONFIRMATION_HTML } from "./wrap.js";
+
+it("confirms current widget height on each parent chat-host notification", () => {
+  const postMessage = vi.fn();
+  const parent = { postMessage };
+  let height = 120;
+  let receive: (event: unknown) => void = () => {};
+  runInNewContext(WIDGET_SIZE_CONFIRMATION_HTML.slice(8, -9), {
+    window: { parent },
+    document: {
+      body: {
+        get scrollHeight() {
+          return height;
+        },
+        get offsetHeight() {
+          return height;
+        },
+        getBoundingClientRect: () => ({ height }),
+      },
+    },
+    addEventListener: (_type: string, handler: typeof receive) => {
+      receive = handler;
+    },
+  });
+  receive({ source: parent, data: { type: "openclaw:widget-chat-host" } });
+  expect(postMessage).not.toHaveBeenCalled();
+  const data = { type: "openclaw:widget-chat-host", measure: true };
+  receive({ source: {}, data });
+  expect(postMessage).not.toHaveBeenCalled();
+  receive({ source: parent, data });
+  height = 80;
+  receive({ source: parent, data });
+  receive({ source: parent, data });
+  expect(postMessage.mock.calls).toEqual(
+    [120, 80, 80].map((reportedHeight) => [
+      { type: "openclaw:widget-size", height: reportedHeight },
+      "*",
+    ]),
+  );
+});
 
 const messagePrefix = "x".repeat(499);
 const sourcePrefix = "s".repeat(199);
@@ -68,8 +107,8 @@ it("keeps the wrapped document bytes stable", () => {
     '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
   );
 
-  expect(Buffer.byteLength(html)).toBe(17765);
+  expect(Buffer.byteLength(html)).toBe(17837);
   expect(createHash("sha256").update(html).digest("hex")).toBe(
-    "e8c709f66c308ddf94d310ad2a29375a1edff39b9d82328464146045640e72f0",
+    "30a203b6d327fbc31318e65ffc172510d584979f94e14ceb5fbf0bc4d33b956b",
   );
 });

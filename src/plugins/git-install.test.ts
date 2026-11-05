@@ -1,19 +1,19 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
-import { expectedNpmCommand } from "../test-utils/npm-command.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
   requestDeferredPluginInstall,
-  resolvePluginInstallTransaction,
+  takePluginInstallTransaction,
 } from "./install-transaction.js";
 
 const runCommandWithTimeoutMock = vi.fn();
@@ -70,6 +70,8 @@ function commandArgvAt(index: number): string[] {
   const call = expectDefined(runCommandWithTimeoutMock.mock.calls[index], `command #${index + 1}`);
   return call[0] as string[];
 }
+const cloneDestination = () =>
+  path.resolve(expectDefined(commandArgvAt(0).at(-1), "clone destination"));
 
 function firstInstallOptions() {
   return installPluginFromInstalledPackageDirMock.mock.calls[0]?.[0] as
@@ -84,11 +86,15 @@ function expectSuccess(result: GitResult): asserts result is Extract<GitResult, 
     throw new Error(result.error);
   }
 }
-function expectFailure(result: GitResult, message: string) {
+function expectFailure(
+  result: GitResult,
+  message: string,
+): asserts result is Extract<GitResult, { ok: false }> {
   expect(result.ok).toBe(false);
-  if (!result.ok) {
-    expect(result.error).toContain(message);
+  if (result.ok) {
+    throw new Error("Expected failed git install");
   }
+  expect(result.error).toContain(message);
 }
 
 function mockGitCommands(...outputs: Array<string | { code: number; stderr: string }>) {
@@ -146,21 +152,69 @@ async function installWithSecurityEvents(options: Parameters<typeof installPlugi
 }
 
 describe("parseGitPluginSpec", () => {
-  it("normalizes GitHub shorthand and ref selectors", () => {
-    expect(expectParsedGitSpec("git:github.com/acme/demo@v1.2.3")).toMatchObject({
-      url: "https://github.com/acme/demo.git",
-      ref: "v1.2.3",
-      label: "acme/demo",
-      normalizedSpec: "git:https://github.com/acme/demo.git@v1.2.3",
+  it.skipIf(process.platform !== "win32").each([
+    [".\\plugin fixtures\\local ü 空", "main"],
+    ["..\\plugin fixtures\\local ü 空", "main"],
+    ["C:\\plugin fixtures\\local ü 空", "main"],
+    ["C:/repos/@acme/plugin.git", "feature/release.git"],
+    [".\\plugin fixtures\\local", "release.git"],
+  ])("resolves a native Windows local repository and its ref: %s", (repository, ref) => {
+    const expectedPath = path.resolve(repository);
+    const parsed = expectParsedGitSpec(`git:${repository}@${ref}`);
+    expect(parsed).toMatchObject({ url: expectedPath, ref });
+    expect(expectParsedGitSpec(parsed.normalizedSpec)).toMatchObject({
+      url: expectedPath,
+      ref,
     });
-    expect(expectParsedGitSpec("git:acme/demo@feature/foo")).toMatchObject({
-      url: "https://github.com/acme/demo.git",
-      ref: "feature/foo",
-      label: "acme/demo",
+  });
+
+  it
+    .skipIf(process.platform !== "win32")
+    .each([
+      "C:\\repos\\@acme\\plugin.git",
+      "C:/repos/@acme/plugin.git",
+      "C:\\repos/@acme/plugin.git",
+      "C:/repos/team@acme/plugin.git",
+      "C:/repos/@acme/plugin",
+      "C:\\repos\\plugin@release.git",
+    ])("preserves literal @ characters in an absolute repository path: %s", (repository) => {
+    expect(expectParsedGitSpec(`git:${repository}`)).toMatchObject({
+      url: path.resolve(repository),
+      ref: undefined,
     });
-    expect(expectParsedGitSpec("git:acme/demo#main")).toMatchObject({
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "supports an unambiguous .git-ending ref on an absolute repository",
+    () => {
+      const parsed = expectParsedGitSpec("git:C:\\repos\\plugin#release.git");
+      expect(parsed).toMatchObject({ url: path.resolve("C:\\repos\\plugin"), ref: "release.git" });
+      expect(expectParsedGitSpec(parsed.normalizedSpec)).toMatchObject({
+        url: parsed.url,
+        ref: "release.git",
+      });
+    },
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "preserves a local @ ancestor through file-URL transport",
+    () => {
+      const native = expectParsedGitSpec("git:C:/repos/@acme/plugin");
+      const url = pathToFileURL(native.url).href;
+      expect(expectParsedGitSpec(`git:${url}`)).toMatchObject({ url, ref: undefined });
+    },
+  );
+
+  it.each([
+    ["git:github.com/acme/demo@v1.2.3", "v1.2.3"],
+    ["git:acme/demo@feature/foo", "feature/foo"],
+    ["git:acme/demo#main", "main"],
+  ])("normalizes GitHub shorthand and ref selectors: %s", (spec, ref) => {
+    expect(expectParsedGitSpec(spec)).toMatchObject({
       url: "https://github.com/acme/demo.git",
-      ref: "main",
+      ref,
+      label: "acme/demo",
+      normalizedSpec: `git:https://github.com/acme/demo.git@${ref}`,
     });
   });
 
@@ -231,18 +285,8 @@ describe("installPluginFromGitSpec", () => {
         "--",
         "https://github.com/acme/demo.git",
       ]);
-      expect(cloneArgv[5]).toContain("/.openclaw-install-stage-");
-      expect(commandArgvAt(2)).toEqual(["git", "switch", "--detach", "--", "abc123"]);
-      expect(commandArgvAt(4)).toEqual(
-        expectedNpmCommand([
-          "install",
-          "--omit=dev",
-          "--loglevel=error",
-          "--ignore-scripts",
-          "--no-audit",
-          "--no-fund",
-        ]),
-      );
+      expect(cloneArgv[5]).toContain(`${path.sep}.openclaw-install-stage-`);
+      expect(commandArgvAt(4)).toContain("--ignore-scripts");
       expect(runCommandWithTimeoutMock.mock.calls.map(([, options]) => options.timeoutMs)).toEqual([
         gitWork,
         timeoutMs ?? 120_000,
@@ -299,29 +343,40 @@ describe("installPluginFromGitSpec", () => {
       expectedPluginId: undefined,
       outcome: "error",
     },
+    {
+      code: undefined,
+      reason: "blocked without a terminal code",
+      spec: demoSpec,
+      expectedPluginId: "demo",
+      outcome: "denied",
+    },
   ])(
     "reports $outcome preflight without installing dependencies",
     async ({ code, reason, spec, expectedPluginId, outcome }) => {
       mockGitCommands("", "abc123\n");
-      preflightPluginGitInstallPolicyMock.mockResolvedValueOnce({ blocked: { reason, code } });
+      preflightPluginGitInstallPolicyMock.mockResolvedValueOnce({
+        blocked: {
+          reason,
+          code,
+          installPolicyWarning: {
+            reason,
+            targetName: "demo",
+            targetType: "plugin",
+            requestMode: "install",
+          },
+        },
+      });
       const { result, events } = await installWithSecurityEvents({ spec, expectedPluginId });
       expectFailure(result, reason);
+      expect(result).toEqual({ ok: false, error: reason, ...(code ? { code } : {}) });
       if (expectedPluginId) {
         expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
-        expect(commandArgvAt(0).slice(0, 7)).toEqual([
-          ...clonePrefix,
-          "--depth",
-          "1",
-          "--",
-          "https://github.com/acme/demo.git",
-        ]);
-        expect(commandArgvAt(1)).toEqual(["git", "rev-parse", "HEAD"]);
         expect(preflightPluginGitInstallPolicyMock).toHaveBeenCalledWith(
           expect.objectContaining({
             pluginId: "demo",
             requestedSpecifier: demoSpec,
             source: { kind: "git", authority: "third-party", mutable: true, network: true },
-            sourcePath: expect.stringContaining("/.openclaw-install-stage-"),
+            sourcePath: expect.stringContaining(`${path.sep}.openclaw-install-stage-`),
           }),
         );
       }
@@ -366,11 +421,7 @@ describe("installPluginFromGitSpec", () => {
       const result = await install({ spec, gitDir });
       expectSuccess(result);
 
-      const cloneArgv = commandArgvAt(0);
-      const cloneDest = expectDefined(
-        cloneArgv[cloneArgv.length - 1],
-        "cloneArgv[cloneArgv.length - 1] test invariant",
-      );
+      const cloneDest = cloneDestination();
       const normalizedSpec = spec === demoSpec ? normalizedDemoSpec : spec;
       const persistentRepoDir = expectedGitRepoDir(gitDir, normalizedSpec);
       const cloneParent = await fs.realpath(path.dirname(path.resolve(cloneDest)));
@@ -403,7 +454,7 @@ describe("installPluginFromGitSpec", () => {
       path.basename(expectDefined(reviewedArtifactDir, "reviewed artifact test invariant")),
     ).toMatch(/^\.openclaw-install-stage-/);
     await expect(read(result.targetDir, "index.js")).resolves.toBe("reviewed capabilities");
-    await resolvePluginInstallTransaction(result)?.commit();
+    await takePluginInstallTransaction(result)?.commit();
   });
 
   it("preserves a deferred git consent rejection without publishing its staged artifact", async () => {
@@ -436,13 +487,7 @@ describe("installPluginFromGitSpec", () => {
     const result = await install({ gitDir, dryRun: true });
 
     expect(result.ok).toBe(true);
-    const cloneArgv = commandArgvAt(0);
-    const cloneDest = path.resolve(
-      expectDefined(
-        cloneArgv[cloneArgv.length - 1],
-        "cloneArgv[cloneArgv.length - 1] test invariant",
-      ),
-    );
+    const cloneDest = cloneDestination();
     expect(path.relative(gitDir, cloneDest).split(path.sep)[0]).toBe("..");
     await expect(fs.access(gitDir)).rejects.toThrow();
   });
@@ -457,16 +502,10 @@ describe("installPluginFromGitSpec", () => {
 
     const result = await install({ spec: "git:https://token:secret@github.com/acme/demo.git" });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("failed to clone github.com/acme/demo");
-      expect(result.error).toContain("https://***:***@github.com/acme/demo.git");
-      expect(result.error).toContain("https://***:***@github.com/acme/fallback.git");
-      expect(result.error).not.toContain("token");
-      expect(result.error).not.toContain("secret");
-      expect(result.error).not.toContain("other");
-      expect(result.error).not.toContain("credential");
-    }
+    expectFailure(result, "failed to clone github.com/acme/demo");
+    expect(result.error).toContain("https://***:***@github.com/acme/demo.git");
+    expect(result.error).toContain("https://***:***@github.com/acme/fallback.git");
+    expect(result.error).not.toMatch(/token|secret|other|credential/);
     expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
   });
 

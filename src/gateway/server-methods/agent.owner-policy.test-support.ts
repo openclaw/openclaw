@@ -27,6 +27,11 @@ export function registerAgentOwnerPolicyCases(): void {
     ...fields,
   });
   const operator = origin({ operatorProfileId: "operator-alice" });
+  const inputProvenance = {
+    kind: "inter_session" as const,
+    sourceSessionKey: "agent:main:source",
+    sourceTool: "sessions_send",
+  };
   const principal = (kind: string, ref: string) => ({
     state: "present",
     kind,
@@ -130,27 +135,19 @@ export function registerAgentOwnerPolicyCases(): void {
           agentId: "main",
           sessionKey: "agent:main:main",
           idempotencyKey: "test-sender-owner",
-          ...(requesterOrigin
-            ? {
-                inputProvenance: {
-                  kind: "inter_session" as const,
-                  sourceSessionKey: "agent:main:source",
-                  sourceTool: "sessions_send",
-                },
-              }
-            : {}),
+          ...(requesterOrigin ? { inputProvenance } : {}),
         },
         { reqId: "sender-owner", client },
       );
       const callArgs = await waitForAgentCommandCall();
       expect(callArgs).toMatchObject({
         senderIsOwner: expectedOwner,
+        ...(requesterOrigin ? { requesterOrigin } : {}),
         userTurnTranscriptRecorder: {
           message: { __openclaw: { senderIsOwner: requesterOrigin ? false : expectedOwner } },
         },
       });
       if (requesterOrigin) {
-        expect(callArgs).toMatchObject({ requesterOrigin });
         expect(admissionFacts).toMatchObject({
           invoker: principal("agent", "main"),
           ...(profile ? { representedSubject: principal("person", profile.id) } : {}),

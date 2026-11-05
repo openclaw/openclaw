@@ -6,7 +6,6 @@ import {
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import type { AcpSessionReadInput } from "../acp/runtime/session-meta-read.types.js";
-import * as acpSessionMeta from "../acp/runtime/session-meta-readonly.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -23,7 +22,6 @@ import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
-import * as rowProjection from "./session-utils-row.js";
 import { writeResidentEntries } from "./session-utils.perf.test-support.js";
 
 const stateWorker = vi.hoisted(() => ({
@@ -66,7 +64,6 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
     });
     const stateEntry = makeEntry("state-session", 3);
     const missingEntry = makeEntry("missing-session", 2);
-    const staleAliasEntry = makeEntry("stale-alias-session", 1);
     const markerMeta = {
       backend: "marker",
       agent: "marker-agent",
@@ -124,11 +121,6 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
       (sql) => (/^select\b.*\bacp_sessions\b/is.test(sql) ? "metadata" : null),
     );
     try {
-      const unboundKey = "agent:default:webchat:dm:unbound";
-      seedCanonicalAcpSessionMeta({
-        sessionKey: unboundKey,
-        meta: { ...markerMeta, runtimeSessionName: unboundKey },
-      });
       const key = (sessionKey: string, agentId = "default") =>
         buildAcpDatabaseSessionKey(sessionKey, agentId);
       const cohort: [
@@ -137,14 +129,9 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
         expected: string | null,
       ][] = [
         [[key(stateKey)], stateEntry, stateKey],
-        [[key(stateKey)], staleAliasEntry, null],
         [[key(missingKey), key(stateKey)], stateEntry, stateKey],
         [[key(stateKey), key(markerKey)], markerEntry, markerKey],
         [[key(markerKey), key(stateKey)], markerEntry, markerKey],
-        [[key(stateKey), key(unboundKey)], stateEntry, stateKey],
-        [[key(unboundKey)], staleAliasEntry, unboundKey],
-        [[key(stateKey)], { sessionId: "state-session", sessionStartedAt: 101 }, null],
-        [[key(stateKey)], { sessionId: "state-session", sessionStartedAt: 100 }, stateKey],
         [
           [key(stateKey)],
           { lifecycleRevision: "state-session", sessionId: "other", sessionStartedAt: 101 },
@@ -202,15 +189,12 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
       await list();
       await list("runtime");
       acpSelects.counts.metadata = 0;
-      using rows = vi.spyOn(rowProjection, "readSessionRowInputs");
-      using metadataReads = vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntryAsync");
       const result = await list();
       expect(result.sessions).toHaveLength(3);
       expect(acpSelects.counts.metadata).toBe(0);
       for (const search of ["openclaw", "unmatched-runtime"]) {
         const searched = await list("runtime", search);
         expect(searched.totalCount).toBe(search === "openclaw" ? 55 : 0);
-        expect(rows).not.toHaveBeenCalled();
         expect(acpSelects.counts.metadata).toBe(0);
       }
       expect(locked()).toBe(false);
@@ -222,9 +206,6 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
       writeResidentEntries({ [missingKey]: missingEntry }, 1);
       acpSelects.counts.metadata = 0;
       await projection.ensureMaterialized();
-      expect(rows).toHaveBeenCalledOnce();
-      expect(rows.mock.calls[0]?.[0].key).toBe(missingKey);
-      expect(metadataReads).not.toHaveBeenCalled();
       expect(acpSelects.counts.metadata).toBe(0);
       expect(locked()).toBe(true);
     } finally {

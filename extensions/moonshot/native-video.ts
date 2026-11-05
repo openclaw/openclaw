@@ -68,15 +68,14 @@ export function wrapMoonshotStream(
           }
         }
       }
-      const isOversized = () =>
-        Buffer.byteLength(JSON.stringify(payload), "utf8") >= requestBytesExclusive;
-      while (admitted.length > 0 && isOversized()) {
-        replacePart(admitted.pop()!, "(video omitted: Moonshot request size limit)");
-      }
-      if (isOversized()) {
-        throw new Error(
-          `Moonshot request body must be smaller than ${requestBytesExclusive} bytes`,
-        );
+      while (Buffer.byteLength(JSON.stringify(payload), "utf8") >= requestBytesExclusive) {
+        const part = admitted.pop();
+        if (!part) {
+          throw new Error(
+            `Moonshot request body must be smaller than ${requestBytesExclusive} bytes`,
+          );
+        }
+        replacePart(part, "(video omitted: Moonshot request size limit)");
       }
       return result;
     },

@@ -13,11 +13,10 @@ import {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
   createProviderOperationDeadline,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
-  type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
@@ -380,32 +379,8 @@ function aspectRatioScore(aspectRatio: string, targetRatio: number): number {
   return Math.abs(Math.log(widthRatio / heightRatio) - Math.log(targetRatio));
 }
 
-async function fetchImageBuffer(
-  url: string,
-  deadline: ProviderOperationDeadline,
-  maxBytes: number,
-): Promise<{ buffer: Buffer; mimeType: string }> {
-  const { response, release } = await fetchWithSsrFGuard({
-    url,
-    timeoutMs: resolveProviderOperationTimeoutMs({
-      deadline,
-      defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
-    }),
-    auditContext: "fal-image-download",
-  });
-  try {
-    await assertOkOrThrowProviderError(response, "fal image download failed");
-    const mimeType = response.headers.get("content-type")?.trim() || "image/png";
-    return {
-      buffer: await readResponseWithLimit(response, maxBytes, {
-        onOverflow: ({ maxBytes: maxBytesLocal }) =>
-          new Error(`fal generated image download exceeds ${maxBytesLocal} bytes`),
-      }),
-      mimeType,
-    };
-  } finally {
-    await release();
-  }
+function mapGptImage25Models<T>(value: () => T): Record<string, T> {
+  return Object.fromEntries(FAL_GPT_IMAGE_25_MODELS.map((model) => [model, value()]));
 }
 
 export function buildFalImageGenerationProvider(): ImageGenerationProvider {
@@ -433,9 +408,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         maxCount: 4,
         maxInputImages: 1,
         maxInputImagesByModel: {
-          ...Object.fromEntries(
-            FAL_GPT_IMAGE_25_MODELS.map((model) => [model, GPT_IMAGE_25_EDIT_MAX_INPUT_IMAGES]),
-          ),
+          ...mapGptImage25Models(() => GPT_IMAGE_25_EDIT_MAX_INPUT_IMAGES),
           [FAL_NANO_BANANA_MODEL]: NANO_BANANA_LEGACY_EDIT_MAX_INPUT_IMAGES,
           [`${FAL_NANO_BANANA_MODEL}/edit`]: NANO_BANANA_LEGACY_EDIT_MAX_INPUT_IMAGES,
         },
@@ -453,7 +426,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       geometry: {
         sizes: [...FAL_SUPPORTED_SIZES],
         sizesByModel: {
-          ...Object.fromEntries(FAL_GPT_IMAGE_25_MODELS.map((model) => [model, []])),
+          ...mapGptImage25Models(() => []),
           [FAL_KREA_2_MEDIUM_MODEL]: [],
           [FAL_KREA_2_LARGE_MODEL]: [],
         },
@@ -479,7 +452,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         ),
         resolutions: ["1K", "2K", "4K"],
         resolutionsByModel: {
-          ...Object.fromEntries(FAL_GPT_IMAGE_25_MODELS.map((model) => [model, []])),
+          ...mapGptImage25Models(() => []),
           [FAL_KREA_2_MEDIUM_MODEL]: [],
           [FAL_KREA_2_LARGE_MODEL]: [],
           [FAL_NANO_BANANA_MODEL]: [],
@@ -494,15 +467,9 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       },
       output: {
         formats: [...FAL_OUTPUT_FORMATS],
-        formatsByModel: Object.fromEntries(
-          FAL_GPT_IMAGE_25_MODELS.map((model) => [model, [...GPT_IMAGE_25_OUTPUT_FORMATS]]),
-        ),
-        qualitiesByModel: Object.fromEntries(
-          FAL_GPT_IMAGE_25_MODELS.map((model) => [model, [...GPT_IMAGE_25_QUALITIES]]),
-        ),
-        backgroundsByModel: Object.fromEntries(
-          FAL_GPT_IMAGE_25_MODELS.map((model) => [model, [...GPT_IMAGE_25_BACKGROUNDS]]),
-        ),
+        formatsByModel: mapGptImage25Models(() => [...GPT_IMAGE_25_OUTPUT_FORMATS]),
+        qualitiesByModel: mapGptImage25Models(() => [...GPT_IMAGE_25_QUALITIES]),
+        backgroundsByModel: mapGptImage25Models(() => [...GPT_IMAGE_25_BACKGROUNDS]),
       },
     },
     async generateImage(req) {
@@ -665,19 +632,42 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           await readProviderJsonResponse(response, "fal.image-generation"),
         );
         const images: GeneratedImageAsset[] = [];
-        let imageIndex = 0;
         for (const entry of payload.images) {
           const url = normalizeOptionalString(entry.url);
           if (!url) {
             throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
           }
-          const downloaded = await fetchImageBuffer(url, deadline, maxImageBytes);
-          imageIndex += 1;
-          images.push({
-            buffer: downloaded.buffer,
-            mimeType: downloaded.mimeType,
-            fileName: `image-${imageIndex}.${imageFileExtensionForMimeType(downloaded.mimeType)}`,
+          const { response: download, release: releaseDownload } = await fetchWithSsrFGuard({
+            url,
+            timeoutMs: resolveProviderOperationTimeoutMs({
+              deadline,
+              defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
+            }),
+            auditContext: "fal-image-download",
           });
+          try {
+            await assertOkOrThrowProviderError(download, "fal image download failed");
+            const mimeType = download.headers.get("content-type")?.trim() || "image/png";
+            const buffer = await readProviderBinaryResponse(
+              download,
+              "fal generated image download",
+              "image",
+              {
+                maxBytes: maxImageBytes,
+                // Guarded fetch already bounds the download; preserve its deadline-only timing.
+                chunkTimeoutMs: 0,
+                onOverflow: ({ maxBytes }) =>
+                  new Error(`fal generated image download exceeds ${maxBytes} bytes`),
+              },
+            );
+            images.push({
+              buffer,
+              mimeType,
+              fileName: `image-${images.length + 1}.${imageFileExtensionForMimeType(mimeType)}`,
+            });
+          } finally {
+            await releaseDownload();
+          }
         }
 
         if (images.length === 0) {

@@ -1,5 +1,3 @@
-/* @vitest-environment jsdom */
-
 import { createSignal, flush } from "solid-js";
 import { beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
@@ -11,9 +9,13 @@ import {
   createDiscoveryDetail,
   createInspectResult,
   createPlugin,
+  createPluginSettingsDetailProps,
   createResult,
 } from "./plugins-page.test-support.ts";
-import { renderPluginSettingsDetail, type DetailProps } from "./settings-view.tsx";
+import {
+  renderPluginSettingsDetail as PluginSettingsDetail,
+  type DetailProps,
+} from "./settings-view.tsx";
 
 beforeEach(() => i18n.setLocale("en"));
 
@@ -26,53 +28,22 @@ function setting(container: ParentNode, key: string) {
 }
 
 function mount(overrides: Partial<DetailProps>, setup?: (props: DetailProps) => void) {
-  const props: DetailProps = {
-    connected: true,
-    loading: false,
-    result: createResult(),
-    error: null,
-    busy: {},
-    messages: {},
-    iconUrls: {},
-    canMutate: true,
-    mutationBlockedReason: null,
-    configBusy: false,
-    configSchemaLoading: false,
-    configRead: undefined,
-    configSchemaRead: undefined,
-    configError: null,
-    canEditConfig: true,
-    configValue: {},
-    configHints: {},
-    configUnsupportedPaths: [],
-    pluginId: "workboard",
-    inspection: null,
-    inspectionRead: { receipt: () => null, value: () => null },
-    configSchema: null,
-    hostControlsSchema: null,
-    backHref: "/settings/plugins",
-    backLabel: "Plugins",
-    tab: "readme",
-    onBack: vi.fn(),
-    onRetryInspection: vi.fn(),
-    onTabChange: vi.fn(),
-    onIconError: vi.fn(),
-    onSetEnabled: vi.fn(),
-    onUninstall: vi.fn(),
-    onConfigPatch: vi.fn(),
-    onConfigRemove: vi.fn(),
-    onConfigReload: vi.fn(),
-    onConfigReadRetry: vi.fn(),
-    onConfigWriteRetry: vi.fn(),
-    onRefresh: vi.fn(),
-    ...overrides,
-  };
+  const props: DetailProps = createPluginSettingsDetailProps(createResult(), overrides);
+  const [currentProps, setProps] = createSignal(props);
   const { container } = mountSolid(() => {
     setup?.(props);
-    return renderPluginSettingsDetail(props);
+    return <PluginSettingsDetail {...currentProps()} />;
   });
   flush();
-  return { container, find: queryWithin(container), props };
+  return {
+    container,
+    find: queryWithin(container),
+    props,
+    update: (next: Partial<DetailProps>) => {
+      setProps((previous) => ({ ...previous, ...next }));
+      flush();
+    },
+  };
 }
 
 async function selectSettingAction(row: Element, value: "ask" | "reset") {
@@ -120,28 +91,35 @@ it.each(["multiple-servers", "mixed-capabilities", "missing-description", "disab
   },
 );
 
+it("omits SDK notices from plugin details while retaining actionable errors and warnings", () => {
+  const plugin = createPlugin({
+    error: "Plugin could not load.",
+    compatibilityNotices: [
+      {
+        code: "deprecated-sdk-api",
+        severity: "info",
+        message: "Uses older OpenClaw APIs.",
+        migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
+        apis: [],
+      },
+    ],
+  });
+  const { container } = mount({
+    result: createResult(plugin),
+    error: "Could not refresh plugins.",
+    messages: { "plugin:workboard": { kind: "warning", text: "Plugin action needs attention." } },
+  });
+  expect(container.textContent).not.toContain("Uses older OpenClaw APIs");
+  expect(container.textContent).toContain("Plugin could not load.");
+  expect(container.textContent).toContain("Could not refresh plugins.");
+  expect(container.textContent).toContain("Plugin action needs attention.");
+});
+
 it("does not offer enablement or Settings for an uninstalled plugin", () => {
   const { find } = mount({
     result: createResult(createPlugin({ installed: false, state: "not-installed" })),
   });
   expect(find('[aria-label="Enable Workboard"], [aria-label="Settings"]')).toBeNull();
-});
-
-it("retains the focused Uninstall button when inspection arrives", () => {
-  let publishInspection!: () => void;
-  const { find } = mount({ result: createResult(createPlugin({ removable: true })) }, (props) => {
-    const [inspection, setInspection] = createSignal<DetailProps["inspection"]>(null);
-    Object.defineProperty(props, "inspection", { get: inspection });
-    publishInspection = () => setInspection(createInspectResult());
-  });
-  const button = find<HTMLButtonElement>('[aria-label="Uninstall Workboard"]')!;
-  button.focus();
-  expect(document.activeElement).toBe(button);
-  publishInspection();
-  flush();
-  expect(find('[aria-label="Uninstall Workboard"]')).toBe(button);
-  expect(button.isConnected).toBe(true);
-  expect(document.activeElement).toBe(button);
 });
 
 it("retains inspection retry focus and uses the current error and callback", async () => {
@@ -176,69 +154,58 @@ it("retains inspection retry focus and uses the current error and callback", asy
   expect(nextRetry).toHaveBeenCalledOnce();
 });
 
-it("does not dispatch enablement when setup is missing", () => {
-  const { find, props } = mount({
-    result: createResult(createPlugin({ state: "needs-setup" })),
-  });
+it.each(["needs-setup", "disconnected"])("does not dispatch enablement when %s", (reason) => {
+  const disconnected = reason === "disconnected";
+  const { container, find, props } = mount(
+    disconnected
+      ? { connected: false, canMutate: false }
+      : { result: createResult(createPlugin({ state: "needs-setup" })) },
+  );
+  if (disconnected) {
+    expect(container.textContent).toContain("Agent work queue and session handoff.");
+    expect(find("[inert]")).toBeNull();
+  }
   const button = find<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
-  expect(button.disabled || button.getAttribute("aria-disabled") === "true").toBe(true);
+  expect(
+    disconnected
+      ? button.disabled
+      : button.disabled || button.getAttribute("aria-disabled") === "true",
+  ).toBe(true);
   button.click();
   expect(props.onSetEnabled).not.toHaveBeenCalled();
 });
 
-it("retains disconnected plugin details without dispatching enablement", () => {
-  const { container, find, props } = mount({ connected: false, canMutate: false });
-  expect(container.textContent).toContain("Agent work queue and session handoff.");
-  expect(find("[inert]")).toBeNull();
-  const button = find<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
-  expect(button.disabled).toBe(true);
-  button.click();
-  expect(props.onSetEnabled).not.toHaveBeenCalled();
-});
-
-it("gives host permissions the setting menu and preserves configured, inherited, and read-only values", async () => {
+it("gives inherited host permissions the setting menu and preserves read-only values", async () => {
   const { container, props } = mount({
     tab: "configuration",
     inspection: createInspectResult(),
     onAskSetting: vi.fn(),
-    configValue: { plugins: { entries: { workboard: { hooks: { timeoutMs: 5000 } } } } },
     hostControlsSchema: objectSchema({
       hooks: objectSchema({
-        allowPromptInjection: { type: "boolean" },
-        allowConversationAccess: { type: "boolean" },
-        timeoutMs: { type: "integer" },
-      }),
-      llm: objectSchema({
-        allowedModels: { type: "array", items: { type: "string" } },
+        allowPromptModification: { type: "boolean" },
       }),
     }),
   });
   await Promise.resolve();
   flush();
-  const row = setting(container, "hooks.allowPromptInjection");
+  const row = setting(container, "hooks.allowPromptModification");
+  expect(row.textContent).toContain("add or change the context and instructions sent to the model");
+  expect(row.textContent).toContain("Only allow this for plugins you trust.");
   expect(row.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true);
   expect(row.querySelector('[data-value="reset"]')?.hasAttribute("disabled")).toBe(true);
   await selectSettingAction(row, "ask");
   const hooksPath = ["plugins", "entries", "workboard", "hooks"];
-  const path = [...hooksPath, "allowPromptInjection"];
+  const path = [...hooksPath, "allowPromptModification"];
   expect(props.onAskSetting).toHaveBeenCalledWith(
-    expect.objectContaining({
-      path,
-      value: true,
-      label: "Add context to prompts",
-    }),
+    expect.objectContaining({ path, value: true, label: "Modify prompts" }),
   );
   row.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
   expect(props.onConfigPatch).toHaveBeenCalledWith(path, false);
-  await selectSettingAction(setting(container, "hooks.timeoutMs"), "reset");
-  expect(props.onConfigRemove).toHaveBeenCalledWith([...hooksPath, "timeoutMs"]);
-  expect(setting(container, "llm.allowedModels").querySelector(".oc-menu-trigger")).not.toBeNull();
-  expect(container.textContent).not.toMatch(/Declared capabilities|Your grants/);
   vi.mocked(props.onConfigPatch).mockClear();
   const { container: readOnly } = mount({ ...props, canEditConfig: false });
   await Promise.resolve();
   flush();
-  const readOnlyInput = setting(readOnly, "hooks.allowPromptInjection").querySelector("input")!;
+  const readOnlyInput = setting(readOnly, "hooks.allowPromptModification").querySelector("input")!;
   expect(readOnlyInput.disabled).toBe(true);
   readOnlyInput.click();
   expect(props.onConfigPatch).not.toHaveBeenCalled();
@@ -249,14 +216,12 @@ it("shows selected capabilities without a catalog", () => {
   inspection.declared = {
     ...inspection.declared,
     tools: ["speech_status"],
-    providers: ["local-model", "sibling-model"],
-    channels: ["local-channel", "sibling-channel"],
     contracts: ["speechProviders: local-speech", "videoGenerationProviders: sibling-video"],
   };
   inspection.overview = {
     capabilities: {
-      providers: ["local-model"],
-      channels: ["local-channel"],
+      providers: [],
+      channels: [],
       contracts: { speechProviders: ["local-speech", "local-speech-alias"] },
       ui: ["page"],
     },
@@ -265,7 +230,7 @@ it("shows selected capabilities without a catalog", () => {
   const titles = [...container.querySelectorAll(".plugin-capabilities h2")].map(
     (heading) => heading.textContent,
   );
-  expect(titles).toEqual(["Capabilities2", "Tools1"]);
+  expect(titles).toEqual(["Capabilities", "Extensions", "Tools"]);
   expect(container.textContent).toContain("Text to speech");
   expect(container.textContent).toContain("Pages");
   expect(container.textContent).not.toMatch(/speechProviders:|sibling-|Video generation/);

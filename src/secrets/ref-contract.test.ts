@@ -13,30 +13,19 @@ import {
   resolveDefaultSecretProviderAlias,
 } from "./ref-contract.js";
 
-describe("file secret ref id validation", () => {
-  it("accepts valid file secret ref ids", () => {
-    for (const id of VALID_FILE_SECRET_REF_IDS) {
-      expect(isValidFileSecretRefId(id), `expected valid id: ${id}`).toBe(true);
+describe.each([
+  ["file", isValidFileSecretRefId, VALID_FILE_SECRET_REF_IDS, INVALID_FILE_SECRET_REF_IDS],
+  ["exec", isValidExecSecretRefId, VALID_EXEC_SECRET_REF_IDS, INVALID_EXEC_SECRET_REF_IDS],
+] as const)("%s secret ref id validation", (source, isValid, validIds, invalidIds) => {
+  it(`accepts valid ${source} secret ref ids`, () => {
+    for (const id of validIds) {
+      expect(isValid(id), `expected valid id: ${id}`).toBe(true);
     }
   });
 
-  it("rejects invalid file secret ref ids", () => {
-    for (const id of INVALID_FILE_SECRET_REF_IDS) {
-      expect(isValidFileSecretRefId(id), `expected invalid id: ${id}`).toBe(false);
-    }
-  });
-});
-
-describe("exec secret ref id validation", () => {
-  it("accepts valid exec secret ref ids", () => {
-    for (const id of VALID_EXEC_SECRET_REF_IDS) {
-      expect(isValidExecSecretRefId(id), `expected valid id: ${id}`).toBe(true);
-    }
-  });
-
-  it("rejects invalid exec secret ref ids", () => {
-    for (const id of INVALID_EXEC_SECRET_REF_IDS) {
-      expect(isValidExecSecretRefId(id), `expected invalid id: ${id}`).toBe(false);
+  it(`rejects invalid ${source} secret ref ids`, () => {
+    for (const id of invalidIds) {
+      expect(isValid(id), `expected invalid id: ${id}`).toBe(false);
     }
   });
 });

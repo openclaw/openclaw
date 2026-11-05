@@ -1,7 +1,7 @@
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { openResolvedImage } from "./chat-message-image-open.ts";
+import { openResolvedImage } from "./chat-image-presentation.ts";
 
 registerChatMediaEnglish();
 

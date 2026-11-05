@@ -117,7 +117,7 @@ describe("qa scenario catalog channel contracts", () => {
     });
     const flow = JSON.stringify(requireFlowScenario(scenario).execution.flow);
     expect(flow).toContain("transport.buildAgentDelivery");
-    expect(flow).toContain("peer: { kind: 'group', id: delivery.replyTo }");
+    expect(flow).toContain("peer: { kind: 'direct', id: delivery.replyTo }");
   });
 
   it("rejects unlinked spawn evidence despite matching parent synthesis", async () => {

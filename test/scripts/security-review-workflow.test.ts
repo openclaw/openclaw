@@ -452,6 +452,15 @@ describe("security review workflow trust boundaries", () => {
       { eventName: "workflow_run", sourceEvent: "workflow_dispatch", allowed: true },
       { action: "created", body: "/allow-security-sensitive-change", allowed: true },
       { action: "created", body: "/allow-dependencies-change", allowed: true },
+      { action: "created", body: `/refresh-security-review ${"a".repeat(40)}`, allowed: true },
+      { action: "edited", body: `/refresh-security-review ${"a".repeat(40)}`, allowed: false },
+      { action: "deleted", body: `/refresh-security-review ${"a".repeat(40)}`, allowed: false },
+      {
+        action: "created",
+        body: `/refresh-security-review ${"a".repeat(40)}`,
+        issue: true,
+        allowed: false,
+      },
       { action: "created", body: "Thanks", allowed: false },
       {
         action: "edited",
@@ -640,8 +649,8 @@ describe("security review workflow trust boundaries", () => {
       writeFileSync(
         join(bin, "npm"),
         `#!${process.execPath}
-const fs = require("node:fs");
-const path = require("node:path");
+import fs from "node:fs";
+import path from "node:path";
 fs.writeFileSync(${JSON.stringify(installLog)}, JSON.stringify({
   args: process.argv.slice(2),
   cwd: process.cwd(),

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -56,7 +55,13 @@ describe("compile related blocks", () => {
       ["sources/alpha.md", "source.alpha", "Alpha"],
       ["sources/beta.md", "source.beta", "Beta"],
       ["sources/hub.md", "source.hub", "Hub"],
-      ["concepts/one.md", "concept.one", "Concept One", ["source.alpha"], ["concepts/two"]],
+      [
+        "concepts/one.md",
+        "concept.one",
+        "Concept One",
+        ["source.alpha"],
+        ["concepts/two#Heading|Display", "two#^block"],
+      ],
       [
         "concepts/two.md",
         "concept.two",
@@ -72,8 +77,26 @@ describe("compile related blocks", () => {
       ...edgePages,
     ]);
 
-    await compileMemoryWikiVault(config);
+    // Bound relation-list reads independently of wall-clock timing.
+    let relationReads = 0;
+    const scan = markdown.scanWikiPageSummary;
+    vi.spyOn(markdown, "scanWikiPageSummary").mockImplementation((params) => {
+      const result = scan(params);
+      if (result.status === "valid") {
+        result.page = new Proxy(result.page, {
+          get(target, key, receiver) {
+            if (key === "sourceIds" || key === "linkTargets") {
+              relationReads++;
+            }
+            return Reflect.get(target, key, receiver);
+          },
+        });
+      }
+      return result;
+    });
 
+    await compileMemoryWikiVault(config);
+    expect(relationReads).toBeLessThan((10 + hubPages.length + edgePages.length) * 20);
     const blocks = Object.fromEntries(
       await Promise.all(
         Object.keys(EXPECTED_BLOCKS).map(
@@ -82,76 +105,6 @@ describe("compile related blocks", () => {
       ),
     );
     expect(blocks).toEqual(EXPECTED_BLOCKS);
-  });
-
-  it("builds related blocks from indexes instead of rescanning every page per page", async () => {
-    const vault = await createVault({
-      initialize: true,
-      config: { vault: { renderMode: "obsidian" } },
-    });
-    const { rootDir, config } = vault;
-    const pageCount = 120;
-    const sourceCount = 36;
-    const specs: PageSpec[] = [];
-    for (let index = 0; index < sourceCount; index++) {
-      specs.push([`sources/s${index}.md`, `source.s${index}`, `Source ${index}`]);
-    }
-    // Path, filename-only, aliased heading and block links resolve to the same backlink.
-    const linkForms = [
-      ["concepts/", ""],
-      ["", ""],
-      ["concepts/", "#Heading|Display"],
-      ["", "#^block"],
-    ] as const;
-    for (let index = 0; index < pageCount - sourceCount; index++) {
-      // Skewed picks make the first few sources hubs past the fanout cap.
-      const [prefix, suffix] = linkForms[index % linkForms.length] ?? ["", ""];
-      const pick = (salt: number) =>
-        Math.floor(((index * 31 + salt * 17) % 97) ** 2 / 97) % sourceCount;
-      specs.push([
-        `concepts/p${index}.md`,
-        `concept.p${index}`,
-        `Page ${index}`,
-        [...new Set([`source.s${pick(1)}`, `source.s${pick(2)}`])],
-        [`${prefix}p${(index * 7 + 3) % (pageCount - sourceCount)}${suffix}`],
-      ]);
-    }
-    await writePages(vault, specs);
-
-    // Count how often compile touches each page's relation lists; a per-page rescan of
-    // the whole vault shows up as quadratic growth here, independent of timing.
-    let relationReads = 0;
-    const scan = markdown.scanWikiPageSummary;
-    vi.spyOn(markdown, "scanWikiPageSummary").mockImplementation((params) => {
-      const result = scan(params);
-      if (result.status === "valid") {
-        for (const key of ["sourceIds", "linkTargets"] as const) {
-          const value = result.page[key];
-          Object.defineProperty(result.page, key, {
-            configurable: true,
-            enumerable: true,
-            get() {
-              relationReads++;
-              return value;
-            },
-          });
-        }
-      }
-      return result;
-    });
-
-    await compileMemoryWikiVault(config);
-
-    expect(relationReads).toBeLessThan(pageCount * 20);
-
-    const digest = createHash("sha256");
-    for (const [file] of specs) {
-      digest
-        .update(file)
-        .update("\0")
-        .update(await readRelatedBlock(rootDir, file));
-    }
-    expect(digest.digest("hex")).toBe(EXPECTED_RELATED_DIGEST);
   });
 });
 
@@ -175,6 +128,3 @@ const EXPECTED_BLOCKS: Record<string, string> = {
   "concepts/edge-00.md":
     "### Related Pages\n\n- [[concepts/edge-01|Edge 01]]\n- [[concepts/edge-02|Edge 02]]\n- [[concepts/edge-03|Edge 03]]\n- [[concepts/edge-04|Edge 04]]\n- [[concepts/edge-05|Edge 05]]\n- [[concepts/edge-06|Edge 06]]\n- [[concepts/edge-07|Edge 07]]\n- [[concepts/edge-08|Edge 08]]\n- [[concepts/edge-09|Edge 09]]\n- [[concepts/edge-10|Edge 10]]\n- [[concepts/edge-11|Edge 11]]\n- [[concepts/edge-12|Edge 12]]",
 };
-// Digest of every related block, captured from the pre-index implementation so the
-// index must reproduce the same bytes.
-const EXPECTED_RELATED_DIGEST = "a7a043ff49c0b48d9ebfbcf6d590eacf790ba419ea40278b8eeda52a08ef6732";

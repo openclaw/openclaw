@@ -29,14 +29,13 @@ type ReplyQuestionInputParams = Pick<
   | "sessionKey"
 >;
 
-type ReplyQuestionInputResult =
-  | { handled: false; requesterMismatch?: true }
-  | { handled: true; payload: ReplyPayload | undefined };
-
 /** Question-only runtimes accept answers without exposing ordinary steering. */
 export async function runReplyQuestionInput(
   params: ReplyQuestionInputParams,
-): Promise<ReplyQuestionInputResult> {
+): Promise<
+  | { handled: false; requesterMismatch?: true }
+  | { handled: true; payload: ReplyPayload | undefined }
+> {
   const { followupRun, opts, sessionKey } = params;
   const external =
     followupRun.run.inputProvenance === undefined ||
@@ -67,8 +66,6 @@ export async function runReplyQuestionInput(
     operatorAuthority: followupRun.operatorAuthority,
     toolsAllow: followupRun.toolsAllow,
     disableTools: followupRun.disableTools === true,
-    forceRestartSafeTools: followupRun.forceRestartSafeTools,
-    forceCodeModeTools: followupRun.forceCodeModeTools,
   });
   const sourceAbort = opts?.abortSignal;
   const queuedAbort = resolveFollowupAbortSignal(followupRun);

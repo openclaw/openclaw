@@ -157,6 +157,7 @@ export const createTelegramMessageProcessor = (
     replyMedia,
     replyChain,
     promptContext,
+    resolveSenderMedia,
   }) => {
     const turnCfg = turnContext.cfg;
     const turnTelegramCfg = turnContext.telegramCfg;
@@ -176,6 +177,7 @@ export const createTelegramMessageProcessor = (
       replyMedia,
       replyChain,
       promptContext,
+      resolveSenderMedia,
       storeAllowFrom,
       options,
       cfg: turnCfg,
@@ -390,6 +392,7 @@ export const createTelegramMessageProcessor = (
                 ? dropped.error
                 : new Error("telegram spooled queue drop was not completed");
             }
+            await drainLifecycle?.onDropped?.(reason);
           },
         });
         if (adopted) {

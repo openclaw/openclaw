@@ -1,6 +1,6 @@
 // Capacity policy reads this state without importing the queue runtime.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
+import type { CommandQueueAdmissionOptions } from "./command-queue.types.js";
 import { CommandLane, SUBAGENT_LANE_PREFIX, SWARM_LANE_PREFIX } from "./lanes.js";
 
 export function getDefaultLaneConcurrency(lane: string): number {
@@ -30,8 +30,8 @@ export type QueueEntry = {
   warnAfterMs: number;
   queuedAheadAtEnqueue: number;
   activeAheadAtEnqueue: number;
-  taskIdentity?: CommandQueueEnqueueOptions["taskIdentity"];
-  sessionTarget?: CommandQueueEnqueueOptions["sessionTarget"];
+  taskIdentity?: CommandQueueAdmissionOptions["taskIdentity"];
+  sessionTarget?: CommandQueueAdmissionOptions["sessionTarget"];
   onWait?: (waitMs: number, queuedAhead: number) => void;
   releaseQueuedAbort?: () => void;
 };
@@ -51,7 +51,7 @@ type LaneQueue = {
 export type LaneState = {
   lane: string;
   queue: LaneQueue;
-  activeTasks: Map<number, CommandQueueEnqueueOptions["sessionTarget"]>;
+  activeTasks: Map<number, CommandQueueAdmissionOptions["sessionTarget"]>;
   maxConcurrent: number;
   draining: boolean;
   generation: number;
@@ -183,15 +183,16 @@ export function removeLaneQueueEntry(queue: LaneQueue, entry: QueueEntry): boole
  * the same lanes, counters, and draining flag in production builds.
  */
 const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
+const queueState = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
+  lanes: new Map<string, LaneState>(),
+  nextTaskId: 1,
+  nextQueueSequence: 1,
+  laneGroups: new Map<string, LaneGroupState>(),
+  laneGroupByLane: new Map<string, string>(),
+}));
 
 export function getQueueState() {
-  return resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
-    lanes: new Map<string, LaneState>(),
-    nextTaskId: 1,
-    nextQueueSequence: 1,
-    laneGroups: new Map<string, LaneGroupState>(),
-    laneGroupByLane: new Map<string, string>(),
-  }));
+  return queueState;
 }
 
 export function normalizeLane(lane: string): string {

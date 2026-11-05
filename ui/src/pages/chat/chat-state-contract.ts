@@ -45,6 +45,8 @@ export type ChatState = StreamCausalBoundaryState & {
   uploadConfig?: ApplicationConfigCapability;
   client: GatewayBrowserClient | null;
   connected: boolean;
+  /** Gateway admission can pause while the transport still owns in-flight results. */
+  gatewayWorkPaused?: boolean;
   chatSubmissions?: ApplicationChatSubmissions;
   reconcileApprovalTerminals?: ApplicationOverlays["reconcileApprovalTerminals"];
   hasPendingInitialTurn?: (sessionKey: string) => boolean;

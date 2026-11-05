@@ -181,6 +181,14 @@ vi.mock("./shared/stale-plugin-config.js", () => ({
   maybeRepairStalePluginConfig: hoistedMocks.maybeRepairStalePluginConfig,
 }));
 
+vi.mock("./shared/context-engine-plugin-id-selector.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared/context-engine-plugin-id-selector.js")>()),
+  maybeRepairContextEnginePluginIdSelector: (cfg: OpenClawConfig) => ({
+    config: cfg,
+    changes: [],
+  }),
+}));
+
 vi.mock("./shared/stale-oauth-profile-shadows.js", () => ({
   repairStaleOAuthProfileShadows: hoistedMocks.repairStaleOAuthProfileShadows,
 }));

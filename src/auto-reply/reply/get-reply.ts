@@ -10,7 +10,6 @@ import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
-import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import {
   WorkspaceAliasRepointedError,
@@ -36,7 +35,6 @@ import {
 } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
-import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
@@ -102,9 +100,7 @@ import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js
 import { resolveReplyStoredModelSelection } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
 
-const stageSandboxMediaRuntimeLoader = createLazyImportLoader(
-  () => import("./stage-sandbox-media.js"),
-);
+const stageReplyMediaRuntimeLoader = createLazyImportLoader(() => import("./stage-reply-media.js"));
 const replyResolverTimingLog = createSubsystemLogger("auto-reply/reply-resolver-timing");
 
 export async function getReplyFromConfig(
@@ -135,7 +131,7 @@ async function resolveReplyFromConfig(
       isFastTestEnv,
       configOverride,
     });
-  const source = prepareReplySourceInput(ctx, cfg, opts);
+  const source = await prepareReplySourceInput(ctx, cfg, opts);
   opts = source.options;
   try {
     // Retain preparation timings before a stall happens. Whole-turn summaries
@@ -168,11 +164,8 @@ async function resolveReplyFromConfig(
       finalized.CommandTargetSessionKey = explicitSteerTargetSessionKey;
     }
     const initialAgentScope = await resolverTiming.measure("reply.resolve_agent_scope", () =>
-      resolveReplyAgentScope({ cfg, ctx: finalized }),
+      resolveReplyAgentScope({ cfg, ctx: finalized, signal: opts?.abortSignal }),
     );
-    await waitForAgentDatabaseWriteAdmission(initialAgentScope.agentId, {
-      signal: opts?.abortSignal,
-    });
     assertReplyPreprocessingActive(opts?.abortSignal);
     opts?.operatorAuthority?.assertCurrent();
     opts?.internalEventExecution?.assertCurrent?.();
@@ -908,42 +901,17 @@ async function resolveReplyFromConfig(
     ) {
       const stagingSessionEntry =
         sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry;
-      const stagingWorkspaceDir =
-        resolveIngressWorkspaceOverrideForSessionRun({
-          spawnedBy: stagingSessionEntry.spawnedBy,
-          workspaceDir: stagingSessionEntry.spawnedWorkspaceDir,
-          cwd: stagingSessionEntry.spawnedCwd,
-        }) ?? workspaceDir;
-      // Private library selections change the sandbox isolation identity. Resolve
-      // the current selection before staging so the attachment and admitted run
-      // select the same SSH runtime, even when a prior snapshot needs refreshing.
-      const selectedSkills =
-        stagingSessionEntry.skillLibrarySelections ??
-        stagingSessionEntry.skillsSnapshot?.librarySelections;
-      const stagingSkillsSnapshot = selectedSkills?.length
-        ? (
-            await (
-              await import("../../skills/runtime/session-snapshot.js")
-            ).resolveReusableWorkspaceSkillSnapshot({
-              ...skillSnapshotScope,
-              executionWorkspaceDir:
-                stagingSessionEntry.worktree?.canonicalWorkspaceDir ?? workspaceDir,
-              existingSnapshot: stagingSessionEntry.skillsSnapshot,
-              librarySelections: selectedSkills,
-              skillFilter: preparedReplyOpts?.skillFilter,
-              skillOverrides: preparedReplyOpts?.skillOverrides,
-            })
-          ).snapshot
-        : undefined;
       const stageResult = await traceGetReplyPhase("reply.stage_media", async () =>
-        (await stageSandboxMediaRuntimeLoader.load()).stageSandboxMedia({
+        (await stageReplyMediaRuntimeLoader.load()).stageReplyMedia({
           ctx,
           sessionCtx,
           cfg,
           agentId,
           sessionKey,
-          workspaceDir: stagingWorkspaceDir,
-          skillsSnapshot: stagingSkillsSnapshot,
+          workspaceDir,
+          sessionEntry: stagingSessionEntry,
+          skillFilter: preparedReplyOpts?.skillFilter,
+          skillOverrides: preparedReplyOpts?.skillOverrides,
           abortSignal: optsWithSkillFilter?.abortSignal,
           awaitSessionDiffBaseline: resolvedOpts?.awaitSessionDiffBaseline,
         }),

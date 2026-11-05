@@ -41,6 +41,7 @@ export type ApplicationOverlaySnapshot = ApplicationUpdateOverlaySnapshot & {
   approvalBusy: boolean;
   approvalCanGrant: boolean;
   approvalErrors: ReadonlyMap<string, string>;
+  approvalNodeNames?: ReadonlyMap<string, string>;
   devicePairSetupOpen: boolean;
   devicePairSetupLifecycle: DevicePairSetupLifecycle;
   devicePairPendingCount: number;

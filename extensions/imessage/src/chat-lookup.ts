@@ -13,17 +13,17 @@ type IMessageConversationReadOrigin = NonNullable<
   ChannelMessageActionContext["conversationReadOrigin"]
 >;
 
-type IMessageChatListResponse = { chats?: unknown };
 type IMessageChat = { id: number; guid: string; identifier?: string };
-type ChatListCacheEntry = {
-  list: readonly IMessageChat[];
-  expiresAt: number;
-};
-
 // Cache by the complete account transport identity so routing and actions reuse one
 // chat snapshot without leaking a same-path account across Messages Macs.
 const CHAT_LIST_CACHE_TTL_MS = 30 * 1000;
-const chatListCache = new Map<string, ChatListCacheEntry>();
+const chatListCache = new Map<
+  string,
+  {
+    list: readonly IMessageChat[];
+    expiresAt: number;
+  }
+>();
 
 function numberFromUnknown(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : parseStrictInteger(value);
@@ -68,7 +68,7 @@ export async function resolveIMessageChat(params: {
   chatListCache.delete(key);
   const client = await createIMessageRpcClient(params.options);
   try {
-    const result = await client.request<IMessageChatListResponse>(
+    const result = await client.request<{ chats?: unknown }>(
       "chats.list",
       { limit: 1000 },
       { timeoutMs: params.options.timeoutMs },
