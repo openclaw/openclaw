@@ -149,22 +149,25 @@ suite.define(() => {
           });
           await page.addInitScript(() => {
             const frames: Array<{
+              details: boolean;
               progress: string | null;
               sections: Array<{ id: string; top: number; height: number }>;
             }> = [];
             const sample = () => {
-              const panel = document.querySelector(".chat-pane-cache__pane--active .chat-details");
+              const pane = document.querySelector(".chat-pane-cache__pane--active");
+              const panel = pane?.querySelector(".chat-details");
               const session = panel?.querySelector("section.chat-details-session");
-              if (panel && session?.checkVisibility()) {
-                const top = panel.getBoundingClientRect().top;
+              if (pane?.querySelector(".chat-pane__header")?.checkVisibility()) {
+                const top = panel?.getBoundingClientRect().top ?? 0;
                 frames.push({
+                  details: Boolean(session?.checkVisibility()),
                   progress:
-                    panel.querySelector('[data-progress-card-placement="details"]')?.textContent ??
+                    panel?.querySelector('[data-progress-card-placement="details"]')?.textContent ??
                     null,
                   sections: [
-                    ...panel.querySelectorAll(
+                    ...(panel?.querySelectorAll(
                       "section.chat-details-session, [data-details-group], [data-progress-card-placement='details']",
-                    ),
+                    ) ?? []),
                   ].map((section) => {
                     const box = section.getBoundingClientRect();
                     return {
@@ -223,11 +226,13 @@ suite.define(() => {
           const frames = await page.evaluate(async () => {
             await new Promise(requestAnimationFrame);
             return Reflect.get(window, "progressReloadFrames") as Array<{
+              details: boolean;
               progress: string | null;
               sections: Array<{ id: string; top: number; height: number }>;
             }>;
           });
           expect(frames.length).toBeGreaterThan(1);
+          expect(frames[0]!.details).toBe(true);
           expect(frames[0]!.sections.some((section) => section.id === "automations")).toBe(true);
           const settled = frames.at(-1)!.sections;
           for (const frame of frames) {
