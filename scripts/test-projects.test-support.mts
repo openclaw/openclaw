@@ -7,7 +7,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import adaptiveMarkdownQualification from "../config/ci-adaptive-markdown.json" with { type: "json" };
-import { createAdaptiveMarkdownFilter } from "./lib/ci-adaptive-markdown.mjs";
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
@@ -101,6 +100,7 @@ import {
   isTestOnlyPath,
   isTestSupportFileTarget,
 } from "./lib/changed-path-facts.mjs";
+import { createAdaptiveMarkdownFilter } from "./lib/ci-adaptive-markdown.mjs";
 import {
   createExtensionTestProcessTargetChunks,
   listTrackedTestPlanFiles,

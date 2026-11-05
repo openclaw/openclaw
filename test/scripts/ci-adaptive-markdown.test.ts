@@ -30,10 +30,9 @@ function fixture() {
     createHash("sha256")
       .update(
         JSON.stringify(
-          files.toSorted().map((file) => [
-            file,
-            createHash("sha256").update(contents[file]!).digest("hex"),
-          ]),
+          files
+            .toSorted()
+            .map((file) => [file, createHash("sha256").update(contents[file]!).digest("hex")]),
         ),
       )
       .digest("hex");
@@ -43,10 +42,11 @@ function fixture() {
     tests: { [unchanged]: hash([unchanged, source]) },
   };
   const select = (changes = [changed]) =>
-    createAdaptiveMarkdownFilter(changes, createTestInputFingerprint(cwd), qualification)([
-      changedTest,
-      unchanged,
-    ]);
+    createAdaptiveMarkdownFilter(
+      changes,
+      createTestInputFingerprint(cwd),
+      qualification,
+    )([changedTest, unchanged]);
   return { cwd, select };
 }
 

@@ -9,11 +9,10 @@ export function createAdaptiveMarkdownFilter(changedPaths, fingerprint, qualific
   const eligible =
     changedPaths.length > 0 &&
     changedPaths.every(
-      (file) =>
-        /^packages\/markdown-core\/src\/[^/]+\.ts$/u.test(file) &&
-        !file.includes(".test"),
+      (file) => /^packages\/markdown-core\/src\/[^/]+\.ts$/u.test(file) && !file.includes(".test"),
     );
-  const commonUnchanged = eligible && fingerprint(qualification.common) === qualification.commonHash;
+  const commonUnchanged =
+    eligible && fingerprint(qualification.common) === qualification.commonHash;
   /** @param {string[]} owners */
   return (owners) =>
     commonUnchanged
