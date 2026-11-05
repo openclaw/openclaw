@@ -984,14 +984,14 @@ describe("secret egress proxy", () => {
   });
 
   function captureProxySocket() {
-    const emitted = vi.spyOn(net.Server.prototype, "emit");
+    // Bun delivers connections natively, but both runtimes register socket listeners.
+    const listeners = vi.spyOn(net.Socket.prototype, "once");
     return () => {
-      const socket = emitted.mock.calls.find(
-        ([event, candidate]) =>
-          event === "connection" &&
+      const socket = listeners.mock.contexts.find(
+        (candidate) =>
           candidate instanceof net.Socket &&
           candidate.localPort === Number(new URL(proxy.proxyOrigin).port),
-      )?.[1];
+      );
       if (!(socket instanceof net.Socket)) {
         throw new Error("Proxy did not accept a TCP connection");
       }
