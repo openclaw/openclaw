@@ -1215,7 +1215,6 @@
 ["src/agents/bootstrap-files.test.ts","../plugins/memory-runtime.js","8c0538970a03432a04966620a21395fb6b2b815339c5bb97c555a277a83127d5",1]
 ["src/agents/btw.mocks.test-support.ts","../plugins/provider-policy-surface.js","f6bbd621edcf584ec5bc6b5768f0d261682bfeacc5f90c28fa8c3f7566d63ac4",1]
 ["src/agents/btw.mocks.test-support.ts","../plugins/provider-runtime.js","b0d6550000e3d3880ee0a62904fecab85d0f37c38a05357f4b6446a10f951d5d",1]
-["src/agents/btw.mocks.test-support.ts","../plugins/providers.js","43a2d17642f79147dcbbfeaab99198a2268524e7c6e7f8782760abb0a2fc612a",1]
 ["src/agents/btw.mocks.test-support.ts","./agent-scope.js","b6ab12167eaec4538b5cfe175874bd22fefe14e8e6d64be4bd6250fee28fbca3",1]
 ["src/agents/btw.mocks.test-support.ts","./auth-profiles/session-override.js","8167212c7a5f876894a637facdcfbd68decb01b6674fcec66189b4e8c2342a98",1]
 ["src/agents/btw.mocks.test-support.ts","./cli-runner/execute.runtime.js","7b58b50f08c34c5f746dddff1ba493eb3d8bf124c4adc542a9fb2bee42f28333",1]
