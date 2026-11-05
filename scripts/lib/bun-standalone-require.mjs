@@ -140,25 +140,33 @@ globalThis.__openclawStandaloneExternalModulePath = (filename) => {
   // The compiled require adapter already passes image paths to the native loader.
   if (filename.startsWith("/$bunfs/")) return undefined;
   const entry = embedded(filename);
+  if (entry) ensureImageExports();
   return entry ? imageNamespace + ":" + entry : undefined;
 };
 globalThis.__openclawStandaloneExternalModuleResolution = (filename) => {
   const entry = embedded(filename);
+  if (entry) ensureImageExports();
   return { path: entry ?? filename, namespace: entry ? imageNamespace : "file" };
 };
+let imageExportsRegistered = false;
 let requireImageModule;
-Bun.plugin({ name: "openclaw-image-exports", setup(build) {
-  build.onLoad({ filter: /.*/, namespace: imageNamespace }, ({ path: filename }) => {
-    requireImageModule ??= globalThis.__openclawStandaloneCreateRequire(createRequire, path.join(root, "package.json"));
-    const loaded = requireImageModule(filename);
-    if (commonJsEntries.has(filename)) {
-      return { exports: { ...loaded, __esModule: true, default: loaded }, loader: "object" };
-    }
-    // ESM consumers retain every named export as well as the original default.
-    const { __esModule: _interop, ...exports } = loaded;
-    return { exports, loader: "object" };
-  });
-}});`;
+// Keep the onLoad hook inactive until a disk import needs image exports.
+function ensureImageExports() {
+  if (imageExportsRegistered) return;
+  Bun.plugin({ name: "openclaw-image-exports", setup(build) {
+    build.onLoad({ filter: /.*/, namespace: imageNamespace }, ({ path: filename }) => {
+      requireImageModule ??= globalThis.__openclawStandaloneCreateRequire(createRequire, path.join(root, "package.json"));
+      const loaded = requireImageModule(filename);
+      if (commonJsEntries.has(filename)) {
+        return { exports: { ...loaded, __esModule: true, default: loaded }, loader: "object" };
+      }
+      // ESM consumers retain every named export as well as the original default.
+      const { __esModule: _interop, ...exports } = loaded;
+      return { exports, loader: "object" };
+    });
+  }});
+  imageExportsRegistered = true;
+}`;
 }
 
 /** Route disk imports to their embedded module without changing the compiled loader. */

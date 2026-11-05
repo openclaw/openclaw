@@ -166,7 +166,7 @@ console.log("lazy relocated loader");`,
   },
 );
 
-it("hands new image entries to plugins without routing them through disk require", () => {
+it.each(["path", "resolution"])("loads shared image exports lazily (%s)", (first) => {
   const root = temporary.make("standalone-image-boundary-");
   const esm = "/$bunfs/root/new-sdk.mjs";
   const cjs = "/$bunfs/root/new-legacy.cjs";
@@ -181,6 +181,7 @@ it("hands new image entries to plugins without routing them through disk require
   const adapter = createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths });
   const builtins = adapter.finalize([]);
   let load: ((args: { path: string }) => { exports: Record<string, unknown> }) | undefined;
+  let registrations = 0;
   const builder = {
     onLoad(_options: unknown, callback: NonNullable<typeof load>) {
       load = callback;
@@ -197,6 +198,7 @@ it("hands new image entries to plugins without routing them through disk require
     __openclawStandaloneNativeResolve: () => undefined,
     Bun: {
       plugin(options: { setup: (value: typeof builder) => void }) {
+        registrations++;
         options.setup(builder);
       },
     },
@@ -213,6 +215,14 @@ it("hands new image entries to plugins without routing them through disk require
     imageRequire,
   );
   runStandaloneBootstrap(createStandaloneExternalModuleBootstrap(), context, imageRequire);
+  expect(registrations).toBe(0);
+  const missing = path.join(root, "missing.mjs");
+  expect(context["__openclawStandaloneExternalModulePath"](missing)).toBeUndefined();
+  expect(context["__openclawStandaloneExternalModuleResolution"](missing)).toEqual({
+    path: missing,
+    namespace: "file",
+  });
+  expect(registrations).toBe(0);
   const require = context["__openclawStandaloneCreateRequire"](
     createRequire,
     path.join(root, "consumer.cjs"),
@@ -220,6 +230,21 @@ it("hands new image entries to plugins without routing them through disk require
   // No corresponding files exist on disk: a new image edge must use the image intrinsic.
   expect(require(path.join(root, "new-sdk.mjs"))).toBe(sdk);
   expect(require(path.join(root, "new-legacy.cjs"))).toBe(legacy);
+  expect(registrations).toBe(0);
+  const imagePath = path.join(root, "new-sdk.mjs");
+  if (first === "path") {
+    expect(context["__openclawStandaloneExternalModulePath"](imagePath)).toBe(
+      `openclaw-image:${esm}`,
+    );
+  } else {
+    expect(context["__openclawStandaloneExternalModuleResolution"](imagePath)).toEqual({
+      path: esm,
+      namespace: "openclaw-image",
+    });
+  }
+  context["__openclawStandaloneExternalModulePath"](imagePath);
+  context["__openclawStandaloneExternalModuleResolution"](imagePath);
+  expect(registrations).toBe(1);
   expect(load).toBeTypeOf("function");
   expect(load!({ path: esm }).exports.increment).toBe(sdk.increment);
   expect(load!({ path: esm }).exports.default).toBe(state);
