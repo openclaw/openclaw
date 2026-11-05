@@ -8,7 +8,7 @@ import {
   createGatewayPluginRequestHandler,
   sendRequest,
   shouldEnforceGatewayAuthForPluginPath,
-  withGatewayServer,
+  withPluginGatewayHttpServer,
 } from "openclaw/plugin-sdk/gateway-http-testing";
 import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -30,7 +30,7 @@ it("returns JSON 404 for unsupported /a2a/v1 descendants instead of the Control 
   await withTempDir("openclaw-a2a-namespace-", async (directory) => {
     const root = await fs.realpath(directory);
     await fs.writeFile(path.join(root, "index.html"), CONTROL_UI_DOCUMENT);
-    await withGatewayServer({
+    await withPluginGatewayHttpServer({
       prefix: "a2a-namespace-control-ui",
       resolvedAuth: AUTH_NONE,
       overrides: {

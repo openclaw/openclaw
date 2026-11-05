@@ -2,7 +2,7 @@
 // Re-exporting server-http.test-harness pulls server-request-context.test-support
 // into plugin-sdk declaration emit, which cannot name Vitest's Procedure type.
 import { EventEmitter } from "node:events";
-import { type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
+import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
 import type { ResolvedGatewayAuth } from "../gateway/auth.js";
 import { createGatewayRequest } from "../gateway/hooks-test-helpers.js";
 import { createGatewayHttpServer } from "../gateway/server-http.js";
@@ -78,18 +78,24 @@ function createCapturedResponse(req: IncomingMessage): {
     },
   });
   return {
-    res: res as unknown as ServerResponse,
+    res: toServerResponse(res),
     ended,
     response: {
-      res: res as unknown as ServerResponse,
+      res: toServerResponse(res),
       headers,
       getBody: () => body,
     },
   };
 }
 
+// The captured emitter is the response the Gateway handler writes. One assertion
+// keeps that test double out of the public signature without an unknown chain.
+function toServerResponse(response: EventEmitter): ServerResponse {
+  return response as ServerResponse;
+}
+
 /** Start one Gateway HTTP server against an isolated config and dispatch requests in-process. */
-export async function withGatewayServer(params: {
+export async function withPluginGatewayHttpServer(params: {
   prefix: string;
   resolvedAuth: ResolvedGatewayAuth;
   overrides?: Partial<GatewayHttpServerOptions>;
