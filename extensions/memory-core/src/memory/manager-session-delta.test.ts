@@ -77,7 +77,7 @@ describe("memory session delta publication", () => {
     expect(manager.status().dirty).toBe(false);
   });
 
-  it("keeps the published index when a background rebuild is interrupted", async () => {
+  it("keeps the published index dirty when a background delta is interrupted", async () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     onTestFinished(() => {
       vi.useRealTimers();
@@ -92,6 +92,8 @@ describe("memory session delta publication", () => {
     );
     onTestFinished(() => manager.close());
     await manager.sync({ reason: "initial", force: true });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await (manager as unknown as { awaitManagerIdle(): Promise<void> }).awaitManagerIdle();
     const database = Reflect.get(manager, "db") as DatabaseSync;
     const before = readPublishedSessionIndex(
       database,
@@ -102,7 +104,6 @@ describe("memory session delta publication", () => {
       ...session,
       messages: [{ role: "user", timestamp: Date.now(), content: "newproof appended" }],
     });
-    Reflect.set(manager, "memoryFullRetryDirty", true);
     fixture.provider.beforeEmbedBatch = async () => {
       fixture.provider.beforeEmbedBatch = null;
       activity.listener?.(true);
