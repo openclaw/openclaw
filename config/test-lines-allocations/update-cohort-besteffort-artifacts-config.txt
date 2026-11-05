@@ -4,5 +4,6 @@
 # Repair settlement keeps a later config edit, still continues an interrupted
 # rollback that already restored migration rows, and still reports a kept config
 # file after a later step fails, while invalid config stays pending. A later demo
-# snapshot keeps its package-owner record, and a malformed included file still refuses.
-138
+# snapshot keeps its package-owner record, a kept installation keeps both plugins'
+# snapshots, and a malformed included file still refuses.
+325
