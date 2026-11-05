@@ -61,9 +61,18 @@ const composer = (page: Page) => page.getByRole("textbox", { name: "Chat compose
 const navigate = (page: Page, pathname: string) =>
   evaluateControlUiContext(
     page,
-    (app, path) => app.navigate("plugins", { pathname: path }),
+    (app, path) =>
+      app.navigate(path.startsWith("/settings/") ? "plugin-settings" : "plugins", {
+        pathname: path,
+      }),
     pathname,
   );
+
+const settleLaunch = (page: Page) =>
+  page.evaluate(async () => {
+    await new Promise<number>(requestAnimationFrame);
+    await new Promise<number>(requestAnimationFrame);
+  });
 
 function responses(plugin: PluginCatalogItem = installed) {
   return {
@@ -329,68 +338,69 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
       methodResponses: { ...responses(disabled), "plugins.list": inventory([disabled]) },
     });
     try {
-      await page.goto(`${server.baseUrl}settings/plugins/calendar-plus`);
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:main"));
+      await composer(page).waitFor();
+      await navigate(page, "/settings/plugins/calendar-plus");
+      await recommendation(page).first().waitFor();
+      // Reject real modal preparation once; keep the confirmation owner and retry flow intact.
+      await page.evaluate(() => {
+        const get = customElements.get;
+        customElements.get = function (tag) {
+          if (tag !== "openclaw-modal-dialog") return get.call(this, tag);
+          customElements.get = get;
+          throw new Error("Synthetic confirmation preparation failed");
+        };
+      });
+      await recommendation(page).first().click();
+      await page
+        .getByRole("alert")
+        .filter({ hasText: "Synthetic confirmation preparation failed" })
+        .waitFor();
+      await expect.poll(() => recommendation(page).first().isEnabled()).toBe(true);
       await recommendation(page).first().click();
       const activation = page.getByRole("dialog", {
         name: "Enable Calendar Plus before opening chat?",
         exact: true,
       });
-      await activation.waitFor({ timeout: 5000 });
+      await activation.waitFor();
+      await page.goBack();
+      await waitForControlUiRoute(page, { routeId: "chat" });
+      await expect.poll(() => activation.count()).toBe(0);
       expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await navigate(page, "/settings/plugins/calendar-plus");
+      await recommendation(page).first().click();
       await activation.getByRole("button", { name: "Cancel", exact: true }).click();
-      await gateway.deferNext("plugins.setEnabled");
-      await recommendation(page).first().click();
-      await activation.getByRole("button", { name: "Enable and continue", exact: true }).click();
-      expect((await gateway.waitForRequest("plugins.setEnabled")).params).toEqual({
-        pluginId: "calendar-plus",
-        enabled: true,
-      });
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      await gateway.rejectDeferred("plugins.setEnabled", {
-        code: "INVALID_REQUEST",
-        message: "Review new capabilities",
-        details: {
-          capabilityConsentCode: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
-          pluginId: "calendar-plus",
-          reviewToken: calendarInspection.reviewToken,
-          widened: { tools: ["calendar_create"] },
-        },
-      });
       const dialog = page.locator("[data-plugin-consent]");
-      await dialog.waitFor();
-      await expect
-        .poll(() =>
-          dialog.getByRole("button", { name: "Enable Calendar Plus", exact: true }).isEnabled(),
-        )
-        .toBe(true);
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-      await expect.poll(() => recommendation(page).first().isEnabled()).toBe(true);
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      await gateway.deferNext("plugins.setEnabled");
-      await recommendation(page).first().click();
-      await activation.getByRole("button", { name: "Enable and continue", exact: true }).click();
-      await gateway.waitForRequest("plugins.setEnabled", { after: 1 });
-      await gateway.rejectDeferred("plugins.setEnabled", {
-        code: "INVALID_REQUEST",
-        message: "Review new capabilities",
-        details: {
-          capabilityConsentCode: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
-          pluginId: "calendar-plus",
-          reviewToken: calendarInspection.reviewToken,
-          widened: { tools: ["calendar_create"] },
-        },
-      });
-      await dialog.waitFor();
-      await expect
-        .poll(() =>
-          dialog.getByRole("button", { name: "Enable Calendar Plus", exact: true }).isEnabled(),
-        )
-        .toBe(true);
+      const enable = dialog.getByRole("button", { name: "Enable Calendar Plus", exact: true });
+      for (const attempt of [0, 1]) {
+        await gateway.deferNext("plugins.setEnabled");
+        await recommendation(page).first().click();
+        await activation.getByRole("button", { name: "Enable and continue", exact: true }).click();
+        expect(
+          (await gateway.waitForRequest("plugins.setEnabled", { after: attempt })).params,
+        ).toEqual({ pluginId: "calendar-plus", enabled: true });
+        await gateway.rejectDeferred("plugins.setEnabled", {
+          code: "INVALID_REQUEST",
+          message: "Review new capabilities",
+          details: {
+            capabilityConsentCode: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
+            pluginId: "calendar-plus",
+            reviewToken: calendarInspection.reviewToken,
+            widened: { tools: ["calendar_create"] },
+          },
+        });
+        await expect.poll(() => enable.isEnabled()).toBe(true);
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+        if (attempt === 0) {
+          await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+          await expect.poll(() => recommendation(page).first().isEnabled()).toBe(true);
+          expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+        }
+      }
       await proof(page, "enable-consent");
       await gateway.deferNext("plugins.setEnabled");
-      await dialog.getByRole("button", { name: "Enable Calendar Plus", exact: true }).click();
+      await enable.click();
       expect((await gateway.waitForRequest("plugins.setEnabled", { after: 2 })).params).toEqual({
         pluginId: "calendar-plus",
         enabled: true,
@@ -592,12 +602,7 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
       const lists = (await gateway.getRequests("sessions.list")).length;
       await gateway.resolveDeferred("sessions.create");
       await gateway.waitForRequest("sessions.list", { after: lists });
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
+      await settleLaunch(page);
       expect(new URL(page.url()).pathname).toBe(pathname);
       expect(await recommendation(page).first().isEnabled()).toBe(true);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
@@ -636,12 +641,7 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
           plugin: installed,
           restartRequired: false,
         });
-        await page.evaluate(
-          () =>
-            new Promise<void>((resolve) => {
-              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-            }),
-        );
+        await settleLaunch(page);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
         expect(new URL(page.url()).pathname).toBe(
           retirement === "navigate" ? "/plugins" : `/plugins/${calendarDiscoveryPlugin.id}`,

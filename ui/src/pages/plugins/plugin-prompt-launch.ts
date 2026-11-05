@@ -157,6 +157,11 @@ export function createPluginPromptLaunch(host: {
           ),
           signal: intent.confirmation.signal,
           canConfirm: () => intent.isCurrent() && !blockedReason(),
+        }).catch((error: unknown) => {
+          if (intent.isCurrent()) {
+            setMessage(rowKey, { kind: "error", text: formatUiError(error) });
+          }
+          return false;
         });
         // Confirmation yields; the originating route, agent and write access must still hold.
         if (!confirmed || !intent.isCurrent() || blockedReason()) {

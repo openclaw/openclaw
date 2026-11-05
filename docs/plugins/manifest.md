@@ -345,6 +345,11 @@ prompts. Native plugins, including third-party plugins, declare it at the top le
   Catalog, inspection, and local discovery detail can read them without loading
   the plugin runtime.
 
+On upgrade, previously accepted declarations with a prompt longer than 128 normalized
+Unicode code points are ignored as a whole; the plugin still loads. Shorten those
+prompts to restore recommendations. Existing internal whitespace is now collapsed
+to single spaces, including line breaks.
+
 The Gateway also understands `recommendedPrompts` in a registry's selected-version
 `pluginManifestSummary`. Pre-install availability depends on the registry actually
 publishing that field; a registry summary that omits it cannot supply recommendations.
