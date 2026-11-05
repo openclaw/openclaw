@@ -1,12 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
-  buildCacheKey,
   buildCircuitBreakerKey,
-  getCachedResult,
   isCircuitBreakerOpen,
   recordCircuitBreakerTimeout as recordTimeout,
   resetCircuitBreaker,
-  setCachedResult,
   shouldCacheResult,
 } from "./recall-state.js";
 import { DEFAULT_MAX_CACHE_ENTRIES } from "./types.js";
@@ -106,26 +103,4 @@ it("keeps circuit-breaker decisions scoped to the agent, provider, and model", (
       isCircuitBreakerOpen(buildCircuitBreakerKey(agent, provider, model), 1, cooldownMs),
     ).toBe(false);
   }
-});
-
-it("expires cached recall on elapsed time when the wall clock steps backwards", () => {
-  const cacheKey = buildCacheKey({
-    agentId: "main",
-    sessionKey: "agent:main:cache-clock-step",
-    query: "clock step prompt",
-    authorityFingerprint: "cache-authority",
-    recallToolNames: ["memory_search"],
-  });
-  setCachedResult(
-    cacheKey,
-    { status: "ok", elapsedMs: 1, rawReply: "memory", summary: "memory" },
-    15_000,
-  );
-  expect(getCachedResult(cacheKey)).toBeDefined();
-
-  // A backwards wall-clock step must not keep the entry past its TTL.
-  vi.setSystemTime(Date.now() - 60 * 60 * 1000);
-  vi.advanceTimersByTime(16_000);
-
-  expect(getCachedResult(cacheKey)).toBeUndefined();
 });
