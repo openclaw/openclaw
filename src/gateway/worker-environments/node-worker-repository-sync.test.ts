@@ -326,7 +326,8 @@ it.each([
       }
       // Startup must accept setup output even when GitHub normalization is unavailable.
       const initialCaptures = await capture();
-      expect(initialCaptures[0]!.metrics.contentHashCount).toBeGreaterThan(0);
+      // Preparation's persisted memo already covers the unchanged startup tree.
+      expect(initialCaptures[0]!.metrics.memoHitCount).toBeGreaterThan(0);
       expect(revision).toBe(1);
       expect(checkpoint).toBeDefined();
       await gitAt(first.remoteWorkspaceDir, "rm", "--cached", "retained-removal.ignored");
