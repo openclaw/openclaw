@@ -6,6 +6,7 @@ import {
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { canReadSessionAccess } from "../../config/sessions/session-access.js";
+import { runWithoutSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { CreatedGatewaySession } from "../session-create-service.types.js";
@@ -87,16 +88,18 @@ export async function dispatchSessionCreateInitialTurn(
     undefined,
   );
   params.assertCurrent();
-  // The initial turn must acquire its own writer, not the requesting session's.
-  await runWithoutOwnedSessionTranscriptWrites(async () => {
-    if (opening.internalInput) {
-      const { handleTrustedInternalChatSend } = await loadChatSendInternalEntry();
-      await handleTrustedInternalChatSend(sendOptions, undefined, { stageCreatedInput: true });
-    } else {
-      const { handleDirectExternalChatSend } = await loadChatSendExternalEntry();
-      await handleDirectExternalChatSend(sendOptions);
-    }
-  });
+  // The run owns its writer and memory admission beyond the creation request's lifetime.
+  await runWithoutOwnedSessionTranscriptWrites(() =>
+    runWithoutSessionActorStorage(async () => {
+      if (opening.internalInput) {
+        const { handleTrustedInternalChatSend } = await loadChatSendInternalEntry();
+        await handleTrustedInternalChatSend(sendOptions, undefined, { stageCreatedInput: true });
+      } else {
+        const { handleDirectExternalChatSend } = await loadChatSendExternalEntry();
+        await handleDirectExternalChatSend(sendOptions);
+      }
+    }),
+  );
 }
 
 export function isFreshChatSendStarted(params: { cached?: boolean; payload: unknown }): boolean {

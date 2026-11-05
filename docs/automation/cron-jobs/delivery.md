@@ -84,6 +84,8 @@ services. Leaving the policy unset keeps strict behavior.
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; OpenClaw also accepts the Telegram-owned `-1001234567890:123` shorthand. Direct RPC/config callers may pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
+When an announcement omits `delivery.accountId`, OpenClaw uses the remembered session account, then the agent's channel binding, then the channel's configured default account. Set an explicit account to override this selection.
+
 For announce delivery in the Control UI Automations editor, choose a channel and an explicit **Account ID** under **Advanced** to see configured conversation targets in the **To** field. Selecting a target preserves your chosen account and does not infer a topic. Changing the agent, delivery mode, channel, account, or recipient clears the previous topic when you save. These configured suggestions apply only to the primary announce destination; failure-alert routing remains separate. You can still enter a target that is not in the suggestions.
 
 On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <channel-plugin-id>` unless a provider-prefixed `--to` or a preserved session route selects the channel. Use `--best-effort-deliver` only when unresolved fallback delivery is acceptable; it does not choose a channel, and a delivery failure does not fail the job.
@@ -113,9 +115,43 @@ an active bound Gateway.` Run the job on its owning Gateway instead of copying
 connection fields into the prompt. The next send then uses the live binding,
 including current cancellation and tool-policy withdrawal.
 
-When an agent creates an isolated reminder from an active chat, OpenClaw stores the preserved live delivery target for the fallback announce route. If it must recover a saved route, it reads the selected agent’s session store—even when the session key is the unqualified `global` alias. Explicit delivery targets still take precedence. Internal session keys may be lowercase; provider delivery targets are not reconstructed from those keys when current chat context is available.
+When an agent creates an isolated reminder from an active chat, OpenClaw stores the preserved live delivery target for the fallback announce route. If it must recover a saved route, it reads the selected agent’s session store—even when the session key is the unqualified `global` alias. Explicit delivery targets still take precedence. When a [default destination](#default-destinations) applies to the job's creator or agent, no chat route is stored and the default is used instead. Internal session keys may be lowercase; provider delivery targets are not reconstructed from those keys when current chat context is available.
 
 Implicit announce delivery uses configured channel allowlists to validate and reroute stale targets. DM pairing-store approvals are not fallback automation recipients; set `delivery.to` or configure the channel `allowFrom` entry when a scheduled job should proactively send to a DM.
+
+### Default destinations
+
+Set `cron.delivery` to send every announce job that names no route of its own to one place, `cron.agents.<agentId>.delivery` to give one agent's jobs their own place, and `cron.creators.<profileId>.delivery` to give the jobs one person created their own place. For example, to send results to topic 1 of a Telegram forum unless a job says otherwise:
+
+```json5
+{
+  cron: {
+    delivery: { channel: "telegram", to: "-100123456789", threadId: 1 },
+    failureAlert: { channel: "telegram", to: "-100123456789:topic:1" },
+  },
+}
+```
+
+The job owner is its `agentId`, else the agent in its session key, else the default agent. The job creator is the Gateway profile recorded when the job was created: the operator profile that created it, or the human profile that asked an agent to create it. Jobs created before creator recording, and jobs whose creator is channel-only, unknown, an agent with no delegating human, or the system, have no creator default. Primary results resolve in this order:
+
+| Job delivery                                                                                    | Destination                                                                          |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Names a route: `channel` other than `last`, `to`, `threadId`, `accountId`, or `target: "owner"` | The job's own route (defaults ignored)                                               |
+| `announce` (or omitted) with no route, creator has `cron.creators.<profileId>.delivery`         | The creator default                                                                  |
+| `announce` (or omitted) with no route, owner agent has `cron.agents.<agentId>.delivery`         | The agent default                                                                    |
+| `announce` (or omitted) with no route, only `cron.delivery` set                                 | The Gateway default                                                                  |
+| `announce` (or omitted) with no route, no default configured                                    | Unchanged: creating conversation, remembered route, or the single configured channel |
+| `none` or `webhook`                                                                             | Unchanged: defaults never add a chat destination                                     |
+
+- The most specific default wins whole. A creator default replaces the agent and Gateway defaults, and an agent default replaces the Gateway default, instead of merging fields, because a recipient, thread, and account belong to the channel that supplied them.
+- A default replaces the creating-conversation route for route-less announce jobs in every session target, including `current` and `main`. Results then land in the default destination, not the creating chat. To keep a job in a particular chat, set its `channel` and `to`.
+- Why the creator outranks the agent: the person who set a job up chose where their results go, and that choice should follow them across whichever agent they used. An agent is a shared runtime that can serve several people, so its default is broader.
+- An agent creating a job from a chat does not pin that chat as the job's route when a default applies to the requesting person or the job's agent; the job stays route-less and follows the configured default.
+- `none` stays silent. A default does not give a `none` job a `message`-tool destination either.
+- Defaults resolve at run time. Stored jobs are never rewritten, so changing or removing a default moves future results of every job that relies on it. Jobs that already store an explicit route, including routes pinned at creation by earlier releases, keep it.
+- A default's `channel` must name an installed channel plugin; config validation rejects an unknown one, and `openclaw doctor` lists defaults whose channel plugin is not active. `cron.agents` keys that differ only by case are rejected.
+
+Failure alerts have the same layers. `cron.creators.<profileId>.failureAlert` and `cron.agents.<agentId>.failureAlert` set the route fields (`mode`, `channel`, `to`, `threadId`, `accountId`) for that person's or agent's jobs; the creator route wins, and either replaces the `cron.failureAlert` route fields whole. Threshold, cooldown, skipped-run counting, and `enabled` stay Gateway-wide in `cron.failureAlert`. Failure routes also accept an optional `threadId`. For Telegram topics, use `to: "-100123456789", threadId: 1`; the existing `to: "-100123456789:topic:1"` form still works. No migration is required. Without these optional defaults, existing delivery and creating-conversation fallback behavior is unchanged. When no failure route is configured, alerts fall back to the job's primary announce destination, which includes a configured default destination. A `none` job still gets failure alerts through a configured failure route, as before.
 
 ### Owner delivery and direct messages
 
@@ -167,8 +203,8 @@ Startup recovery reconciles incidents from saved run outcomes without sending hi
 Failure notification routes resolve in this order:
 
 1. Route fields in the job's `failureAlert` object.
-2. `job.delivery.failureDestination`, layered over the destination fields in global `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). A `cron.failureDestination` block is not read directly; `openclaw doctor --fix` merges it into the global object.
-3. The job's primary announce target.
+2. `job.delivery.failureDestination`, layered over the destination fields in global `cron.failureAlert` (`mode`, `channel`, `to`, `threadId`, `accountId`), or over the creator's `cron.creators.<profileId>.failureAlert` route, else the owning agent's `cron.agents.<agentId>.failureAlert` route, when one exists. A `cron.failureDestination` block is not read directly; `openclaw doctor --fix` merges it into the global object.
+3. The job's primary announce target, including a configured [default destination](#default-destinations).
 
 - `job.failureAlert: false` disables execution and required-delivery failure alerts for that job. The auto-disable safety notification remains active.
 - Global `cron.failureAlert.enabled: false` disables inherited notifications. A per-job `failureAlert` object explicitly re-enables that job; `enabled: true` explicitly enables the global policy.

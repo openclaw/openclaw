@@ -6,6 +6,7 @@ import {
   type SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { canReadSessionAccess, resolveSessionAccess } from "../config/sessions/session-access.js";
@@ -283,6 +284,28 @@ export function sharingIdentity(
   return identity?.id === GATEWAY_OWNER_PROFILE_ID ? undefined : identity;
 }
 
+/** Identityless tool callers retain owner sharing only through their live, bounded source. */
+export function isSessionSharingOwnerEquivalent(
+  client: GatewayClient | null,
+  actor: ReturnType<typeof resolveGatewayOperatorRoleActor>,
+): boolean {
+  if (actor?.kind === "system") {
+    return true;
+  }
+  const authority = client?.internal?.operatorRunAuthority;
+  if (actor?.kind !== "operator" || actor.profileId !== GATEWAY_OWNER_PROFILE_ID || !authority) {
+    return false;
+  }
+  assertAdmittedRunOperatorAuthority(authority);
+  authority.assertCurrent();
+  // Attribution alone grants nothing; neither side may widen session-only scopes.
+  return (
+    authority.profileId === actor.profileId &&
+    operatorScopeSatisfied("operator.read", authority.scopes) &&
+    operatorScopeSatisfied("operator.read", client?.connect?.scopes ?? [])
+  );
+}
+
 export function resolveSessionSharingRole(
   params: SessionSharingRoleParams,
   preparedCap?: { value: ReturnType<typeof operatorSessionCap> },
@@ -309,7 +332,7 @@ export function prepareSessionSharingRole(
   if (!identity) {
     const role =
       params.client?.authenticatedGitHubIdentitySync ||
-      (params.cfg?.gateway?.roles && operatorActor?.kind !== "system")
+      (params.cfg?.gateway?.roles && !isSessionSharingOwnerEquivalent(params.client, operatorActor))
         ? "viewer"
         : "owner";
     if (

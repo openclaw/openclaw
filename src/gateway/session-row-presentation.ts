@@ -574,7 +574,7 @@ export function prepareProjectedSessionPresentation(
     },
     select(
       opts: SessionsListParams,
-      select: (retained?: WeakMap<object, SessionListFilteredEntries>) => SessionEntrySelection,
+      select: (retained?: Map<object, SessionListFilteredEntries>) => SessionEntrySelection,
     ) {
       // Membership, clocks, and transient runs are not owned by metadata partitions.
       const live = opts.activeOnly || opts.activityPulseBoundaries;

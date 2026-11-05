@@ -448,6 +448,19 @@ async function verifyAndActivateCandidate(
   params.onPreparationComplete?.();
   throwIfSetupInferenceCancelled(params);
   const progress = params.prompter?.progress("Testing your AI connection…");
+  // A silent spinner reads as a hang once a provider is slow; show the wait and the way out.
+  const checkStarted = Date.now();
+  const elapsed = progress
+    ? setInterval(() => {
+        const seconds = Math.round((Date.now() - checkStarted) / 1000);
+        if (seconds >= 3) {
+          progress.update(
+            `Testing your AI connection… ${seconds}s. You can cancel; nothing changes until the check passes.`,
+          );
+        }
+      }, 1000)
+    : undefined;
+  elapsed?.unref?.();
   const verification = await withGeneration(async () => {
     try {
       const native = await verifySetupHarness({
@@ -469,7 +482,10 @@ async function verifyAndActivateCandidate(
     } catch (error) {
       return { ok: false as const, ...describeSetupInferenceError(error, route) };
     }
-  }).finally(() => progress?.stop());
+  }).finally(() => {
+    clearInterval(elapsed);
+    progress?.stop();
+  });
   throwIfSetupInferenceCancelled(params);
   if (!verification.ok) {
     return failure(verification);

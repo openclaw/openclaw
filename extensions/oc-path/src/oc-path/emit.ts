@@ -78,8 +78,13 @@ export function emitJsoncObjectEntries<T>(
   emit: (entry: JsoncEntry, path: string) => T,
 ): T[] {
   return entries.map((entry) => {
-    const path = `${parentPath}/${entry.key}`;
-    guardSentinel(entry.key, path);
+    const path = guardedJsoncKeyPath(entry.key, parentPath);
     return emit(entry, path);
   });
+}
+
+export function guardedJsoncKeyPath(key: string, parentPath: string): string {
+  const path = `${parentPath}/${key}`;
+  guardSentinel(key, path);
+  return path;
 }

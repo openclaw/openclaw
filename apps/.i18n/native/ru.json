@@ -1743,6 +1743,7 @@
     "native.android.e541942ff77b53eb": "Прослушивание (PTT)",
     "native.android.e54941cceace936d": "Вернуться к этому моменту",
     "native.android.e54afc3de5a87a03": "Начать голосовое общение",
+    "native.android.e559007177ac681d": "Не удалось обновить метаданные чата. Нажмите «Обновить», чтобы повторить попытку.",
     "native.android.e5799ce1b2df6f8c": "Открыть OpenClaw на телефоне",
     "native.android.e587a3bd7b40ceed": "Настроено моделей: $count",
     "native.android.e5ad8016516600bb": "Создать ветку с последнего завершённого сообщения",

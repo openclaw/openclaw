@@ -32,6 +32,7 @@ import {
   authorizeSessionSharingTarget,
   canManageSessionSharing,
   isGatewayAdmin,
+  isSessionSharingOwnerEquivalent,
   prepareSessionSharingRole,
   resolveSessionVisibility,
   sharingIdentity,
@@ -67,14 +68,18 @@ export function canReceiveSessionEvent(params: {
   }
   const identity = sharingIdentity(client, operatorActor);
   if (!identity) {
+    const ownerEquivalent =
+      Boolean(policyConfig.gateway?.roles) &&
+      isSessionSharingOwnerEquivalent(client, operatorActor);
     return (
       (!operatorScopeSatisfied("operator.sessions.read", client.connect.scopes ?? []) ||
         operatorActor?.kind === "system" ||
         operatorScopeSatisfied("operator.read", client.connect.scopes ?? [])) &&
-      (!policyConfig.gateway?.roles || operatorActor?.kind === "system") &&
+      (!policyConfig.gateway?.roles || ownerEquivalent) &&
       event !== "session.suggestion" &&
       event !== "session.typing" &&
-      (operatorActor?.kind === "system" ||
+      (ownerEquivalent ||
+        operatorActor?.kind === "system" ||
         client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID ||
         sessionKeys.every((key) => {
           const target = params.prepared.target(key, params.agentId);
@@ -389,6 +394,8 @@ export function prepareProjectedSessionSharing(params: {
             cfg,
             roleProfile?.githubLogin ?? null,
           );
+  const ownerEquivalent =
+    !identity && Boolean(cfg.gateway?.roles) && isSessionSharingOwnerEquivalent(client, actor);
   let cacheKey: string | undefined;
   return {
     ...prepareSessionSharing(params, {
@@ -423,10 +430,11 @@ export function prepareProjectedSessionSharing(params: {
         facts[11] === Boolean(cfg.gateway?.roles) &&
         facts[12] === cfg.session?.sharing?.accessPolicy &&
         facts[13] === (scopes !== undefined) &&
-        facts.length === 14 + (scopes?.length ?? 0)
+        facts[14] === ownerEquivalent &&
+        facts.length === 15 + (scopes?.length ?? 0)
       ) {
         let i = 0;
-        while (i < (scopes?.length ?? 0) && facts[14 + i] === scopes?.[i]) {
+        while (i < (scopes?.length ?? 0) && facts[15 + i] === scopes?.[i]) {
           i++;
         }
         if (i === (scopes?.length ?? 0)) {
@@ -446,6 +454,8 @@ export function prepareProjectedSessionSharing(params: {
         policy,
         Boolean(cfg.gateway?.roles),
         cfg.session?.sharing?.accessPolicy,
+        // Equal effective scopes can retain different source sharing authority.
+        ownerEquivalent,
       ]);
       const next: unknown[] = [
         cfg,
@@ -462,6 +472,7 @@ export function prepareProjectedSessionSharing(params: {
         Boolean(cfg.gateway?.roles),
         cfg.session?.sharing?.accessPolicy,
         scopes !== undefined,
+        ownerEquivalent,
       ];
       // Concatenation retains an exact-sized snapshot instead of push's spare capacity.
       projectedSharingKeys.set(viewer, {
@@ -492,17 +503,21 @@ export function createSessionListEntryFilter(
     isGatewayAdmin(params.client) ||
     (!identity &&
       (operatorActor?.kind === "system" ||
-        params.client?.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID))
+        (!params.cfg?.gateway?.roles &&
+          params.client?.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID)))
   ) {
     return undefined;
   }
   if (!identity) {
-    return params.cfg?.gateway?.roles
-      ? () => false
-      : (key, entry) =>
-          (!params.client?.authenticatedGitHubIdentitySync ||
-            resolveSessionVisibility(entry) !== "draft") &&
-          canReadSessionAccess(params.cfg, key, entry, () => false);
+    if (params.cfg?.gateway?.roles) {
+      return isSessionSharingOwnerEquivalent(params.client, operatorActor)
+        ? undefined
+        : () => false;
+    }
+    return (key, entry) =>
+      (!params.client?.authenticatedGitHubIdentitySync ||
+        resolveSessionVisibility(entry) !== "draft") &&
+      canReadSessionAccess(params.cfg, key, entry, () => false);
   }
   const sessionCap = prepared
     ? prepared.sessionCap
