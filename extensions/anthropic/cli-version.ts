@@ -22,7 +22,8 @@ async function readExecutableIdentity(executable: string): Promise<string> {
 /** Share installed-file evidence between native CLI capabilities and OAuth identity. */
 export function createClaudeCodeVersionProbe(api: OpenClawPluginApi) {
   let current: VersionProbe | undefined;
-  const probe = async (executable: string | undefined, failure: string) => {
+  const probe = async (executable: string | undefined, initialFailure: string) => {
+    let failure = initialFailure;
     try {
       if (executable) {
         failure = "probe-error";

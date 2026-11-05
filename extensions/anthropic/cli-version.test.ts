@@ -14,7 +14,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { OpenClawPluginApi, ProviderPlugin } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { runCommandWithTimeout as runFixtureCommand } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { commandResult } from "../test-support/command-result.test-support.js";
 import { makeModel } from "./model-contract-cases.test-support.js";
@@ -270,7 +270,7 @@ it.each(process.platform === "win32" ? ["mtime", "size"] : ["mtime", "size", "re
       symlinkSync(original, cliPath);
     }
     const runner = vi.fn<CommandRunner>((argv, options) =>
-      runCommandWithTimeout([process.execPath, ...argv], options),
+      runFixtureCommand([process.execPath, ...argv], options),
     );
     const fixture = register(runner);
     const normal = capture(fixture.provider);
@@ -304,7 +304,7 @@ it.each(process.platform === "win32" ? ["mtime", "size"] : ["mtime", "size", "re
 
 it("uses the transport floor after a failed replacement and recovers when the CLI changes again", async () => {
   const runner = vi.fn<CommandRunner>((argv, options) =>
-    runCommandWithTimeout([process.execPath, ...argv], options),
+    runFixtureCommand([process.execPath, ...argv], options),
   );
   const fixture = register(runner);
   const request = capture(fixture.provider);
