@@ -20,7 +20,7 @@ it("keeps embedded setup and its draft mounted while the endpoint editor reconne
     "openclaw.setup.auth.commit",
   );
   const original = request.getMockImplementation()!;
-  request.mockImplementation(async (method, params) => {
+  request.mockImplementation(async (method: string, _params?: unknown) => {
     switch (method) {
       case "openclaw.setup.detect":
         return {
@@ -46,7 +46,7 @@ it("keeps embedded setup and its draft mounted while the endpoint editor reconne
       case "wizard.cancel":
         return { status: "cancelled" };
       default:
-        return original(method, params);
+        return original(method);
     }
   });
   await context.runtimeConfig.ensureLoaded();
