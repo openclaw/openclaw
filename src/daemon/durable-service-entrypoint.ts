@@ -73,8 +73,6 @@ export type DurableServiceCliReplacement = {
   version: string;
   globalRoot: string;
   packageRoot: string;
-  /** An earlier copy exists; only then can a failed install restore something. */
-  replacesExisting: boolean;
   /** The entrypoint the service will run; the staged copy must contain it. */
   entrypoint: string;
 };
@@ -160,7 +158,6 @@ export async function resolveDurableServiceCli(
       version,
       globalRoot: layout.globalRoot,
       packageRoot,
-      replacesExisting: exists,
       entrypoint: planned.planned,
     },
   };
@@ -176,6 +173,10 @@ export async function resolveDurableServiceCli(
  * install settles: if the install fails, the previous copy is restored (a first install keeps
  * its new copy, which nothing else uses); if it succeeds, the backup retires only once the
  * service is verified loaded.
+ *
+ * Gateway and node services share the copy but not a service lock, so one package lock covers
+ * staging through settlement: a failed install's restore cannot undo another install's swap.
+ * `openclaw update` does not take this lock; it updates the copy under its own ownership.
  */
 export async function installDurableServiceCli(params: {
   env: NodeJS.ProcessEnv;
@@ -189,6 +190,33 @@ export async function installDurableServiceCli(params: {
     return;
   }
   const replacement = params.replacement;
+  const { prefix } = resolveDurableLayout(params.env).layout;
+  await fs.mkdir(prefix, { recursive: true });
+  const { withFileLock } = await import("../infra/file-lock.js");
+  await withFileLock(
+    path.join(prefix, ".openclaw-service-install"),
+    {
+      // A waiting install sits behind another's npm staging and service install, so the
+      // budget is minutes. Only a definitely dead holder is reclaimed, never by age.
+      retries: { retries: 600, factor: 1.2, minTimeout: 100, maxTimeout: 1_000 },
+      stale: 30_000,
+      staleRecovery: "remove-if-definitely-stale",
+    },
+    () => installUnderPackageLock({ ...params, replacement }),
+  );
+}
+
+async function installUnderPackageLock(
+  params: Parameters<typeof installDurableServiceCli>[0] & {
+    replacement: DurableServiceCliReplacement;
+  },
+): Promise<void> {
+  const replacement = params.replacement;
+  // Read under the lock: an install that waited may now replace a copy another one made.
+  const replacesExisting = await fs.access(replacement.packageRoot).then(
+    () => true,
+    () => false,
+  );
   const staged = await stageDurableCopy(params.env, replacement);
   let activation: Promise<void> | undefined;
   let swapped = false;
@@ -219,7 +247,7 @@ export async function installDurableServiceCli(params: {
               : outcome === "installed"
                 ? "retain"
                 : // A failed first install keeps its swapped-in copy: nothing to restore.
-                  swapped && !replacement.replacesExisting
+                  swapped && !replacesExisting
                   ? "retire"
                   : "restore",
           );
