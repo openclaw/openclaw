@@ -1,3 +1,1 @@
-# Exact net growth for boot-bound native hello admission and metadata validation.
-# Extends existing transport/lifecycle tables; admission remains pending before hello.
 48
