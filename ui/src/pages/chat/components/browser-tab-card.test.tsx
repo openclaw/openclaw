@@ -484,7 +484,7 @@ describe("browser tab card", () => {
     expect(element.querySelector(".title")?.textContent).toBe("Example page");
     expect(gateway.request).toHaveBeenCalledExactlyOnceWith(
       "controlUi.linkPreview",
-      { url: "https://example.com/page" },
+      { url: "https://example.com/page", allowUnavailable: true },
       { signal: expect.any(AbortSignal) },
     );
     element.querySelector(".icon img")?.dispatchEvent(new Event("error"));
