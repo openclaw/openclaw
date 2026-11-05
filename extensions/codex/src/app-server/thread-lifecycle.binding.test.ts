@@ -1097,7 +1097,8 @@ describe("Codex app-server thread lifecycle bindings", () => {
         const rejected = expect(fixture.start()).rejects.toThrow(error);
         if (options.receipt) {
           await fixture.unsubscribed;
-          await vi.advanceTimersByTimeAsync(2_000);
+          // Codex's 10s unload confirmation window (thread-lifecycle-adoption.ts).
+          await vi.advanceTimersByTimeAsync(10_000);
         }
         await rejected;
         expect(await readCodexAppServerBinding(fixture.sessionFile)).toEqual(before);
