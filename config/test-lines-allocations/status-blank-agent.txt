@@ -1,0 +1,2 @@
+# Regression proof: a blank status --agent fails before any scan or probe starts.
+10
