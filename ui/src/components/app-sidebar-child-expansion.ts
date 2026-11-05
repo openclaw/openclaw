@@ -10,7 +10,8 @@ export class SidebarChildExpansion {
   private readonly observedChildKeys = new Map<string, readonly string[]>();
   private restoredPending = false;
   private activeSessionKey: string | null = null;
-  private readonly revealedAncestors = new Set<string>();
+  private readonly revealedPaths = new Set<string>();
+  selectedRootKey: string | null = null;
 
   constructor(private readonly onChange: () => void) {}
 
@@ -28,7 +29,7 @@ export class SidebarChildExpansion {
         previous.connectionIdentity !== input.connectionIdentity);
     if (scopeChanged || this.activeSessionKey !== input.selectedSessionKey) {
       this.activeSessionKey = input.selectedSessionKey;
-      this.revealedAncestors.clear();
+      this.revealedPaths.clear();
     }
     if (scopeChanged && !this.restoredPending) {
       this.modes.clear();
@@ -42,15 +43,20 @@ export class SidebarChildExpansion {
       if (!row.children.some(reveal)) {
         return false;
       }
-      if (!this.revealedAncestors.has(row.key)) {
-        this.revealedAncestors.add(row.key);
-        if (!this.isExpanded(row.key)) {
-          this.modes.set(row.key, "expanded");
-        }
+      if (this.revealOnce("session:" + row.key) && !this.isExpanded(row.key)) {
+        this.modes.set(row.key, "expanded");
       }
       return true;
     };
-    input.rows.some(reveal);
+    this.selectedRootKey = input.rows.find(reveal)?.key ?? null;
+  }
+
+  revealOnce(key: string): boolean {
+    if (this.revealedPaths.has(key)) {
+      return false;
+    }
+    this.revealedPaths.add(key);
+    return true;
   }
 
   keys(): string[] {
@@ -97,7 +103,7 @@ export class SidebarChildExpansion {
   }
 
   restore(rows: readonly { key: string; childrenDisplayMode?: SidebarExpansionMode }[]): void {
-    this.revealedAncestors.clear();
+    this.revealedPaths.clear();
     this.modes.clear();
     this.observedChildKeys.clear();
     for (const row of rows) {

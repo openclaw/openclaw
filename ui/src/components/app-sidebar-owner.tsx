@@ -303,12 +303,20 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   override updated() {
     super.updated();
-    this.sessionOrganizer.revealActiveSections(
-      isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : null,
-      this.context?.gateway.snapshot.client ?? null,
-      this.zonedVisibleSections(this.selectedAgentSessionRows(this.getSessionNavigationState()))
-        .sections,
+    const sections = this.zonedVisibleSections(
+      this.selectedAgentSessionRows(this.getSessionNavigationState()),
+    ).sections;
+    const disclosure = this.sessionProjection.children;
+    const selected = sections.find((section) =>
+      section.rows.some((row) => row.key === disclosure.selectedRootKey),
     );
+    if (
+      selected &&
+      disclosure.revealOnce("section:" + selected.id) &&
+      this.sessionOrganizer.collapsedSessionSections.has(selected.id)
+    ) {
+      this.sessionOrganizer.toggleSection(selected.id);
+    }
   }
 
   toggleSessionPin(session: SidebarRecentSession): void {

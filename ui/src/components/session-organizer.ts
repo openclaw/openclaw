@@ -34,9 +34,6 @@ type SessionOrganizerOperations = typeof import("./session-organizer-operations.
 export class SessionOrganizer {
   readonly sectionHeaders = new Map<string, HTMLElement>();
   collapsedSessionSections = loadStoredCollapsedSessionSections();
-  private sectionRevealSessionKey: string | null = null;
-  private sectionRevealConnection: unknown;
-  private readonly revealedActiveSections = new Set<string>();
   draggingSessionKey: string | null = null;
   draggingSidebarSection: string | null = null;
   sessionDropTarget: string | null = null;
@@ -368,41 +365,6 @@ export class SessionOrganizer {
       void this.promoteSession(session);
     }
     this.finishSidebarEntryDrag();
-  }
-
-  revealActiveSections(
-    sessionKey: string | null,
-    connectionIdentity: unknown,
-    sections: readonly { id: string; rows: readonly SidebarRecentSession[] }[],
-  ): void {
-    if (
-      this.sectionRevealSessionKey !== sessionKey ||
-      this.sectionRevealConnection !== connectionIdentity
-    ) {
-      this.sectionRevealSessionKey = sessionKey;
-      this.sectionRevealConnection = connectionIdentity;
-      this.revealedActiveSections.clear();
-    }
-    if (sessionKey === null) {
-      return;
-    }
-    const containsSelection = (row: SidebarRecentSession): boolean =>
-      row.visuallyActive || row.children.some(containsSelection);
-    let collapsed: Set<string> | undefined;
-    for (const section of sections) {
-      if (this.revealedActiveSections.has(section.id) || !section.rows.some(containsSelection)) {
-        continue;
-      }
-      // Remember expanded sections too, so a later manual collapse stays closed.
-      this.revealedActiveSections.add(section.id);
-      if (this.collapsedSessionSections.has(section.id)) {
-        collapsed ??= new Set(this.collapsedSessionSections);
-        collapsed.delete(section.id);
-      }
-    }
-    if (collapsed) {
-      this.saveCollapsedSessionSections(collapsed);
-    }
   }
 
   saveCollapsedSessionSections(sections: ReadonlySet<string>) {
