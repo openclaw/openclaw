@@ -12,7 +12,7 @@
     "typebox": "1.4.3"
   },
   "optionalDependencies": {
-    "onnxruntime-node": "1.30.0"
+    "onnxruntime-node": "1.31.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

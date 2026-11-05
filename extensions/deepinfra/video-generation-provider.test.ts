@@ -390,7 +390,7 @@ describe("deepinfra video generation provider", () => {
       label: "whitespace and newline",
       value: MP4_VIDEO.toString("base64").replace(/(.{40})/g, "$1\n "),
     },
-    { label: "unpadded", value: MP4_VIDEO.toString("base64").replace(/=+$/, "") },
+    { label: "unpadded", value: MP4_VIDEO.toString("base64").replace(/[=]+$/, "") },
   ])("accepts valid $label base64 video outputs", async ({ value }) => {
     mockSubmit({
       id: "videos_normalized_base64",
