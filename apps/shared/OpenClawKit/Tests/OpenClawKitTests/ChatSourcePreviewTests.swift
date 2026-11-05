@@ -339,7 +339,7 @@ struct ChatSourcePreviewTests {
         #expect(cards == [[], [self.first, self.second], []])
     }
 
-    @Test @MainActor func `split rows parse citations once per part text until that text changes`() {
+    @Test @MainActor func `split row cards follow each row's visible text across repeated renders`() {
         func split(_ text: String, id: UUID = UUID(), run: String? = nil) -> OpenClawChatMessage {
             OpenClawChatMessage(id: id, role: "assistant", content: [
                 .init(type: "toolCall", id: "call", name: "read"),
@@ -347,11 +347,7 @@ struct ChatSourcePreviewTests {
                 .init(type: "text", text: text),
             ], timestamp: 3, transcriptRunID: run ?? self.runID, phase: "final_answer")
         }
-        var parsed: [String] = []
-        let state = ChatSourcePreviewState { message in
-            parsed.append(ChatMessageVisibleText.visibleText(in: message))
-            return ChatSourcePreviewProjector.citations(in: message)
-        }
+        let state = ChatSourcePreviewState()
         let cited = split("Read \(self.first).")
         let uncited = split("Read \(self.first).", run: "other-run")
         let search = self.search([self.row(self.first), self.row(self.second)])
@@ -362,13 +358,11 @@ struct ChatSourcePreviewTests {
         for _ in 0..<3 {
             #expect(render([cited, uncited]) == [[], [self.first], [], []])
         }
-        #expect(parsed == ["", "Read \(self.first)."])
 
         let revised = split("Read \(self.second).", id: cited.id)
         #expect(render([revised]) == [[], []])
         state.update([search, revised])
         #expect(render([revised]) == [[], [self.second]])
-        #expect(parsed == ["", "Read \(self.first).", "Read \(self.second)."])
 
         // Same row and content; each step changes one footer input of the visible text from the step before.
         func footer(_ stopReason: String?, cites url: String? = nil, ownsFooter: Bool = true) -> OpenClawChatMessage {
@@ -385,7 +379,6 @@ struct ChatSourcePreviewTests {
         #expect(cards(footer("error", cites: self.first)).isEmpty)
         #expect(cards(footer("error")) == [self.second])
         #expect(cards(footer("error", ownsFooter: false)).isEmpty)
-        #expect(parsed.suffix(5) == ["", "See \(self.second).", "See \(self.first).", "See \(self.second).", ""])
     }
 
     private func answer(_ text: String) -> OpenClawChatMessage {

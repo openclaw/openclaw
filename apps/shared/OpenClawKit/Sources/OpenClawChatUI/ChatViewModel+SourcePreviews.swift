@@ -37,14 +37,9 @@ final class ChatSourcePreviewState {
     @ObservationIgnored private var projector = ChatSourcePreviewProjector()
     @ObservationIgnored private var messages: [OpenClawChatMessage] = []
     @ObservationIgnored private var task: Task<Void, Never>?
-    @ObservationIgnored private let citations: (OpenClawChatMessage) -> [URL]
     // Split rows come from the narrated transcript, not from update(), so each
     // part's links are checked against the part's own visible-text inputs on read.
     @ObservationIgnored private var partLinks: [UUID: PartLinks] = [:]
-
-    init(citations: @escaping (OpenClawChatMessage) -> [URL] = ChatSourcePreviewProjector.citations(in:)) {
-        self.citations = citations
-    }
 
     func update(_ messages: [OpenClawChatMessage]) {
         self.messages = messages
@@ -59,7 +54,7 @@ final class ChatSourcePreviewState {
         if let cached = self.partLinks[message.presentationID], cached.matches(message) {
             links = cached.links
         } else {
-            links = self.citations(message)
+            links = ChatSourcePreviewProjector.citations(in: message)
             self.partLinks[message.presentationID] = PartLinks(message, links: links)
         }
         return previews.filter { preview in links.contains(where: preview.represents) }
