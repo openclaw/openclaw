@@ -85,8 +85,9 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   const forward =
     current.cohort.disposition !== "commit" &&
     current.cohort.settledPublications === 0 &&
+    // Only a readable, different version or build proves the original core is gone.
     version !== null &&
-    !installed(from) &&
+    (version !== from.version || (buildId !== null && buildId !== from.buildId)) &&
     !hasPackageRecoveryAuthority(current.cohort.installKey) &&
     verification?.serviceRunning === true &&
     verification.versionMatch === true &&

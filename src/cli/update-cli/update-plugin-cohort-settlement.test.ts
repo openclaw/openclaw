@@ -36,16 +36,18 @@ const obligation = {
 };
 const SUPERSEDED = "Plugin migration obligation changed after update publication: discord";
 
-function installCore(root: string, identity: { version: string; buildId: string }) {
+function installCore(root: string, identity: { version: string; buildId: string | null }) {
   fs.mkdirSync(path.join(root, "dist"), { recursive: true });
   fs.writeFileSync(
     path.join(root, "package.json"),
     JSON.stringify({ name: "openclaw", version: identity.version }),
   );
-  fs.writeFileSync(
-    path.join(root, "dist", "build-info.json"),
-    JSON.stringify({ buildId: identity.buildId }),
-  );
+  if (identity.buildId !== null) {
+    fs.writeFileSync(
+      path.join(root, "dist", "build-info.json"),
+      JSON.stringify({ buildId: identity.buildId }),
+    );
+  }
 }
 
 /**
@@ -53,7 +55,7 @@ function installCore(root: string, identity: { version: string; buildId: string 
  * The candidate's Doctor later completed that obligation, superseding the publication.
  */
 async function supersededCohort(params: {
-  installed: { version: string; buildId: string };
+  installed: { version: string; buildId: string | null };
   servedCandidate: boolean;
   recorded?: { disposition: "rollback"; settledPublications: 0 | 1 };
   pendingPackageRecovery?: true;
@@ -178,6 +180,10 @@ it.each([
 
 it.each([
   ["the original core is installed", { installed: original, servedCandidate: true }],
+  [
+    "the original version has no readable build",
+    { installed: { version: original.version, buildId: null }, servedCandidate: true },
+  ],
   ["the candidate never verified serving", { installed: candidate, servedCandidate: false }],
   [
     "a package activation record remains",
