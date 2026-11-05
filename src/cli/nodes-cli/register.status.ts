@@ -91,8 +91,10 @@ function formatNodeVersions(
     }
     const platform = normalizeOptionalLowercaseString(node.platform);
     // Legacy nodes reported one version field; headless hosts use it as core, mobile nodes as UI.
+    // macOS node hosts report platform "macos" (mapped from darwin), not "darwin".
     if (
       platform === "darwin" ||
+      platform === "macos" ||
       platform === "linux" ||
       platform === "win32" ||
       platform === "windows"
