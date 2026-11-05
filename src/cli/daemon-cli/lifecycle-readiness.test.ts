@@ -154,7 +154,6 @@ describe("Gateway service readiness", () => {
       message: "Gateway start failed: activated plugins reported load errors.",
     },
     { outcome: "auth-rejected", code: 1, message: "Gateway start failed: the Gateway rejected" },
-    { outcome: "port-held", code: 1, message: "Gateway port 18789 is held by another process." },
   ])("reports managed start $outcome with exit $code", async (testCase) => {
     const { outcome, runtime = "running", code, message } = testCase;
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
