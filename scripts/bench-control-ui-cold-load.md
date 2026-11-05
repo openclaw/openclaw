@@ -1,5 +1,49 @@
 # Team-scale Control UI cold-load benchmark
 
+## Cross-flow CPU census
+
+Use the cross-engine harness's Chromium-only `--cpu-profile` mode to find small
+costs shared across its existing route and interaction workloads. It uses V8
+sampling without Playwright/Timeline tracing and writes source-mapped
+`*.cpuprofile` files plus `cpu-census.json` after each completed profile.
+
+```sh
+pnpm ui:build
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --pages --page-phases visit,action --engines chromium --viewport both \
+  --cpu-profile --cpu-throttle 1 --output .artifacts/cpu-census/routes-1x
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --engines chromium --viewport both --cpu-profile --cpu-throttle 6 \
+  --output .artifacts/cpu-census/interactions-6x
+```
+
+Repeat each selection at both 1× and 6× on the same production build. Use
+`--steps` for explicit-only scenarios. Keep throttle rankings separate: pooled
+self time weights the throttled run more heavily. Each report ranks every
+function and file by **self** time, with its share of all active samples, unique
+scenario/viewport/bundle flow count, and per-flow contribution. Repeated
+observations increase time without increasing flow count. File totals sum leaf
+samples rather than inclusive stacks, so a sample is never charged to both a
+caller and its callee. Failed assertions do not enter the aggregate.
+
+The denominator excludes root and idle samples. It also excludes the leading
+`(program)` interval: this harness awaits `Profiler.start` before running the
+action, and V8 charges profiler initialization to that first sample. Raw sampled,
+idle and profiler lead-in durations remain in the observation records. Later
+browser/native frames (including GC and V8's
+unattributed `(program)` bucket), Solid, application sources, other dependencies,
+automation, and unmapped frames remain separate owners. Ownership is based on
+source paths, not inferred from a caller: a WebAssembly address without a map
+remains unmapped. Generated JS without a source map also remains unmapped.
+
+Profiles identify candidates, not timing improvements or precise consumed CPU.
+Confirm any candidate in separate unprofiled, interleaved baseline/candidate
+comparisons with an A/A control, the three flows contributing most of its cost,
+and an unaffected flow. Use at least 20 pairs in Chromium and WebKit. WebKit
+acceptance uses application elapsed time, never `cpuMs`; see the Solid
+performance guide for timing, tail, and noisy-host criteria. Synthetic Gateway
+fixtures measure rendering and transport simulation, not live provider latency.
+
 ## Long sessions
 
 `--long-session --transcript-messages 2000 --face chat` uses a mixed synthetic

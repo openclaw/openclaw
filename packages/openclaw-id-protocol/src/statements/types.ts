@@ -1,5 +1,6 @@
 // Signed statement bodies (owner-key spec section 3). Field names are the wire names.
 import type { Ed25519PublicKey, IrohEndpointKey, KeyFingerprint } from "../keys.js";
+import type { StatementVersion } from "../version.js";
 
 /** Statement types. The type string is part of the signed domain-separation prefix. */
 export const STATEMENT_TYPES = [
@@ -164,6 +165,18 @@ export type SnapshotOwnerDevice = { device_pub: Ed25519PublicKey; caps: OwnerCap
 export type SnapshotMember = { account_id: string; role: MemberRole; peer_keys: IrohEndpointKey[] };
 
 /**
+ * Protocol versions a Gateway accepts for new input, per versioned surface, ascending. Clients
+ * pick the highest version they share with it (`selectVersion`). The tunnel is not listed: its
+ * version is negotiated by QUIC ALPN inside the handshake K_srv authenticates.
+ */
+export type ProtocolVersions = {
+  /** Signed statement envelope versions. */
+  statement: number[];
+  /** ClawDescriptor versions. */
+  descriptor: number[];
+};
+
+/**
  * Gateway-signed (K_gw) mirror of the claw's current allowlist for Discovery listing and relay
  * admission. Not an authority, and it carries no history: a removed key is simply absent.
  */
@@ -179,6 +192,12 @@ export type MembershipSnapshotBody = {
   /** Owner device peer keys the relay should admit. */
   owner_peer_keys: IrohEndpointKey[];
   members: SnapshotMember[];
+  /**
+   * The versions this Gateway accepts. Signed by K_gw and only used from a snapshot that passed
+   * `assessFreshness`, so Discovery cannot edit it. It can still replay an older list a client
+   * has not seen; the Gateway refusing unlisted versions is what keeps that harmless.
+   */
+  protocols: ProtocolVersions;
   issued_at: UnixSeconds;
 };
 
@@ -213,7 +232,8 @@ export type StatementBodies = {
  * checked against the claw's current owner devices, which only the Gateway knows.
  */
 export type SignedStatement<T extends StatementType = StatementType> = {
-  v: 1;
+  /** Envelope version; selects the schema and the signing domain. */
+  v: StatementVersion;
   type: T;
   body: StatementBodies[T];
   signer: Ed25519PublicKey;
