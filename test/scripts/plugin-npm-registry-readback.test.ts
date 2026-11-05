@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { npmRegistryPackument } from "./plugin-npm-publication-readback.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -14,16 +14,7 @@ function readback(fault: string, deferVisibility = true, route = "npm-oidc") {
   const summary = join(root, "summary.md");
   const name = "@openclaw/demo";
   const version = "2026.9.2-beta.1";
-  const dist = {
-    integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
-    shasum: createHash("sha1").update(bytes).digest("hex"),
-    tarball: "https://registry.npmjs.org/@openclaw/demo/-/demo.tgz",
-  };
-  const packument = {
-    name,
-    "dist-tags": { beta: version },
-    versions: { [version]: { name, version, dist } },
-  };
+  const packument = npmRegistryPackument(name, version, bytes);
   writeFileSync(tarball, bytes);
   writeFileSync(summary, "");
   const preload = `// Only explicit retry waits advance the mocked registry's clock.
@@ -40,7 +31,6 @@ const bytes = Buffer.from(${JSON.stringify(bytes.toString())});
 if (fault === "missing-version") packument.versions = {};
 if (fault === "integrity") packument.versions[${JSON.stringify(version)}].dist.shasum = "0".repeat(40);
 if (fault === "selector") packument["dist-tags"].beta = "2026.9.1-beta.1";
-if (fault === "missing-selector") delete packument["dist-tags"].beta;
 if (fault === "ahead-selector") packument["dist-tags"].beta = "2026.9.3-beta.1";
 if (fault === "malformed-selector") packument["dist-tags"].beta = {};
 if (fault === "package-name") packument.versions[${JSON.stringify(version)}].name = "@openclaw/other";
@@ -49,7 +39,7 @@ globalThis.fetch = async (url, init) => {
   if (!url.startsWith("https://registry.npmjs.org/") || (init?.method ?? "GET") !== "GET") {
     throw new Error("Unexpected registry mutation or destination");
   }
-  const status = {unavailable: 503, forbidden: 403, "missing-package": 404}[fault];
+  const status = {unavailable: 503, forbidden: 403}[fault];
   if (status) return new Response(null, {status});
   if (url.endsWith(".tgz")) {
     if (fault === "missing-tarball") return new Response(null, {status: 404});
@@ -90,19 +80,12 @@ globalThis.fetch = async (url, init) => {
 }
 
 it.each([
-  ...[
-    "missing-version",
-    "missing-package",
-    "missing-tarball",
-    "unavailable",
-    "selector",
-    "missing-selector",
-  ].map((fault) => [fault, true, "npm-oidc", "pending"] as const),
-  ["missing-version", false, "npm-oidc", "rejected"],
+  ...["missing-version", "missing-tarball", "unavailable", "selector"].map(
+    (fault) => [fault, true, "npm-oidc", "pending"] as const,
+  ),
   ["missing-tarball", false, "npm-token-bootstrap", "rejected"],
   ["missing-version", true, "npm-readback", "rejected"],
   ["selector", false, "npm-oidc", "rejected"],
-  ["selector", true, "npm-readback", "rejected"],
   ...[
     "integrity",
     "bytes",

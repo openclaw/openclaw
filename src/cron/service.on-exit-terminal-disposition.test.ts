@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createTelegramDelivery,
   setupFailureAlertSuite,
@@ -28,7 +27,7 @@ it.each<
 ])(
   "records and notifies a watcher terminal %s",
   async (_name, error, delivery, notices, alerts, priorFailures = 0) => {
-    await withFailureAlertCron({ scheduler: createTestGatewayScheduler() }, async (f) => {
+    await withFailureAlertCron({}, async (f) => {
       f.runIsolatedAgentJob.mockResolvedValue({ status: "error", error });
       const job = await f.addJob("completed watcher", { schedule, delivery });
       for (let attempt = 0; attempt < priorFailures; attempt += 1) {
@@ -52,9 +51,9 @@ it.each<
       });
       expect(f.runCronFailureRepair).not.toHaveBeenCalled();
       expect(f.sendCronFailureAlert).toHaveBeenCalledTimes(alerts);
-      expect(f.enqueueSystemEvent).toHaveBeenCalledTimes(notices);
+      expect(f.enqueueSessionEvent).toHaveBeenCalledTimes(notices);
       if (notices) {
-        expect(f.enqueueSystemEvent).toHaveBeenCalledWith(
+        expect(f.enqueueSessionEvent).toHaveBeenCalledWith(
           expect.stringContaining("auto-disabled"),
           expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
         );
@@ -66,7 +65,7 @@ it.each<
 it.each([true, false])(
   "preserves an operator force-run of an on-exit job with enabled=%s",
   async (enabled) => {
-    await withFailureAlertCron({ scheduler: createTestGatewayScheduler() }, async (f) => {
+    await withFailureAlertCron({}, async (f) => {
       f.runIsolatedAgentJob.mockResolvedValue({
         status: "error",
         error: "invalid job configuration",
@@ -80,7 +79,7 @@ it.each([true, false])(
       const stored = await f.cron.readJob(job.id);
       expect(stored?.enabled).toBe(enabled);
       expect(stored?.state.autoDisabled).toBeUndefined();
-      expect(f.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(f.enqueueSessionEvent).not.toHaveBeenCalled();
       expect(f.sendCronFailureAlert).not.toHaveBeenCalled();
       expect(f.runCronFailureRepair).not.toHaveBeenCalled();
     });

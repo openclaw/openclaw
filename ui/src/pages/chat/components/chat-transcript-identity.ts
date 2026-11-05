@@ -3,9 +3,11 @@ import { classifySessionKind } from "../../../../../src/sessions/classify-sessio
 import {
   normalizeRoleForGrouping,
   resolveMessageRole,
-  resolveMessageSender,
 } from "../../../lib/chat/message-normalizer.ts";
-import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
+import {
+  resolveMessageSender,
+  sessionParticipantIdentityKey,
+} from "../../../lib/chat/sender-label.ts";
 import {
   isSubagentSessionKey,
   isUiGlobalScopeConfigured,
@@ -84,7 +86,8 @@ export function resolveTranscriptAvatarPlacement(
   props: Pick<
     ChatThreadProps,
     "selectedSession" | "transcriptMetadata" | "sessionKey" | "sessionHost" | "userId"
-  >,
+  > &
+    Pick<ChatThreadProps, "applicationContext">,
   chatItems: ReturnType<typeof buildCachedChatItems>,
 ): { isDirectThread: boolean; avatarPlacement: "none" | "footer" | "gutter" } {
   const sessionHost = props.sessionHost ?? null;
@@ -117,7 +120,7 @@ export function resolveTranscriptAvatarPlacement(
   const defaultAvatarPlacement = resolveChatDefaultAvatarPlacement(
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
       !hasForwardedGroups,
-    props.userId,
+    props.userId ?? props.applicationContext?.sessions.presentation.profileId,
   );
   const avatarPlacement =
     activeSession?.classification === "subagent" || isSubagentSessionKey(props.sessionKey)

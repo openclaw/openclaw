@@ -43,10 +43,9 @@ ui/src/lib/reactive/shadow-styles.ts	1
 ui/src/lib/reactive/stream-auto-follow.ts	1
 ui/src/lib/reactive/timers.ts	2
 ui/src/lib/reactive/visible-poll.ts	1
-ui/src/pages/activity/activity-page.ts	1
+ui/src/pages/activity/activity-page.tsx	1
 ui/src/pages/activity/session-activity-media.tsx	1
 ui/src/pages/agents/agents-page.tsx	1
-ui/src/pages/apps/apps-page.tsx	1
 ui/src/pages/chat/chat-page-state.ts	1
 ui/src/pages/chat/chat-pane-runtime-view.tsx	1
 ui/src/pages/chat/components/chat-agent-run-frame.tsx	1

@@ -504,6 +504,18 @@ describe("healthCommand", () => {
     expect(rpc.callGateway).not.toHaveBeenCalled();
   });
 
+  it("keeps structured JSON failures inside the non-exiting host", async () => {
+    rpc.callGateway.mockRejectedValueOnce(new Error("health request failed"));
+    const payload = { ok: false, error: { type: "gateway_request_error" } };
+    rpc.formatGatewayClientRequestErrorJson.mockReturnValueOnce(payload);
+    await expect(
+      healthCommandNonExiting({ json: true, config: {} }, runtime),
+    ).rejects.toBeInstanceOf(ExitError);
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(requireFirstRuntimeLog())).toEqual(payload);
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("throws ExitError from healthCommandNonExiting instead of exiting the host runtime", async () => {
     const error = new Error("gateway.auth.password is unavailable");
     rpc.callGateway.mockRejectedValueOnce(error);

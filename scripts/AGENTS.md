@@ -7,6 +7,7 @@ Own local tooling, script wrappers, generated-artifact helper rules.
 - Tests: `run-vitest.mjs`; follow [testing skill](../.agents/skills/openclaw-testing/SKILL.md) + [test-authoring skill](../.agents/skills/test-audit/SKILL.md).
 - Lint/typecheck: `run-oxlint.mjs` + `run-tsgo.mjs` own repo-local runtime behavior; use them in package scripts and CI steps.
 - Changed-file checks: `check-changed.mjs` owns execution; `changed-lanes.mjs` owns classification. Never copy path-scope rules into hooks/CI snippets.
+- Knip ownership for standalone commands and dynamically loaded children: follow [Before You PR](../CONTRIBUTING.md#before-you-pr).
 - PR preparation: `pr` / `pr-lib` own source acquisition, correction reviews, gate bindings. Changing them: read [PR preparation](../docs/reference/scripts/pr-preparation.md).
 - PR wrapper lifecycle: `pr` / `pr-lib` own supervision, locks, materialized dependencies. Changing/repairing them: read [PR wrapper tooling](../docs/reference/scripts/pr-tooling.md).
 - GitHub transport: `pr-lib` owns observations + protected dispatch. Changing API/Octopool behavior: read [PR GitHub transport](../docs/reference/scripts/github-transport.md).
@@ -20,7 +21,7 @@ Own local tooling, script wrappers, generated-artifact helper rules.
 - Portable Bash entrypoints using heredocs/here-strings (including sourced helpers): copy the Darwin Bash 5.3+ re-exec guard from `test/scripts/build-and-run-mac.test.ts` before those operations (prevents heredoc pipe deadlocks) and add the file to `portableScripts`. stdin/sourced installers: request `/bin/bash` when replay impossible.
 - Tests: run through `scripts/run-vitest.mjs` or root `pnpm test ...`; bare `vitest ...` starts local watch mode unless `run` or `--run` explicit.
 - Changes to `scripts/lib/` planners need the affected planner tests and the tooling test typecheck leaf: `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.root.tooling.json --incremental`. `pnpm tsgo:scripts` does not typecheck their test callers.
-- macOS CI workflow changes: run all `test/scripts/ci-workflow*.test.ts`, including failure-collection cases in `ci-workflow-complete.test.ts`, plus `ci-swift-cache-lifetime.test.ts`, `macos-native-test-launch.test.ts`, and `macos-native-runtime-artifact.test.ts`; validate workflows with `scripts/check-workflows.mts`.
+- macOS CI workflow changes: run all `test/scripts/ci-workflow*.test.ts`, including failure-collection cases in `ci-workflow-complete.test.ts`, plus `ci-swift-cache-lifetime.test.ts` and `macos-native-test-launch.test.ts`; the workflow guards also exercise native runtime artifact packing and restoration. Validate workflows with `scripts/check-workflows.mts`.
 - Lint (one/few files): direct `node scripts/run-oxlint.mjs --tsconfig <matching config> <files...>`, not sharded `pnpm lint`.
 
 ## TypeScript Syntax

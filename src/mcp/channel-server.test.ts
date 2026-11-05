@@ -7,6 +7,11 @@ import { serveOpenClawChannelMcp } from "./channel-server.js";
 import type { SessionMessagePayload } from "./channel-shared.js";
 
 const transportState = vi.hoisted((): { next?: InMemoryTransport } => ({}));
+// mock-isolation: Channel fixtures read empty config without starting a config owner.
+vi.mock("../config/config.js", () => ({
+  captureRuntimeConfigAsyncReader: () => async () => ({}),
+}));
+
 vi.mock("@modelcontextprotocol/server/stdio", () => ({
   StdioServerTransport: vi.fn(function () {
     if (!transportState.next) {
@@ -81,7 +86,6 @@ async function connectMcpWithoutGateway(claudeChannelMode: "on" | "off" = "off")
     });
   const serving = serveOpenClawChannelMcp({
     claudeChannelMode,
-    config: {},
     verbose: false,
   });
   void serving.catch(started.reject);

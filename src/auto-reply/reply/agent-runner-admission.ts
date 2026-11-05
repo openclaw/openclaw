@@ -1,6 +1,7 @@
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
@@ -19,7 +20,6 @@ import {
 import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { resolveReplyScheduledToolPolicy } from "./agent-runner-run-params.js";
-import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 
@@ -55,9 +55,17 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
   const cronAdmission =
     automation && sessionKey
       ? prepareCronRunAdmission({
+          scheduledExecution: automation.occurrence.mint({
+            cfg: selectLiveRuntimeConfig(params.followupRun.run.config),
+            agentId: params.followupRun.run.agentId,
+            runId,
+            runSessionKey: sessionKey,
+            toolsAllow: resolveCronRunToolsAllow(automation.job),
+            operatorAuthority: params.followupRun.operatorAuthority,
+          }),
           admissionSource: automation.admissionSource,
           assertSourceCurrent,
-          cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
+          cfg: selectLiveRuntimeConfig(params.followupRun.run.config),
           agentId: params.followupRun.run.agentId,
           runId,
           sessionId: params.followupRun.run.sessionId,
@@ -78,7 +86,7 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
     cronAdmission?.preparedRunAdmission ??
     prepareChannelRunAdmission({
       sourceContext: params.followupRun.run,
-      cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
+      cfg: selectLiveRuntimeConfig(params.followupRun.run.config),
       runId,
       agentId: params.followupRun.run.agentId,
       ingressKind: "channel",
@@ -167,6 +175,16 @@ export function prepareReplyTurnRunSource(params: AgentTurnParams, runId: string
                   nextCheckEnabled:
                     automation.job.pacing !== undefined ||
                     isCronOneShotContinuationJob(automation.job),
+                  assertCurrent: () => {
+                    automation.assertCurrent();
+                    if (
+                      !params.replyOperation ||
+                      params.replyOperation.result ||
+                      params.replyOperation.abortSignal.aborted
+                    ) {
+                      throw new Error("Automation reply owner has closed");
+                    }
+                  },
                 },
               ],
             ]),

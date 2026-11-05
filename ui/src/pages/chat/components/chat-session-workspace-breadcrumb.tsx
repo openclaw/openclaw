@@ -1,21 +1,22 @@
-import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { splitWorkspaceFilename } from "./chat-session-workspace-catalog.ts";
 
-export type WorkspaceBreadcrumbProps = {
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
+
+/** Folder actions belong to the current tab; this component never opens or renames a tab. */
+export function WorkspaceBreadcrumb(props: {
   /** Canonical workspace-relative path. External/artifact identity uses sourceLabel instead. */
   path: string;
   rootLabel: string;
   sourceLabel?: string;
   name?: string;
   onBrowsePath: (path: string) => void;
-};
-
-/** Folder actions belong to the current tab; this component never opens or renames a tab. */
-export function WorkspaceBreadcrumb(props: WorkspaceBreadcrumbProps) {
+}) {
   let container: HTMLElement | undefined;
   let current: HTMLSpanElement | undefined;
   let source: HTMLSpanElement | undefined;
@@ -105,26 +106,11 @@ export function WorkspaceBreadcrumb(props: WorkspaceBreadcrumbProps) {
       setDisplayName(fitted);
     };
   };
-  const schedule = createLayoutMeasurement(
+  createLayoutMeasurement(
     () => [props.path, props.rootLabel, props.name, props.sourceLabel],
     measure,
-    { targets: () => (container ? [container] : []) },
+    { targets: () => (container ? [container] : []), fonts: true },
   );
-  onSettled(() => {
-    if (!container) {
-      return undefined;
-    }
-    let active = true;
-    const update = () => {
-      if (active) {
-        schedule();
-      }
-    };
-    void document.fonts.ready.then(update);
-    return () => {
-      active = false;
-    };
-  });
   const browse = (path: string) => {
     props.onBrowsePath(path);
   };

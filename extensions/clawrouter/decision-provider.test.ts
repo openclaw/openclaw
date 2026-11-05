@@ -305,6 +305,52 @@ it.each(["image/png", "image/jpeg", "image/webp"])(
   },
 );
 
+it.each([201, 400])(
+  "dispatches all %i questions through the native router route",
+  async (count) => {
+    const names = Array.from({ length: count }, (_, index) => `q${index}`);
+    await fixture(
+      async (origin, seen) => {
+        const outcome = await evaluate(
+          origin,
+          {},
+          {
+            ...batch,
+            questions: Object.fromEntries(names.map((name) => [name, { type: "boolean" }])),
+          },
+        );
+        expect(outcome).toMatchObject({ status: "ok" });
+        if (outcome.status === "ok") {
+          expect(Object.keys(outcome.result.answers)).toEqual(names);
+          expect(Object.values(outcome.result.answers)).toEqual(
+            names.map(() => ({ type: "boolean", probabilityTrue: 0.75 })),
+          );
+        }
+        expect(seen.map(({ path }) => path)).toEqual([
+          "/v1/catalog",
+          "/v1/native/openai/v1/decisions",
+        ]);
+        expect(seen[1]?.body).toEqual({
+          model: "gpt-6-luna",
+          input: "Only supplied evidence",
+          questions: names.map((name) => ({ name, type: "predicate", instructions: "" })),
+        });
+      },
+      (path, response) =>
+        response.end(
+          JSON.stringify(
+            path === "/v1/catalog"
+              ? catalog()
+              : {
+                  ...reply,
+                  answers: names.map((name) => ({ name, type: "predicate", probability: 0.75 })),
+                },
+          ),
+        ),
+    );
+  },
+);
+
 it("rejects unsupported reasoning, image size, and question/choice counts before catalog I/O", async () => {
   await fixture(async (origin, seen) => {
     for (const reasoning of ["on", "off"] as const) {
@@ -331,7 +377,7 @@ it("rejects unsupported reasoning, image size, and question/choice counts before
         {
           ...batch,
           questions: Object.fromEntries(
-            Array.from({ length: 201 }, (_, index) => ["q" + index, { type: "boolean" }]),
+            Array.from({ length: 401 }, (_, index) => ["q" + index, { type: "boolean" }]),
           ),
         },
       ),

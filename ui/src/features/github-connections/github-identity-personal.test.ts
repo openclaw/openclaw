@@ -197,8 +197,7 @@ it("does not expose personal authorization when durable identity is absent or st
       throw new Error("Identity synchronization failed");
     },
   });
-  await identity.verify();
-  expect(identity.read().error).toContain("Identity synchronization failed");
+  await expect(identity.verify()).rejects.toThrow("Identity synchronization failed");
   expectState(identity, { personal: null, system: null });
   sync({ target: null, authorizable: false, statusReadable: false });
   await identity.startAuthorization();

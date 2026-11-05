@@ -36,6 +36,7 @@ import {
   withPluginDiagnosticsReport,
 } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { SECRET_DEGRADATION_RETRY_HINT } from "../secrets/runtime-degraded-state.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { buildWorkspaceSkillReadiness } from "../skills/discovery/status.js";
 import { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
@@ -55,7 +56,7 @@ import {
 import { appendStatusReportHeading, appendStatusReportTable } from "./status-all/text-report.js";
 import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
 import { buildStatusAllOverviewRows } from "./status-overview-rows.ts";
-import { countActiveStatusAgents } from "./status-overview-values.js";
+import { buildStatusSecretDiagnostics, countActiveStatusAgents } from "./status-overview-values.js";
 import {
   reportStatusScanFailure,
   resolveStatusServiceSummaries,
@@ -249,7 +250,6 @@ async function resolveStatusAllLocalDiagnosis(params: {
     diagnosis: {
       snap,
       remoteUrlMissing: overview.gatewaySnapshot.remoteUrlMissing,
-      secretDiagnostics: overview.secretDiagnostics,
       sentinel,
       lastErr,
       port,
@@ -357,12 +357,16 @@ export async function statusAllCommand(
       nodeOnlyGateway,
       databaseEngines,
     };
+    const secretDiagnostics = buildStatusSecretDiagnostics(
+      summary.degradedSecretOwners ?? [],
+      overview.secretDiagnostics,
+    );
     const overviewRows = buildStatusAllOverviewRows({
       surface: overviewSurface,
       osLabel: overview.osSummary.label,
       configPath,
       summary,
-      secretDiagnosticsCount: overview.secretDiagnostics.length,
+      secretDiagnosticsCount: secretDiagnostics.length,
       updateRows,
       agentStatus,
     });
@@ -392,7 +396,6 @@ export async function statusAllCommand(
     }
     lines.push(heading("OpenClaw status --all"));
     const report = { lines, heading, width: tableWidth };
-    const overviewColumns = [...statusOverviewTableColumns];
     // Prepare every styled row before table rendering so callbacks retain their existing order.
     const channelColumns = statusChannelsTableColumns.map((column) =>
       column.key === "Detail" ? Object.assign({}, column, { minWidth: 28 }) : column,
@@ -414,7 +417,7 @@ export async function statusAllCommand(
     const agentColumns = [...statusAgentsTableColumns];
     const agentRows = buildStatusAgentTableRows({ agentStatus, ok, warn });
 
-    appendStatusReportTable(report, "Overview", overviewColumns, overviewRows);
+    appendStatusReportTable(report, "Overview", [...statusOverviewTableColumns], overviewRows);
     appendStatusReportTable(report, "Channels", channelColumns, channelRows);
     for (const detail of details) {
       appendStatusReportTable(report, detail.title, detail.columns, detail.rows);
@@ -478,14 +481,13 @@ export async function statusAllCommand(
     }
 
     emitCheck(
-      `Secret diagnostics (${diagnosis.secretDiagnostics.length})`,
-      diagnosis.secretDiagnostics.length === 0 ? "ok" : "warn",
+      `Secret diagnostics (${secretDiagnostics.length})`,
+      secretDiagnostics.length === 0 ? "ok" : "warn",
     );
-    emitLimited(
-      diagnosis.secretDiagnostics,
-      10,
-      (diagnostic) => `  - ${muted(redactStatusSecrets(diagnostic))}`,
-    );
+    emitLimited(secretDiagnostics, 10, (diagnostic) => `  - ${muted(diagnostic)}`);
+    if (summary.degradedSecretOwners?.length) {
+      emitDetail(`Retry: ${SECRET_DEGRADATION_RETRY_HINT}`);
+    }
 
     if (diagnosis.sentinel?.payload) {
       emitCheck("Restart sentinel present", "warn");
@@ -499,7 +501,7 @@ export async function statusAllCommand(
       if (updateRestartValue) {
         emitDetail(`Update restart: ${updateRestartValue}`);
       }
-      for (const line of formatUpdateRestartActionLines(diagnosis.sentinel.payload)) {
+      for (const line of formatUpdateRestartActionLines(diagnosis.sentinel.payload, diagnosis)) {
         emitDetail(line);
       }
     } else {
@@ -693,8 +695,9 @@ export async function statusAllCommand(
         diagnosis.channelIssues.length === 0 ? "ok" : "warn",
       );
       emitLimited(diagnosis.channelIssues, 12, (issue) => {
-        const fixText = issue.fix ? ` · fix: ${issue.fix}` : "";
-        return `  - ${issue.channel}[${issue.accountId}] ${issue.kind}: ${issue.message}${fixText}`;
+        return sanitizeTerminalText(
+          `  - ${issue.channel}[${issue.accountId}] ${issue.kind}: ${issue.message}${issue.fix ? ` · fix: ${issue.fix}` : ""}`,
+        );
       });
     } else if (diagnosis.nodeOnlyGateway) {
       emitCheck(
@@ -731,6 +734,7 @@ export async function statusAllCommand(
     lines.push("");
     lines.push(muted("Pasteable debug report. Auth tokens redacted."));
     lines.push("Troubleshooting: https://docs.openclaw.ai/troubleshooting");
+    lines.push("Support: https://community.openclaw.ai/");
     lines.push("");
 
     if (usage) {

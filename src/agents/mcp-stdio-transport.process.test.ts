@@ -25,8 +25,8 @@ async function fixture(spontaneous: boolean) {
   const transport = new OpenClawStdioClientTransport({
     command: process.execPath,
     args: [serverPath],
-    stderr: "ignore",
   });
+  transport.stderr.resume();
   const closed = createDeferred();
   const descendant = createDeferred<number>();
   // MCP transports expose callback properties rather than EventTarget listeners.

@@ -149,6 +149,22 @@ const updated = (account: ResolvedGoogleChatAccount, text: string) => ({
 });
 
 describe("Google Chat automatic reply target reconciliation", () => {
+  it.each<{ typing: "message" | "none"; kind: string }>([
+    { typing: "message", kind: "final" },
+    { typing: "none", kind: "block" },
+  ])("keeps $kind delivery with $typing typing off the durable path", async ({ typing, kind }) => {
+    apiMocks.sendGoogleChatMessage.mockResolvedValueOnce({
+      messageName: TYPING,
+      threadName: THREAD,
+    });
+    await processEvent({
+      account: createAccount({ replyToMode: "all", typingIndicator: typing }),
+      run: async (delivery) => {
+        expect(delivery.durable({ text: "hello", replyToId: THREAD }, { kind })).toBe(false);
+      },
+    });
+  });
+
   it("keeps automatic replies top-level with reply mode off", async () => {
     const account = createAccount({ replyToMode: "off" });
     const payload = Object.freeze({ text: "top-level reply", replyToId: SOURCE });

@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import type {
   ChatMobilePeople,
   ChatMobilePeopleMention,
@@ -31,7 +32,12 @@ export type ChatMobilePeopleBodyProps = {
 
 function PersonName(props: { person: ChatMobilePerson }) {
   return (
-    <span class="chat-mobile-people__name" aria-label={props.person.label}>
+    <span
+      ref={createTextOverflow(() => props.person.firstName)}
+      class="chat-mobile-people__name"
+      aria-label={props.person.label}
+      title={props.person.label}
+    >
       {props.person.firstName}
     </span>
   );
@@ -42,13 +48,14 @@ function PeopleSection(props: {
   people: readonly ChatMobilePerson[];
   labels: ChatMobilePeopleLabels;
   showCount?: boolean;
+  partial?: boolean;
   onMention?: ChatMobilePeopleBodyProps["onMention"];
 }) {
   return (
     <section class="chat-mobile-people__section" aria-label={props.title}>
       <h3>
         {props.title}
-        <Show when={props.showCount}>
+        <Show when={props.showCount && !props.partial}>
           <span>{props.people.length}</span>
         </Show>
       </h3>
@@ -145,6 +152,7 @@ export function ChatMobilePeopleBody(props: ChatMobilePeopleBodyProps) {
           people={props.people.participants}
           labels={props.labels}
           showCount
+          partial={!props.people.participantsComplete}
           onMention={props.onMention}
         />
       </Show>

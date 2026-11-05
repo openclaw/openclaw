@@ -9,7 +9,7 @@ import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts
 import { chatOutboxDeliveryKey } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -25,9 +25,9 @@ import {
   removeDeliveredQueuedChatSendForRun,
   updateQueuedMessage,
 } from "./chat-queue.ts";
-import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import type { ChatQueueAdmissionResult } from "./composer-persistence.ts";
+import { formatChatSelectionQuote } from "./components/chat-selection-attachment.ts";
+import type { ChatQueueAdmissionResult } from "./composer-queue-persistence.ts";
 import {
   admitChatSubmission,
   retireChatSubmissionDisplay,
@@ -42,11 +42,9 @@ import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-m
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
-export const UNCONFIRMED_CHAT_SEND_ERROR =
-  "Delivery has not been confirmed. Check the conversation — retry only if your message didn't arrive.";
-
-export const OFFLINE_QUEUE_STORAGE_ERROR =
-  "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
+export function chatOfflineQueueStorageError(): string {
+  return t("chat.queue.storageFailed");
+}
 
 export function formatChatQueueAdmissionError(
   result: Exclude<ChatQueueAdmissionResult, "admitted">,
@@ -58,7 +56,7 @@ export function formatChatQueueAdmissionError(
   if (result === "full") {
     return t("chat.queue.full");
   }
-  return editing ? t("chat.queue.editStorageFailed") : OFFLINE_QUEUE_STORAGE_ERROR;
+  return editing ? t("chat.queue.editStorageFailed") : chatOfflineQueueStorageError();
 }
 
 export function isChatResetCommand(text: string) {
@@ -80,6 +78,9 @@ export function chatSendAdmissionHoldReason(
   sessionKey: string,
   agentId?: string,
 ): string | null {
+  if (sessionKey === host.sessionKey && host.isRouteSessionPending?.()) {
+    return t("chat.thread.loading");
+  }
   if (isExpiredIncognitoSession(host, sessionKey)) {
     return t("chat.incognitoExpiredTitle");
   }
@@ -97,6 +98,7 @@ export function chatSendHoldReason(
   agentId?: string,
 ): string | null {
   return (
+    (host.gatewayWorkPaused ? t("chat.queue.states.waitingForReconnect") : null) ??
     chatSendAdmissionHoldReason(host, sessionKey, agentId) ??
     chatSendPendingReason(host, sessionKey, initialTurnPending)
   );
@@ -108,7 +110,7 @@ function chatConnectionPendingReason(host: Pick<ChatHost, "client" | "connected"
     : null;
 }
 
-// Hello permits RPCs before account recovery has claimed any retained first turn.
+// Sending waits for the authenticated outbox scope and locally owned session creation.
 // Renderers show loading only for these transient holds, never terminal expiry.
 export function chatSendPendingReason(
   host: Pick<ChatHost, "client" | "connected" | "hasPendingInitialTurn">,
@@ -121,17 +123,6 @@ export function chatSendPendingReason(
       ? t("chat.queue.initialTurnPending")
       : null)
   );
-}
-
-export function formatTerminalChatSendAckError(
-  ack: TerminalFailureChatSendAck,
-  context: "chat" | "detached",
-): string {
-  return ack.status === "error"
-    ? "Chat failed before the run started; try again."
-    : context === "detached"
-      ? "The active run ended before the detached message was accepted."
-      : "The run ended before the message was accepted.";
 }
 
 function preserveDeliveredUserTurn(
@@ -292,11 +283,10 @@ export function retireDeliveredQueuedUserTurn(
       return "stale";
     }
     const reason = result.status === "failed" ? result.reason : "missing";
-    // Delivery proof must never become a fresh-send retry because local bytes
-    // were unavailable. Keep the same run identity and its no-replay barrier.
+    // Keep the same key if local projection fails after delivery.
     updateQueuedMessage(host, stored.id, (item) =>
       failOutboxPayload(
-        { ...item, sendState: item.sendState === "held" ? "held" : "unconfirmed" },
+        { ...item, sendState: item.sendState === "held" ? "held" : "failed" },
         reason,
       ),
     );
@@ -304,15 +294,13 @@ export function retireDeliveredQueuedUserTurn(
   });
 }
 
-type ChatDeliveryFailureHost = Parameters<typeof visibleSessionMatches>[0] & {
-  lastError?: string | null;
-  chatError?: string | null;
-  sessionsResult?: SessionsListResult | null;
-};
-
 /** Surface a terminal delivery failure in the owning pane or a named toast. */
 export function surfaceChatDeliveryFailure(
-  host: ChatDeliveryFailureHost,
+  host: Parameters<typeof visibleSessionMatches>[0] & {
+    lastError?: string | null;
+    chatError?: string | null;
+    sessionsResult?: SessionsListResult | null;
+  },
   sessionKey: string,
   agentId: string | undefined,
   error: string,
@@ -332,7 +320,18 @@ export function surfaceChatDeliveryFailure(
         !scopedAgentId ||
         (session.agentId !== undefined && normalizeAgentId(session.agentId) === scopedAgentId)),
   );
-  showToast({ message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}` });
+  showToast({
+    placement: "top-right",
+    severity: "error",
+    message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}`,
+  });
+}
+
+/** Model-facing text an annotation contributes ahead of the user's own message. */
+export function annotationMessageContext(attachment: ChatAttachment): string | undefined {
+  return attachment.selectionAnnotation
+    ? formatChatSelectionQuote(attachment.selectionAnnotation)
+    : attachment.browserAnnotation?.modelContext.trim();
 }
 
 export function prependReplyQuote(

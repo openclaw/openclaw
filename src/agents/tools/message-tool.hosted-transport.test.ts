@@ -5,20 +5,15 @@ import { WebSocketServer } from "ws";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
-import * as commandSecretTargets from "../../cli/command-secret-targets.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as cron from "../../cron/active-jobs.js";
 import { prepareCronRunAdmission } from "../../cron/run-admission.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
+import { TEST_SCHEDULED_EXECUTION } from "../../cron/scheduled-occurrence.test-support.js";
 import * as turns from "../../gateway/message-action-turn-capability.js";
-import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import { closeMinimalGatewayServer } from "../../gateway/minimal-gateway.test-helpers.js";
 import { resolveTrustedMessageActionToolContext } from "../../gateway/server-methods/message-action-context.js";
-import type {
-  GatewayRequestContext,
-  GatewayRequestHandler,
-} from "../../gateway/server-methods/types.js";
+import type { GatewayRequestHandler } from "../../gateway/server-methods/types.js";
 import * as runs from "../../infra/agent-run-registry.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
 import * as plugins from "../../plugins/runtime.js";
@@ -31,6 +26,12 @@ import { resolveConversationCapabilityProfile } from "../conversation-capability
 import { createEmbeddedMessageInvocationPolicy } from "../scheduled-message-invocation.js";
 import * as callers from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
+import {
+  messageGatewayContext as gatewayContext,
+  registerMessageChannel,
+  resolvedMessageSecrets as resolvedSecrets,
+  stubMessageSecrets,
+} from "./message-tool-execution.test-support.js";
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let registry: ReturnType<typeof plugins.captureActivePluginRegistrySnapshot>;
@@ -39,12 +40,7 @@ beforeEach(async () => {
     env: { OPENCLAW_GATEWAY_URL: undefined, OPENCLAW_GATEWAY_TOKEN: undefined },
   });
   registry = plugins.captureActivePluginRegistrySnapshot();
-  vi.spyOn(commandSecretTargets, "getScopedChannelsCommandSecretTargets").mockReturnValue({
-    targetIds: new Set<string>(),
-  });
-  vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(
-    async ({ config }) => resolvedSecrets(config),
-  );
+  stubMessageSecrets();
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -58,32 +54,6 @@ function hostedConfig(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
     channels: { gatewaychat: { enabled: true } },
     ...overrides,
   };
-}
-
-function gatewayContext(
-  getRuntimeConfig: () => OpenClawConfig,
-  handler: GatewayRequestHandler,
-  overrides: Partial<GatewayRequestContext> = {},
-) {
-  const methods = createGatewayMethodRegistry([
-    {
-      name: "message.action",
-      owner: { kind: "core", area: "message" },
-      scope: "operator.write",
-      handler,
-    },
-  ]);
-  return {
-    getRuntimeConfig,
-    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-    getGatewayMethodRegistry: () => methods,
-    trackExecution: <T>(run: () => Promise<T>) => run(),
-    ...overrides,
-  } as GatewayRequestContext;
-}
-
-function resolvedSecrets(resolvedConfig: OpenClawConfig) {
-  return { resolvedConfig, diagnostics: [], targetStatesByPath: {}, hadUnresolvedTargets: false };
 }
 
 function gatewayPlugin(
@@ -149,9 +119,7 @@ it("dispatches a hosted message action without connecting to either Gateway endp
     const plugin = gatewayPlugin("react", () => {
       throw new Error("The action must cross the Gateway transport");
     });
-    plugins.setActivePluginRegistry(
-      fixtures.createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]),
-    );
+    registerMessageChannel(plugin);
     const config = hostedConfig({
       gateway: {
         mode: "remote",
@@ -268,12 +236,12 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
       expectDefined(sendHandlers["message.action"], "Gateway message handler"),
     );
     const context = gatewayContext(() => currentConfig, dispatched, {
-      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
       dedupe: new Map(),
     });
     const resolveGatewayContext = () => context;
     promptAdmission = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
       prepareCronRunAdmission({
+        scheduledExecution: TEST_SCHEDULED_EXECUTION,
         deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
         cfg: configA,
         ...run,

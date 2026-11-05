@@ -5,6 +5,7 @@ import {
 } from "../agents/github-host.js";
 import { resolveConfiguredGitHubToolIdentity } from "../agents/github-tool-identity.js";
 import { runGitReadOperation } from "../infra/git-read-cache.js";
+import { assertionSucceeds } from "../shared/assertion.js";
 import { createControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
 import { gitHubPublicApi, type ControlUiGitHubSessionIdentity } from "./github-public-api.js";
@@ -61,14 +62,7 @@ export async function withControlUiSessionGitHubRead<T>(
     agentId,
     getRuntimeConfig: context.getRuntimeConfig,
     getSessionRowProjection: () => getSessionRowProjection(context),
-    isCurrentClient: () => {
-      try {
-        assertClient();
-        return true;
-      } catch {
-        return false;
-      }
-    },
+    isCurrentClient: () => assertionSucceeds(assertClient),
   });
   const session = await read?.();
   if (!session?.sessionId) {

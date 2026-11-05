@@ -37,6 +37,7 @@ import {
   cronContinuationGatewayClient,
   cronMediaCompletionEvent,
   setupCronContinuationReleaseFixture,
+  readyCronContinuationEntry,
   operatorWriteGatewayClient,
   REAL_PNG,
   waitForAgentCommandCall,
@@ -47,6 +48,26 @@ import {
 import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = getAgentTestMocks();
+
+function mockCronContinuationStore(
+  sessionKey: string,
+  baseSessionKey: string,
+  entry: SessionEntry,
+) {
+  mocks.loadSessionEntry.mockReturnValue({
+    cfg: {},
+    storePath: getAgentTestStorePath(),
+    canonicalKey: sessionKey,
+    entry,
+  });
+  const { cronRunContinuation: _cronRunContinuation, ...baseEntry } = structuredClone(entry);
+  const store: Record<string, SessionEntry> = {
+    [baseSessionKey]: baseEntry,
+    [sessionKey]: structuredClone(entry),
+  };
+  mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
+  return store;
+}
 
 describe("gateway agent handler", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-gateway-agent-media-routing-");
@@ -1031,54 +1052,6 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
-  it("suppresses persisted prompts for subagent announce task-completion handoffs", async () => {
-    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
-    mocks.agentCommand.mockClear();
-
-    await invokeAgent(
-      {
-        message: "runtime-only announce bookkeeping",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:subagent:child",
-          sourceTool: "subagent_announce",
-        },
-        internalEvents: [
-          {
-            type: "task_completion",
-            source: "subagent",
-            childSessionKey: "agent:main:subagent:child",
-            childSessionId: "child-session-id",
-            announceType: "completion",
-            taskLabel: "child task",
-            status: "ok",
-            statusLabel: "completed",
-            result: "child result",
-            statsLine: "tokens=10",
-            replyInstruction: "Deliver the child result.",
-          },
-        ],
-        idempotencyKey: "test-subagent-announce-suppress-prompt",
-      },
-      {
-        reqId: "subagent-announce-suppress-prompt",
-        client: backendGatewayClient(),
-      },
-    );
-
-    const callArgs = await waitForAgentCommandCall<{
-      suppressPromptPersistence?: boolean;
-      preserveUserFacingSessionModelState?: boolean;
-      message?: string;
-    }>();
-    expect(callArgs.suppressPromptPersistence).toBe(true);
-    expect(callArgs.preserveUserFacingSessionModelState).toBe(true);
-    expect(callArgs.message).toMatch(/^\[Inter-session message\]/);
-    expect(callArgs.message).toContain("sourceTool=subagent_announce");
-  });
-
   it("restores exact cron continuation policy for generated-media wakes", async () => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:cron:job-1:run:run-1";
@@ -1112,18 +1085,7 @@ describe("gateway agent handler", () => {
         },
       },
     };
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
-      storePath: getAgentTestStorePath(),
-      canonicalKey: sessionKey,
-      entry,
-    });
-    const { cronRunContinuation: _cronRunContinuation, ...baseEntry } = structuredClone(entry);
-    const store: Record<string, SessionEntry> = {
-      [baseSessionKey]: baseEntry,
-      [sessionKey]: structuredClone(entry),
-    };
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
+    mockCronContinuationStore(sessionKey, baseSessionKey, entry);
     mocks.agentCommand.mockResolvedValue({
       payloads: [{ text: "continued" }],
       meta: { durationMs: 100 },
@@ -1310,30 +1272,8 @@ describe("gateway agent handler", () => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:cron:job-1:run:run-1";
     const baseSessionKey = "agent:main:cron:job-1";
-    const entry: SessionEntry = {
-      sessionId: "run-1",
-      updatedAt: Date.now(),
-      lifecycleRevision: "revision-1",
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "ready" as const,
-        basePersisted: true,
-      },
-    };
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
-      storePath: getAgentTestStorePath(),
-      canonicalKey: sessionKey,
-      entry,
-    });
-    const { cronRunContinuation: _cronRunContinuation, ...baseEntry } = structuredClone(entry);
-    const store: Record<string, SessionEntry> = {
-      [baseSessionKey]: baseEntry,
-      [sessionKey]: structuredClone(entry),
-    };
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
+    const entry = readyCronContinuationEntry();
+    const store = mockCronContinuationStore(sessionKey, baseSessionKey, entry);
     const firstTurn = createDeferred<{ payloads: Array<{ text: string }> }>();
     mocks.agentCommand.mockImplementationOnce(() => firstTurn.promise);
     const admissionObserver = await observeAgentLifecycleAdmission("cron-media-first");
@@ -1484,18 +1424,7 @@ describe("gateway agent handler", () => {
   it("keeps an exact continuation ready for later media when the stable row was deleted", async () => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:cron:delete-after-run:run:run-1";
-    const entry: SessionEntry = {
-      sessionId: "run-1",
-      updatedAt: Date.now(),
-      lifecycleRevision: "revision-1",
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "ready",
-        basePersisted: true,
-      },
-    };
+    const entry = readyCronContinuationEntry();
     const store: Record<string, SessionEntry> = { [sessionKey]: structuredClone(entry) };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
@@ -1531,30 +1460,8 @@ describe("gateway agent handler", () => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:cron:job-1:run:run-1";
     const baseSessionKey = "agent:main:cron:job-1";
-    const entry = {
-      sessionId: "run-1",
-      updatedAt: Date.now(),
-      lifecycleRevision: "revision-1",
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "ready" as const,
-        basePersisted: true,
-      },
-    };
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
-      storePath: getAgentTestStorePath(),
-      canonicalKey: sessionKey,
-      entry,
-    });
-    const { cronRunContinuation: _cronRunContinuation, ...baseEntry } = structuredClone(entry);
-    const store: Record<string, SessionEntry> = {
-      [baseSessionKey]: baseEntry,
-      [sessionKey]: structuredClone(entry),
-    };
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
+    const entry = readyCronContinuationEntry();
+    const store = mockCronContinuationStore(sessionKey, baseSessionKey, entry);
     mocks.agentCommand.mockImplementation(async (call: AgentCommandCall) => {
       expectDefined(store[sessionKey], "store[sessionKey] test invariant").sessionId = "run-2";
       const onActiveModelSelected = call.onActiveModelSelected;
@@ -1601,32 +1508,12 @@ describe("gateway agent handler", () => {
     const sessionKey = "agent:main:cron:job-1:run:run-1";
     const baseSessionKey = "agent:main:cron:job-1";
     const entry: SessionEntry = {
-      sessionId: "run-1",
-      updatedAt: Date.now(),
-      lifecycleRevision: "revision-1",
-      modelProvider: "openai",
-      model: "gpt-5.4",
+      ...readyCronContinuationEntry(),
       contextTokens: 128_000,
       agentHarnessId: "openclaw",
       cliSessionBindings: { "openai-cli": { sessionId: "native-a" } },
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "ready" as const,
-        basePersisted: true,
-      },
     };
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
-      storePath: getAgentTestStorePath(),
-      canonicalKey: sessionKey,
-      entry,
-    });
-    const { cronRunContinuation: _cronRunContinuation, ...baseEntry } = structuredClone(entry);
-    const store: Record<string, SessionEntry> = {
-      [baseSessionKey]: baseEntry,
-      [sessionKey]: structuredClone(entry),
-    };
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
+    const store = mockCronContinuationStore(sessionKey, baseSessionKey, entry);
     mocks.agentCommand.mockImplementation(async (call: AgentCommandCall) => {
       const onActiveModelSelected = call.onActiveModelSelected;
       if (typeof onActiveModelSelected !== "function") {

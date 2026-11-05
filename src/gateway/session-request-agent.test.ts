@@ -17,9 +17,10 @@ function fixedStoreConfig(owner: string): OpenClawConfig {
   };
 }
 
-function explicitConfig(): OpenClawConfig {
-  return { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } };
-}
+const explicitConfig: OpenClawConfig = {
+  agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+};
+const invalidRequest = { ok: false, error: { code: "INVALID_REQUEST" } };
 
 it("uses the configured persisted owner for a bare key", () => {
   const cfg = fixedStoreConfig("ops");
@@ -36,10 +37,7 @@ it.each(["main", "primary"])(
     cfg.session = { ...cfg.session, scope: "global", mainKey: "primary" };
     for (const owner of ["ops", "retired"]) {
       cfg.agents!.defaults!.sessionStore!.agentId = owner;
-      expect.soft(resolve(cfg, key, "research")).toMatchObject({
-        ok: false,
-        error: { code: "INVALID_REQUEST" },
-      });
+      expect.soft(resolve(cfg, key, "research")).toMatchObject(invalidRequest);
     }
     expect(resolve(cfg, key)).toEqual(owned);
     cfg.agents!.defaults!.sessionStore!.agentId = "research";
@@ -51,13 +49,11 @@ it.each(["main", "primary"])(
 );
 
 it("returns typed ownership results for arbitrary bare keys before canonicalization", () => {
-  const cfg = explicitConfig();
-
-  expect(resolve(cfg, "thread-1")).toMatchObject({
+  expect(resolve(explicitConfig, "thread-1")).toMatchObject({
     ok: false,
     error: { code: "INVALID_REQUEST", message: expect.stringContaining("has no explicit owner") },
   });
-  expect(resolve(cfg, "thread-1", "research")).toEqual({
+  expect(resolve(explicitConfig, "thread-1", "research")).toEqual({
     ok: true,
     agentId: "research",
   });
@@ -81,16 +77,10 @@ it.each(["", "агент✨"])(
 );
 
 it("keeps retired agent-qualified history readable outside global scope", () => {
-  const cfg = explicitConfig();
-
-  expect(resolve(cfg, "agent:retired:main")).toEqual({
-    ok: true,
-    agentId: "retired",
-  });
-  expect(resolve({ ...cfg, session: { scope: "global" } }, "agent:retired:main")).toMatchObject({
-    ok: false,
-    error: { code: "INVALID_REQUEST" },
-  });
+  expect(resolve(explicitConfig, "agent:retired:main")).toEqual({ ok: true, agentId: "retired" });
+  expect(
+    resolve({ ...explicitConfig, session: { scope: "global" } }, "agent:retired:main"),
+  ).toMatchObject(invalidRequest);
 });
 
 const configured = fixedStoreConfig("ops");

@@ -2,9 +2,10 @@ import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import type { ApplicationContext } from "../../app/context.ts";
 import { terminalFontFamily } from "../../app/terminal-font.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
-import { renderSolidSnapshot } from "../../lib/dom/solid-snapshot.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
+import { renderSolidSnapshot } from "../../lib/reactive/detached-root.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { showConfirmDialog } from "../confirm-dialog.ts";
 import { createDockLayout } from "../dock-layout.ts";
@@ -26,6 +27,8 @@ import type { TerminalInputs, TerminalPanelSessionTab } from "./terminal-panel-s
 import { terminalPanelTabIcon, terminalPanelHostedTabs } from "./terminal-panel-tabs.tsx";
 import { createTerminalPanelUpload, type TerminalPanelUpload } from "./terminal-panel-upload.ts";
 import { createTerminalSessionPicker } from "./terminal-session-picker.ts";
+
+registerTerminalEnglish();
 
 // Clone the SVG itself: insertion consumes a fragment and loses its replacement boundary.
 const hostedTabIcon = renderSolidSnapshot(terminalPanelTabIcon).firstElementChild!;
@@ -368,26 +371,49 @@ export function createTerminalPanel(
     },
     get hostedTabs() {
       return terminalPanelHostedTabs(terminalSessions.state.tabs, element.gatewayConnected).map(
-        (tab) => Object.assign(tab, { icon: hostedTabIcon.cloneNode(true) }),
+        (tab) =>
+          Object.assign(tab, {
+            icon: hostedTabIcon.cloneNode(true),
+            onActivate: () => owner.selectHostedTab(tab.id),
+          }),
       );
     },
     get activeHostedTabId() {
       return terminalSessions.state.activeId;
     },
-    selectHostedTab(id: string): void {
+    selectHostedTab(id: string, event?: MouseEvent | KeyboardEvent): void {
       sessionPicker?.onDismiss(false);
-      terminalSessions.switchTo(id);
+      // Automatic tab navigation keeps focus in the tablist for the next key.
+      const navigating =
+        event instanceof KeyboardEvent &&
+        (event.key === "ArrowLeft" ||
+          event.key === "ArrowRight" ||
+          event.key === "Home" ||
+          event.key === "End");
+      terminalSessions.switchTo(id, !navigating);
     },
     async closeHostedTab(id: string): Promise<void> {
       const tab = terminalSessions.state.tabs.find((entry) => entry.id === id);
       const client = element.client;
       if (element.mobile && tab?.status === "live" && !tab.agentOwned) {
-        const confirmed = await showConfirmDialog({
-          title: i18n.t("terminal.closeSession"),
-          message: i18n.t("terminal.closeSessionMessage"),
-          confirmLabel: i18n.t("common.close"),
-          danger: true,
-        });
+        let confirmed: boolean;
+        try {
+          confirmed = await showConfirmDialog({
+            title: i18n.t("terminal.closeSessionTitle"),
+            message: i18n.t("terminal.closeSessionMessage"),
+            confirmLabel: i18n.t("common.close"),
+            danger: true,
+          });
+        } catch (error) {
+          if (
+            owner.isConnected &&
+            element.client === client &&
+            terminalSessions.state.tabs.includes(tab)
+          ) {
+            terminalSessions.setError(formatUiError(error));
+          }
+          return;
+        }
         if (
           !confirmed ||
           !owner.isConnected ||
@@ -540,7 +566,8 @@ export function createTerminalPanel(
         viewportRef: (nextViewport: HTMLDivElement) => {
           viewport = nextViewport;
         },
-        onSelect: (id: string): void => owner.selectHostedTab(id),
+        onSelect: (id: string, event?: MouseEvent | KeyboardEvent): void =>
+          owner.selectHostedTab(id, event),
         onClose: (id: string): Promise<void> => owner.closeHostedTab(id),
         onNew: (): void => {
           sessionPicker?.onDismiss(false);

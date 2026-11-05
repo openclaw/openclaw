@@ -5,8 +5,10 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, expect, it, vi } from "vitest";
+import { parseSlackChannelCreateInput } from "./actions.js";
 import { createSlackActions } from "./channel-actions.js";
 import * as slackClient from "./client.js";
+import { parseSlackConversationOpenInput } from "./conversation-open.js";
 
 const credentials = { botToken: "xoxb-test", userToken: "xoxp-readonly", userTokenReadOnly: true };
 
@@ -64,6 +66,19 @@ function createFixture(id = "C01234567", openResponse?: Record<string, unknown>)
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+it.each([
+  [undefined, undefined],
+  [" t123 ", "t123"],
+])("preserves optional workspace normalization for %s", (teamId, expected) => {
+  expect(parseSlackConversationOpenInput(["U123"], teamId).teamId).toBe(expected);
+  expect(parseSlackChannelCreateInput("synthetic-channel", teamId).teamId).toBe(expected);
+});
+
+it.each(["", "C123", "T"])("rejects malformed workspace %s at both action inputs", (teamId) => {
+  expect(() => parseSlackConversationOpenInput(["U123"], teamId)).toThrow();
+  expect(() => parseSlackChannelCreateInput("synthetic-channel", teamId)).toThrow();
 });
 
 it("exposes the recipient contract to the message tool", () => {

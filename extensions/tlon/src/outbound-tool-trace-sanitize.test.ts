@@ -1,5 +1,7 @@
 // Prove sanitization through the delivery hook and actual Urbit HTTP pokes.
+import { once } from "node:events";
 import http from "node:http";
+import { text as readBody } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core";
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -20,22 +22,6 @@ type CapturedPoke = {
   mark: string;
   json: unknown;
 };
-
-async function listen(server: http.Server): Promise<number> {
-  return await new Promise<number>((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      resolve((server.address() as { port: number }).port);
-    });
-  });
-}
-
-async function readBody(request: http.IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
 
 let server: http.Server;
 let baseUrl: string;
@@ -72,7 +58,9 @@ beforeEach(async () => {
       response.writeHead(500, { Connection: "close" }).end(String(error));
     });
   });
-  baseUrl = `http://127.0.0.1:${await listen(server)}`;
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 });
 
 afterEach(async () => {
@@ -97,14 +85,21 @@ it("sanitizes DM, group, and media-caption text before the Urbit poke", async ()
     },
   } as OpenClawConfig;
 
-  const send = (to: string, text: string, mediaUrl?: string) =>
-    sendDurableMessageBatch({
+  const send = async (to: string, text: string, mediaUrl?: string) => {
+    const result = await sendDurableMessageBatch({
       cfg,
       channel: "tlon",
       to,
       payloads: [{ text, ...(mediaUrl ? { mediaUrl } : {}) }],
       skipQueue: true,
     });
+    expect(result.status).toBe("sent");
+    if (result.status !== "sent") {
+      throw new Error(`Unexpected send status: ${result.status}`);
+    }
+    expect(result.receipt.parts).toMatchObject([{ kind: mediaUrl ? "media" : "text" }]);
+    expect(result.receipt.platformMessageIds).toEqual([result.results[0]?.messageId]);
+  };
   await send(
     "~sampel-palnet",
     "**Done.**\n⚠️ 🛠️ `search private repos (agent)` failed\n\n```text\n⚠️ 🛠️ `documented example (agent)` failed\n```",
@@ -123,12 +118,6 @@ it("sanitizes DM, group, and media-caption text before the Urbit poke", async ()
     expect.objectContaining({ shipUrl: baseUrl, shipName: "~zod" }),
     1024 * 1024,
   );
-
-  expect(pokes.map(({ app, mark }) => ({ app, mark }))).toEqual([
-    { app: "chat", mark: "chat-dm-action" },
-    { app: "channels", mark: "channel-action-1" },
-    { app: "chat", mark: "chat-dm-action" },
-  ]);
 
   const expectText = (index: number, included: string[], excluded: string[]) => {
     const json = JSON.stringify(expectDefined(pokes[index], `poke ${index}`).json);

@@ -3,15 +3,6 @@ import { z } from "zod";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const HttpUrlSchema = z.string().url().refine(isHttpUrl, "Expected http:// or https:// URL");
-const EnterpriseIssuerSchema = z
-  .string()
-  .url()
-  .refine((value) => {
-    const url = URL.parse(value);
-    return url !== null && isHttpsUrl(url);
-  }, "Expected https:// URL");
-const EnterpriseClientIdSchema = z.string().trim().min(1);
-const EnterpriseClientSecretSchema = z.string().min(1).register(sensitive);
 
 const McpOAuthClientMetadataUrlSchema = z
   .string()
@@ -45,7 +36,7 @@ export const McpServerSchema = z
     connectionTimeoutMs: z.number().finite().positive().optional(),
     requestTimeoutMs: z.number().finite().positive().optional(),
     supportsParallelToolCalls: z.boolean().optional(),
-    auth: z.enum(["oauth", "enterprise"]).optional(),
+    auth: z.literal("oauth").optional(),
     oauth: z
       .strictObject({
         identity: z.enum(["shared", "per-requester"]).optional(),
@@ -53,32 +44,6 @@ export const McpServerSchema = z
         scope: z.string().trim().min(1).optional(),
         redirectUrl: HttpUrlSchema.optional(),
         clientMetadataUrl: McpOAuthClientMetadataUrlSchema.optional(),
-      })
-      .optional(),
-    enterprise: z
-      .strictObject({
-        identity: z.literal("shared"),
-        idpIssuer: EnterpriseIssuerSchema,
-        idpClientId: EnterpriseClientIdSchema,
-        idpClientSecret: EnterpriseClientSecretSchema,
-        resourceIssuer: EnterpriseIssuerSchema,
-        resourceClientId: EnterpriseClientIdSchema,
-        resourceClientSecret: EnterpriseClientSecretSchema,
-        scope: z.string().trim().min(1),
-        redirectUrl: z
-          .string()
-          .url()
-          .refine((value) => {
-            const url = URL.parse(value);
-            return (
-              url !== null &&
-              url.protocol === "http:" &&
-              ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&
-              !url.username &&
-              !url.password
-            );
-          }, "Expected an HTTP loopback callback URL"),
-        tokenEndpointAuthMethod: z.enum(["client_secret_basic", "client_secret_post"]).optional(),
       })
       .optional(),
     sslVerify: z.boolean().optional(),
@@ -177,33 +142,6 @@ export const McpServerSchema = z
           path: ["oauth", "identity"],
         });
       }
-    }
-    if (data.auth === "enterprise") {
-      if (
-        !data.enterprise ||
-        !data.url ||
-        data.command !== undefined ||
-        data.transport === "stdio"
-      ) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'auth: "enterprise" requires enterprise settings and an HTTP server URL',
-          path: ["enterprise"],
-        });
-      }
-      if (data.oauth) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'auth: "enterprise" cannot be combined with oauth settings',
-          path: ["oauth"],
-        });
-      }
-    } else if (data.enterprise) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'enterprise settings require auth: "enterprise"',
-        path: ["enterprise"],
-      });
     }
     if (
       data.transport === "stdio" &&

@@ -15,6 +15,8 @@ test.each(["darwin", "linux", "win32"] as const)(
 const posix = process.platform !== "win32";
 const opaqueShell = { shellWrapperExecutable: true };
 const inlineShell = { ...opaqueShell, shellInlineCommand: "echo hi" };
+const blocked = (blockedWrapper: string) => ({ policyBlocked: true, blockedWrapper });
+const shell = ["sh", "-c", "echo hi"];
 
 type TrustPlan = ReturnType<typeof resolveExecWrapperTrustPlan>;
 const defaultPolicyPlan: Omit<TrustPlan, "argv" | "policyArgv" | "dispatchChain"> = {
@@ -73,7 +75,7 @@ describe("resolveExecWrapperTrustPlan", () => {
       true,
       ["command", "curl", "https://example.invalid"],
       {},
-      { platform: "win32" as const },
+      { platform: "win32" },
     ],
     [
       "env plus command carrier",
@@ -111,29 +113,18 @@ describe("resolveExecWrapperTrustPlan", () => {
     ],
     ["yash --cmdline", true, ["yash", "--cmdline", "echo hi"], inlineShell],
     ["yash -xc", true, ["yash", "-xc", "echo hi"], inlineShell],
-    [
-      "command -v blocked",
-      posix,
-      ["command", "-v", "curl"],
-      {
-        policyBlocked: true,
-        blockedWrapper: "command",
-      },
-    ],
+    ["command -v blocked", posix, ["command", "-v", "curl"], blocked("command")],
     [
       "command -p blocked",
       posix,
       ["command", "-p", "curl", "https://example.invalid"],
-      {
-        policyBlocked: true,
-        blockedWrapper: "command",
-      },
+      blocked("command"),
     ],
     [
       "caffeinate unwraps",
       posix,
       ...unwrapped(
-        ["/usr/bin/caffeinate", "-d", "-w", "42", "sh", "-c", "echo hi"],
+        ["/usr/bin/caffeinate", "-d", "-w", "42", ...shell],
         4,
         [["caffeinate", 0]],
         inlineShell,
@@ -143,39 +134,37 @@ describe("resolveExecWrapperTrustPlan", () => {
       "time plus busybox",
       posix,
       ...unwrapped(
-        ["/usr/bin/time", "-p", "busybox", "sh", "-c", "echo hi"],
+        ["/usr/bin/time", "-p", "busybox", ...shell],
         3,
         [
           ["time", 0],
           ["busybox", 2],
         ],
         {
-          policyArgv: ["busybox", "sh", "-c", "echo hi"],
-          shellWrapperExecutable: true,
-          shellInlineCommand: "echo hi",
+          policyArgv: ["busybox", ...shell],
+          ...inlineShell,
         },
       ),
     ],
     [
       "script blocked",
       process.platform === "darwin" || process.platform === "freebsd",
-      ["/usr/bin/script", "-q", "/dev/null", "sh", "-c", "echo hi"],
+      ["/usr/bin/script", "-q", "/dev/null", ...shell],
       {
         wrapperInvocations: [
           {
             wrapper: "script",
-            sourceArgv: ["/usr/bin/script", "-q", "/dev/null", "sh", "-c", "echo hi"],
+            sourceArgv: ["/usr/bin/script", "-q", "/dev/null", ...shell],
           },
         ],
-        policyBlocked: true,
-        blockedWrapper: "script",
+        ...blocked("script"),
       },
     ],
     [
       "sandbox-exec unwraps",
       posix,
       ...unwrapped(
-        ["/usr/bin/sandbox-exec", "-p", "(allow default)", "sh", "-c", "echo hi"],
+        ["/usr/bin/sandbox-exec", "-p", "(allow default)", ...shell],
         3,
         [["sandbox-exec", 0]],
         inlineShell,
@@ -189,15 +178,7 @@ describe("resolveExecWrapperTrustPlan", () => {
     ],
     ["npx --call stays opaque", true, ["npx", "--call", "sh -c 'echo hi'"], {}],
     ["bash login stays opaque", posix, ["bash", "--login", "-c", "echo hi"], opaqueShell],
-    [
-      "busybox non-shell blocked",
-      true,
-      ["busybox", "sed", "-n", "1p"],
-      {
-        policyBlocked: true,
-        blockedWrapper: "busybox",
-      },
-    ],
+    ["busybox non-shell blocked", true, ["busybox", "sed", "-n", "1p"], blocked("busybox")],
     [
       "outer-wrapper depth overflow",
       true,
@@ -208,7 +189,7 @@ describe("resolveExecWrapperTrustPlan", () => {
           ["nohup", 0],
           ["timeout", 1],
         ],
-        { policyBlocked: true, blockedWrapper: "busybox" },
+        blocked("busybox"),
       ),
       { depth: 2 },
     ],

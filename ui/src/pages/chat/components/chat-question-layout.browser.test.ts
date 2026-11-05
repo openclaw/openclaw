@@ -64,7 +64,9 @@ it.each([320, 400, 440, 480])(
     mountSolid(() => createComponent(ComposerQuestionDock, { panel: props }), { container });
     await questionPanelIn(container);
     await document.fonts.ready;
-    for (const option of container.querySelectorAll<HTMLElement>('[role="radio"]')) {
+    const options = container.querySelectorAll<HTMLElement>('[role="radio"]');
+    expect(options).toHaveLength(3);
+    for (const option of options) {
       const tile = option
         .querySelector<HTMLElement>(".chat-question-panel__thumbnail")!
         .getBoundingClientRect();

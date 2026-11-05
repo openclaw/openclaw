@@ -4,10 +4,15 @@ import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control
 import { exactButton } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Control UI failed input ACK ownership" });
+const suite = createControlUiE2eSuite({ name: "Control UI input ACK ownership" });
 
 suite.define(() => {
-  it.each(["adopted-a", "unadopted-c"])("%s survives a steer timeout", async (ownership) => {
+  it.each([
+    { ownership: "adopted-a", status: "timeout" },
+    { ownership: "unadopted-c", status: "timeout" },
+    { ownership: "adopted-a", status: "ok" },
+    { ownership: "unadopted-c", status: "ok" },
+  ])("$ownership survives a steer $status receipt", async ({ ownership, status }) => {
     await suite.withPage({ viewport: { width: 1200, height: 800 } }, async ({ page }) => {
       const sessionKey = "agent:main:main";
       const gateway = await installMockGateway(page, { sessionKey });
@@ -18,14 +23,14 @@ suite.define(() => {
       const toolText = "Successor C tool proof";
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
-      await page.locator("[data-settings-send-shortcut]").selectOption("enter");
+      await page.locator('[data-test-id="send-shortcut-enter"]').click();
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const composer = page.locator(".agent-chat__input textarea");
       await composer.fill("Start the original task.");
       await exactButton(page, "Send message").click();
       const original = await gateway.waitForRequest("chat.send");
       const runId = String(asOptionalRecord(original.params)?.idempotencyKey);
-      const stop = page.getByRole("button", { name: "Stop generating" });
+      const stop = page.getByRole("button", { name: "Stop", exact: true });
       await stop.waitFor();
       const progress = "Original run continues working.";
       await chat({
@@ -72,12 +77,25 @@ suite.define(() => {
         await successorTool.scrollIntoViewIfNeeded();
       }
 
-      // Mirrors a targeted cancellation of the separate pre-ACK steer controller.
-      const timeout = { runId: steerRunId, status: "timeout", stopReason: "rpc" };
-      await gateway.resolveDeferred("chat.send", timeout);
-      await page
-        .getByTitle("The run ended before the message was accepted.", { exact: true })
-        .waitFor();
+      const historyRequests = (await gateway.getRequests("chat.history")).length;
+      if (status === "ok") {
+        // Delayed history must not hide loss of another live run's state.
+        await gateway.deferNext("chat.history");
+      }
+      await gateway.resolveDeferred("chat.send", {
+        runId: steerRunId,
+        status,
+        ...(status === "timeout" ? { stopReason: "rpc" } : {}),
+      });
+      if (status === "timeout") {
+        await page
+          .getByTitle("Your message wasn’t accepted before the reply ended. Try again.", {
+            exact: true,
+          })
+          .waitFor();
+      } else {
+        await gateway.waitForRequest("chat.history", { after: historyRequests });
+      }
       expect(await composer.inputValue()).toBe("Keep this next message draft.");
 
       if (ownership === "adopted-a") {
@@ -87,7 +105,7 @@ suite.define(() => {
         await composer.fill("");
         await stop.click();
         const aborted = await gateway.waitForRequest("chat.abort");
-        expect(aborted.params).toEqual({ sessionKey, runId });
+        expect(aborted.params).toEqual({ sessionKey, runId, userInitiated: true });
       } else {
         expect(await successorTool.isVisible()).toBe(true);
         expect(await successorTool.locator(".chat-tool-row__cmd").textContent()).toContain(
@@ -95,6 +113,9 @@ suite.define(() => {
         );
       }
       expect(await gateway.getRequests("chat.send")).toHaveLength(2);
+      if (status === "ok") {
+        await gateway.resolveDeferred("chat.history");
+      }
     });
   });
 });

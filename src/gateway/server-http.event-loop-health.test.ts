@@ -57,6 +57,7 @@ it("retains a blocked request interval when readiness is read before the sampler
           }
           return {
             ready: true,
+            coreReady: true,
             failing: [],
             uptimeMs: clock.clock.now(),
             eventLoop: monitor.snapshot(),
@@ -75,6 +76,7 @@ it("retains a blocked request interval when readiness is read before the sampler
           await clock.wake();
           expect(await readJson(url)).toMatchObject({
             ready: true,
+            coreReady: true,
             eventLoop: {
               degraded: true,
               reasons: expect.arrayContaining(["event_loop_delay"]),

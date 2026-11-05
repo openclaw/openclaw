@@ -9,6 +9,7 @@ import {
 } from "solid-js";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { isChatRunWorking } from "../chat-run-working.ts";
 import { ComposerDictationOwner } from "../composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import {
@@ -19,11 +20,11 @@ import { createGoalComposer } from "./chat-composer-goal-mode.tsx";
 import { createComposerPrediction } from "./chat-composer-prediction.ts";
 import { createComposerQuestionPanel } from "./chat-composer-question.tsx";
 import type { ComposerQuestions } from "./chat-composer-questions.ts";
-import { composerDraftKey, getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
+import { composerDraftKey, getChatComposerState } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.tsx";
 
-export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
+export { resetChatComposerState } from "./chat-composer-state.ts";
 
 export function ChatComposer(props: ChatComposerProps & { questions: ComposerQuestions }) {
   // A pane owns this component's lifetime; a different pane mounts a different composer.
@@ -145,6 +146,10 @@ export function ChatComposer(props: ChatComposerProps & { questions: ComposerQue
       voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
       voice.dictation.update(options);
       prediction.sync(predictions);
+      if (current.queuedSubmitDue) {
+        // Submission reads live composer state; run it after this commit.
+        queueMicrotask(current.flushQueuedSubmit);
+      }
     },
   );
   onSettled(() => {
@@ -180,5 +185,24 @@ export function ChatComposer(props: ChatComposerProps & { questions: ComposerQue
     listen(document, "visibilitychange", () => prediction.sync(readPredictionSource())),
   );
 
-  return renderChatComposerView(context, currentProps, state);
+  // Owners and handlers retain live reads; only scalar presentation values filter updates.
+  const scalarContext = createProjection(() => {
+    const current = context();
+    return {
+      attachmentReadRevision: current.attachmentReadRevision,
+      canCompose: current.canCompose,
+      showAbortableUi: current.showAbortableUi,
+      visibleDraft: current.visibleDraft,
+      submitQueued: current.submitQueued,
+      predictionText: current.predictionText,
+      runStatusAnnouncement: current.runStatusAnnouncement,
+      cancellationCaveat: current.cancellationCaveat,
+      sendShortcut: current.sendShortcut,
+      showComposer: current.showComposer,
+      draftKey: current.draftKey,
+      mentionError: current.mentionError,
+    };
+  });
+  const viewContext = merge(context, scalarContext);
+  return renderChatComposerView(() => viewContext, currentProps, state);
 }

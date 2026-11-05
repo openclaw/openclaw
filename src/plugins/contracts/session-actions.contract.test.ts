@@ -19,6 +19,7 @@ import { handleGatewayRequest } from "../../gateway/server-methods.js";
 import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
 import type { GatewayClient, RespondFn } from "../../gateway/server-methods/types.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import * as profiles from "../../state/user-profile-list.js";
 import type { PluginSessionActionContext, PluginSessionActionRegistration } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
@@ -97,6 +98,16 @@ function requireHookError(response: HookResponse): { code?: unknown; message?: u
   return error;
 }
 
+function actionClient(scopes: string[]) {
+  return {
+    connId: "test-client",
+    scopes,
+    allowsAgent: expect.any(Function),
+    isSharedGateway: expect.any(Function),
+    assertCurrent: expect.any(Function),
+  };
+}
+
 function expectObservedEvent(
   observed: unknown[],
   index: number,
@@ -169,7 +180,13 @@ function eventEmitter(api: Pick<OpenClawPluginApi, "agent"> | undefined, runId: 
 }
 
 describe("plugin session actions", () => {
+  // The Gateway installs the profile catalog before admitting requests; this
+  // harness supplies its shared-Gateway fact as a Gateway with several people.
+  beforeEach(() => {
+    vi.spyOn(profiles, "hasMultipleResidentSessionSharingIdentities").mockReturnValue(true);
+  });
   afterEach(() => {
+    vi.restoreAllMocks();
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetAgentEventsForTest();
   });
@@ -512,7 +529,7 @@ describe("plugin session actions", () => {
         expect(handler).toHaveBeenCalledWith({
           pluginId,
           actionId,
-          client: { connId: "test-client", scopes },
+          client: actionClient(scopes),
         });
       }
     });
@@ -539,7 +556,7 @@ describe("plugin session actions", () => {
         actionId: "approve",
         sessionKey: MAIN_SESSION_KEY,
         agentId: "main",
-        client: { connId: "test-client", scopes: [APPROVALS_SCOPE] },
+        client: actionClient([APPROVALS_SCOPE]),
       });
       const blankPluginId = await callPluginSessionActionForTest(
         {

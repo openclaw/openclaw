@@ -296,10 +296,9 @@ export function registerMemoryEmbeddingMigrationFunctions(
     if (!renewAuthority) {
       return;
     }
-    const now = performance.now();
-    if (now - renewedAt >= 1_000) {
+    if (performance.now() - renewedAt >= 1_000) {
       renewAuthority();
-      renewedAt = now;
+      renewedAt = performance.now();
     }
   };
   db.function("openclaw_memory_embedding_from_json", { deterministic: true }, (raw) => {

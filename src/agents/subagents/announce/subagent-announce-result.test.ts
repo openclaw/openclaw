@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { applyAssistantDeliveryDirectives } from "../../../config/sessions/transcript-assistant-delivery.js";
 import {
   isVisibleAssistantResultEventForRun,
   matchesTranscriptEvent,
@@ -130,6 +131,83 @@ describe("exact-run announcement results", () => {
     expect(findTranscriptEvent).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { display: true },
+    {
+      openclawDeliveryMirror: {
+        kind: "message-tool-source-reply",
+        final: true,
+        sourceTurnId: "delivered-turn",
+      },
+    },
+  ])("preserves an explicitly delivered literal silence token: %j", async (visibility) => {
+    const child = completedChild("delivered answer");
+    const event = assistant(child.runId, "NO_REPLY");
+    installTranscript([{ ...event, message: { ...event.message, ...visibility } }]);
+    await expect(readResult(child)).resolves.toMatchObject({ text: "NO_REPLY" });
+  });
+
+  it("preserves the stored display contract after delivery directives are projected", async () => {
+    const child = completedChild("captured native answer");
+    const event = assistant(child.runId, "");
+    const message = applyAssistantDeliveryDirectives({
+      ...event.message,
+      content: [
+        { type: "text", text: "[[reply_to_current]]NO_REPLY\nRiver " },
+        { type: "text", text: "stones.\nNO_REPLY" },
+      ],
+    });
+    installTranscript([{ ...event, message }]);
+    await expect(readResult(child)).resolves.toMatchObject({
+      text: "NO_REPLY\nRiverstones.\nNO_REPLY",
+    });
+  });
+
+  it.each([
+    {
+      content:
+        "[[reply_to_current]]QA-PARENT-PRIVATE-CHILD1-0123456789ABCDEF0123456789ABCDEF\nMEDIA:./qa-private-result.png",
+      expected:
+        "QA-PARENT-PRIVATE-CHILD1-0123456789ABCDEF0123456789ABCDEF\nMEDIA:./qa-private-result.png",
+    },
+    {
+      content: [
+        { type: "text", text: "River " },
+        { type: "text", text: "stones.\nMEDIA:./qa-private-result.png" },
+      ],
+      expected: "River\nstones.\nMEDIA:./qa-private-result.png",
+    },
+  ])(
+    "retains child media references for parent review: $expected",
+    async ({ content, expected }) => {
+      const child = completedChild("captured native answer");
+      const event = assistant(child.runId, "");
+      installTranscript([{ ...event, message: { ...event.message, content } }]);
+      await expect(readResult(child)).resolves.toMatchObject({ text: expected });
+    },
+  );
+
+  it("recovers the complete multipart native answer beyond the terminal snapshot", async () => {
+    const first = "long answer ".repeat(500).trim();
+    const text = `${first}\nrequired-final-part`;
+    const child = completedChild(text);
+    const event = assistant(child.runId, "");
+    installTranscript([
+      {
+        ...event,
+        message: {
+          ...event.message,
+          content: [
+            { type: "text", text: `${first} ` },
+            { type: "text", text: "required-final-part" },
+          ],
+        },
+      },
+    ]);
+    expect(child.completion?.terminalReply).not.toEqual({ disposition: "visible", text });
+    await expect(readResult(child)).resolves.toMatchObject({ text });
+  });
+
   it.each(["retired", "recovered", "before batch", "after batch"] as const)(
     "rejects replaced result authority: %s",
     async (change) => {
@@ -215,7 +293,7 @@ describe("exact-run announcement results", () => {
       ],
     );
     const prepared = await readFindings([child]);
-    expect(prepared.text).toContain(`${"&lt;archived&gt;".repeat(700)}required-archive-tail`);
+    expect(prepared.text).toContain(text);
     expect(prepared.text).not.toMatch(/older archive result|newer archive result/);
     expect(child.completion?.terminalReply).toBe(terminalReply);
     expect(terminalReply).toEqual({ disposition: "visible", text: `${text.slice(0, 4_095)}…` });

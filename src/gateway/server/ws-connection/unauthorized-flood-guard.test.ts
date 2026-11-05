@@ -1,9 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  ErrorCodes,
-  errorShape,
-  type ErrorShape,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { ErrorCodes, errorShape } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
 import {
   createDispatchTestHarness,
@@ -39,24 +35,19 @@ function createConnection(connId = "flood-test-connection") {
   const client = createOperatorWsClient({ connId });
   const harness = createDispatchTestHarness({ connId });
   let sequence = 0;
-  return {
-    ...harness,
-    async respond(responseError: ErrorShape | null = unauthorized) {
-      const error = responseError ?? undefined;
-      mocks.handleGatewayRequest.mockImplementationOnce(({ respond }) => {
-        respond(error === undefined, undefined, error);
+  async function respond(count = 1, responseError: typeof unauthorized | null = unauthorized) {
+    const error = responseError ?? undefined;
+    for (let index = 0; index < count; index += 1) {
+      mocks.handleGatewayRequest.mockImplementationOnce(({ respond: publish }) => {
+        publish(error === undefined, undefined, error);
       });
       const id = String(++sequence);
       await harness.dispatcher.dispatch({ type: "req", id, method: "health", params: {} }, client);
-      expect(harness.send).toHaveBeenLastCalledWith({
-        type: "res",
-        id,
-        ok: error === undefined,
-        payload: undefined,
-        error,
-      });
-    },
-  };
+      const response = { type: "res", id, ok: error === undefined, payload: undefined, error };
+      expect(harness.send).toHaveBeenLastCalledWith(response);
+    }
+  }
+  return { ...harness, respond };
 }
 
 function responseLogs() {
@@ -65,82 +56,54 @@ function responseLogs() {
   );
 }
 
-describe("authenticated WebSocket unauthorized-role floods", () => {
-  it("sends every response, suppresses repeated logs, and closes after the threshold", async () => {
-    const connection = createConnection();
-    for (let count = 1; count <= 10; count += 1) {
-      await connection.respond();
-    }
-    expect(connection.close).not.toHaveBeenCalled();
-    expect(responseLogs()).toHaveLength(1);
-    expect(responseLogs()[0]).toMatchObject({ unauthorizedCount: 1 });
+it("sends every response, suppresses repeated logs, and closes after the threshold", async () => {
+  const connection = createConnection();
+  await connection.respond(10);
+  expect(connection.close).not.toHaveBeenCalled();
+  expect(responseLogs()).toMatchObject([{ unauthorizedCount: 1 }]);
 
-    await connection.respond();
-    expect(connection.close).toHaveBeenCalledExactlyOnceWith(1008, "repeated unauthorized calls");
-    expect(connection.setCloseCause).toHaveBeenLastCalledWith("repeated-unauthorized-requests", {
-      unauthorizedCount: 11,
-      method: "health",
-    });
-    expect(responseLogs()[1]).toMatchObject({
-      unauthorizedCount: 11,
-      suppressedUnauthorizedResponses: 9,
-    });
-
-    await connection.respond();
-    expect(connection.send).toHaveBeenCalledTimes(12);
-    expect(connection.close).toHaveBeenCalledTimes(2);
-    expect(responseLogs()).toHaveLength(3);
-    expect(responseLogs()[2]).toMatchObject({ unauthorizedCount: 12 });
-    expect(responseLogs()[2]).not.toHaveProperty("suppressedUnauthorizedResponses");
+  await connection.respond();
+  expect(connection.close).toHaveBeenCalledExactlyOnceWith(1008, "repeated unauthorized calls");
+  expect(connection.setCloseCause).toHaveBeenLastCalledWith("repeated-unauthorized-requests", {
+    unauthorizedCount: 11,
+    method: "health",
   });
+  await connection.respond();
+  expect(connection.send).toHaveBeenCalledTimes(12);
+  expect(connection.close).toHaveBeenCalledTimes(2);
+  expect(responseLogs()).toMatchObject([
+    { unauthorizedCount: 1 },
+    { unauthorizedCount: 11, suppressedUnauthorizedResponses: 9 },
+    { unauthorizedCount: 12 },
+  ]);
+  expect(responseLogs()[2]).not.toHaveProperty("suppressedUnauthorizedResponses");
+});
 
-  it("resets the counter after a successful response", async () => {
-    const connection = createConnection();
-    for (let count = 0; count < 10; count += 1) {
-      await connection.respond();
-    }
-    await connection.respond(null);
-    for (let count = 0; count < 10; count += 1) {
-      await connection.respond();
-    }
-    expect(connection.close).not.toHaveBeenCalled();
-    expect(responseLogs().map((entry) => entry?.unauthorizedCount)).toEqual([1, undefined, 1]);
-    await connection.respond();
-    expect(connection.close).toHaveBeenCalledExactlyOnceWith(1008, "repeated unauthorized calls");
-  });
+it("keeps counters owned by their connection", async () => {
+  const first = createConnection("first-connection");
+  const second = createConnection("second-connection");
+  await first.respond(10);
+  await second.respond();
+  expect(first.close).not.toHaveBeenCalled();
+  expect(second.close).not.toHaveBeenCalled();
+  expect(responseLogs().map((entry) => [entry?.connId, entry?.unauthorizedCount])).toEqual([
+    ["first-connection", 1],
+    ["second-connection", 1],
+  ]);
+});
 
-  it("keeps counters owned by their connection", async () => {
-    const first = createConnection("first-connection");
-    const second = createConnection("second-connection");
-    for (let count = 0; count < 10; count += 1) {
-      await first.respond();
-    }
-    await second.respond();
-    expect(first.close).not.toHaveBeenCalled();
-    expect(second.close).not.toHaveBeenCalled();
-    expect(responseLogs().map((entry) => [entry?.connId, entry?.unauthorizedCount])).toEqual([
-      ["first-connection", 1],
-      ["second-connection", 1],
-    ]);
-  });
-
-  it.each([
-    errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.admin"),
-    errorShape(ErrorCodes.UNAVAILABLE, "service unavailable"),
-  ])("does not count non-role errors: $message", async (error) => {
-    const connection = createConnection();
-    await connection.respond();
-    for (let count = 0; count < 12; count += 1) {
-      await connection.respond(error);
-    }
-    await connection.respond();
-    expect(connection.close).not.toHaveBeenCalled();
-    expect(responseLogs()).toHaveLength(14);
-    expect(
-      responseLogs()
-        .slice(1, 13)
-        .every((entry) => entry?.unauthorizedCount === undefined),
-    ).toBe(true);
-    expect(responseLogs()[13]).toMatchObject({ unauthorizedCount: 1 });
-  });
+it.each([
+  null,
+  errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.admin"),
+  errorShape(ErrorCodes.UNAVAILABLE, "service unavailable"),
+])("resets the counter on non-role responses: %j", async (error) => {
+  const connection = createConnection();
+  await connection.respond(10);
+  await connection.respond(12, error);
+  await connection.respond(10);
+  expect(connection.close).not.toHaveBeenCalled();
+  const counts = responseLogs().map((entry) => entry?.unauthorizedCount);
+  expect(counts).toEqual([1, ...Array(12).fill(undefined), 1]);
+  await connection.respond();
+  expect(connection.close).toHaveBeenCalledExactlyOnceWith(1008, "repeated unauthorized calls");
 });

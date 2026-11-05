@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createStorageMock } from "../test-helpers/storage.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
-import { createProfilePrefsServer } from "./server-prefs.test-support.ts";
+import {
+  createProfilePrefsServer,
+  installServerPrefsStorage,
+} from "./server-prefs.test-support.ts";
 import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 const scope = "ws://navigation";
@@ -39,16 +41,10 @@ function holdFirstReply(heldMethod = "users.prefs.set", firstOnly = true) {
 }
 const pushPins = (sidebarEntries: string[], sidebarEntriesBase: string[]) =>
   pushServerUiPrefs(a.writer, { sidebarEntries, sidebarEntriesBase }, hooks);
+installServerPrefsStorage(scope);
 beforeEach(() => {
-  vi.stubGlobal("localStorage", createStorageMock());
-  resetServerUiPrefsSync();
-  patchSettings({ gatewayUrl: scope });
   backend = createProfilePrefsServer({ a: { [pinsKey]: [usage] }, b: { [pinsKey]: [cron] } });
   a = backend.connect("a");
-});
-afterEach(() => {
-  resetServerUiPrefsSync();
-  vi.unstubAllGlobals();
 });
 
 it.each(["a", "b"])("reconnect %s keeps the authenticated outbox", async (reconnectedId) => {

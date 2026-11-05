@@ -2,6 +2,7 @@ import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   externalContentStamp,
+  nativeWebSearchCodecs,
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   readCachedSearchPayload,
@@ -10,17 +11,10 @@ import {
   readStringParam,
   resolveSearchCacheTtlMs,
   resolveSearchTimeoutSeconds,
-  resolveSiteName,
   type SearchConfigRecord,
-  wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import {
-  asOptionalObjectRecord,
-  filterStringEntries,
-  isRecord,
-  normalizeBoundedOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeBoundedOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { PARALLEL_FREE_SESSION_ID_MAX_LENGTH } from "./parallel-free-web-search-provider.shared.js";
 
@@ -124,7 +118,8 @@ export async function executeParallelSearchRequest(params: {
 
   const start = Date.now();
   const response = await params.search(request, resolveSearchTimeoutSeconds(params.searchConfig));
-  const results = mapParallelResults(response, request.count);
+  const count = request.count;
+  const results = nativeWebSearchCodecs["parallel.search"].results(response, count);
   const payload: Record<string, unknown> = {
     ...(request.objective ? { objective: request.objective } : {}),
     searchQueries: request.searchQueries,
@@ -178,29 +173,4 @@ function normalizeParallelSearchQueries(candidates: string[] = []): string[] {
     }
   }
   return out;
-}
-
-function mapParallelResults(response: ParallelSearchResponse, count: number) {
-  const rawResults = asOptionalObjectRecord(response)?.results;
-  const results = Array.isArray(rawResults) ? rawResults.filter(isRecord) : [];
-  return results.slice(0, count).map((entry) => {
-    const title = typeof entry.title === "string" ? entry.title : "";
-    const url = typeof entry.url === "string" ? entry.url : "";
-    const published =
-      typeof entry.publish_date === "string" && entry.publish_date ? entry.publish_date : undefined;
-    const excerpts = filterStringEntries(entry.excerpts).map((e) =>
-      wrapWebContent(e, "web_search"),
-    );
-    const description = excerpts.join("\n\n");
-    return Object.assign(
-      {
-        title: title ? wrapWebContent(title, "web_search") : "",
-        url,
-        description,
-        siteName: resolveSiteName(url) || undefined,
-      },
-      published ? { published } : {},
-      excerpts.length > 0 ? { excerpts } : {},
-    );
-  });
 }

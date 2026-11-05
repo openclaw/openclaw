@@ -6,7 +6,6 @@ import { prepareEmbeddedAttemptBootstrap } from "../../agents/embedded-agent-run
 import {
   prepareEmbeddedAttemptPromptAssembly,
   prepareEmbeddedAttemptPromptContext,
-  type EmbeddedAttemptSteeringLease,
 } from "../../agents/embedded-agent-runner/run/attempt-prompt-build.js";
 import { buildAfterTurnRuntimeContext } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { prepareAttemptSystemPromptAdditions } from "../../agents/embedded-agent-runner/run/attempt-system-prompt-additions.js";
@@ -62,7 +61,6 @@ export async function prepareWorkerTurnPrompt(params: {
   history: AgentMessage[];
   contextEngine: ContextEngine;
   contextEnginePluginId?: string;
-  setLeasedSteering: (lease: EmbeddedAttemptSteeringLease) => void;
   assertCurrent: () => void;
 }) {
   const { turn, agentId, model, transcriptPolicy } = params;
@@ -228,7 +226,6 @@ export async function prepareWorkerTurnPrompt(params: {
     setActiveSessionSystemPrompt: (value) => {
       systemPromptText = value;
     },
-    setLeasedSteering: params.setLeasedSteering,
   });
   const context = await prepareEmbeddedAttemptPromptContext({
     ...transcriptPolicy,
@@ -248,6 +245,7 @@ export async function prepareWorkerTurnPrompt(params: {
     sessionAgentId: agentId,
     systemPromptText,
     systemPromptReport: prompt.systemPromptReport,
+    systemPromptRuntimeContextFragments: prompt.runtimeContextFragments,
     toolResultPromptProjectionState: createToolResultPromptProjectionState(),
   });
   const history = context.hookMessagesForCurrentPrompt;

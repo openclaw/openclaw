@@ -7,7 +7,8 @@ import * as pluginMetadata from "../../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";
 
-vi.mock("../../../plugins/setup-registry.js", () => ({
+vi.mock("../../../plugins/setup-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/setup-registry.js")>()),
   resolvePluginSetupCliBackend: () => undefined,
   resolvePluginSetupRegistry: () => ({
     providers: [],
@@ -16,7 +17,7 @@ vi.mock("../../../plugins/setup-registry.js", () => ({
     autoEnableProbes: [],
     diagnostics: [],
   }),
-  runPluginSetupConfigMigrations: ({ config }: { config: OpenClawConfig }) => ({
+  runPluginSetupConfigMigrations: async ({ config }: { config: OpenClawConfig }) => ({
     config,
     changes: [],
   }),
@@ -57,7 +58,8 @@ vi.mock("../../../plugins/manifest-registry.js", () => {
   };
 });
 
-vi.mock("./channel-legacy-config-migrate.js", () => ({
+vi.mock("./channel-legacy-config-migrate.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./channel-legacy-config-migrate.js")>()),
   applyChannelDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
     next: cfg,
     changes: [],

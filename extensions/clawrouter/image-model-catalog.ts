@@ -8,17 +8,13 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
-  fetchWithTimeoutGuarded,
-  readProviderJsonResponse,
-  resolveProviderHttpRequestConfigWithOriginTrust,
-  sanitizeConfiguredModelProviderRequest,
-} from "openclaw/plugin-sdk/provider-http";
-import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeClawRouterApiBaseUrl } from "./base-url.js";
+import {
+  fetchClawRouterCapabilityOffers,
+  resolveClawRouterCapabilityHttpContext,
+} from "./capability-offers.js";
 
 // Qualified by ClawRouter's JSON Images API contract; not a list of key grants.
 const SUPPORTED_IMAGE_MODELS = new Set([
@@ -135,32 +131,7 @@ export function resolveClawRouterImageHttpContext(
   req: Pick<ImageGenerationRequest, "cfg">,
   apiKey: string,
 ) {
-  const providerConfig = req.cfg.models?.providers?.clawrouter;
-  const baseUrl = normalizeClawRouterApiBaseUrl(providerConfig?.baseUrl);
-  const context = resolveProviderHttpRequestConfigWithOriginTrust({
-    provider: "clawrouter",
-    capability: "image",
-    transport: "http",
-    baseUrl,
-    defaultBaseUrl: baseUrl,
-    request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
-  });
-  const providerHeaders = sanitizeConfiguredModelProviderRequest({
-    headers: providerConfig?.headers,
-  })?.headers;
-  const headers = new Headers(providerHeaders);
-  context.headers.forEach((value, name) => headers.set(name, value));
-  // The same resolved ClawRouter credential owns discovery and paid dispatch.
-  headers.set("Authorization", "Bearer " + apiKey);
-  headers.set("X-ClawRouter-Client", "openclaw");
-  headers.set("Accept", "application/json");
-  return {
-    ...context,
-    headers,
-    ssrfPolicy: context.trustConfiguredBaseUrlOrigin
-      ? { allowedOrigins: [new URL(baseUrl).origin] }
-      : undefined,
-  };
+  return resolveClawRouterCapabilityHttpContext(req.cfg, apiKey, "image");
 }
 
 export function assertClawRouterImageResponseOk(response: Response, operation: string): void {
@@ -181,100 +152,47 @@ export async function fetchClawRouterImageModels(params: {
   signal?: AbortSignal;
   ssrfPolicy?: ImageGenerationRequest["ssrfPolicy"];
 }): Promise<ImageCatalogEntry[]> {
-  const { context } = params;
-  params.signal?.throwIfAborted();
-  const { response, release } = await fetchWithTimeoutGuarded(
-    context.baseUrl.replace(/\/+$/u, "") + "/catalog",
-    { method: "GET", headers: context.headers, signal: params.signal },
-    params.timeoutMs(),
-    fetch,
-    {
-      ssrfPolicy: mergeSsrFPolicies(
-        params.ssrfPolicy,
-        context.ssrfPolicy,
-        context.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
-      ),
-      dispatcherPolicy: context.dispatcherPolicy,
-      auditContext: "clawrouter.image-catalog",
-    },
-  );
-  try {
-    assertClawRouterImageResponseOk(response, "ClawRouter image catalog");
-    const payload = asOptionalRecord(
-      await readProviderJsonResponse(response, "clawrouter.image-catalog", {
-        maxBytes: 1024 * 1024,
-        timeoutMs: params.timeoutMs,
-      }),
-    );
-    if (payload?.version !== "clawrouter.client-catalog.v1" || !Array.isArray(payload.providers)) {
-      throw new Error("ClawRouter image catalog response malformed; refresh or update ClawRouter.");
+  const offers = await fetchClawRouterCapabilityOffers(params);
+  const result: ImageCatalogEntry[] = [];
+  const seen = new Set<string>();
+  for (const offer of offers) {
+    const model = offer.model;
+    const id = normalizeOptionalString(model?.id);
+    if (
+      offer.providerId !== "openai" ||
+      offer.endpoint !== "images_generations" ||
+      offer.routeKind !== "unified" ||
+      offer.requestFormat !== "openai.images_generations" ||
+      offer.responseFormat !== "openai.images_generations" ||
+      !offer.methods.includes("POST") ||
+      !id ||
+      seen.has(id) ||
+      !isSupportedClawRouterImageModel(id) ||
+      !Array.isArray(model?.capabilities) ||
+      !model.capabilities.includes("image.generation")
+    ) {
+      continue;
     }
-    const result: ImageCatalogEntry[] = [];
-    const seen = new Set<string>();
-    for (const providerValue of payload.providers) {
-      const provider = asOptionalRecord(providerValue);
-      if (
-        provider?.id !== "openai" ||
-        provider.allowed !== true ||
-        provider.executable !== true ||
-        !Array.isArray(provider.models) ||
-        !Array.isArray(provider.offers)
-      ) {
-        continue;
-      }
-      for (const modelValue of provider.models) {
-        const model = asOptionalRecord(modelValue);
-        const id = normalizeOptionalString(model?.id);
-        if (
-          !id ||
-          seen.has(id) ||
-          !isSupportedClawRouterImageModel(id) ||
-          !Array.isArray(model?.capabilities) ||
-          !model.capabilities.includes("image.generation")
-        ) {
-          continue;
-        }
-        const eligible = provider.offers.some((value) => {
-          const offer = asOptionalRecord(value);
-          return (
-            offer?.endpoint === "images_generations" &&
-            offer.modelId === id &&
-            offer.transport === "http" &&
-            offer.routeKind === "unified" &&
-            offer.route === "/v1/images/generations" &&
-            offer.eligible === true &&
-            (offer.affordability === "exact-covered" || offer.affordability === "request-dependent")
-          );
-        });
-        if (!eligible) {
-          continue;
-        }
-        const limits = parseImageLimits(model?.pricing);
-        if (!limits) {
-          continue;
-        }
-        seen.add(id);
-        result.push({
-          kind: "image_generation",
-          provider: "clawrouter",
-          model: id,
-          label: normalizeOptionalString(model?.displayName) ?? id,
-          source: "live",
-          modes: ["generate"],
-          capabilities: {
-            ...CLAWROUTER_IMAGE_CAPABILITIES,
-            generate: { ...CLAWROUTER_IMAGE_CAPABILITIES.generate, maxCount: limits.maxImages },
-          },
-          limits,
-        });
-      }
+    const limits = parseImageLimits(model.pricing);
+    if (!limits) {
+      continue;
     }
-    params.signal?.throwIfAborted();
-    return result;
-  } finally {
-    void response.body?.cancel().catch(() => undefined);
-    await release();
+    seen.add(id);
+    result.push({
+      kind: "image_generation",
+      provider: "clawrouter",
+      model: id,
+      label: normalizeOptionalString(model.displayName) ?? id,
+      source: "live",
+      modes: ["generate"],
+      capabilities: {
+        ...CLAWROUTER_IMAGE_CAPABILITIES,
+        generate: { ...CLAWROUTER_IMAGE_CAPABILITIES.generate, maxCount: limits.maxImages },
+      },
+      limits,
+    });
   }
+  return result;
 }
 
 export async function listClawRouterImageModelCatalog(

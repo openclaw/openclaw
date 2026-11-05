@@ -13,7 +13,6 @@ export function createTelegramDelivery(): NonNullable<CronJobCreate["delivery"]>
 }
 
 type FailureAlertParams = {
-  scheduler: Deps["scheduler"];
   failureAlert?: NonNullable<Deps["cronConfig"]>["failureAlert"];
   runResult?: Awaited<ReturnType<JobRunner>>;
   useFallback?: boolean;
@@ -34,6 +33,9 @@ export function setupFailureAlertSuite() {
     const mocks = {
       sendCronFailureAlert: vi.fn<NonNullable<Deps["sendCronFailureAlert"]>>(async () => undefined),
       enqueueSystemEvent: vi.fn(),
+      enqueueSessionEvent: vi.fn<NonNullable<Deps["enqueueSessionEvent"]>>(async () => ({
+        ok: true,
+      })),
       requestHeartbeat: vi.fn(),
       runCronFailureRepair: vi.fn<NonNullable<Deps["runCronFailureRepair"]>>(async () => undefined),
       runIsolatedAgentJob: vi.fn<JobRunner>(async () => runResult),
@@ -42,7 +44,6 @@ export function setupFailureAlertSuite() {
     const { sendCronFailureAlert, ...deps } = mocks;
     const cron = new CronService({
       ...cronTestDeps({ storePath }),
-      scheduler: params.scheduler,
       cronConfig:
         params.failureAlert === undefined ? undefined : { failureAlert: params.failureAlert },
       log: noopLogger,

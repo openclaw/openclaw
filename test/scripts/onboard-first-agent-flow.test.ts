@@ -12,10 +12,10 @@ const run = (script: string, env: NodeJS.ProcessEnv, timeout = 10_000) =>
   });
 
 test.each([
-  ["legacy", "plain", "provider", 5],
-  ["team", "fragmented", "provider", 6],
-  ["legacy", "fragmented", "configured", 4],
-  ["team", "plain", "configured", 5],
+  ["legacy", "plain", "provider", 6],
+  ["team", "fragmented", "provider", 7],
+  ["legacy", "fragmented", "configured", 5],
+  ["team", "plain", "configured", 6],
 ] as const)("guided sender: %s / %s / %s", (layout, rendering, modelPrompt, count) => {
   const result = run(
     `
@@ -26,8 +26,8 @@ prompts=("Help make OpenClaw better?")
 [[ "$LAYOUT" != team ]] || prompts+=($'\\e[36mWhat would you like to create?\\e[39m\\n● One agent\\n○ A small team')
 prompts+=("What should we call your first agent?" "How should I set things up?")
 case "$MODEL_PROMPT" in
-  configured) prompts+=("Use Current model?") ;;
-  *) prompts+=("Model/auth provider" "Use which detected AI?") ;;
+  configured) prompts+=("Use Current model?" "Set up memory embeddings?") ;;
+  *) prompts+=("Model/auth provider" "Use which detected AI?" "Set up memory embeddings?") ;;
 esac
 index=0
 render() {
@@ -35,7 +35,9 @@ render() {
 }
 wait_for_log() { log_contains "$1"; }
 send() {
-  [[ "$1" == $'\\r' ]] || { echo 'unexpected keystroke' >&2; return 22; }
+  local expected=$'\\r'
+  [[ "\${prompts[$index]}" != "Set up memory embeddings?" ]] || expected=$'n\\r'
+  [[ "$1" == "$expected" ]] || { echo 'unexpected keystroke' >&2; return 22; }
   index=$((index + 1))
   render "\${prompts[$index]:-DONE}"
 }

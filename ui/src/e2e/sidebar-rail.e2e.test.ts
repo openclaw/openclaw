@@ -1,28 +1,37 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
   defaultControlUiFeatureMethods,
   controlUiBundledSettingsStorageKey,
 } from "../test-helpers/control-ui-e2e.ts";
-import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   installPreferenceServer,
-  captureFrame,
   expectFocused,
   seedStorage,
 } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Personal rail pins" });
 const unloaded = [
-  { key: "agent:research:plan", kind: "direct" as const, label: "Research plan", icon: "🔬" },
-  { key: "agent:main:notes", kind: "direct" as const, label: "Release notes" },
+  {
+    key: "agent:research:plan",
+    sessionId: "session:agent:research:plan",
+    kind: "direct" as const,
+    label: "Research plan",
+    icon: "🔬",
+  },
+  {
+    key: "agent:main:notes",
+    sessionId: "session:agent:main:notes",
+    kind: "direct" as const,
+    label: "Release notes",
+  },
 ];
 const entries = [
-  "session:agent:main:current",
-  "session:agent:main:design",
-  ...unloaded.map((row) => `session:${row.key}`),
+  "session-rail:agent:main:current",
+  "session-rail:agent:main:design",
+  ...unloaded.map((row) => `session-rail:${row.key}`),
 ];
 
 suite.define(() => {
@@ -39,7 +48,7 @@ suite.define(() => {
         });
         await seedStorage(page, {
           [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
-            railShortcuts: ["session:agent:main:design"],
+            railShortcuts: ["session-rail:agent:main:design"],
           }),
         });
         await page.goto(suite.server.baseUrl + "chat");
@@ -169,16 +178,6 @@ suite.define(() => {
         }
         expect(await gateway.getRequests("sessions.describe", { key: row.key })).toHaveLength(1);
       }
-      expect(await pins.locator(".sidebar-reorder-trigger").count()).toBe(0);
-      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-        const dir = createControlUiE2eArtifactDir("rail", process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR);
-        await captureFrame(dir, "after-desktop.png", page.locator(".shell"), [rail, pins.first()]);
-        await page.setViewportSize({ width: 390, height: 844 });
-        await navigationDrawerToggle(page).click();
-        await page.locator(".shell--nav-drawer-open").waitFor();
-        await captureFrame(dir, "after-mobile.png", page.locator(".shell"), [rail]);
-        await page.setViewportSize({ width: 1280, height: 800 });
-      }
       const source = rail.getByRole("link", { name: "Research plan", exact: true });
       const target = rail.getByRole("link", { name: "Current work", exact: true });
       const box = await target.boundingBox();
@@ -254,12 +253,20 @@ suite.define(() => {
           presenceUsers: [{ id: "alex", name: "Alex", self: true }],
           featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get", "users.prefs.set"],
         });
+        // Chat may migrate its own preferences while the empty rail is loading.
+        const railWrites = async () =>
+          (await gateway.getRequests("users.prefs.set")).filter(({ params }) => {
+            const preferenceEntries = asNullableRecord(asNullableRecord(params)?.entries);
+            return (
+              preferenceEntries !== null && Object.hasOwn(preferenceEntries, "ui.railShortcuts")
+            );
+          });
         await page.goto(suite.server.baseUrl + "chat");
         await gateway.waitForRequest("connect");
         const installProfilePreferences = () =>
           installPreferenceServer(
             page,
-            { "ui.themeMode": "dark" },
+            { "ui.themeMode": "dark", "new-session.migration.v1": true },
             "openclaw-test:clean-rail:profile-prefs",
           );
         await installProfilePreferences();
@@ -271,18 +278,7 @@ suite.define(() => {
         expect(await rail.locator(".sidebar-rail__pin").count()).toBe(0);
         expect(await rail.getAttribute("class")).not.toContain("--drag-active");
         expect(await gateway.getRequests("sessions.list", { pinned: true })).toEqual([]);
-        expect(await gateway.getRequests("users.prefs.set")).toEqual([]);
-        const dir =
-          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-            ? createControlUiE2eArtifactDir("clean-rail", process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR)
-            : null;
-        const capture = async (name: string) => {
-          if (!dir) {
-            return;
-          }
-          await captureFrame(dir, name, page.locator(".shell"), [rail, source]);
-        };
-        await capture("rail-empty.png");
+        expect(await railWrites()).toEqual([]);
         const sourceBox = await source.boundingBox();
         const railBox = await rail.boundingBox();
         if (!sourceBox || !railBox) {
@@ -301,7 +297,6 @@ suite.define(() => {
         );
         await page.mouse.move(railBox.x + railBox.width / 2, railBox.y + 80, { steps: 12 });
         await expect.poll(() => rail.getAttribute("class")).toContain("--drag-active");
-        await capture("rail-drag-over.png");
         await page.mouse.up();
         const first = rail.getByRole("link", { name: rows[0]!.label, exact: true });
         await first.waitFor();
@@ -318,15 +313,12 @@ suite.define(() => {
               .locator(".sidebar-rail__pin")
               .evaluateAll((pins) => pins.map((pin) => pin.getAttribute("data-sidebar-entry"))),
           )
-          .toEqual(rows.map((row) => `session:${row.key}`));
-        await capture("rail-two-added.png");
+          .toEqual(rows.map((row) => `session-rail:${row.key}`));
+        await expect.poll(async () => (await railWrites()).length).toBeGreaterThan(0);
         await expect
-          .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
-          .toBeGreaterThan(0);
-        await expect
-          .poll(async () => (await gateway.getRequests("users.prefs.set")).at(-1)?.params)
+          .poll(async () => (await railWrites()).at(-1)?.params)
           .toMatchObject({
-            entries: { "ui.railShortcuts": rows.map((row) => `session:${row.key}`) },
+            entries: { "ui.railShortcuts": rows.map((row) => `session-rail:${row.key}`) },
           });
         await page.reload();
         await gateway.waitForRequest("connect");

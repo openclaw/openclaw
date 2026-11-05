@@ -1,6 +1,7 @@
 import { createMemo } from "solid-js";
 import type { SessionVisibility } from "../../../api/types.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type {
   ChatSessionAccessMobileProps,
   ChatSessionSharingMobileLabels,
@@ -14,16 +15,10 @@ import {
   CHAT_SESSION_SHARING_DESCRIPTION_KEYS,
   ChatSessionSharingModeIcon,
   projectChatSessionSharingRoster,
-  selectChatSessionSharingItem,
-} from "./chat-session-sharing.solid.tsx";
+  createChatSessionSharingPresentation,
+} from "./chat-session-sharing-shared.tsx";
 
-export type ChatSessionSharingMobileNavigation = {
-  onOpenSharing: () => void;
-  onOpenAccess: () => void;
-  onApplied: () => void;
-  /** Host-owned destination instance; undefined while Session access is not presented. */
-  accessTarget: () => object | undefined;
-};
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type ChatSessionSharingMobileAdapter = {
   readonly available: boolean;
@@ -37,11 +32,18 @@ export type ChatSessionSharingMobileAdapter = {
 /** Create once under the retained session owner; read must expose live native Sharing props. */
 export function createChatSessionSharingMobileAdapter(
   read: () => PreparedChatSessionSharing | null | undefined,
-  navigation: ChatSessionSharingMobileNavigation,
+  navigation: {
+    onOpenSharing: () => void;
+    onOpenAccess: () => void;
+    onApplied: () => void;
+    /** Host-owned destination instance; undefined while Session access is not presented. */
+    accessTarget: () => object | undefined;
+  },
 ): ChatSessionSharingMobileAdapter {
   const source = createMemo(read);
+  const presentation = createChatSessionSharingPresentation(source);
   const visibility = () => source()?.session?.visibility ?? "shared";
-  const pending = () => source()?.state?.loading === true;
+  const pending = () => presentation.busy() || source()?.state?.loading === true;
   const unavailable = () => {
     const current = source();
     if (!current?.session) {
@@ -89,8 +91,8 @@ export function createChatSessionSharingMobileAdapter(
     get anyoneWithLink() {
       return t("chat.sessionSharing.anyoneWithLink");
     },
-    get messagePermissions() {
-      return t("chat.sessionSharing.messagePermissions");
+    get permissions() {
+      return t("chat.sessionSharing.permissions");
     },
     get showSearch() {
       return t("chat.sessionSharing.searchPeople");
@@ -142,17 +144,19 @@ export function createChatSessionSharingMobileAdapter(
     onChange: (enabled) => {
       const current = source();
       if (current && !publicLink.disabledReason && enabled !== publicLink.enabled) {
-        void selectChatSessionSharingItem(current, enabled ? "public:enable" : "public:disable");
+        void presentation.select(enabled ? "public:enable" : "public:disable");
       }
     },
     onCopy: () => {
       const current = source();
       if (current && !publicLink.copyDisabledReason) {
-        void selectChatSessionSharingItem(current, "public:copy");
+        void presentation.select("public:copy");
       }
     },
   };
   const permissions: NonNullable<ChatSessionSharingMobileProps["permissions"]> = {
+    read: presentation.read,
+    scope: presentation.scope,
     get rows() {
       return rows();
     },
@@ -162,7 +166,7 @@ export function createChatSessionSharingMobileAdapter(
     get personActivity() {
       return source()?.personActivity;
     },
-    onMemberChange: (identityId, member) => {
+    onPermissionChange: (identityId, level) => {
       const current = source();
       const row = rows().find((candidate) => candidate.identity.id === identityId);
       if (
@@ -171,9 +175,10 @@ export function createChatSessionSharingMobileAdapter(
         row &&
         !row.fixed &&
         !row.disabledReason &&
-        row.selected !== member
+        row.level !== level &&
+        row.options.includes(level)
       ) {
-        void selectChatSessionSharingItem(current, `member:${identityId}`);
+        void presentation.select(`permission:${level}:${identityId}`);
       }
     },
   };
@@ -201,6 +206,9 @@ export function createChatSessionSharingMobileAdapter(
       },
     },
     sharing: {
+      get pending() {
+        return presentation.busy();
+      },
       get visibility() {
         return visibility();
       },
@@ -212,14 +220,22 @@ export function createChatSessionSharingMobileAdapter(
       get error() {
         return source()?.state?.error;
       },
+      get completion() {
+        return presentation.completion();
+      },
       get publicLink() {
         return source()?.onPublicShareChange ? publicLink : undefined;
       },
       get permissions() {
         const current = source();
-        return current &&
+        return visibility() !== "shared" &&
+          visibility() !== "draft" &&
+          current &&
           current.membersAvailable !== false &&
-          (!current.state?.result || pending() || current.state?.error || rows().length > 0)
+          (!current.state?.result ||
+            current.state?.read ||
+            current.state?.error ||
+            rows().length > 0)
           ? permissions
           : undefined;
       },
@@ -249,6 +265,9 @@ export function createChatSessionSharingMobileAdapter(
       get error() {
         return source()?.state?.error;
       },
+      get completion() {
+        return presentation.completion();
+      },
       onVisibilityChange: async (value) => {
         const current = source();
         const target = navigation.accessTarget();
@@ -258,7 +277,7 @@ export function createChatSessionSharingMobileAdapter(
         }
         const sessionKey = session.key;
         const sessionId = session.sessionId;
-        const outcome = await selectChatSessionSharingItem(current, `visibility:${value}`);
+        const outcome = await presentation.select(`visibility:${value}`);
         const latestSession = source()?.session;
         return (
           outcome?.status === "success" &&

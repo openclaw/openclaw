@@ -1,5 +1,5 @@
-import type { WorkGroupRenderItem } from "../chat-thread-grouping.ts";
 import { getExpansionStateVersion } from "../chat-thread.ts";
+import type { WorkGroupRenderItem } from "../chat-turn-presentation.ts";
 import { selectWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 

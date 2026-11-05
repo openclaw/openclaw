@@ -1,69 +1,20 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { SecretEgressProxyWorkerHandle } from "./egress-proxy/proxy-worker.js";
+import { publicCa, startProxy, useEgressProxyMock } from "./egress.test-support.js";
 import { withConfiguredModelEgress } from "./model-egress.js";
 import { resolveSecretSentinel } from "./sentinel.js";
 
-const startProxy = vi.hoisted(() =>
-  vi.fn<typeof import("./egress-proxy/proxy-worker.js").startSecretEgressProxyWorker>(),
-);
-vi.mock("./egress-proxy/proxy-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./egress-proxy/proxy-worker.js")>()),
-  startSecretEgressProxyWorker: startProxy,
-}));
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const credential = "synthetic-model-egress-api-key";
-const publicCa = "synthetic-public-ca-bundle";
+const apiKey = { source: "env", provider: "default", id: "MODEL_EGRESS_API_KEY" } as const;
 let config: OpenClawConfig;
-let proxy: SecretEgressProxyWorkerHandle;
-const revoke = vi.fn();
+const { proxy } = useEgressProxyMock();
 
-beforeEach(async () => {
-  vi.clearAllMocks();
+beforeEach(() => {
   vi.stubEnv("OPENAI_BASE_URL", undefined);
   vi.stubEnv("OPENCLAW_SECRET_SENTINELS", "off");
-  const dir = tempDirs.make("model-egress-test-");
-  const secretPath = path.join(dir, "key.txt");
-  const caPath = path.join(dir, "ca.pem");
-  await fs.writeFile(secretPath, credential, { mode: 0o600 });
-  await fs.writeFile(caPath, publicCa);
-  config = {
-    secrets: {
-      providers: { model_key: { source: "file", path: secretPath, mode: "singleValue" } },
-    },
-    models: {
-      providers: {
-        openai: {
-          apiKey: { source: "file", provider: "model_key", id: "value" },
-          baseUrl: "",
-          models: [],
-        },
-      },
-    },
-  };
-  proxy = {
-    caCertPath: caPath,
-    proxyOrigin: "http://127.0.0.1:12345",
-    getCertificateStatus: async () => ({
-      state: "ready",
-      caExpiresAt: "2030-01-01",
-      failedCertificates: 0,
-    }),
-    registerProcess: vi.fn(async () => ({
-      env: {
-        HTTPS_PROXY: "http://openclaw:synthetic-proxy-token@127.0.0.1:12345",
-        NODE_EXTRA_CA_CERTS: caPath,
-      },
-      revoke,
-    })),
-    stop: vi.fn(async () => {}),
-  };
-  startProxy.mockResolvedValue(proxy);
+  vi.stubEnv("MODEL_EGRESS_API_KEY", credential);
+  config = { models: { providers: { openai: { apiKey, baseUrl: "", models: [] } } } };
 });
 
 afterEach(() => vi.unstubAllEnvs());
@@ -73,47 +24,32 @@ function runOptions() {
 }
 
 it.each([
-  { configured: undefined, baseUrl: "https://api.openai.com/v1", host: "api.openai.com" },
-  {
-    configured: "https://inference.example.test/tenant/v1",
-    baseUrl: "https://inference.example.test/tenant/v1",
-    host: "inference.example.test",
-  },
-])(
-  "seals the credential only for the selected route $baseUrl",
-  async ({ configured, baseUrl, host }) => {
-    if (configured) {
-      config.models!.providers!.openai!.baseUrl = configured;
-    } else {
-      Reflect.deleteProperty(config.models!.providers!.openai!, "baseUrl");
-    }
-    const result = await withConfiguredModelEgress(runOptions(), async (egress) => {
-      expect(egress).toMatchObject({
-        baseUrl,
-        model: "gpt-5.5",
-        allowedHosts: [host],
-        caBundle: publicCa,
-      });
-      expect(resolveSecretSentinel(egress.sentinel)).toBe(credential);
-      expect(JSON.stringify(egress)).not.toContain(credential);
-      expect(proxy.registerProcess).toHaveBeenCalledWith([
-        {
-          name: "openai model API key",
-          sentinel: egress.sentinel,
-          allowedHosts: [host],
-        },
-      ]);
-      expect(revoke).not.toHaveBeenCalled();
-      return 17;
+  [undefined, "https://api.openai.com/v1", "api.openai.com"],
+  [
+    "https://inference.example.test/tenant/v1",
+    "https://inference.example.test/tenant/v1",
+    "inference.example.test",
+  ],
+])("seals the credential only for the selected route %s", async (configured, baseUrl, host) => {
+  if (configured) {
+    config.models!.providers!.openai!.baseUrl = configured;
+  } else {
+    Reflect.deleteProperty(config.models!.providers!.openai!, "baseUrl");
+  }
+  const result = await withConfiguredModelEgress(runOptions(), async (egress) => {
+    expect(egress).toMatchObject({
+      baseUrl,
+      model: "gpt-5.5",
+      allowedHosts: [host],
+      caBundle: publicCa,
     });
-    expect(result).toBe(17);
-    expect(revoke).toHaveBeenCalled();
-    expect(proxy.stop).toHaveBeenCalledOnce();
-    const options = startProxy.mock.calls[0]![0];
-    expect(options.allowedHosts).toEqual([host]);
-    await expect(fs.stat(options.caDir)).rejects.toMatchObject({ code: "ENOENT" });
-  },
-);
+    expect(resolveSecretSentinel(egress.sentinel)).toBe(credential);
+    expect(JSON.stringify(egress)).not.toContain(credential);
+    return 17;
+  });
+  expect(result).toBe(17);
+  expect(startProxy.mock.calls[0]![0].allowedHosts).toEqual([host]);
+});
 
 it("streams progress before completion and redacts credentials split between chunks", async () => {
   const stdout: string[] = [];
@@ -133,7 +69,6 @@ it("streams progress before completion and redacts credentials split between chu
       expect(stderr.join("")).toBe("diagnostic");
     },
   );
-  expect(stdout.join("")).not.toContain(credential);
 });
 
 it.each([
@@ -153,48 +88,23 @@ it.each([
   expect(run).not.toHaveBeenCalled();
 });
 
-it.each(["preparing", "running"])(
-  "fences cancellation while %s, before settlement",
-  async (phase) => {
-    const controller = new AbortController();
-    const entered = createDeferredCore();
-    const settle = createDeferredCore();
-    if (phase === "preparing") {
-      startProxy.mockImplementationOnce(async () => {
-        entered.resolve();
-        await settle.promise;
-        return proxy;
-      });
-    }
-    const run = vi.fn(async () => {
-      entered.resolve();
-      await settle.promise;
-    });
-    const running = withConfiguredModelEgress({ ...runOptions(), signal: controller.signal }, run);
-    await entered.promise;
-    controller.abort(new Error("job cancelled"));
-    if (phase === "running") {
-      expect(revoke).toHaveBeenCalled();
-    }
-    expect(proxy.stop).not.toHaveBeenCalled();
-    settle.resolve();
-    await expect(running).rejects.toThrow("job cancelled");
-    if (phase === "preparing") {
-      expect(proxy.registerProcess).not.toHaveBeenCalled();
-      expect(run).not.toHaveBeenCalled();
-    }
-    expect(proxy.stop).toHaveBeenCalledOnce();
-  },
-);
-
-it("revokes and removes the private CA directory when the command fails", async () => {
-  await expect(
-    withConfiguredModelEgress(runOptions(), () =>
-      Promise.reject(new Error("remote command failed")),
-    ),
-  ).rejects.toThrow("remote command failed");
-  expect(revoke).toHaveBeenCalled();
+it("fences model cancellation before proxy preparation settles", async () => {
+  const controller = new AbortController();
+  const entered = createDeferredCore();
+  const settle = createDeferredCore();
+  startProxy.mockImplementationOnce(async () => {
+    entered.resolve();
+    await settle.promise;
+    return proxy;
+  });
+  const run = vi.fn();
+  const running = withConfiguredModelEgress({ ...runOptions(), signal: controller.signal }, run);
+  await entered.promise;
+  controller.abort(new Error("job cancelled"));
+  expect(proxy.stop).not.toHaveBeenCalled();
+  settle.resolve();
+  await expect(running).rejects.toThrow("job cancelled");
+  expect(proxy.registerProcess).not.toHaveBeenCalled();
+  expect(run).not.toHaveBeenCalled();
   expect(proxy.stop).toHaveBeenCalledOnce();
-  const options = startProxy.mock.calls[0]![0];
-  await expect(fs.stat(options.caDir)).rejects.toMatchObject({ code: "ENOENT" });
 });

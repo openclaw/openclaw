@@ -1,4 +1,3 @@
-// Setup wizard binary tests cover channel setup wizard binary selection and invocation.
 import { describe, expect, it, vi } from "vitest";
 import {
   createCliPathTextInput,
@@ -7,19 +6,30 @@ import {
 } from "./setup-wizard-binary.js";
 import type { ChannelSetupWizard } from "./setup-wizard.js";
 
-describe("createDetectedBinaryStatus", () => {
+const binaryLabels = {
+  channelLabel: "Signal",
+  binaryLabel: "signal-cli",
+  configuredLabel: "configured",
+  unconfiguredLabel: "needs setup",
+  configuredHint: "signal-cli found",
+  unconfiguredHint: "signal-cli missing",
+  configuredScore: 1,
+  unconfiguredScore: 0,
+};
+const wizardBase: ChannelSetupWizard = {
+  channel: "demo",
+  status: { ...binaryLabels, resolveConfigured: () => true },
+  credentials: [],
+};
+const inputParams = { cfg: {}, accountId: "default", credentialValues: {} };
+const statusParams = { cfg: {}, configured: true };
+
+describe("setup wizard binary helpers", () => {
   it("builds status lines, hint, and score from binary detection", async () => {
     const resolveConfigured = vi.fn(() => true);
     const resolveBinaryPath = vi.fn(() => "/usr/local/bin/signal-cli");
     const status = createDetectedBinaryStatus({
-      channelLabel: "Signal",
-      binaryLabel: "signal-cli",
-      configuredLabel: "configured",
-      unconfiguredLabel: "needs setup",
-      configuredHint: "signal-cli found",
-      unconfiguredHint: "signal-cli missing",
-      configuredScore: 1,
-      unconfiguredScore: 0,
+      ...binaryLabels,
       resolveConfigured,
       resolveBinaryPath,
       detectBinary: vi.fn(async () => true),
@@ -27,15 +37,13 @@ describe("createDetectedBinaryStatus", () => {
 
     expect(await status.resolveConfigured({ cfg: {}, accountId: "work" })).toBe(true);
     expect(resolveConfigured).toHaveBeenCalledWith({ cfg: {}, accountId: "work" });
-    expect(await status.resolveStatusLines?.({ cfg: {}, configured: true })).toEqual([
+    expect(await status.resolveStatusLines?.(statusParams)).toEqual([
       "Signal: configured",
       "signal-cli: found (/usr/local/bin/signal-cli)",
     ]);
     expect(resolveBinaryPath).toHaveBeenCalledWith({ cfg: {}, accountId: undefined });
-    expect(await status.resolveSelectionHint?.({ cfg: {}, configured: true })).toBe(
-      "signal-cli found",
-    );
-    expect(await status.resolveQuickstartScore?.({ cfg: {}, configured: true })).toBe(1);
+    expect(await status.resolveSelectionHint?.(statusParams)).toBe("signal-cli found");
+    expect(await status.resolveQuickstartScore?.(statusParams)).toBe(1);
   });
 
   it("passes accountId into binary path resolution", async () => {
@@ -43,28 +51,18 @@ describe("createDetectedBinaryStatus", () => {
       accountId === "work" ? "/opt/work-signal-cli" : "/usr/local/bin/signal-cli",
     );
     const status = createDetectedBinaryStatus({
-      channelLabel: "Signal",
-      binaryLabel: "signal-cli",
-      configuredLabel: "configured",
-      unconfiguredLabel: "needs setup",
-      configuredHint: "signal-cli found",
-      unconfiguredHint: "signal-cli missing",
-      configuredScore: 1,
-      unconfiguredScore: 0,
+      ...binaryLabels,
       resolveConfigured: () => true,
       resolveBinaryPath,
       detectBinary: vi.fn(async () => false),
     });
 
-    expect(
-      await status.resolveStatusLines?.({ cfg: {}, accountId: "work", configured: false }),
-    ).toEqual(["Signal: needs setup", "signal-cli: missing (/opt/work-signal-cli)"]);
+    const missing = { cfg: {}, accountId: "work", configured: false };
+    const lines = await status.resolveStatusLines?.(missing);
+    expect(lines).toEqual(["Signal: needs setup", "signal-cli: missing (/opt/work-signal-cli)"]);
     expect(resolveBinaryPath).toHaveBeenCalledWith({ cfg: {}, accountId: "work" });
   });
-});
-
-describe("createCliPathTextInput", () => {
-  it("reuses the same path resolver for current and initial values", async () => {
+  it("createCliPathTextInput reuses the same path resolver for current and initial values", async () => {
     const textInput = createCliPathTextInput({
       inputKey: "cliPath",
       message: "CLI path",
@@ -74,27 +72,14 @@ describe("createCliPathTextInput", () => {
       helpLines: ["help"],
     });
 
-    expect(
-      await textInput.currentValue?.({ cfg: {}, accountId: "default", credentialValues: {} }),
-    ).toBe("imsg");
-    expect(
-      await textInput.initialValue?.({ cfg: {}, accountId: "default", credentialValues: {} }),
-    ).toBe("imsg");
+    expect(await textInput.currentValue?.(inputParams)).toBe("imsg");
+    expect(await textInput.initialValue?.(inputParams)).toBe("imsg");
     expect(textInput.helpTitle).toBe("iMessage");
     expect(textInput.helpLines).toEqual(["help"]);
   });
-});
-
-describe("createDelegatedTextInputShouldPrompt", () => {
-  it("forwards shouldPrompt for the requested input key", async () => {
+  it("createDelegatedTextInputShouldPrompt forwards shouldPrompt for the requested input key", async () => {
     const loadWizard = vi.fn(async (): Promise<ChannelSetupWizard> => ({
-      channel: "demo",
-      status: {
-        configuredLabel: "configured",
-        unconfiguredLabel: "needs setup",
-        resolveConfigured: () => true,
-      },
-      credentials: [],
+      ...wizardBase,
       textInputs: [
         {
           inputKey: "cliPath",
@@ -104,26 +89,8 @@ describe("createDelegatedTextInputShouldPrompt", () => {
       ],
     }));
 
-    const shouldPrompt = createDelegatedTextInputShouldPrompt({
-      loadWizard,
-      inputKey: "cliPath",
-    });
-
-    expect(
-      await shouldPrompt({
-        cfg: {},
-        accountId: "default",
-        credentialValues: {},
-        currentValue: "imsg",
-      }),
-    ).toBe(false);
-    expect(
-      await shouldPrompt({
-        cfg: {},
-        accountId: "default",
-        credentialValues: {},
-        currentValue: "other",
-      }),
-    ).toBe(true);
+    const shouldPrompt = createDelegatedTextInputShouldPrompt({ loadWizard, inputKey: "cliPath" });
+    expect(await shouldPrompt({ ...inputParams, currentValue: "imsg" })).toBe(false);
+    expect(await shouldPrompt({ ...inputParams, currentValue: "other" })).toBe(true);
   });
 });

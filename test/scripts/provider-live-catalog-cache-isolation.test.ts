@@ -3,6 +3,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import type { JsonTestResults } from "vitest/node";
+import { resolveVitestCliEntry } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveVitestTestCommand } from "../../scripts/lib/vitest-test-runtime.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../vitest/vitest.timeouts.js";
@@ -56,21 +59,34 @@ extensions.test = {
 export default extensions;
 `,
     );
+    const env = testRunnerFixtureEnv({
+      // Reuse this runtime instead of staging Bun again under the fixture's isolated HOME.
+      OPENCLAW_VITEST_RUNTIME: process.versions.bun ? "bun" : "node",
+      ...(process.versions.bun ? { OPENCLAW_BUN_PATH: process.execPath } : {}),
+      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: local("module-cache"),
+    });
+    const testCommand = resolveVitestTestCommand(
+      [
+        ...resolveVitestNodeArgs(env),
+        resolveVitestCliEntry({ baseDir: repoRoot, env }),
+        "run",
+        "--config",
+        config,
+        ...files,
+      ],
+      env,
+    );
     const result = await lifetime.track(
       runNodeScript(
-        [path.join(repoRoot, "scripts/run-vitest.mjs"), "--config", config, ...files],
-        testRunnerFixtureEnv({
-          // Reuse this runtime instead of staging Bun again under the fixture's isolated HOME.
-          OPENCLAW_VITEST_RUNTIME: process.versions.bun ? "bun" : "node",
-          ...(process.versions.bun ? { OPENCLAW_BUN_PATH: process.execPath } : {}),
-          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: local("module-cache"),
-        }),
+        testCommand.args,
+        { ...env, ...testCommand.envOverrides },
         DEFAULT_VITEST_TEST_TIMEOUT_MS,
         {
           cwd: repoRoot,
           signal,
           maxBuffer: 2 * 1024 * 1024,
           requireProcessTreeExit: process.platform !== "win32",
+          executable: testCommand.command,
         },
       ),
     );

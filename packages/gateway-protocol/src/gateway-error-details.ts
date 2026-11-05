@@ -44,7 +44,9 @@ export const GatewayErrorDetailCodes = {
   TASK_WORKTREE_SOURCE_REQUIRED: "TASK_WORKTREE_SOURCE_REQUIRED",
   TASK_HISTORY_PREVIEW_CAPACITY: "TASK_HISTORY_PREVIEW_CAPACITY",
   CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED: "CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED",
-  CLAW_REVIEW_REQUIRED: "CLAW_REVIEW_REQUIRED",
+  TEMPLATE_REVIEW_REQUIRED: "TEMPLATE_REVIEW_REQUIRED",
+  PENDING_INPUT_NOT_RETIRED: "PENDING_INPUT_NOT_RETIRED",
+  OPENCLAW_CONFIG_READONLY: "OPENCLAW_CONFIG_READONLY",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */
@@ -115,8 +117,13 @@ export type ClawHubRiskAcknowledgementRequiredErrorDetails = Static<
   typeof ErrorSchemas.ClawHubRiskAcknowledgementRequiredErrorDetailsSchema
 >;
 
-export type ClawReviewRequiredErrorDetails = Static<
-  typeof ErrorSchemas.ClawReviewRequiredErrorDetailsSchema
+export type TemplateReviewRequiredErrorDetails = Static<
+  typeof ErrorSchemas.TemplateReviewRequiredErrorDetailsSchema
+>;
+
+/** Requested pending inputs that are still queued or held by a settling turn. */
+export type PendingInputNotRetiredErrorDetails = Static<
+  typeof ErrorSchemas.PendingInputNotRetiredErrorDetailsSchema
 >;
 
 /** Structured details emitted by method-level failures. */
@@ -134,8 +141,10 @@ export type GatewayErrorDetails =
   | SessionWorkspaceRecoveryRequiredErrorDetails
   | TaskWorktreeSourceRequiredErrorDetails
   | ClawHubRiskAcknowledgementRequiredErrorDetails
-  | ClawReviewRequiredErrorDetails
-  | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY };
+  | TemplateReviewRequiredErrorDetails
+  | PendingInputNotRetiredErrorDetails
+  | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY }
+  | { code: typeof GatewayErrorDetailCodes.OPENCLAW_CONFIG_READONLY };
 
 export function readClawHubRiskAcknowledgementRequiredError(
   error: unknown,
@@ -150,13 +159,15 @@ export function readClawHubRiskAcknowledgementRequiredError(
     : null;
 }
 
-export function readClawReviewRequiredError(error: unknown): ClawReviewRequiredErrorDetails | null {
+export function readTemplateReviewRequiredError(
+  error: unknown,
+): TemplateReviewRequiredErrorDetails | null {
   const record = asProtocolRecord(error);
   const details = asProtocolRecord(record?.details);
   return record?.code === ErrorCodes.INVALID_REQUEST &&
-    details?.code === GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED &&
+    details?.code === GatewayErrorDetailCodes.TEMPLATE_REVIEW_REQUIRED &&
     (details.kind === "plugin" || details.kind === "skill")
-    ? { code: GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED, kind: details.kind }
+    ? { code: GatewayErrorDetailCodes.TEMPLATE_REVIEW_REQUIRED, kind: details.kind }
     : null;
 }
 

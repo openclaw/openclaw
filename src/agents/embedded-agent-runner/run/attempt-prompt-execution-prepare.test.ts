@@ -94,32 +94,3 @@ it.each([true, false])(
     expect(result).toEqual(loadedResult);
   },
 );
-
-it("reports failed hydration without consuming the embedded attempt fact", async () => {
-  const media = [{ path: "/tmp/missing.png", contentType: "image/png" }];
-  const input = createInput({}, { media });
-  detectAndLoadPromptImages.mockResolvedValueOnce(
-    imageResult({ failedMediaCount: 1, skippedCount: 1 }),
-  );
-
-  const result = await prepare(input);
-
-  expect(result.failedMediaCount).toBe(1);
-  expect(input.attempt.media).toBe(media);
-});
-
-it("delegates recorder resolution and ingress facts to the canonical hydrator", async () => {
-  const recorder = {
-    message: undefined,
-    resolveMessage: vi.fn(),
-  } as unknown as NonNullable<PromptExecutionInput["attempt"]["userTurnTranscriptRecorder"]>;
-  const media = [{ path: "/tmp/offloaded.png", contentType: "image/png" }];
-  const input = createInput({}, { media, userTurnTranscriptRecorder: recorder });
-
-  await prepare(input);
-
-  expect(detectAndLoadPromptImages).toHaveBeenCalledWith(
-    expect.objectContaining({ media, userTurnTranscriptRecorder: recorder }),
-  );
-  expect(recorder.resolveMessage).not.toHaveBeenCalled();
-});

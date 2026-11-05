@@ -1,9 +1,13 @@
 /* @vitest-environment jsdom */
-import { expect, it, vi } from "vitest";
+import { Virtualizer } from "@tanstack/virtual-core";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import {
   isTranscriptProgrammaticScroll,
+  observeTranscriptOffset,
   TranscriptOffsetState,
 } from "./chat-transcript-offset-observer.ts";
+import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 
 it.each([false, true])(
   "classifies an idle or pending offset without layout (pending: %s)",
@@ -40,4 +44,49 @@ it("keeps maintenance and active commands owned until the committed viewport set
   expect(isTranscriptProgrammaticScroll(state, element)).toBe(true);
   element.scrollTop = 800;
   expect(isTranscriptProgrammaticScroll(state, element)).toBe(false);
+});
+
+it("delivers native offsets without checking end geometry when no end command is active", () => {
+  const element = document.createElement("div");
+  const readGeometry = vi.fn(() => 100);
+  for (const key of ["scrollHeight", "clientHeight"]) {
+    Object.defineProperty(element, key, { get: readGeometry });
+  }
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 0,
+    getScrollElement: () => element,
+    estimateSize: () => 40,
+    scrollToFn: vi.fn(),
+    observeElementRect: vi.fn(),
+    observeElementOffset: vi.fn(),
+  });
+  virtualizer.scrollElement = element;
+  virtualizer.targetWindow = window;
+  const onOffset = vi.fn();
+  const deliver = vi.fn();
+  onTestFinished(
+    observeTranscriptOffset(
+      {
+        state: new TranscriptOffsetState(),
+        getScrollElement: () => element,
+        endAnchor: new TranscriptEndAnchor(() => {}),
+        prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
+        canFollowEnd: () => false,
+        isProgrammaticScroll: () => false,
+        cancelScroll: vi.fn(),
+        onLayoutCorrection: vi.fn(),
+        invalidate: vi.fn(),
+        onOffset,
+        onReaderScroll: vi.fn(),
+        onComposerLayout: vi.fn(),
+      },
+      virtualizer,
+      deliver,
+    ),
+  );
+  element.scrollTop = 20;
+  element.dispatchEvent(new Event("scroll"));
+  expect(deliver).toHaveBeenCalledWith(20, true);
+  expect(onOffset).toHaveBeenCalledOnce();
+  expect(readGeometry).not.toHaveBeenCalled();
 });

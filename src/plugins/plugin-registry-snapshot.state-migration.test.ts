@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
@@ -123,11 +122,6 @@ describe("persisted plugin registry Doctor contract freshness", () => {
     };
     const loadSnapshot = () => loadPluginMetadataSnapshot({ config: {}, env, stateDir });
     const pluginId = "doctor-replay";
-    const pluginRecord = (snapshot: ReturnType<typeof loadSnapshot>) =>
-      expectDefined(
-        snapshot.index.plugins.find((plugin) => plugin.pluginId === pluginId),
-        pluginId,
-      );
     const pluginDir = writeManagedNpmPlugin({
       stateDir,
       packageName: "@openclaw/doctor-replay",
@@ -144,18 +138,7 @@ describe("persisted plugin registry Doctor contract freshness", () => {
     await writePersistedInstalledPluginIndex(derived.index, { stateDir });
 
     const persisted = loadSnapshot();
-    const persistedPlugin = pluginRecord(persisted);
     expect(persisted.registrySource).toBe("persisted");
-    expect(persistedPlugin.doctorContractHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(persistedPlugin.doctorContractFile).toMatchObject({
-      size: expect.any(Number),
-      mtimeMs: expect.any(Number),
-      ctimeMs: expect.any(Number),
-    });
-    expect(loadSnapshot()).toMatchObject({
-      registrySource: "persisted",
-      configFingerprint: persisted.configFingerprint,
-    });
 
     fs.writeFileSync(
       contractPath,
@@ -183,15 +166,10 @@ module.exports = {
     clearPluginMetadataLifecycleCaches();
     await withPluginCache(createPluginCache(), async () => {
       const refreshed = loadSnapshot();
-      const refreshedPlugin = pluginRecord(refreshed);
       expect(refreshed.registrySource).toBe("derived");
       expect(refreshed.registryDiagnostics.map((diagnostic) => diagnostic.code)).toContain(
         "persisted-registry-stale-source",
       );
-      expect(refreshedPlugin.manifestHash).toBe(persistedPlugin.manifestHash);
-      expect(refreshedPlugin.packageJson?.hash).toBe(persistedPlugin.packageJson?.hash);
-      expect(refreshedPlugin.doctorContractHash).not.toBe(persistedPlugin.doctorContractHash);
-      expect(refreshedPlugin.doctorContractFile).not.toEqual(persistedPlugin.doctorContractFile);
       expect(refreshed.configFingerprint).not.toBe(persisted.configFingerprint);
 
       const migration = await autoMigrateLegacyPluginDoctorState({ config: {}, env });

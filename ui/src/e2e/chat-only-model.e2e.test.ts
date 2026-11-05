@@ -67,7 +67,7 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
-    await gateway.waitForRequest("chat.startup");
+    await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
 
     const main = page.getByRole("main");
     const composer = main.locator(".agent-chat__composer-shell");
@@ -75,23 +75,24 @@ suite.define(() => {
     const badge = picker.locator(".chat-controls__model-capability-badge");
 
     await pollAttribute(picker, "data-chat-model-tools").toBe("unavailable");
-    await expect.poll(async () => (await badge.textContent())?.trim()).toBe("Chat only");
-    await pollAttribute(picker, "aria-label").toContain("Chat only");
+    await expect.poll(async () => (await badge.textContent())?.trim()).toBe("No tools");
+    await pollAttribute(picker, "aria-label").toContain("No tools");
 
     await picker.click();
     const localOption = composer.locator('[data-chat-model-option="lmstudio/qwen3-8b"]');
     const openAiOption = composer.locator('[data-chat-model-option="openai/gpt-5.5"]');
+    await revealChatModelOption(composer, "openai/gpt-5.5");
     await pollText(localOption.locator(".chat-controls__model-option-meta")).toBe("32.8k");
-    await pollAttribute(localOption, "aria-label").toContain("cannot use tools");
-    await revealChatModelOption(localOption);
+    await pollAttribute(localOption, "aria-label").toContain("can’t read files");
+    await revealChatModelOption(composer, "lmstudio/qwen3-8b");
     const infoIcon = localOption.locator(".chat-controls__model-chat-only-info");
     await pollCount(infoIcon.locator("svg")).toBe(1);
     await expect.poll(async () => (await infoIcon.boundingBox())?.width).toBe(16);
     await expect
-      .poll(async () => (await openAiOption.textContent())?.includes("Chat only"))
+      .poll(async () => (await openAiOption.textContent())?.includes("No tools"))
       .toBe(false);
 
-    await selectChatModelOption(openAiOption);
+    await selectChatModelOption(composer, "openai/gpt-5.5");
     const patch = await gateway.waitForRequest("sessions.patch");
     expect(patch.params).toMatchObject({ key: sessionKey, model: "openai/gpt-5.5" });
     await pollAttribute(picker, "data-chat-model-tools").toBe("available");
@@ -101,7 +102,7 @@ suite.define(() => {
     if (!(await pickerDetails.evaluate((element: HTMLDetailsElement) => element.open))) {
       await picker.click();
     }
-    await selectChatModelOption(localOption);
+    await selectChatModelOption(composer, "lmstudio/qwen3-8b");
     await pollAttribute(picker, "data-chat-model-tools").toBe("unavailable");
     if (await pickerDetails.evaluate((element: HTMLDetailsElement) => element.open)) {
       await picker.click();

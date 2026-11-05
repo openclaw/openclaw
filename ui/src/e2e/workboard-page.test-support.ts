@@ -14,7 +14,7 @@ export async function installWorkboardPage(
 ) {
   const gateway = await installMockGateway(page, { ...workboardUi, methodResponses });
   await seedChatSettings(page, baseUrl, {
-    railShortcuts: ["route:agents-home", `plugin:workboard/board-${boardId}`],
+    railShortcuts: ["route:sessions", `plugin:workboard/board-${boardId}`],
   });
   return gateway;
 }

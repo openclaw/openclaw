@@ -1,11 +1,10 @@
 import path from "node:path";
-import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
-import { listSessionTranscriptArchivesReadOnly } from "../config/sessions/session-accessor.sqlite-history.js";
+import { readTranscriptStatsSync } from "../config/sessions/session-accessor.sqlite-read.js";
+import { readTranscriptStatsBatchReadOnlySync } from "../config/sessions/session-accessor.sqlite-transcript-stats-read.js";
 import {
-  readTranscriptStatsBatchReadOnlySync,
-  readTranscriptStatsSync,
-} from "../config/sessions/session-accessor.sqlite-read.js";
-import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
+  listSessionTranscriptArchivesReadOnly,
+  listSessionTranscriptInstances,
+} from "../config/sessions/session-history-read.js";
 import {
   listDurableSqliteTargetPathsForSessionStorePath,
   resolveSqliteTargetFromSessionStorePath,
@@ -21,7 +20,6 @@ import {
 function createNativeStorageUsageAccess(env?: NodeJS.ProcessEnv): UsageCostCollectionAccess {
   return {
     env,
-    materializeArchive: async (sourcePath) => materializeSessionArchiveForRead(sourcePath),
     listSqliteMetadataStores: listDurableSqliteTargetPathsForSessionStorePath,
     resolveSqliteStorePath: (agentId, storePath) =>
       resolveSqliteTargetFromSessionStorePath(storePath, { agentId, env }).path,

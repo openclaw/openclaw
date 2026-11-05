@@ -9,19 +9,19 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
-import type { CronJob, CronJobExecutionResult } from "../types.js";
+import type { CronEvent, CronJob, CronJobExecutionResult } from "../types.js";
 import { run } from "./ops-run.js";
-import type { CronEvent, CronServiceDeps } from "./state.js";
+import type { CronServiceDeps } from "./state.js";
 
 export function createOkIsolatedCronStateFactory(log: CronServiceDeps["log"]) {
-  return function createOkIsolatedCronState(params: {
+  return (params: {
     storePath: string;
     now: number;
     summary?: string;
     onEvent?: (event: CronEvent) => void;
     triggersEnabled?: boolean;
-  }) {
-    return createCronRegressionState({
+  }) =>
+    createCronRegressionState({
       log,
       storePath: params.storePath,
       nowMs: () => params.now,
@@ -33,7 +33,6 @@ export function createOkIsolatedCronStateFactory(log: CronServiceDeps["log"]) {
       })),
       ...(params.onEvent ? { onEvent: params.onEvent } : {}),
     });
-  };
 }
 
 type RegressionParams = Parameters<typeof createCronRegressionState>[0];

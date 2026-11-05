@@ -1,25 +1,24 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
+  getApiProvider,
   getEnvApiKey,
   resolveProviderContext,
   type Context,
   type Model,
+  type ModelRequestHeaders,
   type ProviderCallStreamOptions,
   type ProviderContext,
   type ProviderModel,
   type SimpleStreamOptions,
-  type VideoContent,
 } from "openclaw/plugin-sdk/llm";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import {
-  collectProviderApiKeysForExecution,
-  executeWithApiKeyRotation,
-} from "openclaw/plugin-sdk/provider-auth-runtime";
+import { executeWithApiKeyRotation } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderHttpError,
   providerOperationRetryConfig,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import {
   buildAssistantMessage,
   buildGoogleGenerationConfig,
@@ -27,15 +26,19 @@ import {
   buildGuardedModelFetch,
   consumeGoogleGenerateContentStream,
   projectGoogleMessages,
+  createGoogleVideoPlaceholder,
+  GOOGLE_VIDEO_SLOT_OMISSION,
+  materializeGoogleVideoSlots,
+  type GoogleVideoSlots,
   requiresGoogleToolCallId,
   convertGoogleTools,
   type GoogleStreamChunk as GoogleSseChunk,
+  applyProviderPayloadHook,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
   mergeTransportHeaders,
   notifyProviderHttpResponse,
-  iterateSseFrames,
   sanitizeTransportPayloadText,
   stripSystemPromptCacheBoundary,
   transformTransportMessages,
@@ -45,11 +48,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
-import { isGoogleNativeVideoModelId } from "./provider-models.js";
+import { isGoogleGeminiTextModelId } from "./provider-models.js";
 import { isOfficialGoogleAiStudioBaseUrl, normalizeGoogleApiBaseUrl } from "./provider-policy.js";
+import { resolveGoogleVertexBaseUrlLocation } from "./src/google-api-base-url.js";
 import {
   isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
@@ -57,6 +60,8 @@ import {
   resolveGoogleGemini3ThinkingLevel,
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
+import { collectGoogleTransportApiKeys } from "./transport-api-keys.js";
+import { hasGoogleFirstResponseActivity, parseGoogleSseChunks } from "./transport-stream-sse.js";
 import { isGoogleVertexCredentialsMarker } from "./vertex-adc-config.js";
 import { resolveGoogleVertexAuthorizedUserHeaders } from "./vertex-adc.js";
 
@@ -64,13 +69,14 @@ type CanonicalGoogleTransportApi = "google-generative-ai" | "google-vertex";
 type GoogleTransportApi = CanonicalGoogleTransportApi | "openclaw-google-generative-ai-transport";
 
 type GoogleTransportModel = ProviderModel<GoogleTransportApi> & {
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   provider: string;
 };
 
 type GoogleTransportOptions = SimpleStreamOptions &
   ProviderCallStreamOptions & {
     cachedContent?: string;
+    topP?: number;
     toolChoice?:
       | "auto"
       | "none"
@@ -109,10 +115,8 @@ const GOOGLE_NATIVE_VIDEO_MIME: ReadonlySet<string> = new Set([
   "video/wmv",
   "video/3gpp",
 ]);
-const GOOGLE_VIDEO_SLOT_OMISSION = "(video omitted: native video slot unavailable)";
 const GOOGLE_VIDEO_MIME_OMISSION = "(video omitted: unsupported Google video MIME type)";
 const GOOGLE_REQUEST_BYTES_EXCLUSIVE = 20_000_000;
-type GoogleVideoSlots = Map<Record<string, unknown>, VideoContent>;
 
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS = 45_000;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
@@ -155,7 +159,7 @@ function supportsGoogleNativeVideo(model: GoogleTransportModel): boolean {
     model.provider === "google" &&
     normalizeGoogleTransportRouteApi(model.api) === "google-generative-ai" &&
     isOfficialGoogleAiStudioBaseUrl(model.baseUrl) &&
-    isGoogleNativeVideoModelId(model.id) &&
+    isGoogleGeminiTextModelId(model.id) &&
     model.input.includes("video")
   );
 }
@@ -221,13 +225,17 @@ function resolveGoogleVertexProject(options: GoogleTransportOptions | undefined)
   return project;
 }
 
-function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined): string {
+function resolveGoogleVertexLocation(
+  model: GoogleTransportModel,
+  options: GoogleTransportOptions | undefined,
+): string {
   const location =
     normalizeOptionalString((options as { location?: unknown } | undefined)?.location) ||
+    resolveGoogleVertexBaseUrlLocation(model.baseUrl) ||
     normalizeOptionalString(process.env.GOOGLE_CLOUD_LOCATION);
   if (!location) {
     throw new Error(
-      "Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.",
+      "Vertex AI requires a location. Set a Vertex model baseUrl, GOOGLE_CLOUD_LOCATION, or pass location in options.",
     );
   }
   return location;
@@ -264,15 +272,16 @@ export function buildGoogleGenerativeAiParams(
   options?: GoogleTransportOptions,
   videoSlots?: GoogleVideoSlots,
 ): GoogleGenerateContentRequest {
-  const generationConfig: Record<string, unknown> = {
-    ...buildGoogleGenerationConfig(
-      model,
-      options?.thinking ?? buildGoogleSimpleThinking(canonicalGoogleModel(model), options),
-      options?.maxTokens,
-    ),
-  };
+  const generationConfig: Record<string, unknown> = buildGoogleGenerationConfig(
+    model,
+    options?.thinking ?? buildGoogleSimpleThinking(canonicalGoogleModel(model), options),
+    options?.maxTokens,
+  );
   if (typeof options?.temperature === "number") {
     generationConfig.temperature = options.temperature;
+  }
+  if (typeof options?.topP === "number") {
+    generationConfig.topP = options.topP;
   }
   if (options?.stop !== undefined && options.stop.length > 0) {
     generationConfig.stopSequences = options.stop;
@@ -287,13 +296,11 @@ export function buildGoogleGenerativeAiParams(
       (id) => (requiresGoogleToolCallId(model.id) ? normalizeToolCallId(id) : id),
       { preserveCrossModelToolCallThoughtSignature: isGoogleGemini3ThinkingLevelModel(model.id) },
     ) as ProviderContext["messages"],
+    tools: context.tools,
     replay: "managed",
     requiresToolCallSignature: isGoogleGemini3ThinkingLevelModel(model.id),
-    videoPart: (video) => {
-      const placeholder = { text: GOOGLE_VIDEO_SLOT_OMISSION };
-      videoSlots?.set(placeholder, video);
-      return placeholder;
-    },
+    videoPart: (video) =>
+      createGoogleVideoPlaceholder(video, videoSlots, { text: GOOGLE_VIDEO_SLOT_OMISSION }),
   });
   const params: GoogleGenerateContentRequest = { contents };
   const cachedContent =
@@ -350,19 +357,6 @@ function serializeGoogleRequest(
   return body;
 }
 
-function isGoogleOauthApiKey(apiKey: string | undefined): boolean {
-  return Boolean(
-    apiKey?.trimStart().startsWith("{") && parseGeminiAuth(apiKey).headers.Authorization,
-  );
-}
-
-function hasGoogleAuthHeader(headers: Record<string, string> | undefined): boolean {
-  return Object.keys(headers ?? {}).some((name) => {
-    const normalized = name.trim().toLowerCase();
-    return normalized === "authorization" || normalized === "x-goog-api-key";
-  });
-}
-
 function resolveGoogleGemini3FirstResponseRetryMs(): number {
   const raw = process.env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
   return parseStrictNonNegativeInteger(raw) ?? GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
@@ -411,10 +405,8 @@ function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
     timeout.unref?.();
   }
   const clearDeadline = () => {
-    if (timeout) {
-      clearTimeout(timeout);
-      timeout = undefined;
-    }
+    clearTimeout(timeout);
+    timeout = undefined;
   };
   return {
     signal,
@@ -426,7 +418,6 @@ function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
 type GoogleSseAttempt =
   | {
       type: "ready";
-      firstChunk?: GoogleSseChunk;
       chunks: AsyncGenerator<GoogleSseChunk>;
     }
   | { type: "timeout" };
@@ -448,25 +439,13 @@ async function openGoogleSseAttempt(params: {
       ? createChildSignal(params.parentSignal, params.firstResponseTimeoutMs)
       : undefined;
   const signal = attemptSignal?.signal ?? params.parentSignal;
-  const handleTimedOperationError = (error: unknown): GoogleSseAttempt => {
-    attemptSignal?.clearDeadline();
-    if (attemptSignal?.timedOut() && !params.parentSignal?.aborted) {
-      return { type: "timeout" };
-    }
-    throw error;
-  };
-  let response: Response;
   try {
-    response = await params.guardedFetch(params.url, {
+    const response = await params.guardedFetch(params.url, {
       method: "POST",
       headers: params.headers,
       body: serializeGoogleRequest(params.request, params.videoSlots),
       signal,
     });
-  } catch (error) {
-    return handleTimedOperationError(error);
-  }
-  try {
     // Response hooks share the first-response deadline. A stalled hook must cancel
     // the unread body and enter the same Gemini fallback as a stalled fetch or body.
     await notifyProviderHttpResponse({
@@ -475,99 +454,42 @@ async function openGoogleSseAttempt(params: {
       model: canonicalGoogleModel(params.model),
       signal,
     });
-  } catch (error) {
-    return handleTimedOperationError(error);
-  }
-  if (!response.ok) {
+    if (!response.ok) {
+      attemptSignal?.clearDeadline();
+      throw await createProviderHttpError(response, params.errorPrefix);
+    }
+    const chunks = parseGoogleSseChunks(response, signal);
+    const prefetched: GoogleSseChunk[] = [];
+    for (;;) {
+      // Opening owns first-frame errors, including when no retry timer is active.
+      const first = await chunks.next();
+      if (first.done) {
+        break;
+      }
+      prefetched.push(first.value);
+      if (!attemptSignal || hasGoogleFirstResponseActivity(first.value)) {
+        break;
+      }
+    }
     attemptSignal?.clearDeadline();
-    throw await createProviderHttpError(response, params.errorPrefix);
-  }
-  const chunks = parseGoogleSseChunks(response, signal);
-  if (!attemptSignal) {
-    return { type: "ready", chunks };
-  }
-  const iterator = chunks[Symbol.asyncIterator]();
-  let first: IteratorResult<GoogleSseChunk>;
-  try {
-    first = await iterator.next();
-  } catch (error) {
-    return handleTimedOperationError(error);
-  }
-  attemptSignal.clearDeadline();
-  return {
-    type: "ready",
-    ...(!first.done ? { firstChunk: first.value } : {}),
-    chunks,
-  };
-}
-
-async function* parseGoogleSseChunks(
-  response: Response,
-  signal?: AbortSignal,
-): AsyncGenerator<GoogleSseChunk> {
-  if (!response.body) {
-    throw new Error("No response body");
-  }
-  const reader = response.body.getReader();
-  let completed = false;
-  const abortHandler = () => {
-    void reader.cancel().catch(() => undefined);
-  };
-  signal?.addEventListener("abort", abortHandler);
-  try {
-    for await (const { frame, terminated } of iterateSseFrames(async () => {
-      signal?.throwIfAborted();
-      const chunk = await reader.read();
-      // Cancellation settles a pending read as done; never mistake that for EOF.
-      signal?.throwIfAborted();
-      return chunk;
-    })) {
-      const data = frame
-        .split(/\r\n|\n|\r/u)
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trim())
-        .join("\n");
-      let chunk: unknown;
-      if (!terminated) {
-        const trailingPayload = data || frame.trim();
-        if (!trailingPayload || (!data && !trailingPayload.startsWith("{"))) {
-          continue;
-        }
-        // Provider errors can arrive as bare JSON or data frames without their final delimiter.
-        chunk = safeParseJson(trailingPayload);
-        if (!isRecord(chunk) || !isRecord(chunk.error)) {
-          throw new Error("Google SSE stream ended with an incomplete frame");
-        }
-      } else {
-        if (!data || data === "[DONE]") {
-          continue;
-        }
+    return {
+      type: "ready",
+      chunks: (async function* () {
         try {
-          chunk = JSON.parse(data);
-        } catch {
-          throw new Error("Google SSE stream returned malformed JSON");
+          yield* prefetched;
+          yield* chunks;
+        } finally {
+          // A blocked prefetched prompt can end consumption before delegation begins.
+          await chunks.return(undefined);
         }
-      }
-      if (isRecord(chunk) && isRecord(chunk.error)) {
-        const providerError = chunk.error;
-        throw Object.assign(
-          new Error(normalizeOptionalString(providerError.message) ?? "Google stream failed"),
-          {
-            code: normalizeOptionalString(providerError.status) ?? "GOOGLE_STREAM_ERROR",
-            status: typeof providerError.code === "number" ? providerError.code : undefined,
-            type: "google_stream_failed",
-          },
-        );
-      }
-      yield chunk as GoogleSseChunk;
+      })(),
+    };
+  } catch (error) {
+    attemptSignal?.clearDeadline();
+    if (attemptSignal?.timedOut() && !params.parentSignal?.aborted) {
+      return { type: "timeout" };
     }
-    completed = true;
-  } finally {
-    signal?.removeEventListener("abort", abortHandler);
-    if (!completed) {
-      await reader.cancel(signal?.reason).catch(() => undefined);
-    }
-    reader.releaseLock();
+    throw error;
   }
 }
 
@@ -592,42 +514,31 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           : context;
         const videoSlots: GoogleVideoSlots = new Map();
         let params = buildGoogleGenerativeAiParams(model, providerContext, options, videoSlots);
-        const nextParams = await options?.onPayload?.(params, canonicalModel);
-        if (nextParams !== undefined) {
-          params = nextParams as GoogleGenerateContentRequest;
-        }
+        const nextParams = await applyProviderPayloadHook(options, params, canonicalModel);
+        params = nextParams as GoogleGenerateContentRequest;
         const trustedVideoSlots: Record<string, unknown>[] = [];
-        const visit = (value: unknown): void => {
-          if (Array.isArray(value)) {
-            value.forEach(visit);
-            return;
-          }
-          if (!isRecord(value)) {
-            return;
-          }
-          const video = videoSlots.get(value);
-          if (video) {
+        materializeGoogleVideoSlots(
+          params,
+          videoSlots,
+          (slot, video) => {
             if (!GOOGLE_NATIVE_VIDEO_MIME.has(video.mimeType)) {
-              replaceGooglePartWithText(value, GOOGLE_VIDEO_MIME_OMISSION);
+              replaceGooglePartWithText(slot, GOOGLE_VIDEO_MIME_OMISSION);
               return;
             }
-            Object.keys(value).forEach((key) => Reflect.deleteProperty(value, key));
-            value.inlineData = { mimeType: video.mimeType, data: video.data };
-            trustedVideoSlots.push(value);
-            return;
-          }
-          const inlineData = isRecord(value.inlineData) ? value.inlineData : undefined;
-          if (normalizeLowercaseStringOrEmpty(inlineData?.mimeType).startsWith("video/")) {
-            replaceGooglePartWithText(value, GOOGLE_VIDEO_SLOT_OMISSION);
-            return;
-          }
-          Object.values(value).forEach(visit);
-        };
-        visit(params);
+            slot.inlineData = { mimeType: video.mimeType, data: video.data };
+            trustedVideoSlots.push(slot);
+          },
+          (part) => {
+            const inlineData = isRecord(part.inlineData) ? part.inlineData : undefined;
+            if (normalizeLowercaseStringOrEmpty(inlineData?.mimeType).startsWith("video/")) {
+              replaceGooglePartWithText(part, GOOGLE_VIDEO_SLOT_OMISSION);
+            }
+          },
+        );
         let requestUrl: string;
         if (kind === "google-vertex") {
           const project = encodeURIComponent(resolveGoogleVertexProject(options));
-          const location = encodeURIComponent(resolveGoogleVertexLocation(options));
+          const location = encodeURIComponent(resolveGoogleVertexLocation(model, options));
           // Mirror resolveGoogleModelPath: strip the google/ provider prefix so a
           // provider-qualified id does not become an invalid models/google%2F... path.
           const modelId = encodeURIComponent(stripGoogleProviderPrefix(model.id));
@@ -640,7 +551,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         const fetchImpl = (options as { fetch?: typeof fetch } | undefined)?.fetch;
         const openSse = async (apiKeyForRequest: string | undefined) => {
           const optionHeaders = options?.headers;
-          let requestHeaders: Record<string, string>;
+          let requestHeaders: ModelRequestHeaders;
           if (kind === "google-vertex") {
             const authHeaders = isGoogleVertexCredentialsMarker(apiKeyForRequest)
               ? await resolveGoogleVertexAuthorizedUserHeaders(fetchImpl)
@@ -688,7 +599,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
             options,
             guardedFetch,
             url: requestUrl,
-            headers: requestHeaders,
+            headers: omitNullRequestHeaders(requestHeaders) ?? {},
             request,
             videoSlots: trustedVideoSlots,
           };
@@ -728,15 +639,8 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           return retryAttempt;
         };
         const apiKeys =
-          kind === "google-generative-ai" &&
-          isOfficialGoogleAiStudioBaseUrl(model.baseUrl) &&
-          !isGoogleOauthApiKey(apiKey) &&
-          !hasGoogleAuthHeader(model.headers) &&
-          !hasGoogleAuthHeader(options?.headers)
-            ? collectProviderApiKeysForExecution({
-                provider: model.provider,
-                primaryApiKey: apiKey,
-              })
+          kind === "google-generative-ai"
+            ? collectGoogleTransportApiKeys(model, options, apiKey)
             : [];
         const sse =
           apiKeys.length > 0
@@ -747,17 +651,11 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                 execute: openSse,
               })
             : await openSse(apiKey);
-        const chunks =
-          sse.firstChunk === undefined
-            ? sse.chunks
-            : (async function* (firstChunk: GoogleSseChunk) {
-                yield firstChunk;
-                yield* sse.chunks;
-              })(sse.firstChunk);
         await consumeGoogleGenerateContentStream({
-          chunks,
+          chunks: sse.chunks,
           model: canonicalModel,
           output,
+          tools: providerContext.tools,
           stream,
           signal: options?.signal,
           nextToolCallId: (name) => `${name || "tool"}_${Date.now()}_${++toolCallCounter}`,
@@ -782,4 +680,73 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
 export function createGoogleVertexTransportStreamFn(): StreamFn {
   return createGoogleTransportStreamFn("google-vertex");
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+export function createGoogleInteractionsTransportStreamFn(): StreamFn {
+  return (model, context, options) => {
+    const { eventStream, stream } = createWritableTransportEventStream();
+    void (async () => {
+      const output = buildAssistantMessage({
+        model,
+        content: [],
+        usage: createEmptyTransportUsage(),
+        stopReason: "stop",
+      });
+      try {
+        const provider = getApiProvider("google-interactions");
+        if (!provider) {
+          throw new Error("Google Interactions transport is unavailable");
+        }
+        const apiKey = options?.apiKey ?? getEnvApiKey(model.provider);
+        const openStream = async (requestApiKey: string | undefined) => {
+          // OAuth JSON credentials authenticate with a bearer token, never as an API
+          // key; same translation as GenerateContent (parseGeminiAuth). Caller headers win.
+          const bearer = requestApiKey
+            ? parseGeminiAuth(requestApiKey).headers.Authorization
+            : undefined;
+          const source = provider.streamSimple(model, context, {
+            ...options,
+            apiKey: requestApiKey,
+            ...(bearer
+              ? {
+                  headers: { Authorization: bearer, "x-goog-api-key": null, ...options?.headers },
+                }
+              : {}),
+          });
+          const iterator = source[Symbol.asyncIterator]();
+          // The adapter emits start only after the guarded HTTP request succeeds.
+          // Retry opening failures, never an error after streaming has started.
+          const first = await iterator.next();
+          if (!first.done && first.value.type === "error") {
+            await iterator.return?.();
+            throw new Error(first.value.error.errorMessage ?? "Google Interactions request failed");
+          }
+          return { first, iterator };
+        };
+        const apiKeys = collectGoogleTransportApiKeys(model, options, apiKey);
+        const opened =
+          apiKeys.length > 0
+            ? await executeWithApiKeyRotation({
+                provider: model.provider,
+                apiKeys,
+                transientRetry: providerOperationRetryConfig("read"),
+                execute: openStream,
+              })
+            : await openStream(apiKey);
+        if (!opened.first.done) {
+          stream.push(opened.first.value);
+        }
+        for (;;) {
+          const next = await opened.iterator.next();
+          if (next.done) {
+            break;
+          }
+          stream.push(next.value);
+        }
+        stream.end();
+      } catch (error) {
+        failTransportStream({ stream, output, signal: options?.signal, error });
+      }
+    })();
+    return eventStream;
+  };
+}

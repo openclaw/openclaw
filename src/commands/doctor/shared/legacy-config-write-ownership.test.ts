@@ -6,7 +6,8 @@ import { listGitTrackedFiles, toRepoRelativePath } from "../../../test-utils/rep
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const SRC_ROOT = path.join(REPO_ROOT, "src");
-const DOCTOR_ROOT = path.join(SRC_ROOT, "commands", "doctor");
+const COMMANDS_ROOT = path.join(SRC_ROOT, "commands");
+const DOCTOR_ROOT = path.join(COMMANDS_ROOT, "doctor");
 const ownershipRules = [
   [
     "migrateLegacyConfig",
@@ -33,10 +34,13 @@ function collectSourceFiles(dir: string): string[] {
 }
 
 function isOwnedSourceFile(file: string): boolean {
-  return file.endsWith(".ts") && !file.endsWith(".test.ts") && !isUnderDoctorRoot(file);
+  return file.endsWith(".ts") && !file.endsWith(".test.ts") && !isDoctorSourceFile(file);
 }
 
-function isUnderDoctorRoot(file: string): boolean {
+function isDoctorSourceFile(file: string): boolean {
+  if (path.dirname(file) === COMMANDS_ROOT && /^doctor[.-]/.test(path.basename(file))) {
+    return true;
+  }
   const relativePath = path.relative(DOCTOR_ROOT, file);
   return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }
@@ -54,6 +58,15 @@ function collectViolations(files: string[]): string[] {
 }
 
 describe("legacy config write ownership", () => {
+  it("recognizes Doctor command modules without exempting neighboring source", () => {
+    expect(isOwnedSourceFile(path.join(COMMANDS_ROOT, "doctor-heartbeat-retirement.ts"))).toBe(
+      false,
+    );
+    expect(isOwnedSourceFile(path.join(COMMANDS_ROOT, "status.ts"))).toBe(true);
+    expect(isOwnedSourceFile(path.join(COMMANDS_ROOT, "doctor-adapter", "runtime.ts"))).toBe(true);
+    expect(isOwnedSourceFile(path.join(SRC_ROOT, "infra", "doctor-adapter.ts"))).toBe(true);
+  });
+
   it("lists ownership scan files without scanning source directories in-process", () => {
     expectNoReaddirSyncDuring(() => {
       const files = collectSourceFiles(SRC_ROOT);

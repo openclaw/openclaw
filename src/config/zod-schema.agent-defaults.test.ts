@@ -101,18 +101,9 @@ describe("agent defaults schema", () => {
     }
   });
 
-  it("rejects invalid heartbeat activeHours without an explicit cadence", () => {
-    const heartbeat = (start: string, end: string) => ({ activeHours: { start, end } });
-    expectSchemaFailurePath(
-      AgentDefaultsSchema.safeParse({ heartbeat: heartbeat("99:99", "17:00") }),
-      "heartbeat.activeHours.start",
-    );
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({
-        id: "ops",
-        heartbeat: heartbeat("09:00", "not-a-time"),
-      }),
-      "heartbeat.activeHours.end",
-    );
+  it("rejects retired heartbeat config at both runtime agent scopes", () => {
+    const heartbeat = { every: "30m", target: "owner" };
+    expect(AgentDefaultsSchema.safeParse({ heartbeat }).success).toBe(false);
+    expect(AgentEntrySchema.safeParse({ id: "ops", heartbeat }).success).toBe(false);
   });
 });

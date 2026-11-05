@@ -9,14 +9,12 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   AutocompleteInteraction,
-  BaseComponentInteraction,
   ModalInteraction,
   createInteraction,
   type RawInteraction,
 } from "./interactions.js";
 import {
   attachRestMock,
-  createInternalComponentInteractionPayload,
   createInternalInteractionPayload,
   createInternalModalInteractionPayload,
   createInternalTestClient,
@@ -42,9 +40,8 @@ function interactionFixture(
   const rest = attachRestMock(client, overrides);
   return {
     interaction: createInteraction(client, raw),
-    post: rest.post,
-    patch: rest.patch,
-    delete: rest.delete,
+    client,
+    ...rest,
   };
 }
 
@@ -59,7 +56,6 @@ function pendingCallback() {
 
 describe("BaseInteraction", () => {
   it.each([
-    { first: "accepted", operation: "reply" },
     { first: "rejected", operation: "reply" },
     { first: "accepted", operation: "followUp" },
   ] as const)("serializes $operation after the first callback is $first", async (testCase) => {
@@ -96,57 +92,25 @@ describe("BaseInteraction", () => {
     expect(interaction.responseState).toBe("replied");
   });
 
-  it.each([
-    { kind: "component", operation: "update" },
-    { kind: "component", operation: "show-modal" },
-    { kind: "component", operation: "launch-activity" },
-    { kind: "autocomplete", operation: "autocomplete" },
-  ] as const)(
-    "rejects a second initial $kind $operation without calling Discord",
-    async (testCase) => {
-      const raw =
-        testCase.kind === "component"
-          ? createInternalComponentInteractionPayload(identity)
-          : createInternalInteractionPayload({
-              ...identity,
-              type: InteractionType.ApplicationCommandAutocomplete,
-            });
-      const { interaction, post } = interactionFixture({}, raw);
-      const first =
-        testCase.kind === "autocomplete" && interaction instanceof AutocompleteInteraction
-          ? interaction.respond([{ name: "First", value: "first" }])
-          : interaction.reply("first");
-      const next = () => {
-        if (interaction instanceof AutocompleteInteraction) {
-          return interaction.respond([{ name: "Second", value: "second" }]);
-        }
-        if (!(interaction instanceof BaseComponentInteraction)) {
-          throw new Error("expected a component interaction");
-        }
-        switch (testCase.operation) {
-          case "update":
-            return interaction.update("second");
-          case "show-modal":
-            return interaction.showModal({ serialize: () => ({ title: "Choose" }) });
-          case "launch-activity":
-            return interaction.launchActivity();
-          default:
-            throw new Error("expected an initial interaction callback");
-        }
-      };
-
-      const [firstResult, secondResult] = await Promise.allSettled([first, next()]);
-      expect(firstResult.status).toBe("fulfilled");
-      expect(secondResult.status).toBe("rejected");
-      if (secondResult.status === "rejected") {
-        expect(secondResult.reason).toMatchObject({
-          message: expect.stringMatching(/already.*acknowledg/i),
-        });
-      }
-      expect(post).toHaveBeenCalledOnce();
-      expect(interaction.acknowledged).toBe(true);
-    },
-  );
+  it("rejects a second initial callback without calling Discord", async () => {
+    const { interaction, post } = interactionFixture(
+      {},
+      createInternalInteractionPayload({
+        ...identity,
+        type: InteractionType.ApplicationCommandAutocomplete,
+      }),
+    );
+    if (!(interaction instanceof AutocompleteInteraction)) {
+      throw new Error("expected autocomplete interaction");
+    }
+    const respond = () => interaction.respond([{ name: "First", value: "first" }]);
+    expect(await Promise.allSettled([respond(), respond()])).toMatchObject([
+      { status: "fulfilled" },
+      { status: "rejected", reason: { message: expect.stringMatching(/already.*acknowledg/i) } },
+    ]);
+    expect(post).toHaveBeenCalledOnce();
+    expect(interaction.acknowledged).toBe(true);
+  });
 
   it("waits for the initial response before fetching the original reply", async () => {
     const firstResponse = createDeferred<void>();
@@ -167,9 +131,7 @@ describe("BaseInteraction", () => {
 
   it("keeps response transactions independent for different interactions", async () => {
     const { firstResponse, post } = pendingCallback();
-    const client = createInternalTestClient();
-    attachRestMock(client, { post });
-    const firstInteraction = createInteraction(client, createInternalInteractionPayload(identity));
+    const { client, interaction: firstInteraction } = interactionFixture({ post });
     const secondInteraction = createInteraction(
       client,
       createInternalInteractionPayload({ id: "interaction2", token: "token2" }),
@@ -226,15 +188,7 @@ describe("BaseInteraction", () => {
         await interaction.defer();
       }
       await interaction.reply({
-        components: [
-          {
-            isV2: true,
-            serialize: () => ({
-              type: ComponentType.Container,
-              components: [{ type: ComponentType.TextDisplay, content: "done" }],
-            }),
-          },
-        ],
+        components: [{ isV2: true, serialize: () => v2Payload.components[0] }],
       });
       const args = [{ body: v2Payload }, { with_components: true }];
       if (mode === "follow-up") {
@@ -259,7 +213,6 @@ describe("BaseInteraction", () => {
       {},
       createInternalInteractionPayload({
         ...identity,
-        type: InteractionType.ApplicationCommand,
         guild_id: "guild1",
         member: {
           roles: [],

@@ -16,6 +16,7 @@ export type TranscriptScrollObservation =
       type: "resize";
       viewport: TranscriptViewportMeasurement;
       scrollCorrection?: { before: number; after: number };
+      resumeFollow?: boolean;
     }
   | { type: "input"; event: Event; touching: boolean }
   | {

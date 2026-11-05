@@ -7,7 +7,10 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
+import {
+  captureThawRestartTargets,
+  restartRunningChannelAccounts,
+} from "./channel-thaw-restart.js";
 import {
   createTestChannelManager,
   createTestChannelRegistry,
@@ -51,7 +54,7 @@ it("keeps thaw-restarted channel work alive after the maintenance tick finishes"
       delayMs: 0,
       run: async () => {
         maintenanceSignal = getAsyncWorkSignal();
-        await restartRunningChannelAccounts(manager, {
+        await restartRunningChannelAccounts(captureThawRestartTargets(manager), {
           shouldContinue: () => true,
           onError: (message) => errors.push(message),
         });

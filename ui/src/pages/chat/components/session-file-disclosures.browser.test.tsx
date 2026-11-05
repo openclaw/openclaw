@@ -1,25 +1,24 @@
 import { createSignal, flush } from "solid-js";
 import { expect, it } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { FolderDisclosure } from "./chat-session-workspace-disclosure.tsx";
-import { ReviewDisclosure } from "./session-diff-disclosure.tsx";
+import { FileDisclosure } from "./file-disclosure.tsx";
 
 it.each([
-  { name: "Files", Disclosure: FolderDisclosure, duration: 200 },
-  { name: "Review", Disclosure: ReviewDisclosure, duration: 240 },
+  { name: "Files", variant: "folder" as const, duration: 200 },
+  { name: "Review", variant: "review" as const, duration: 240 },
 ])(
   "preserves $name disclosure geometry during reversal and synchronous exits",
-  ({ Disclosure, duration }) => {
+  ({ variant, duration }) => {
     const [open, setOpen] = createSignal(false);
     const [active, setActive] = createSignal(true);
     const [instant, setInstant] = createSignal(false);
     const view = mountSolid(() => (
       <div style={{ "--ease-out": "cubic-bezier(0.16, 1, 0.3, 1)", width: "320px" }}>
-        <Disclosure open={open()} active={active()} instant={instant()}>
+        <FileDisclosure variant={variant} open={open()} active={active()} instant={instant()}>
           <div style={{ height: "160px" }}>
             <input aria-label="Retained reader" />
           </div>
-        </Disclosure>
+        </FileDisclosure>
       </div>
     ));
     const shell = view.container.querySelector<HTMLDivElement>(

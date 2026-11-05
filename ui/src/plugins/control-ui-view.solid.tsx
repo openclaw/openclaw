@@ -4,7 +4,6 @@ import {
   createRoot,
   createSignal,
   getOwner,
-  onCleanup,
   onSettled,
   runWithOwner,
   Show,
@@ -16,6 +15,7 @@ import type {
   ControlUiView,
   ControlUiViewContext,
 } from "../../../src/plugin-sdk/control-ui.js";
+import { formatUiError } from "../lib/format-error.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -27,7 +27,7 @@ import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
 
-type ViewKind = "pages" | "panels" | "accessories" | "widgets" | "replacements";
+type ViewKind = "pages" | "panels" | "accessories" | "widgets" | "inlineViews" | "replacements";
 
 type ViewRegistration = ControlUiRegistration<{ mount: ControlUiView<unknown> }>;
 type PluginViewProps = {
@@ -35,6 +35,7 @@ type PluginViewProps = {
   contributionKey: string;
   surface: ControlUiSurface;
   props: unknown;
+  fallback?: () => JSX.Element;
   mountDefaultView: ((target: HTMLElement) => () => void) | undefined;
   mountReplacementCompanion: ((target: HTMLElement) => () => void) | undefined;
   presented: boolean;
@@ -122,10 +123,14 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
         return;
       }
       // SAFETY: the prior bridge value is a host-rendered SDK props record; page props may omit session identity.
-      const previous = before as Partial<BoardGetParams> | undefined;
+      const previous = before as (Partial<BoardGetParams> & { toolCallId?: string }) | undefined;
       // SAFETY: the next bridge value follows the same host-rendered SDK props contract.
-      const next = after as Partial<BoardGetParams> | undefined;
-      if (previous?.sessionKey !== next?.sessionKey || previous?.agentId !== next?.agentId) {
+      const next = after as (Partial<BoardGetParams> & { toolCallId?: string }) | undefined;
+      if (
+        previous?.sessionKey !== next?.sessionKey ||
+        previous?.agentId !== next?.agentId ||
+        (host.kind === "inlineViews" && previous?.toolCallId !== next?.toolCallId)
+      ) {
         ownerChanged = true;
         mountAbort?.abort();
       }
@@ -185,7 +190,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
   const fail = (failure: unknown) => {
     const pluginId = registration?.pluginId ?? "host";
     unmount();
-    setError(failure instanceof Error ? failure.message : String(failure));
+    setError(formatUiError(failure));
     context?.plugins.reportError(pluginId, failure);
   };
   const update = () => {
@@ -231,6 +236,11 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     listen(registration.signal, "abort", unmount, { once: true, signal: abort.signal });
     try {
       viewContext = {
+        reportError: (failure) => {
+          if (mountAbort === abort && !abort.signal.aborted && host.isConnected && !disposed) {
+            fail(failure);
+          }
+        },
         host: scopeControlUiHost(registration.host, abort.signal, () => host.isConnected),
         signal: abort.signal,
         props: scopedProps(abort.signal),
@@ -255,7 +265,13 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
           };
         },
       };
-      handle = registration.value.mount(container, viewContext);
+      const mounted = registration.value.mount(container, viewContext);
+      // A plugin can report a synchronous failure before returning its disposer.
+      if (abort.signal.aborted) {
+        mounted?.dispose?.();
+      } else {
+        handle = mounted;
+      }
     } catch (failure) {
       fail(failure);
     }
@@ -277,25 +293,27 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       />
     );
   }
-  views.set(host, {
-    focus(options) {
-      if (handle?.focus) {
-        handle.focus();
-      } else {
-        // The plugin owns its markup; focus falls back to its first editable control.
-        const input = host.querySelector<HTMLElement>("textarea, input, [contenteditable=true]");
-        if (input) {
-          input.focus(options);
+  onSettled(() => {
+    views.set(host, {
+      focus(options) {
+        if (handle?.focus) {
+          handle.focus();
         } else {
-          HTMLElement.prototype.focus.call(host, options);
+          // The plugin owns its markup; focus falls back to its first editable control.
+          const input = host.querySelector<HTMLElement>("textarea, input, [contenteditable=true]");
+          if (input) {
+            input.focus(options);
+          } else {
+            HTMLElement.prototype.focus.call(host, options);
+          }
         }
-      }
-    },
-  });
-  onCleanup(() => {
-    disposed = true;
-    unmount();
-    views.delete(host);
+      },
+    });
+    return () => {
+      disposed = true;
+      unmount();
+      views.delete(host);
+    };
   });
   return (
     <>
@@ -309,7 +327,12 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       </Show>
       <Show
         when={available() && !error()}
-        fallback={<MountedContent mount={props.mountDefaultView} />}
+        fallback={
+          <>
+            {props.fallback?.()}
+            <MountedContent mount={props.mountDefaultView} />
+          </>
+        }
       >
         <Show when={!delegated()}>
           <MountedContent mount={props.mountReplacementCompanion} />
@@ -331,6 +354,7 @@ export const PluginView = defineSolidBridge<
     contributionKey: { default: "", attribute: false },
     surface: { default: "workspace", attribute: false },
     props: { default: {}, attribute: false },
+    fallback: { default: undefined, attribute: false },
     mountDefaultView: { default: undefined, attribute: false },
     mountReplacementCompanion: { default: undefined, attribute: false },
     presented: { default: true, type: Boolean },
@@ -382,7 +406,8 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
     return <span style={{ display: "contents" }}>{props.renderDefault()}</span>;
   }
   const mountDefault = (target: HTMLElement) => mount(target, DefaultView);
-  const mountCompanion = (target: HTMLElement) => mount(target, () => props.renderCompanion?.());
+  const mountCompanion = (target: HTMLElement) =>
+    mount(target, () => <>{props.renderCompanion?.()}</>);
   function ReplacementView() {
     let host!: HTMLElement;
     onSettled(() => props.replacementRef?.(host));
@@ -412,10 +437,12 @@ export function PluginContribution(props: {
   contributionKey: string;
   props: unknown;
   presented?: boolean;
+  fallback?: () => JSX.Element;
 }) {
   return (
     <PluginView
       kind={props.kind}
+      fallback={props.fallback}
       contributionKey={props.contributionKey}
       props={props.props}
       presented={props.presented ?? true}

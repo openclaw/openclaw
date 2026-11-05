@@ -66,15 +66,15 @@ vi.mock("./manifest-registry.js", () => ({
 const throwingFactory = (error: Error) => () => {
   throw error;
 };
+const pdfFields = { id: "pdf", label: "PDF", mimeTypes: ["application/pdf"] };
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.readBundledDiscoveryModeMemoized.mockReturnValue("compat");
   mocks.publicArtifactModule = {
     createPdfDocumentExtractor: () => ({
-      id: "pdf",
-      label: "PDF",
-      mimeTypes: ["application/pdf"],
+      ...pdfFields,
+      mimeTypes: [...pdfFields.mimeTypes],
       extract: vi.fn(),
     }),
   };
@@ -111,13 +111,7 @@ it("isolates a throwing factory when another extractor factory succeeds", () => 
   mocks.publicArtifactModule.createBrokenDocumentExtractor = throwingFactory(error);
 
   expect(resolvePluginDocumentExtractors()).toStrictEqual([
-    {
-      id: "pdf",
-      label: "PDF",
-      mimeTypes: ["application/pdf"],
-      extract: expect.any(Function),
-      pluginId: "document-extract",
-    },
+    { ...pdfFields, extract: expect.any(Function), pluginId: "document-extract" },
   ]);
   expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
     expect.stringMatching(/document extractors.*document-extract/),

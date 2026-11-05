@@ -2,6 +2,17 @@ import { OpenClaw } from "./client.js";
 import { EventHub } from "./event-hub.js";
 import type * as SDK from "./types.js";
 
+export async function collectUntil<T>(source: AsyncIterable<T>, stop: (event: T) => boolean) {
+  const events: T[] = [];
+  for await (const event of source) {
+    events.push(event);
+    if (stop(event)) {
+      break;
+    }
+  }
+  return events;
+}
+
 export type RequestCall = {
   method: string;
   params?: unknown;

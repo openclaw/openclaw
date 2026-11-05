@@ -54,6 +54,8 @@ it.each([false, true])(
         : undefined,
     );
     let refused = false;
+    const refusalError = new Error("Synthetic shutdown refused late admission");
+    const operation = vi.fn(async () => "forbidden");
     using refusal = sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
       if (
         request.stage === "prepare" &&
@@ -61,14 +63,15 @@ it.each([false, true])(
         request.facts.kind === "agent-validation-start"
       ) {
         refused = true;
-        throw new Error("Synthetic shutdown refused late admission");
+        throw refusalError;
       }
       admit(request, grant);
     });
-    await expect(generation.run(createSource(), async () => "forbidden")).rejects.toThrow();
+    await expect(generation.run(createSource(), operation)).rejects.toBe(refusalError);
     await generation.close();
     refusal.mockRestore();
     expect(refused).toBe(true);
+    expect(operation).not.toHaveBeenCalled();
     const state = openOpenClawStateDatabase({ env }).db;
     expect(state.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([]);
     expect(fs.readFileSync(`${path}.seal`, "utf8")).toBe(seal);
@@ -134,6 +137,8 @@ it("admits schema and integrity once, then warm turns request only their writes"
   expect(requests).toEqual(
     expect.arrayContaining(["open", "prepare:agent-validation-start", "commit"]),
   );
+  // Cold opening needs three grants, without another refresh of its admitted schema.
+  expect(requests.filter((request) => request === "open")).toHaveLength(3);
   requests.length = 0;
   await turn("second-turn");
   await turn("third-turn");

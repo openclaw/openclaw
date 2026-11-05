@@ -3,13 +3,16 @@ import type { ImageLightboxItem } from "../../../components/image-lightbox.types
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { readBlobAsDataUrl } from "../../../lib/blob-data-url.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { createTimeout } from "../../../lib/reactive/timers.ts";
 import { isAbsolutePath } from "../../new-session/path.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileViewControls } from "./chat-file-reader-controls.ts";
+import { FileSessionMenu } from "./chat-file-session-menu.tsx";
 import { copyImageToClipboard, convertImageBlobToPng } from "./chat-image-actions.tsx";
 import type {
   AttachmentSidebarRuntime,
@@ -18,6 +21,10 @@ import type {
   SidebarContent,
 } from "./chat-sidebar-content-types.ts";
 import { DesktopFileNavigation, SidebarFile, FileAction } from "./chat-sidebar-file-view.tsx";
+
+registerEnglishCatalog(registerChatComposerEnglish);
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 /** The workspace owns identity and original downloads; this view operates on displayed pixels. */
 export function SidebarImage(props: {
@@ -92,10 +99,7 @@ export function SidebarImage(props: {
         content.mimeType === "image/svg+xml"
           ? await readBlobAsDataUrl(
               await convertImageBlobToPng(await (await fetch(content.src)).blob()),
-              {
-                readError: "Image could not be decoded",
-                invalidResultError: "Image could not be decoded",
-              },
+              "Image could not be decoded",
             )
           : content.src;
       if (isCurrentImage(content) && props.controls.active !== false) {
@@ -202,24 +206,11 @@ export function SidebarImage(props: {
                     return file().download(signal);
                   }}
                 />
-                <Show when={props.onViewSource}>
-                  {(source) => (
-                    <Menu
-                      id={`image-source-${id}`}
-                      label={t("chat.detailPanel.moreFileActions")}
-                      panelClass="sidebar-file-view__menu"
-                      trigger={<Icon name="moreHorizontal" />}
-                      triggerClass="session-panel-rail__button sidebar-file-view__action"
-                      items={[
-                        {
-                          id: "source",
-                          label: t("chat.detailPanel.viewSource"),
-                          icon: <Icon name="codeXml" />,
-                        },
-                      ]}
-                      onSelect={() => source()()}
-                    />
-                  )}
+                <Show when={props.onViewSource || props.controls.fileAttachment}>
+                  <FileSessionMenu
+                    attachment={props.controls.fileAttachment}
+                    onViewSource={props.onViewSource}
+                  />
                 </Show>
               </div>
             )}
@@ -289,6 +280,9 @@ export function SidebarFileFallback(props: {
               download={props.file.download}
               class="btn btn--sm sidebar-file-view__action session-panel-rail__button"
             />
+            <Show when={props.controls.fileAttachment}>
+              <FileSessionMenu attachment={props.controls.fileAttachment} />
+            </Show>
           </div>
         </div>
       </div>

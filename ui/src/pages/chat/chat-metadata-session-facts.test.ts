@@ -2,7 +2,10 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
+import {
+  invalidateChatMetadataForSessionEvent,
+  invalidateChatMetadataStore,
+} from "../../lib/chat/chat-metadata-cache.ts";
 import { revalidateChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import {
   createGatewayHarness,
@@ -12,7 +15,7 @@ import {
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { makeChatHost, makeRequestMock, requestCalls } from "./chat-host.test-support.ts";
-import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
+import { renderControls } from "./chat-pane-session-controls.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
@@ -38,18 +41,50 @@ function metadataHost(
   const client = createTestGatewayClient(request);
   const harness = createGatewayHarness(client);
   const sessions = createTestSessionCapability(harness.gateway, "work");
-  const state = {
-    ...makeChatHost(),
+  const state = Object.assign(makeChatHost(), {
     client,
     sessions,
     sessionKey,
     assistantAgentId: "work",
     connected: true,
     ...overrides,
-  } as unknown as ChatPageHost;
+  }) as unknown as ChatPageHost;
   onTestFinished(() => retireChatMetadataRequests(state));
   return { client, sessions, state, ...harness };
 }
+
+it("keeps unrelated chat metadata when deletion also refreshes the roster", async () => {
+  const row = sessionRow("agent:work:current", { agentId: "work" });
+  const request = makeRequestMock({
+    "chat.metadata": { commands: [] },
+    "models.list": { models: [] },
+    "sessions.describe": { session: row },
+  });
+  const { client, state } = metadataHost(request, row.key, {
+    sessionsResult: sessionsResult([row], 1),
+  });
+  await refreshChatMetadata(state);
+  request.mockClear();
+  // The deletion owner emits the exact removal followed by a broad roster notice.
+  for (const payload of [
+    { sessionKey: "agent:other:removed", agentId: "other", reason: "delete" },
+    { reason: "delete" },
+  ]) {
+    invalidateChatMetadataForSessionEvent(client, payload, {});
+  }
+  await refreshChatMetadata(state);
+  expect(requestCalls(request, "models.list")).toHaveLength(0);
+  expect(requestCalls(request, "sessions.describe")).toHaveLength(0);
+
+  invalidateChatMetadataForSessionEvent(
+    client,
+    { sessionKey: row.key, agentId: "work", reason: "delete" },
+    {},
+  );
+  await refreshChatMetadata(state);
+  expect(requestCalls(request, "models.list")).toHaveLength(1);
+  expect(requestCalls(request, "sessions.describe")).toHaveLength(1);
+});
 
 it.each(["agent:work:current", "global"])(
   "refreshes catalog-dependent facts for %s without reloading retained roster windows",
@@ -101,19 +136,7 @@ it.each(["agent:work:current", "global"])(
     state.sessionsResult = sessionsResult([before], 1);
     state.sessionsResultAgentId = "work";
     await refreshChatMetadata(state);
-    const writeAccess = { allowed: true, requiredScope: "operator.write" } as const;
-    const controls = () =>
-      renderChatPaneComposerControls({
-        state,
-        selectedSession: state.sessionsResult?.sessions[0],
-        agentDefaultModel: undefined,
-        modelAccess: writeAccess,
-        effortAccess: writeAccess,
-        contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
-        permissionAccess: writeAccess,
-        canSelectFull: true,
-        onModelSetup: vi.fn(),
-      });
+    const controls = () => renderControls(state);
     const container = document.createElement("div");
     permissionReadbackUnavailable = true;
     await controls().permissionPicker.onSelect("full");
@@ -125,7 +148,8 @@ it.each(["agent:work:current", "global"])(
         expectedSessionId: before.sessionId,
       }),
     );
-    expect(state.chatError).toContain("Failed to update permissions");
+    expect(state.chatError).toBe(t("chat.permissionControls.updateFailed"));
+    expect(state.lastErrorDetail).toEqual(new Error("Permission application failed"));
     const view = mountSolid(ChatPermissionPicker, controls().permissionPicker, container);
     const picker = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
     expect(picker.getAttribute("aria-label")).toContain(
@@ -194,6 +218,37 @@ it("does not publish a catalog descriptor after the chat changes its session", a
   described.resolve({ session: { ...row, contextTokens: 262144 } });
   await pending;
   expect(state.sessionsResult).toBe(replacement);
+});
+
+it("keeps a pending descriptor when only catalog hints change", async () => {
+  const facts = createDeferred<{ session: GatewaySessionRow }>();
+  const before = sessionRow("agent:work:current", { agentId: "work" });
+  const after = { ...before, contextTokens: 262144 };
+  const request = makeRequestMock({
+    "chat.metadata": { commands: [] },
+    "sessions.describe": () => facts.promise,
+    "sessions.list": () => sessionsResult([before], 1),
+  });
+  const { client, sessions, state } = metadataHost(request, before.key, {
+    sessionsResultAgentId: "work",
+  });
+  onTestFinished(() => facts.resolve({ session: after }));
+  await sessions.refresh({ agentId: "work" });
+  state.sessionsResult = sessions.state.result;
+  await refreshChatMetadata(state);
+  invalidateChatMetadataStore(client);
+  await vi.waitFor(() => expect(requestCalls(request, "sessions.describe")).toHaveLength(1));
+
+  invalidateChatMetadataStore(client, { agentId: "work" }, undefined, "refresh", {
+    commandsChanged: false,
+    refreshSessionFacts: false,
+  });
+  facts.resolve({ session: after });
+  await refreshChatMetadata(state);
+
+  expect(state.sessionsResult?.sessions[0]?.contextTokens).toBe(262144);
+  expect(sessions.state.result?.sessions[0]?.contextTokens).toBe(262144);
+  expect(requestCalls(request, "sessions.describe")).toHaveLength(1);
 });
 
 it.each(["direct command revalidation", "scoped invalidation"] as const)(

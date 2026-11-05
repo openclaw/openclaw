@@ -1,5 +1,4 @@
 import { execFile, execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -37,14 +36,19 @@ import { resolveExtendedStablePackage } from "../../src/infra/update-check.ts";
 import { listenLoopback, respondJson } from "../helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeCombinedBuildFixture } from "./prepublish-plugin-registry-build.fixture.js";
+import {
+  SOURCE_SHA,
+  VERSION,
+  registryFixture,
+  sha256,
+  writeJson,
+  writeTarball,
+} from "./prepublish-plugin-registry.fixture.js";
 
-const SOURCE_SHA = "a".repeat(40);
-const VERSION = "2026.8.1-beta.1";
 const PACKAGE_NAME = "@openclaw/discord";
 const SCRIPT = path.resolve("scripts/prepublish-plugin-registry-artifact.mjs");
 const BUILD_AND_PACK = path.resolve("scripts/lib/plugin-npm-build-and-pack.mts");
 const registryTempDirs = useAutoCleanupTempDirTracker(afterEach);
-const packageTarballs = new Map<string, Buffer>();
 const fixtureCommitArgs = [
   "-c",
   "user.email=release-test@example.invalid",
@@ -68,63 +72,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function writeJson(file: string, value: unknown) {
-  writeFileSync(file, `${JSON.stringify(value)}\n`);
-}
-
-function sha256(file: string): string {
-  return createHash("sha256").update(readFileSync(file)).digest("hex");
-}
-
-function artifactEntry(root: string, artifactDir: string, name: string, tarball: string) {
-  const tarballPath = path.join(artifactDir, tarball);
-  writeFixtureTarball(root, tarballPath, name);
-  return { name, version: VERSION, tarball, sha256: sha256(tarballPath) };
-}
-
-function writeFixtureTarball(root: string, tarballPath: string, name: string, version = VERSION) {
-  const cacheKey = `${name}@${version}`;
-  const cached = packageTarballs.get(cacheKey);
-  if (cached) {
-    writeFileSync(tarballPath, cached);
-    return;
-  }
-  const packageRoot = path.join(root, "package");
-  mkdirSync(packageRoot, { recursive: true });
-  writeJson(path.join(packageRoot, "package.json"), { name, version });
-  execFileSync("tar", ["-czf", tarballPath, "-C", root, "package"]);
-  // Each test mutates its own file; only original archive bytes survive cleanup.
-  packageTarballs.set(cacheKey, readFileSync(tarballPath));
-}
-
 function fixture(packageNames = [PACKAGE_NAME]) {
-  const root = registryTempDirs.make("openclaw-prepublish-plugin-registry-");
-  const artifactDir = path.join(root, "artifact");
-  mkdirSync(artifactDir);
-  const manifestPath = path.join(artifactDir, PREPUBLISH_PLUGIN_REGISTRY_MANIFEST);
-  const manifest = {
-    schema: "openclaw.prepublish-plugin-registry/v1",
-    schemaVersion: 1,
-    sourceSha: SOURCE_SHA,
-    candidateVersion: VERSION,
-    packages: packageNames.map((name) =>
-      artifactEntry(
-        root,
-        artifactDir,
-        name,
-        `${name.replace(/^@/u, "").replace("/", "-")}-${VERSION}.tgz`,
-      ),
-    ),
-  };
-  const writeManifest = () => writeJson(manifestPath, manifest);
-  writeManifest();
-  return {
-    artifactDir,
-    manifest,
-    manifestPath,
-    tarballPath: path.join(artifactDir, manifest.packages[0]!.tarball),
-    writeManifest,
-  };
+  return registryFixture(
+    registryTempDirs.make("openclaw-prepublish-plugin-registry-"),
+    packageNames,
+    VERSION,
+    { versionedNames: true },
+  );
 }
 
 function immutableTuple(paths: ReturnType<typeof fixture>) {
@@ -225,7 +179,7 @@ function preparedBundleFixture(repoRoot: string, sourceSha: string) {
   const entries = ["openclaw", "@openclaw/ai", "@openclaw/gateway-protocol"].map((name) => {
     const tarballName = `${name.replace(/^@/u, "").replace("/", "-")}.tgz`;
     const tarballPath = path.join(preparedBundleDir, tarballName);
-    writeFixtureTarball(path.join(repoRoot, "prepared-staging"), tarballPath, name);
+    writeTarball(path.join(repoRoot, "prepared-staging"), tarballPath, name);
     return {
       packageName: name,
       packageVersion: VERSION,
@@ -444,7 +398,7 @@ describe("prepublish plugin registry artifact", () => {
     const publishedVersion = "2026.8.33";
     const root = registryTempDirs.make("openclaw-cross-os-registry-");
     const tarballPath = path.join(root, `openclaw-${candidateVersion}.tgz`);
-    writeFixtureTarball(path.join(root, "archive"), tarballPath, "openclaw", candidateVersion);
+    writeTarball(path.join(root, "archive"), tarballPath, "openclaw", candidateVersion);
 
     const upstreamRequests: string[] = [];
     const upstream = createServer((request, response) => {

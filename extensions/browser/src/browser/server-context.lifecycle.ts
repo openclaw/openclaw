@@ -29,7 +29,7 @@ type ProfileLifecycleActor = {
   starts: Map<string, Promise<void>>;
   leases: Set<Promise<void>>;
   handles: Set<RunningChrome>;
-  cleanupChromeMcp: Set<string>;
+  cleanupChromeMcp: string | undefined;
   cleanupPlaywright: Map<string, PlaywrightConnectionRetirement>;
   cleanupRelays: Set<ExtensionRelayResource>;
   terminal: ProfileLifecycleTerminal | null;
@@ -43,7 +43,6 @@ type ProfileTransitionOptions = {
   reason: string;
   terminal?: ProfileLifecycleTerminal;
   closeRelay?: boolean;
-  captureProfileResources?: boolean;
   /** Bridge runtimes must not retire process-global adapters shared by another runtime. */
   closeSharedAdapters?: boolean;
   managedChrome?: "stop" | "release-profile-data";
@@ -71,7 +70,7 @@ function createProfileLifecycleActor(): ProfileLifecycleActor {
     starts: new Map(),
     leases: new Set(),
     handles: new Set(),
-    cleanupChromeMcp: new Set(),
+    cleanupChromeMcp: undefined,
     cleanupPlaywright: new Map(),
     cleanupRelays: new Set(),
     terminal: null,
@@ -185,11 +184,9 @@ export function getOrCreateProfileRuntime(
   assertRuntimeAdmission(state);
   const current = state.profiles.get(profile.name);
   if (current) {
-    getProfileLifecycle(current);
     return current;
   }
   const created: ProfileRuntimeState = { profile, running: null, lastTargetId: null };
-  getProfileLifecycle(created);
   state.profiles.set(profile.name, created);
   return created;
 }
@@ -375,10 +372,9 @@ export function beginProfileTransition(
   const closeSharedAdapters = params.closeSharedAdapters !== false;
   const usesChromeMcp = getBrowserProfileCapabilities(ownerProfile).usesChromeMcp;
   if (closeSharedAdapters && usesChromeMcp) {
-    actor.cleanupChromeMcp.add(ownerProfile.name);
+    actor.cleanupChromeMcp = ownerProfile.name;
   }
-  const shouldClosePlaywright =
-    closeSharedAdapters && params.captureProfileResources !== false && !usesChromeMcp;
+  const shouldClosePlaywright = closeSharedAdapters && !usesChromeMcp;
   const eagerPlaywrightRetirement = shouldClosePlaywright
     ? capturePlaywrightRetirement(actor, ownerProfile.cdpUrl)
     : null;
@@ -431,13 +427,12 @@ export function beginProfileTransition(
           }
         }
 
-        if (cleanupActor.cleanupChromeMcp.size > 0) {
+        if (cleanupActor.cleanupChromeMcp) {
           try {
             const chromeMcp = await getChromeMcpModule.peek();
-            for (const profileName of cleanupActor.cleanupChromeMcp) {
-              stopped = (await chromeMcp?.closeChromeMcpSession(profileName)) || stopped;
-              cleanupActor.cleanupChromeMcp.delete(profileName);
-            }
+            stopped =
+              (await chromeMcp?.closeChromeMcpSession(cleanupActor.cleanupChromeMcp)) || stopped;
+            cleanupActor.cleanupChromeMcp = undefined;
           } catch (err) {
             firstError ??= toLifecycleError(err, "Chrome MCP cleanup failed.");
           }

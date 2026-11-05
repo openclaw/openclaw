@@ -2,7 +2,8 @@ import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
@@ -120,9 +121,7 @@ export type BrowserInspectedNode = NonNullable<ReturnType<typeof readBrowserInsp
 type BrowserRequestEnvelope = {
   method: "GET" | "POST" | "DELETE";
   path: string;
-  query?: Record<string, unknown>;
   body?: unknown;
-  timeoutMs?: number;
 };
 
 function withoutBrowserTarget(value: unknown): Record<string, unknown> {
@@ -587,8 +586,5 @@ export async function fetchBrowserScreenshotDataUrl(params: {
   } finally {
     clearTimeout(timeout);
   }
-  return readBlobAsDataUrl(blob, {
-    readError: () => t("browser.errors.screenshotReadFailed"),
-    invalidResultError: () => t("browser.errors.screenshotReadFailed"),
-  });
+  return readBlobAsDataUrl(blob, () => t("browser.errors.screenshotReadFailed"));
 }

@@ -3,12 +3,16 @@
 import { ErrorCodes, GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 const sessionKey = "agent:main:current";
 const unreadRow = (extra: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
@@ -22,7 +26,7 @@ const activeStatus = () => ({ note: "Working", expiresAt: Date.now() + 60_000 })
 function authorize(
   pane: ReturnType<typeof createTestChatPane>["pane"],
   scopes: string[],
-  methods = ["sessions.patch"],
+  methods = ["sessions.patch", "sessions.patchMany"],
 ) {
   pane.context.gateway.snapshot.hello = {
     auth: { role: "operator", scopes },
@@ -52,13 +56,42 @@ const observedSessions = (rows: GatewaySessionRow[]) => ({
   sectionOrder: [],
 });
 
+function commitReadMarkerHistory(
+  pane: ReturnType<typeof createTestChatPane>["pane"],
+  row: GatewaySessionRow = unreadRow({ sessionId: "read-marker-session" }),
+) {
+  const state = pane.state;
+  const client = state.client;
+  if (!client) {
+    throw new Error("Read-marker fixture requires a connected client");
+  }
+  state.currentSessionId = row.sessionId;
+  setChatHistoryLoad(state, {
+    phase: "committed",
+    sessions: state.sessions,
+    client,
+    connectionEpoch: state.connectionEpoch,
+    sessionKey: state.sessionKey,
+    requestAgentId: undefined,
+    sessionInfo: row,
+  });
+}
+
 function createReadMarkerPane(result: Record<string, never> | null = null) {
   const patch = vi.fn().mockResolvedValue(result);
+  const acknowledgeHiddenRuns = vi.fn(
+    async (
+      rows: Parameters<
+        ReturnType<typeof createSessionCapabilityFixture>["acknowledgeHiddenRuns"]
+      >[0],
+    ) => rows.map(({ key }) => ({ key, ok: result !== null })),
+  );
   const { pane, state } = createTestChatPane({
     client: {} as GatewayBrowserClient,
-    sessions: createSessionCapabilityFixture({ patch }),
+    sessions: createSessionCapabilityFixture({ patch, acknowledgeHiddenRuns }),
   });
-  return { pane, state, patch };
+  commitReadMarkerHistory(pane);
+  return { pane, state, patch, acknowledgeHiddenRuns };
 }
 
 describe("chat pane read markers", () => {
@@ -85,9 +118,12 @@ describe("chat pane read markers", () => {
       }),
     });
     onTestFinished(() => sessions.dispose());
+    commitReadMarkerHistory(pane, row);
     await sessions.refresh({ force: true });
     onTestFinished(sessions.subscribe((state) => pane.applySessionsState(state)));
     pane.applySessionsState(sessions.state);
+    expect(sessions.state.result?.sessions[0]?.unread).toBe(false);
+    await withSessionMutationOperations(() => undefined);
     expect(patch).toHaveBeenCalledOnce();
 
     rejected.reject(
@@ -120,7 +156,7 @@ describe("chat pane read markers", () => {
   });
 
   it("pauses parent and hidden-run acknowledgements during restart", () => {
-    const { pane, state, patch } = createReadMarkerPane({});
+    const { pane, state, patch, acknowledgeHiddenRuns } = createReadMarkerPane({});
     const row: GatewaySessionRow = { key: state.sessionKey, kind: "direct", unread: true };
     state.sessionsResult = sessionsResult(
       [
@@ -146,7 +182,8 @@ describe("chat pane read markers", () => {
       suspensionPhase: "accepting",
     });
     pane.markSessionRead(row);
-    expect(patch).toHaveBeenCalledTimes(2);
+    expect(patch).toHaveBeenCalledTimes(1);
+    expect(acknowledgeHiddenRuns).toHaveBeenCalledTimes(1);
   });
 
   it("marks an unread failure read even when its regular unread flag is false", () => {
@@ -263,6 +300,7 @@ describe("chat pane read markers", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const { pane } = createTestChatPane({ client: createTestGatewayClient(request) });
+    commitReadMarkerHistory(pane);
     const { context } = pane;
     const errors = vi.fn();
     onTestFinished(
@@ -355,20 +393,19 @@ describe("chat pane read markers", () => {
           expiresAt: Date.now() + 60_000,
         },
       });
-      const { pane, state, patch } = createParentPane([blocked]);
+      const { pane, state, acknowledgeHiddenRuns } = createParentPane([blocked]);
       pane.markSessionRead(parent);
-      expect(patch).not.toHaveBeenCalled();
+      expect(acknowledgeHiddenRuns).not.toHaveBeenCalled();
       state.sessionsResult = sessionsResult([parent, { ...blocked, agentStatus: undefined }], 21);
       pane.markSessionRead(parent);
-      expect(patch).toHaveBeenCalledExactlyOnceWith(
-        blocked.key,
-        { unread: false },
-        { agentId: "main", expectedMarkedUnreadAt: null },
+      expect(acknowledgeHiddenRuns).toHaveBeenCalledExactlyOnceWith(
+        [expect.objectContaining({ key: blocked.key })],
+        { agentId: "main" },
       );
     });
 
     it("leaves persistent children, read runs, failures, and manual markers unread", () => {
-      const { pane, patch } = createParentPane([
+      const { pane, acknowledgeHiddenRuns } = createParentPane([
         {
           key: "agent:main:dashboard:child",
           kind: "direct",
@@ -384,18 +421,20 @@ describe("chat pane read markers", () => {
 
       pane.markSessionRead(parent);
 
-      expect(patch).not.toHaveBeenCalled();
+      expect(acknowledgeHiddenRuns).not.toHaveBeenCalled();
     });
 
     it.each(["operator.write", "operator.sessions.write"])(
       "acknowledges newer owned run activity only on a later read with %s",
       (scope) => {
-        const { pane, state, patch } = createParentPane([run("done", { unread: false })]);
+        const { pane, state, acknowledgeHiddenRuns } = createParentPane([
+          run("done", { unread: false }),
+        ]);
         authorize(pane, [scope]);
         const ownedParent = { ...parent, sharingRole: "owner" as const };
 
         pane.markSessionRead(ownedParent);
-        expect(patch).not.toHaveBeenCalled();
+        expect(acknowledgeHiddenRuns).not.toHaveBeenCalled();
 
         state.sessionsResult = sessionsResult(
           [ownedParent, run("done", { updatedAt: 30, sharingRole: "owner" })],
@@ -403,26 +442,29 @@ describe("chat pane read markers", () => {
         );
         pane.markSessionRead(ownedParent);
 
-        expect(patch).toHaveBeenCalledOnce();
-        expectRead(patch, "agent:main:subagent:done");
+        expect(acknowledgeHiddenRuns).toHaveBeenCalledOnce();
+        expect(acknowledgeHiddenRuns).toHaveBeenCalledWith(
+          [expect.objectContaining({ key: "agent:main:subagent:done" })],
+          { agentId: "main" },
+        );
       },
     );
 
     it("retries a hidden run after a transient UNAVAILABLE failure", async () => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(0);
       onTestFinished(() => clock.mockRestore());
-      const { pane, patch } = createParentPane([run("done")]);
-      patch.mockRejectedValueOnce(
+      const { pane, acknowledgeHiddenRuns } = createParentPane([run("done")]);
+      acknowledgeHiddenRuns.mockRejectedValueOnce(
         new GatewayRequestError({ code: ErrorCodes.UNAVAILABLE, message: "ack failed" }),
       );
 
       pane.markSessionRead(parent);
-      await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(acknowledgeHiddenRuns).toHaveBeenCalledOnce());
       await Promise.resolve();
       clock.mockReturnValue(600);
       pane.markSessionRead(parent);
 
-      expect(patch).toHaveBeenCalledTimes(2);
+      expect(acknowledgeHiddenRuns).toHaveBeenCalledTimes(2);
     });
   });
 });

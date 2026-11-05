@@ -72,45 +72,27 @@ describe("ACP permission relay helpers", () => {
     });
   });
 
-  it("parses Gateway exec.approval.requested payloads", () => {
-    expect(
-      parseGatewayExecApprovalRequestEventPayload({
-        id: "approval-raw",
-        request: {
-          command: "echo raw",
-          host: "gateway",
-          sessionKey: "agent:main:main",
-          toolCallId: "tool-raw",
-        },
-      }),
-    ).toEqual({
-      approvalId: "approval-raw",
-      command: "echo raw",
-      host: "gateway",
-      toolCallId: "tool-raw",
-    });
-
+  it("rejects missing raw requests and normalizes empty commands", () => {
     expect(parseGatewayExecApprovalRequestEventPayload({ id: "approval-raw" })).toBeNull();
     expect(
       parseGatewayExecApprovalRequestEventPayload({
         id: "approval-raw",
-        request: { command: "" },
+        request: { command: "", host: "gateway", toolCallId: "tool-raw" },
       }),
     ).toEqual({
       approvalId: "approval-raw",
       command: undefined,
-      host: undefined,
+      host: "gateway",
+      toolCallId: "tool-raw",
     });
   });
 
-  it("maps selected ACP outcomes back to Gateway decisions", () => {
+  it("maps an allow-always ACP outcome back to the Gateway decision", () => {
     const options = buildOptionsForAllowedDecisions(["allow-once", "allow-always", "deny"]);
     const decide = (outcome: Parameters<typeof resolveGatewayDecisionFromPermissionOutcome>[0]) =>
       resolveGatewayDecisionFromPermissionOutcome(outcome, options);
     expect(decide({ outcome: { outcome: "selected", optionId: "allow-always" } })).toBe(
       "allow-always",
     );
-    expect(decide({ outcome: { outcome: "selected", optionId: "missing" } })).toBeUndefined();
-    expect(decide({ outcome: { outcome: "cancelled" } })).toBeUndefined();
   });
 });

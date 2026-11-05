@@ -13,15 +13,6 @@ export const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
 export const MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
 const MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
 
-export type MatrixQaHarnessFiles = {
-  outputDir: string;
-  composeFile: string;
-  image: string;
-  serverName: string;
-  homeserverPort: number;
-  registrationToken: string;
-};
-
 function buildVersionsUrl(baseUrl: string) {
   return `${baseUrl}_matrix/client/versions`;
 }
@@ -55,13 +46,9 @@ export async function waitForReachableMatrixBaseUrl(params: {
   composeFile: string;
   containerBaseUrl: string | null;
   hostBaseUrl: string;
-  timeoutMs?: number;
-  pollMs?: number;
 }) {
-  const timeoutMs = params.timeoutMs ?? 60_000;
-  const pollMs = params.pollMs ?? 1_000;
   const startedAt = Date.now();
-  const deadline = startedAt + timeoutMs;
+  const deadline = startedAt + 60_000;
   const candidateBaseUrls = params.containerBaseUrl
     ? [params.hostBaseUrl, params.containerBaseUrl]
     : [params.hostBaseUrl];
@@ -99,7 +86,7 @@ export async function waitForReachableMatrixBaseUrl(params: {
     }
     const remainingSleepMs = deadline - Date.now();
     if (remainingSleepMs > 0) {
-      await sleep(Math.min(pollMs, remainingSleepMs));
+      await sleep(Math.min(1_000, remainingSleepMs));
     }
   }
 
@@ -108,36 +95,31 @@ export async function waitForReachableMatrixBaseUrl(params: {
     : params.hostBaseUrl;
   throw new Error(
     [
-      `Matrix homeserver did not become healthy within ${Math.round(timeoutMs / 1000)}s.`,
+      "Matrix homeserver did not become healthy within 60s.",
       `Last checked: ${candidateLabel}`,
       `Hint: check container logs with \`docker compose -f ${params.composeFile} logs ${MATRIX_QA_SERVICE}\`.`,
     ].join("\n"),
   );
 }
 
-function resolveMatrixQaHarnessImage(image?: string) {
-  return (
-    image?.trim() || process.env.OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE?.trim() || MATRIX_QA_DEFAULT_IMAGE
-  );
-}
+export async function writeMatrixQaHarnessFiles(params: { outputDir: string }) {
+  const image = process.env.OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE?.trim() || MATRIX_QA_DEFAULT_IMAGE;
+  const registrationToken = `matrix-qa-${randomUUID()}`;
+  const serverName = MATRIX_QA_DEFAULT_SERVER_NAME;
+  const composeFile = path.join(params.outputDir, "docker-compose.matrix-qa.yml");
+  const dataDir = path.join(params.outputDir, "data");
 
-function renderMatrixQaCompose(params: {
-  homeserverPort: number;
-  image: string;
-  registrationToken: string;
-  serverName: string;
-}) {
+  await fs.mkdir(dataDir, { recursive: true });
   // Omitting `published` lets Docker atomically choose and bind the host port;
   // probing a free numeric port before Compose starts races parallel harnesses.
-  const portMapping =
-    params.homeserverPort === 0
-      ? `      - target: ${MATRIX_QA_INTERNAL_PORT}\n        host_ip: 127.0.0.1`
-      : `      - "127.0.0.1:${params.homeserverPort}:${MATRIX_QA_INTERNAL_PORT}"`;
-  return `services:
+  await fs.writeFile(
+    composeFile,
+    `services:
   ${MATRIX_QA_SERVICE}:
-    image: ${params.image}
+    image: ${image}
     ports:
-${portMapping}
+      - target: ${MATRIX_QA_INTERNAL_PORT}
+        host_ip: 127.0.0.1
     environment:
       TUWUNEL_ADDRESS: "0.0.0.0"
       TUWUNEL_ALLOW_ENCRYPTION: "true"
@@ -145,35 +127,11 @@ ${portMapping}
       TUWUNEL_ALLOW_REGISTRATION: "true"
       TUWUNEL_DATABASE_PATH: "/var/lib/tuwunel"
       TUWUNEL_PORT: "${MATRIX_QA_INTERNAL_PORT}"
-      TUWUNEL_REGISTRATION_TOKEN: "${params.registrationToken}"
-      TUWUNEL_SERVER_NAME: "${params.serverName}"
+      TUWUNEL_REGISTRATION_TOKEN: "${registrationToken}"
+      TUWUNEL_SERVER_NAME: "${serverName}"
     volumes:
       - ./data:/var/lib/tuwunel
-`;
-}
-
-export async function writeMatrixQaHarnessFiles(params: {
-  outputDir: string;
-  image?: string;
-  homeserverPort: number;
-  registrationToken?: string;
-  serverName?: string;
-}): Promise<MatrixQaHarnessFiles> {
-  const image = resolveMatrixQaHarnessImage(params.image);
-  const registrationToken = params.registrationToken?.trim() || `matrix-qa-${randomUUID()}`;
-  const serverName = params.serverName?.trim() || MATRIX_QA_DEFAULT_SERVER_NAME;
-  const composeFile = path.join(params.outputDir, "docker-compose.matrix-qa.yml");
-  const dataDir = path.join(params.outputDir, "data");
-
-  await fs.mkdir(dataDir, { recursive: true });
-  await fs.writeFile(
-    composeFile,
-    `${renderMatrixQaCompose({
-      homeserverPort: params.homeserverPort,
-      image,
-      registrationToken,
-      serverName,
-    })}\n`,
+\n`,
     { encoding: "utf8", mode: 0o600 },
   );
   return {
@@ -181,7 +139,6 @@ export async function writeMatrixQaHarnessFiles(params: {
     composeFile,
     image,
     serverName,
-    homeserverPort: params.homeserverPort,
     registrationToken,
   };
 }

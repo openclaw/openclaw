@@ -3,9 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { resolveStateDir } from "../config/state-dir.js";
+import type { WorkerGcProfiles, WorkerGcStorm } from "../infra/diagnostic-process-types.js";
 import { sanitizeDiagnosticCpuProfile } from "./diagnostic-cpu-profile.js";
 import { sanitizeDiagnosticHeapProfile, type SamplingProfile } from "./diagnostic-heap-profile.js";
 import { captureDiagnosticProfile, createInspectorProfileCapture } from "./diagnostic-profile.js";
+import { createSubsystemLogger } from "./subsystem.js";
 
 const DURATION_MS = 5_000;
 const SAMPLING_INTERVAL_BYTES = 262_144;
@@ -13,7 +15,44 @@ const MAX_FILES = 20;
 const FILE_PATTERN = /^code-mode-gc-\d+-[a-f0-9-]+\.(?:heapprofile|cpuprofile)\.json$/;
 let writes: Promise<unknown> = Promise.resolve();
 
-export type WorkerGcProfiles = { heap: string; cpu: string };
+/** The Gateway reports storms lazily; its registry retains the final capture admission. */
+export async function reportWorkerGcStorm(
+  event: WorkerGcStorm,
+  workerThreadId: number,
+  workerSlot?: number,
+): Promise<Omit<WorkerGcStorm, "profiles"> | undefined> {
+  const { profiles, ...storm } = event;
+  const metadata = { ...storm, workerThreadId, workerSlot };
+  const log = createSubsystemLogger("agents/code-mode");
+  if (profiles) {
+    try {
+      const profileFiles = await writeWorkerGcProfiles(profiles);
+      log.warn("Code Mode worker GC storm", { ...metadata, profileFiles });
+    } catch {
+      log.warn("Code Mode worker GC storm", {
+        ...metadata,
+        captureStatus: "unavailable",
+        captureReason: "profile-write-failed",
+      });
+    }
+  } else {
+    log.warn("Code Mode worker GC storm", metadata);
+  }
+  if (storm.captureStatus === "requested") {
+    // Workers cannot query process-wide tracing. Admit here before enabling their profiler.
+    const { getEnabledCategories } = await import("node:trace_events");
+    if (getEnabledCategories()) {
+      log.warn("Code Mode worker GC storm", {
+        ...metadata,
+        captureStatus: "unavailable",
+        captureReason: "tracing-active",
+      });
+    } else {
+      return storm;
+    }
+  }
+  return undefined;
+}
 
 /** Runs only in the storming isolate; no inspector listener or guest values are captured. */
 export function captureWorkerGcProfiles() {
@@ -46,11 +85,15 @@ export function captureWorkerGcProfiles() {
         disable: (session) =>
           Promise.all([session.post("HeapProfiler.disable"), session.post("Profiler.disable")]),
       }),
-    sanitize: ({ heap, cpu }, packageRoot, measurement): WorkerGcProfiles => ({
+    sanitize: async ({ heap, cpu }, packageRoot, measurement): Promise<WorkerGcProfiles> => ({
       heap: JSON.stringify(
         // SAFETY: V8 supplies IDs and samples omitted by Node's inspector declarations.
-        sanitizeDiagnosticHeapProfile(heap as SamplingProfile, packageRoot, {
+        await sanitizeDiagnosticHeapProfile(heap as SamplingProfile, packageRoot, {
           durationMs: measurement.durationMs,
+          requestedDurationMs: DURATION_MS,
+          effectiveDurationMs: DURATION_MS,
+          actualDurationMs: measurement.durationMs,
+          durationLimitReason: null,
           samplingIntervalBytes: SAMPLING_INTERVAL_BYTES,
           includeObjectsCollectedByMajorGC: true,
           includeObjectsCollectedByMinorGC: true,

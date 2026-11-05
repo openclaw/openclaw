@@ -34,7 +34,7 @@ export async function prepareAttemptSystemPromptAdditions(params: {
     (params.storePath &&
       isIncognitoOpenClawAgentSqlitePath(params.storePath, { agentId: params.agentId }));
   if (incognito) {
-    const existing = extraSystemPrompt?.trim();
+    const existing = extraSystemPrompt;
     extraSystemPrompt = existing
       ? `${existing}\n\n${INCOGNITO_SYSTEM_PROMPT}`
       : INCOGNITO_SYSTEM_PROMPT;
@@ -76,7 +76,7 @@ export async function prepareAttemptSystemPromptAdditions(params: {
       primaryModelRef: modelRef,
     });
     if (utilityModelRef !== modelRef) {
-      const existing = extraSystemPrompt?.trim();
+      const existing = extraSystemPrompt;
       extraSystemPrompt = existing
         ? `${existing}\n\n${PROGRESS_CARD_SYSTEM_PROMPT}`
         : PROGRESS_CARD_SYSTEM_PROMPT;

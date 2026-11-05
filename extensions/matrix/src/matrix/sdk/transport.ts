@@ -104,27 +104,6 @@ function withoutMatrixStateAfterSyncParam(rawUrl: string): string {
   return url.toString();
 }
 
-function buildBufferedResponse(params: {
-  source: Response;
-  body: BodyInit;
-  url: string;
-}): Response {
-  const response = new Response(params.body, {
-    status: params.source.status,
-    statusText: params.source.statusText,
-    headers: new Headers(params.source.headers),
-  });
-  try {
-    Object.defineProperty(response, "url", {
-      value: params.source.url || params.url,
-      configurable: true,
-    });
-  } catch {
-    // Response.url is read-only in some runtimes; metadata is best-effort only.
-  }
-  return response;
-}
-
 async function consumeMatrixResponse<T>(
   response: Response,
   release: () => Promise<void>,
@@ -376,7 +355,19 @@ export function createMatrixGuardedFetch(params: {
           ),
         assertCurrent,
       },
-      (body) => buildBufferedResponse({ source: response, body: Uint8Array.from(body), url }),
+      (body) => {
+        const bufferedBody = Uint8Array.from(body);
+        const bufferedResponse = new Response(bufferedBody, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: new Headers(response.headers),
+        });
+        Object.defineProperty(bufferedResponse, "url", {
+          value: response.url || url,
+          configurable: true,
+        });
+        return bufferedResponse;
+      },
     );
   }) as typeof fetch;
 }

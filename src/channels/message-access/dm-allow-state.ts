@@ -9,7 +9,6 @@ export async function resolveDmAllowAuditState(params: {
   allowFrom?: Array<string | number> | null;
   dmPolicy?: string | null;
   normalizeEntry?: (raw: string) => string;
-  readStore?: (provider: ChannelId, accountId: string) => Promise<string[]>;
 }) {
   const configAllowFrom = normalizeStringEntries(
     Array.isArray(params.allowFrom) ? params.allowFrom : undefined,
@@ -19,7 +18,6 @@ export async function resolveDmAllowAuditState(params: {
     provider: params.provider,
     accountId: params.accountId,
     dmPolicy: params.dmPolicy,
-    readStore: params.readStore,
   });
   const normalizeEntry = params.normalizeEntry ?? ((value: string) => value);
   const normalizedCfg = normalizeStringEntries(

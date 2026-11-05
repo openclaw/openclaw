@@ -1,11 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import {
-  installPwToolsCoreTestHooks,
-  setPwToolsCoreCurrentPage,
-  setPwToolsCoreCurrentRefLocator,
-} from "./pw-tools-core.test-harness.js";
+import * as harness from "./pw-tools-core.test-harness.js";
 
-installPwToolsCoreTestHooks();
+harness.installPwToolsCoreTestHooks();
 const imageSize = vi.hoisted(() => ({ width: 1280, height: 720 }));
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
@@ -34,8 +30,8 @@ beforeEach(() => {
   view.y = 0;
   screenshot.mockReset().mockResolvedValue(Buffer.from("PNG"));
   boundingBox.mockReset().mockResolvedValue(box([0, 0, 1, 1]));
-  setPwToolsCoreCurrentPage({ evaluate, screenshot, url: () => "https://example.com" });
-  setPwToolsCoreCurrentRefLocator({ boundingBox });
+  harness.setPwToolsCoreCurrentPage({ evaluate, screenshot, url: () => "https://example.com" });
+  harness.setPwToolsCoreCurrentRefLocator({ boundingBox });
 });
 
 it.each([false, true])(
@@ -82,7 +78,7 @@ it("captures the resolved element and projects annotations relative to it", asyn
     .mockResolvedValueOnce(box([50, 100, 200, 300]))
     .mockResolvedValueOnce(box([60, 110, 30, 20]));
   const elementScreenshot = vi.fn(async () => Buffer.from("ELEM"));
-  setPwToolsCoreCurrentRefLocator({
+  harness.setPwToolsCoreCurrentRefLocator({
     boundingBox,
     elementHandle: async () => ({
       screenshot: elementScreenshot,

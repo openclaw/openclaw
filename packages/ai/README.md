@@ -26,10 +26,21 @@ runtime-local policy can use `createNodeLlmRuntime`; it preserves that host acro
 provider work without replacing the process default. `createLlmRuntime` continues
 to use the process-default host.
 
+Embedding hosts can implement optional `isLogEnabled(subsystem, level)` to skip
+diagnostic preparation for disabled sinks. Hosts without it retain emission-time
+filtering.
+
 OpenAI HTTP adapters report rejected response status and headers through
 `onResponse` before consuming the error body. Successful streaming responses
 invoke the callback before the first event. Retry and failover policy remains
 with the application.
+
+Anthropic Messages, OpenAI-compatible Chat Completions, Google, Mistral, and
+OpenAI Responses calls stop waiting for payload and response hooks when the
+request signal aborts. A hook can continue running after cancellation; embedding
+hosts can retain that work through `observePendingProviderWork` until it
+settles. Native provider transports get the same payload-hook behavior from
+`applyProviderPayloadHook`.
 
 Hosts that attach request state to async contexts should supply
 `runInDetachedAsyncContext` from a context-free root initialized before requests
@@ -49,7 +60,7 @@ The pinned Mistral SDK chat client is bundled into the adapter; consumers do not
 need the SDK's full package tree. The SDK's Apache-2.0 license ships as
 `dist/mistral.LICENSE`.
 
-The explicit `@openclaw/ai/internal/anthropic`, `google-model-family`, `openai`,
+The explicit `@openclaw/ai/internal/anthropic`, `google`, `google-model-family`, `openai`,
 `openai-completions-compat`, `openai-responses-payload-policy`, `retry-after`, `runtime`, `shared`, and
 `tool-schema` subpaths exist for the OpenClaw application itself.
 They carry no semver guarantee and can change or disappear in any release; do

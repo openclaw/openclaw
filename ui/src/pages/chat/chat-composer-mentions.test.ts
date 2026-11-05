@@ -2,7 +2,7 @@
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import {
   composerFixture,
   mention,
@@ -34,7 +34,7 @@ it.each([
     "chat",
     "Review @Alex",
     [recipient],
-    history === "loading" ? "Loading chat" : undefined,
+    history === "loading" ? "Loading conversation…" : undefined,
   );
 
   view.edit(draft);

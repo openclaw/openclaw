@@ -2,7 +2,7 @@ import tls from "node:tls";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayService, type GatewayService } from "../daemon/service.js";
+import { resolveGatewayService } from "../daemon/service.js";
 import { hasEnvHttpProxyConfigured } from "../infra/net/proxy-env.js";
 import { probeManagedProxyLoopback } from "../infra/net/proxy/proxy-validation.js";
 import { shouldManageGatewayService } from "./doctor-service-repair-policy.js";
@@ -19,50 +19,10 @@ type ProxyEnvSource = {
   label: "doctor process" | "installed Gateway service";
 };
 
-function probeDirectTlsConnectivity(): Promise<DirectConnectivity> {
-  return new Promise((resolve) => {
-    const socket = tls.connect({
-      host: DIRECT_PROBE_HOST,
-      port: DIRECT_PROBE_PORT,
-      servername: DIRECT_PROBE_HOST,
-      timeout: DIRECT_PROBE_TIMEOUT_MS,
-    });
-    const finish = (result: DirectConnectivity) => {
-      socket.destroy();
-      resolve(result);
-    };
-    socket.once("secureConnect", () => finish("reachable"));
-    socket.once("timeout", () => finish("unreachable"));
-    socket.once("error", () => finish("unreachable"));
-  });
-}
-
-async function resolveProxyEnvSources(params: {
-  env: NodeJS.ProcessEnv;
-  service: Pick<GatewayService, "readCommand">;
-}): Promise<ProxyEnvSource[]> {
-  const sources: ProxyEnvSource[] = [];
-  if (hasEnvHttpProxyConfigured("https", params.env)) {
-    sources.push({ env: params.env, label: "doctor process" });
-  }
-  if (!(await shouldManageGatewayService(params.env))) {
-    return sources;
-  }
-  const command = await params.service.readCommand(params.env).catch(() => null);
-  const serviceEnv = command?.environment;
-  if (serviceEnv && hasEnvHttpProxyConfigured("https", serviceEnv)) {
-    sources.push({ env: serviceEnv, label: "installed Gateway service" });
-  }
-  return sources;
-}
-
 /** Emits a managed-loopback failure or the web_fetch proxy diagnostic when relevant. */
 export async function noteWebFetchProxyDiagnostic(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  service?: Pick<GatewayService, "readCommand">;
-  probeDirectConnectivity?: () => Promise<DirectConnectivity>;
-  noteFn?: typeof note;
 }): Promise<void> {
   if (params.cfg.gateway?.mode === "remote") {
     return;
@@ -85,7 +45,7 @@ export async function noteWebFetchProxyDiagnostic(params: {
             `  ${formatCliCommand("openclaw config set proxy.enabled false")}`,
             "- If external traffic requires a proxy, keep HTTP_PROXY/HTTPS_PROXY and set NO_PROXY=127.0.0.1,localhost,::1 in the Gateway service environment.",
           ];
-    (params.noteFn ?? note)(
+    note(
       [
         "- Managed proxy routing (proxy.enabled) is active, but a request to this process's loopback listener failed. This can cause WebChat/Codex handshake errors or 502 responses.",
         `- Inspect the proxy configuration: ${formatCliCommand("openclaw config get proxy")}`,
@@ -103,21 +63,43 @@ export async function noteWebFetchProxyDiagnostic(params: {
     return;
   }
 
-  const sources = await resolveProxyEnvSources({
-    env,
-    service: params.service ?? resolveGatewayService(),
-  });
+  const service = resolveGatewayService();
+  const sources: ProxyEnvSource[] = [];
+  if (hasEnvHttpProxyConfigured("https", env)) {
+    sources.push({ env, label: "doctor process" });
+  }
+  if (await shouldManageGatewayService(env)) {
+    const command = await service.readCommand(env).catch(() => null);
+    const serviceEnv = command?.environment;
+    if (serviceEnv && hasEnvHttpProxyConfigured("https", serviceEnv)) {
+      sources.push({ env: serviceEnv, label: "installed Gateway service" });
+    }
+  }
   if (sources.length === 0) {
     return;
   }
 
-  const directConnectivity = await (params.probeDirectConnectivity ?? probeDirectTlsConnectivity)();
+  const directConnectivity = await new Promise<DirectConnectivity>((resolve) => {
+    const socket = tls.connect({
+      host: DIRECT_PROBE_HOST,
+      port: DIRECT_PROBE_PORT,
+      servername: DIRECT_PROBE_HOST,
+      timeout: DIRECT_PROBE_TIMEOUT_MS,
+    });
+    const finish = (result: DirectConnectivity) => {
+      socket.destroy();
+      resolve(result);
+    };
+    socket.once("secureConnect", () => finish("reachable"));
+    socket.once("timeout", () => finish("unreachable"));
+    socket.once("error", () => finish("unreachable"));
+  });
   const sourceLines = sources.map((source) => {
     const keys = HTTP_PROXY_ENV_KEYS.filter((key) => Boolean(source.env[key]?.trim()));
     return `- HTTP(S) proxy environment detected in the ${source.label}: ${keys.join(", ")}.`;
   });
 
-  (params.noteFn ?? note)(
+  note(
     [
       ...sourceLines,
       "- web_fetch still uses direct connections because tools.web.fetch.useTrustedEnvProxy is not enabled.",

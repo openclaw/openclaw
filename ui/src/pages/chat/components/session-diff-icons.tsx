@@ -1,39 +1,27 @@
 import { Show } from "solid-js";
+import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 
 /** Approved Tabler eye-code glyph; kept local until the shared icon owner exports it. */
 export function SessionDiffOpenIcon() {
   return (
-    <svg
+    <StrokeIcon
       xmlns="http://www.w3.org/2000/svg"
       width="18"
       height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
       stroke-width="1.5"
-      stroke-linecap="round"
-      stroke-linejoin="round"
       aria-hidden="true"
     >
       <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
       <path d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
       <path d="M20 21l2 -2l-2 -2" />
       <path d="M17 17l-2 2l2 2" />
-    </svg>
+    </StrokeIcon>
   );
 }
 
 export function SessionDiffActionIcon(icon: { action: "jump" | "expand" | "collapse" }) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-    >
+    <StrokeIcon aria-hidden="true">
       <Show
         when={icon.action === "jump"}
         fallback={
@@ -54,21 +42,13 @@ export function SessionDiffActionIcon(icon: { action: "jump" | "expand" | "colla
         <circle cx="11.5" cy="14.5" r="2.5" />
         <path d="M13.3 16.3 15 18" />
       </Show>
-    </svg>
+    </StrokeIcon>
   );
 }
 
 export function SessionDiffScopeIcon(props: { action: "uncommitted" | "commit" }) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-    >
+    <StrokeIcon aria-hidden="true">
       <Show
         when={props.action === "commit"}
         fallback={
@@ -83,37 +63,21 @@ export function SessionDiffScopeIcon(props: { action: "uncommitted" | "commit" }
         <circle cx="12" cy="12" r="3" />
         <path d="M3 12h6m6 0h6" />
       </Show>
-    </svg>
+    </StrokeIcon>
   );
 }
 export function SessionDiffEditorIcon() {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-    >
+    <StrokeIcon aria-hidden="true">
       <rect x="2" y="4" width="20" height="16" rx="2" />
       <path d="M10 4v4M2 8h20M6 4v4" />
-    </svg>
+    </StrokeIcon>
   );
 }
 export function SessionDiffCollapseIcon() {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-    >
+    <StrokeIcon aria-hidden="true">
       <path d="m7 20 5-5 5 5m-10-16 5 5 5-5" />
-    </svg>
+    </StrokeIcon>
   );
 }

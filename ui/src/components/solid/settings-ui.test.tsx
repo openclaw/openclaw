@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { SettingsSegmented, SettingsToggle, SettingsToggleRow } from "./settings-ui.tsx";
 
 afterEach(cleanup);
@@ -21,7 +21,7 @@ it.each([
     const view = render(() => (
       <Toggle
         title="Notifications"
-        ariaLabel="Enabled"
+        ariaLabel={updated() ? "Current label" : "Old label"}
         checked={false}
         onAct={updated() ? record("current") : record("old")}
         onChange={(checked) => {
@@ -32,7 +32,7 @@ it.each([
     ));
     setUpdated(true);
     flush();
-    const input = view.getByRole("switch") as HTMLInputElement;
+    const input = view.getByRole("switch", { name: "Current label" }) as HTMLInputElement;
     for (const activate of [
       () =>
         Toggle === SettingsToggleRow
@@ -50,6 +50,26 @@ it.each([
     }
   },
 );
+
+it("preserves native toggle activation while its label refreshes", () => {
+  const [label, setLabel] = createSignal("Initial label");
+  const onChange = vi.fn();
+  const view = render(() => (
+    <SettingsToggle ariaLabel={label()} checked={false} onChange={onChange} />
+  ));
+  const input = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
+  input.addEventListener(
+    "click",
+    () => {
+      setLabel("Refreshed label");
+      flush();
+    },
+    { capture: true, once: true },
+  );
+  input.click();
+  expect(onChange).toHaveBeenCalledExactlyOnceWith(true);
+  expect(input.checked).toBe(true);
+});
 
 it("isolates radio groups, skips disabled options and rolls back rejected keyboard choice", () => {
   const onChange = vi.fn(() => false);
@@ -87,16 +107,40 @@ it("isolates radio groups, skips disabled options and rolls back rejected keyboa
   expect(onChange).toHaveBeenCalledTimes(1);
 });
 
-it("applies controlled radio changes without replacing focused inputs", () => {
+it("registers keyed radio refs without untracked reads and retains focused inputs", () => {
+  const warnings = vi.spyOn(console, "warn");
+  onTestFinished(() => warnings.mockRestore());
+  const inputRef = vi.fn();
+  const [choices, setChoices] = createSignal([
+    options[0],
+    { value: "middle", label: "Middle" },
+    options[1],
+  ]);
   const [value, setValue] = createSignal("first");
   const view = render(() => (
-    <SettingsSegmented value={value()} options={options} onChange={(next) => void setValue(next)} />
+    <SettingsSegmented
+      value={value()}
+      options={choices()}
+      inputRef={inputRef}
+      onChange={(next) => void setValue(next)}
+    />
   ));
-  const last = view.getByRole("radio", { name: "Last" }) as HTMLInputElement;
+  flush();
+  const last = view.container.querySelector<HTMLInputElement>('input[value="last"]')!;
+  expect(inputRef).toHaveBeenCalledTimes(3);
+  expect(inputRef).toHaveBeenCalledWith("last", last);
   last.focus();
+  setChoices([
+    { value: "first", label: "First updated" },
+    { value: "middle", label: "Middle updated" },
+    { value: "last", label: "Last updated" },
+  ]);
+  flush();
   last.click();
   flush();
   expect(last.checked).toBe(true);
-  expect(view.getByRole("radio", { name: "Last" })).toBe(last);
+  expect(view.getByRole("radio", { name: "Last updated" })).toBe(last);
   expect(document.activeElement).toBe(last);
+  expect(inputRef).toHaveBeenCalledTimes(3);
+  expect(warnings).not.toHaveBeenCalledWith(expect.stringContaining("STRICT_READ_UNTRACKED"));
 });

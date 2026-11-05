@@ -1,14 +1,9 @@
 import { vi } from "vitest";
 import type { MatrixRoomInfo } from "./room-info.js";
 
-export type DirectRoomTrackerOptions = {
-  isExplicitlyConfiguredRoom?: (roomId: string) => boolean | Promise<boolean>;
-  canPromoteRecentInvite?: (roomId: string) => boolean | Promise<boolean>;
-  canPromoteUnmappedStrictRoom?: (roomId: string) => boolean | Promise<boolean>;
-  shouldKeepLocallyPromotedDirectRoom?:
-    | ((roomId: string) => boolean | undefined | Promise<boolean | undefined>)
-    | undefined;
-};
+export type DirectRoomTrackerOptions = NonNullable<
+  Parameters<typeof import("./direct.js").createDirectRoomTracker>[1]
+>;
 
 type MonitorRetirement = {
   closeTaskAdmission: () => void;
@@ -17,38 +12,8 @@ type MonitorRetirement = {
   cleanup: () => Promise<void> | void;
 };
 
-const hoisted = vi.hoisted(() => {
-  const createEmitter = () => {
-    const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
-    return {
-      on(event: string, listener: (...args: unknown[]) => void) {
-        let bucket = listeners.get(event);
-        if (!bucket) {
-          bucket = new Set();
-          listeners.set(event, bucket);
-        }
-        bucket.add(listener);
-        return this;
-      },
-      off(event: string, listener: (...args: unknown[]) => void) {
-        listeners.get(event)?.delete(listener);
-        return this;
-      },
-      emit(event: string, ...args: unknown[]) {
-        for (const listener of listeners.get(event) ?? []) {
-          listener(...args);
-        }
-        return true;
-      },
-      listenerCount(event: string) {
-        return listeners.get(event)?.size ?? 0;
-      },
-      removeAllListeners() {
-        listeners.clear();
-        return this;
-      },
-    };
-  };
+const hoisted = await vi.hoisted(async () => {
+  const { EventEmitter } = await import("node:events");
   const callOrder: string[] = [];
   const state = {
     leaseAbortController: new AbortController(),
@@ -72,7 +37,7 @@ const hoisted = vi.hoisted(() => {
       return ingress;
     },
   );
-  const client = Object.assign(createEmitter(), {
+  const client = Object.assign(new EventEmitter(), {
     id: "matrix-client",
     bindSyncIngress: vi.fn(async () => () => {}),
     drainPendingDecryptions: vi.fn(async () => undefined),
@@ -111,10 +76,7 @@ const hoisted = vi.hoisted(() => {
   const disposeMonitorEvents = vi.fn(() => {
     callOrder.push("dispose-monitor-events");
   });
-  const acquireSharedMatrixClientImpl = async (params: { startClient?: boolean }) => {
-    if (params.startClient !== false) {
-      throw new Error("Matrix monitor must acquire its lease before startup");
-    }
+  const acquireSharedMatrixClientImpl = async () => {
     callOrder.push("prepare-client");
     return lease;
   };
