@@ -375,8 +375,10 @@ unchanged by the measured-worker cutover.
 Backend routing still applies. Hybrid retries and fork retries retain their
 hosted routes. Ordinary manual CI dispatches remain hosted in hybrid mode;
 Full Release Validation's existing frozen-target lint exception remains separate.
-Npm preflight uses the larger Blacksmith request by default and retains its
-explicit `use_github_hosted_runners` option.
+Npm preflight build and test jobs use the larger Blacksmith request by default
+and retain their explicit `use_github_hosted_runners` option. The final npm
+qualification job uses `ubuntu-24.04`, honoring `OPENCLAW_RELEASE_RUNNER_GROUP`.
+It validates and seals the existing artifacts without rerunning builds or tests.
 
 Candidate discovery and binding, plus short Full Release Validation admission,
 reuse, dispatch, and execution-plan jobs, always use `ubuntu-24.04`. Reusable
