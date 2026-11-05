@@ -60,6 +60,18 @@ describe("schema 41 migration witnesses", () => {
       );
     },
   );
+  it("preserves historical upgrades that do not install question storage", () => {
+    using original = fixture(27);
+    using upgraded = fixture(40);
+    const before = captureOpenClawMigrationWitness(original, { role: "agent", agentId: "main" });
+    const capture = () =>
+      captureOpenClawMigrationWitness(upgraded, { role: "agent", agentId: "main" });
+    expect(assertOpenClawMigrationWitnessPreserved(before, capture()).warnings).toEqual([]);
+    upgraded.exec("UPDATE retained_plugin_data SET payload = 'lost during historical upgrade'");
+    expect(() => assertOpenClawMigrationWitnessPreserved(before, capture())).toThrow(
+      /changed or lost/u,
+    );
+  });
   it("preserves existing FIFO row identity across 40→41 witnesses", () => {
     using original = fixture(40);
     using upgraded = fixture(41);

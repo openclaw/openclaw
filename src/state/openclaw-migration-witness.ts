@@ -623,6 +623,7 @@ export function assertOpenClawMigrationWitnessPreserved(
   if (
     crossing &&
     original.schemaVersion < DURABLE_QUESTIONS_SCHEMA_VERSION &&
+    current.schemaVersion >= DURABLE_QUESTIONS_SCHEMA_VERSION &&
     current.tables.find((table) => table.name === "session_questions")?.rowCount !== 0
   ) {
     throw new Error("Migration added unclassified question content");
