@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { getEnvironmentData } from "node:worker_threads";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -124,6 +125,91 @@ function readResult(result: Awaited<ReturnType<typeof runIsolatedModuleScript>>)
 }
 
 describe("Gateway config selection before migration admission", () => {
+  const postgresConnection: unknown = getEnvironmentData(
+    "openclaw.test.state.conformance.connection",
+  );
+  it.skipIf(typeof postgresConnection !== "string").each(["external", "config"] as const)(
+    "uses retained PostgreSQL health before recovery with %s DSN environment",
+    async (environment) => {
+      const { configPath, env, options } = createFixture("openclaw-pg-selection-");
+      const config = {
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+        database: {
+          families: { state: { engine: "postgres" } },
+          postgres: {
+            connection: { source: "env", provider: "default", id: "SELECTION_TEST_DSN" },
+            schemaPrefix: `selection_${createHash("sha256").update(configPath).digest("hex").slice(0, 12)}`,
+          },
+        },
+        ...(environment === "config"
+          ? { env: { vars: { SELECTION_TEST_DSN: postgresConnection } } }
+          : {}),
+      };
+      writeJson(configPath, config);
+      writeJson(`${configPath}.bak`, {
+        ...config,
+        messages: { ackReaction: "retained".repeat(1024) },
+      });
+      const before = stateManifest(path.dirname(configPath));
+      const result = await runIsolatedModuleScript(
+        {
+          ...env,
+          SELECTION_TEST_DSN: environment === "external" ? String(postgresConnection) : undefined,
+        },
+        `
+        import fs from "node:fs";
+        const { resolveDatabaseEngineSelection } = await import("./src/infra/database-engine/config.ts");
+        const { withDatabaseEngineSelection, getDatabaseEngineSelection } = await import("./src/infra/database-engine/context.ts");
+        const { withEngineStoreAdmission, installDatabaseProcessRole } = await import("./src/infra/database-engine/admission-scope.ts");
+        const { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } = await import("./src/state/openclaw-state-db.ts");
+        const { patchConfigHealthEntryToStore } = await import("./src/config/io.health-state.ts");
+        const { createConfigHealthFingerprint } = await import("./src/config/io.observe-state.ts");
+        const { createConfigIO } = await import("./src/config/io.factory.ts");
+        const { withPostgresConnection } = await import("./src/infra/database-engine/postgres-store-metadata.ts");
+        const { dropPostgresTestSchemas } = await import("./src/infra/postgres-sync/schema-cleanup.test-support.ts");
+        const { selectGatewayRunEnvironment, prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } = await import("./src/cli/gateway-cli/pre-bootstrap.ts");
+        const raw = fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8");
+        const parsed = JSON.parse(raw);
+        const selection = await resolveDatabaseEngineSelection(parsed, process.env);
+        await withPostgresConnection(selection.postgres, async (client) => {
+          try {
+            await withDatabaseEngineSelection(selection, async () => {
+              withEngineStoreAdmission(() => {
+                openOpenClawStateDatabase();
+                patchConfigHealthEntryToStore({ env: process.env, homedir: () => process.env.HOME, logger: console }, process.env.OPENCLAW_CONFIG_PATH, {
+                  lastKnownGood: createConfigHealthFingerprint({ raw, parsed, stat: null }),
+                });
+              });
+              await closeOpenClawStateDatabaseAsync();
+            });
+            installDatabaseProcessRole("gateway");
+            const params = { opts: {}, runtime: { log() {}, error: console.error, exit(code) { throw new Error("unexpected exit " + code); } } };
+            if (!await selectGatewayRunEnvironment(params)) throw new Error("selection refused");
+            if (!await prepareGatewayRunBootstrap(params)) throw new Error("preparation refused");
+            const snapshot = await createConfigIO({ observe: false, pluginValidation: "core-only" }).readConfigFileSnapshot();
+            const admitted = await recheckGatewayRunBootstrap({ ...params, snapshot });
+            console.log("__RESULT__" + JSON.stringify({ admitted, installed: getDatabaseEngineSelection() !== undefined }));
+          } finally {
+            await withDatabaseEngineSelection(selection, () => closeOpenClawStateDatabaseAsync());
+            await dropPostgresTestSchemas(client, selection.postgres.schemaPrefix);
+          }
+        });
+        `,
+        options,
+      );
+      expect(readResult(result)).toEqual({ admitted: true, installed: false });
+      for (const [filename, hash] of Object.entries(before)) {
+        expect(
+          createHash("sha256")
+            .update(fs.readFileSync(path.join(path.dirname(configPath), filename)))
+            .digest("hex"),
+        ).toBe(hash);
+      }
+    },
+    75_000,
+  );
+
   it("accepts a Doctor-repaired escaped reference and refuses later config drift", async () => {
     const { configPath, env, options } = createFixture("openclaw-startup-reference-repair-");
     const apiKey = "$${STARTUP_MEMORY_KEY}";

@@ -204,14 +204,29 @@ async function readGuardedGatewayRunConfig(
       if (!guard(current)) {
         return null;
       }
-      const recovery = await measureGatewayBootstrapStep("cli.environment.config-recovery", () =>
-        createConfigIO({
-          configPath: current.path,
-          env: cloneEnvWithPlatformSemantics(process.env),
-          observe: false,
-          pluginValidation: "core-only",
-          measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
-        }).prepareConfigRecovery(current),
+      const recovery = await measureGatewayBootstrapStep(
+        "cli.environment.config-recovery",
+        async () => {
+          const recoveryEnv = cloneEnvWithPlatformSemantics(process.env);
+          const prepare = () =>
+            createConfigIO({
+              configPath: current.path,
+              env: recoveryEnv,
+              observe: false,
+              pluginValidation: "core-only",
+              measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
+            }).prepareConfigRecovery(current);
+          if (!current.valid) {
+            return prepare();
+          }
+          const [{ resolveDatabaseEngineSelection }, { withDatabaseEngineSelection }] =
+            await Promise.all([
+              import("../../infra/database-engine/config.js"),
+              import("../../infra/database-engine/context.js"),
+            ]);
+          const selection = await resolveDatabaseEngineSelection(current.config, recoveryEnv);
+          return withDatabaseEngineSelection(selection, prepare);
+        },
       );
       return recovery ? (guard(recovery.snapshot) ? recovery.snapshot : null) : current;
     }),
