@@ -92,11 +92,16 @@ describe("config cli roster integration", () => {
 
   it("never matches agents.entries ids that differ beyond casing", async () => {
     const raw = JSON.stringify({
-      agents: { ownership: "explicit", entries: { main: { name: "Main" } } },
+      agents: {
+        ownership: "explicit",
+        entries: { main: { name: "Main" }, work: { name: "Lower" } },
+      },
     });
     await withConfig(raw, async ({ configPath }) => {
       await reject(invoke(["config", "unset", 'agents.entries["!!!"].name']));
       expect(read(configPath)).toBe(raw);
+      // A stored "work" entry makes unintended id sanitization visible: if
+      // "work!" resolved to "work", this unset would delete work.name.
       await reject(invoke(["config", "unset", "agents.entries.work!.name"]));
       expect(read(configPath)).toBe(raw);
     });
