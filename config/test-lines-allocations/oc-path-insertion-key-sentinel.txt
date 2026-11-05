@@ -1,2 +1,0 @@
-# Exact and substring JSONC +key CLI refusals with unchanged-file assertions.
-2
