@@ -2621,7 +2621,7 @@ jobs:
         prepare_docker_release,
         release_execution_plan,
       ]
-    if: always() && !cancelled() && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat'
+    if: always() && !cancelled() && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && needs.resolve_target.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
