@@ -44,6 +44,7 @@ import {
   restoreRetainedManagedNpmInstallMarkers,
 } from "./managed-npm-retention.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import type { PluginSourceSnapshotIndexChange } from "./plugin-source-snapshot.types.js";
 import {
   assertPluginCohortArtifactDirectory,
   readPluginCohortArtifactIdentity as artifactIdentity,
@@ -355,6 +356,17 @@ export function recordPluginCohortRetentionMarker(
   });
 }
 
+/** Install records are keyed by installation owner; snapshots by plugin ID. */
+function snapshotBelongsToInstallation(
+  restoration: PluginSourceSnapshotIndexChange,
+  installKey: string,
+): boolean {
+  const owners = [restoration.before?.installOwner, restoration.after?.installOwner].filter(
+    (owner) => owner !== undefined,
+  );
+  return owners.length > 0 ? owners.includes(installKey) : restoration.pluginId === installKey;
+}
+
 /**
  * Restore only matching cohort deltas. A plugin migration obligation or install
  * record that a later writer changed keeps that value; rollback restores the rest,
@@ -480,10 +492,10 @@ export async function settleUpdatePluginCohort(
             const current = currentRecords[change.pluginId];
             const alreadyRestored = isDeepStrictEqual(current, change.before);
             if (!alreadyRestored && !isDeepStrictEqual(current, change.after)) {
-              // A later install owns this plugin now; keep it with its source snapshot.
+              // A later install owns this installation now; keep its plugins' snapshots too.
               kept.push(`plugin ${change.pluginId} install record`);
               sourceSnapshotRestorations = sourceSnapshotRestorations.filter(
-                (restoration) => restoration.pluginId !== change.pluginId,
+                (restoration) => !snapshotBelongsToInstallation(restoration, change.pluginId),
               );
               continue;
             }

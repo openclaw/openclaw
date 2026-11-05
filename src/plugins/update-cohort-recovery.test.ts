@@ -55,8 +55,8 @@ const fence = { assertCurrent() {} };
 const config = { plugins: { enabled: false } };
 const packageName = "@example/cohort-fixture";
 
-function generation(state: OpenClawTestState, version: string) {
-  writeManagedNpmPlugin({ stateDir: state.stateDir, packageName, pluginId: "fixture", version });
+function generation(state: OpenClawTestState, version: string, pluginId = "fixture") {
+  writeManagedNpmPlugin({ stateDir: state.stateDir, packageName, pluginId, version });
   const npmDir = state.statePath("npm");
   const npmRoot = resolvePluginNpmGenerationProjectDir({
     npmDir,
@@ -473,6 +473,121 @@ it("keeps a later install record, restores matching ones and completes rollback"
       expect(
         updateRunWarningMessages(getUpdateRun(f.runId, { env: state.env })?.steps ?? []),
       ).toEqual(warnings);
+    },
+  );
+});
+
+it("keeps a later installation record together with its plugin's source snapshot", async () => {
+  await withOpenClawTestState(
+    { label: "cohort-owner-key", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+    async (state) => {
+      await state.writeConfig(config);
+      // Install records are keyed by installation owner; snapshots by plugin ID.
+      const original = generation(state, "1.0.0", "demo");
+      const latest = generation(state, "2.0.0", "demo");
+      const digests = { contentDigest: "c".repeat(64), dependencyClosureDigest: "d".repeat(64) };
+      for (const installed of [original, latest]) {
+        installed.record.sourceSnapshotDigests = { demo: digests };
+      }
+      const descriptor = (installed: typeof original): PluginSourceSnapshotDescriptor => ({
+        formatVersion: 1,
+        generation: installed.record.version!,
+        installedRevision: 1,
+        installRecordHash: hashJson(
+          normalizeInstallRecordMap({ "package-owner": installed.record })["package-owner"],
+        ),
+        ...digests,
+        buildResolutionDigest: "b".repeat(64),
+        platform: process.platform,
+        arch: process.arch,
+        abi: process.versions.modules,
+        artifact: {
+          path: state.statePath("snapshot", installed.record.version!),
+          identity: "identity",
+          manifestIdentity: "manifest",
+          manifestDigest: "f".repeat(64),
+          tokenIdentity: "token-identity",
+        },
+      });
+      const published = await refreshPersistedInstalledPluginIndexWithReceipt({
+        reason: "source-changed",
+        env: state.env,
+        config,
+        installRecords: { "package-owner": latest.record },
+        sourceSnapshots: [
+          {
+            pluginId: "demo",
+            installOwner: "package-owner",
+            rootDir: latest.packageDir,
+            descriptor: descriptor(latest),
+          },
+        ],
+      });
+      const snapshot = (installed: typeof original, installedRevision: number) => ({
+        installOwner: "package-owner",
+        rootDir: installed.packageDir,
+        installRecordHash: descriptor(installed).installRecordHash,
+        sourceSnapshot: { ...descriptor(installed), installedRevision },
+      });
+      const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
+      const transactionId = randomUUID();
+      recoveryStore.beginPluginCohortRecovery(
+        {
+          runId,
+          transactionId,
+          revision: 0,
+          claimId: randomUUID(),
+          claimKind: "initial",
+          handoff: null,
+          source: { stateDir: state.stateDir, configPath: state.configPath },
+          from: { root: state.root, nodePath: process.execPath, version: "1", buildId: "old" },
+          to: { root: state.root, nodePath: process.execPath, version: "2", buildId: "new" },
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          effects: [],
+          restore: null,
+          verification: null,
+          primaryFailure: null,
+        },
+        {
+          runId,
+          transactionId,
+          revision: 0,
+          disposition: "pending",
+          installKey: state.root,
+          priorArtifacts: [],
+          artifacts: [],
+          publications: [
+            {
+              kind: "records",
+              records: [
+                { pluginId: "package-owner", before: original.record, after: latest.record },
+              ],
+              sourceSnapshots: [
+                {
+                  pluginId: "demo",
+                  before: snapshot(original, 1),
+                  after: snapshot(latest, published.revision),
+                },
+              ],
+            },
+          ],
+          settledPublications: 0,
+        },
+        fence,
+        { env: state.env },
+      );
+      // A later install replaced the whole installation after this update published it.
+      const independent = { ...latest.record, version: "independent" };
+      await seedInstalledPluginIndex({ "package-owner": independent }, { config, env: state.env });
+      await settleUpdatePluginCohort({ runId, env: state.env, fence, action: "rollback" });
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual({ "package-owner": independent });
+      expect(recoveryStore.loadPluginCohortRecovery(runId, { env: state.env })).toBeUndefined();
+      expect(
+        updateRunWarningMessages(getUpdateRun(runId, { env: state.env })?.steps ?? []),
+      ).toEqual([expect.stringContaining("plugin package-owner install record")]);
     },
   );
 });
