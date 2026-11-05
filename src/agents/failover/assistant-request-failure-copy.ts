@@ -83,6 +83,7 @@ const ASSISTANT_REQUEST_FAILURE_COPY = {
   billing:
     "The AI service reported a billing problem. Check your account's credit balance and usage limits before trying again.",
   server_error: "The AI service is having trouble. Please try again in a moment.",
+  route_unavailable: "The provider cannot serve this model right now. Choose another model.",
   timeout:
     "The request took too long. Check the conversation for any completed work before trying again.",
   tls_certificate: `Couldn't connect securely to the AI service. ${ERROR_DETAILS_HINT}`,
