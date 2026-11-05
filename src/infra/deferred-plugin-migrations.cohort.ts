@@ -1,4 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -11,6 +13,7 @@ import {
   pluginCohortPublicationContext,
   type PluginCohortPublicationContext,
 } from "./update-plugin-cohort-context.js";
+import { foldPluginCohortMigrationPublications } from "./update-plugin-cohort-records.js";
 import {
   PluginCohortMigrationRowSchema,
   type PluginCohortMigrationPublication,
@@ -121,6 +124,33 @@ export function recordPluginCohortMigrationRowsAfterWrite(
     kind: "plugin-migrations",
     rows,
   });
+}
+
+/** A rollback restores these rows before it counts settled publications. */
+export function hasRestoredPluginCohortMigrationPublications(
+  publications: readonly PluginCohortMigrationPublication[],
+  options: { env: NodeJS.ProcessEnv },
+): boolean {
+  if (publications.length === 0) {
+    return false;
+  }
+  const rows = foldPluginCohortMigrationPublications(publications);
+  return (
+    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+      ({ db }) => {
+        if (!tableExists(db, "migration_runs")) {
+          return false;
+        }
+        const current = readCohortMigrationRows(db, [...rows.keys()]);
+        return [...rows.values()].some(
+          (row) =>
+            !isDeepStrictEqual(row.before, row.after) &&
+            isDeepStrictEqual(current.get(row.pluginId), row.before),
+        );
+      },
+      { env: options.env },
+    ) === true
+  );
 }
 
 /** The lifecycle owner retains the lease, transaction and cache invalidation. */
