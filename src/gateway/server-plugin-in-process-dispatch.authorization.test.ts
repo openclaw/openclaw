@@ -6,7 +6,7 @@ import {
 } from "../agents/admitted-run-context.js";
 import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
 import {
   getOwnedSessionTranscriptActor,
@@ -895,6 +895,8 @@ describe("typed in-process agent authorization", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:private-draft";
+      const owner = createOperatorClient({ profileName: "owner", scopes: ["operator.write"] });
+      const context = createContext();
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
@@ -902,18 +904,33 @@ describe("typed in-process agent authorization", () => {
           updatedAt: 1,
           visibility: "draft",
           createdVia: "operator",
-          createdActor: { type: "human", source: "profile", id: "owner" },
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: owner.authenticatedUserProfile!.profileId,
+          },
         },
       );
+      const accepted = { runId: "draft-owner-run", status: "accepted" };
+      startTurn.mockImplementation(async ({ io }) => {
+        io.emitAcceptance([true, accepted, undefined]);
+      });
+      await expect(dispatchScopedAgent({ client: owner, context, sessionKey })).resolves.toEqual(
+        accepted,
+      );
+      expect(startTurn).toHaveBeenCalledOnce();
+      startTurn.mockClear();
+      const published = loadSessionEntry({ agentId: "main", sessionKey });
 
       await expect(
         dispatchScopedAgent({
           client: createOperatorClient({ profileName: "outsider", scopes: ["operator.write"] }),
-          context: createContext(),
+          context,
           sessionKey,
         }),
-      ).rejects.toThrow("session is draft for this connection");
+      ).rejects.toThrow(`Session "${sessionKey}" was not found.`);
       expect(startTurn).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(published);
     });
   });
 

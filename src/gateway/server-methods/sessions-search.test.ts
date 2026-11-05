@@ -535,7 +535,7 @@ describe("sessions.search gateway method", () => {
     expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("deduplicates retired copies (identified: %s)", async (identified) => {
+  it.each([false, true])("deduplicates authorized retired copies (scoped: %s)", async (scoped) => {
     resolveExistingAgentSessionStoreTargetsAsyncMock.mockResolvedValue([
       { agentId: "retired", storePath: "/stores/retired-a/sessions.json" },
       { agentId: "retired", storePath: "/stores/retired-b/sessions.json" },
@@ -549,13 +549,7 @@ describe("sessions.search gateway method", () => {
       snippet: "needle",
       score: 3,
     };
-    // Canonical metadata summaries authorize the deduplicated transcript candidate.
-    readSessionEntrySummariesMock.mockResolvedValue([
-      {
-        sessionKey: duplicate.sessionKey,
-        entry: { sessionId: duplicate.sessionId, updatedAt: 1 },
-      },
-    ]);
+    // Admin transcript-copy deduplication is separate from canonical-row admission below.
     searchSessionTranscriptsMock
       .mockReturnValueOnce({
         hits: [duplicate, { ...duplicate, messageId: "message-2", score: 1 }],
@@ -572,11 +566,11 @@ describe("sessions.search gateway method", () => {
       {
         agentId: "retired",
         query: "needle",
-        ...(identified ? {} : { sessionKeys: ["main"] }),
+        ...(scoped ? { sessionKeys: ["main"] } : {}),
         limit: 3,
       },
-      identified ? ["operator.read"] : undefined,
-      identified ? "legacy-search-viewer" : undefined,
+      ["operator.admin"],
+      "legacy-search-administrator",
     );
 
     expect(searchSessionTranscriptsMock).toHaveBeenCalledTimes(2);
@@ -585,7 +579,7 @@ describe("sessions.search gateway method", () => {
       agentId: "retired",
       query: "needle",
       limit: 25,
-      sessionKeys: ["agent:retired:main"],
+      ...(scoped ? { sessionKeys: ["agent:retired:main"] } : {}),
       storePath: "/stores/retired-a/sessions.json",
     });
     expect(respond).toHaveBeenCalledWith(

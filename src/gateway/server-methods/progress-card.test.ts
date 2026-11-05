@@ -3,13 +3,19 @@ import {
   PROGRESS_CARD_MAX_STEPS,
   PROGRESS_CARD_MAX_UTF8_BYTES,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ProgressCardStore } from "../../session-cards/progress-card-store.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withRestoredMocks } from "../../test-utils/vitest-spies.js";
 import { progressCardStore } from "../progress-card-store.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { progressCardHandlers } from "./progress-card.js";
 import { expectRpcResult } from "./rpc-response.test-support.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const defaultSessionKey = "agent:main:main";
 function expectError(respond: ReturnType<typeof vi.fn>, message: string, code = "INVALID_REQUEST") {
@@ -20,6 +26,7 @@ function expectError(respond: ReturnType<typeof vi.fn>, message: string, code = 
   );
 }
 function createHarness() {
+  const config = { agents: { entries: { main: {}, work: {} } } };
   const get = vi.fn<ProgressCardStore["get"]>();
   const put = vi.fn<ProgressCardStore["put"]>();
   const broadcast = vi.fn();
@@ -27,6 +34,7 @@ function createHarness() {
     operation: "get" | "put",
     params: Record<string, unknown> = {},
     respond = vi.fn<RespondFn>(),
+    client: GatewayClient | null = null,
   ) => {
     const getSpy = vi.spyOn(progressCardStore, "get").mockImplementation(get);
     const putSpy = vi.spyOn(progressCardStore, "put").mockImplementation(put);
@@ -34,34 +42,79 @@ function createHarness() {
       await progressCardHandlers[`progressCard.${operation}`]!({
         params: { sessionKey: defaultSessionKey, ...params },
         respond,
+        client,
         context: {
           broadcast,
-          getRuntimeConfig: () => ({ agents: { entries: { main: {}, work: {} } } }),
+          getRuntimeConfig: () => config,
         } as unknown as GatewayRequestContext,
       } as never);
       return respond;
     });
   };
-  return { broadcast, invoke, get, put };
+  return { broadcast, invoke, get, put, config };
 }
 
 describe("progress card gateway methods", () => {
   it.each(["get", "put"] as const)(
     "reports rejected %s without publishing or retrying",
     async (operation) => {
-      const harness = createHarness();
-      const release = createDeferredCore<never>();
-      harness[operation].mockImplementationOnce(() => release.promise);
-      const respond = vi.fn<RespondFn>();
-      const pending = harness.invoke(operation, {}, respond);
-      release.reject(new Error("storage unavailable"));
-      await pending;
-      expectError(respond, "storage unavailable", "UNAVAILABLE");
-      expect(respond).toHaveBeenCalledOnce();
-      expect(harness.broadcast).not.toHaveBeenCalled();
-      expect(harness[operation]).toHaveBeenCalledOnce();
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const harness = createHarness();
+        setRuntimeConfigSnapshot(harness.config);
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: defaultSessionKey },
+          { sessionId: "progress-owner", updatedAt: 1, visibility: "shared" },
+        );
+        const entered = createDeferredCore();
+        const release = createDeferredCore<never>();
+        harness[operation].mockImplementationOnce(() => {
+          entered.resolve();
+          return release.promise;
+        });
+        const respond = vi.fn<RespondFn>();
+        const pending = harness.invoke(operation, {}, respond);
+        await awaitGateBeforeSettlement(entered.promise, pending, "card store admission skipped");
+        release.reject(new Error("storage unavailable"));
+        await pending;
+        expectError(respond, "storage unavailable", "UNAVAILABLE");
+        expect(respond).toHaveBeenCalledOnce();
+        expect(harness.broadcast).not.toHaveBeenCalled();
+        expect(harness[operation]).toHaveBeenCalledOnce();
+      });
     },
   );
+
+  it("denies a foreign Draft before reading or publishing its progress card", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const harness = createHarness();
+      setRuntimeConfigSnapshot(harness.config);
+      const reader = ensureProfileForEmail("progress-reader@example.test");
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: defaultSessionKey },
+        {
+          sessionId: "private-progress",
+          updatedAt: 1,
+          visibility: "draft",
+          createdActor: { type: "human", source: "profile", id: "another-person" },
+        },
+      );
+      const respond = vi.fn<RespondFn>();
+      await expect(
+        harness.invoke("get", {}, respond, sharingPolicyClient({ user: reader.id })),
+      ).rejects.toMatchObject({
+        error: {
+          code: "INVALID_REQUEST",
+          message: `Session "${defaultSessionKey}" was not found.`,
+        },
+      });
+      expect([
+        harness.get.mock.calls,
+        harness.put.mock.calls,
+        harness.broadcast.mock.calls,
+      ]).toEqual([[], [], []]);
+      expect(respond).not.toHaveBeenCalled();
+    });
+  });
 
   it.each([
     { agentId: "missing", message: "Unknown agent id" },

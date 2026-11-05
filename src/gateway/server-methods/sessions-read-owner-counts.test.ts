@@ -437,8 +437,13 @@ it("revokes a source-bound audience before the next cached list without using Dr
       listSessions({ client, context, request: { archived: "all", limit: 100 } });
     expect((await read(member)).sessions.map((row) => row.key)).toEqual([sessionKey]);
     expect((await read(other)).sessions).toEqual([]);
-    // Same-object policy edits must not reuse an audience-filtered list vector.
+    // Publish the same-object policy edit through its owner before reusing the list cache.
     rule.profileIds = [];
+    setRuntimeConfigSnapshot(config);
     expect((await read(member)).sessions).toEqual([]);
+    expect((await read(other)).sessions).toEqual([]);
     expect((await read(own)).sessions.map((row) => row.key)).toEqual([sessionKey]);
+    rule.profileIds = [selected];
+    setRuntimeConfigSnapshot(config);
+    expect((await read(member)).sessions.map((row) => row.key)).toEqual([sessionKey]);
   }));

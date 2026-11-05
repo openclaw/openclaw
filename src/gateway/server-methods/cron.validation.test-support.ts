@@ -324,9 +324,12 @@ export function createCronTestInvoker(
   ) {
     const context = options.context ?? createCronTestContext(options.currentJob, getRuntimeConfig);
     const respond = options.respond ?? vi.fn();
-    const readContext = createDirectChatContext({ getRuntimeConfig: context.getRuntimeConfig });
-    await initializeSessionReadContext(readContext);
-    bindSessionRowProjection(context, () => getSessionRowProjection(readContext));
+    // Raw writers own fail-fast database admission before any session-row read.
+    if (method !== "cron.add" && method !== "cron.update" && method !== "wake") {
+      const readContext = createDirectChatContext({ getRuntimeConfig: context.getRuntimeConfig });
+      await initializeSessionReadContext(readContext);
+      bindSessionRowProjection(context, () => getSessionRowProjection(readContext));
+    }
     await expectDefined(
       handlers[method],
       "cronHandlers[method] test invariant",

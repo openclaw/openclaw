@@ -3,6 +3,7 @@ import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/recor
 import { readMessageWorkContext } from "../../chat/work-context.js";
 import { assertModelSelectionUnlocked } from "../../sessions/model-overrides.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
+import { resolveSessionCreationVisibility } from "./creation-visibility.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SessionMessageCutMutationResult } from "./session-accessor.types.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
@@ -222,7 +223,7 @@ export function planSessionMessageCut(
       ? {
           access:
             params.creationAccess ??
-            (currentEntry.access ? { mode: "creator" as const } : undefined),
+            resolveSessionCreationVisibility({}, params.targetKey, currentEntry).access,
         }
       : {}),
     ...(params.mode === "fork" && params.creationVisibility

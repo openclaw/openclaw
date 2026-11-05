@@ -211,7 +211,7 @@ it("lists sharing evidence and adds members independently of placement display f
     }
   }));
 
-it("limits creators to the current combined-store scope across configuration changes", () =>
+it("retains registered creators in the combined-store scope across configuration changes", () =>
   withState(async (state) => {
     const stores = [state.path("picker-selected.sqlite"), state.path("picker-other.sqlite")];
     const initialConfig: OpenClawConfig = {
@@ -240,7 +240,7 @@ it("limits creators to the current combined-store scope across configuration cha
       cfg = { ...initialConfig, session: { store: storePath } };
       setRuntimeConfigSnapshot(cfg);
       sessionChanges.emit({ all: true, scope: "config" });
-      const expected = [{ type: "agent", id: `creator-${index}` }];
+      const expected = stores.map((_, creator) => ({ type: "agent", id: `creator-${creator}` }));
       const listed = await call(
         "session.members.listEvidence",
         { sessionKey: `agent:main:scope-${index}` },

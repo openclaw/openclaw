@@ -12,6 +12,7 @@ import {
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
+import { canReadSessionAccess } from "./session-access.js";
 import {
   appendTranscriptEvent as appendEvent,
   forkSessionAtMessage as fork,
@@ -398,4 +399,77 @@ it("forks a Shared parent's history into a private child under creation defaults
     visibility: "draft",
   });
   expect(readEntry(scope)).toMatchObject({ visibility: "shared" });
+});
+
+it.each<{
+  name: string;
+  access?: InternalSessionEntry["access"];
+  visibility: "shared" | "draft";
+  privateChild: boolean;
+}>([
+  { name: "legacy", access: undefined, visibility: "shared", privateChild: false },
+  {
+    name: "unrestricted",
+    access: { mode: "unrestricted" },
+    visibility: "shared",
+    privateChild: false,
+  },
+  { name: "creator", access: { mode: "creator" }, visibility: "shared", privateChild: true },
+  { name: "source", access: { mode: "source" }, visibility: "shared", privateChild: true },
+  {
+    name: "audience",
+    access: { mode: "audience", profileIds: ["selected"] },
+    visibility: "shared",
+    privateChild: true,
+  },
+  {
+    name: "draft-unrestricted",
+    access: { mode: "unrestricted" },
+    visibility: "draft",
+    privateChild: true,
+  },
+])(
+  "message fork preserves the $name source confidentiality contract",
+  async ({ name, access, visibility, privateChild }) => {
+    const { scope, params } = await createSession({ access, visibility });
+    const original = readEntry(scope);
+    const sourceEvents = await readEvents(scope);
+    const targetKey = `agent:main:fork:access-${name}`;
+    const forked = await fork({ ...params, targetKey }, sourceExpectedState);
+    assert(forked.status === "created");
+    const child = readEntry({ ...scope, sessionKey: targetKey });
+    assert(child);
+    if (privateChild) {
+      expect(child.access).toEqual({ mode: "creator" });
+    } else {
+      expect(child.access).toBeUndefined();
+      expect(canReadSessionAccess({}, targetKey, child, () => false)).toBe(true);
+    }
+    if (visibility === "draft") {
+      expect(child.visibility).toBe("draft");
+    }
+    expect(readEntry(scope)).toEqual(original);
+    expect(await readEvents(scope)).toEqual(sourceEvents);
+  },
+);
+
+it("reads pre-ACL stored history without rewriting its metadata when source policy is toggled", async () => {
+  const { scope } = await createSession();
+  const before = readEntry(scope);
+  assert(before);
+  expect(before).not.toHaveProperty("access");
+  const events = await readEvents(scope);
+  expect(events[0]).toMatchObject({ type: "session", version: 3 });
+  for (const enabled of [false, true, false]) {
+    const cfg = enabled
+      ? { session: { sharing: { accessPolicy: { default: "creator" as const } } } }
+      : {};
+    setRuntimeConfigSnapshot(cfg);
+    const stored = readEntry(scope);
+    assert(stored);
+    expect(canReadSessionAccess(cfg, scope.sessionKey, stored, () => false)).toBe(!enabled);
+    expect(canReadSessionAccess(cfg, scope.sessionKey, stored, () => true)).toBe(true);
+    expect(stored).toEqual(before);
+    expect(await readEvents(scope)).toEqual(events);
+  }
 });

@@ -572,7 +572,20 @@ export function authorizeSessionSharingTarget(
     : params.cfg && operatorSessionCap(params.client, params.cfg);
   const role = prepared?.role ?? resolveSessionSharingRole(params, { value: sessionCap });
   const access = resolveSessionAccess(params.cfg, params.target.canonicalKey, params.target.entry);
-  if (role === "viewer" && access && access.mode !== "unrestricted") {
+  if (
+    role === "viewer" &&
+    access &&
+    access.mode !== "unrestricted" &&
+    (visibility === "draft" ||
+      !canReadSessionAccess(
+        params.cfg,
+        params.target.canonicalKey,
+        params.target.entry,
+        prepareSessionCreatorProfile(
+          sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client))?.id,
+        ),
+      ))
+  ) {
     return hiddenSessionNotFound(params.target.canonicalKey);
   }
   if (

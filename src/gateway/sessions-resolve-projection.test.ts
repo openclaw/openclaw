@@ -246,18 +246,30 @@ describe("prepared resident resolution", () => {
         getConfig: () => currentConfig,
       });
       const lookup = projection.readLookup.bind(projection);
-      vi.spyOn(projection, "readLookup").mockImplementationOnce(async (...args) => {
-        const result = await lookup(...args);
-        currentConfig = { ...cfg, session: { store: storePath } };
-        sessionChanges.emit({ all: true, scope: "config" });
-        return result;
-      });
-      try {
-        await expect(preparedResolve(projection, { label: entry.label })).resolves.toEqual({
-          ok: true,
-          key: replacementKey,
-          agentId: "main",
+      const lookupMock = vi
+        .spyOn(projection, "readLookup")
+        .mockImplementationOnce(async (...args) => {
+          const result = await lookup(...args);
+          currentConfig = { ...cfg, session: { store: storePath } };
+          sessionChanges.emit({ all: true, scope: "config" });
+          return result;
         });
+      try {
+        const ambiguous = await preparedResolve(projection, { label: entry.label });
+        expect(ambiguous).toMatchObject({
+          ok: false,
+          error: {
+            code: "INVALID_REQUEST",
+            message: expect.stringContaining(`Multiple sessions found with label: ${entry.label}`),
+          },
+        });
+        for (const key of [scope.sessionKey, replacementKey]) {
+          expect(ambiguous).toHaveProperty("error.message", expect.stringContaining(key));
+        }
+        expect(lookupMock.mock.calls.length).toBeGreaterThan(1);
+        for (const key of [replacementKey, scope.sessionKey]) {
+          await expect(preparedResolve(projection, { key })).resolves.toEqual(resolved(key));
+        }
       } finally {
         projection.dispose();
       }

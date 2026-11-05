@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -436,6 +437,7 @@ export async function authorizeControlUiReadRequestOrReply(
 type ControlUiSessionReadFilter = (
   sessionKey: string | undefined,
   entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito" | "access">,
+  membership?: ReadonlySet<string>,
 ) => boolean;
 
 type AuthorizedControlUiSessionOwnerReadRequest = AuthorizedControlUiReadRequest &
@@ -475,14 +477,17 @@ export async function authorizeControlUiSessionOwnerReadRequestOrReply(
     return null;
   }
   // Aliases were prepared with the profile; the filter never reads resident state later.
-  const canReadSession = createProfileSessionEntryFilter(
-    {
-      profileId: profile.profileId,
-      sessionCap: requestAuth.operatorRolePolicy?.sessions.others,
-      cfg: params.cfg ?? getRuntimeConfig(),
-    },
-    prepareSessionCreatorProfile(profile.profileId, profile.aliases),
-  );
+  const creatorMatches = prepareSessionCreatorProfile(profile.profileId, profile.aliases);
+  const canReadSession: ControlUiSessionReadFilter = (sessionKey, entry, membership) =>
+    createProfileSessionEntryFilter(
+      {
+        profileId: profile.profileId,
+        sessionCap: requestAuth.operatorRolePolicy?.sessions.others,
+        cfg: params.cfg ?? getRuntimeConfig(),
+        membership,
+      },
+      creatorMatches,
+    )(sessionKey, entry);
   return { ...requestAuth, canReadSession };
 }
 
@@ -702,13 +707,7 @@ export function resolveTrustedHttpOperatorScopes(
     const header = getHeader(req, "x-openclaw-scopes");
     return header === undefined
       ? scopes
-      : intersectOperatorScopes(
-          scopes,
-          header
-            .split(",")
-            .map((scope) => scope.trim())
-            .filter(Boolean),
-        );
+      : intersectOperatorScopes(scopes, normalizeTrimmedStringList(header.split(",")));
   }
   if (!requestAuth.trustDeclaredOperatorScopes) {
     // Gateway bearer auth only proves possession of the shared secret. Do not
@@ -721,10 +720,7 @@ export function resolveTrustedHttpOperatorScopes(
   const scopes =
     headerValue === undefined
       ? [...CLI_DEFAULT_OPERATOR_SCOPES]
-      : headerValue
-          .split(",")
-          .map((scope) => scope.trim())
-          .filter((scope) => scope.length > 0);
+      : normalizeTrimmedStringList(headerValue.split(","));
   return applyHttpOperatorRoleScopeCeiling(scopes, requestAuth);
 }
 

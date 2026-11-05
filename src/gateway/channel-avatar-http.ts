@@ -22,6 +22,12 @@ import {
 } from "./http-image-response.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { authorizeControlUiSessionOwnerReadRequestOrReply } from "./http-utils.js";
+import {
+  prepareSessionMutationFacts,
+  type PreparedSessionSourceFacts,
+  type SessionFactsRead,
+} from "./session-sharing-preparation.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
 
 const CHANNEL_AVATAR_CACHE_MAX_ENTRIES = 128;
 
@@ -115,8 +121,16 @@ export async function handleChannelAvatarHttpRequest(
     return true;
   }
 
-  const serve = async (reference: string | undefined, assertCurrent: () => void) => {
+  const serve = async (
+    reference: string | undefined,
+    assertCurrent: () => void,
+    canRead: () => boolean = () => true,
+  ) => {
     assertCurrent();
+    if (!canRead()) {
+      sendSessionReadForbidden(res);
+      return true;
+    }
     if (!reference) {
       res.setHeader("cache-control", "no-store");
       respondNotFound(res);
@@ -130,6 +144,10 @@ export async function handleChannelAvatarHttpRequest(
       // The media may have expired or been pruned after the session row was written.
     }
     assertCurrent();
+    if (!canRead()) {
+      sendSessionReadForbidden(res);
+      return true;
+    }
     if (!image) {
       res.setHeader("cache-control", "no-store");
       respondNotFound(res);
@@ -140,8 +158,6 @@ export async function handleChannelAvatarHttpRequest(
   };
   if (source) {
     const entry = source.readCurrent();
-    // Visibility is settled once per request; a share revoked during the byte
-    // read is an accepted brief overlap, like the icon route.
     if (entry && !requestAuth.canReadSession(sessionKey, entry)) {
       sendSessionReadForbidden(res);
       return true;
@@ -162,27 +178,63 @@ export async function handleChannelAvatarHttpRequest(
     return serve(
       matchesChannelAvatarSender(requestUrl.searchParams, origin) ? reference : undefined,
       assertCurrent,
+      () => {
+        const current = source.readCurrent();
+        return !current || requestAuth.canReadSession(sessionKey, current);
+      },
     );
   }
-  let reference: string | undefined;
+  let sharing: SessionFactsRead<PreparedSessionSourceFacts>;
   try {
-    const { entry } = await (
-      await getSessionStoreModule()
-    ).loadGatewaySessionEntryReadOnlyInWorker({
-      cfg: getRuntimeConfig(),
-      key: requestedKey,
-      assertActive: requestAuth.assertCurrent,
+    const cfg = getRuntimeConfig();
+    sharing = await prepareSessionMutationFacts({
+      cfg,
+      agentId: resolveSessionStoreIdentity({ cfg, sessionKey }).agentId,
+      sessionKey,
+      allowMissing: true,
     });
-    if (entry && !requestAuth.canReadSession(requestedKey, entry)) {
+  } catch {
+    return serve(undefined, requestAuth.assertCurrent);
+  }
+  try {
+    const loaded = await getSessionStoreModule()
+      .then((store) =>
+        store.loadGatewaySessionEntryReadOnlyInWorker({
+          cfg: getRuntimeConfig(),
+          key: requestedKey,
+          assertActive: requestAuth.assertCurrent,
+        }),
+      )
+      .catch(() => undefined);
+    requestAuth.assertCurrent();
+    const entry = loaded?.entry;
+    const canRead = () => {
+      const current = sharing.readCurrent(getRuntimeConfig());
+      return (
+        !current.target ||
+        requestAuth.canReadSession(sessionKey, current.target.entry, current.membership)
+      );
+    };
+    if (!canRead()) {
       sendSessionReadForbidden(res);
       return true;
     }
     const origin = sessionDeliveryOrigin(entry);
-    reference = matchesChannelAvatarSender(requestUrl.searchParams, origin)
+    const reference = matchesChannelAvatarSender(requestUrl.searchParams, origin)
       ? origin?.avatar
       : undefined;
-  } catch {
-    // Invalid or missing session keys are ordinary route misses.
+    const assertCurrent = () => {
+      requestAuth.assertCurrent();
+      const current = sharing.readCurrent(getRuntimeConfig()).target?.entry;
+      if (
+        current?.sessionId !== entry?.sessionId ||
+        current?.lifecycleRevision !== entry?.lifecycleRevision
+      ) {
+        throw new Error("Channel avatar session authority changed");
+      }
+    };
+    return await serve(reference, assertCurrent, canRead);
+  } finally {
+    sharing.release();
   }
-  return serve(reference, requestAuth.assertCurrent);
 }

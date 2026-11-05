@@ -468,7 +468,7 @@ test.for([
 
 test.for(["sessions.send", "sessions.steer"] as const)(
   "confidential messaging ingress roleless absence and preclaim guard via %s",
-  async (method) => {
+  async (method, { signal }) => {
     // Change only this isolated fixture, not any external/staging Gateway.
     for (const socket of people.values()) {
       socket.terminate();
@@ -552,5 +552,37 @@ test.for(["sessions.send", "sessions.steer"] as const)(
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     expect(gatewayReplyMock).not.toHaveBeenCalled();
+
+    await prepareGatewayReplyRuntimeForTest();
+    const selected = await client("selected");
+    for (const scope of [source, audience]) {
+      const label = "roleless selected " + method + " " + scope.sessionKey;
+      const patched = await rpcReq(selected, "sessions.patch", { key: scope.sessionKey, label });
+      expect(patched, JSON.stringify(patched.error)).toMatchObject({ ok: true });
+      expect(loadSessionEntry(scope)?.label).toBe(label);
+      const completed = createDeferred();
+      const message = "roleless selected may write " + scope.sessionKey;
+      dispatchInboundMessageMock.mockImplementationOnce(async (params: unknown) => {
+        const { ctx, replyOptions } = params as Parameters<typeof dispatchInboundMessage>[0];
+        try {
+          expect(ctx.SessionKey).toBe(scope.sessionKey);
+          expect(replyOptions?.userTurnTranscriptRecorder).toBeDefined();
+          await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+          return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+        } finally {
+          completed.resolve();
+        }
+      });
+      const accepted = await rpcReq(selected, method, {
+        key: scope.sessionKey,
+        message,
+        idempotencyKey: randomUUID(),
+      });
+      expect(accepted, JSON.stringify(accepted.error)).toMatchObject({ ok: true });
+      await withinTest(completed.promise, signal);
+      expect(await withinTest(waitForGatewayActiveWork(), signal)).toMatchObject({ drained: true });
+      expect(JSON.stringify(loadTranscriptEventsSync(scope))).toContain(message);
+    }
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
   },
 );
