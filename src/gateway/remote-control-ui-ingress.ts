@@ -25,7 +25,7 @@ import {
 } from "../state/user-profile-list.js";
 import { ensureCanonicalGatewayOwnerProfile } from "../state/user-profile-writes.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
-import { isTrustedProxyUserAllowed } from "./auth.js";
+import { gatewayPersonPrincipalAuthError } from "./auth.js";
 import { validateRemoteControlUiFrameAncestors } from "./control-ui-csp.js";
 import { filterRemoteControlUiPluginReadCookies } from "./control-ui-plugin-auth-cookie.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
@@ -52,18 +52,7 @@ function remoteControlUiGatewayAuthError(
   principal: GatewayIngressPrincipal,
 ): string | undefined {
   if (principal.kind === "person") {
-    const proxy = auth.trustedProxy;
-    if (
-      auth.mode !== "trusted-proxy" ||
-      !cfg.gateway?.roles ||
-      proxy?.userHeader.trim().toLowerCase() !== "cf-access-authenticated-user-email" ||
-      !proxy.requiredHeaders?.some(
-        (header) => header.trim().toLowerCase() === "cf-access-jwt-assertion",
-      )
-    ) {
-      return "Person ingress requires trusted-proxy authentication with verified Cloudflare Access profiles and gateway.roles. Approve the grant from the person's authenticated Gateway Control UI.";
-    }
-    return undefined;
+    return gatewayPersonPrincipalAuthError(auth, cfg);
   }
   if (cfg.gateway?.roles) {
     return "Owner ingress does not support gateway.roles. Use a person-bound grant approved in the Gateway Control UI.";
@@ -327,7 +316,11 @@ export function createGatewayControlUiIngressFactory(params: {
               initial.emails.some((email) => !current.emails.includes(email)) ||
               initial.githubAccountIds?.some((id) => !current.githubAccountIds?.includes(id)) ||
               (principal.kind === "person" &&
-                !isTrustedProxyUserAllowed(host.getResolvedAuth().trustedProxy, current.emails)) ||
+                gatewayPersonPrincipalAuthError(
+                  host.getResolvedAuth(),
+                  host.getRuntimeConfig(),
+                  current.emails,
+                ) !== undefined) ||
               !isDeepStrictEqual(role, principal.kind === "person" ? readRole(current) : undefined)
             ) {
               throw new Error("Principal identity or role changed");

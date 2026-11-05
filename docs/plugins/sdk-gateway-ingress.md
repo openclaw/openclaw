@@ -285,9 +285,11 @@ Core saves a bounded principal-source reference, not a credential. On each
 continuation it revalidates the ingress consent independently of Gateway access
 policy, identity, role, model restrictions, and original scope ceiling. Losing
 or revoking one grant cannot be repaired by borrowing another grant for the
-same profile. For person sources, core also checks the current resolved
-`gateway.auth.trustedProxy.allowUsers` against canonical profile emails at
-restoration and before protected operations. Removing a person from a nonempty
+same profile. At restoration and before protected operations, person sources
+must satisfy the same current policy as live person ingress: trusted-proxy
+authentication, `gateway.roles`, and the Cloudflare Access email and JWT headers.
+Core also checks current resolved `gateway.auth.trustedProxy.allowUsers` against
+canonical profile emails. Removing a person from a nonempty
 list blocks their retained work; an absent or empty list remains unrestricted.
 MCP relay registers this hook against its persisted connected-app
 grants. Ephemeral consent handles remain nonrecoverable. If the consent owner or

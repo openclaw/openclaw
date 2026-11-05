@@ -63,7 +63,9 @@ import {
 } from "./run.operator-continuation.test-support.js";
 import {
   prepareContinuationClient,
-  revokeAfterNextPrincipalRestore,
+  PRINCIPAL_POLICY_CASES,
+  isPrincipalPolicyScenario,
+  preparePrincipalPolicyChange,
   principalGatewayPolicy,
   captureRealIngressOperator,
   expectRetryableOriginalOneShot,
@@ -137,9 +139,7 @@ it.each([
   "paused force run",
   "restart",
   "principal reload",
-  "principal allowlist allowed",
-  "principal allowlist removed before restore",
-  "principal allowlist removed before effect",
+  ...PRINCIPAL_POLICY_CASES,
   "principal owner unavailable",
   "principal store unavailable",
   "restart before scheduling",
@@ -165,13 +165,9 @@ it.each([
   const principalSource = scenario.startsWith("principal") || restartBeforeScheduling;
   const unavailableSource =
     scenario === "principal owner unavailable" || scenario === "principal store unavailable";
-  const allowlistSource = scenario.startsWith("principal allowlist");
-  const allowUsersRemoved = allowlistSource && scenario !== "principal allowlist allowed";
-  const realPrincipal =
-    restartBeforeScheduling ||
-    unavailableSource ||
-    scenario === "principal reload" ||
-    allowlistSource;
+  const personPolicySource = isPrincipalPolicyScenario(scenario);
+  const personPolicyRemoved = personPolicySource && scenario !== "principal allowlist allowed";
+  const realPrincipal = principalSource;
   let restoreIngressOwner: (() => void) | undefined;
   let releaseIngressOwner: (() => void) | undefined;
   const roleRevoked = scenario === "role revoked" || scenario === "principal role revoked";
@@ -186,7 +182,7 @@ it.each([
     scenario === "write-scoped operator" || scenario === "cron-scoped operator";
   const config = await prepareAuthorityConfig({
     tools: { allow: [AUTOMATIONS_TOOL_NAME, "github_publish"] },
-    ...(realPrincipal ? { gateway: principalGatewayPolicy(allowlistSource) } : {}),
+    ...(realPrincipal ? { gateway: principalGatewayPolicy(personPolicySource) } : {}),
     ...(recurring ? { cron: { triggers: { enabled: true } } } : {}),
   });
   const fixture = createCronFixture(undefined, config);
@@ -197,7 +193,7 @@ it.each([
   if (realPrincipal) {
     await setCanonicalUserProfileRole(profile.id, "writer");
   }
-  const { client, removePersonFromAllowlist } = prepareContinuationClient({
+  const { client, revokePersonPolicy } = prepareContinuationClient({
     config,
     context,
     profileId: profile.id,
@@ -276,7 +272,7 @@ it.each([
   const updateCreator = createDeferredCore();
   const creatorUpdated = createDeferredCore();
   const releaseCreator = createDeferredCore();
-  if (principalSource && !realPrincipal && original) {
+  if (scenario === "principal access revoked" && original) {
     original.authority = principalRecoveryFixture(
       original.authority,
       scenario === "principal access revoked",
@@ -476,14 +472,7 @@ it.each([
     restoreIngressOwner = recovery.restore;
     releaseIngressOwner = recovery.release;
   }
-  if (scenario === "principal allowlist removed before restore") {
-    removePersonFromAllowlist?.();
-  }
-  if (scenario === "principal allowlist removed before effect") {
-    revokeAfterNextPrincipalRestore(
-      expectDefined(removePersonFromAllowlist, "current allowlist owner"),
-    );
-  }
+  await preparePrincipalPolicyChange(scenario, revokePersonPolicy);
   // No operator request, original admitted run or human follow-up survives this point.
   const job = expectDefined((await fixture.read())[0], "durably stored continuation");
   if (scopedOperator) {
@@ -661,9 +650,6 @@ it.each([
         if (publish) {
           expect(JSON.stringify(offered)).toContain('"inspect"');
           expect(JSON.stringify(offered)).toContain("merge");
-          if (scenario === "principal allowlist removed before effect") {
-            removePersonFromAllowlist?.();
-          }
           for (const args of [
             { action: "inspect" },
             {
@@ -826,10 +812,12 @@ it.each([
       expect((await fixture.read()).map((item) => item.id)).toEqual([job.id]);
     }
     const state = expectDefined(execution.getJob(job.id), "finished scheduled job").state;
-    if (allowUsersRemoved) {
-      expect(reads, "Current allowUsers must fence protected RPC reads").toBe(0);
+    if (personPolicyRemoved) {
+      expect(reads, "Current person policy must fence protected RPC reads").toBe(0);
       expect(writes).toEqual([]);
-      expect(rejected ?? finishedEvent?.error).toMatch(/allow|authority|principal|policy/i);
+      expect(rejected ?? finishedEvent?.error).toMatch(
+        /allow|authority|principal|policy|Person ingress requires trusted-proxy/i,
+      );
       expect(entered).toBe(0);
       return;
     }

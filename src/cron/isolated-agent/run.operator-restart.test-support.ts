@@ -8,6 +8,7 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureGatewayAuthPolicy } from "../../gateway/auth-policy.js";
+import { resolveGatewayAuthForConfig } from "../../gateway/auth-resolve.js";
 import * as cronSourceRuntime from "../../gateway/cron-operator-source.js";
 import * as operatorCapture from "../../gateway/operator-run-authority.js";
 import { createGatewayControlUiIngressFactory } from "../../gateway/remote-control-ui-ingress.js";
@@ -16,6 +17,7 @@ import type { GatewayRequestContext } from "../../gateway/server-methods/types.j
 import { createOperatorClient } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { recordSessionOperatorSource } from "../../gateway/session-operator-sources.js";
 import { prepareSessionSystemTurnAuthority } from "../../gateway/session-system-turn-authority.js";
+import type { GatewayIngressPrincipalBindingV1 } from "../../plugins/gateway-ingress.types.js";
 import type { CronStoredJob } from "../types.js";
 
 export async function prepareRestartBeforeScheduling(params: {
@@ -105,37 +107,7 @@ export async function captureRealIngressOperator(params: {
   scopes: string[];
 }) {
   const lifetime = new AbortController();
-  const getConfig = () =>
-    params.context.getCommittedRuntimeConfig?.() ?? params.context.getRuntimeConfig();
-  const factory = createGatewayControlUiIngressFactory({
-    pluginId: "mcp-relay",
-    signal: lifetime.signal,
-    assertCurrent: () => lifetime.signal.throwIfAborted(),
-    host: {
-      signal: lifetime.signal,
-      controlUiBasePath: "",
-      getRuntimeConfig: getConfig,
-      getResolvedAuth: () => ({
-        mode: "trusted-proxy",
-        allowTailscale: false,
-        trustedProxy: {
-          userHeader: "cf-access-authenticated-user-email",
-          requiredHeaders: ["cf-access-jwt-assertion"],
-          allowUsers: getConfig().gateway?.auth?.trustedProxy?.allowUsers,
-        },
-      }),
-      resolveGatewayContext: () => params.context,
-      handleRequest: async () => {
-        throw new Error("This proof uses principal RPC, not HTTP presentation.");
-      },
-      handleSandboxRequest: async () => {
-        throw new Error("This proof uses principal RPC, not sandbox presentation.");
-      },
-      handleUpgrade: async () => {
-        throw new Error("This proof uses principal RPC, not WebSocket presentation.");
-      },
-    },
-  });
+  const factory = principalIngressFactory(params.context, lifetime.signal, "mcp-relay");
   const grant = {
     audienceId: "continuation-grant",
     recoveryId: "0",
@@ -278,54 +250,84 @@ export function principalGatewayPolicy(
         },
       },
     },
-    ...(allowlisted
-      ? {
-          auth: {
-            mode: "trusted-proxy",
-            trustedProxy: {
-              userHeader: "cf-access-authenticated-user-email",
-              requiredHeaders: ["cf-access-jwt-assertion"],
-              allowUsers: ["scheduled-operator@example.test"],
-            },
-          },
-        }
-      : {}),
+    auth: {
+      mode: "trusted-proxy",
+      token: "principal-policy-test-token",
+      trustedProxy: {
+        userHeader: "cf-access-authenticated-user-email",
+        requiredHeaders: ["cf-access-jwt-assertion"],
+        ...(allowlisted ? { allowUsers: ["scheduled-operator@example.test"] } : {}),
+      },
+    },
   };
 }
 
-export function bindPersonAllowlistRevocation(
+function bindPersonPolicyRevocation(
   context: GatewayRequestContext,
   config: OpenClawConfig,
+  profileId: string,
+  scopes: string[],
+  scenario: string,
 ) {
   let current = config;
   context.getRuntimeConfig = () => current;
   context.getCommittedRuntimeConfig = () => current;
-  return () => {
-    current = {
-      ...config,
-      gateway: {
-        ...config.gateway,
-        auth: {
-          ...config.gateway?.auth,
-          trustedProxy: {
-            ...config.gateway?.auth?.trustedProxy,
-            userHeader: "cf-access-authenticated-user-email",
-            allowUsers: ["other-person@example.test"],
+  return async () => {
+    const disableMode = scenario.startsWith("principal auth mode");
+    const lifetime = new AbortController();
+    let live: GatewayIngressPrincipalBindingV1 | undefined;
+    try {
+      if (disableMode) {
+        live = await principalIngressFactory(
+          context,
+          lifetime.signal,
+          "policy-control",
+        ).bindPrincipal({
+          audienceId: "live-policy-control",
+          principal: { kind: "person", profileId },
+          operatorScopeCeiling: scopes,
+          signal: lifetime.signal,
+          assertCurrent: () => lifetime.signal.throwIfAborted(),
+        });
+      }
+      current = {
+        ...config,
+        gateway: {
+          ...config.gateway,
+          auth: {
+            ...config.gateway?.auth,
+            ...(disableMode
+              ? { mode: "token" as const }
+              : {
+                  trustedProxy: {
+                    ...config.gateway?.auth?.trustedProxy,
+                    userHeader: "cf-access-authenticated-user-email",
+                    allowUsers: ["other-person@example.test"],
+                  },
+                }),
           },
         },
-      },
-    };
-    setRuntimeConfigSnapshot(current);
+      };
+      setRuntimeConfigSnapshot(current);
+      if (live) {
+        await expect(live.request("voicewake.get", {})).rejects.toMatchObject({
+          code: "unsupported-auth",
+        });
+      }
+    } finally {
+      await live?.close();
+      lifetime.abort();
+    }
   };
 }
 
-export function revokeAfterNextPrincipalRestore(revoke: () => void) {
+export function revokeAfterNextPrincipalRestore(revoke: () => void | Promise<void>) {
   const restore = cronSourceRuntime.restoreCronOperatorSource;
   vi.spyOn(cronSourceRuntime, "restoreCronOperatorSource").mockImplementationOnce(
     async (params) => {
       const actual = await restore(params);
       expect(actual?.authority.recoverySnapshot?.sourceIngress).toBe("principal");
-      revoke();
+      await revoke();
       return actual;
     },
   );
@@ -359,8 +361,61 @@ export function prepareContinuationClient(params: {
   };
   client.authPolicy = captureGatewayAuthPolicy(config, { role: "operator", authMethod: "token" });
   context.getRuntimeConfig = () => config;
-  const removePersonFromAllowlist = scenario.startsWith("principal allowlist")
-    ? bindPersonAllowlistRevocation(context, config)
+  const revokePersonPolicy = isPrincipalPolicyScenario(scenario)
+    ? bindPersonPolicyRevocation(context, config, profileId, client.connect.scopes ?? [], scenario)
     : undefined;
-  return { client, removePersonFromAllowlist };
+  return { client, revokePersonPolicy };
+}
+
+function principalIngressFactory(
+  context: GatewayRequestContext,
+  signal: AbortSignal,
+  pluginId: string,
+) {
+  const getConfig = () => context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig();
+  return createGatewayControlUiIngressFactory({
+    pluginId,
+    signal,
+    assertCurrent: () => signal.throwIfAborted(),
+    host: {
+      signal,
+      controlUiBasePath: "",
+      getRuntimeConfig: getConfig,
+      getResolvedAuth: () => resolveGatewayAuthForConfig({ config: getConfig(), env: {} }),
+      resolveGatewayContext: () => context,
+      handleRequest: async () => {
+        throw new Error("This proof uses principal RPC, not HTTP presentation.");
+      },
+      handleSandboxRequest: async () => {
+        throw new Error("This proof uses principal RPC, not sandbox presentation.");
+      },
+      handleUpgrade: async () => {
+        throw new Error("This proof uses principal RPC, not WebSocket presentation.");
+      },
+    },
+  });
+}
+
+export const PRINCIPAL_POLICY_CASES = [
+  "principal allowlist allowed",
+  "principal allowlist removed before restore",
+  "principal allowlist removed before effect",
+  "principal auth mode disabled before restore",
+  "principal auth mode disabled before effect",
+] as const;
+export const isPrincipalPolicyScenario = (scenario: string) =>
+  PRINCIPAL_POLICY_CASES.some((value) => value === scenario);
+
+export async function preparePrincipalPolicyChange(
+  scenario: string,
+  revoke: (() => void | Promise<void>) | undefined,
+) {
+  if (!revoke) {
+    return;
+  }
+  if (scenario.endsWith("before restore")) {
+    await revoke();
+  } else if (scenario.endsWith("before effect")) {
+    revokeAfterNextPrincipalRestore(revoke);
+  }
 }

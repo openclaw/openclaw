@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
+import { getCanonicalGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
@@ -21,7 +22,7 @@ import {
 import { captureGatewayAuthPolicy, isGatewayAuthGrantCurrent } from "./auth-policy.js";
 import type { GatewayAuthPolicy } from "./auth-policy.types.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
-import { isTrustedProxyUserAllowed } from "./auth.js";
+import { gatewayPersonPrincipalAuthError } from "./auth.js";
 import { prepareChannelOperatorAuthority } from "./channel-operator-authority.js";
 import {
   captureGatewayDeviceRevocation,
@@ -49,6 +50,7 @@ import {
   decodeQueuedOperatorRecoverySource,
   type OperatorRunRecoverySnapshot,
 } from "./operator-run-recovery-source.codec.js";
+import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { restoreIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-types.js";
@@ -261,15 +263,21 @@ async function restoreGatewayOperatorSnapshot(params: {
       }
       if (
         snapshot.sourceIngress === "principal" &&
-        snapshot.profileId !== GATEWAY_OWNER_PROFILE_ID &&
-        !isTrustedProxyUserAllowed(
-          resolveGatewayAuthForConfig({ config: cfg }).trustedProxy,
-          profileFacts.emails,
-        )
+        snapshot.profileId !== GATEWAY_OWNER_PROFILE_ID
       ) {
-        throw new GatewayOperatorRecoveryAuthorizationError(
-          "Person principal is no longer permitted by gateway.auth.trustedProxy.allowUsers.",
+        // The transport owns effective auth overrides; headless contexts resolve their config.
+        const resolver = context.resolveGatewayContext
+          ? getCanonicalGatewayContextResolver(context.resolveGatewayContext)
+          : undefined;
+        const host = resolver ? getGatewayControlUiIngressHost(resolver) : undefined;
+        const eligibilityError = gatewayPersonPrincipalAuthError(
+          host?.getResolvedAuth() ?? resolveGatewayAuthForConfig({ config: cfg }),
+          cfg,
+          profileFacts.emails,
         );
+        if (eligibilityError) {
+          throw new GatewayOperatorRecoveryAuthorizationError(eligibilityError);
+        }
       }
       return { cfg, profile: profileFacts };
     };

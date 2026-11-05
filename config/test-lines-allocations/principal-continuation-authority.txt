@@ -5,4 +5,5 @@
 # helper-only tests missed. Preserve those distinct contracts; scalar unchanged.
 # Includes exact-issuance migration, awaited startup and declared warning feedback.
 # Adds +108 counted lines for genuine person allowlist revocation before/after restore.
-1116
+# Adds +92 counted lines for live/recovered person enablement policy parity.
+1208
