@@ -430,6 +430,7 @@ describe("queued ingress acceptance", () => {
             expect(signals.map((signal) => signal.aborted)).toEqual([false, false]);
             await vi.advanceTimersByTimeAsync(60);
             expect(signals.map((signal) => signal.aborted)).toEqual([true, false]);
+            await vi.advanceTimersByTimeAsync(250);
             expect(selectedGroups).toContainEqual(["Second request"]);
             // The waiting input keeps its heartbeat until its own preparation fails.
             await vi.advanceTimersByTimeAsync(90);
@@ -455,6 +456,7 @@ describe("queued ingress acceptance", () => {
         } finally {
           drain.dispose();
           clearFollowupQueue(key);
+          await vi.advanceTimersByTimeAsync(250);
           preparation?.mockRestore();
         }
       });
