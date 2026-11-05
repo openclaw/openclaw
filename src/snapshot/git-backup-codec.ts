@@ -610,7 +610,12 @@ export async function restoreGitBackupDirectory(params: {
     const stagedHandle = await fs.open(stagedPath, "wx", 0o600);
     await stagedHandle.close();
     database = openNodeSqliteDatabase(stagedPath);
-    database.exec("PRAGMA foreign_keys = OFF; PRAGMA journal_mode = DELETE;");
+    // schema.sql is caller-supplied. trusted_schema=OFF keeps trigger and
+    // generated-column bodies from calling extension or filesystem functions
+    // before the table hashes have been checked.
+    database.exec(
+      "PRAGMA foreign_keys = OFF; PRAGMA journal_mode = DELETE; PRAGMA trusted_schema = OFF;",
+    );
     for (const statement of [...plainTables, ...indexes]) {
       database.exec(statement);
     }
