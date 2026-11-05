@@ -230,10 +230,11 @@ sessions that get the standing index):
    that read like instructions or contain markup are skipped.
    - `keyword` (default): BM25 keyword search over each page's title and body,
      with a boost for title matches, keeps the top `maxCandidates` pages that
-     share at least one word with the message. For each page it quotes the
-     best-matching passages (blank-line separated): at most `excerpts`
-     passages of `excerptChars` characters, `pageChars` per page. Pages that
-     share no word with the message are never sent to the Decision model.
+     share at least one word (any script) with the message. For each page it
+     quotes the best-matching passages (blank-line separated): at most
+     `excerpts` passages of `excerptChars` characters, `pageChars` per page. A
+     longer passage is clipped to the window around its matching words. Pages
+     that share no word with the message are never sent to the Decision model.
    - `model`: the page label index (type, title, one exact alias, most
      connected first, up to `maxIndexChars`) is offered to the Decision model.
      When more than `maxCandidates` entries fit, one `choice` question per 254

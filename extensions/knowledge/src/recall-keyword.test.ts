@@ -41,3 +41,15 @@ it("quotes the best passages within the per-passage and per-page budgets", () =>
   expect(entry!.text!.length).toBeLessThanOrEqual(2_800 + parts.length);
   expect(entry!.text).not.toContain("alpha");
 });
+
+it("matches words in any script", () => {
+  const pages = [page("a", "Прививки", "Нове нужна прививка."), page("b", "日記", "x")];
+  expect(keywordCandidates("Когда прививка?", pages, 10, budget)).toMatchObject([{ id: "a" }]);
+});
+
+it("clips a long passage around the words that matched it", () => {
+  const body = `${"General notes about the house. ".repeat(40)}Router reset PIN: 4421.`;
+  const [entry] = keywordCandidates("router reset", [page("m", "Maintenance", body)], 10, budget);
+  expect(entry!.text).toHaveLength(1_000);
+  expect(entry!.text).toContain("Router reset PIN: 4421.");
+});

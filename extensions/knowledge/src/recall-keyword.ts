@@ -22,17 +22,65 @@ const K1 = 1.2;
 const B = 0.75;
 const TITLE_BOOST = 4;
 
-/** Lowercased, NFKC-normalized word tokens without stopwords; simple plural folding. */
+/** Normalized word token with simple plural folding, or undefined for stopwords and one-letter words. */
+function keywordToken(word: string): string | undefined {
+  const token = word.normalize("NFKC").toLowerCase();
+  if (/^.?$/su.test(token) || STOP.has(token)) {
+    return undefined;
+  }
+  return token.length > 4 && token.endsWith("s") ? token.slice(0, -1) : token;
+}
+
+/** Unicode letter/number runs; apostrophes split words, so possessive "'s" drops as a one-letter word. */
+const WORD = /[\p{L}\p{M}\p{N}]+/gu;
+
+/** Lowercased, NFKC-normalized word tokens in any script, without stopwords. */
 function keywordTokens(text: string): string[] {
-  return (
-    text
-      .toLowerCase()
-      .normalize("NFKC")
-      .replace(/([a-z])['’]s\b/g, "$1")
-      .match(/[a-z0-9]+/g)
-      ?.filter((token) => token.length > 1 && !STOP.has(token))
-      .map((token) => (token.length > 4 && token.endsWith("s") ? token.slice(0, -1) : token)) ?? []
-  );
+  const tokens: string[] = [];
+  for (const [word] of text.normalize("NFKC").matchAll(WORD)) {
+    const token = keywordToken(word);
+    if (token !== undefined) {
+      tokens.push(token);
+    }
+  }
+  return tokens;
+}
+
+/**
+ * The `size`-character window of `text` that covers the most query weight,
+ * so a long passage is never clipped away from the words that matched it.
+ */
+function matchWindow(
+  text: string,
+  query: ReadonlySet<string>,
+  idf: (token: string) => number,
+  size: number,
+): string {
+  if (text.length <= size) {
+    return text;
+  }
+  const hits: { at: number; end: number; token: string }[] = [];
+  for (const match of text.matchAll(WORD)) {
+    const token = keywordToken(match[0]);
+    if (token !== undefined && query.has(token)) {
+      hits.push({ at: match.index, end: match.index + match[0].length, token });
+    }
+  }
+  let best = { start: 0, score: -1 };
+  for (const hit of hits) {
+    const start = Math.max(0, Math.min(hit.at - Math.floor(size / 8), text.length - size));
+    const seen = new Set<string>();
+    for (const other of hits) {
+      if (other.at >= start && other.end <= start + size) {
+        seen.add(other.token);
+      }
+    }
+    const score = [...seen].reduce((sum, token) => sum + idf(token), 0);
+    if (score > best.score) {
+      best = { start, score };
+    }
+  }
+  return text.slice(best.start, best.start + size);
 }
 
 /** Blank-line separated passages; a page without breaks is one passage. */
@@ -124,6 +172,7 @@ function excerpt(
   idf: (token: string) => number,
   policy: KeywordExcerptPolicy,
 ): string {
+  const wanted = new Set(query);
   const ranked = parts
     .map((text, index) => {
       const tokens = new Set(keywordTokens(text));
@@ -135,7 +184,7 @@ function excerpt(
   const chosen: string[] = [];
   let used = 0;
   for (const { text } of ranked) {
-    const clipped = text.slice(0, policy.excerptChars);
+    const clipped = matchWindow(text, wanted, idf, policy.excerptChars);
     if (used + clipped.length > policy.pageChars) {
       continue;
     }
