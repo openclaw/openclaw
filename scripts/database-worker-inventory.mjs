@@ -2894,7 +2894,7 @@ const reviewedOperations = new Map([
           "openPackageActivationJournal.readRow",
           "openPackageActivationJournal.transition",
           "openPackageActivationJournal.replaceCompleted",
-          "openJournal.withDatabase.validate",
+          "openJournal.validate",
           "openJournal.readRow",
           "openJournal.transition",
           "openJournal.replaceCompleted",
