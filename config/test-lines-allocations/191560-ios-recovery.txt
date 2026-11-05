@@ -1,0 +1,2 @@
+# Native reconnect regression exercises toolbar recovery navigation and keeps session mutations disabled; requires real SwiftUI/XCTest execution.
+33

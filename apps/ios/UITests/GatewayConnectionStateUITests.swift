@@ -89,6 +89,39 @@ final class GatewayConnectionStateUITests: XCTestCase {
         self.capture(app, named: "connection-node-pairing-actionable")
     }
 
+    /// An automatic reconnect keeps its handoff pending for as long as the saved Gateway
+    /// never answers. Chat must still offer the toolbar route to Gateway settings.
+    func testToolbarStaysUsableWhileReconnectingToUnreachableGateway() {
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        // Argument defaults save a manual Gateway at an unroutable TEST-NET-1 address.
+        app.launchArguments = [
+            "--openclaw-initial-tab", "chat", "--openclaw-initial-destination", "chat", "-AppleLanguages", "(en)",
+            "-gateway.onboardingComplete", "YES", "-gateway.hasConnectedOnce", "YES",
+            "-onboarding.quickSetupDismissed", "YES", "-gateway.autoconnect", "YES",
+            "-gateway.manual.enabled", "YES", "-gateway.manual.host", "192.0.2.10", "-gateway.manual.port", "18789",
+        ]
+        app.launch()
+        let status = app.buttons["chat-gateway-status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 15))
+        XCTAssertTrue(status.label.contains("Gateway: Connecting"), status.label)
+        XCTAssertFalse(app.textViews["chat-message-input"].isEnabled, "The chat surface waits out the handoff")
+
+        for control in [app.buttons["RootTabs.Sidebar.Show"], status, app.buttons["Chat actions"]] {
+            XCTAssertTrue(control.isEnabled, "\(control.identifier) \(control.label) must stay enabled")
+        }
+        self.capture(app, named: "reconnecting-chat-recovery-toolbar")
+        app.buttons["Chat actions"].tap()
+        XCTAssertFalse(app.buttons["New session options…"].isEnabled)
+        let gatewaySettings = app.buttons["chat-gateway-settings"]
+        XCTAssertTrue(gatewaySettings.waitForExistence(timeout: 5))
+        XCTAssertTrue(gatewaySettings.isEnabled)
+        gatewaySettings.tap()
+        XCTAssertTrue(app.navigationBars["Gateway"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Scan QR"].isEnabled)
+        self.capture(app, named: "reconnecting-gateway-settings-reachable")
+    }
+
     private func launchConnectionApp(_ app: XCUIApplication, setupCode: String) {
         addUIInterruptionMonitor(withDescription: "Local network access") { alert in
             guard alert.buttons["Allow"].exists else { return false }
