@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createOpenClawStateLeaseLostError } from "../../state/openclaw-state-lease-error.js";
 import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderFormatErrorCopy } from "./assistant-request-failure-copy.js";
 import {
@@ -59,6 +60,21 @@ describe("failover user copy", () => {
   ])("gives recovery guidance without internal identifiers for %s", (raw, expected) => {
     expect(sanitizedCopy(raw, { errorContext: true })).toBe(expected);
     expect(sanitizedCopy(raw)).toBe(raw);
+  });
+
+  it("recognizes workspace lease loss with the current owner's diagnostic suffix", () => {
+    const error = createOpenClawStateLeaseLostError(
+      {
+        scope: "core:managed-worktrees:create",
+        key: "capacity",
+        leaseLabel: "managed worktree allocation lease",
+      },
+      undefined,
+      { reason: "missing" },
+    );
+    expect(sanitizedCopy(error.message, { errorContext: true })).toBe(
+      "Couldn't finish preparing the code workspace. Send your request again to retry workspace setup.",
+    );
   });
 
   it("keeps normalized startup diagnostics out of the compact summary", () => {

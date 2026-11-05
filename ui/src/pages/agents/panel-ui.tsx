@@ -2,6 +2,14 @@ import type { JSX } from "@solidjs/web";
 import { For } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 
+/** What a config-editing panel reads; edits save themselves through the config owner. */
+export type AgentConfigState = {
+  configLoading: boolean;
+  configSaving: boolean;
+  configDirty: boolean;
+  canUpdateConfig: boolean;
+};
+
 export function AgentPanelAction(props: { label: string; disabled: boolean; onClick: () => void }) {
   return (
     <button class="btn btn--sm" disabled={props.disabled} onClick={() => props.onClick()}>

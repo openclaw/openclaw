@@ -166,6 +166,7 @@ export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly stri
           const prefix = value.slice(0, 498);
           const complete =
             prefix.match(/^[\s\S]*(?:[.!?](?=\s)|\r?\n)/u)?.[0] ??
+            prefix.match(/^[^\r\n]+:\s+\[[^\]\r\n]+\]/u)?.[0] ??
             prefix.match(/^[^\r\n]+:(?=\s)/u)?.[0];
           return complete
             ? `${complete.trimEnd()} …`
@@ -184,6 +185,7 @@ export type DoctorConfigCapture = {
   configChanges: UpdateDoctorConfigChange[];
   configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
   deferredInspectionCheckIds?: string[];
+  warnings?: string[];
 };
 /** Runs a policy check under Doctor's held maintenance owner and its open scope. */
 type DoctorPolicyCustodyOwner = { assertCurrent(policy: () => void): void };
@@ -199,6 +201,7 @@ export type UpdateDoctorWriteAuthority = {
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
+  databaseWriteCapture?: ReturnType<typeof createUpdateDoctorDatabaseWriteCapture>;
   databasePluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
   originalRecoveryCapture?: {
     runId: string;
@@ -362,6 +365,10 @@ const doctorConfigWrites = new AsyncLocalStorage<{
   capture: DoctorConfigCapture;
   authority?: UpdateDoctorWriteAuthority;
 }>();
+
+export function getUpdateDoctorConfigCapture(): DoctorConfigCapture | undefined {
+  return doctorConfigWrites.getStore()?.capture;
+}
 
 /** Deferral requires an owned result channel, not just an inherited marker. */
 export function recordUpdateDoctorDeferredInspectionChecks(

@@ -180,7 +180,7 @@ describe("normalizeSlackOutboundText", () => {
       ["renders bullet lists", "- one\n- two", "• one\n• two"],
       ["renders ordered lists with numbering", "2. two\n3. three", "2. two\n3. three"],
       ["renders headings as bold text", "# Title", "*Title*"],
-      ["renders blockquotes", "> Quote", "> Quote"],
+      ["renders blockquotes", "> > Quote\n> > more", "> > Quote\n> > more"],
     ] as const;
     for (const [name, input, expected] of cases) {
       expect(normalizeSlackOutboundText(input), name).toBe(expected);

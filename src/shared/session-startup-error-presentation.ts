@@ -11,7 +11,7 @@ const STARTUP_FAILURES = [
   {
     // allocation.ts names the lease; the state-lease owner supplies scope/key and outcome.
     pattern:
-      /^managed worktree allocation lease core:managed-worktrees:(?:create|mutation)\/\S+ (?:was lost|expired)(?:$|\s*(?:\||: code=|\n))/u,
+      /^managed worktree allocation lease core:managed-worktrees:(?:create|mutation)\/\S+ (?:was lost|expired)(?:$|\s*(?:\(lease loss:|\||: code=|\n))/u,
     title: "Couldn't finish preparing the code workspace.",
     channelRecovery: "Send your request again to retry workspace setup.",
     recovery: "Send your request again to retry workspace setup.",

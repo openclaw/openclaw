@@ -1295,7 +1295,7 @@ button.chat-reply-attribution__target:focus-visible {
 }
 
 button.chat-reply-attribution__target:disabled {
-  cursor: var(--cursor-default);
+  cursor: default;
 }
 
 .chat-reply-attribution__excerpt {
@@ -1375,24 +1375,35 @@ button.chat-reply-attribution__target:disabled {
     justify-content: flex-end;
   }
 
-  :is(.chat-group-footer-actions, .chat-message-actions-row)
-    :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
-    position: relative;
-    margin-inline: 10px;
+  /* Every action, including the reaction trigger, owns 4px on each side, so
+     icons share one 32px rhythm and the row's own box contains every hit area. */
+  :is(.chat-group-footer-actions, .chat-message-actions-row) {
+    gap: 0;
   }
 
-  /* This transparent extension belongs to the native button. It is anchored to
-     the button's bottom edge and grows up over the group's own message, never
-     into the turn gap; inline margins keep neighboring targets apart. It
-     inherits the button’s pointer policy during disclosure. */
+  :is(.chat-group-footer-actions, .chat-message-actions-row)
+    :is(
+      .chat-copy-btn,
+      .chat-reply-btn,
+      .chat-read-aloud-btn,
+      .chat-group-rewind,
+      .chat-reaction-action
+    ) {
+    position: relative;
+    margin-inline: 4px;
+  }
+
+  /* This transparent extension belongs to the native button. It fills the
+     button's inline margins and grows up over the group's own message, never
+     into the turn gap. It inherits the button's pointer policy during
+     disclosure. */
   :is(.chat-group-footer-actions, .chat-message-actions-row)
     :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind)::before {
     content: "";
     position: absolute;
     inset-block-end: 0;
-    inset-inline-start: -10px;
-    width: var(--chat-touch-target);
-    height: var(--chat-touch-target);
+    inset-inline: -4px;
+    height: 44px;
     pointer-events: inherit;
   }
 
@@ -1649,30 +1660,6 @@ button.chat-reply-attribution__target:disabled {
   white-space: nowrap;
   vertical-align: bottom;
   color: var(--text);
-}
-
-/* Reuse the shared text-shimmer owner; accessibility modes keep static text. */
-@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
-  .agent-chat__typing-text[data-typing] {
-    background-image: linear-gradient(
-      90deg,
-      var(--muted) 0%,
-      var(--muted) 35%,
-      var(--text) 50%,
-      var(--muted) 65%,
-      var(--muted) 100%
-    );
-    background-size: 200% 100%;
-    background-repeat: repeat-x;
-    background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    animation: text-shimmer 2.4s ease-in-out infinite;
-  }
-
-  .agent-chat__typing-text[data-typing] .agent-chat__typing-name {
-    color: inherit;
-  }
 }
 
 .agent-chat__typing-preview-text {
@@ -2064,10 +2051,39 @@ button.chat-reply-attribution__target:disabled {
     display: none;
   }
 
+  .chat-reply-attribution--reply {
+    align-items: center;
+    min-height: var(--chat-reply-attribution-line-height);
+  }
+
   .chat-reply-attribution--reply .chat-reply-attribution__label {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+  }
+
+  /* The icon carries the cue on screen; assistive tech still hears the label. */
+  .chat-reply-attribution--reply .chat-reply-attribution__label-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .chat-reply-attribution--reply .chat-reply-attribution__name-rest {
+    display: none;
+  }
+
+  .chat-reply-attribution--reply button.chat-reply-attribution__target {
+    position: relative;
+  }
+
+  /* A larger hit area without changing the line's height. */
+  .chat-reply-attribution--reply button.chat-reply-attribution__target::after {
+    content: "";
+    position: absolute;
+    inset: -8px -4px;
   }
 
   .chat-reply-attribution__mobile-icon {

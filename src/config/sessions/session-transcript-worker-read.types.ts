@@ -30,6 +30,8 @@ import type { SessionEntryReadWorkerInput } from "./session-entry-read.types.js"
 import type {
   SessionModelContextLimits,
   SessionTranscriptEventMatch,
+  SessionTranscriptMatchCaller,
+  SessionTranscriptMatchDiagnostics,
 } from "./session-history-read.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
@@ -78,6 +80,8 @@ export type SessionArchivedEvictionCandidatesWorkerInput = Omit<
 export type SessionTranscriptEventMatchRequest = {
   target: ResolvedTranscriptReadScope;
   match: SessionTranscriptEventMatch;
+  caller?: SessionTranscriptMatchCaller;
+  diagnostics?: SessionTranscriptMatchDiagnostics;
 };
 
 export type SessionTranscriptMatchWorkerInput = {

@@ -1,5 +1,6 @@
 import type { WorkerSessionPlacementRecord, WorkerSessionTurnClaim } from "./placement-store.js";
 import type { WorkerPlacementRedispatch } from "./service-contract.js";
+import type { WorkerEnvironmentService } from "./service.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import type { WorkerTurnAdmissionOptions } from "./worker-turn-admission.js";
 import type {
@@ -9,7 +10,8 @@ import type {
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 export type WorkerTurnLauncherOptions = WorkerTurnAdmissionOptions & {
-  environments: WorkerTurnEnvironmentService;
+  environments: WorkerTurnEnvironmentService &
+    Pick<WorkerEnvironmentService, "ensureRetainedRunning">;
   /** Read-only resolution; a cancelled turn may stop waiting for these facts. */
   resolveWorkspace: (identity: {
     sessionId: string;

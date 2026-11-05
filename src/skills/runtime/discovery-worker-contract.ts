@@ -31,8 +31,12 @@ export type SkillsDiscoveryEnvironment = ReturnType<typeof captureSkillsDiscover
 export type SkillsSourcePlanInput = {
   workspaceDir: string;
   environment: SkillsDiscoveryEnvironment;
-  options?: Omit<WorkspaceSkillSourcePlanOptions, "pluginMetadataSnapshot" | "pluginSkillRoots">;
+  options?: Omit<
+    WorkspaceSkillSourcePlanOptions,
+    "pluginMetadataSnapshot" | "pluginSkillRoots" | "agentSkillsDirs"
+  >;
   pluginContributions?: PluginSkillContribution[];
+  agentSkillsDirs?: string[];
   acpRuntimeAvailable: boolean;
 };
 

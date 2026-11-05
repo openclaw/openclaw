@@ -106,7 +106,7 @@ struct SessionDashboardScreenTests {
         let script = AuthenticatedControlUI.authUserScript(
             config: config,
             pageURL: url,
-            storedOperatorToken: nil,
+            legacyCredentials: nil,
             usesNativeNavigationChrome: true)
 
         #expect(script?.contains("__OPENCLAW_NATIVE_WEB_CHROME__") == true)

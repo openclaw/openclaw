@@ -98,9 +98,11 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const alert = page.locator(".chat-run-failure");
         await alert.waitFor();
-        await expect.poll(() => alert.locator(".chat-run-failure__summary").isVisible()).toBe(true);
+        await expect
+          .poll(() => alert.locator(".chat-run-failure__recovery").isVisible())
+          .toBe(true);
         expect(await alert.getByLabel("Error details", { exact: true }).isVisible()).toBe(false);
-        await alert.locator("summary").click();
+        await alert.locator(".chat-run-failure__toggle").click();
         expect(await alert.getByLabel("Error details", { exact: true }).textContent()).toContain(
           diagnostic,
         );
@@ -213,7 +215,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, { sessionKey });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const { runId } = await sendPrompt(page, gateway, "Review the project");
-        await page.getByRole("button", { name: "Stop generating" }).waitFor();
+        await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
         const row = {
           key: sessionKey,
           kind: "direct",
@@ -241,7 +243,7 @@ suite.define(() => {
           phase: "error",
           session: row,
         });
-        await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
+        await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ state: "hidden" });
         const alert = page.locator(".chat-error");
         await polledText(alert).toContain(diagnostic);
         expect(await exactButton(alert, "Copy error").count()).toBe(1);

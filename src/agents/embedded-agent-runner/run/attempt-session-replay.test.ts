@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createFailureMessage } from "../../../../packages/agent-core/src/turn-interruption.js";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { classifyAgentExecResult } from "../../../commands/agent-exec-result.js";
 import {
   loadTranscriptEventsSync,
@@ -18,7 +19,7 @@ import {
   type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { SKILL_WORKSHOP_CHANGE_NOTICE_KIND } from "../../../shared/transcript-only-openclaw-assistant.js";
+import { PLUGIN_NOTICE_KIND } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
@@ -182,10 +183,10 @@ describe("interrupted canonical user replay", () => {
               idempotencyKey: `skill-workshop-notice:${attempt.runId}`,
               text: "One skill changed after review",
               deliveryMirror: {
-                kind: SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
-                agentId: target.agentId,
-                runId: "background-review",
-                skills: [{ name: "some-skill", action: "updated" }],
+                kind: PLUGIN_NOTICE_KIND,
+                pluginId: "skill-workshop",
+                type: "skills-changed",
+                data: { agentId: target.agentId, runId: "background-review" },
               },
             });
             expect(appended.ok).toBe(true);
@@ -788,18 +789,27 @@ describe("interrupted canonical user replay", () => {
     ["tail", "final"],
     ["tail", "other-run"],
     ["tail", "coded-abort"],
+    ["length", "retry"],
+    ["length", "fallback"],
+    ["length", "other-run"],
     ["tool-work", "other-run"],
     ["tool-work", "final"],
     ["tool-work", "hidden-user"],
     ["tool-work", "unknown-activity"],
-  ] as const)("does not resume %s across a %s boundary", async (kind, boundary) => {
+  ] as const)("enforces %s replay across %s", async (kind, boundary) => {
     await withInterruptedTurn(false, async (fixture) => {
       const original = SessionManager.open(fixture.target);
-      if (kind === "tail") {
+      const resumes = kind === "length" && boundary === "fallback";
+      fixture.attempt.fallbackReason =
+        kind === "length" && boundary !== "retry" ? "format" : undefined;
+      if (kind !== "tool-work") {
         const guarded = guardSessionManager(original, {
           runId: boundary === "other-run" ? "unrelated-run" : fixture.attempt.runId,
         });
-        const message = createFailureMessage(testModel, createAgentRunRestartAbortError(), true);
+        const message =
+          kind === "length"
+            ? createAssistant(testModel, [], "length")
+            : createFailureMessage(testModel, createAgentRunRestartAbortError(), true);
         if (boundary === "partial") {
           message.content = [{ type: "text", text: "partial response" }];
         } else if (boundary === "final") {
@@ -843,9 +853,10 @@ describe("interrupted canonical user replay", () => {
         await appendOversizedCacheSnapshot(original);
       }
       await withReplaySession(fixture, false, async (_session, submit) => {
+        replyWith("Recovered answer");
         await submit();
-        expect(streamMocks.streamSimple).not.toHaveBeenCalled();
-        expect(fixture.attempt.userTurnTranscriptRecorder!.hasPersisted()).toBe(false);
+        expect(streamMocks.streamSimple).toHaveBeenCalledTimes(resumes ? 1 : 0);
+        expect(fixture.attempt.userTurnTranscriptRecorder!.hasPersisted()).toBe(resumes);
       });
     });
   });
@@ -897,12 +908,7 @@ describe("interrupted canonical user replay", () => {
         false,
         async (_session, submit) => {
           const settled = Promise.allSettled([submit()]);
-          await Promise.race([
-            entered.promise,
-            settled.then(() => {
-              throw new Error("Replay settled before the mutation barrier");
-            }),
-          ]);
+          await awaitGateBeforeSettlement(entered.promise, settled, "Replay settled early");
           const other = SessionManager.open(fixture.target);
           if (change === "later-user" || change.startsWith("excluded-user")) {
             const laterUser = {
@@ -965,19 +971,12 @@ describe("interrupted canonical user replay", () => {
           expect(streamMocks.streamSimple).not.toHaveBeenCalled();
           expect(loadTranscriptEventsSync(fixture.target)).toEqual(before);
         },
-        phase === "SDK hooks"
-          ? {
-              beforeStart: async () => {
-                entered.resolve();
-                await release.promise;
-              },
-            }
-          : {
-              afterReplayPreparation: async () => {
-                entered.resolve();
-                await release.promise;
-              },
-            },
+        {
+          [phase === "SDK hooks" ? "beforeStart" : "afterReplayPreparation"]: async () => {
+            entered.resolve();
+            await release.promise;
+          },
+        },
       );
     });
   });

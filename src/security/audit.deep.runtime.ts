@@ -9,7 +9,6 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { loadSkillRootRecords } from "../skills/loading/skill-root-loader.js";
 import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
 import type { SkillScanFinding } from "../skills/security/scanner.js";
-import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
@@ -275,7 +274,12 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const entries = [...workspaceDirs].flatMap((workspaceDir) =>
     loadWorkspaceSkills(workspaceDir, { config: params.cfg }),
   );
-  const { listAgentIds } = await import("../agents/agent-scope.js");
+  const [{ listAgentIds }, { resolveAgentDir }, { resolvePluginMetadataSnapshotRequiredRuntime }] =
+    await Promise.all([
+      import("../agents/agent-scope.js"),
+      import("../agents/agent-scope-config.js"),
+      import("../plugins/plugin-metadata-snapshot-required.js"),
+    ]);
   const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
   const reportWorkshopScanFailure = (filePath: string, error: unknown) => {
     findings.push({
@@ -290,18 +294,38 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   // Installed-code audit includes hidden and shadowed Workshop skills, not only
   // the merged prompt inventory. Prompt discovery limits must not hide installed
   // artifacts from the audit.
+  // Disabled plugins keep their learned skills on disk, so every declared folder is installed code.
+  let agentSkillsDirs: string[] = [];
+  try {
+    const metadataSnapshot = resolvePluginMetadataSnapshotRequiredRuntime({
+      workspaceDir: [...workspaceDirs][0] ?? params.stateDir,
+      config: params.cfg,
+      env,
+    });
+    agentSkillsDirs = [
+      ...new Set(
+        metadataSnapshot.manifestRegistry.plugins.flatMap((record) =>
+          record.agentSkillsDir ? [record.agentSkillsDir] : [],
+        ),
+      ),
+    ];
+  } catch (error) {
+    reportWorkshopScanFailure(path.join(params.stateDir, "agents"), error);
+  }
   for (const agentId of listAgentIds(params.cfg)) {
-    const workshopDir = resolveWorkshopSkillsDir(params.cfg, agentId, env);
-    entries.push(
-      ...loadSkillRootRecords({
-        dir: workshopDir,
-        source: "openclaw-workshop",
-        config: params.cfg,
-        mode: "audit",
-        rejectHardlinks: true,
-        onDiagnostic: ({ path: filePath, message }) => reportWorkshopScanFailure(filePath, message),
-      }),
-    );
+    for (const name of agentSkillsDirs) {
+      entries.push(
+        ...loadSkillRootRecords({
+          dir: path.join(resolveAgentDir(params.cfg, agentId, env), name),
+          source: "openclaw-workshop",
+          config: params.cfg,
+          mode: "audit",
+          rejectHardlinks: true,
+          onDiagnostic: ({ path: filePath, message }) =>
+            reportWorkshopScanFailure(filePath, message),
+        }),
+      );
+    }
   }
   for (const entry of entries) {
     if (resolveSkillSource(entry.skill) === "openclaw-bundled") {

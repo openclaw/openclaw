@@ -187,7 +187,7 @@ function observeColdMetadataReads(database: DatabaseSync) {
 }
 
 it.each(["rpc", "message-by-id"] as const)(
-  "restores %s history without reading cold metadata on the caller",
+  "reads archived %s history without restoring or reading cold metadata on the caller",
   async (transport) => {
     await withHistoryState(async (state) => {
       const fixture = await createSessionColdStorageFixture(state.statePath("cold-history.sqlite"));
@@ -196,9 +196,12 @@ it.each(["rpc", "message-by-id"] as const)(
           config: maintenanceConfig(fixture.scope.storePath),
         }),
       ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
+      const archivedSnapshot = fixture.snapshot();
+      const archive = readSessionColdTranscript(fixture.database(), historicalId);
       const { metadataReads, restore } = observeColdMetadataReads(fixture.database());
       try {
-        expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
+        expect(readSessionColdTranscript(fixture.database(), historicalId)).toEqual(archive);
+        expect(archive).toBeDefined();
         expect(metadataReads).toHaveLength(1);
         metadataReads.length = 0;
         const read = async () => {
@@ -210,7 +213,7 @@ it.each(["rpc", "message-by-id"] as const)(
           const page = await readChatHistoryPage(historyParams(fixture.scope));
           return page.messages.map(readChatHistoryMessageId);
         };
-        // The first read restores cold history; the second probes the now-hot transcript.
+        // Both reads stay cold; metadata and payload work belong to the history worker.
         for (let round = 0; round < 2; round++) {
           expect(await read()).toEqual(
             transport === "message-by-id"
@@ -222,8 +225,8 @@ it.each(["rpc", "message-by-id"] as const)(
       } finally {
         restore();
       }
-      expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
-      expect(fixture.snapshot()).toEqual(fixture.original);
+      expect(readSessionColdTranscript(fixture.database(), historicalId)).toEqual(archive);
+      expect(fixture.snapshot()).toEqual(archivedSnapshot);
     });
   },
 );

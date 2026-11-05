@@ -2,8 +2,9 @@ import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
-import { getAgentExecCgroup } from "./linux-exec-cgroup.js";
+import { getAgentExecCgroup, type ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { prepareOomScoreAdjustedSpawn } from "./linux-oom-score.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
 import { brokerSpawnOptions } from "./spawn-broker/pipe.js";
@@ -16,7 +17,8 @@ export function spawnProcess(
   args: string[],
   options: SpawnOptions,
   initiateSpawn?: SpawnInitiation,
-  gatewayWorker?: true,
+  executionIntent: ProcessExecutionIntent = "gateway-internal",
+  executionScopeKey?: string,
 ): ChildProcess {
   assertAppContainerSpawnSupported(options.stdio);
   const broker = getSpawnBroker();
@@ -28,11 +30,13 @@ export function spawnProcess(
           args,
           options,
           initiateSpawn,
-          gatewayWorker ? undefined : getAgentExecCgroup(),
+          executionIntent === "agent-tool" ? getAgentExecCgroup(executionScopeKey) : undefined,
         )
       : initiateSpawn
-        ? initiateSpawn(() => spawn(command, args, options))
-        : spawn(command, args, options);
+        ? initiateSpawn(() =>
+            runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native"),
+          )
+        : runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native");
   if (!options.shell && options.argv0 !== undefined) {
     prepareOomScoreAdjustedSpawn(command, args, options).afterSpawn?.(child.pid);
   }
@@ -44,7 +48,8 @@ export function spawnProcess(
 export async function spawnAndWait(params: {
   assertCurrent?: () => void;
   initiateSpawn?: SpawnInitiation;
-  gatewayWorker?: true;
+  executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   argv: string[];
   options: SpawnOptions;
   spawnImpl?: typeof spawnProcess;
@@ -58,7 +63,8 @@ export async function spawnAndWait(params: {
     params.argv.slice(1),
     params.options,
     params.initiateSpawn,
-    params.gatewayWorker,
+    params.executionIntent,
+    params.executionScopeKey,
   );
   await once(child, "spawn");
   return child;

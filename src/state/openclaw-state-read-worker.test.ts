@@ -410,10 +410,12 @@ it("closes one read path without aborting its sibling", async () => {
     type: "backup.runs",
   });
   const assertion = expect(firstRead).rejects.toThrow(/read admission (?:is )?closed/i);
+  // Bind the FIFO task before the sibling source probe can overtake it.
+  await first.captured;
   const siblingRead = executeExistingOpenClawStateRead(siblingSource.options, {
     type: "backup.runs",
   });
-  await Promise.all([first.captured, sibling.captured]);
+  await sibling.captured;
   const firstOptions = await first.submitted;
   const siblingOptions = await sibling.submitted;
   await closeOpenClawStateDatabaseByPathAsync(firstSource.pathname);
@@ -578,6 +580,8 @@ it.each(captures)(
     const baseline = baselineTransport
       ? baselineTransport.startRead(location, authority)
       : executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+    // Bind the FIFO baseline before another filesystem probe can overtake it.
+    await baselineTask.submitted;
     const result = transport
       ? transport.startRead(location, authority)
       : executeExistingOpenClawStateRead(options, fixture.command);

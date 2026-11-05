@@ -352,7 +352,7 @@ function splitParagraphs(
   }
   const sourceText = ir.text.slice(start, end);
   const paragraphs: InputRichBlockParagraph[] = [];
-  const pushParagraph = (rangeStart: number, rangeEnd: number) => {
+  const pushParagraph = (rangeStart: number, rangeEnd: number, paragraphBreak: string) => {
     // Trim the range so style/link offsets stay aligned with the source.
     const raw = ir.text.slice(rangeStart, rangeEnd);
     const absStart = rangeStart + raw.length - raw.trimStart().length;
@@ -364,17 +364,27 @@ function splitParagraphs(
     // Inline island conversion can normalize a leaf to nothing (e.g. an anchor
     // with empty label); an empty paragraph is invalid wire content.
     if (text !== "") {
-      paragraphs.push({ type: "paragraph", text });
+      // Telegram supplies one line between paragraphs and hides trailing newlines.
+      // Keep additional authored breaks at the start of the following paragraph.
+      paragraphs.push({
+        type: "paragraph",
+        text:
+          paragraphs.length > 0 && paragraphBreak
+            ? normalizeRichText([paragraphBreak, text])
+            : text,
+      });
     }
   };
-  const blankLine = /\n[ \t]*\n+/g;
+  const blankLine = /\n(?:[ \t]*\n)+/g;
   let last = 0;
+  let paragraphBreak = "";
   let match: RegExpExecArray | null;
   while ((match = blankLine.exec(sourceText)) !== null) {
-    pushParagraph(start + last, start + match.index);
+    pushParagraph(start + last, start + match.index, paragraphBreak);
+    paragraphBreak = match[0].replace(/[ \t]/g, "").slice(1);
     last = match.index + match[0].length;
   }
-  pushParagraph(start + last, end);
+  pushParagraph(start + last, end, paragraphBreak);
   return paragraphs;
 }
 
@@ -613,22 +623,26 @@ export function markdownToTelegramRichBlocks(
       switch (segment.kind) {
         case "html": {
           blocks.push(
-            ...renderTelegramHtmlIsland(segment.node, (nodes) => {
-              const content: InputRichBlock[] = [];
-              let first = 0;
-              for (let last = 0; last < nodes.length; last += 1) {
-                if (nodes[last + 1]?.start === nodes[last]!.end) {
-                  continue;
+            ...renderTelegramHtmlIsland(
+              segment.node,
+              (nodes) => {
+                const content: InputRichBlock[] = [];
+                let first = 0;
+                for (let last = 0; last < nodes.length; last += 1) {
+                  if (nodes[last + 1]?.start === nodes[last]!.end) {
+                    continue;
+                  }
+                  const start = nodes[first]!.start;
+                  const end = nodes[last]!.end;
+                  // Removed summaries, credits, and checkboxes split body ranges.
+                  // Render the remaining tree with the same Markdown owner as the root.
+                  content.push(...renderChildRange(start, end, nodes.slice(first, last + 1)));
+                  first = last + 1;
                 }
-                const start = nodes[first]!.start;
-                const end = nodes[last]!.end;
-                // Removed summaries, credits, and checkboxes split body ranges.
-                // Render the remaining tree with the same Markdown owner as the root.
-                content.push(...renderChildRange(start, end, nodes.slice(first, last + 1)));
-                first = last + 1;
-              }
-              return content;
-            }),
+                return content;
+              },
+              (start, end) => irRangeToRichText(ir, start, end, skipEntityDetection),
+            ),
           );
           break;
         }

@@ -115,6 +115,7 @@ async function runDoctorConfigPreflightOperation(
   let postSessionPluginMigration: PreparedPostSessionPluginMigration | undefined;
   let postSessionPluginMigrationPlanBound = false;
   let doctorMediaPersistenceAttempted = false;
+  let inspectedSessionEntryPaths: readonly string[] = [];
   let configSnapshotRead: ConfigPreflightSnapshotRead | undefined;
   const pluginMigrations = createDoctorPluginMigrationPreparation({
     enabled: stateMigrationsRequested,
@@ -324,6 +325,9 @@ async function runDoctorConfigPreflightOperation(
         env: process.env,
         deferSchemaRepair: repair,
         integrityCheck: options.integrityCheck,
+        onInspectedTargets: (targets) => {
+          inspectedSessionEntryPaths = targets.map((target) => target.canonicalPath);
+        },
       }),
     );
     if (!repair && entryState.found > 0) {
@@ -341,6 +345,7 @@ async function runDoctorConfigPreflightOperation(
       env: process.env,
       retainedPluginIds: pluginMigrations.retainedPluginIds(),
       measure: options.measure,
+      deferPackageRepair: options.deferPluginPackageRepair,
     });
     configChanged ||= convergence.changed === true;
     setActiveDegradedPlugins(convergence.quarantinedPlugins);
@@ -372,16 +377,24 @@ async function runDoctorConfigPreflightOperation(
     if (options.doctorOnlyStateMigrations === true && !stateMigrationInput?.cfg) {
       const { detectLegacyExecApprovals, migrateLegacyExecApprovals } =
         await import("../infra/state-migrations.exec-approvals.js");
+      const {
+        getActiveOpenClawStateDatabaseReadSnapshotAsync,
+        withOpenClawStateDatabaseReadSnapshot,
+      } = await import("../state/openclaw-state-db-readonly.js");
       const stateDir = resolveStateDir(process.env);
       // Invalid config cannot drive the general graph; its root policy can still recover.
       noteDoctorStateMigrationResult(
-        await measurePreflightStep("exec-approvals-migration", () =>
-          migrateLegacyExecApprovals({
-            detected: detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }),
+        await measurePreflightStep("exec-approvals-migration", async () => {
+          const detected = await withOpenClawStateDatabaseReadSnapshot(async () => {
+            await getActiveOpenClawStateDatabaseReadSnapshotAsync();
+            return detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true });
+          });
+          return migrateLegacyExecApprovals({
+            detected,
             stateDir,
             env: process.env,
-          }),
-        ),
+          });
+        }),
       );
     }
     if (stateMigrationInput) {
@@ -418,6 +431,7 @@ async function runDoctorConfigPreflightOperation(
               doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
               invocationPurpose: options.invocationPurpose,
               integrityCheck: options.integrityCheck,
+              inspectedSessionEntryPaths,
               ...(options.agentDatabaseMigrationDiscovery
                 ? { agentDatabaseMigrationDiscovery: options.agentDatabaseMigrationDiscovery }
                 : {}),

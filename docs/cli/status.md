@@ -67,8 +67,9 @@ Channels without a check, such as WhatsApp, report lifecycle health instead.
 In the Health table, `healthy` is `OK`; degraded lifecycle states and failed
 checks remain `WARN`. A lifecycle `OK` does not mean a live check ran.
 
-The Update run row preserves the last recorded update outcome. A failed run is
-historical only when its saved observation of a running Gateway has a version or
+The Update run history read uses a native read-only connection instead of staging
+a copy of the shared state database. A failed run is historical only when its saved observation
+of a running Gateway has a version or
 build ID that differs from the healthy local Gateway now serving requests:
 `Last update run failed (preflight-no-good-commit) — Gateway is serving 2026.10.1;
 recorded serving version was 2026.9.4.` The installed package's starting identity
@@ -345,7 +346,10 @@ succeeds or the Gateway restarts.
 `status --json --all` reports memory details from the active memory plugin
 runtime selected by `plugins.slots.memory`. Custom memory plugins can leave
 built-in `memory.search.enabled` disabled and still report
-their own files, chunks, vector, and FTS state.
+their own files, chunks, vector, and FTS state. If the vector probe fails,
+the report marks the vector availability it could not verify as `false` and
+puts the probe error in `memory.vector.loadError` instead of repeating the
+last reported vector state.
 
 ## Related
 

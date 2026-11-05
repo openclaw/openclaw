@@ -102,7 +102,6 @@ try {
             profileId: canonical,
             label: `Person ${canonical}`,
             avatarUrl: `/avatar/${canonical}`,
-            hasUploadedAvatar: true,
           },
     );
   }

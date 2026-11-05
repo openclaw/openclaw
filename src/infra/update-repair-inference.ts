@@ -11,6 +11,7 @@ import { supportsModelTools } from "../agents/model-tool-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { monotonicDeadlineAfter, remainingMonotonicMs } from "../shared/monotonic-time.js";
 import { verifySystemAgentInferenceWithFallback } from "../system-agent/inference-fallback.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig,
@@ -34,7 +35,7 @@ export async function selectUpdateRepairInference(params: {
 }): Promise<UpdateRepairInferenceResult> {
   const controller = new AbortController();
   const signal = AbortSignal.any([params.signal, controller.signal]);
-  const deadline = Date.now() + params.timeoutMs;
+  const deadline = monotonicDeadlineAfter(params.timeoutMs);
   const timeout = setTimeout(() => controller.abort(), params.timeoutMs);
   const chains = new Map<string, SystemAgentConfiguredRoute[]>();
   const eligibility = new Map<SystemAgentConfiguredRoute, boolean>();
@@ -158,7 +159,7 @@ export async function selectUpdateRepairInference(params: {
           signal.throwIfAborted();
           const result = await runSetupInferenceTurn({
             route,
-            timeoutMs: Math.max(1, deadline - Date.now()),
+            timeoutMs: Math.max(1, remainingMonotonicMs(deadline)),
             requireExecutionOwner: false,
             signal,
             runtime: params.runtime,
