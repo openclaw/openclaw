@@ -79,6 +79,7 @@ import type { UnifiedModelCatalogProviderPlugin } from "./provider-catalog.types
 import type { ProviderPlugin } from "./provider-plugin.types.js";
 import type {
   ContextEngineFactory,
+  LearnContribution,
   MemoryCorpusSupplement,
   MemoryPluginCapability,
   MemoryPromptSectionBuilder,
@@ -450,6 +451,8 @@ export type OpenClawPluginApi = {
   registerSessionSchedulerJob: OpenClawPluginSessionWorkflowApi["registerSessionSchedulerJob"];
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (capability: MemoryPluginCapability) => void;
+  /** Contribute a medium, guidance and subcommands to /learn turns (non-exclusive). */
+  registerLearnContribution: (contribution: LearnContribution) => void;
   /** Register an additive memory-adjacent prompt section (non-exclusive). */
   registerMemoryPromptSupplement: (builder: MemoryPromptSectionBuilder) => void;
   /** Register an async memory prompt preparation step (non-exclusive). */

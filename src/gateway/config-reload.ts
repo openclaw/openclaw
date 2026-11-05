@@ -147,6 +147,10 @@ export function startGatewayConfigReloader(
   const activeReloads = new Set<Promise<unknown>>();
   let pluginOperationTail: Promise<unknown> = Promise.resolve();
   let missingConfigRetries = 0;
+  // Observation, source acceptance, and runtime application advance independently.
+  // These slots own queued, running, and retry work; receipts follow candidates
+  // only while their saved values survive. A failed receipt does not undo persistence,
+  // and restart intent can outlive the write that requested it.
   let pendingInProcessConfig: GatewayConfigReloadCandidate | null = null;
   let activeConfigCandidate: GatewayConfigReloadCandidate | null = null;
   let retryCandidate: GatewayConfigReloadCandidate | null = null;
@@ -304,8 +308,22 @@ export function startGatewayConfigReloader(
     };
     let nextPluginInstallRecords = currentPluginInstallRecords;
     let committedRuntimeConfig: OpenClawConfig | null = null;
-    // The reload queue serializes application. New observations belong to the next pass.
-    const isCurrent = () => !stopped;
+    const isCurrent = () => {
+      if (stopped) {
+        return false;
+      }
+      const pendingWrite = pendingInProcessConfig;
+      // A watcher can see the rename before its RPC writer publishes the receipt.
+      // Let that exact write own precommit reload so drain excludes its waiting root.
+      return !(
+        committedRuntimeConfig === null &&
+        !pluginLifecycle &&
+        candidate?.origin !== "write" &&
+        pendingWrite?.origin === "write" &&
+        (pendingWrite.application || pendingWrite.carriedApplications?.length) &&
+        configSourceSnapshotsMatch(sourceSnapshot, pendingWrite.snapshot)
+      );
+    };
     const assertInvokerOwned = () => {
       // Published work must finish its cleanup and receipt even if its invoker closes.
       if (!committedRuntimeConfig) {

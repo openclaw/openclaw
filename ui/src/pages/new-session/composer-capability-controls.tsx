@@ -10,44 +10,16 @@ import type {
   ChatComposerCapabilityMenuSource,
 } from "../chat/components/chat-composer-plus-menu.types.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
-import type { NewSessionVisibility } from "./create-params.ts";
 
 registerNewSessionSetupEnglish();
 
 type NewSessionComposerCapabilityOptions = {
   submitting: boolean;
   messageLocked?: boolean;
-  visibility?: NewSessionVisibility;
-  draftAvailable?: boolean;
   capabilityMenu?: ChatComposerCapabilityMenuSource;
   toolOverrides?: SessionToolOverrides | null;
   onChange: () => void;
-  onVisibilityChange?: (visibility: NewSessionVisibility) => void;
 };
-
-export function NewSessionDraftVisibility(props: { options: NewSessionComposerCapabilityOptions }) {
-  const active = () => props.options.visibility === "draft";
-  return (
-    <button
-      type="button"
-      class={[
-        "new-session-page__visibility new-session-page__visibility--draft",
-        { "new-session-page__visibility--active": active() },
-      ]}
-      role="switch"
-      aria-label={t("newSession.draft")}
-      aria-checked={active() ? "true" : "false"}
-      disabled={props.options.submitting || props.options.messageLocked}
-      title={t("newSession.draftDescription")}
-      onClick={() => props.options.onVisibilityChange?.(active() ? "normal" : "draft")}
-    >
-      <span class="new-session-page__visibility-icon" aria-hidden="true">
-        <Icon name="pencil" />
-      </span>
-      <span class="new-session-page__visibility-label">{t("newSession.draft")}</span>
-    </button>
-  );
-}
 
 export function NewSessionPlusMenu(props: {
   options: NewSessionComposerCapabilityOptions;
@@ -66,20 +38,6 @@ export function NewSessionPlusMenu(props: {
       open: textarea.capabilityMenuOpen,
       view: textarea.capabilityMenuView,
       toolOverrides: options.toolOverrides,
-      rootToggles:
-        options.draftAvailable || options.visibility === "draft"
-          ? [
-              {
-                value: "new-session-draft",
-                label: t("newSession.draft"),
-                icon: "pencil",
-                checked: options.visibility === "draft",
-                disabled,
-                title: t("newSession.draftDescription"),
-                onChange: (checked) => options.onVisibilityChange?.(checked ? "draft" : "normal"),
-              },
-            ]
-          : undefined,
       onOpenChange: (open) => {
         textarea.capabilityMenuOpen = open;
         if (!open) {

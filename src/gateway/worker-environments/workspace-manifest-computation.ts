@@ -20,6 +20,13 @@ export type WorkspaceComputationHashes = {
   entries: Array<[string, string]>;
 };
 
+export type WorkspaceManifestHostEffects = {
+  "workspace.manifest.read": {
+    input: { knownTreeRoot?: string };
+    output: Uint8Array<ArrayBuffer>;
+  };
+};
+
 export type WorkspaceComputationHashResult<T> = {
   value: T;
   hashes: Array<[string, string]>;
@@ -125,7 +132,7 @@ export type WorkspaceManifestComputationOperations = {
   };
 } & {
   "workspace.manifest.local": {
-    input: { snapshot: Uint8Array<ArrayBuffer> };
+    input: { owner: string };
     output: LocalWorkspaceManifestValue;
   };
   "workspace.manifest.base-refresh": {

@@ -695,7 +695,7 @@ openclaw-board-widget-cell {
     padding: 0;
   }
 
-  .board-tabs {
+  > .board-view > .board-tabs {
     padding-left: 16px;
   }
 
@@ -727,7 +727,7 @@ openclaw-board-widget-cell {
       min-height: 0;
     }
 
-    .board-grid {
+    > .board-view > .board-grid {
       flex: 1 1 0;
       min-height: 0;
       grid-auto-rows: minmax(0, 1fr);

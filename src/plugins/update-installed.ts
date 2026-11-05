@@ -25,6 +25,7 @@ import {
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import {
   copyPluginInstallTransactionRequest,
+  retainPluginInstallTransaction,
   withPluginInstallTransactions,
 } from "./install-transaction.js";
 import {
@@ -50,9 +51,8 @@ import {
   buildPluginUpdateVersionOutcome,
   formatClawHubInstallFailure,
   formatNpmInstallFailure,
-  readClawHubTrustErrorCode,
+  resolveClawHubTrustSkipCode,
   runPluginUpdateAttempt,
-  shouldSkipClawHubTrustFailureForExistingInstall,
   type ClawHubPluginUpdateSuccess,
   type GitPluginUpdateSuccess,
   type MarketplacePluginUpdateSuccess,
@@ -73,7 +73,6 @@ import {
   expectedIntegrityForNpmUpdate,
   isNpmMetadataCompatibleWithCurrentHost,
   isPluginInstallRecordUpdateSource,
-  isTrustedSourceLinkedOfficialNpmUpdate,
   resolveClawHubNpmUpdateFallback,
   resolveClawHubUpdateSpecs,
   resolveNpmUpdateTarget,
@@ -82,11 +81,7 @@ import {
   type PluginUpdateSummary,
   type UpdateInstalledPluginsParams,
 } from "./update-source.js";
-import {
-  createPluginUpdateTransactionState,
-  finalizePluginUpdateSummary,
-  recordPluginUpdateTransaction,
-} from "./update-summary.js";
+import { finalizePluginUpdateSummary } from "./update-summary.js";
 import {
   resolveRecordedClawHubPackage,
   runPluginUpdateWithClawHubLease,
@@ -107,7 +102,6 @@ export async function updateNpmInstalledPlugins(
 async function runInstalledPluginUpdate(
   params: UpdateInstalledPluginsParams,
   assertCurrent?: () => void,
-  prepareEffect?: () => void | Promise<void>,
 ): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
   const retainOnUnavailable = params.retainOnUnavailable === true;
@@ -124,7 +118,7 @@ async function runInstalledPluginUpdate(
     bundledSources: bundled,
   });
   const outcomes: PluginUpdateOutcome[] = [];
-  const transactionState = createPluginUpdateTransactionState(params);
+  const installOwnerMigrations: Record<string, string> = {};
   let next = params.config;
   let changed = false;
   let ranNpmInstaller = false;
@@ -273,11 +267,10 @@ async function runInstalledPluginUpdate(
         : record.source === "clawhub"
           ? clawhubSpecs?.recordSpec
           : record.spec;
-    const trustedSourceLinkedOfficialInstall = isTrustedSourceLinkedOfficialNpmUpdate({
-      pluginId,
-      spec: effectiveSpec,
-      record,
-    });
+    const trustedSourceLinkedOfficialInstall = Boolean(
+      npmTarget?.officialPackageName &&
+      parseRegistryNpmSpec(effectiveSpec ?? "")?.name === npmTarget.officialPackageName,
+    );
     let expectedIntegrity =
       catalogExpectedIntegrity ??
       expectedIntegrityForNpmUpdate({
@@ -546,20 +539,15 @@ async function runInstalledPluginUpdate(
 
     const { result, activeClawHubInstallSpec, channelFallbackSuffix, npmFallbackSpec } = attempt;
     if (!result.ok) {
-      if (
-        record.source === "clawhub" &&
-        shouldSkipClawHubTrustFailureForExistingInstall({ result, currentVersion })
-      ) {
-        const code = readClawHubTrustErrorCode(result);
-        if (!code) {
-          continue;
-        }
+      const trustSkipCode =
+        record.source === "clawhub" && resolveClawHubTrustSkipCode({ result, currentVersion });
+      if (trustSkipCode) {
         outcomes.push(
           buildClawHubTrustSkippedOutcome({
             pluginId,
             phase: params.dryRun ? "check" : "update",
             error: result.error,
-            code,
+            code: trustSkipCode,
             ...("warning" in result && result.warning ? { warning: result.warning } : {}),
             ...(currentVersion ? { currentVersion } : {}),
           }),
@@ -614,8 +602,9 @@ async function runInstalledPluginUpdate(
     }
 
     const resolvedPluginId = result.pluginId;
-    recordPluginUpdateTransaction(transactionState, result, pluginId, resolvedPluginId);
+    retainPluginInstallTransaction(params, result);
     if (resolvedPluginId !== pluginId) {
+      installOwnerMigrations[pluginId] = resolvedPluginId;
       next = migratePluginConfigId(next, pluginId, resolvedPluginId);
     }
 
@@ -688,7 +677,7 @@ async function runInstalledPluginUpdate(
     skipIds: params.skipIds,
     dryRun: params.dryRun,
     outcomes,
-    installOwnerMigrations: transactionState.installOwnerMigrations,
+    installOwnerMigrations,
   });
   next = duplicateReconciliation.config;
   changed ||= duplicateReconciliation.changed;
@@ -699,8 +688,7 @@ async function runInstalledPluginUpdate(
     outcomes,
     ranNpmInstaller,
     logger,
-    transactionState,
-    prepareEffect,
+    installOwnerMigrations,
     beforePersistentApply: assertCurrent,
     beforePersistentEffect: params.beforePersistentEffect,
   });

@@ -1,7 +1,12 @@
 import { createDeferredCore } from "../shared/deferred.js";
 import { announcePluginReplacement } from "./plugin-replacement-watchers.js";
 
-/** Host-only operation result, distinct from reservation release and operator status. */
+/**
+ * Final application/recovery health, separate from reservation release.
+ * Release wakes admission retries; `committed` records publication even if later
+ * activation or cleanup fails. Logical retirement closes ordinary authority,
+ * while physical cleanup can still retain resources.
+ */
 export type PluginReplacementOutcome = Readonly<{
   kind: "applied" | "restored" | "unchanged" | "failed";
   committed: boolean;

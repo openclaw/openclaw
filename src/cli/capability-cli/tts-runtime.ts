@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../../gateway/connection-details.js";
 import { isLoopbackHost } from "../../gateway/net.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../../tts/provider-registry.js";
 import type { TtsResult } from "../../tts/tts-runtime-types.js";
@@ -43,6 +44,7 @@ export async function runTtsConvert(params: {
   output?: string;
   transport: CapabilityTransport;
 }) {
+  const signal = getAsyncWorkSignal();
   let result: Pick<TtsResult, "audioPath" | "provider" | "outputFormat" | "voiceCompatible">;
   let attempts: NonNullable<TtsResult["attempts"]> = [];
   if (params.transport === "gateway") {
@@ -108,9 +110,11 @@ export async function runTtsConvert(params: {
   }
   let outputPath = result.audioPath;
   if (params.output && result.audioPath) {
+    const buffer = await fs.readFile(result.audioPath);
+    signal?.throwIfAborted();
     // Match image/video outputs: the extension follows the audio actually returned.
     const written = await writeOutputAsset({
-      buffer: await fs.readFile(result.audioPath),
+      buffer,
       outputPath: params.output,
       outputIndex: 0,
       outputCount: 1,

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Command } from "commander";
@@ -123,10 +124,7 @@ function gatewayConfig(agent = "worker", revision = "revision-new", applied = re
 }
 
 async function addWithAgentReadiness(beforeWait?: () => void) {
-  const manifestPath = await writeManifest({
-    ...cliTestHelpers.minimalManifest,
-    agent: { id: "worker" },
-  });
+  const path = await writeManifest({ ...cliTestHelpers.minimalManifest, agent: { id: "worker" } });
   const apply = mocks.applyTemplateAddPlanStateless.getMockImplementation();
   if (!apply) {
     throw new Error("Missing Add fixture implementation");
@@ -136,7 +134,7 @@ async function addWithAgentReadiness(beforeWait?: () => void) {
     await options.cronGateway.waitUntilAgentAvailable(plan.agent.finalId);
     return apply(plan, options);
   });
-  return await add(["--json"], manifestPath);
+  return await add(["--json"], path);
 }
 
 describe("templates cli", () => {
@@ -194,42 +192,41 @@ describe("templates cli", () => {
     });
   });
 
-  it.each([undefined, "demo-agent-two"])(
-    "plans package identity with agent override %s",
-    async (agentId) => {
-      const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
-      const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
-      if (agentId) {
-        mocks.loadConfig.mockReturnValue({
-          ...enabledTemplatesLabsConfig,
-          agents: { entries: { "demo-agent": {} } },
-        });
-      }
-      await add(
-        [
-          "--dry-run",
-          "--workspace",
-          workspace,
-          "--json",
-          ...(agentId ? ["--agent-id", agentId] : []),
-        ],
-        root,
-      );
-
-      expect(output()).toMatchObject({
-        schemaVersion: "openclaw.templateAddPlan.v1",
-        stability: "experimental",
-        template: { kind: "package", name: "@acme/demo-agent", version: "1.2.3" },
-        agent: {
-          requestedId: "demo-agent",
-          finalId: agentId ?? "demo-agent",
-          workspace: expectedWorkspace,
-        },
-        summary: { agentActions: 1, workspaceActions: 2, packageActions: 1, blockedActions: 1 },
+  it.for([undefined, "demo-agent-two", ""])("plans package with override %s", async (agentId) => {
+    const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
+    const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
+    if (agentId) {
+      mocks.loadConfig.mockReturnValue({
+        ...enabledTemplatesLabsConfig,
+        agents: { entries: { "demo-agent": {} } },
       });
-      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
-    },
-  );
+    }
+    const args = ["--dry-run", "--workspace", workspace, "--json"];
+    args.push(...(agentId === undefined ? [] : ["--agent-id", agentId]));
+    await add(args, root);
+    const blockedActions = agentId === "" ? 2 : 1;
+    expect(output()).toMatchObject({
+      schemaVersion: "openclaw.templateAddPlan.v1",
+      stability: "experimental",
+      template: { kind: "package", name: "@acme/demo-agent", version: "1.2.3" },
+      agent: {
+        requestedId: "demo-agent",
+        finalId: agentId ?? "demo-agent",
+        workspace: expectedWorkspace,
+      },
+      summary: { agentActions: 1, workspaceActions: 2, packageActions: 1, blockedActions },
+    });
+    if (agentId === "") {
+      expect(output()).toMatchObject({
+        blockers: expect.arrayContaining([expect.objectContaining({ code: "invalid_agent_id" })]),
+        actions: expect.arrayContaining([
+          expect.objectContaining({ kind: "agent", blocked: true }),
+        ]),
+      });
+    }
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(existsSync(workspace)).toBe(false);
+  });
 
   it("redacts credentials and sanitizes MCP targets in add previews", async () => {
     const manifestPath = await writeManifest({
@@ -374,24 +371,18 @@ describe("templates cli", () => {
     expect(mocks.leaseAssertOwned).toHaveBeenCalledOnce();
   });
 
-  it("accepts an already-applied Gateway config revision", async () => {
+  it.for([false, true])("accepts an applied revision after cached response: %s", async (cached) => {
+    if (cached) {
+      mocks.callGatewayFromCli
+        .mockResolvedValueOnce(gatewayConfig("other", "revision-old"))
+        .mockResolvedValueOnce(gatewayConfig("worker", "revision-new", "revision-old"));
+    }
     mocks.callGatewayFromCli.mockResolvedValue(gatewayConfig());
-
     expect(await addWithAgentReadiness()).toMatchObject({ status: "complete" });
-
-    expect(mocks.sleep).not.toHaveBeenCalled();
-  });
-
-  it("waits for the requested agent in an applied revision after a cached response", async () => {
-    mocks.callGatewayFromCli
-      .mockResolvedValueOnce(gatewayConfig("other", "revision-old"))
-      .mockResolvedValueOnce(gatewayConfig("worker", "revision-new", "revision-old"))
-      .mockResolvedValueOnce(gatewayConfig());
-
-    expect(await addWithAgentReadiness()).toMatchObject({ status: "complete" });
-
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(3);
-    expect(mocks.sleep).toHaveBeenCalledTimes(2);
+    expect(mocks.sleep).toHaveBeenCalledTimes(cached ? 2 : 0);
+    if (cached) {
+      expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(3);
+    }
   });
 
   it("reports the last Gateway error after the reload deadline", async () => {
