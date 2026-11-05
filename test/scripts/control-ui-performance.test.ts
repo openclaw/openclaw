@@ -32,6 +32,8 @@ const performanceSources = [
     "control-ui-optional-assets.ts",
     "record-shared.mjs",
     "regexp.mjs",
+    "release-context.mjs",
+    "release-version.mjs",
   ].map((name) => `scripts/lib/${name}`),
 ].map((file): [string, string] => [file, fs.readFileSync(path.resolve(file), "utf8")]);
 function compileFixture(root: string, entry: string[], options: Parameters<typeof build>[0] = {}) {

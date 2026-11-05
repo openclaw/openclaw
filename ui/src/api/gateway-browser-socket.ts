@@ -6,7 +6,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { gatewayWebSocketTransportUrl, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
-import { formatUiError } from "../lib/format-error.ts";
+import { formatConnectionErrorSummary } from "../lib/connection-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
 
 const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR";
@@ -15,7 +15,7 @@ export const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY
 export function formatBrowserWebSocketConstructorError(err: unknown, url: string): ErrorShape {
   const name = err && typeof err === "object" && "name" in err ? err.name : undefined;
   const browserErrorName = typeof name === "string" && name.trim() ? name : undefined;
-  const browserMessage = formatUiError(err);
+  const browserMessage = formatConnectionErrorSummary(err);
   const message = browserMessage.toLowerCase();
   const securityError =
     browserErrorName?.toLowerCase() === "securityerror" ||

@@ -1,6 +1,7 @@
 import DOMPurify from "dompurify";
 import { listen } from "../lib/reactive/listener.ts";
 import { observeIntersection } from "../lib/reactive/observers.ts";
+import { isMarkdownBlockParked } from "./markdown-block-presentation.ts";
 import type { CodeHighlightReply, CodeHighlightRequest } from "./markdown-code-highlight-chunks.ts";
 
 let worker: Worker | undefined;
@@ -87,6 +88,7 @@ export class MarkdownCodeHighlights {
     const current = this.blocks.get(wrapper);
     // The reconciler replaces this opaque code node whenever its source changes.
     if (current?.code === code) {
+      this.observe(current);
       this.schedule(current);
       return;
     }
@@ -120,6 +122,8 @@ export class MarkdownCodeHighlights {
       if (!this.root.contains(block.code)) {
         this.retire(block);
         this.blocks.delete(block.wrapper);
+      } else if (isMarkdownBlockParked(block.wrapper)) {
+        this.retire(block);
       }
     }
   }
@@ -175,14 +179,19 @@ export class MarkdownCodeHighlights {
   }
 
   private observe(block: Block): void {
-    if (!this.active || block.stopObserving || block.complete) {
+    if (
+      !this.active ||
+      block.stopObserving ||
+      block.complete ||
+      isMarkdownBlockParked(block.wrapper)
+    ) {
       return;
     }
     block.stopObserving = observeIntersection(
       [block.viewport],
       (entries) => {
         block.visible = entries.at(-1)?.isIntersecting === true;
-        if (!block.visible) {
+        if (!block.visible || isMarkdownBlockParked(block.wrapper)) {
           this.cancel(block);
         } else if (block.reply) {
           this.schedule(block);
@@ -226,6 +235,7 @@ export class MarkdownCodeHighlights {
     return (
       this.active &&
       block.visible &&
+      !isMarkdownBlockParked(block.wrapper) &&
       this.blocks.get(block.wrapper) === block &&
       this.root.contains(block.code)
     );

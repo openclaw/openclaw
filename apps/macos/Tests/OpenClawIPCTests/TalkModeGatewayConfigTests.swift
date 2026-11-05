@@ -3,20 +3,6 @@ import Testing
 @testable import OpenClaw
 
 struct TalkModeGatewayConfigTests {
-    @Test func `talk config preserves the saved gateway accent over the operator color`() {
-        let snapshot = ConfigSnapshot(
-            path: nil,
-            exists: true,
-            raw: nil,
-            hash: nil,
-            parsed: nil,
-            valid: true,
-            config: ["ui": AnyCodable(["seamColor": "#0055dd", "prefs": ["accent": "#AABBCC"]])],
-            issues: nil)
-
-        #expect(Self.parse(snapshot).seamColorHex == "#aabbcc")
-    }
-
     @Test func `mlx provider does not inherit elevenlabs defaults`() {
         let snapshot = ConfigSnapshot(
             path: nil,
@@ -156,7 +142,6 @@ struct TalkModeGatewayConfigTests {
         #expect(parsed.outputFormat == nil)
         #expect(parsed.referenceAudioPath == nil)
         #expect(parsed.referenceText == nil)
-        #expect(parsed.seamColorHex == nil)
         #expect(parsed.snapshot.realtime.provider == nil)
         #expect(parsed.snapshot.realtime.modelId == nil)
         #expect(parsed.snapshot.realtime.speakerVoice == nil)

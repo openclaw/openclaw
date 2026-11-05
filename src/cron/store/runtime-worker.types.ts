@@ -203,7 +203,7 @@ export type CronRuntimeMutationContracts = {
 
   "cron.mutateExternalState": {
     input: CronRuntimeMutationInputs["cron.mutateExternalState"];
-    snapshot: { nowMs: number; cronConfig?: CronConfig };
+    snapshot: { nowMs: number; cronConfig?: CronConfig; defaultAgentId?: string };
     outcome: {
       job?: CronJob;
       nowMs: number;
