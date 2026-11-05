@@ -165,6 +165,18 @@ export async function completePostUpdateMaintenance(
     >;
   },
 ): Promise<{ result: UpdateRunResult; detail: string } | undefined> {
+  const startedAt = performance.now();
+  using _ = {
+    [Symbol.dispose]() {
+      result.steps.push({
+        name: "post-update-maintenance-timing",
+        command: "openclaw update",
+        cwd: context.root,
+        durationMs: Math.round(performance.now() - startedAt),
+        exitCode: 0,
+      });
+    },
+  };
   await tryInstallShellCompletion({
     root: context.root,
     jsonMode: Boolean(params.opts.json),

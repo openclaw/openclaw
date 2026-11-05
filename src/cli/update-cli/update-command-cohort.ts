@@ -125,13 +125,24 @@ export async function commitVerifiedUpdatePluginCohort(
     (activationVerified || run?.gatewayRestartRequired !== true) &&
     run?.executorFence
   ) {
-    await settleUpdatePluginCohort({
-      runId: run.runId,
-      env: params.ownedManagedUpdateEnv ?? run.env,
-      fence: run.executorFence,
-      action: "commit",
-    });
-    assertCurrent();
+    const startedAt = performance.now();
+    try {
+      await settleUpdatePluginCohort({
+        runId: run.runId,
+        env: params.ownedManagedUpdateEnv ?? run.env,
+        fence: run.executorFence,
+        action: "commit",
+      });
+      assertCurrent();
+    } finally {
+      result.steps.push({
+        name: "plugin-cohort-commit-timing",
+        command: "openclaw update",
+        cwd: result.root ?? "",
+        durationMs: Math.round(performance.now() - startedAt),
+        exitCode: 0,
+      });
+    }
   }
 }
 

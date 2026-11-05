@@ -112,6 +112,8 @@ suite.define(() => {
             },
           },
         });
+        // Compile the inline Gateway's history adapter before the browser assertion deadline.
+        await import("../../../src/config/sessions/session-history-worker-runtime.ts");
         const { startGatewayServer } = await import("../../../src/gateway/server.js");
         gateway = await startGatewayServer(port, {
           auth: { mode: "trusted-proxy", trustedProxy },
