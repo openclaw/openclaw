@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionModelContextLimits } from "../config/sessions/session-history-read.types.js";
 import {
   composeSessionSourceAssertion,
   type PreparedSessionSourceAuthority,
@@ -88,12 +89,14 @@ const FORK_CONTEXT_LIMITS = {
 } as const;
 
 // The turn's initiating input can sit far behind its completed entry in a long tool loop. Each
-// pass reads further back; the last reads the whole model context through the anchor.
+// pass reads further back. The search reads only message roles and metadata, so tool result
+// bodies are omitted, and even the last pass stays bounded: an unlimited read of a long
+// tool-heavy session exhausts the transcript worker. A turn beyond it refuses the fork.
 const FORK_TURN_SEARCH_LIMITS = [
-  { maxBytes: 65_536, maxEvents: 64 },
-  { maxBytes: 4_194_304, maxEvents: 4_096 },
-  undefined,
-] as const;
+  { maxBytes: 65_536, maxEvents: 64, toolResultOverflow: "omit" },
+  { maxBytes: 4_194_304, maxEvents: 4_096, toolResultOverflow: "omit" },
+  { maxBytes: 16_777_216, maxEvents: 32_768, toolResultOverflow: "omit" },
+] as const satisfies readonly SessionModelContextLimits[];
 
 type SessionForkTurn = {
   /** Undefined for a turn stored before requester recording; callers use session facts. */
@@ -105,7 +108,8 @@ type SessionForkTurn = {
  * Facts of the turn a fork reads through: the requester its initiating user message recorded and
  * the model its last assistant message ran on. The search stops at that turn's initiating input,
  * not at an event count. Returns undefined when the model context no longer holds that input
- * (for example, compacted mid-turn), so callers refuse instead of guessing the requester.
+ * (for example, compacted mid-turn) or holds it only beyond the bounded search, so callers refuse
+ * instead of guessing the requester.
  */
 export async function readSessionForkTurn(
   source: TranscriptEntryAnchor,
@@ -115,7 +119,7 @@ export async function readSessionForkTurn(
   for (const limits of FORK_TURN_SEARCH_LIMITS) {
     const sessionManager = await SessionManager.openModelContextAsync(source, {
       through: source,
-      ...(limits ? { limits } : {}),
+      limits,
       ...(signal ? { signal } : {}),
     });
     for (const entry of sessionManager.getBranch().toReversed()) {
