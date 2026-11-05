@@ -1,10 +1,13 @@
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import {
   getProviderHttpMocks,
   requireFirstPostJsonRecordRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import { registerProviderPlugin, requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   expectExplicitVideoGenerationCapabilities,
@@ -598,9 +601,7 @@ describe("openrouter video generation provider", () => {
       }),
     );
     if (phase === "poll") {
-      fetchMock.mockResolvedValueOnce(
-        releasedJson({ id: "job-123", status, error }),
-      );
+      fetchMock.mockResolvedValueOnce(releasedJson({ id: "job-123", status, error }));
     }
 
     await expect(generateVideo()).rejects.toThrow(expected);
