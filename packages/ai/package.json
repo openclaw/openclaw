@@ -7,7 +7,6 @@
     "anthropic",
     "google",
     "llm",
-    "mistral",
     "openai",
     "streaming"
   ],
@@ -131,36 +130,13 @@
   "dependencies": {
     "@anthropic-ai/sdk": "0.137.0",
     "@google/genai": "2.31.0",
-    "@opentelemetry/semantic-conventions": "1.43.0",
     "openai": "7.45.1",
     "partial-json": "0.1.7",
     "proxy-from-env": "2.1.0",
     "typebox": "1.4.3",
-    "zod": "4.6.7",
-    "zod-to-json-schema": "3.25.2"
-  },
-  "peerDependencies": {
-    "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.220.0 || ^0.223.0",
-    "@opentelemetry/resources": "^2.9.0",
-    "@opentelemetry/sdk-trace-base": "^2.9.0"
-  },
-  "peerDependenciesMeta": {
-    "@opentelemetry/api": {
-      "optional": true
-    },
-    "@opentelemetry/exporter-trace-otlp-http": {
-      "optional": true
-    },
-    "@opentelemetry/resources": {
-      "optional": true
-    },
-    "@opentelemetry/sdk-trace-base": {
-      "optional": true
-    }
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@mistralai/mistralai": "3.4.0",
     "@openclaw/model-catalog-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*"
   },

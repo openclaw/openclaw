@@ -29,7 +29,6 @@ const apis = [
   "openai-completions",
   "openai-responses",
   "anthropic-messages",
-  "mistral-conversations",
   "google-generative-ai",
   "google-vertex",
   "google-interactions",

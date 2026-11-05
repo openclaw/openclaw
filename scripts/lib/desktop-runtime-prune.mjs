@@ -2,22 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Audited npm artifacts: runtime exports use compiled JS. Mistral's optional
-// "source" condition is not enabled by the desktop runtime. Re-audit on upgrades.
+// Audited npm artifacts: runtime exports use compiled JS. Re-audit on upgrades.
 const developmentFiles = {
   openai: { versions: ["7.30.1"], sources: ["src"], trees: [] },
   zod: { versions: ["4.6.5"], sources: ["src"], trees: [] },
   "@anthropic-ai/sdk": { versions: ["0.132.1"], sources: ["src"], trees: [] },
-  "@mistralai/mistralai": {
-    versions: ["3.2.0"],
-    sources: ["src"],
-    trees: [
-      "tests",
-      "examples",
-      "packages/mistralai-azure/examples",
-      "packages/mistralai-gcp/examples",
-    ],
-  },
   pino: { versions: ["9.14.0"], sources: [], trees: ["test", "examples", "benchmarks"] },
   "pino-std-serializers": { versions: ["7.1.0"], sources: [], trees: ["test"] },
   "sonic-boom": { versions: ["4.2.1"], sources: [], trees: ["test"] },

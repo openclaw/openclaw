@@ -905,7 +905,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "packages/ai/src/internal/anthropic-inline-images.test.ts",
   "packages/ai/src/provider-transport-parity.test.ts",
   "packages/ai/src/providers/anthropic-server-fallback.test.ts",
-  "packages/ai/src/providers/mistral.test.ts",
   "packages/ai/src/providers/openai-chatgpt-responses.cache.test.ts",
   "packages/ai/src/transports/openai-completions-params.shaping.test.ts",
   "packages/ai/src/transports/openai-completions-params.tools.test.ts",

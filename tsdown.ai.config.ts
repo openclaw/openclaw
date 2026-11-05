@@ -11,15 +11,9 @@ const repoRoot = resolveRepoRoot(import.meta.url);
 const externalDependencies = [
   "@anthropic-ai/sdk",
   "@google/genai",
-  "@opentelemetry/api",
-  "@opentelemetry/exporter-trace-otlp-http",
-  "@opentelemetry/resources",
-  "@opentelemetry/sdk-trace-base",
-  "@opentelemetry/semantic-conventions",
   "openai",
   "typebox",
   "zod",
-  "zod-to-json-schema",
 ] as const;
 
 const config = {
@@ -58,12 +52,9 @@ const config = {
   format: "esm",
   outDir: "packages/ai/dist",
 
-  copy: [{ from: "node_modules/@mistralai/mistralai/LICENSE", rename: "mistral.LICENSE" }],
   platform: "node",
   target: "node22",
   deps: {
-    // Ship the chat client's reachable code, not the SDK's full API/source tree.
-    alwaysBundle: [/^@mistralai\/mistralai(?:\/|$)/u],
     neverBundle(id) {
       return externalDependencies.some(
         (dependency) => id === dependency || id.startsWith(`${dependency}/`),

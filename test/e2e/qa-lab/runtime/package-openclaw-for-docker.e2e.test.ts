@@ -1451,13 +1451,11 @@ describe("package-openclaw-for-docker", () => {
                 name: "@openclaw/ai",
                 version: "2026.6.17",
                 peerDependencies: {
-                  "@opentelemetry/api": "^1.9.0",
                   "root-required": "^2.0.0",
                   "root-optional-peer": "^3.0.0",
                   retained: "1.0.0",
                 },
                 peerDependenciesMeta: {
-                  "@opentelemetry/api": { optional: true },
                   "root-optional-peer": { optional: true },
                   retained: { optional: true },
                 },

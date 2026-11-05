@@ -1199,7 +1199,6 @@ const config = {
         "@cloudflare/containers",
         // Docker packaging stages @openclaw/ai without nested dependencies after
         // verifying the root owns its exact runtime dependency versions.
-        "@mistralai/mistralai",
         "openai",
         "cross-spawn",
         "file-type",

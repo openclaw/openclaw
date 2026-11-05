@@ -161,8 +161,9 @@ function makeTerminalStreamFailureInput(assistant: AssistantMessage) {
   return fixture;
 }
 
-async function streamIncompleteMistralResponseOverLoopback() {
-  const { streamMistral } = await import("../../../../packages/ai/src/providers/mistral.js");
+async function streamIncompleteCompletionsResponseOverLoopback() {
+  const { streamOpenAICompletions } =
+    await import("../../../../packages/ai/src/providers/openai-completions.js");
   const partialText = "Safe partial answer";
   const server = http.createServer((request, response) => {
     request.resume();
@@ -172,7 +173,7 @@ async function streamIncompleteMistralResponseOverLoopback() {
         id: "terminal-stream-recovery-proof",
         object: "chat.completion.chunk",
         created: 1,
-        model: "mistral-large-latest",
+        model: "fixture-model",
         choices: [{ index: 0, delta: { content: partialText }, finish_reason: null }],
         usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
       })}\n\n`,
@@ -183,11 +184,11 @@ async function streamIncompleteMistralResponseOverLoopback() {
     server.listen(0, "127.0.0.1", resolve);
   });
   const { port } = server.address() as AddressInfo;
-  const model = makeProviderModelFixture<"mistral-conversations">({
-    id: "mistral-large-latest",
-    name: "Mistral terminal recovery proof",
-    api: "mistral-conversations",
-    provider: "mistral",
+  const model = makeProviderModelFixture<"openai-completions">({
+    id: "fixture-model",
+    name: "Completions terminal recovery proof",
+    api: "openai-completions",
+    provider: "openai",
     baseUrl: `http://127.0.0.1:${port}`,
     contextWindow: 128_000,
     maxTokens: 8192,
@@ -197,7 +198,7 @@ async function streamIncompleteMistralResponseOverLoopback() {
   } satisfies Context;
 
   try {
-    const stream = streamMistral(model, context, { apiKey: "redacted-fixture-token" });
+    const stream = streamOpenAICompletions(model, context, { apiKey: "redacted-fixture-token" });
     for await (const event of stream) {
       void event;
     }
@@ -411,10 +412,10 @@ describe("handleEmbeddedAssistantFailure", () => {
     },
   );
 
-  it("recovers a real loopback Mistral partial EOF through embedded model fallback", async () => {
-    const { assistant, partialText } = await streamIncompleteMistralResponseOverLoopback();
+  it("recovers a real loopback Completions partial EOF through embedded model fallback", async () => {
+    const { assistant, partialText } = await streamIncompleteCompletionsResponseOverLoopback();
     const classification = classifyAssistantFailoverReason(assistant);
-    const config = createModelFallbackConfig("mistral/mistral-large-latest", [
+    const config = createModelFallbackConfig("openai/fixture-model", [
       "google/mock-2",
     ]) satisfies OpenClawConfig;
     const calls: string[] = [];
@@ -423,13 +424,13 @@ describe("handleEmbeddedAssistantFailure", () => {
 
     const result = await runWithModelFallback({
       cfg: config,
-      provider: "mistral",
-      model: "mistral-large-latest",
-      sessionId: "session:mistral-terminal-recovery-proof",
+      provider: "openai",
+      model: "fixture-model",
+      sessionId: "session:completions-terminal-recovery-proof",
       skipAuthProfileRuntime: true,
       run: async (provider, model) => {
         calls.push(`${provider}/${model}`);
-        if (provider === "mistral") {
+        if (provider === "openai") {
           const fixture = makeTerminalStreamFailureInput(assistant);
           embeddedTrace = fixture.traceAttempts;
           try {
@@ -447,25 +448,25 @@ describe("handleEmbeddedAssistantFailure", () => {
 
     expect(assistant).toMatchObject({
       stopReason: "error",
-      errorMessage: "Mistral stream ended without a terminal finish reason",
+      errorMessage: "Stream ended without finish_reason",
     });
     expect(assistant.content).toContainEqual({ type: "text", text: partialText });
     expect(classification).toBe("timeout");
     expect(embeddedFailure).toEqual({
       reason: "timeout",
-      rawError: "Mistral stream ended without a terminal finish reason",
+      rawError: "Stream ended without finish_reason",
     });
     expect(embeddedTrace).toEqual([
       {
-        provider: "mistral",
-        model: "mistral-large-latest",
+        provider: "openai",
+        model: "fixture-model",
         result: "timeout",
         reason: "timeout",
         stage: "assistant",
         status: 408,
       },
     ]);
-    expect(calls).toEqual(["mistral/mistral-large-latest", "google/mock-2"]);
+    expect(calls).toEqual(["openai/fixture-model", "google/mock-2"]);
     expect(result.result).toBe("fallback complete");
     expect(result.result).not.toContain(partialText);
   });

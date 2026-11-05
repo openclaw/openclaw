@@ -12,7 +12,7 @@ layer: provider-neutral message/tool/stream contracts, validation, diagnostics,
 event streams, an isolated runtime registry, and lazy adapters for the eight
 built-in API families (Anthropic Messages, OpenAI Completions, OpenAI
 Responses, Azure OpenAI Responses, ChatGPT/Codex Responses, Google Generative
-AI, Google Vertex, Mistral Conversations).
+AI, Google Interactions, Google Vertex).
 
 It publishes alongside the root `openclaw` package on every release, pinned to
 the same version. Its exact-pinned direct dependencies resolve at install time;

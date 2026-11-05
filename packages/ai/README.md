@@ -35,7 +35,7 @@ OpenAI HTTP adapters report rejected response status and headers through
 invoke the callback before the first event. Retry and failover policy remains
 with the application.
 
-Anthropic Messages, OpenAI-compatible Chat Completions, Google, Mistral, and
+Anthropic Messages, OpenAI-compatible Chat Completions, Google, and
 OpenAI Responses calls stop waiting for payload and response hooks when the
 request signal aborts. A hook can continue running after cancellation; embedding
 hosts can retain that work through `observePendingProviderWork` until it
@@ -54,11 +54,8 @@ supports input progress; completed tool calls retain only parsed `arguments`.
 It is the live block, not a per-event snapshot: a consumer that lags behind the
 producer reads the latest value, or none once the call has finished.
 
-The Anthropic and Mistral adapters report unreadable tool descriptors as
-a stream error before sending a model request rather than silently omitting them.
-The pinned Mistral SDK chat client is bundled into the adapter; consumers do not
-need the SDK's full package tree. The SDK's Apache-2.0 license ships as
-`dist/mistral.LICENSE`.
+The Anthropic adapter reports unreadable tool descriptors as a stream error
+before sending a model request rather than silently omitting them.
 
 The explicit `@openclaw/ai/internal/anthropic`, `google`, `google-model-family`, `openai`,
 `openai-completions-compat`, `openai-responses-payload-policy`, `retry-after`, `runtime`, `shared`, and

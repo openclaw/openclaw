@@ -98,7 +98,6 @@ export const CORE_BUILT_IN_MODEL_APIS = new Set([
   "google-generative-ai",
   "google-interactions",
   "google-vertex",
-  "mistral-conversations",
   "openai-chatgpt-responses",
   "openai-completions",
   "openai-responses",

@@ -14,7 +14,6 @@ import {
 import { streamAnthropic } from "./providers/anthropic.js";
 import { streamGoogleInteractions } from "./providers/google-interactions.js";
 import { streamGoogle } from "./providers/google.js";
-import { streamMistral } from "./providers/mistral.js";
 import { streamOpenAICodexResponses } from "./providers/openai-chatgpt-responses.js";
 import { createJwt } from "./providers/openai-chatgpt-responses.test-helpers.js";
 import { streamOpenAICompletions } from "./providers/openai-completions.js";
@@ -29,7 +28,6 @@ import type { StreamOptions } from "./types.js";
 registerParityHostLifecycle();
 const googleModel = makeProviderModel("google-generative-ai", "google", "gemini-3-pro");
 const interactionsModel = makeProviderModel("google-interactions", "google", "gemini-3-flash");
-const mistralModel = makeProviderModel("mistral-conversations", "mistral", "mistral-large");
 const responsesModel = makeOpenAIProviderModel("openai-responses");
 const completionsModel = makeOpenAIProviderModel("openai-completions");
 const codexModel = makeProviderModel("openai-chatgpt-responses", "openai-codex", "gpt-5.5-codex");
@@ -52,7 +50,6 @@ const cases = [
     (o: StreamOptions) => streamGoogleInteractions(interactionsModel, context, o),
   ],
   ["Google generate content", (o: StreamOptions) => streamGoogle(googleModel, context, o)],
-  ["Mistral", (o: StreamOptions) => streamMistral(mistralModel, context, o)],
   ["Responses direct", (o: StreamOptions) => streamOpenAIResponses(responsesModel, context, o)],
   [
     "Responses managed",

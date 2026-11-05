@@ -35,16 +35,6 @@ const SEVERITY_RANK = {
   critical: 4,
 };
 const SNAPSHOT_SECTIONS = ["dependencies", "optionalDependencies"];
-// GitHub's GHSA-3q49-cfcf-g5fm feed includes an overbroad ">=0" range alongside
-// the compromised @mistralai/mistralai versions. Keep the production audit
-// blocking for the compromised releases while allowing pinned safe locks.
-const AUDIT_ADVISORY_VERSION_OVERRIDES = [
-  {
-    packageName: "@mistralai/mistralai",
-    advisoryIds: new Set(["1118204", "GHSA-3q49-cfcf-g5fm"]),
-    unaffectedVersions: new Set(["2.2.1", "2.2.5"]),
-  },
-];
 
 class AdvisoryUnavailableError extends Error {}
 class AdvisoryRequestTimeoutError extends AdvisoryUnavailableError {}
@@ -108,14 +98,6 @@ export function collectProdResolvedPackagesFromLockfile(lockfileText) {
   const versionsByPackage = new Map();
   const seenSnapshots = new Set();
   const queue = [...lockfile.importers];
-  // tsdown.ai bundles this development dependency into the shipped AI runtime.
-  const bundledMistral = lockfile.importerRoots
-    .get("packages/ai")
-    ?.get("devDependencies")
-    ?.find(({ dependencyName }) => dependencyName === "@mistralai/mistralai");
-  if (bundledMistral) {
-    queue.push(bundledMistral);
-  }
 
   while (queue.length > 0) {
     const next = queue.pop();
@@ -204,34 +186,7 @@ export function createBulkAdvisoryPayload(versionsByPackage) {
   );
 }
 
-function advisoryMatchesOverride(advisory, override) {
-  const advisoryId = String(advisory?.id ?? "");
-  const advisoryUrl = typeof advisory?.url === "string" ? advisory.url : "";
-  return (
-    override.advisoryIds.has(advisoryId) ||
-    [...override.advisoryIds].some((id) => advisoryUrl.includes(id))
-  );
-}
-
-function shouldSuppressAdvisoryFinding({ packageName, advisory, versionsByPackage }) {
-  if (!versionsByPackage) {
-    return false;
-  }
-  const override = AUDIT_ADVISORY_VERSION_OVERRIDES.find(
-    (candidate) =>
-      candidate.packageName === packageName && advisoryMatchesOverride(advisory, candidate),
-  );
-  if (!override) {
-    return false;
-  }
-  const resolvedVersions = versionsByPackage.get(packageName);
-  if (!resolvedVersions || resolvedVersions.size === 0) {
-    return false;
-  }
-  return [...resolvedVersions].every((version) => override.unaffectedVersions.has(version));
-}
-
-export function filterFindingsBySeverity(advisoriesByPackage, minSeverity, versionsByPackage) {
+export function filterFindingsBySeverity(advisoriesByPackage, minSeverity) {
   const threshold = normalizeAuditLevel(minSeverity);
   const findings = [];
 
@@ -239,9 +194,6 @@ export function filterFindingsBySeverity(advisoriesByPackage, minSeverity, versi
     for (const advisory of advisories) {
       const severity = advisory.severity;
       if ((SEVERITY_RANK[severity] ?? -1) < SEVERITY_RANK[threshold]) {
-        continue;
-      }
-      if (shouldSuppressAdvisoryFinding({ packageName, advisory, versionsByPackage })) {
         continue;
       }
       findings.push({
@@ -580,11 +532,7 @@ export async function runPnpmAuditProd({
       return 0;
     }
     const advisoryResults = await fetchBulkAdvisories({ payload, fetchImpl, budgetMs, stderr });
-    const findings = filterFindingsBySeverity(
-      advisoryResults,
-      normalizedMinSeverity,
-      versionsByPackage,
-    );
+    const findings = filterFindingsBySeverity(advisoryResults, normalizedMinSeverity);
     if (findings.length === 0) {
       result = {
         outcome: "complete",
