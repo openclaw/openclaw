@@ -36,7 +36,7 @@ export function createAdaptiveMarkdownFilter(
       !facts.isChangedLaneTest &&
       !facts.isTestOnly &&
       !isTestOnlyPath(file) &&
-      !/(?:^|\/)(?:__fixtures__|fixtures|test-fixtures|test-utils|test-helpers|test-support|testing)\//u.test(
+      !/(?:^|\/)(?:__fixtures__|fixtures|scripts|test-fixtures|test-utils|test-helpers|test-support|testing)\//u.test(
         file,
       ) &&
       !/\.(?:config|setup|d)\.[cm]?[jt]sx?$/u.test(file) &&

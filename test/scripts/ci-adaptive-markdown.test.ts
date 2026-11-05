@@ -147,6 +147,7 @@ it("admits regular production companions but keeps helpers, fixtures and missing
     "src/runtime.test-support.ts",
     "src/fixtures/runtime.ts",
     "packages/example/vitest.config.ts",
+    "packages/example/scripts/generate.ts",
     "scripts/runtime.ts",
   ];
   for (const file of [...companions, ...excluded]) {
