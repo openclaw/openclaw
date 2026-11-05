@@ -1,7 +1,6 @@
 {
   "version": 2,
   "locale": "fr",
-  "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "translations": {
     "native.android.000452ffd65ee11a": "1 outil ignoré",
     "native.android.004fd715ebe3d013": "Conversations récentes",
@@ -2301,6 +2300,7 @@
     "native.apple.1e95c351636ace48": "Obtenir les instructions de connexion. La présence dans la liste des appareils à proximité ne garantit pas l’identité du propriétaire du Gateway.",
     "native.apple.1eb5cb3fa091bfaa": "En cours",
     "native.apple.1eec0c3f30993373": "Le mode vocal a rencontré une erreur. Essayez de parler à nouveau.",
+    "native.apple.1eec26d04ba179e3": "Ce tableau de bord nécessite une interface Gateway prenant en charge la connexion depuis l’application native. Si la connexion échoue, mettez à jour Gateway. Le chat et les réglages de l’application native restent disponibles.",
     "native.apple.1ef295c1fbce7883": "En cours de consultation",
     "native.apple.1ef2c9a8cf3055e1": "Code de configuration appliqué. Connexion en cours...",
     "native.apple.1f000764a8ae9309": "Copier l’identifiant",
@@ -2407,6 +2407,7 @@
     "native.apple.287d7ee22143fe4f": "Connectez cette application Mac à un Gateway local avant d’importer les cookies du navigateur.",
     "native.apple.289e286c20ded5d7": "%lld approbations supplémentaires",
     "native.apple.28c62043b750117e": "OpenClaw En Pause",
+    "native.apple.28e1f7d66851c866": "Le tableau de bord est indisponible avec cette session Cloudflare. Le chat natif et les réglages restent accessibles.",
     "native.apple.28f50747b4810aa3": "L’activation vocale écoutera en continu les phrases d’activation via le microphone de cet appareil.",
     "native.apple.2963d57ca8f445cb": "Afficher tous les propriétaires",
     "native.apple.29779d9500ee1f36": "Autoriser l’accès à la position à tout moment ?",
@@ -3856,7 +3857,6 @@
     "native.apple.b5b7102ed84a411c": "Masque le libellé d’état du Gateway",
     "native.apple.b5b843b6a0a96cc5": "Le microphone du mode temps réel est devenu indisponible : %@",
     "native.apple.b6047dc323d4d013": "Le service de nœud Mac persistant est indisponible avec le profil de l’application ; le nœud d’exécution reste disponible.",
-    "native.apple.b63397a349b9705f": "Ce tableau de bord nécessite une session de navigateur. Le chat natif et les paramètres du Gateway restent disponibles.",
     "native.apple.b63d92eab5836702": "Journaux de découverte",
     "native.apple.b64b9c3d707d9f01": "Atelier de compétences",
     "native.apple.b64d7a5636bb97ef": "Noms d’hôtes HTTPS exacts, séparés par des virgules ou des espaces. Si ce champ est vide, seuls les SecretRefs de la configuration sont autorisés.",
