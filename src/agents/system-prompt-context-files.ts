@@ -1,4 +1,3 @@
-import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 
