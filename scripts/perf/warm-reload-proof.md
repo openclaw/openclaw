@@ -108,6 +108,18 @@ initial cold capture remains separate from these independently reset visits.
 For separate attribution, add `--cpu-profile --reloads 1` to save a Chrome timeline
 and V8 CPU profile for each warm capture. Profiled timings are not comparison results.
 
+Warm-pane startup investigations should compare eleven interleaved AB/BA pairs and
+an A/A control on archived chat, active chat (`--active-targets`), and dashboard.
+Use one quiet AWS instance and the same 80 ms profile for both arms. Count complete
+cached panes below 500 ms, then inspect the correlated compositor surface and its
+predecessor; transcript presence alone does not establish a complete cached pane.
+Report per-pair deltas, median and IQR for pane readiness, hello handling, FCP,
+first painted rows, final rows, LoAF blocking, and CLS. Keep separate profiled runs
+for module evaluation, IndexedDB completion, rendering, and layout attribution.
+An improvement requires at least nine of eleven better pairs on two routes and
+no route regression. A secondary regresses with nonoverlapping IQRs, or at least
+nine worse pairs and a median paired rise above the larger of 10 ms and 3%.
+
 The default `--admission signed-in` installs a random HttpOnly session cookie in
 Chromium for the owned loopback proxy. The proxy checks that cookie for HTTP and
 WebSocket requests, strips client-supplied identity/forwarding/scope headers, and
