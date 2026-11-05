@@ -94,6 +94,8 @@ const repositoryScriptEntries = [
   "scripts/ci-shard-timings-refresh.mts!",
   "scripts/ci-test-observations.mjs!",
   "scripts/ci-adaptive-select.mjs!",
+  "scripts/ci-adaptive-evaluate.mjs!",
+  "scripts/ci-adaptive-jev.mjs!",
   "scripts/ci-adaptive-priors.mjs!",
   "scripts/ci-adaptive-costs.mjs!",
   // The scheduled-run execution context design invokes this development replay by path.
@@ -853,6 +855,8 @@ const rootToolingAndWorkspaceDependencies = [
   "signal-utils",
   // Root declaration builds compile terminal-core source and resolve this package from root.
   "string-width",
+  // The rule-cache benchmark resolves this dependency from extensions/tokenjuice/package.json.
+  "tokenjuice",
 ] as const;
 
 function workspacePackage(packageDir: string, extraEntries: readonly string[] = []) {

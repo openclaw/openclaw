@@ -106,7 +106,7 @@ describe("BrowserPanel capture and input ownership", () => {
     expect(controller.activeTargetId).toBe("active-tab");
     expect(controller.view).toBe(previousView);
     expect(controller.errorText).toBe(
-      "Couldn’t complete this browser request. Try again. Tab focus rejected",
+      "Couldn’t complete the browser action. Try again.\nTab focus rejected",
     );
     expect(controller.loading).toBe(false);
   });
@@ -144,7 +144,7 @@ describe("BrowserPanel capture and input ownership", () => {
       expect(controller.view).toBeNull();
       expect(controller.urlDraft).toBe("");
       expect(controller.errorText).toBe(
-        "Couldn’t complete this browser request. Try again. Tab focus rejected",
+        "Couldn’t complete the browser action. Try again.\nTab focus rejected",
       );
       expect(calls("/tabs")).toEqual([]);
     },
@@ -433,7 +433,7 @@ describe("BrowserPanel capture and input ownership", () => {
     await flushBrowserResponses();
 
     expect(controller.errorText).toBe(
-      "Couldn’t complete this browser request. Try again. Browser connection temporarily unavailable",
+      "Couldn’t complete the browser action. Try again.\nBrowser connection temporarily unavailable",
     );
     expect(controller.mode).toBe("inspect");
     expect(controller.evaluateUnavailable).toBe(false);
@@ -458,8 +458,13 @@ describe("BrowserPanel capture and input ownership", () => {
     vi.spyOn(renderedPanel.querySelector(".bp-stage")!, "getBoundingClientRect").mockReturnValue(
       controller.host.renderRoot.firstElementChild!.getBoundingClientRect(),
     );
-    expect(renderedPanel.querySelector('[role="alert"]')?.textContent).toBe(
-      "Couldn’t complete this browser request. Try again. Browser connection temporarily unavailable",
+    const alert = renderedPanel.querySelector('[role="alert"]');
+    expect(alert?.firstElementChild?.textContent).toBe(
+      "Couldn’t complete the browser action. Try again.",
+    );
+    expect(alert?.querySelector("details")?.open).toBe(false);
+    expect(alert?.querySelector("details")?.textContent).toContain(
+      "Browser connection temporarily unavailable",
     );
 
     await vi.advanceTimersByTimeAsync(120);
@@ -511,7 +516,7 @@ describe("BrowserPanel capture and input ownership", () => {
       expect(controller.evaluateUnavailable).toBe(expected);
       expect(controller.mode).toBe(expected ? "interact" : "inspect");
       expect(controller.errorText).toBeTruthy();
-      expect(controller.errorText?.includes("Couldn’t complete this browser request")).toBe(
+      expect(controller.errorText?.includes("Couldn’t complete the browser action")).toBe(
         !expected,
       );
     },

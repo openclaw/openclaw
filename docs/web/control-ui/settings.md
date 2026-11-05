@@ -109,6 +109,10 @@ After the Gateway applies the change, reload the browser page or reconnect to pi
 
 ## Personal identity
 
+**Settings → Profile → Your access** shows your current permissions. To request broader access, use **Admin access**; an admin must approve this device separately.
+
+**Personal instructions** keeps your preferences in your personal `USER.md`, separate from the shared workspace file. A missing profile asks you to sign in. If you’re already signed in but lack permission to view your own sessions, ask an admin for access instead. Your unsaved draft stays private when your profile or access changes.
+
 Authenticated people have a durable Gateway profile with a display name, avatar, linked emails, and optional verified GitHub identity. Open **Settings → Profile → Identity** to update the editable fields. The profile follows the authenticated person across browsers; clearing browser site data does not delete it.
 
 Profile photos load through authenticated Gateway routes in the online roster, person cards, and chat. Paired browsers use their approved read scopes. When the Mac app connects through an SSH tunnel to a trusted-proxy Gateway, image requests can use the connection's saved password if its paired credential is rejected. Credentials stay in request headers; profiles without an available image show initials.
@@ -123,7 +127,7 @@ Choose **Use for new sessions** to set a **New session default**. Existing sessi
 
 GitHub-backed sign-in through Cloudflare Access or Tailscale Serve fills the read-only **GitHub account** row with the verified public avatar and account link without replacing a custom OpenClaw avatar. **Git co-author credit** is a separate profile-wide toggle, on by default for verified accounts, that controls future commits from shared sessions. It stays editable for personal profiles without a single display account, including merged accounts on multiple enterprise hosts. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for verification, retry, account-change, noreply privacy, and eligibility rules.
 
-**Settings → Profile → GitHub connections** separately shows **My GitHub** and **System GitHub**. Identified people, including read-scoped operators, can connect and disconnect only their own account; administrators can also change the shared System account. Connecting defaults to **For me** for identified users and never changes their sign-in identity, co-author preference, or shared execution defaults. Personal credentials support explicit Gateway-brokered **Publish PR** actions, not ordinary agent shell commands. See [GitHub connections](/concepts/user-model#github-connections).
+**Settings → Profile → GitHub accounts** separately shows **My GitHub** and **System GitHub**. Identified people, including read-scoped operators, can connect and disconnect only their own account; administrators can also change the shared System account. Connecting defaults to **For me** for identified users and never changes their sign-in identity, co-author preference, or shared execution defaults. Personal credentials support explicit Gateway-brokered **Publish PR** actions, not ordinary agent shell commands. See [GitHub connections](/concepts/user-model#github-connections).
 
 Administrators also see the default agent's effective GitHub account and verification status here. **View agent account** opens **Agent settings → Tools → GitHub account**, where any agent's account source, credential type, OAuth expiry, and refresh state are available. Authenticated [GitHub Actions widgets](/tools/show-widget#read-github-actions-runs) use this effective agent account. **Verified** confirms the account with GitHub; repository permissions are checked on each data request.
 
@@ -163,7 +167,7 @@ Gateway in this browser without reconnecting. Session edits and connection edits
 have independent Save/Apply and Discard actions. Switching Gateways restores
 that Gateway's saved session selection.
 
-Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a ten-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery and state-directory disk space reuse thirty-second snapshots. Machine name, CPU count, and CPU model are sampled once when the Gateway process starts; restart the Gateway to reflect CPU topology changes. Process counters, load averages, and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Disk paths, including the state directory, are returned only to `operator.admin` connections; read-only connections receive the state volume's total and free space without a path, so the card shows no per-disk meters. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
+Open **Settings → Gateway** to see the **This computer** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a ten-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery and state-directory disk space reuse thirty-second snapshots. Machine name, CPU count, and CPU model are sampled once when the Gateway process starts; restart the Gateway to reflect CPU topology changes. Process counters, load averages, and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Disk paths, including the state directory, are returned only to `operator.admin` connections; read-only connections receive the state volume's total and free space without a path, so the card shows no per-disk meters. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
 
 The **Connection** card also shows average ping and p50, p95, and p99 round-trip
 times in milliseconds. It samples every ten seconds while the page is visible
@@ -177,7 +181,7 @@ CPU, process memory, and event-loop delay graphs as the debug overlay, with up t
 100 snapshots sampled every ten seconds while visible. CPU includes event-loop
 utilization, memory shows process RSS and used heap, and delay shows the Gateway's
 event-loop p99 and maximum delay. These are Gateway process measurements, separate
-from connection ping and the machine-wide **Gateway Host** readings below.
+from connection ping and the machine-wide **This computer** readings below.
 Gateway, Appearance, Devices, Systems, and System busyness share status reads for the same connection,
 so opening the tray alongside Settings does not multiply `system.info` traffic.
 Hidden tabs pause these reads and resume when visible. Cached samples retain their
@@ -215,7 +219,7 @@ Plugin themes can also bring their own SVG hats and composer visitors through [d
 
 Every built-in theme includes matching light and dark background artwork across the app canvas. The small, bundled lossless WebP images follow the selected mode, including System. Plugin themes can [declare their own light and dark backgrounds](/plugins/manifest/surfaces#themes), which are dimmed like a custom image; personal and imported palettes, and plugin themes without one for the current mode, use neutral artwork. Existing users keep this theme artwork until they change their background preference.
 
-In **Appearance → Background**, choose **None**, **Theme artwork**, or **Custom image**. **New session page** and **Conversations** are independent: hiding a background does not delete your image. Choosing a custom image for the first time starts with conversation backgrounds off. Later edits preserve your placement choices. Changing themes, fonts, accent, or color mode does not replace an explicit image or re-enable **None**. Without a personal profile, None, theme artwork, placement, presentation, and visibility are saved only in this browser for the selected Gateway. You can opt out without signing in; private uploads still require a profile.
+In **Appearance → Background**, choose **None**, **Theme artwork**, or **Custom image**. **New session page** and **Sessions** are independent: hiding a background does not delete your image. Choosing a custom image for the first time starts with **Sessions** turned off. Later edits preserve your placement choices. Changing themes, fonts, accent, or color mode does not replace an explicit image or re-enable **None**. Without a personal profile, None, theme artwork, placement, presentation, and visibility are saved only in this browser for the selected Gateway. You can opt out without signing in; private uploads still require a profile.
 
 Custom images belong to your authenticated profile, not the shared conversation. Upload a static JPEG, PNG, or WebP up to 8 MiB and 25 megapixels. The Gateway resizes it to at most 2560 pixels on the longest side, strips metadata, and saves a normalized JPEG of at most 2 MiB. The original file is not retained. You can keep one image; **Replace image** replaces it and **Remove image** deletes it. Choosing None or theme artwork retains the image for later use. Uploading requires profile write access; the Control UI explains when a personal profile or permission is unavailable.
 
@@ -265,7 +269,8 @@ are unchanged.
 ## Session sources
 
 Open the sidebar's **Filter & sort** menu and choose **Session sources…** to
-control automatic discovery of **Claude Code**, **Codex**, **OpenCode**, and **Pi** conversations.
+control automatic discovery of **Claude Code**, **Codex**, **OpenCode**, and **Pi** sessions
+on this Gateway and paired devices.
 The same controls live in **Settings → Appearance → Session sources**; searching
 Settings for the coding app's name and **sessions** opens them directly.
 
@@ -687,9 +692,11 @@ Authenticated native UI requires HTTPS or a browser-trusted loopback URL.
 On non-local plain HTTP, plugin pages explain how to open a supported URL;
 dashboard pairing and backend plugin operations remain available.
 
-## Import assistant memory
+<a id="import-assistant-memory" />
 
-Open **Settings** → **Import Memory** to bring local Codex, Claude Code, or Hermes memory
+## Import agent memory
+
+Open **Settings** → **Import memory** to bring local Codex, Claude Code, or Hermes memory
 into an OpenClaw agent. The Gateway discovers supported local memory on its own
 host, so a remote Control UI imports from the Gateway computer rather than the
 browser computer.

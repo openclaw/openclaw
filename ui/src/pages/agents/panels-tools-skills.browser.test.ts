@@ -246,7 +246,7 @@ describe("agents tools panel (browser)", () => {
       },
     });
     expect(container.querySelectorAll(".settings-kv dd")[3]?.textContent?.trim()).toBe("0");
-    expect(container.textContent).toContain("No tools are listed in this preview.");
+    expect(container.textContent).toContain("No tools in this preview.");
     expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
   });
 
@@ -292,8 +292,8 @@ describe("agents tools panel (browser)", () => {
     expect(container.textContent).toContain(
       "Based on saved session settings and discovered tools.",
     );
-    expect(container.textContent).toContain("additional tools may become available");
-    expect(container.textContent).toContain("unsaved edits are not included");
+    expect(container.textContent).toContain("more tools may become available");
+    expect(container.textContent).toContain("unsaved edits aren’t included");
     expect(texts(container, ".agent-tools-runtime-chip .mono")).toEqual([
       "Message Actions",
       "Probe Tool",
@@ -350,25 +350,25 @@ describe("agents tools panel (browser)", () => {
       expect(section.textContent).toContain(inherited ? "@system-user" : "@octocat");
       expect(content(section, ".settings-status")).toBe("Verified");
       const details = section.querySelector<HTMLButtonElement>(
-        'button[aria-label="Connection details"]',
+        'button[aria-label="Account details"]',
       );
-      assert(details, "Missing connection details button");
+      assert(details, "Missing account details button");
       details.click();
       await waitForSolid(() => {
         const authorRow = Array.from(section.querySelectorAll(".settings-row")).find((row) =>
-          row.querySelector(".settings-row__title")?.textContent?.includes("Git Author"),
+          row.querySelector(".settings-row__title")?.textContent?.includes("Git author in use"),
         );
         expect(authorRow?.querySelector(".settings-row__value")?.textContent?.trim()).toBe(
           inherited ? "System Author · system@example.com" : "Not set",
         );
       });
       if (inherited) {
-        expect(section.textContent).toContain("Managed GitHub authorization");
+        expect(section.textContent).toContain("GitHub sign-in");
         expect(section.textContent).toContain("repo, workflow");
         expect(section.textContent).toContain("System GitHub");
       }
       expect(section.querySelector(".settings-secret input")).toBeNull();
-      expect(section.textContent).toContain("Manage connections in Profile");
+      expect(section.textContent).toContain("Manage accounts in Profile");
       expect(section.textContent).not.toMatch(
         /system-detected|github-api|OS account running the Gateway|Advanced: agent GitHub override/,
       );
@@ -439,7 +439,7 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
 
     expect(container.textContent).toContain(
-      "Full selects tools; it does not grant Full access execution permissions.",
+      "“Full” includes all tools, but doesn’t grant command permissions.",
     );
     const toggle = toolSwitch(container, "openclaw");
     expect(toggle.checked).toBe(false);

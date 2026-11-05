@@ -120,7 +120,7 @@ const responsiveViewports = [
 ] as const;
 
 const standaloneHeaderCases = [
-  { route: "cron", subtitle: "Scheduled tasks and recurring agent runs." },
+  { route: "cron", subtitle: "Schedule recurring tasks for your agent." },
   { route: "usage", subtitle: "API usage and costs." },
   {
     route: "memory-import",
@@ -847,7 +847,7 @@ suite.define(() => {
           (await page.locator(".cron-list-hub-tabs .hub-tab").allTextContents()).map((label) =>
             label.trim(),
           ),
-        ).toEqual(["All", "Active", "Paused", "Run history"]);
+        ).toEqual(["All", "Active", "Paused", "Activity history"]);
         expect(await page.locator(".cron-toolbar__filters").getByRole("radiogroup").count()).toBe(
           0,
         );

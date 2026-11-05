@@ -256,9 +256,17 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .sidebar-recent-session .session-owner-stack::after {
   right: 0;
+  /* Keep the right-hand face opaque underneath its away opacity. */
+  z-index: var(--owner-cutout-z, 0);
+  background:
+    linear-gradient(var(--session-row-bg, transparent) 0 0) padding-box,
+    var(--sidebar-bg, var(--bg));
+  mask: none;
 }
 
 .session-owner-stack--overflow {
+  --owner-cutout-z: 1;
+
   justify-content: flex-start;
 }
 
@@ -618,6 +626,10 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .btn.primary:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: var(--primary-hover);
   box-shadow: 0 2px 12px var(--accent-glow);
+}
+
+.btn.primary:active:where(:not(:disabled, [aria-disabled="true"])) {
+  background: var(--primary-active);
 }
 
 .btn.active {
@@ -3742,7 +3754,7 @@ select.data-table-pagination__size {
 }
 
 .sidebar-recent-session .hover-marquee {
-  --hover-marquee-fade-width: 24px;
+  --hover-marquee-fade-width: 6px;
 }
 
 /* Text on a tag fill keeps its readable tone; only icons take the quieter one. */

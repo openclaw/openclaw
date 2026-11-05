@@ -207,11 +207,11 @@ describe("settings sidebar search", () => {
   it("does not match the middle of a word for a short query", () => {
     render({
       searchQuery: "cp",
-      searchBlockMatches: [block("connection", "Gateway Host", "#settings-connection-host")],
+      searchBlockMatches: [block("connection", "This computer", "#settings-connection-host")],
     });
 
     const resultLabels = labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label");
-    expect(resultLabels).toEqual(["Gateway Host"]);
+    expect(resultLabels).toEqual(["This computer"]);
     expect(labels(".settings-sidebar__subitem-page")).toEqual(["Gateway"]);
   });
 
@@ -352,7 +352,7 @@ describe("settings sidebar search", () => {
     // Management surfaces moved back to the workspace sidebar.
     expect(allLabels).not.toContain("Activity");
     expect(allLabels).not.toContain("Sessions");
-    expect(allLabels).toContain("Privacy & Security");
+    expect(allLabels).toContain("Privacy & security");
     expect(allLabels.indexOf("Updates")).toBe(allLabels.indexOf("Logs") + 1);
     expect(allLabels.indexOf("About")).toBe(allLabels.indexOf("Updates") + 1);
 
@@ -372,7 +372,7 @@ describe("settings sidebar search", () => {
     enterQuery("does-not-exist");
     expect(labels()).toEqual([]);
     expect(container.querySelector<HTMLElement>('[role="status"]')?.textContent?.trim()).toBe(
-      "No matching settings.",
+      "No settings match your search.",
     );
 
     container.querySelector<HTMLButtonElement>(".settings-sidebar__search-clear")?.click();

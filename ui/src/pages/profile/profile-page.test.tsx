@@ -111,19 +111,25 @@ afterEach(async () => {
 
 it("refreshes translated copy when the locale changes while mounted", async () => {
   const { context } = createConnectedContext(vi.fn() as GatewayBrowserClient["request"]);
-  context.gateway.snapshot.phase = "stopped";
-  context.gateway.snapshot.client = null;
   const page = mountProfilePage(context);
-  flush();
+  await waitForFast(() =>
+    expect(page.querySelector("#settings-profile-identity h2")).not.toBeNull(),
+  );
 
-  const note = page.querySelector(".settings-empty");
-  const englishNote = note?.textContent?.trim();
+  // Use unchanged copy: newly edited English intentionally falls back until translated.
+  const title = page.querySelector("#settings-profile-identity h2");
+  const englishTitle = title?.textContent?.trim();
 
   await i18n.setLocale("de");
   flush();
 
-  expect(note?.textContent?.trim()).toBe(t("profilePage.offline"));
-  expect(note?.textContent?.trim()).not.toBe(englishNote);
+  await waitForFast(() => {
+    const translatedTitle = page
+      .querySelector("#settings-profile-identity h2")
+      ?.textContent?.trim();
+    expect(translatedTitle).toBe(t("profilePage.identity.title"));
+    expect(translatedTitle).not.toBe(englishTitle);
+  });
 });
 
 it("renders identity before Usage statistics and opens the usage page", async () => {
@@ -831,7 +837,7 @@ it("replaces a retired profile read when the same ID gains profile qualification
 });
 
 it.each([
-  { scopes: ["operator.read"], summary: "You have permission to view server information." },
+  { scopes: ["operator.read"], summary: "You can view settings and activity." },
   { scopes: ["operator.write"], summary: "You have permission to send messages and make changes." },
   {
     scopes: ["operator.sessions.read"],
@@ -840,7 +846,7 @@ it.each([
   { scopes: ["operator.admin"], summary: "You have admin access." },
   {
     scopes: ["operator.approvals"],
-    summary: "This connection has a limited set of permissions.",
+    summary: "Your access is limited.",
   },
   {
     scopes: ["operator.read", "operator.sessions.write"],
@@ -873,7 +879,7 @@ it("distinguishes unreported permissions from an explicit empty grant", async ()
   const page = mountProfilePage(harness.context);
   flush();
   expect(page.querySelector("#settings-profile-access")?.textContent).toContain(
-    "Couldn’t confirm your permissions. Reconnect to try again.",
+    "Couldn’t confirm your access. Reconnect to try again.",
   );
 
   harness.emitHello(gatewayHelloForMethods([], []));

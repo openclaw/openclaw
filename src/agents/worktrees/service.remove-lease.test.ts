@@ -106,7 +106,9 @@ it("allows only one concurrent remover to own the claim", async () => {
 });
 
 it("skips idle garbage collection for a worktree with a live run lease", async () => {
-  await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+  await updateRegistryWorktree(env, created.id, {
+    lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+  });
   const lease = await acquireWorktreeRunLease(created.id, { env });
 
   const skipped = await service.gc();
