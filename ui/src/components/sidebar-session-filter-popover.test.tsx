@@ -2,6 +2,7 @@
 import type { JSX } from "@solidjs/web";
 import { expect, it, onTestFinished, vi } from "vitest";
 import "../test-helpers/app-sidebar-suite.ts";
+import { createMediaQueryList } from "../test-helpers/media-query.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { PickerFocusHandle } from "./select-picker-types.ts";
@@ -56,7 +57,7 @@ it.each([false, true])("preserves initial or chosen focus (%s)", async (chosen) 
 });
 
 it("wraps focus from a nested picker's final group control", async () => {
-  vi.stubGlobal("matchMedia", () => ({ matches: true }));
+  vi.stubGlobal("matchMedia", (query: string) => createMediaQueryList(query, true));
   let picker: PickerFocusHandle | undefined;
   const container = mountFilter(
     () => (

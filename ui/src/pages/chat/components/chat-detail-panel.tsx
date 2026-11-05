@@ -38,12 +38,15 @@ import type {
   FileReaderViewRequest,
 } from "./chat-sidebar-content-types.ts";
 import { buildRawContent, SidebarPanel, type SidebarPanelProps } from "./chat-sidebar-content.tsx";
-import type { ChatDetailPanel, ChatDetailPanelProps } from "./chat-sidebar-view-types.ts";
+import type {
+  ChatDetailPanel as ChatDetailPanelElement,
+  ChatDetailPanelProps,
+} from "./chat-sidebar-view-types.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
-function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
+function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanelElement) {
   const fileAttachment = createFileSessionAttachment(props);
   const gateways = nativeGatewaysCapability();
   const nativeGateways = gateways && projectOwner(gateways, (owner) => owner);
@@ -695,7 +698,9 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
     () => lifecycle.snapshot(),
     () => {
       publishDraft();
-      const request = props.fileNavigation?.view;
+      // Bridge props may already describe the next selection while this frame applies.
+      // Consume only the navigation synchronized with visibleContent by renderPanel.
+      const request = previousNavigation?.view;
       if (request && request !== handledFileViewRequest) {
         // Consume even a mismatched request: it must not wait for a later selection.
         handledFileViewRequest = request;
@@ -729,7 +734,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
   return <SidebarPanel {...lifecycle.snapshot()} />;
 }
 
-defineSolidBridge("openclaw-chat-detail-panel", DetailPanel, {
+export const ChatDetailPanel = defineSolidBridge("openclaw-chat-detail-panel", DetailPanel, {
   properties: chatDetailPanelProperties,
   ...detailPanelOperationLifetime,
 });

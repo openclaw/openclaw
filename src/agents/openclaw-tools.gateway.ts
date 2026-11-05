@@ -28,6 +28,7 @@ export function createHostedGatewayTools(
       sessionId: options?.sessionId,
       runId: options?.runId,
       onYield: options?.onYield,
+      senderIsOwner: options?.senderIsOwner,
     }),
     ...(preparedDelegateTools ?? createOpenClawDelegateToolsForRun({ ...options, sessionAgentId })),
     ...(personalInstructionsEnabled ? [createPersonalInstructionsTool(sessionAgentId)] : []),

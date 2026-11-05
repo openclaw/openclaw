@@ -5,7 +5,7 @@ import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { OllamaTagModel } from "./provider-models.js";
 import { configureOllamaNonInteractive, promptAndConfigureOllama } from "./setup.js";
 
-export const baseUrl = "http://127.0.0.1:11434";
+const baseUrl = "http://127.0.0.1:11434";
 
 export function createLocalPrompter(overrides: Partial<WizardPrompter> = {}): WizardPrompter {
   return {

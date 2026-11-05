@@ -6,7 +6,6 @@ export {
   backfillMatrixAuthDeviceIdAfterStartup,
   hasReadyMatrixEnvAuth,
   resolveMatrixEnvAuthReadiness,
-  resolveMatrixConfigForAccount,
   resolveScopedMatrixEnvConfig,
   resolveMatrixAuth,
   resolveMatrixAuthContext,

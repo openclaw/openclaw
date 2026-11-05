@@ -12,7 +12,6 @@ import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/doctor-migration-plan-adapter.js";
-import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { areBundledPluginsDisabled } from "./bundled-dir.js";
 import { resolveBundledPluginScanDir } from "./bundled-plugin-scan.js";
 import { hasPluginConfigMigrationSource } from "./config-contract-matches.js";
@@ -37,16 +36,18 @@ import {
   collectRelevantDoctorPluginIdsForTouchedPaths,
   hasScopedProviderAuthAlias,
 } from "./doctor-contract-relevance.js";
-import type { PluginDoctorMigrationResourceCollectionParams } from "./doctor-migration-resources.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import { isActivatedManifestOwner } from "./manifest-owner-policy.js";
 import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
 import type { PluginManifestRegistry } from "./manifest-registry.types.js";
 import type { PluginManifestDoctorContract } from "./manifest-types.js";
 import { PluginDependencyLinkError } from "./plugin-instance-error.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
-import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
-import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
+import {
+  getPluginSetupModuleLoader,
+  PluginSetupPreparationRequiredError,
+} from "./plugin-setup-module.js";
 import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 
 export { collectRelevantDoctorPluginIds } from "./doctor-contract-relevance.js";
@@ -64,12 +65,15 @@ export function withDeferredPluginDoctorMigrations<T>(
 }
 
 export function isPluginDoctorMigrationDeferred(pluginId: string): boolean {
-  return deferredPluginMigrations.getStore()?.has(pluginId) === true;
+  const policyId = normalizePluginPolicyId(pluginId);
+  return [...(deferredPluginMigrations.getStore() ?? [])].some(
+    (id) => id === pluginId || normalizePluginPolicyId(id) === policyId,
+  );
 }
 
-type PluginDoctorContractSurface = keyof PluginManifestDoctorContract;
+export type PluginDoctorContractSurface = keyof PluginManifestDoctorContract;
 
-function declaresPluginDoctorContractSurface(
+export function declaresPluginDoctorContractSurface(
   declaration: PluginManifestDoctorContract | undefined,
   surface: PluginDoctorContractSurface,
 ): boolean {
@@ -97,15 +101,14 @@ export function isTrustedForDurableStores(record: PluginManifestRegistryRecord):
 
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
 
-type PluginDoctorRegistryParams = {
+export type PluginDoctorRegistryParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
   /** Candidate generation prepared by the install owner before publication. */
   manifestRegistry?: PluginManifestRegistry;
-  historicalWebhookListeners?: boolean;
-  startup?: boolean;
+  historicalWebhookListeners?: PluginDoctorCompatibilityOptions["historicalWebhookListeners"];
   /** Port preflight inspects retained data even when its selected owner is disabled. */
   includeDisabled?: boolean;
 };
@@ -158,10 +161,13 @@ function loadPluginDoctorContractEntry(
   try {
     // External packages can be replaced at the same path during this process.
     // Bind Doctor callbacks to the selected inventory, like other setup contracts.
+    // Doctor migration contexts open stores without an operation source, so a bundled
+    // plugin's operation modules would be captured (copied) on every load and never run.
     const loader = getPluginSetupModuleLoader(
       record,
       contractArtifact.modulePath,
       contractArtifact.boundaryRoot,
+      { stateOperations: false },
     );
     const { summary, ...contract } = loader.initialize(() =>
       coercePluginDoctorContractModule(
@@ -181,6 +187,9 @@ function loadPluginDoctorContractEntry(
     }
     return { pluginId: record.id, ...contract, origin: record.origin };
   } catch (error) {
+    if (error instanceof PluginSetupPreparationRequiredError) {
+      throw error;
+    }
     log.warn(
       `failed to load doctor contract for ${record.id} from ${contractArtifact.modulePath}: ${formatErrorMessage(error)}`,
     );
@@ -188,7 +197,7 @@ function loadPluginDoctorContractEntry(
   }
 }
 
-function resolvePluginDoctorManifestRecords(
+export function resolvePluginDoctorManifestRecords(
   params: PluginDoctorRegistryParams & { artifactPreservingReadOnly?: boolean },
   includeDeferred = false,
 ): PluginManifestRegistryRecord[] {
@@ -219,6 +228,7 @@ function filterPluginDoctorRecordsByScope(
   includeDeferred = false,
 ): PluginManifestRegistryRecord[] {
   const scopedPluginIds = pluginIds ? new Set(pluginIds) : null;
+  const scopedConfigIds = pluginIds ? new Set(pluginIds.map(normalizePluginPolicyId)) : null;
   const scopedProviderIds = pluginIds
     ? new Set(pluginIds.map(normalizeProviderId).filter(Boolean))
     : null;
@@ -228,6 +238,7 @@ function filterPluginDoctorRecordsByScope(
       !(
         scopedPluginIds &&
         !scopedPluginIds.has(record.id) &&
+        !(scopedConfigIds && scopedConfigIds.has(normalizePluginPolicyId(record.id))) &&
         !(record.packageName && scopedPluginIds.has(record.packageName)) &&
         !record.legacyPluginIds?.some((pluginId) => scopedPluginIds.has(pluginId)) &&
         !record.channels.some((channelId) => scopedPluginIds.has(channelId)) &&
@@ -424,7 +435,7 @@ export function listPluginDoctorStateMigrationEntries(
   );
 }
 
-function loadPluginDoctorStateMigrationEntries(
+export function loadPluginDoctorStateMigrationEntries(
   records: readonly PluginManifestRegistryRecord[],
   validateDeclarations = true,
   onInspectedPlugin?: (pluginId: string) => void,
@@ -680,17 +691,19 @@ export function resolvePluginDoctorStateMigrationInventory(params: {
 }
 
 /** Freeze the live registry's selected migration actions before state mutation. */
-export function resolveLivePluginDoctorStateMigrationInventory(params: {
+export type LiveDoctorInventoryParams = {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): PluginDoctorStateMigrationInventory {
+};
+
+export function resolveLiveDoctorInventoryFromSelection(
+  params: LiveDoctorInventoryParams,
+  selectRecords: () => PluginManifestRegistryRecord[],
+): PluginDoctorStateMigrationInventory {
   const bundledInventory = listPluginDoctorStateMigrationInventory(params);
   let records: PluginManifestRegistryRecord[];
   try {
-    records = resolvePluginDoctorStateMigrationRecords({
-      ...params,
-      artifactPreservingReadOnly: true,
-    });
+    records = selectRecords();
   } catch (error) {
     // Keep metadata for an early refusal, but never treat failed live discovery as
     // a complete empty inventory. Preparation may refresh it after schema repair.
@@ -747,24 +760,5 @@ export function applyPluginDoctorCompatibilityMigrations(
       surface: "configRepair",
     }),
     { ...params, isDeferred: isPluginDoctorMigrationDeferred },
-  );
-}
-
-/** Inspect plugin-owned migration paths before the updater captures its recovery set. */
-export async function preparePluginDoctorMigrationBackupResources(
-  params: PluginDoctorMigrationResourceCollectionParams,
-) {
-  return await withArtifactPreservingStateReads(() =>
-    withPluginSourceCaptureStorage(
-      { stateDir: params.stateDir, placement: "temporary" },
-      async () => {
-        const entries = loadPluginDoctorStateMigrationEntries(
-          resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true }),
-        );
-        const { preparePluginDoctorMigrationResources } =
-          await import("./doctor-migration-resources.js");
-        return await preparePluginDoctorMigrationResources(entries, params);
-      },
-    ),
   );
 }

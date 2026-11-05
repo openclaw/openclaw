@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage as errorMessage, toErrorObject } from "../../infra/errors.js";
 import { realpathOrResolve } from "../../infra/path-existence.js";
+import { registerProcessExitCleanup } from "../../infra/process-exit-cleanup.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
@@ -141,10 +143,8 @@ async function releaseGitLock(cleanup: LeaseCleanup): Promise<boolean> {
 export async function resolveWorktreeForPath(params: {
   sessionEntry?: { worktree?: { id: string } };
   candidatePaths: Array<string | undefined>;
-  env?: NodeJS.ProcessEnv;
 }): Promise<WorktreeRunSource | undefined> {
-  const env = params.env ?? process.env;
-  const context = captureOpenClawStateWorkerContext({ env });
+  const context = captureOpenClawStateWorkerContext({ env: process.env });
   const boundId = params.sessionEntry?.worktree?.id;
   if (boundId !== undefined) {
     // The session's stored binding is authoritative: if that worktree is gone the
@@ -239,6 +239,7 @@ async function runLeaseCleanup(cleanup: LeaseCleanup): Promise<boolean> {
 }
 
 function retainCleanupFailure(cleanup: LeaseCleanup, error: unknown): void {
+  materializeErrorStack(error);
   cleanup.failure = error;
   pendingLeaseCleanups.add(cleanup);
   setWorktreeRunEndCleanupFailure(cleanup.context, cleanup, { error });
@@ -258,7 +259,7 @@ function ensureExitCleanupRegistered(): void {
   }
   exitCleanupRegistered = true;
   // Only settled admissions can be deleted synchronously; unknown writers may still insert.
-  process.on("exit", () => {
+  registerProcessExitCleanup(() => {
     for (const cleanup of pendingLeaseCleanups) {
       if (cleanup.admissionSettled && !cleanup.rowDeleted) {
         try {

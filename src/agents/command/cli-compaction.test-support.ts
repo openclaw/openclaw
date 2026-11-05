@@ -122,22 +122,13 @@ export function createPreparedRuntimeLease(input: {
       pluginMetadataSnapshot: prepared.metadataSnapshot,
       pluginRegistry: prepared.pluginRegistry,
     },
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: vi.fn(async () => {}),
   };
 }
 
 export const defaultSettingsManager = () =>
   SettingsManager.inMemory({ compaction: { reserveTokens: 200, keepRecentTokens: 0 } });
-
-const defaultPreemptiveCompaction = () => ({
-  route: "fits" as const,
-  shouldCompact: false,
-  estimatedPromptTokens: 600,
-  promptBudgetBeforeReserve: 800,
-  overflowTokens: 0,
-  toolResultReducibleChars: 0,
-  effectiveReserveTokens: 200,
-});
 
 export async function prepareCompactionScenario(params: {
   tmpDir: string;
@@ -187,7 +178,15 @@ export async function prepareCompactionScenario(params: {
     },
     ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
     createPreparedEmbeddedAgentSettingsManager: defaultSettingsManager,
-    shouldPreemptivelyCompactBeforePrompt: defaultPreemptiveCompaction,
+    shouldPreemptivelyCompactBeforePrompt: () => ({
+      route: "fits",
+      shouldCompact: false,
+      estimatedPromptTokens: 600,
+      promptBudgetBeforeReserve: 800,
+      overflowTokens: 0,
+      toolResultReducibleChars: 0,
+      effectiveReserveTokens: 200,
+    }),
     resolveLiveToolResultMaxChars: () => 20_000,
     runContextEngineMaintenance: maintenance,
     recordCliCompactionInStore,
@@ -195,7 +194,7 @@ export async function prepareCompactionScenario(params: {
   });
 
   const runParams: CliCompactionParams = {
-    cfg: params.cfg ?? ({} as OpenClawConfig),
+    cfg: params.cfg ?? {},
     ...session,
     sessionAgentId: "main",
     workspaceDir: params.tmpDir,

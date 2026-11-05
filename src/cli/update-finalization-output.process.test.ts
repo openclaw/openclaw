@@ -10,6 +10,7 @@ import { listUpdateRuns } from "../infra/update-run-ledger.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { updateFinalizationOutputEntrypoint } from "./cli-entrypoint.test-support.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import {
   formatCliProcessFailure,
   runCliProcessChild,
@@ -94,15 +95,12 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       expect(address.port).not.toBe(18789);
       await fs.mkdir(state);
       await fs.mkdir(workspace);
-      await fs.writeFile(
-        config,
-        JSON.stringify({
-          gateway: { mode: "local", port: address.port, auth: { mode: "none" } },
-          plugins: { enabled: false, allow: [] },
-          agents: { defaults: { workspace } },
-          logging: { file: path.join(root, "openclaw.log") },
-        }),
-      );
+      await writeFixtureJson(config, {
+        gateway: { mode: "local", port: address.port, auth: { mode: "none" } },
+        plugins: { enabled: false, allow: [] },
+        agents: { defaults: { workspace } },
+        logging: { file: path.join(root, "openclaw.log") },
+      });
       const json = !scenario.startsWith("human");
       const traceExit =
         scenario === "human-recovery-plugin-error" &&
@@ -124,9 +122,9 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         "dev",
         ...(scenario === "human-recovery-plugin-error" ? [] : ["--yes"]),
         "--no-restart",
-        // The fixture overrides the blocked phase to 1s; recovery keeps a separate explicit budget.
+        // The slow fixture phase gets its own budget; Doctor admission keeps the normal budget.
         "--timeout",
-        scenario === "borrowed-phase" ? "1" : "9",
+        "9",
         ...(json && scenario !== "inherited-json" ? ["--json"] : []),
       ];
       const readRun = () =>
@@ -476,7 +474,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           "Update mode: package",
           "Reason code: doctor-failed",
           "Failed phase finalize-doctor: exit 1",
-          "Recovery outcome: not serving (timeout)",
+          "Recovery outcome: readiness unverified (timeout)",
           "Gateway readiness was not verified; service status: unknown. Check openclaw gateway status --deep.",
         );
         expect(run.steps.filter((step) => step.step === "gateway recovery verification")).toEqual([

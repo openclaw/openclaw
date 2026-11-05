@@ -3,10 +3,8 @@ import { refreshPendingApprovalQueue, type ExecApprovalPromptState } from "./exe
 import type { ApplicationGateway } from "./gateway.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
 
-type OverlayOperatorAccess = ReturnType<typeof readGatewayOperatorAccess>;
-
 export function readOverlayOperatorAccessTransition(
-  previous: OverlayOperatorAccess,
+  previous: ReturnType<typeof readGatewayOperatorAccess>,
   snapshot: ApplicationGateway["snapshot"],
 ) {
   const access = snapshot.phase === "connected" ? readGatewayOperatorAccess(snapshot) : previous;

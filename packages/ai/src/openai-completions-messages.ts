@@ -359,51 +359,38 @@ export function convertMessages(
   }
 
   if (relocatableSplit !== undefined && systemParamIndex !== undefined) {
-    relocateNonBehavioralRegion({
-      params,
-      systemParamIndex,
-      split: relocatableSplit,
-      cacheOptOutIndexes: options.cacheOptOutIndexes,
-    });
+    const cacheOptOutIndexes = options.cacheOptOutIndexes;
+    // Commit relocation only after finding an emitted carrier.
+    const text = sanitizeSurrogates(stripSystemPromptCacheBoundary(relocatableSplit.relocatable));
+    // A trailing carrier would rewrite the earlier user turn on every follow-up.
+    for (let index = systemParamIndex + 1; index < params.length; index++) {
+      const param = params[index];
+      if (!param || param.role !== "user") {
+        continue;
+      }
+      if (typeof param.content === "string") {
+        param.content = `${param.content}\n\n${text}`;
+      } else if (Array.isArray(param.content)) {
+        param.content = [
+          ...param.content,
+          { type: "text", text } satisfies ChatCompletionContentPartText,
+        ];
+      } else {
+        continue;
+      }
+      // Shrink the system message only once a carrier turn is secured, so a
+      // projected-away user turn leaves the region where it already is.
+      const systemParam = params[systemParamIndex];
+      if (systemParam) {
+        systemParam.content = sanitizeSurrogates(
+          stripSystemPromptCacheBoundary(relocatableSplit.remainingPrompt),
+        );
+      }
+      // The turn now carries volatile text, so it must not anchor a cache breakpoint.
+      cacheOptOutIndexes?.add(index);
+      break;
+    }
   }
 
   return params;
-}
-
-/** Commit relocation only after finding an emitted carrier. */
-function relocateNonBehavioralRegion(args: {
-  params: ChatCompletionMessageParam[];
-  systemParamIndex: number;
-  split: { remainingPrompt: string; relocatable: string };
-  cacheOptOutIndexes?: Set<number>;
-}): void {
-  const text = sanitizeSurrogates(stripSystemPromptCacheBoundary(args.split.relocatable));
-  // A trailing carrier would rewrite the earlier user turn on every follow-up.
-  for (let index = args.systemParamIndex + 1; index < args.params.length; index++) {
-    const param = args.params[index];
-    if (!param || param.role !== "user") {
-      continue;
-    }
-    if (typeof param.content === "string") {
-      param.content = `${param.content}\n\n${text}`;
-    } else if (Array.isArray(param.content)) {
-      param.content = [
-        ...param.content,
-        { type: "text", text } satisfies ChatCompletionContentPartText,
-      ];
-    } else {
-      continue;
-    }
-    // Shrink the system message only once a carrier turn is secured, so a
-    // projected-away user turn leaves the region where it already is.
-    const systemParam = args.params[args.systemParamIndex];
-    if (systemParam) {
-      systemParam.content = sanitizeSurrogates(
-        stripSystemPromptCacheBoundary(args.split.remainingPrompt),
-      );
-    }
-    // The turn now carries volatile text, so it must not anchor a cache breakpoint.
-    args.cacheOptOutIndexes?.add(index);
-    return;
-  }
 }

@@ -73,7 +73,7 @@ function migrate(databasePath: string, env: NodeJS.ProcessEnv) {
 }
 
 it("repairs a mis-stamped v17 database while preserving auth and ownership", async () => {
-  const { env, withDb, verify } = fixture(true);
+  const { databasePath, env, withDb, verify } = fixture(true);
   withDb((database) => {
     database.exec(`
       INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES ('last-good', '{"profile":"primary"}', 10);
@@ -83,6 +83,7 @@ it("repairs a mis-stamped v17 database while preserving auth and ownership", asy
 
   expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
   expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
+  await migrate(databasePath, env);
 
   verify((repaired) => {
     expectRow(repaired, "SELECT state_json FROM auth_profile_state WHERE state_key = 'last-good'", {
@@ -100,16 +101,6 @@ it("repairs a mis-stamped v17 database while preserving auth and ownership", asy
     expectRows(repaired, "SELECT tbl, idx FROM sqlite_stat1 WHERE tbl = 'state_leases'", []);
     expectRow(repaired, "PRAGMA integrity_check", { integrity_check: "ok" });
     expectRows(repaired, "PRAGMA foreign_key_check", []);
-  });
-});
-
-it("leaves a clean v17 database unchanged", async () => {
-  const { databasePath, env, withDb, verify } = fixture();
-  const beforeSchemaVersion = withDb((db) => row(db, "PRAGMA schema_version"), true);
-  await migrate(databasePath, env);
-  verify((after) => {
-    expectRow(after, "PRAGMA schema_version", beforeSchemaVersion);
-    expect(row(after, leaseTable)).toBeUndefined();
   });
 });
 

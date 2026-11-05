@@ -1,5 +1,5 @@
 import type { NewSessionResponse, SessionUpdate } from "@agentclientprotocol/sdk";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import {
   createNewSessionRequest,
@@ -16,19 +16,13 @@ import {
 import type { GatewaySessionPresentationRow } from "./translator.presentation.js";
 import { createPromptScenario } from "./translator.scenario.test-support.js";
 
-vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
-
 const sessionId = "bridge-session";
 const row: GatewaySessionPresentationRow = {
   key: sessionId,
-  label: "main-work",
-  displayName: "Main work",
   derivedTitle: "Fix ACP bridge",
   kind: "direct",
   updatedAt: 1_710_000_000_000,
   thinkingLevel: "high",
-  modelProvider: "openai",
-  model: "gpt-5.4",
   thinkingLevels: ["off", "medium", "max"].map((id) => ({ id, label: id })),
   verboseLevel: "full",
   reasoningLevel: "stream",
@@ -109,8 +103,6 @@ it("replays transcript text and thinking with current session controls and usage
             { type: "text", text: "Answer" },
           ],
         },
-        { role: "system", content: [{ type: "text", text: "ignore me" }] },
-        { role: "assistant", content: [{ type: "image", image: "skip" }] },
       ],
     }),
   });
@@ -176,7 +168,6 @@ it("streams partial tool output and retains file locations through completion", 
   const prompt = agent.prompt(createPromptRequest(sessionId, "Inspect app.ts"));
   const tool = { sessionKey: sessionId, toolCallId: "tool-1", name: "read" };
   const args = { path: "src/app.ts", line: 12.9 };
-  const location = { path: "src/app.ts", line: 12 };
   const output = (text: string) => ({
     content: [{ type: "text", text }],
     details: { path: "src/app.ts" },
@@ -197,7 +188,7 @@ it("streams partial tool output and retains file locations through completion", 
     status: "in_progress",
     rawInput: args,
     kind: "read",
-    locations: [location],
+    locations: [{ path: "src/app.ts", line: 12 }],
   });
   for (const [rawOutput, status, text] of [
     [partial, "in_progress", "partial output"],
@@ -209,7 +200,7 @@ it("streams partial tool output and retains file locations through completion", 
       status,
       rawOutput,
       content: [{ type: "content", content: { type: "text", text } }],
-      locations: [location],
+      locations: [{ path: "src/app.ts", line: 12 }],
     });
   }
 });
@@ -220,9 +211,6 @@ async function configFixture() {
       kind: "direct",
       updatedAt: 1_710_000_000_000,
       thinkingLevel: "minimal",
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      reasoningLevel: "stream",
       responseUsage: "tokens",
     },
   });

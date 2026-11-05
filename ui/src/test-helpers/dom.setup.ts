@@ -1,10 +1,24 @@
-import { afterEach, vi } from "vitest";
+import { afterEach, aroundEach, vi } from "vitest";
 import { installPopoverPolyfill } from "./popover.ts";
 import { cleanupSolid } from "./solid-cleanup.ts";
 import { installSafeLocalStorageForTesting } from "./storage.ts";
+import { beginUiLeakCheck, reportUiLeaks } from "./unit-leak-guard.ts";
 
 // Setup files run for every test file; ordinary helpers stay cached with isolate:false.
 afterEach(cleanupSolid);
+
+// The outer hook observes state after local afterEach and onTestFinished cleanup.
+aroundEach(async (runTest, { task }) => {
+  if (task.file.projectName !== "unit") {
+    return runTest();
+  }
+  const check = beginUiLeakCheck();
+  try {
+    await runTest();
+  } finally {
+    reportUiLeaks(`${task.file.filepath} > ${task.name}`, check());
+  }
+});
 
 installPopoverPolyfill();
 

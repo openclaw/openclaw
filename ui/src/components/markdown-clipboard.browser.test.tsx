@@ -9,9 +9,10 @@ import {
 } from "../pages/chat/components/chat-message-text-view.tsx";
 import { exportWidget } from "../pages/chat/components/widget-export.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import "./markdown-mermaid.tsx";
+import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import { handleMarkdownTableInteraction, releaseMarkdownTables } from "./markdown-tables.ts";
 import { CopyButton } from "./solid/copy-button.tsx";
 
@@ -55,11 +56,7 @@ afterEach(() => {
     owner.remove();
   }
   vi.restoreAllMocks();
-  if (clipboardDescriptor) {
-    Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
-  } else {
-    Reflect.deleteProperty(navigator, "clipboard");
-  }
+  restorePropertyDescriptor(navigator, "clipboard", clipboardDescriptor);
 });
 
 afterAll(() => {
@@ -385,10 +382,10 @@ describe("Markdown clipboard operation lifetime", () => {
     button.click();
     button.click();
     await flushCopy();
-    expect(button.getAttribute("aria-label")).toBe("Copied!");
+    expect(button.getAttribute("aria-label")).toBe("Copied");
     await rejectCopy(pending);
     expect(fallbackCopies).toEqual([]);
-    expect(button.getAttribute("aria-label")).toBe("Copied!");
+    expect(button.getAttribute("aria-label")).toBe("Copied");
   });
 
   it.each(["code", "table", "mermaid", "message"] as const)(
@@ -399,7 +396,7 @@ describe("Markdown clipboard operation lifetime", () => {
       button.click();
       await flushCopy();
       expect(fallbackCopies).toEqual([writeText.mock.calls[0]![0]]);
-      expect(button.getAttribute("aria-label")).toBe("Copied!");
+      expect(button.getAttribute("aria-label")).toBe("Copied");
     },
   );
 });

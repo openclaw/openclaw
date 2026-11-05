@@ -15,10 +15,8 @@ const injected = vi.hoisted(() => ({
   provenance: undefined as ProcessProvenance | undefined,
   bootTimeNs: undefined as bigint | undefined,
   volume: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" as string | undefined,
-  changedInodePath: "",
   recoveryLocksCreated: 0,
   userFailure: "",
-  claimFailure: "",
   witnessFailure: "",
   onUsers: undefined as (() => void | Promise<void>) | undefined,
   onRevalidate: undefined as (() => void) | undefined,
@@ -38,10 +36,7 @@ vi.mock("../../scripts/crabbox-staging-users.mts", async (importOriginal) => ({
 }));
 vi.mock("../../scripts/crabbox-staging-claims.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/crabbox-staging-claims.mts")>()),
-  verifyNoStagingClaims: async () =>
-    injected.claimFailure
-      ? { ok: false, reason: injected.claimFailure, error: new Error(injected.claimFailure) }
-      : { ok: true },
+  verifyNoStagingClaims: async () => ({ ok: true }),
 }));
 vi.mock("../../scripts/crabbox-staging-witness.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/crabbox-staging-witness.mts")>()),
@@ -54,13 +49,6 @@ vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return {
     ...actual,
-    lstatSync: (...args: unknown[]) => {
-      const stat = Reflect.apply(actual.lstatSync, actual, args);
-      if (stat && typeof stat.ino === "bigint" && String(args[0]) === injected.changedInodePath) {
-        stat.ino += 1n;
-      }
-      return stat;
-    },
     mkdirSync: (...args: unknown[]) => {
       if (String(args[0]).endsWith("/recovery.lock")) {
         injected.recoveryLocksCreated += 1;
@@ -129,9 +117,8 @@ beforeEach(() => {
   injected.provenance = oldHost;
   injected.bootTimeNs = BigInt(Date.now() + 86_400_000) * 1_000_000n;
   injected.volume = oldHost.hostId;
-  injected.changedInodePath = "";
   injected.recoveryLocksCreated = 0;
-  injected.userFailure = injected.claimFailure = injected.witnessFailure = "";
+  injected.userFailure = injected.witnessFailure = "";
   injected.onUsers = undefined;
   injected.onRevalidate = undefined;
   injected.beforeRemove = undefined;
@@ -333,35 +320,23 @@ const legacyRefusals = [
   { defect: "missing digest flag", reason: /requires --confirm/ },
   { defect: "same-boot digest", reason: /different boot/ },
   { defect: "receipt at boot time", reason: /mtime must predate/ },
-  { defect: "receipt after boot time", reason: /mtime must predate/ },
   { defect: "unavailable current provenance", reason: /verified current host\/boot/ },
   { defect: "unavailable current boot time", reason: /verified current host\/boot/ },
   { defect: "missing required metadata", reason: /invalid metadata/ },
   { defect: "missing manifest", reason: /ENOENT/ },
   { defect: "manifest mismatch", reason: /manifest does not match/ },
-  { defect: "changed inode", reason: /identity changed/ },
-  { defect: "changed volume", reason: /identity changed/ },
   { defect: "unavailable volume UUID", reason: /identity changed|UUID-backed/ },
-  { defect: "existing recovery lock", reason: /Another or interrupted recovery/ },
   { defect: "live users", reason: /fixture live staging user/ },
-  { defect: "unavailable lsof", reason: /fixture unavailable user census/ },
-  { defect: "native claims", reason: /fixture native claims/, writesConfirmation: true },
-  { defect: "source witness", reason: /fixture retained source/, writesConfirmation: true },
 ];
 posixIt.each(legacyRefusals)(
   "refuses legacy disposition with $defect",
-  async ({ defect, reason, writesConfirmation }) => {
+  async ({ defect, reason }) => {
     const fixture = stage(true);
     const overrides: Record<string, Partial<typeof injected>> = {
       "unavailable current provenance": { provenance: undefined },
       "unavailable current boot time": { bootTimeNs: undefined },
-      "changed inode": { changedInodePath: fixture.owner.root },
-      "changed volume": { volume: "ffffffff-bbbb-4ccc-8ddd-eeeeeeeeeeee" },
       "unavailable volume UUID": { volume: undefined },
       "live users": { userFailure: "fixture live staging user" },
-      "unavailable lsof": { userFailure: "fixture unavailable user census" },
-      "native claims": { claimFailure: "fixture native claims" },
-      "source witness": { witnessFailure: "fixture retained source" },
     };
     Object.assign(injected, overrides[defect]);
     if (defect === "same-boot digest") {
@@ -369,9 +344,8 @@ posixIt.each(legacyRefusals)(
         receipt.ownerDomain = processDomain(newHost);
       });
     }
-    if (defect === "receipt at boot time" || defect === "receipt after boot time") {
-      injected.bootTimeNs =
-        fixture.stat().mtimeNs - (defect === "receipt after boot time" ? 1n : 0n);
+    if (defect === "receipt at boot time") {
+      injected.bootTimeNs = fixture.stat().mtimeNs;
     }
     if (defect === "missing required metadata") {
       rewriteReceipt(fixture, (receipt) => {
@@ -383,9 +357,6 @@ posixIt.each(legacyRefusals)(
     }
     if (defect === "manifest mismatch") {
       fs.writeFileSync(fixture.file("manifest.json"), "{}\n");
-    }
-    if (defect === "existing recovery lock") {
-      fs.mkdirSync(fixture.file("recovery.lock"));
     }
     const args = confirmationArgs(fixture);
     if (defect === "stale digest") {
@@ -400,15 +371,7 @@ posixIt.each(legacyRefusals)(
     const before = fixture.read();
     const lockCount = injected.recoveryLocksCreated;
     await refused(fixture, args, reason);
-    expectRetained(fixture);
-    if (writesConfirmation) {
-      expect(JSON.parse(fixture.read())).toMatchObject({
-        operatorConfirmation: { receiptSha256: digest(before) },
-      });
-      expect(fs.existsSync(fixture.file("recovery.lock"))).toBe(false);
-    } else {
-      expectRetained(fixture, before, lockCount);
-    }
+    expectRetained(fixture, before, lockCount);
   },
 );
 

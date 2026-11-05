@@ -130,6 +130,29 @@ async function replaceStore(options: Options, ...names: string[]) {
 }
 
 describe("resident profile display and reference catalog", () => {
+  it("uses verified handles for unnamed profiles and never an authentication email", async () => {
+    const options = fixture();
+    const github = syncAccount(options, "private-login@example.test", 301, "public-handle");
+    const emailOnly = ensureProfileForEmail("other-private-login@example.test", options);
+    setDisplayName(github.id, null, options);
+    setDisplayName(emailOnly.id, null, options);
+    await prepareCatalog(options);
+    const queries = spyOnQueries(options);
+
+    expect(options.display(github.id).displayName).toBe("public-handle");
+    expect(options.display(emailOnly.id).displayName).toBe(`Person ${emailOnly.id.slice(0, 8)}`);
+    expect(profiles.listResidentUserProfileDisplayFacts(options)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: github.id, label: "public-handle" }),
+        expect.objectContaining({
+          id: emailOnly.id,
+          label: `Person ${emailOnly.id.slice(0, 8)}`,
+        }),
+      ]),
+    );
+    expect(queries).not.toHaveBeenCalled();
+  });
+
   it("does not join hydration from before a committed profile change", async () => {
     const options = fixture();
     const profile = ensureProfileForEmail("changing@example.test", options);
@@ -264,6 +287,8 @@ describe("resident profile display and reference catalog", () => {
       }
       const native = spyOnQueries(options);
       const current = prepared.readCurrentFacts(bindings);
+      const revision = prepared.readCurrentRevision(bindings);
+      expect(prepared.readCurrentRevision(bindings)).toBe(revision);
       expect(selected.readCurrentFacts(selectedBindings)).toEqual(current);
       expect(retained.readCurrentFacts(retainedBindings)).toEqual(current);
       const profile = {
@@ -282,6 +307,7 @@ describe("resident profile display and reference catalog", () => {
       native.mockRestore();
       setDisplayName(first.id, "Cosmetic update", options);
       linkEmail("later@example.test", first.id, options);
+      expect(prepared.readCurrentRevision(bindings)).not.toBe(revision);
       expect(prepared.readCurrentFacts().profile.emails).toEqual(
         [email, "retained@example.test", "later@example.test"].toSorted(),
       );
@@ -329,6 +355,7 @@ describe("resident profile display and reference catalog", () => {
         assignedRole: "reader",
       });
       expect(() => prepared.readCurrentFacts(bindings)).toThrow("user profile not found");
+      expect(() => prepared.readCurrentRevision(bindings)).toThrow("user profile not found");
       expect(() => selected.readCurrentFacts(selectedBindings)).toThrow("user profile not found");
       expect(retained.readCurrentFacts(retainedBindings)).toEqual(prepared.readCurrentFacts());
       expect(after).not.toHaveBeenCalled();
@@ -365,6 +392,7 @@ describe("resident profile display and reference catalog", () => {
       const [current] = await replaceStore(options, "current");
       expect(() => prepared.readCurrentFacts()).toThrow();
       expect(() => prepared.readCurrentProfile()).toThrow();
+      expect(() => prepared.readCurrentRevision()).toThrow();
       const seen = vi.fn(() => profiles.isUserProfileCatalogReady(options.path));
       releases.push(onUserProfilesChanged(seen));
       if (admission === "native") {
@@ -384,6 +412,7 @@ describe("resident profile display and reference catalog", () => {
       const missing = await prepareIdentity(prior.id, options);
       expect(() => missing.readCurrentFacts()).toThrow("user profile not found");
       expect(() => missing.readCurrentProfile()).toThrow("user profile not found");
+      expect(() => missing.readCurrentRevision()).toThrow("user profile not found");
       const native = spyOnQueries(options);
       expect(options.resolve(prior.id)).toEqual({ ok: true, value: undefined });
       expect(options.display(current.id).displayName).toBe("current");
@@ -514,6 +543,22 @@ describe("resident profile display and reference catalog", () => {
       expect(native).not.toHaveBeenCalled();
     },
   );
+
+  it("resolves a nameless GitHub profile to its verified login without exposing its email", async () => {
+    const options = fixture();
+    const profile = syncAccount(options, "private-name@example.test", 42, "octocat");
+    setDisplayName(profile.id, null, options);
+    await prepareCatalog(options);
+    const display = options.display(profile.id);
+    expect(display.displayName).toBe("octocat");
+    expect(getUserProfileDisplaysNative([profile.id], options).get(profile.id)?.displayName).toBe(
+      "octocat",
+    );
+    setDisplayName(profile.id, "My saved name", options);
+    expect(options.display(profile.id).displayName).toBe("My saved name");
+    expect(display).not.toHaveProperty("emails");
+    expect(display).not.toHaveProperty("role");
+  });
 
   it("keeps aliases stable across cosmetics and same-head GitHub refresh", async () => {
     const options = fixture();

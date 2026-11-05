@@ -24,7 +24,6 @@ export type ModelProvidersViewProps = SharedModelProvidersProps & {
   catalogDiscovering: boolean;
   catalogDiscoveryError: string | null;
   providerDetailsReady?: boolean;
-  apiKeySaving?: Record<string, boolean>;
   installedAgents: JSX.Element | typeof undefined;
   providerScope?: JSX.Element;
   customProvider?: CustomProviderEditorActions;

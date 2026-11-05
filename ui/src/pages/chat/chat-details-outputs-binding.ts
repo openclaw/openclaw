@@ -1,9 +1,10 @@
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { detailsOutputsIcons } from "./chat-details-output-icons.tsx";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type { ChatDetailsOutputsIcons, ChatDetailsProps } from "./components/chat-details-types.ts";
+import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import {
   isCurrentSessionWorkspace,
   loadSessionWorkspaceArtifacts,
@@ -144,13 +145,12 @@ export function projectDetailsOutputs(
   binding: DetailsOutputsBinding,
   workspace: SessionWorkspaceState,
   board: ResolvedBoardView,
-  icons: ChatDetailsOutputsIcons,
 ): Pick<ChatDetailsProps, "outputs" | "retainOutputs"> {
   const artifacts = workspace.assistantArtifacts;
   return {
     retainOutputs: binding.retain,
     outputs: {
-      ...icons,
+      ...detailsOutputsIcons,
       artifacts: artifacts?.resolved ? artifacts.items : null,
       artifactRead: artifacts,
       artifactsError: artifacts?.error ?? null,

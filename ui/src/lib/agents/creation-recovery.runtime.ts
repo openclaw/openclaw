@@ -21,44 +21,6 @@ export class AgentCreationUncertainError extends Error {
   }
 }
 
-/** A missing row only proves failure after the original request has settled on the server. */
-async function reconcileAgentCreation(
-  client: GatewayBrowserClient,
-  attempt: AgentCreationAttempt,
-): Promise<AgentCreationResult | null> {
-  let snapshot: ConfigSnapshot;
-  try {
-    snapshot = await client.request<ConfigSnapshot>("config.get", {});
-  } catch {
-    throw new AgentCreationUncertainError();
-  }
-  const config = snapshot?.sourceConfig;
-  if (!snapshot?.valid || !snapshot.exists || snapshot.writeError || !isRecord(config)) {
-    throw new AgentCreationUncertainError();
-  }
-  const entries = isRecord(config.agents) ? config.agents.entries : undefined;
-  const entry = isRecord(entries) ? entries[attempt.agentId] : undefined;
-  if (!isRecord(entry)) {
-    if (attempt.responseReceived) {
-      return null;
-    }
-    throw new AgentCreationUncertainError();
-  }
-  const mainKey = isRecord(config.session) ? config.session.mainKey : undefined;
-  return {
-    agentId: attempt.agentId,
-    name: typeof entry.name === "string" && entry.name.trim() ? entry.name : attempt.name,
-    onboarding: {
-      sessionKey: buildAgentMainSessionKey({
-        agentId: attempt.agentId,
-        mainKey: typeof mainKey === "string" ? mainKey : undefined,
-      }),
-      status: "error",
-      error: t("agentChip.creationRecovered"),
-    },
-  };
-}
-
 /** Loaded after provisional navigation; the eager owner retains attempted identities. */
 export async function executeAgentCreation(
   client: GatewayBrowserClient,
@@ -90,7 +52,38 @@ export async function executeAgentCreation(
   if (!isCurrent()) {
     return null;
   }
-  created ??= (await reconcileAgentCreation(client, attempt)) ?? undefined;
+  // A missing row only proves failure after the original request has settled on the server.
+  if (created === undefined || created === null) {
+    let snapshot: ConfigSnapshot;
+    try {
+      snapshot = await client.request<ConfigSnapshot>("config.get", {});
+    } catch {
+      throw new AgentCreationUncertainError();
+    }
+    const config = snapshot?.sourceConfig;
+    if (!snapshot?.valid || !snapshot.exists || snapshot.writeError || !isRecord(config)) {
+      throw new AgentCreationUncertainError();
+    }
+    const entries = isRecord(config.agents) ? config.agents.entries : undefined;
+    const entry = isRecord(entries) ? entries[attempt.agentId] : undefined;
+    if (isRecord(entry)) {
+      const mainKey = isRecord(config.session) ? config.session.mainKey : undefined;
+      created = {
+        agentId: attempt.agentId,
+        name: typeof entry.name === "string" && entry.name.trim() ? entry.name : attempt.name,
+        onboarding: {
+          sessionKey: buildAgentMainSessionKey({
+            agentId: attempt.agentId,
+            mainKey: typeof mainKey === "string" ? mainKey : undefined,
+          }),
+          status: "error",
+          error: t("agentChip.creationRecovered"),
+        },
+      };
+    } else if (!attempt.responseReceived) {
+      throw new AgentCreationUncertainError();
+    }
+  }
   if (!isCurrent()) {
     return null;
   }

@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { configSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -9,13 +10,66 @@ import {
   emptyUsage,
   providerPageOptions,
 } from "./model-catalog-fixtures.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "custom-endpoints",
   startServer: startControlUiE2eServer,
 });
 suite.define(() => {
+  it("edits model-level adapters without authoring a provider adapter", async () => {
+    await suite.withPage(providerPageOptions(1200, 1125), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["config.get", "config.patch", "config.customEndpoint"],
+        methodResponses: {
+          "config.get": configSnapshot(
+            {
+              models: {
+                providers: {
+                  lab: {
+                    baseUrl: "http://lab.lan/v1",
+                    auth: "none",
+                    models: [{ id: "chat", name: "Lab chat", api: "openai-completions" }],
+                  },
+                },
+              },
+            },
+            "model-api-base",
+          ),
+          "models.list": { models: [] },
+          "models.authStatus": { ts: 1, providers: [], providerCapabilities: [] },
+          "usage.status": emptyUsage(),
+        },
+      });
+      await page.goto(suite.server.baseUrl + "settings/model-providers");
+      const edit = page.getByRole("button", { name: "Edit endpoint", exact: true });
+      await edit.waitFor();
+      const entryFrame = await takeControlUiScreenshotFrame(
+        page,
+        page.locator(".shell"),
+        [page.locator(".provider-row").first()],
+        { animations: "disabled" },
+      );
+      await writeFile(path.join(suite.artifactDir, "model-level-entry.png"), entryFrame.png);
+      expect(await edit.isDisabled()).toBe(false);
+      await edit.click();
+      const form = page.locator(".custom-endpoint-editor");
+      expect(await form.getByLabel("API adapter", { exact: true }).inputValue()).toBe("");
+      const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [form], {
+        animations: "disabled",
+      });
+      await writeFile(path.join(suite.artifactDir, "model-level-adapters.png"), frame.png);
+      await form.getByLabel("API base URL", { exact: true }).fill("http://lab.lan/v2");
+      await gateway.deferNext("config.customEndpoint");
+      await form.getByRole("button", { name: "Save", exact: true }).click();
+      const request = await gateway.waitForRequest("config.customEndpoint");
+      expect(request.params).toMatchObject({
+        action: "edit",
+        provider: "lab",
+        baseUrl: "http://lab.lan/v2",
+      });
+      expect(request.params).not.toHaveProperty("api");
+    });
+  });
   it("connects a custom provider, edits branding, and refreshes the unified list with safe logo fallbacks", async () => {
     await suite.withPage(providerPageOptions(1200, 1125), async ({ page }) => {
       const logoBytes = await readFile(path.resolve("ui/public/favicon-32.png"));
@@ -50,7 +104,7 @@ suite.define(() => {
         await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
       };
       await page.goto(suite.server.baseUrl + "settings/model-providers");
-      await page.getByRole("button", { name: "Connect provider", exact: true }).first().click();
+      await page.getByRole("button", { name: "Add account", exact: true }).first().click();
       const search = page.locator("[data-models-login-search]");
       await search.fill("custom");
       const option = page.getByRole("button", { name: "Custom Provider", exact: false });
@@ -92,9 +146,10 @@ suite.define(() => {
         .toBe(32);
       expect(await page.locator('[data-provider-id="openai"]').count()).toBe(1);
       expect(await page.locator("[data-custom-endpoints]").count()).toBe(0);
-      expect(await row.getByRole("button", { name: "Set API key", exact: true }).isDisabled()).toBe(
+      expect(await row.getByRole("button", { name: /^Set API key(?::|$)/ }).isDisabled()).toBe(
         true,
       );
+      expect(await gateway.getRequests("models.authSetApiKey")).toHaveLength(0);
       await capture("after-unified-list", row);
       await row.getByRole("button", { name: "Edit endpoint", exact: true }).click();
       expect(await form.getByLabel("Provider ID", { exact: false }).isDisabled()).toBe(true);
@@ -188,7 +243,7 @@ suite.define(() => {
         },
       });
       await page.goto(suite.server.baseUrl + "settings/model-providers");
-      await page.getByRole("button", { name: "Connect provider", exact: true }).first().click();
+      await page.getByRole("button", { name: "Add account", exact: true }).first().click();
       await page.locator("[data-models-login-search]").fill("custom");
       await page.getByRole("button", { name: "Custom Provider", exact: false }).click();
       const form = page.locator(".custom-endpoint-editor");
@@ -248,7 +303,10 @@ suite.define(() => {
         .toBe(true);
       await gateway.deferNext("config.customEndpoint");
       await form.getByRole("button", { name: "Delete endpoint", exact: true }).click();
-      await page.getByRole("button", { name: "Delete endpoint", exact: true }).last().click();
+      await page
+        .locator(".confirm-dialog")
+        .getByRole("button", { name: "Delete endpoint", exact: true })
+        .click();
       const removed = await gateway.waitForRequest("config.customEndpoint", { after: 2 });
       expect(removed.params).toEqual({
         action: "delete",
@@ -392,7 +450,7 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "settings/model-providers");
-        await page.getByRole("button", { name: "Connect provider", exact: true }).first().click();
+        await page.getByRole("button", { name: "Add account", exact: true }).first().click();
         await page.locator("[data-models-login-search]").fill("custom");
         await page.getByRole("button", { name: "Custom Provider", exact: false }).click();
         const form = page.locator(".custom-endpoint-editor");

@@ -66,6 +66,24 @@ describe("probeLineBot", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it.each([0, Number.MAX_SAFE_INTEGER, -1, 0.5, Number.MAX_SAFE_INTEGER + 1, "2"])(
+    "only reports safe nonnegative consumption counts (%s)",
+    async (totalUsage) => {
+      stubProbe(
+        Response.json({ type: "limited", value: 200 }),
+        Response.json({ totalUsage }),
+        webhookResponse(true),
+      );
+
+      const result = await probeLineBot("token", 5000);
+      expect(result.quota).toEqual(
+        totalUsage === 0 || totalUsage === Number.MAX_SAFE_INTEGER
+          ? { kind: "limited", limit: 200, used: totalUsage }
+          : undefined,
+      );
+    },
+  );
+
   it("shares the optional quota deadline across both response bodies", async () => {
     vi.useFakeTimers();
     const bodies: ReturnType<typeof createPendingLineResponse>[] = [];

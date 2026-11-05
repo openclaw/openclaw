@@ -184,6 +184,7 @@ it.for(["token", "native"] as const)(
   async (source, { signal }) => {
     useRealIdentity(source === "token" ? "synthetic-options-stale-token" : undefined);
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const credentialRefresh = createDeferredCore<Response>();
     const nativeRefresh = createDeferredCore<ReturnType<typeof commandResult>>();
     const entered = createDeferredCore();
@@ -272,6 +273,7 @@ it("marks only expired personal account facts stale through options revalidation
     );
     fixture.personalConnectionStatus.mockImplementation(fixture.personalLifecycle.status);
     const now = vi.spyOn(Date, "now").mockReturnValue(initialNow);
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     try {
       await verifyGitHubCredential(personalToken);
       now.mockReturnValue(initialNow + 30_000);
@@ -289,6 +291,38 @@ it("marks only expired personal account facts stale through options revalidation
       refresh.resolve(accountResponse(42, "personal-reader"));
       await verifyGitHubCredential(personalToken);
     }
+  });
+});
+
+it("retains a failed publication without a captured tree when PR discovery is unavailable", async () => {
+  await withReadFixture(async (fixture) => {
+    const snapshot = {
+      repository: null,
+      branch: "feature",
+      source_head_commit: null,
+      workspace_tree: null,
+    };
+    const failed = {
+      result: {
+        ...receipt.result,
+        status: "failed" as const,
+        code: "unavailable" as const,
+        nextAction: "retry" as const,
+      },
+      confirmation: null,
+    };
+    vi.spyOn(prRead, "createControlUiSessionPrRead").mockReturnValue(async () => ({
+      params: { sessionKey, agentId: "main" },
+      identity: "pr-source",
+      readSource: { agentId: "main", path: "/fixture" },
+      source: { owner: "owner", repo: "repo", branch: "feature" },
+    }));
+    fixture.pullRequests.read.mockRejectedValue(new Error("PR discovery is unavailable"));
+    fixture.latestShared.mockImplementation(async (_session, _key, isSuperseded) =>
+      (await isSuperseded(snapshot)) ? null : failed,
+    );
+    expectOptions(await fixture.options(), { latestShared: failed });
+    expect(fixture.pullRequests.read).not.toHaveBeenCalled();
   });
 });
 
@@ -326,22 +360,19 @@ it.each([false, true])(
         }
         return { pullRequests: prs, status: "ready", rateLimited: false };
       });
-      const covered = vi.spyOn(relevance, "isGitHubPublicationSuperseded").mockResolvedValue(true);
+      const covered = vi
+        .spyOn(relevance, "isGitHubPublicationSuperseded")
+        .mockImplementation(async (_snapshot, readPublished) => Boolean(await readPublished()));
       fixture.latestShared.mockImplementation(async (_session, _key, isSuperseded) =>
         (await isSuperseded(snapshot)) ? null : receipt,
       );
       const respond = await fixture.options();
       if (revoked) {
         expectFailure(respond);
-        expect(covered).not.toHaveBeenCalled();
       } else {
         expectPartialReply(respond, { latestShared: null });
-        expect(covered).toHaveBeenCalledWith(
-          snapshot,
-          prs,
-          expect.objectContaining({ assertCurrent: expect.any(Function) }),
-        );
       }
+      expect(covered).toHaveBeenCalledWith(snapshot, expect.any(Function));
       expect(fixture.pullRequests.read).toHaveBeenCalledWith(
         target,
         expect.any(Function),

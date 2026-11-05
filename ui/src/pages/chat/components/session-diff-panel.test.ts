@@ -1,103 +1,28 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, merge } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
+import { stubResizeObserver } from "../../../test-helpers/resize-observer.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as diffSyntax from "./chat-diff-highlight.runtime.ts";
 import type { SessionDiffProps } from "./chat-sidebar-content-types.ts";
-import { SessionDiffPanel } from "./session-diff-panel.tsx";
-
-function mountPanel() {
-  const [props, setProps] = createSignal<Parameters<typeof SessionDiffPanel>[0]>({
-    owner: null,
-    execNode: null,
-    loader: null,
-    loadFileText: null,
-    openFile: null,
-    revealFile: null,
-  });
-  const view = mountSolid(() => createComponent(SessionDiffPanel, merge(props)));
-  return {
-    panel: view.container.querySelector<HTMLElement>("openclaw-session-diff")!,
-    unmount: view.unmount,
-    update: (patch: Partial<Parameters<typeof SessionDiffPanel>[0]>) =>
-      setProps((current) => ({ ...current, ...patch })),
-  };
-}
+import {
+  fileResult,
+  FRESH_PATCH,
+  mountPanel,
+  result,
+  SNAPSHOT_PATCH,
+} from "./session-diff-panel.test-support.tsx";
 
 function settlePanel(panel: HTMLElement) {
   return waitForSolid(() =>
     expect(panel.querySelector(".session-diff")?.getAttribute("aria-busy")).toBe("false"),
   );
-}
-
-function setupDesktopResizeObserver() {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
-  });
-}
-
-function result(branch: string): SessionsDiffResult {
-  return {
-    sessionKey: "agent:main:test",
-    branch,
-    baseRef: "main",
-    files: [],
-    additions: 0,
-    deletions: 0,
-  };
-}
-
-const SNAPSHOT_PATCH = [
-  "--- a/example.txt",
-  "+++ b/example.txt",
-  "@@ -3 +3 @@",
-  "-before",
-  "+snapshot line",
-].join("\n");
-
-const FRESH_PATCH = [
-  "--- a/example.txt",
-  "+++ b/example.txt",
-  "@@ -1,3 +1,3 @@",
-  " fresh gap edit",
-  " context",
-  "-before",
-  "+fresh snapshot line",
-].join("\n");
-
-function fileResult(patch: string): SessionsDiffResult {
-  return {
-    sessionKey: "agent:main:test",
-    branch: "feature/test",
-    baseRef: "main",
-    files: [
-      {
-        path: "example.txt",
-        status: "modified",
-        additions: 1,
-        deletions: 1,
-        patch,
-      },
-    ],
-    additions: 1,
-    deletions: 1,
-  };
 }
 
 function namedFileResult(paths: string[]): SessionsDiffResult {
@@ -115,13 +40,14 @@ afterEach(async () => {
   document.body.replaceChildren();
   clearNativeGatewayTestState();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   Reflect.deleteProperty(navigator, "clipboard");
 });
 
 describe("SessionDiffPanel", () => {
   it("names untracked repository directories in the review and file tree", async () => {
     setNativeGatewayTestState(null);
-    setupDesktopResizeObserver();
+    stubResizeObserver();
     const { panel, update } = mountPanel();
     update({
       mobile: false,
@@ -161,7 +87,7 @@ describe("SessionDiffPanel", () => {
     "retains %s disclosure on refresh and applies presentation entry resets",
     async (path) => {
       setNativeGatewayTestState(null);
-      setupDesktopResizeObserver();
+      stubResizeObserver();
       const { panel, update } = mountPanel();
       const toggles = () => [
         ...panel.querySelectorAll<HTMLButtonElement>(".session-diff__file-toggle"),
@@ -192,9 +118,9 @@ describe("SessionDiffPanel", () => {
       update({ active: true });
       await waitForSolid(() => expect(expanded()).toEqual(["false", "false"]));
 
-      panel.querySelector<HTMLButtonElement>('button[aria-label="Expand All"]')!.click();
+      panel.querySelector<HTMLButtonElement>('button[aria-label="Expand all"]')!.click();
       await waitForSolid(() => expect(expanded()).toEqual(["true", "true"]));
-      panel.querySelector<HTMLButtonElement>('button[aria-label="Collapse All"]')!.click();
+      panel.querySelector<HTMLButtonElement>('button[aria-label="Collapse all"]')!.click();
       await waitForSolid(() => expect(expanded()).toEqual(["false", "false"]));
       update({ mobile: true });
       await waitForSolid(() => expect(expanded()).toEqual(["true", "true"]));
@@ -205,9 +131,9 @@ describe("SessionDiffPanel", () => {
     "retains the %s tree disclosure on refresh and reopens it for a new search",
     async (directory) => {
       setNativeGatewayTestState(null);
-      setupDesktopResizeObserver();
+      stubResizeObserver();
       const { panel, update } = mountPanel();
-      const paths = ["first.ts", "second.ts"].map((name) => `${directory}/${name}`);
+      const paths = ["first.ts", "Cafe\u0301.ts"].map((name) => `${directory}/${name}`);
       update({ mobile: false, loader: async () => namedFileResult(paths) });
       await waitForSolid(() =>
         expect(panel.querySelectorAll(".session-diff__file")).toHaveLength(2),
@@ -228,7 +154,7 @@ describe("SessionDiffPanel", () => {
       panel.querySelector<HTMLButtonElement>('button[aria-label="Search changed files"]')!.click();
       flush();
       const search = panel.querySelector<HTMLInputElement>('input[type="search"]')!;
-      search.value = "second";
+      search.value = "CAFÉ";
       search.dispatchEvent(new Event("input", { bubbles: true }));
       await waitForSolid(() => {
         expect(folder.getAttribute("aria-expanded")).toBe("true");
@@ -244,7 +170,7 @@ describe("SessionDiffPanel", () => {
     { saved: null, mode: "auto", split: false },
   ])("restores desktop mode $mode from $saved", async ({ saved, mode, split }) => {
     setNativeGatewayTestState(null);
-    setupDesktopResizeObserver();
+    stubResizeObserver();
     const key = "openclaw.control.sessionDiff.v1";
     localStorage.removeItem(key);
     onTestFinished(() => localStorage.removeItem(key));
@@ -264,15 +190,17 @@ describe("SessionDiffPanel", () => {
     );
   });
 
-  it("keeps desktop disclosure and word highlighting separate from the patch and native presentation", async () => {
+  it("keeps Unicode jump selection, disclosure, and highlighting across modes", async () => {
     setNativeGatewayTestState(null);
-    setupDesktopResizeObserver();
+    stubResizeObserver();
     localStorage.removeItem("openclaw.control.sessionDiff.v1");
     const { panel, update } = mountPanel();
     update({ mobile: false });
     const before = "const count = 2;";
     const after = "const count = 3;";
-    update({ loader: async () => fileResult(`@@ -1 +1 @@\n-${before}\n+${after}`) });
+    const data = fileResult(`@@ -1 +1 @@\n-${before}\n+${after}`);
+    data.files[0]!.path = "src/Mu\u0308ller.ts";
+    update({ loader: async () => data });
     await settlePanel(panel);
     const click = (selector: string) => panel.querySelector<HTMLButtonElement>(selector)!.click();
     const chooseViewOption = async (value: string) => {
@@ -290,6 +218,12 @@ describe("SessionDiffPanel", () => {
     });
     file.scrollIntoView = scrollIntoView;
     click(".session-diff__jump");
+    flush();
+    click(".header-search__toggle");
+    flush();
+    const search = panel.querySelector<HTMLInputElement>("input.session-diff-menu__search")!;
+    search.value = "M\u00fcller";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
     await waitForSolid(() =>
       expect(panel.querySelector('button[data-value="jump:0"]')).not.toBeNull(),
     );
@@ -334,7 +268,7 @@ describe("SessionDiffPanel", () => {
 
   it("reverses desktop context and carries expanded lines into native presentation only once", async () => {
     setNativeGatewayTestState(null);
-    setupDesktopResizeObserver();
+    stubResizeObserver();
     const { panel, update } = mountPanel();
     update({ mobile: false });
     const fileText = deferred<string | null>();
@@ -387,7 +321,7 @@ describe("SessionDiffPanel", () => {
     update({ loader: async () => ({ ...result("feature/test"), truncated: true }) });
     await settlePanel(panel);
 
-    expect(panel.textContent).not.toContain("No changes in this session's checkout.");
+    expect(panel.textContent).not.toContain("No changes yet in this session’s checkout.");
     expect(panel.textContent).toContain("Some changes could not be displayed.");
     expect(panel.querySelector(".session-diff__file")).toBeNull();
 
@@ -405,7 +339,7 @@ describe("SessionDiffPanel", () => {
     expect(panel.querySelector(".session-diff__filename")?.textContent).toBe("example.txt");
     expect(panel.textContent).toContain("Diff preview is unavailable.");
     expect(panel.textContent).toContain("Some changes could not be displayed.");
-    expect(panel.textContent).not.toContain("No changes in this session's checkout.");
+    expect(panel.textContent).not.toContain("No changes yet in this session’s checkout.");
 
     update({ loader: async () => ({ ...fileResult(SNAPSHOT_PATCH), truncated: true }) });
     await settlePanel(panel);
@@ -414,12 +348,12 @@ describe("SessionDiffPanel", () => {
     expect(panel.textContent).toContain("snapshot line");
     expect(panel.textContent).not.toContain("Diff preview is unavailable.");
     expect(panel.textContent).toContain("Some changes could not be displayed.");
-    expect(panel.textContent).not.toContain("No changes in this session's checkout.");
+    expect(panel.textContent).not.toContain("No changes yet in this session’s checkout.");
 
     update({ loader: async () => result("feature/test") });
     await settlePanel(panel);
 
-    expect(panel.textContent).toContain("No changes in this session's checkout.");
+    expect(panel.textContent).toContain("No changes yet in this session’s checkout.");
     expect(panel.textContent).not.toContain("Some changes could not be displayed.");
     expect(panel.querySelector(".session-diff__file")).toBeNull();
   });
@@ -443,7 +377,7 @@ describe("SessionDiffPanel", () => {
     panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")?.click();
     flush();
     expect(panel.querySelector("openclaw-session-diff-menu")?.textContent).not.toContain(
-      "Open in Editor",
+      "Open in editor",
     );
   });
 
@@ -532,8 +466,8 @@ describe("SessionDiffPanel", () => {
   });
 
   it.each([
-    { surface: "file", failed: true, feedback: "Copy failed" },
-    { surface: "sync", failed: false, feedback: "Copied!" },
+    { surface: "file", failed: true, feedback: "Couldn’t copy. Try again." },
+    { surface: "sync", failed: false, feedback: "Copied" },
   ])(
     "keeps $surface path copy feedback visible: $feedback",
     async ({ surface, failed, feedback }) => {
@@ -560,7 +494,7 @@ describe("SessionDiffPanel", () => {
       expect(menu).not.toBeNull();
       const nativeMenu = menu?.querySelector<HTMLElement>(".session-diff-menu__surface");
       await waitForSolid(() => expect(nativeMenu?.matches(":popover-open")).toBe(true));
-      const label = surface === "file" ? "Copy Path" : "Checkout path";
+      const label = surface === "file" ? "Copy path" : "Checkout path";
       const button = menu?.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
       expect(button).toBeInstanceOf(HTMLButtonElement);
       if (surface === "sync") {
@@ -605,7 +539,7 @@ describe("SessionDiffPanel", () => {
     flush();
 
     const menu = panel.querySelector("openclaw-session-diff-menu");
-    expect(menu?.textContent?.includes("Open in Editor")).toBe(testCase.offered);
+    expect(menu?.textContent?.includes("Open in editor")).toBe(testCase.offered);
     expect(menu?.textContent?.includes("Cursor")).toBe(testCase.offered);
   });
 
@@ -662,7 +596,7 @@ describe("SessionDiffPanel", () => {
     panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")?.click();
     flush();
     expect(panel.querySelector("openclaw-session-diff-menu")?.textContent).toContain(
-      "Open in Editor",
+      "Open in editor",
     );
 
     setNativeGatewayTestState("remote");

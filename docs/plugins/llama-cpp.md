@@ -477,6 +477,14 @@ constraints. Agent turns and standalone completions also map thinking-off
 requests to the server's chat-template flag and adapt JSON Schema requests
 for older llama-server builds.
 
+For tool continuations with an unchanged prompt prefix, OpenClaw uses the server's
+measured context usage plus newly appended content to budget the next response.
+This avoids charging historical reasoning that the chat template discards.
+The first request of an attempt, a request with a changed prefix, or a request with
+a response schema keeps the conservative payload estimate. Replayed reasoning is
+preserved for templates that need it, and genuinely full contexts still trigger
+output limits or compaction.
+
 Local memory embeddings require managed mode:
 
 For automated embedding-only setup, configure local memory and explicitly consent

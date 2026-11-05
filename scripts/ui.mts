@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPidDefinitelyDead } from "../src/shared/pid-alive.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
-import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
+import { readCurrentGitCommit, resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
@@ -18,7 +18,6 @@ import {
   controlUiBuildSiblingPid,
 } from "./lib/output-root-guard.mjs";
 import { prepareControlUiSettings } from "./lib/prepare-control-ui-settings.mts";
-import { isRecord } from "./lib/record-shared.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 import { resolveNodePackageBin } from "./run-node-package-bin.mts";
 
@@ -27,7 +26,8 @@ const repoRoot = path.resolve(here, "..");
 const uiDir = path.join(repoRoot, "ui");
 const requireFromUi = createRequire(path.join(uiDir, "package.json"));
 
-const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
+// Vite drains its active transforms and dependency optimizer before returning.
+const FORWARDED_SIGNAL_KILL_GRACE_MS = 5_000;
 const PUBLISH_RENAME_DELAYS_MS = [100, 200, 400, 800, 1600];
 const PUBLISH_RENAME_WAIT = new Int32Array(new SharedArrayBuffer(4));
 
@@ -38,15 +38,6 @@ type UiBuildEnvironmentSources = {
   readGitCommit?: () => string | null;
   readPackageVersion?: () => string | null;
 };
-
-function readCurrentGitCommit(): string | null {
-  const result = spawnSync("git", ["rev-parse", "HEAD"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  return result.status === 0 ? result.stdout.trim() : null;
-}
 
 function readCurrentPackageVersion(): string | null {
   try {
@@ -78,7 +69,7 @@ export function resolveUiBuildEnvironment(
     commitLabel: "Control UI build commit",
     env,
     now: sources.now,
-    readGitCommit: sources.readGitCommit ?? readCurrentGitCommit,
+    readGitCommit: sources.readGitCommit ?? (() => readCurrentGitCommit(repoRoot)),
   });
   if (env.OPENCLAW_BUILD_TIMESTAMP?.trim() || env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim()) {
     return buildEnv;
@@ -447,86 +438,21 @@ async function buildAndPublishUi(
       env.OPENCLAW_BUILD_CACHE !== "0" && toolCall.args.length === 2 && toolCall.args[1] === "build"
         ? await import("./lib/build-artifact-cache.mts")
         : undefined;
-    const sourcePluginInventory =
-      cache && env.OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS === "1"
-        ? (await import("./lib/bundled-plugin-build-entries.mjs"))
-            .collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env })
-            .map(({ id, isolated, packageJson }) => {
-              const openclaw =
-                isRecord(packageJson) && isRecord(packageJson.openclaw)
-                  ? packageJson.openclaw
-                  : undefined;
-              return [id, isolated, openclaw?.controlUi];
-            })
-        : undefined;
+    const buildInputs = cache
+      ? await (
+          await import("./lib/control-ui-build-inputs.mts")
+        ).createControlUiBuildInputs(repoRoot, env, toolCall.args.slice(1))
+      : undefined;
     const step = {
       label: "ui:build",
       cache: {
-        inputs: [
-          { path: "ui", excludeDirectories: ["node_modules"] },
-          { path: "packages", excludeDirectories: ["node_modules", "dist", ".artifacts"] },
-          ...fs
-            .readdirSync(path.join(repoRoot, "scripts/lib"))
-            .filter((file) => file.startsWith("control-ui-i18n"))
-            .map((file) => `scripts/lib/${file}`),
-          "scripts/ui.js",
-          "scripts/ui.mts",
-          "scripts/pnpm-runner.mts",
-          "scripts/run-node-package-bin.mts",
-          "scripts/lib/build-artifact-cache.mts",
-          "scripts/lib/output-root-guard.mjs",
-          "scripts/lib/build-identity.mts",
-          "package.json",
-          "pnpm-lock.yaml",
-          "tsconfig.json",
-          "docs/assets/openclaw-hero-dark.png",
-          // Package metadata discovers new generations; all copied files (including
-          // deferred chunks absent from Vite's module graph) invalidate reuse.
-          ...(() => {
-            const root = path.join(repoRoot, "dist/extensions");
-            if (!fs.existsSync(root)) {
-              return [];
-            }
-            return fs
-              .readdirSync(root, { withFileTypes: true })
-              .filter((entry) => entry.isDirectory())
-              .flatMap((entry) => {
-                const relative = `dist/extensions/${entry.name}`;
-                return [
-                  `${relative}/package.json`,
-                  `${relative}/openclaw.plugin.json`,
-                  `${relative}/dist/control-ui`,
-                ];
-              });
-          })(),
-        ],
+        inputs: buildInputs?.paths ?? [],
         outputs: ["."],
         requiredOutputs: ["index.html", "sw.js", ".build-inputs.json"],
         restore: "always" as const,
       },
     };
-    const staticInputs = cache?.listCacheFiles(repoRoot, step.cache.inputs, fs) ?? [];
-    const inputSignature = (inputs: string[]) =>
-      cache!.hashInputFiles(
-        repoRoot,
-        [
-          ...new Set([...staticInputs, ...inputs.map((file) => path.join(repoRoot, file))]),
-        ].toSorted(),
-        fs,
-        [
-          "NODE_ENV",
-          "OPENCLAW_CONTROL_UI_BASE_PATH",
-          "OPENCLAW_CONTROL_UI_RELEASE_BUILD",
-          "OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS",
-        ],
-        env,
-        JSON.stringify({
-          args: toolCall.args.slice(1),
-          platform: process.platform,
-          arch: process.arch,
-          sourcePluginInventory,
-        }),
-      );
+    const inputSignature = buildInputs?.inputSignature;
     const cacheState = cache?.resolveBuildStepCacheState(step, {
       rootDir: repoRoot,
       artifactRoot: output,
@@ -584,7 +510,7 @@ async function buildAndPublishUi(
       }
     }
     // A cache hit refreshes identity only in staging; its validated seed is immutable.
-    if (cache && cacheState && !reuseOutput) {
+    if (cache && cacheState && inputSignature && !reuseOutput) {
       const consumedInputs: string[] = JSON.parse(
         fs.readFileSync(path.join(staging, ".build-inputs.json"), "utf8"),
       );

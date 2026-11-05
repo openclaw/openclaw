@@ -81,8 +81,11 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       desktopNavigationExpanded: false,
       lastLocalePrefSignature: null,
       outboxStoreImport: { load: async () => undefined },
-      recoverDeletedActiveSession() {},
-      selectChatSession() {},
+      shellNavigation: {
+        recoverDeletedActiveSession() {},
+        selectChatSession() {},
+        synchronizeSessionUrl() {},
+      },
       invalidate() {},
     });
     await refreshChatMetadata(retained);

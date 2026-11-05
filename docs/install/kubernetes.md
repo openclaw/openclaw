@@ -123,7 +123,86 @@ kubectl exec -n openclaw deploy/openclaw -- rm /home/node/.openclaw/openclaw.jso
 kubectl rollout restart -n openclaw deploy/openclaw
 ```
 
+Keep `openclaw.json.last-good` and the `openclaw.json.bak*` backups when reseeding.
+A valid replacement does not need a `meta` block: `openclaw doctor --fix` keeps
+it, and the Gateway promotes it to last-good after it starts successfully.
+Truncated or invalid configs still use backup recovery. If recovery replaces a
+file, the warning names the saved `openclaw.json.clobbered.*` original and explains
+how to copy it back after correcting the reported problem.
+
 Deployments created from the previous template applied ConfigMap edits on every pod start (and discarded any config changes made through OpenClaw). If you relied on that flow, use the reseed commands above after ConfigMap edits.
+
+### Temporary storage
+
+The init container prepares a sticky-protected `gateway-tmp` directory (mode `1777`) on the `emptyDir` volume and mounts it at `/tmp` with `subPath`. Keep this layout when customizing the temp volume: filesystem safety checks reject group- or world-writable ancestors without sticky protection, even when `/tmp/openclaw` itself is private. Setting `fsGroup` alone does not add the sticky bit.
+
+The volume must be writable by the init container, which must share the Gateway's effective UID to create and chmod the directory. The recipe uses UID/GID and `fsGroup` 1000. On platforms that assign arbitrary UIDs, adapt these security contexts together. Preparation failures stop initialization and appear in `kubectl logs -n openclaw deploy/openclaw -c init-config`.
+
+### Private storage after a PVC remount
+
+Kubernetes can widen existing volume permissions when applying `fsGroup` on
+mount. The template requests `fsGroupChangePolicy: OnRootMismatch` so kubelet
+can skip recursive permission changes when the volume root already matches.
+This preserves private child modes only while that condition holds; it neither
+repairs existing widened paths nor establishes that the contents are safe.
+If the root stops matching, kubelet can walk the volume again. CSI drivers that
+advertise `VOLUME_MOUNT_GROUP` handle permissions themselves, so this policy
+does not apply to them. See [Kubernetes volume permission policy](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#configure-volume-permission-and-ownership-change-policy-for-pods).
+
+An initial successful boot does not establish that the same PVC will pass
+private-storage admission after a pod replacement. The supplied init container
+prepares configuration and temporary storage; it does not restore private
+credential or recovery-storage permissions. This template has not been validated
+as a complete recovery procedure for already widened storage.
+
+If startup reports `Client credential directory is unsafe`, keep the Gateway
+stopped and have the storage owner inspect the state directory, its
+`client/credentials.sqlite` store, and the sibling `<stateDir>.update-captures`
+directory. Credential directories and files must remain private to the Gateway
+UID (`0700` and `0600`, respectively). Recovery storage also needs trusted
+ancestors that prevent other users from replacing its directories. Membership in
+the volume's group does not grant private credential authority.
+
+The shipped PVC mount covers `/home/node/.openclaw`, while retained update
+captures resolve to `/home/node/.openclaw.update-captures`. That sibling needs a
+writable, persistent location when adapting this template for recovery capture.
+
+For a new or explicitly migrated layout, the storage owner can provision separate
+private child directories on the PVC and expose them through `subPath` mounts at
+`/home/node/.openclaw` and `/home/node/.openclaw.update-captures`. This keeps the
+PVC root out of the Gateway's path ancestry. Both children must be owned by the
+Gateway UID, with trusted ancestors at their container mount points. Their source
+entries on the volume also need protection from replacement before they are
+mounted. `subPath` alone does not establish ownership or protect private modes
+from volume-wide permission changes.
+
+This is an operator-provisioned layout, not an automatic upgrade of the supplied
+mount. Deployments using the supplied mount store state at the PVC root.
+Switching them to an empty child would hide that state and can initialize a different installation.
+Before such a cutover, the storage owner must stop all state users, retain a
+verified backup, and preserve the complete state and matching recovery data in
+the selected children. Include config, credentials, databases and their sidecars,
+and retained migration/backup artifacts. Preserve the old data until the new
+mounts and recovery have been verified. Do not infer that the existing `state/`
+directory is a suitable child: it contains the shared database, not the complete
+OpenClaw state tree.
+
+If a customized deployment instead mounts its PVC at `/home/node` and already
+has complete `.openclaw` and `.openclaw.update-captures` children, those existing
+directories can be selected as the subpaths without relocating their data. The
+storage owner must still verify ownership, private modes, source-entry protection,
+and the target mount ancestry before changing the mounts. Do not automatically
+create missing children or reseed config as a substitute for existing data.
+
+A deployment-specific preparation step can restore modes on exact, authorized,
+UID-owned private paths after mounting and before Gateway or Doctor admission.
+It must refuse symlinks, hardlinked files, foreign owners, unsafe ancestors, and
+unsupported recovery states, and leave source/schema/backup validation intact.
+Pathname `chmod` after a separate check is not a validated implementation of
+these requirements. The unprivileged init container cannot make a foreign-owned
+mount root private. Avoid recursive `chmod` or `chown` over the state tree.
+Verify both the initial boot and a subsequent PVC remount with the selected
+storage driver before relying on restart recovery.
 
 ### Add providers
 

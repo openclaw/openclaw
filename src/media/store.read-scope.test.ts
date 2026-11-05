@@ -1,11 +1,10 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import crypto, { randomUUID } from "node:crypto";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { afterEach, aroundEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { withChannelReadAuthority } from "../shared/channel-read-authority.js";
@@ -131,6 +130,23 @@ describe("read-owned media publication", () => {
     expect(await fs.readFile(source)).toEqual(bytes);
   });
 
+  it("preserves the existing media when publication collides", async () => {
+    const f = await mediaFixture(state, "inbound", true);
+    const uuid = "00000000-0000-4000-8000-000000000001";
+    const id = `${uuid}.pdf`;
+    const existing = path.join(f.dir, id);
+    await fs.writeFile(existing, "previous attachment");
+
+    await expect(
+      withRead(() => {
+        vi.spyOn(crypto, "randomUUID").mockReturnValueOnce(uuid);
+        return f.buffer();
+      }),
+    ).rejects.toMatchObject({ code: "already-exists" });
+    expect(await fs.readFile(existing, "utf8")).toBe("previous attachment");
+    expect(await f.entries()).toEqual([id]);
+  });
+
   it.skipIf(process.platform === "win32").each([
     ["buffer", false],
     ["source", true],
@@ -174,8 +190,6 @@ describe("read-owned media publication", () => {
     async (phase: "file" | "directory") => {
       const f = await mediaFixture(state, "outbound", true);
 
-      const syncing = createDeferred();
-      const release = createDeferred();
       const authority = revocableRead();
       observeOpen((handle, file, flags) => {
         const matches =
@@ -186,19 +200,11 @@ describe("read-owned media publication", () => {
           const sync = handle.sync.bind(handle);
           vi.spyOn(handle, "sync").mockImplementation(async () => {
             await sync();
-            syncing.resolve();
-            await release.promise;
+            authority.revoke();
           });
         }
       });
-      const rejected = expect(authority.run(f.buffer)).rejects.toBe(authority.revoked);
-      try {
-        await syncing.promise;
-        authority.revoke();
-      } finally {
-        release.resolve();
-      }
-      await rejected;
+      await expect(authority.run(f.buffer)).rejects.toBe(authority.revoked);
       expect(await f.entries()).toEqual([]);
     },
   );
@@ -207,8 +213,6 @@ describe("read-owned media publication", () => {
     const f = await mediaFixture(state, "outbound", false);
 
     const source = await f.source();
-    const opened = createDeferred();
-    const resume = createDeferred();
     const authority = revocableRead();
     let reads = 0;
     observeOpen(async (handle, file) => {
@@ -218,17 +222,10 @@ describe("read-owned media publication", () => {
           reads += 1;
           return read(...args);
         });
-        opened.resolve();
-        await resume.promise;
+        authority.revoke();
       }
     });
-    const rejected = expect(authority.run(() => f.saveSource(source))).rejects.toBe(
-      authority.revoked,
-    );
-    await opened.promise;
-    authority.revoke();
-    resume.resolve();
-    await rejected;
+    await expect(authority.run(() => f.saveSource(source))).rejects.toBe(authority.revoked);
     expect(reads).toBe(0);
   });
 

@@ -8,14 +8,14 @@ its replacement, and the exception that justifies keeping it. Measure the touche
 and after, and report the counts in the PR. Prefer fewer production lines;
 explain growth needed for the idiom or correctness.
 
-The installed `solid-js/CHEATSHEET.md` (rc.16) is the API contract. Its
+The installed `solid-js/CHEATSHEET.md` (rc.18) is the API contract. Its
 "What changed from 1.x" list is required reading before the first edit: Solid 2
 is neither React nor Solid 1, and both priors produce plausible-looking bugs.
 
 ## Measure
 
 `pnpm check:control-ui-controllers` is the enforced native-AST census for
-production `ui/src`. Unlike the quick grep below, it counts generic calls,
+production `ui/src` and the bundled plugin view roots listed in the guard. Unlike the quick grep below, it counts generic calls,
 optional calls, computed literal method names, and named import aliases. It
 enforces zero feature-code render effects, zero direct TSX listeners, and zero
 DOM queries outside the explicit foreign-DOM owners in the guard, and option-free
@@ -26,6 +26,8 @@ These baselines prevent counts from rising or moving into unrelated files. After
 removing calls, run `pnpm check:control-ui-controllers --prune` and commit the
 shrunk baselines with the source change. Staged lint checks the index; CI and
 `--base <ref>` compare allowances against the merge base. Do not raise allowances.
+An existing allowance records the current count, not a permanent exception:
+verify its actual ownership and lifecycle against the categories below.
 
 The same guard bans hand-written Solid `createComponent` outside the named
 context adapter and bans JSX `classList` (native DOM `element.classList` is valid).
@@ -59,7 +61,7 @@ prod 'runWithOwner\(|getOwner\(' | wc -l
 | Smell                                                                                                        | Replace with                                                                                                                                                          | Keep only when                                                                                                                                                                                                                       |
 | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Rendering controller (`hostConnected`, `requestUpdate`, `class …Controller` owned by a view)                 | `createThing(deps)` per the [controller recipe](idioms.md#replace-rendering-controllers): signals, memos, `createStore`, setup and returned teardown with `onSettled` | It is a plain TypeScript domain owner with synchronous non-UI state and no host/update semantics. Name it as an owner, not a controller.                                                                                             |
-| An effect that writes a signal or store from another reactive value                                          | `createMemo`, or a writable derivation `createSignal(() => source())` with a stated reset policy                                                                      | Never. An owned-scope write throws in dev; `untrack` does not exempt it, and `ownedWrite: true` hides the design problem.                                                                                                            |
+| An effect that only copies another reactive value into a signal or store                                     | `createMemo`, or a writable derivation `createSignal(() => source())` with a stated reset policy                                                                      | Never for a copy. `untrack` and `ownedWrite: true` do not give the copied value separate ownership.                                                                                                                                  |
 | A conversion that raises the `createEffect` count                                                            | Setup/teardown in the owning function, derived values in memos, event updates in handlers                                                                             | The effect synchronizes with a real external system (DOM measurement, imperative widget, transport). Comment why.                                                                                                                    |
 | `createRenderEffect` in feature code                                                                         | `createEffect(compute, apply)`                                                                                                                                        | Never outside `ui/src/lib/reactive/`.                                                                                                                                                                                                |
 | `untrack` silencing a warning or freezing props                                                              | Model the dependency: read in JSX, a memo, or the effect compute phase                                                                                                | An intentional initial reactive-prop snapshot named `initialX`, or internal use in `ui/src/lib/reactive/` primitives, including repeated projection reads. Effect apply, handlers, and `onSettled` already run untracked.            |
@@ -82,6 +84,30 @@ derived store at its root, then read the nested value after settlement. A
 `Loading` reset uses a value (`on={id()}`), not an accessor. Teardown writes are
 now supported by Solid, but disposal still should not republish an owner's
 state merely to reset a view that is gone. See the [rc.16 notes](lessons.md#rc16-upgrade).
+
+An external lifecycle acknowledgement is different from a reactive copy.
+`BoardMcpAppContent` in `components/board/board-mcp-app-content.tsx` retains the
+presented MCP app until its `teardown()` promise settles, then clears it only if
+that retirement generation is still current. Its effect records the foreign
+view's acknowledged lifetime; a memo of `props.appView` would remove the view
+before teardown completes. Keep this exception tied to that external resource
+and completion contract, not ordinary derived presentation values.
+
+Current examples to inspect with their callers:
+
+- `lib/reactive/shadow-styles.ts` applies reactive styles to an external shadow
+  root and returns the binding's disposal from the effect.
+- `lib/reactive/projection.ts` samples the synchronous owner with `untrack` and
+  owns the shared subscription; `getOwner` ties its disposal to its creator.
+- `components/solid/menu.tsx` registers embedded controls from an owned ref
+  factory; the returned unowned ref only captures the node.
+- `components/solid/tooltip.tsx` forwards native completion events with `listen`
+  and releases them from its explicit runtime `dispose()`.
+- `pages/cron/cron-page-presentation.ts` observes admitted request receipts and
+  presents mutations without transferring admission to Solid.
+
+These explain the named integration, not an allowance to copy the pattern into
+an unrelated view. Use the shared primitive when it already owns the work.
 
 ## Order of work
 

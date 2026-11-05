@@ -84,19 +84,13 @@ function createCurrentEntryRead(
           ? {}
           : { repositoryWorkspaceId: current.repositoryWorkspaceId }),
         ...(current.deviceFolder ? { deviceFolder: { ...current.deviceFolder } } : {}),
+        goal: current.goal,
         lifecycleRevision: current.lifecycleRevision,
         lifecycleRunId: current.lifecycleRunId,
+        lastRunId: current.lastRunId,
         activeWriterRunId: current.activeWriterRunId,
         skillLibrarySelections: current.skillLibrarySelections,
         executionPolicy: captureSessionExecutionPolicy(current),
-        ...(current.subagentRecovery
-          ? {
-              subagentRecovery: {
-                lastRunId: current.subagentRecovery.lastRunId,
-                sessionLifecycleRunId: current.subagentRecovery.sessionLifecycleRunId,
-              },
-            }
-          : {}),
       };
       return true;
     },

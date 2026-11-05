@@ -4,7 +4,12 @@ import type {
   listMemoryFiles,
 } from "./internal.js";
 import type { ResolvedMemorySearchConfig } from "./openclaw-runtime-agent.js";
+import type { OpenClawConfig } from "./openclaw-runtime-config.js";
 import type { readMemoryFile } from "./read-file.js";
+
+type WorkspaceFileMode = NonNullable<
+  NonNullable<OpenClawConfig["agents"]>["defaults"]
+>["workspaceFileMode"];
 
 type MemoryFileMetadata = {
   isFile: boolean;
@@ -17,6 +22,7 @@ type MemoryFileMetadata = {
 
 type MemoryFileCommit = {
   filePath: string;
+  workspaceFileMode?: WorkspaceFileMode;
   tempPrefix: string;
   expectedHash?: string;
   allowInPlaceFallback?: boolean;
@@ -40,8 +46,17 @@ export type MemoryWorkspaceMaintenance = {
   resolveDreamsPath: () => Promise<string>;
   readDreams: (filePath: string) => Promise<string>;
   /** Carry caller authority through transport preparation to the remote start boundary. */
-  writeDreams: (filePath: string, content: string, assertCurrent?: () => void) => Promise<void>;
-  replaceReport: (filePath: string, content: string) => Promise<void>;
+  writeDreams: (
+    filePath: string,
+    content: string,
+    assertCurrent?: () => void,
+    workspaceFileMode?: WorkspaceFileMode,
+  ) => Promise<void>;
+  replaceReport: (
+    filePath: string,
+    content: string,
+    workspaceFileMode?: WorkspaceFileMode,
+  ) => Promise<void>;
   appendCorpus: (filePath: string, content: string, assertCurrent?: () => void) => Promise<number>;
 };
 

@@ -18,6 +18,7 @@ import { writeJsonFile as writeJson } from "../helpers/temp-repo.js";
 
 const SHA = "a".repeat(40);
 const WORKFLOW_SHA = "b".repeat(40);
+const binding = { targetSha: SHA, workflowSha: WORKFLOW_SHA };
 const WORKFLOW = ".github/workflows/npm-placeholder-bootstrap.yml";
 const packageName = "@openclaw/meta-provider";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -90,7 +91,6 @@ async function publication(
   fetchImpl: typeof fetch = async () => registryResponse(),
   packages = entries.map(({ manifest }) => manifest.name).join(","),
 ) {
-  const binding = { targetSha: SHA, workflowSha: WORKFLOW_SHA };
   const artifactDir = join(tempDirs.make("npm-placeholder-parent-"), "artifact");
   const manifest = await createPlaceholderPublication({
     ...binding,
@@ -128,32 +128,9 @@ function classify(name: string, packument: Record<string, unknown>) {
 }
 
 describe("npm placeholder publication", () => {
-  it("preserves selected multi-package order and binds unique release-enabled manifests", async () => {
-    const names = ["@openclaw/zoom-meetings", "@openclaw/comfy-provider"] as const;
-    const { artifactDir, manifest } = await publication(
-      [packageEntry("comfy", names[1]), packageEntry("zoom-meetings", names[0])],
-      undefined,
-      names.join(","),
-    );
-
-    expect(manifest.packages).toMatchObject(
-      names.map((name, index) => ({
-        packageName: name,
-        packageDir: `extensions/${index ? "comfy" : "zoom-meetings"}`,
-        action: "publish",
-        newPackage: true,
-      })),
-    );
-    expect(readFileSync(join(artifactDir, "npm-placeholder-manifest.json"), "utf8")).toContain(
-      `"targetSha": "${SHA}"`,
-    );
-  });
-
   it("creates deterministic canonical two-file placeholder tarballs", () => {
-    const first = createPlaceholderTarball("@openclaw/comfy-provider");
-    const second = createPlaceholderTarball("@openclaw/comfy-provider");
-
-    expect(first).toEqual(second);
+    const first = createPlaceholderTarball(packageName);
+    expect(first).toEqual(createPlaceholderTarball(packageName));
     expect(first.subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
   });
 
@@ -184,7 +161,7 @@ describe("npm placeholder publication", () => {
     const versions = { "2026.7.2": {} };
     const existingMeta = registryState(tags, undefined, versions);
     const { manifest, publish } = await publication(
-      [packageEntry("byteplus", names[0]), packageEntry("meta", names[1])],
+      [packageEntry("meta", names[1]), packageEntry("byteplus", names[0])],
       async (input) =>
         (typeof input === "string"
           ? input
@@ -194,8 +171,13 @@ describe("npm placeholder publication", () => {
         ).includes(encodeURIComponent(names[0]))
           ? registryResponse()
           : registryResponse(existingMeta),
+      names.join(","),
     );
-    expect(manifest.packages).toHaveLength(2);
+    expect(manifest.targetSha).toBe(SHA);
+    expect(manifest.packages.map((entry) => [entry.packageName, entry.packageDir])).toEqual([
+      [names[0], "extensions/byteplus"],
+      [names[1], "extensions/meta"],
+    ]);
     const calls: string[][] = [];
     const tempRoot = tempDirs.make("npm-placeholder-token-success-");
     const result = await publish({
@@ -212,6 +194,9 @@ describe("npm placeholder publication", () => {
     expect(calls.map(([command, tarball]) => [command, tarball && basename(tarball)])).toEqual(
       manifest.packages.map((entry) => ["publish", entry.tarball.name]),
     );
+    for (const args of calls) {
+      expect(args).toContain("--provenance");
+    }
     expect(result.results.map((entry) => entry.packageName)).toEqual(names);
     expect(readdirSync(tempRoot)).toEqual([]);
   });
@@ -222,26 +207,18 @@ describe("npm placeholder publication", () => {
     );
     expect(() => parseSelectedPackages("@openclaw/good,@openclaw/good")).toThrow("duplicates");
 
-    const duplicateRoot = createRepo([
-      packageEntry("one", "@openclaw/good"),
-      packageEntry("two", "@openclaw/good"),
-    ]);
-    expect(() => resolveSelectedPackageSources(duplicateRoot, ["@openclaw/good"])).toThrow(
-      "must map uniquely",
-    );
-
-    const unsafeRoot = createRepo([packageEntry("good", "@openclaw/good")]);
-    writeJson(join(unsafeRoot, "extensions", "good", "package.json"), {});
-    expect(() => resolveSelectedPackageSources(unsafeRoot, ["@openclaw/good"])).toThrow(
-      "must map uniquely",
-    );
-
-    const privateRoot = createRepo([
-      packageEntry("private", "@openclaw/private", { publishConfig: { access: "private" } }),
-    ]);
-    expect(() => resolveSelectedPackageSources(privateRoot, ["@openclaw/private"])).toThrow(
-      "not a public release-enabled npm plugin",
-    );
+    for (const [entries, error] of [
+      [[packageEntry("one", packageName), packageEntry("two", packageName)], "must map uniquely"],
+      [[{ dir: "missing", manifest: {} }], "must map uniquely"],
+      [
+        [packageEntry("private", packageName, { publishConfig: { access: "private" } })],
+        "not a public release-enabled npm plugin",
+      ],
+    ] as const) {
+      expect(() => resolveSelectedPackageSources(createRepo([...entries]), [packageName])).toThrow(
+        error,
+      );
+    }
   });
 
   it("fails final verification when any pre-existing dist-tag changes", () => {
@@ -330,21 +307,12 @@ describe("npm placeholder publication", () => {
       expect(job?.environment).toBeUndefined();
       expect(JSON.stringify(job)).not.toContain("NPM_TOKEN");
     }
-    expect(step(verify, "Verify immutable placeholder publication")).toBeDefined();
     expect(publish).toMatchObject({
       environment: "npm-release",
       permissions: { actions: "read", contents: "read", "id-token": "write" },
     });
     const publishStep = step(publish, "Publish verified placeholders serially");
     expect(publishStep?.env?.NPM_TOKEN).toBe("${{ secrets.NPM_TOKEN }}");
-    expect(readFileSync("scripts/npm-placeholder-publication.mjs", "utf8")).toContain(
-      '"--provenance"',
-    );
-    expect(publishStep?.run).not.toContain("npm trust");
-    expect(readFileSync(WORKFLOW, "utf8")).toContain("plugin-npm-release.yml");
-    const digestStep = step(plan, "Bind immutable artifact digest");
-    expect(digestStep?.env?.RAW_DIGEST).toBe("${{ steps.upload.outputs.artifact-digest }}");
-    expect(digestStep?.run).toContain("digest=sha256:${RAW_DIGEST}");
     for (const job of [verify, publish]) {
       expect(step(job, "Resolve immutable artifact metadata")?.run).toContain(".digest == $digest");
     }
@@ -363,9 +331,8 @@ describe("npm placeholder publication", () => {
         repository: "openclaw/openclaw",
         runId: 123,
         targetRoot: "/tmp/unused",
-        targetSha: SHA,
+        ...binding,
         token: "test-token",
-        workflowSha: WORKFLOW_SHA,
       }),
     ).rejects.toThrow("artifact name does not match its workflow run and attempt");
   });

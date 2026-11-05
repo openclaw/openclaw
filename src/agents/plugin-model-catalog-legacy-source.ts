@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 
 export type PluginModelCatalogMigrationIssue = {
   kind:
@@ -29,7 +30,7 @@ export function recordCatalogMigrationIssue(
 
 export function readLegacyPluginModelCatalog(pathname: string): string | null {
   try {
-    return readFileSync(pathname, "utf8");
+    return decodeUtf8Input(readFileSync(pathname), `Legacy provider catalog ${pathname}`);
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
       return null;

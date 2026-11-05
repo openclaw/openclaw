@@ -2,6 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
@@ -20,7 +21,7 @@ import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolu
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
-import { ExpectedCliError } from "../../cli/failure-output.js";
+import { ExpectedCliError } from "../../cli/expected-cli-error.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../../config/config.js";
 import { danger } from "../../globals.js";
@@ -34,28 +35,6 @@ import {
 } from "../config-validation.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { formatChannelAccountLabel } from "./shared.js";
-
-type ChannelsCapabilitiesOptions = {
-  agent?: string;
-  channel?: string;
-  account?: string;
-  target?: string;
-  timeout?: string;
-  json?: boolean;
-};
-
-type ChannelCapabilitiesReport = {
-  plugin: ChannelPlugin;
-  channel: string;
-  accountId: string;
-  accountName?: string;
-  configured?: boolean;
-  enabled?: boolean;
-  support?: ChannelCapabilities;
-  actions: string[];
-  probe?: unknown;
-  diagnostics?: ChannelCapabilitiesDiagnostics;
-};
 
 const CHANNEL_CAPABILITIES_TIMEOUT_MAX_MS = 30_000;
 
@@ -123,14 +102,15 @@ function formatGenericProbeLines(probe: unknown): ChannelCapabilitiesDisplayLine
 }
 
 function renderDisplayLine(line: ChannelCapabilitiesDisplayLine) {
+  const text = sanitizeTerminalText(line.text);
   switch (line.tone) {
     case "muted":
     case "success":
     case "warn":
     case "error":
-      return theme[line.tone](line.text);
+      return theme[line.tone](text);
     default:
-      return line.text;
+      return text;
   }
 }
 
@@ -147,7 +127,14 @@ async function resolveCapabilitiesRuntimeConfig(config: OpenClawConfig, runtime:
 
 /** Print or serialize configured channel capabilities, actions, and optional health probe details. */
 export async function channelsCapabilitiesCommand(
-  opts: ChannelsCapabilitiesOptions,
+  opts: {
+    agent?: string;
+    channel?: string;
+    account?: string;
+    target?: string;
+    timeout?: string;
+    json?: boolean;
+  },
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
@@ -220,7 +207,18 @@ export async function channelsCapabilitiesCommand(
     throw new ExpectedCliError({ message, humanOutput: danger(message), machineOutput: message });
   }
 
-  const reports: ChannelCapabilitiesReport[] = [];
+  const reports: {
+    plugin: ChannelPlugin;
+    channel: string;
+    accountId: string;
+    accountName?: string;
+    configured?: boolean;
+    enabled?: boolean;
+    support?: ChannelCapabilities;
+    actions: string[];
+    probe?: unknown;
+    diagnostics?: ChannelCapabilitiesDiagnostics;
+  }[] = [];
   for (const plugin of selected) {
     const accountOverride = normalizeOptionalString(opts.account);
     const target = rawTarget || undefined;

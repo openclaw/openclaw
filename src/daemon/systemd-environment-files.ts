@@ -1,14 +1,39 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { Minimatch } from "minimatch";
 import { isUnresolvedShellReference } from "../config/state-dir-dotenv.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { lstatIfExists } from "../infra/path-existence.js";
+import { normalizeWindowsPathSeparators } from "./output.js";
+import { resolveDaemonHomeDir } from "./paths.js";
+import type {
+  GatewayServiceCommandSnapshot,
+  GatewayServiceEnv,
+  GatewayServiceEnvironmentValueSource,
+} from "./service-types.js";
 
 export type SystemdEnvironmentFileSpec = [pathname: string, optional: boolean];
 export type SystemdEnvironmentFilesParams = {
   environmentFileSpecs: SystemdEnvironmentFileSpec[];
   failOnUnavailable?: boolean;
+  onUnavailable?: () => void;
 };
+
+export function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
+  return input.replace(/%%|%h/gu, (specifier) =>
+    specifier === "%%" ? "%" : normalizeWindowsPathSeparators(resolveDaemonHomeDir(env)),
+  );
+}
+
+export function parseSystemdEnvironmentFileSpec(
+  value: string,
+  env: GatewayServiceEnv,
+): SystemdEnvironmentFileSpec | undefined {
+  const optional = value.startsWith("-");
+  const pathname = expandSystemdSpecifier(optional ? value.slice(1) : value, env);
+  // Native systemd ignores relative declarations rather than resolving them beside the unit.
+  return path.posix.isAbsolute(pathname) ? [pathname, optional] : undefined;
+}
 
 async function expandSystemdEnvironmentFilePattern(pattern: string): Promise<string[]> {
   const [parts] = new Minimatch(pattern, {
@@ -174,6 +199,9 @@ export async function resolveSystemdEnvironmentFiles(
 ): Promise<Record<string, string>> {
   const resolved: Record<string, string> = {};
   const failIfUnavailable = (error: unknown, optional: boolean) => {
+    if (!optional || !hasErrnoCode(error, "ENOENT")) {
+      params.onUnavailable?.();
+    }
     if (params.failOnUnavailable && !optional) {
       throw error;
     }
@@ -187,8 +215,8 @@ export async function resolveSystemdEnvironmentFiles(
       continue;
     }
     pathnames.sort();
-    if (params.failOnUnavailable && !optional && pathnames.length === 0) {
-      throw new Error("Missing systemd environment file");
+    if (!optional && pathnames.length === 0) {
+      failIfUnavailable(new Error("Missing systemd environment file"), optional);
     }
     for (const filePath of pathnames) {
       try {
@@ -201,4 +229,46 @@ export async function resolveSystemdEnvironmentFiles(
     }
   }
   return resolved;
+}
+
+type SystemdCommandSnapshotParams = SystemdEnvironmentFilesParams & {
+  programArguments: string[];
+  workingDirectory: string;
+  inlineEnvironment: Record<string, string>;
+  unsetEnvironment: string[];
+};
+
+export async function buildSystemdCommandSnapshot(
+  params: SystemdCommandSnapshotParams,
+): Promise<GatewayServiceCommandSnapshot> {
+  let stateIdentityUnverified = false;
+  const fileEnvironment = await resolveSystemdEnvironmentFiles({
+    ...params,
+    onUnavailable: () => {
+      stateIdentityUnverified = true;
+      params.onUnavailable?.();
+    },
+  });
+  const environment = { ...params.inlineEnvironment, ...fileEnvironment };
+  const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> =
+    Object.fromEntries(Object.keys(params.inlineEnvironment).map((key) => [key, "inline"]));
+  for (const key of Object.keys(fileEnvironment)) {
+    environmentValueSources[key] = Object.hasOwn(params.inlineEnvironment, key)
+      ? "inline-and-file"
+      : "file";
+  }
+  for (const assignment of params.unsetEnvironment) {
+    const separator = assignment.indexOf("=");
+    const key = separator < 0 ? assignment : assignment.slice(0, separator);
+    if (separator < 0 || environment[key] === assignment.slice(separator + 1)) {
+      delete environment[key];
+      delete environmentValueSources[key];
+    }
+  }
+  return {
+    programArguments: params.programArguments,
+    ...(params.workingDirectory ? { workingDirectory: params.workingDirectory } : {}),
+    ...(Object.keys(environment).length > 0 ? { environment, environmentValueSources } : {}),
+    ...(stateIdentityUnverified ? { stateIdentityUnverified: true } : {}),
+  };
 }

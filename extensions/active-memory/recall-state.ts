@@ -51,27 +51,17 @@ export function isCircuitBreakerOpen(
   if (!entry || entry.consecutiveTimeouts < maxTimeouts) {
     return false;
   }
-  if (Date.now() - entry.lastTimeoutAt >= cooldownMs) {
-    // Cooldown expired — reset and allow one attempt through.
-    timeoutCircuitBreaker.delete(key);
-    return false;
-  }
-  return true;
+  // Cooldown allows another attempt; only a completed recall clears the streak.
+  return Date.now() - entry.lastTimeoutAt < cooldownMs;
 }
 
-export function recordCircuitBreakerTimeout(key: string, cooldownMs: number): void {
-  const now = Date.now();
-  for (const [entryKey, entry] of timeoutCircuitBreaker) {
-    if (now - entry.lastTimeoutAt >= cooldownMs) {
-      timeoutCircuitBreaker.delete(entryKey);
-    }
-  }
+export function recordCircuitBreakerTimeout(key: string): void {
   const entry = timeoutCircuitBreaker.get(key);
   // Reinsertion keeps refreshed keys newer than peers when capacity eviction runs.
   timeoutCircuitBreaker.delete(key);
   timeoutCircuitBreaker.set(key, {
     consecutiveTimeouts: (entry?.consecutiveTimeouts ?? 0) + 1,
-    lastTimeoutAt: now,
+    lastTimeoutAt: Date.now(),
   });
   pruneMapToMaxSize(timeoutCircuitBreaker, DEFAULT_MAX_CACHE_ENTRIES);
 }
@@ -194,7 +184,7 @@ export function getCachedResult(cacheKey: string): ActiveRecallResult | undefine
   if (!cached) {
     return undefined;
   }
-  if (cached.expiresAt <= Date.now()) {
+  if (cached.expiresAt <= performance.now()) {
     activeRecallCache.delete(cacheKey);
     return undefined;
   }
@@ -202,7 +192,7 @@ export function getCachedResult(cacheKey: string): ActiveRecallResult | undefine
 }
 
 export function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: number): void {
-  const now = Date.now();
+  const now = performance.now();
   if (
     activeRecallCache.size >= DEFAULT_MAX_CACHE_ENTRIES ||
     now - lastActiveRecallCacheSweepAt >= CACHE_SWEEP_INTERVAL_MS
@@ -210,9 +200,7 @@ export function setCachedResult(cacheKey: string, result: ActiveRecallResult, tt
     sweepExpiredCacheEntries(now);
     lastActiveRecallCacheSweepAt = now;
   }
-  if (activeRecallCache.has(cacheKey)) {
-    activeRecallCache.delete(cacheKey);
-  }
+  activeRecallCache.delete(cacheKey);
   activeRecallCache.set(cacheKey, {
     expiresAt: now + ttlMs,
     result,

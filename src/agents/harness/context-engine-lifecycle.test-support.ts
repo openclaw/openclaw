@@ -2,6 +2,29 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 
+export function createContextEngineRequiringAssembly(): ContextEngine {
+  return {
+    info: {
+      id: "lossless-claw",
+      name: "Lossless",
+      hostRequirements: {
+        "agent-run": {
+          requiredCapabilities: ["assemble-before-prompt"],
+        },
+      },
+    },
+    async ingest() {
+      return { ingested: true };
+    },
+    async assemble({ messages }) {
+      return { messages, estimatedTokens: 0 };
+    },
+    async compact() {
+      return { ok: true, compacted: false };
+    },
+  };
+}
+
 export function textMessage(
   role: "user" | "assistant",
   text: string,

@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { configSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -10,7 +11,6 @@ import {
   providerPageOptions,
 } from "./model-catalog-fixtures.test-support.ts";
 import { expandProvider } from "./model-providers.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "custom-provider-credentials",
@@ -90,9 +90,9 @@ suite.define(() => {
           await form.getByRole("button", { name: "Close", exact: true }).click();
         }
         const definitionWrites = api === "google-generative-ai" ? 0 : 1;
-        expect(await row.getByRole("button", { name: "Set API key", exact: true }).count()).toBe(1);
+        expect(await row.getByRole("button", { name: /^Replace API key:/ }).count()).toBe(1);
         expect(
-          await row.getByRole("button", { name: "Remove provider", exact: true }).isEnabled(),
+          await row.getByRole("button", { name: /^Remove(?: provider)?(?::|$)/ }).isEnabled(),
         ).toBe(true);
         if (api === "google-generative-ai") {
           const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [row], {
@@ -104,7 +104,7 @@ suite.define(() => {
             frame.png,
           );
         }
-        await row.getByRole("button", { name: "Set API key", exact: true }).click();
+        await row.getByRole("button", { name: /^Replace API key:/ }).click();
         await row.getByLabel("API key", { exact: true }).fill("synthetic-replacement-key");
         await row.getByRole("button", { name: "Save", exact: true }).click();
         expect((await gateway.waitForRequest("models.authSetApiKey")).params).toEqual({
@@ -112,16 +112,16 @@ suite.define(() => {
           agentId: "main",
           apiKey: "synthetic-replacement-key",
         });
-        await expect.poll(() => row.textContent()).toContain("Secret saved.");
+        await expect.poll(() => row.textContent()).toContain("API key saved.");
         await gateway.setMethodResponse("config.get", configSnapshot(config(false), "removed"));
         await gateway.setMethodResponse("models.authStatus", {
           ts: 2,
           providers: [],
           providerCapabilities: [],
         });
-        await row.getByRole("button", { name: "Remove provider", exact: true }).click();
-        const confirmation = page.locator(".exec-approval-actions");
-        await confirmation.getByRole("button", { name: "Remove provider", exact: true }).click();
+        await row.getByRole("button", { name: /^Remove(?: provider)?(?::|$)/ }).click();
+        const confirmation = page.locator(".confirm-dialog");
+        await confirmation.getByRole("button", { name: /^Remove(?: provider)?(?::|$)/ }).click();
         expect((await gateway.waitForRequest("models.authLogout")).params).toEqual({
           provider,
           agentId: "main",

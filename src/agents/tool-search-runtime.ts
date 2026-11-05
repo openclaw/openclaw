@@ -1,4 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  attachInternalToolResultContentSource,
+  copyInternalToolResultState,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
@@ -13,10 +17,6 @@ import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import {
-  attachInternalToolResultContentSource,
-  copyInternalToolResultState,
-} from "./runtime/internal-hooks.js";
-import {
   captureToolOutputSelection,
   readToolOutputSchemaVariants,
   type ToolOutputSelection,
@@ -25,12 +25,12 @@ import {
 import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
 import { markToolContractFailure } from "./tool-contract-error.js";
 import { readToolExecutionRefusal } from "./tool-effect-receipt.js";
-import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
-  isToolResultError,
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
-} from "./tool-result-error.js";
+} from "./tool-execution-error.js";
+import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
+import { isToolResultError } from "./tool-result-error.js";
 import { runWithToolResultDelivery } from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,
@@ -45,6 +45,11 @@ import {
   serializeToolSearchControlResult,
 } from "./tool-search-control-result.js";
 import { getToolSearchLexicalIndex } from "./tool-search-index.js";
+import type {
+  CatalogVisibilityOptions,
+  ToolSearchConfig,
+  UnknownToolErrorOptions,
+} from "./tool-search-protocol.js";
 import { scoreLexical, tokenizeQuery } from "./tool-search-ranking.js";
 import {
   formatCatalogInputError,
@@ -56,14 +61,11 @@ import { readToolSearchLimit } from "./tool-search-request.js";
 import { runScheduledToolSearchCall } from "./tool-search-scheduling.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
-  CatalogVisibilityOptions,
   ToolSearchCallOptions,
   ToolSearchCatalogEntry,
   ToolSearchCatalogSession,
   ToolSearchCatalogToolExecutor,
-  ToolSearchConfig,
   ToolSearchToolContext,
-  UnknownToolErrorOptions,
 } from "./tool-search-types.js";
 import { ToolSourceReplyCell } from "./tool-source-reply-completion.js";
 import { textResult, ToolInputError } from "./tools/common.js";
@@ -87,7 +89,7 @@ function findEntry(
   }
   const namedEntries =
     match === "exact-id" ? [] : entries.filter((candidate) => candidate.name === needle);
-  if (namedEntries.length > 1) {
+  if (namedEntries.length > 1 || namedEntries[0]?.requiresExactId) {
     throw new ToolInputError(`Ambiguous tool name: ${needle}; use an exact tool id.`);
   }
   const namedEntry = namedEntries[0];

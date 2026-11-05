@@ -36,8 +36,6 @@ const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 const MAX_DURATION_SECONDS = 10;
 
-type RunwayTaskStatus = "PENDING" | "RUNNING" | "THROTTLED" | "SUCCEEDED" | "FAILED" | "CANCELLED";
-
 type RunwayTaskDetailResponse = {
   status?: unknown;
   output?: unknown;
@@ -59,16 +57,21 @@ const VIDEO_MODELS = new Set(["gen4_aleph"]);
 const RUNWAY_TEXT_ASPECT_RATIOS = ["16:9", "9:16"] as const;
 const RUNWAY_EDIT_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "3:4", "4:3", "21:9"] as const;
 
-function readRunwayTaskStatus(payload: RunwayTaskDetailResponse): RunwayTaskStatus {
+function isRunwayTaskComplete(payload: RunwayTaskDetailResponse): boolean {
   const status = normalizeOptionalString(payload.status);
   switch (status) {
     case "PENDING":
     case "RUNNING":
     case "THROTTLED":
+      return false;
     case "SUCCEEDED":
+      return true;
     case "FAILED":
     case "CANCELLED":
-      return status;
+      throw new Error(
+        readRunwayFailureMessage(payload.failure) ||
+          `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`,
+      );
     case undefined:
       throw new Error("Runway video status response missing task status");
     default:
@@ -84,17 +87,6 @@ function readRunwayFailureMessage(failure: unknown): string | undefined {
     return normalizeOptionalString(failure.message);
   }
   return undefined;
-}
-
-function readRunwayOutputUrls(payload: RunwayTaskDetailResponse): string[] {
-  if (!Array.isArray(payload.output)) {
-    throw new Error("Runway video generation completed with malformed output URLs");
-  }
-  const outputUrls = normalizeTrimmedStringList(payload.output);
-  if (!outputUrls.length) {
-    throw new Error("Runway video generation completed without output URLs");
-  }
-  return outputUrls;
 }
 
 function resolveSourceUri(
@@ -327,16 +319,16 @@ export default definePluginEntry({
           pollIntervalMs: POLL_INTERVAL_MS,
           requestFailedMessage: "Runway video status request failed",
           timeoutMessage: `Runway video generation task ${taskId} did not finish in time`,
-          isComplete: (payload) => readRunwayTaskStatus(payload) === "SUCCEEDED",
-          getFailureMessage: (payload) => {
-            const status = readRunwayTaskStatus(payload);
-            return status === "FAILED" || status === "CANCELLED"
-              ? readRunwayFailureMessage(payload.failure) ||
-                  `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`
-              : undefined;
-          },
+          isComplete: isRunwayTaskComplete,
         });
-        const outputUrls = readRunwayOutputUrls(completed);
+        if (!Array.isArray(completed.output)) {
+          throw new Error("Runway video generation completed with malformed output URLs");
+        }
+        const outputUrls = normalizeTrimmedStringList(completed.output);
+        if (!outputUrls.length) {
+          throw new Error("Runway video generation completed without output URLs");
+        }
+
         const timeoutMs = createProviderOperationTimeoutResolver({
           deadline,
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
@@ -357,6 +349,7 @@ export default definePluginEntry({
               maxBytes,
               validateBinaryResponse: true,
               metadata: { sourceUrl: url },
+              dispatcherPolicy,
             }),
           );
         }

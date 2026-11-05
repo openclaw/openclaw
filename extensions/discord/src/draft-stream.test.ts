@@ -20,7 +20,6 @@ function createHarness(
   const stream = createDiscordDraftStream({
     rest: rest as never,
     channelId: "c1",
-    throttleMs: 250,
     ...options,
   });
   return { rest, stream };

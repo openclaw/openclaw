@@ -43,12 +43,12 @@ afterEach(async () => {
   }
 });
 
-function fixture<T = { value: number }>(scope: string, maxEntries = 2) {
-  const options = {
-    scope,
-    maxEntries,
-    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-audit-") },
-  };
+function fixture<T = { value: number }>(
+  scope: string,
+  maxEntries = 2,
+  env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-audit-") },
+) {
+  const options = { scope, maxEntries, env };
   return {
     options,
     store: createSqliteAuditRecordStore<T>(options),
@@ -130,52 +130,40 @@ it("scans older config edits and rejects all facts when a later page is corrupt"
 
 it("settles competing worker comparisons against current rows and captures submitted values", async () => {
   const { store: native, write, read } = fixture<Greeting>("greeting-cas", 1);
-  native.register("latest", greeting("initial", 0), 1);
+  const initial = greeting("initial");
+  native.register("latest", initial, 1);
   const firstWriter = write();
   const secondWriter = write();
   const reader = read();
-  expect((await reader.latest({ limit: 1 }))[0]?.value).toEqual(greeting("initial", 0));
+  expect((await reader.latest({ limit: 1 }))[0]?.value).toEqual(initial);
 
-  const expected = greeting("initial", 0);
-  const replacement = greeting("greeting", 0);
+  const expected = greeting("initial");
+  const replacement = greeting("greeting");
   const first = firstWriter.compareAndSet("latest", expected, replacement, 2);
-  const second = secondWriter.compareAndSet(
-    "latest",
-    greeting("initial", 0),
-    greeting("initial", 7),
-    3,
-  );
+  const second = secondWriter.compareAndSet("latest", initial, greeting("initial", 7), 3);
   expected.cursor = 99;
   replacement.text = "mutated after submission";
 
   await expect(Promise.all([first, second])).resolves.toEqual([true, false]);
   expect((await reader.latest({ limit: 1 }))[0]).toMatchObject({
-    value: greeting("greeting", 0),
+    value: greeting("greeting"),
     createdAt: 2,
     sequence: 1,
   });
 
-  native.upsert("latest", greeting("foreign commit", 8), 4);
-  expect((await reader.latest({ limit: 1 }))[0]?.value).toEqual(greeting("foreign commit", 8));
-  await expect(
-    secondWriter.compareAndSet(
-      "latest",
-      greeting("foreign commit", 8),
-      greeting("next greeting", 8),
-      5,
-    ),
-  ).resolves.toBe(true);
-  expect(native.latest({ limit: 1 })[0]?.value).toEqual(greeting("next greeting", 8));
+  const foreign = greeting("foreign commit", 8);
+  const next = greeting("next greeting", 8);
+  native.upsert("latest", foreign, 4);
+  expect((await reader.latest({ limit: 1 }))[0]?.value).toEqual(foreign);
+  await expect(secondWriter.compareAndSet("latest", foreign, next, 5)).resolves.toBe(true);
+  expect(native.latest({ limit: 1 })[0]?.value).toEqual(next);
 });
 
 it("rolls back async insertion and retention together, preserving sibling scopes", async () => {
-  const { options, store } = fixture("async-rollback", 2);
-  const register = (key: string, value: { value: number }, createdAt: number) =>
-    createSqliteAuditRecordWriter<{ value: number }>(options).register(key, value, createdAt);
-  const sibling = createSqliteAuditRecordStore<{ value: number }>({
-    ...options,
-    scope: "sibling",
-  });
+  const { options, store, write } = fixture("async-rollback", 2);
+  const register = (...args: Parameters<ReturnType<typeof write>["register"]>) =>
+    write().register(...args);
+  const { store: sibling } = fixture("sibling", 2, options.env);
   store.register("one", { value: 1 }, 3);
   store.register("two", { value: 2 }, 2);
   sibling.register("one", { value: 9 }, 1);
@@ -212,11 +200,7 @@ it("reads bounded newest-first pages by sequence", async () => {
 
 it("prunes a legacy batch with one delete while preserving runtime rows and other scopes", async () => {
   const { options, store } = fixture("batch-test", 3);
-  const sibling = createSqliteAuditRecordStore<{ value: number }>({
-    ...options,
-    scope: "other-scope",
-    maxEntries: 3,
-  });
+  const { store: sibling } = fixture("other-scope", 3, options.env);
   store.register("runtime", { value: 100 }, 0);
   sibling.register("legacy-0", { value: 200 }, 1);
   const { db } = openOpenClawStateDatabase(options);
@@ -243,10 +227,7 @@ it.each(["register", "upsert", "compareAndSet"] as const)(
   "protects the oldest key during %s without changing its insertion age",
   async (operation) => {
     const { options, store, write } = fixture("protected-test", 2);
-    const seed = createSqliteAuditRecordStore<{ value: number }>({
-      ...options,
-      maxEntries: 4,
-    });
+    const { store: seed } = fixture("protected-test", 4, options.env);
     for (const [index, key] of ["old\0key", "second", "third", "newest"].entries()) {
       seed.register(key, { value: index }, 1);
     }

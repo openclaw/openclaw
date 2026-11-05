@@ -35,6 +35,7 @@ it.for(["unchanged", "removed", "rotated"] as const)(
         vi.stubEnv("GITHUB_TOKEN", "");
         let now = 1_000_000;
         vi.spyOn(Date, "now").mockImplementation(() => now);
+        vi.spyOn(performance, "now").mockImplementation(() => now);
         const profileId = `ghp_${"9".repeat(32)}`;
         const cfg: OpenClawConfig = {
           agents: { entries: { main: { tools: { github: { profileId } } } } },
@@ -60,13 +61,10 @@ it.for(["unchanged", "removed", "rotated"] as const)(
         const held = createDeferred();
         const release = createDeferred();
         const rejected = createDeferred<unknown>();
-        const forbiddenDispatch = createDeferred();
         const refreshed = createDeferred();
         const trace: Array<{ path: string; credential: string }> = [];
-        let holdRepository = false;
+        let stage: "initial" | "hold" | "refresh" = "initial";
         let retired = false;
-        let refreshing = false;
-        let refreshedItem = false;
         const realPrepare = githubIdentity.prepareGitHubReadIdentity;
         vi.spyOn(githubIdentity, "prepareGitHubReadIdentity").mockImplementation(async (params) => {
           const identity = await realPrepare(params);
@@ -93,29 +91,27 @@ it.for(["unchanged", "removed", "rotated"] as const)(
             const credential = credentials.get(authorization ?? "") ?? "unexpected";
             trace.push({ path, credential });
             if (retired && credential === "original") {
-              forbiddenDispatch.resolve();
+              rejected.resolve(new Error("Retired credential reached GitHub"));
             }
             if (path === "/user") {
               return Response.json({ id: 765, login: "preview-fixture", avatar_url: null });
             }
             if (path === repository) {
-              if (holdRepository) {
-                holdRepository = false;
-                refreshing = true;
+              if (stage === "hold") {
+                stage = "refresh";
                 held.resolve();
                 await release.promise;
-              } else if (refreshing && refreshedItem) {
+              } else if (stage === "refresh") {
                 refreshed.resolve();
               }
               return Response.json({ id: 765, private: false, visibility: "public" });
             }
             if (path === item) {
-              refreshedItem = refreshing;
               return Response.json({
                 created_at: "2026-09-01T08:00:00Z",
                 updated_at: "2026-09-01T09:00:00Z",
                 state: "open",
-                title: refreshing ? "Refreshed preview" : "Initial preview",
+                title: stage === "initial" ? "Initial preview" : "Refreshed preview",
                 user: { login: "preview-fixture" },
                 repository_url: `https://api.github.com${repository}`,
               });
@@ -127,7 +123,6 @@ it.for(["unchanged", "removed", "rotated"] as const)(
           ...soloClient(),
           connId: "preview-refresh-connection",
         };
-        const handlers = controlUiHandlers;
         const rpc = async () => {
           const respond = vi.fn<RespondFn>();
           const params = {
@@ -146,7 +141,7 @@ it.for(["unchanged", "removed", "rotated"] as const)(
                   new Set(filter(client) ? [client.connId] : []),
               },
             }),
-            extraHandlers: handlers,
+            extraHandlers: controlUiHandlers,
           });
           expect(respond).toHaveBeenCalledOnce();
           const [ok, payload] = expectDefined(respond.mock.calls[0], "preview RPC response");
@@ -155,7 +150,7 @@ it.for(["unchanged", "removed", "rotated"] as const)(
         try {
           expect(await rpc()).toMatchObject({ ok: true, payload: { title: "Initial preview" } });
           now += 60_001;
-          holdRepository = true;
+          stage = "hold";
           const staleRequest = rpc();
           await withinTest(held.promise, signal);
           expect(await withinTest(staleRequest, signal)).toMatchObject({
@@ -175,15 +170,7 @@ it.for(["unchanged", "removed", "rotated"] as const)(
           retired = change !== "unchanged";
           release.resolve();
           if (retired) {
-            const failure = await withinTest(
-              Promise.race([
-                rejected.promise,
-                forbiddenDispatch.promise.then(() => {
-                  throw new Error("Retired credential reached GitHub");
-                }),
-              ]),
-              signal,
-            );
+            const failure = await withinTest(rejected.promise, signal);
             expect(failure).toMatchObject({ reason: "changed" });
             expect(trace.slice(afterChange)).toEqual([]);
           } else {

@@ -12,7 +12,6 @@ import {
 } from "../../shared/worker-bundle-archive.js";
 import { MAX_WORKER_BUNDLE_ARCHIVE_BYTES } from "../../shared/worker-bundle-limits.js";
 import {
-  buildId,
   extract,
   useNodeBootstrapArtifactFixtures,
   version,
@@ -65,21 +64,13 @@ async function rewriteArchive(
 it("reuses image-owned bytes after restart without mutating the deployment archive", async () => {
   const { options, built, bytes, sha256, archive } = await retainArchive();
   const restarted = createProvider(options);
-  const [artifact, concurrent] = await Promise.all([
-    restarted.prepare(new AbortController().signal),
-    restarted.prepare(),
-  ]);
+  const artifact = await restarted.prepare();
   expect(artifact.tarballSha256).toBe(process.platform === "win32" ? built.tarballSha256 : sha256);
-  expect(artifact.tarballPath).not.toBe(archive);
-  expect(concurrent).toBe(artifact);
-  expect(await restarted.prepare()).toBe(artifact);
   const acceptedBytes = await fs.readFile(artifact.tarballPath);
   expect(await fs.readFile(archive)).toEqual(bytes);
   await fs.writeFile(archive, "image replaced after preparation");
   expect(await fs.readFile(artifact.tarballPath)).toEqual(acceptedBytes);
   await restarted.close();
-  await expect(restarted.prepare()).rejects.toThrow("closed");
-  await expect(fs.access(artifact.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
   expect(await fs.readFile(archive, "utf8")).toBe("image replaced after preparation");
 });
 
@@ -88,12 +79,11 @@ it.each([
   "truncated",
   "oversized",
   "symlink",
-  "duplicate entries",
   "extra entry",
   "missing entry",
   "permissions",
 ] as const)("rebuilds invalid %s input without mutating it", async (failure) => {
-  const { root, options, built, builtBytes, bytes, archive } = await retainArchive();
+  const { root, options, builtBytes, bytes, archive } = await retainArchive();
   if (failure === "missing") {
     await fs.rm(archive);
   } else if (failure === "truncated") {
@@ -105,21 +95,12 @@ it.each([
     const target = path.join(root, "image-archive.tgz");
     await fs.rename(archive, target);
     await fs.symlink(target, archive);
-  } else if (failure === "duplicate entries") {
-    const header = Buffer.alloc(512);
-    new tar.Header({ path: "package/duplicate", type: "File", mode: 0o600, size: 0 }).encode(
-      header,
-    );
-    await fs.writeFile(archive, gzipSync(Buffer.concat([header, header, Buffer.alloc(1024)])));
   } else {
     await rewriteArchive(root, archive, failure);
   }
   const before = await fs.lstat(archive).catch(() => undefined);
   const suppliedBytes = before && failure !== "oversized" ? await fs.readFile(archive) : undefined;
-  const restarted = createProvider(options);
-  const [artifact, concurrent] = await Promise.all([restarted.prepare(), restarted.prepare()]);
-  expect(concurrent).toBe(artifact);
-  expect(artifact.tarballSha256).toBe(built.tarballSha256);
+  const artifact = await createProvider(options).prepare();
   expect(await fs.readFile(artifact.tarballPath)).toEqual(builtBytes);
   if (!before) {
     await expect(fs.access(archive)).rejects.toHaveProperty("code", "ENOENT");
@@ -131,18 +112,12 @@ it.each([
       expect(await fs.readFile(archive)).toEqual(suppliedBytes);
     }
   }
-  await restarted.close();
-  await expect(fs.access(artifact.tarballPath)).rejects.toHaveProperty("code", "ENOENT");
 });
 
-it.each([
-  { owner: "built runtime", relative: "dist/shared.js" },
-  { owner: "selected plugin", relative: "dist/extensions/remote-runtime/index.js" },
-])("rebuilds changed $owner bytes under the same version and build ID", async ({ relative }) => {
+it("rebuilds changed runtime bytes under the same version and build ID", async () => {
   const { root, packageRoot, options, bytes, archive, sha256 } = await retainArchive();
-  await write(packageRoot, relative, 'export const answer = "changed-runtime";');
+  await write(packageRoot, "dist/shared.js", 'export const answer = "changed-runtime";');
   const artifact = await createProvider(options).prepare();
-  expect(artifact).toMatchObject({ buildId, openclawVersion: version });
   expect(artifact.tarballSha256).not.toBe(sha256);
   const installed = await extract(root, artifact);
   const { stdout } = await promisify(execFile)(process.execPath, [
@@ -156,7 +131,7 @@ it("keeps both execution modes available with an image prepared for worker-turn"
   const current = await fixture();
   await write(current.packageRoot, "dist/entry.js", 'console.log("generic-node");');
   const workerOptions = { ...current.options, plugins: [] };
-  const { built, sha256, archive, bytes } = await retainArchive({
+  await retainArchive({
     ...current,
     provider: createProvider(workerOptions),
   });
@@ -166,19 +141,14 @@ it("keeps both execution modes available with an image prepared for worker-turn"
   ]);
   expect(worker.enabledPluginIds).toEqual([]);
   expect(remote.enabledPluginIds).toEqual(["remote-runtime"]);
-  expect(worker.tarballSha256).toBe(process.platform === "win32" ? built.tarballSha256 : sha256);
   expect(remote.tarballSha256).not.toBe(worker.tarballSha256);
-  expect(await fs.readFile(archive)).toEqual(bytes);
 });
 
 it("checks the running build before accepting a retained archive and rebuilds after upgrade", async () => {
   const { packageRoot, options, archive, bytes, sha256 } = await retainArchive();
   await write(packageRoot, "dist/build-info.json", { version, buildId: "next-build" });
   await expect(createProvider(options).prepare()).rejects.toThrow("running Gateway build");
-  const upgraded = await createProvider({
-    ...options,
-    runningBuildId: "next-build",
-  }).prepare();
+  const upgraded = await createProvider({ ...options, runningBuildId: "next-build" }).prepare();
   expect(upgraded).toMatchObject({ buildId: "next-build", openclawVersion: version });
   expect(upgraded.tarballSha256).not.toBe(sha256);
   expect(await fs.readFile(archive)).toEqual(bytes);

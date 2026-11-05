@@ -4,30 +4,8 @@ import { type NostrProfile, NostrProfileSchema } from "./config-schema.js";
 import { contentToProfile, type ProfileContent } from "./nostr-profile-core.js";
 import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
-interface ProfileImportOptions {
-  pubkey: string;
-  relays: string[];
-}
-
-function sanitizeProfileUrls(profile: NostrProfile): NostrProfile {
-  const result = { ...profile };
-  const urlFields = ["picture", "banner", "website"] as const;
-
-  for (const field of urlFields) {
-    const value = result[field];
-    if (value && typeof value === "string") {
-      const validation = validateUrlSafety(value);
-      if (!validation.ok) {
-        delete result[field];
-      }
-    }
-  }
-
-  return result;
-}
-
 /** Import the latest verified kind:0 profile across the configured relays. */
-export async function importProfileFromRelays(opts: ProfileImportOptions) {
+export async function importProfileFromRelays(opts: { pubkey: string; relays: string[] }) {
   const { pubkey, relays } = opts;
 
   if (!pubkey || !/^[0-9a-fA-F]{64}$/.test(pubkey)) {
@@ -130,8 +108,16 @@ export async function importProfileFromRelays(opts: ProfileImportOptions) {
 
     // Drop unsafe URLs before schema validation so an otherwise valid profile remains importable.
     // Other invalid known fields reject the event atomically instead of silently changing its data.
-    const sanitizedProfile = sanitizeProfileUrls(profile);
-    const validatedProfile = NostrProfileSchema.safeParse(sanitizedProfile);
+    for (const field of ["picture", "banner", "website"] as const) {
+      const value = profile[field];
+      if (value && typeof value === "string") {
+        const validation = validateUrlSafety(value);
+        if (!validation.ok) {
+          delete profile[field];
+        }
+      }
+    }
+    const validatedProfile = NostrProfileSchema.safeParse(profile);
     if (!validatedProfile.success) {
       return {
         ok: false as const,

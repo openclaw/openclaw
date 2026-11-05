@@ -22,7 +22,7 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
     throw new Error("Incognito approval routing allocated a worker");
   }),
 }));
-const authority = { assertCurrent() {}, authorize() {} };
+const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
 afterEach(() => memorySessionActorOwners.reset());
 
 function request(sessionKey: string): ExecApprovalRequest {
@@ -48,13 +48,7 @@ async function fixture() {
     env: { OPENCLAW_STATE_DIR: "/synthetic/approval" },
   });
   const owner = memorySessionActorOwners.get({ agentId: "main", path });
-  const actor = await owner.acquire(
-    { database: owner.identity, sessionKey },
-    {
-      assertCurrent() {},
-      assertReadable() {},
-    },
-  );
+  const actor = await owner.acquire({ database: owner.identity, sessionKey }, authority);
   const created = await actor.storage!.mutate(
     {
       type: "session.entry.create",

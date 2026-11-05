@@ -207,14 +207,9 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
     });
     return null;
   }
-  const empty = (
-    description: string,
-    openUrl?: string | null,
-    presentation?: DiscussionProps["presentation"],
-  ) => (
+  const empty = (description: string, openUrl?: string | null) => (
     <PanelEmptyState
-      // Only the desktop cannot-embed state opts into the approved geometry.
-      presentation={presentation === "desktop" ? "desktop" : undefined}
+      presentation={props.presentation}
       icon={<Icon name="messageSquare" />}
       heading={t("chat.sidePanel.discussion")}
       description={description}
@@ -238,8 +233,6 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
             ? "chat.sessionDiscussion.unavailable"
             : "chat.sessionDiscussion.requiresWriteAccess",
         ),
-        undefined,
-        props.canOpen ? props.presentation : undefined,
       );
     }
     const embedUrl = resolveDiscussionEmbedUrl(current.embedUrl);
@@ -260,11 +253,7 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
             }
           />
         ) : (
-          empty(
-            t("chat.sessionDiscussion.unavailable"),
-            resolveDiscussionUrl(current.openUrl),
-            props.presentation,
-          )
+          empty(t("chat.sessionDiscussion.unavailable"), resolveDiscussionUrl(current.openUrl))
         )}
       </div>
     );

@@ -1,8 +1,13 @@
 // Mattermost tests cover interactions plugin behavior.
 import { createHmac } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
+import {
+  createMockIncomingRequest,
+  createMockServerResponse,
+  postRawWebhook,
+} from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { buildButtonAttachments } from "../../api.js";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMattermostRuntime } from "../runtime.js";
@@ -292,70 +297,14 @@ describe("createMattermostInteractionHandler", () => {
         : typeof params.body === "string"
           ? params.body
           : JSON.stringify(params.body);
-    const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
-
-    const req = {
-      destroyed: false,
-      method: params.method ?? "POST",
-      headers: params.headers ?? {},
-      socket: { remoteAddress: params.remoteAddress ?? "203.0.113.10" },
-      on(event: string, handler: (...args: unknown[]) => void) {
-        const existing = listeners.get(event) ?? [];
-        existing.push(handler);
-        listeners.set(event, existing);
-        return this;
-      },
-      removeListener(event: string, handler: (...args: unknown[]) => void) {
-        const existing = listeners.get(event) ?? [];
-        listeners.set(
-          event,
-          existing.filter((entry) => entry !== handler),
-        );
-        return this;
-      },
-      destroy() {
-        this.destroyed = true;
-        return this;
-      },
-    } as IncomingMessage & { emitTest: (event: string, ...args: unknown[]) => void };
-
-    req.emitTest = (event: string, ...args: unknown[]) => {
-      const handlers = listeners.get(event) ?? [];
-      for (const handler of handlers) {
-        handler(...args);
-      }
-    };
-
-    queueMicrotask(() => {
-      if (body) {
-        req.emitTest("data", Buffer.from(body));
-      }
-      req.emitTest("end");
+    const req = createMockIncomingRequest(body ? [body] : []);
+    req.method = params.method ?? "POST";
+    req.headers = params.headers ?? {};
+    Object.defineProperty(req.socket, "remoteAddress", {
+      value: params.remoteAddress ?? "203.0.113.10",
     });
 
     return req;
-  }
-
-  function createRes(): ServerResponse & { headers: Record<string, string>; body: string } {
-    const res = {
-      statusCode: 200,
-      headers: {},
-      body: "",
-      setHeader(name: string, value: string | number | readonly string[]) {
-        res.headers[name] = Array.isArray(value) ? value.join(",") : String(value);
-        return res;
-      },
-      end(
-        chunk?: string | Buffer | Uint8Array,
-        _encoding?: BufferEncoding | (() => void),
-        cb?: () => void,
-      ) {
-        res.body = chunk ? String(chunk) : "";
-        cb?.();
-        return res;
-      },
-    } as ServerResponse & { headers: Record<string, string>; body: string };
-    return res;
   }
 
   function createActionContext(actionId = "approve", channelId = "chan-1") {
@@ -393,13 +342,13 @@ describe("createMattermostInteractionHandler", () => {
       headers: params.headers,
       body: params.body,
     });
-    const res = createRes();
+    const res = createMockServerResponse();
     await handler(req, res);
     return res;
   }
 
   function expectForbiddenResponse(
-    res: ServerResponse & { body: string },
+    res: ServerResponse & { body?: string },
     expectedMessage: string,
   ) {
     expect(res.statusCode).toBe(403);
@@ -407,7 +356,7 @@ describe("createMattermostInteractionHandler", () => {
   }
 
   function expectSuccessfulApprovalUpdate(
-    res: ServerResponse & { body: string },
+    res: ServerResponse & { body?: string },
     requestLog?: Array<{ path: string; method?: string }>,
   ) {
     expect(res.statusCode).toBe(200);
@@ -724,21 +673,11 @@ describe("createMattermostInteractionHandler body limits", () => {
       void handler(req, res);
     });
     try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
-        });
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected the interaction test server to have a TCP address");
-      }
+      const port = await listenOnLoopback(server);
 
       // Declared and sent in one write: the shape whose rejection used to race the flush.
       const result = await postRawWebhook({
-        url: `http://127.0.0.1:${address.port}/mattermost/interactions`,
+        url: `http://127.0.0.1:${port}/mattermost/interactions`,
         body: "x".repeat(64 * 1024 + 1),
         headers: { "content-type": "application/json" },
       });
