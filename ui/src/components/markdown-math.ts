@@ -1,9 +1,7 @@
 import "./markdown-math-element.ts";
 import type { MarkdownIt, StateBlock, StateInline } from "markdown-it";
-import {
-  findMarkdownCodeSpans,
-  isInsideCode,
-} from "../../../packages/markdown-core/src/reasoning-tag-parser.js";
+import { findMarkdownCodeSpans } from "../../../packages/markdown-core/src/markdown-code-regions.js";
+import { isInsideCode } from "../../../packages/markdown-core/src/reasoning-tag-syntax.js";
 
 const DISPLAY_DELIMITERS = [
   { open: "$$", close: "$$", displayMode: true },
@@ -18,19 +16,30 @@ const INLINE_DELIMITERS = [
 
 export const MAX_MATH_SCAN = 4096;
 const MAX_MATH_EXPRESSIONS = 200;
-let renderedMathExpressions = 0;
+export type MarkdownMathBudget = { rendered: number };
+declare module "markdown-it" {
+  interface Env {
+    mathBudget?: MarkdownMathBudget;
+  }
+}
 const BARE_URL_RE = /(?:https?:\/\/|www\.)[^\s<]*/giu;
 
-function renderMath(source: string, displayMode: boolean): string {
+function renderMath(
+  source: string,
+  displayMode: boolean,
+  budget: MarkdownMathBudget = { rendered: 0 },
+): string {
   const delimiter = displayMode ? "$$" : "$";
   const literal = escapeMathFallback(delimiter + source + delimiter);
-  if (renderedMathExpressions >= MAX_MATH_EXPRESSIONS) {
+  if (budget.rendered >= MAX_MATH_EXPRESSIONS) {
     return literal;
   }
-  renderedMathExpressions += 1;
+  budget.rendered += 1;
   // HTML caches retain this leaf, not a load-state-dependent literal snapshot.
   // Every Markdown surface gets the same connected lifecycle without a host directive.
-  return `<openclaw-markdown-math data-display="${displayMode}">${literal}</openclaw-markdown-math>`;
+  // Not every browser makes horizontal overflow containers keyboard-focusable.
+  const tabIndex = displayMode ? ' tabindex="0"' : "";
+  return `<openclaw-markdown-math data-display="${displayMode}"${tabIndex}>${literal}</openclaw-markdown-math>`;
 }
 
 function escapeMathFallback(source: string): string {
@@ -192,22 +201,24 @@ function parseInlineMath(state: StateInline, silent: boolean): boolean {
 }
 
 export function installMarkdownMath(markdownParser: MarkdownIt) {
-  markdownParser.core.ruler.before("normalize", "math_budget", () => {
-    renderedMathExpressions = 0;
+  markdownParser.core.ruler.before("normalize", "math_budget", (state) => {
+    state.env.mathBudget ??= { rendered: 0 };
   });
   markdownParser.block.ruler.before("paragraph", "math_block", parseDisplayMath, {
     alt: ["paragraph"],
   });
   markdownParser.inline.ruler.before("escape", "math_inline", parseInlineMath);
-  markdownParser.renderer.rules.math_inline = (tokens, index) => {
+  markdownParser.renderer.rules.math_inline = (tokens, index, _options, env) => {
     const token = tokens[index];
-    return token ? renderMath(token.content, Boolean(token.meta?.displayMode)) : "";
+    return token
+      ? renderMath(token.content, Boolean(token.meta?.displayMode), env?.mathBudget)
+      : "";
   };
-  markdownParser.renderer.rules.math_block = (tokens, index) => {
+  markdownParser.renderer.rules.math_block = (tokens, index, _options, env) => {
     const token = tokens[index];
     if (!token) {
       return "";
     }
-    return renderMath(token.content, true);
+    return renderMath(token.content, true, env?.mathBudget);
   };
 }

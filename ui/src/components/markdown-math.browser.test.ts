@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
+import { userEvent } from "vitest/browser";
+import { toStreamingMarkdownParts } from "./markdown.test-support.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 const leafTag = "openclaw-markdown-math";
 
@@ -81,7 +83,7 @@ describe("Control UI lazy LaTeX rendering", () => {
     document.body.append(retired);
     expect(retired.querySelector(".katex")).toBe(rendered);
   });
-  it("keeps both ends of wide display math reachable inside a narrow host", async () => {
+  it("keeps wide display math keyboard-focusable and both ends reachable", async () => {
     const source =
       "$$" + Array.from({ length: 35 }, (_, index) => "x_{" + index + "}").join("+") + "$$";
     const host = mount(source);
@@ -96,10 +98,14 @@ describe("Control UI lazy LaTeX rendering", () => {
     );
     expect(scroller, "wide math needs a local horizontal reading surface").toBeDefined();
     const readingSurface = scroller!;
+    readingSurface.focus();
+    expect(document.activeElement).toBe(readingSurface);
+    await userEvent.keyboard("{ArrowRight}");
+    await expect.poll(() => readingSurface.scrollLeft).toBeGreaterThan(0);
     expect(readingSurface.getBoundingClientRect().width).toBeLessThanOrEqual(180);
-    const groups = leaf.querySelectorAll<HTMLElement>(".katex-html > .base");
+    const groups = leaf.querySelectorAll<HTMLElement>(".katex-html > .katex-base");
     expect(groups.length).toBeGreaterThan(0);
-    readingSurface.scrollLeft = 0;
+    readingSurface.scrollTo({ left: 0, behavior: "instant" });
     expect(groups[0]!.getBoundingClientRect().left).toBeGreaterThanOrEqual(
       readingSurface.getBoundingClientRect().left - 1,
     );

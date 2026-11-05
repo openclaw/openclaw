@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderMarkdownMath } from "./markdown-math.runtime.ts";
+import { markdownTableCopyText } from "./markdown-tables.ts";
 import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 describe("LaTeX", () => {
@@ -92,7 +93,7 @@ describe("LaTeX", () => {
 
     expect(fragment.querySelector("math")).not.toBeNull();
     expect(fragment.querySelector(".katex-html[aria-hidden='true']")).not.toBeNull();
-    expect(fragment.querySelector(".strut[style]")).not.toBeNull();
+    expect(fragment.querySelector(".katex-strut[style]")).not.toBeNull();
   });
 
   it("preserves text conditions in the sanitized accessible MathML", () => {
@@ -150,6 +151,21 @@ describe("LaTeX", () => {
       ),
     );
     expect(fragment.querySelector("progress")?.hasAttribute("style")).toBe(false);
+  });
+
+  it("copies visible table math once without removing accessible MathML", () => {
+    const host = mathFragment(
+      toSanitizedMarkdownHtml("| Formula | Note |\n| --- | --- |\n| $x^2$ | Keep $y$ and `code` |"),
+    );
+    const table = host.querySelector("table");
+    if (!table) {
+      throw new Error("Missing rendered table");
+    }
+    const before = table.outerHTML;
+
+    expect(markdownTableCopyText(table)).toBe("Formula\tNote\nx2\tKeep y and code");
+    expect(table.outerHTML).toBe(before);
+    expect(table.querySelectorAll("math")).toHaveLength(2);
   });
 
   it("supports math inside link labels during silent lookahead", () => {

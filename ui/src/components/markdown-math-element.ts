@@ -1,10 +1,15 @@
-type MathRuntime = typeof import("./markdown-math.runtime.ts");
-let runtime: Promise<MathRuntime | null> | undefined;
+// This non-JSX utility module owns both typesetting and its stylesheet.
+// Share settled failures as well, so multiple leaves do not start retry storms.
+let runtime: ReturnType<typeof loadMath> | undefined;
 
-function loadMath(): Promise<MathRuntime | null> {
-  // The runtime owns its CSS too; neither is requested by ordinary Markdown.
-  // Keep a failed load settled too: many equations must not cause a retry storm.
-  return (runtime ??= import("./markdown-math.runtime.ts").catch(() => null));
+async function loadMath() {
+  try {
+    const { applyMarkdownMathStyles, renderMarkdownMath } =
+      await import("./markdown-math.runtime.ts");
+    return { applyMarkdownMathStyles, renderMarkdownMath };
+  } catch {
+    return null;
+  }
 }
 
 class MarkdownMathElement extends HTMLElement {
@@ -31,7 +36,7 @@ class MarkdownMathElement extends HTMLElement {
       if (!source) {
         return;
       }
-      void loadMath().then((loaded) => {
+      void (runtime ??= loadMath()).then((loaded) => {
         if (
           !loaded ||
           !this.isConnected ||
