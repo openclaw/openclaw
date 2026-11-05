@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { observeOwnedDirectory } from "../../infra/owned-directory-observation.js";
@@ -124,7 +125,12 @@ function pool() {
 }
 
 function observeSource(source: Source) {
-  if (!source.watch || !source.watchDirectories) {
+  // A read retains its selection, but passive observation follows the active config.
+  if (
+    !source.watch ||
+    !source.watchDirectories ||
+    getRuntimeConfigSnapshot()?.skills?.load?.watch === false
+  ) {
     return;
   }
   const directories = new Set(source.watchDirectories);

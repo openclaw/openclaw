@@ -177,8 +177,14 @@ it("reports quiet runtime waits without scheduling abort", async () => {
     expect(recover).not.toHaveBeenCalled();
     expect(abort).not.toHaveBeenCalled();
 
+    // Release between diagnostic heartbeats so the controller timer reaches the stall first.
+    await vi.advanceTimersByTimeAsync(10_000);
     runtimeOwnsLiveness = false;
+    // Releasing runtime liveness starts a fresh semantic window, not a retroactive stall.
     await vi.advanceTimersByTimeAsync(30_000);
+    expect(abort).not.toHaveBeenCalled();
+    expect(operation.watchdog.snapshot().recovery).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
     expect(recover).not.toHaveBeenCalled();
     expect(operation.watchdog.snapshot().recovery).toMatchObject({ status: "pending" });
     expect(events.filter((event) => event.type.startsWith("session.recovery."))).toEqual([]);
@@ -230,7 +236,8 @@ it("waits in bounded slices, then reclaims host-owned work without a millisecond
     );
 
     runtimeOwnsLiveness = false;
-    vi.advanceTimersByTime(1_000);
+    // The released native turn finalizes in a fresh semantic window before host work is reclaimed.
+    await vi.advanceTimersByTimeAsync(6 * 60_000 + 1_000);
     const result = await waiting;
     expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
     expect(result.status).toBe("owned");

@@ -1349,6 +1349,14 @@ The activated Gateway retains your normal listener settings. Candidate startup
 progress is emitted only when the driving updater announces support, so older
 updaters, including 2026.9.5 and 2026.9.6, retain actual startup errors instead of
 mistaking a progress marker for the failure reason.
+While waiting for canary HTTP readiness, the updater observes live update
+authority about once per second. Cancellation, process exit, and startup deadlines
+remain checked at every poll. Authority is checked again before accepting each
+ready endpoint or recording a startup warning. Revocation may therefore take
+about one second to stop an idle wait, without authorizing an intervening effect.
+The updater running the canary must contain this change; a newer candidate does
+not change an older installed updater's polling.
+
 The internal progress-capable launch repeats the existing `--update-canary`
 boolean marker; legacy launches contain it once. This is an internal
 updater-to-candidate contract, with no operator configuration setting.
