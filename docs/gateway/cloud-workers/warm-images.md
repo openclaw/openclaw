@@ -36,6 +36,10 @@ Environment status reports `stopping` while teardown is pending. Stop cloud work
 
 A matching ready worker skips provisioning, even when the repository has advanced. Exact-commit workers are preferred; otherwise, OpenClaw refreshes the unbound workspace to the requested commit before session binding, using the same content preparation as snapshot forks. When no ready worker is available, a compatible snapshot starts a new machine and New Session shows **Starting from snapshot…**. The fork updates its checkout to the requested commit and installs the current runtime when needed before enrollment. Profile setup is already captured; post-create/start commands run after session binding.
 
+Workspace verification reuses content hashes saved with the snapshot when file identity, size, and timestamps still match. Registration and first binding still check the complete manifest, and changed files are hashed again. Missing or unreadable hash memos, or providers that change filesystem identities when restoring a snapshot, fall back to hashing. The memo contains filesystem metadata and hashes, not file contents or setup secrets. It shares the node's trusted OS/user boundary; it does not protect against code that can rewrite the node's own state.
+
+Workspace verification reuses content hashes saved with the snapshot when file identity, size, and timestamps still match. Registration and first binding still check the complete manifest, and changed files are hashed again. Missing or unreadable hash memos, or providers that change filesystem identities when restoring a snapshot, fall back to hashing. The memo contains filesystem metadata and hashes, not file contents or setup secrets. It shares the node's trusted OS/user boundary; it does not protect against code that can rewrite the node's own state.
+
 Snapshot compatibility covers the repository and source-access scope, backend, exact machine class, operating system, desktop setting, profile setup command, setup-secret names and store references, repository recipe, and whether setup was skipped. Linked worktrees of one local repository share snapshots; separate clones do not. Repository-only sources also bind their repository instance, agent and selected GitHub identity. A changed recipe, machine configuration, or source-access scope needs compatible preparation, usually a cold build. Secret values and temporary sentinels never participate in the key.
 
 The OpenClaw runtime is separate from snapshot compatibility. Gateway updates, runtime archives, enabled plugins, execution mode, profile names, lease durations, and reserve limits do not invalidate an otherwise compatible snapshot. Ready workers must match the current runtime, profile, repository identity, and setup recipe. A different commit alone does not invalidate a ready worker.
@@ -123,6 +127,15 @@ An already-admitted capture can finish after reserve-demand expiry within its se
 ### Inspect snapshots in the Control UI
 
 Open **Settings → Connections → Cloud environments**. Each repository has one row showing **Ready**, **Building**, **Cold only**, or **Needs attention**. Select it to inspect its snapshots, recorded setup source, step timings, and failures. **Cloud device → Change** sets the repository's default profile. Inventory refreshes while builds, captures, or ready workers are present, and after deferred plugin activation.
+
+Preparation timings include retained Git identity and manifest checks, inspection, seed path preparation, object import,
+seed verification and checkout, seed manifests, workspace copy or Git update, toolchain preparation,
+recipe commands, and prepared-manifest capture. Skipped steps are absent; repeated steps are summed.
+These timings measure work inside the preparation scripts, excluding provider boot and transport
+round trips. Completed worker-owned Git stores are not scanned again with `git fsck`; incoming
+packs still require size, SHA-256, object and connectivity verification. Reuse still verifies the
+completed workspace manifest and its Git identity. Lazy snapshot storage must still read directory
+and file metadata, changed content, newly transferred objects, and files used by setup or tools.
 
 **Rebuild** prepares the recorded local project's committed `HEAD` without a session. It requires admin access, a local project root, an eligible profile, and pool capacity. Repository-only sources cannot use this action. Rebuild follows normal refresh policy and may reuse a matching build or reserve; it does not force snapshot replacement. Active builds offer **Cancel**, which opens **Cancel this snapshot build?** and waits for provider work and cloud device cleanup. Failed builds offer **Dismiss**, which opens **Dismiss this failed build?** and hides the row until reload while the terminal record remains retained. Orphaned builds still awaiting cleanup cannot be dismissed.
 

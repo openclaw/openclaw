@@ -326,7 +326,8 @@ it.each([
       }
       // Startup must accept setup output even when GitHub normalization is unavailable.
       const initialCaptures = await capture();
-      expect(initialCaptures[0]!.metrics.contentHashCount).toBeGreaterThan(0);
+      // Preparation's persisted memo already covers the unchanged startup tree.
+      expect(initialCaptures[0]!.metrics.memoHitCount).toBeGreaterThan(0);
       expect(revision).toBe(1);
       expect(checkpoint).toBeDefined();
       await gitAt(first.remoteWorkspaceDir, "rm", "--cached", "retained-removal.ignored");
@@ -348,7 +349,8 @@ it.each([
       );
       await fs.writeFile(path.join(first.remoteWorkspaceDir, "first.txt"), "turn one\n");
       const changedCaptures = await capture();
-      expect(changedCaptures[0]!.metrics.contentHashCount).toBeGreaterThan(0);
+      // An edit must change the manifest; an earlier pass may already have hashed it.
+      expect(changedCaptures[0]!.manifestRef).not.toBe(initialCaptures[0]!.manifestRef);
       expect(changedCaptures[0]!.metrics.memoHitCount).toBeGreaterThan(0);
       await fs.writeFile(path.join(first.remoteWorkspaceDir, "second.txt"), "turn two\n");
       await fs.rm(path.join(first.remoteWorkspaceDir, "tracked.txt"));
