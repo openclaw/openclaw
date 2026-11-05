@@ -3,6 +3,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
+import { getMediaUnderstandingProvider } from "./provider-registry.js";
 import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
 
 export function resolveDefaultMediaModelFromRegistry(params: {
@@ -10,7 +11,7 @@ export function resolveDefaultMediaModelFromRegistry(params: {
   capability: MediaUnderstandingCapability;
   providerRegistry: Map<string, MediaUnderstandingProvider>;
 }): string | undefined {
-  const provider = params.providerRegistry.get(normalizeMediaProviderId(params.providerId));
+  const provider = getMediaUnderstandingProvider(params.providerId, params.providerRegistry);
   return normalizeOptionalString(provider?.defaultModels?.[params.capability]);
 }
 

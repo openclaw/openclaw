@@ -7,12 +7,18 @@ import {
 } from "./config-provider-models.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
+function exactMediaProviderKey(id: string): string {
+  return id.trim().toLowerCase();
+}
+
 function mergeProviderIntoRegistry(
   registry: Map<string, MediaUnderstandingProvider>,
   provider: MediaUnderstandingProvider,
   registryKey = provider.id,
 ) {
-  const normalizedKey = normalizeMediaProviderId(registryKey);
+  // Historical aliases (gemini -> google) must not fold a separately registered
+  // provider into the canonical one. That merge copies hooks across identities.
+  const normalizedKey = exactMediaProviderKey(registryKey);
   const existing = registry.get(normalizedKey);
   const merged = existing
     ? {
@@ -56,7 +62,7 @@ export function buildMediaUnderstandingRegistry(
   // Auto-register media-understanding for config providers with image-capable models (#51392)
   for (const providerId of listImageCapableConfiguredProviders(cfg)) {
     const normalizedKey = normalizeMediaProviderId(providerId);
-    if (!registry.has(normalizedKey)) {
+    if (!getMediaUnderstandingProvider(providerId, registry)) {
       mergeProviderIntoRegistry(registry, {
         id: normalizedKey,
         capabilities: ["image"],
@@ -71,10 +77,16 @@ export function buildMediaUnderstandingRegistry(
   return registry;
 }
 
-/** Looks up a media-understanding provider using the same id normalization as registry builds. */
+/** Looks up a media-understanding provider. An exact registration wins; the historical alias is only the fallback. */
 export function getMediaUnderstandingProvider(
   id: string,
   registry: Map<string, MediaUnderstandingProvider>,
 ): MediaUnderstandingProvider | undefined {
-  return registry.get(normalizeMediaProviderId(id));
+  const exact = exactMediaProviderKey(id);
+  const direct = registry.get(exact);
+  if (direct) {
+    return direct;
+  }
+  const aliased = normalizeMediaProviderId(exact);
+  return aliased === exact ? undefined : registry.get(aliased);
 }

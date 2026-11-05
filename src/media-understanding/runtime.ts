@@ -18,7 +18,6 @@ import { assertMediaExecutionCurrent, type MediaExecutionContext } from "./provi
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
-  normalizeMediaProviderId,
 } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMediaRuntimeTimeoutMs, resolveModelEntries } from "./resolve.js";
 import {
@@ -263,7 +262,7 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
 export async function describePreparedImageWithModel(params: DescribePreparedImageWithModelParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
-  const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
+  const provider = getMediaUnderstandingProvider(params.provider, providerRegistry);
   const describeImage = provider?.describeImage ?? describeImageWithModel;
   const agentDir =
     params.agentDir ??
