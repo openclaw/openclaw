@@ -196,33 +196,40 @@ export async function installLaunchAgent(
   const { plistPath, stdoutPath } =
     publication.kind === "transaction"
       ? await install()
-      : await withGatewayServiceInstallationRecovery(
-          install,
-          async () => {
-            const files = publication.files;
-            if (activationAttempted) {
-              await files.assertCurrent();
-              const current = await probeLaunchAgentState(serviceTarget);
-              if (current.state === "unknown") {
-                throw new Error(
-                  `launchctl print could not determine whether ${serviceTarget} is loaded during LaunchAgent rollback: ${current.detail ?? "unknown error"}`,
-                );
-              }
-              if (current.state !== "not-loaded") {
-                await files.assertCurrent();
-                await bootoutLaunchAgent(serviceTarget);
-              }
+      : await withGatewayServiceInstallationRecovery(install, async () => {
+          const files = publication.files;
+          if (activationAttempted) {
+            await files.assertCurrent();
+            const current = await probeLaunchAgentState(serviceTarget);
+            if (current.state === "unknown") {
+              throw new Error(
+                `launchctl print could not determine whether ${serviceTarget} is loaded during LaunchAgent rollback: ${current.detail ?? "unknown error"}`,
+              );
             }
-            const restored = await files.restore();
-            if (activationAttempted && restoreLoaded) {
+            if (current.state !== "not-loaded") {
               await files.assertCurrent();
-              await assertNoSystemLaunchDaemonOwnership(label);
-              await bootstrap(targetPlistPath, "openclaw gateway start");
+              await bootoutLaunchAgent(serviceTarget);
             }
-            return restored || activationAttempted;
-          },
-          { beforeRecovery: args.beforeRecovery },
-        );
+          }
+          // The hook runs only once the replacement is booted out, before the previous agent
+          // is restored and bootstrapped; a failing hook never skips that recovery.
+          const hook = activationAttempted
+            ? await args.beforeRecovery?.().then(
+                () => undefined,
+                (error: unknown) => ({ error }),
+              )
+            : undefined;
+          const restored = await files.restore();
+          if (activationAttempted && restoreLoaded) {
+            await files.assertCurrent();
+            await assertNoSystemLaunchDaemonOwnership(label);
+            await bootstrap(targetPlistPath, "openclaw gateway start");
+          }
+          if (hook) {
+            throw hook.error;
+          }
+          return restored || activationAttempted;
+        });
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
   // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the
   // real listener startup past setup's health deadline.

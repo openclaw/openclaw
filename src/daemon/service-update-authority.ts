@@ -277,22 +277,10 @@ function retainServiceAuthorityFailure(error: unknown): unknown {
   return error;
 }
 
-// Errors this module raised because native recovery could not restore the previous definition.
-const incompleteRecoveries = new WeakSet<object>();
-
-/**
- * Whether an install failed with native recovery incomplete: the previous definition was not
- * restored and the replacement may still be queued, running or registered.
- */
-export function isGatewayServiceRecoveryIncomplete(error: unknown): boolean {
-  return typeof error === "object" && error !== null && incompleteRecoveries.has(error);
-}
-
 /** Only captured publication receipts may use this while their original lock is live. */
 export async function withGatewayServiceInstallationRecovery<T>(
   install: () => Promise<T>,
   restore: () => Promise<boolean>,
-  options?: { beforeRecovery?: () => Promise<void> },
 ): Promise<T> {
   try {
     const result = await install();
@@ -306,34 +294,15 @@ export async function withGatewayServiceInstallationRecovery<T>(
     let restored: boolean;
     try {
       const owner = owners.getStore();
-      const beforeRecovery = options?.beforeRecovery;
-      // The caller's hook runs first. Hooks report their own failures; one that throws anyway
-      // is reported as a failed recovery, after native recovery has still run.
-      const recover = beforeRecovery
-        ? async () => {
-            const hook = await beforeRecovery().then(
-              () => undefined,
-              (hookError: unknown) => ({ hookError }),
-            );
-            const result = await restore();
-            if (hook) {
-              throw hook.hookError;
-            }
-            return result;
-          }
-        : restore;
-      restored = await (owner ? owner.compensate(recover) : recover());
+      restored = await (owner ? owner.compensate(restore) : restore());
     } catch (recoveryError) {
       const failure = new AggregateError(
         [error, recoveryError],
         `${error instanceof Error ? error.message : String(error)}\nThe previous service definition could not be restored.`,
       );
-      const raised =
-        error instanceof GatewayServiceAuthorityError
-          ? new GatewayServiceAuthorityError(failure, "recovery-pending")
-          : failure;
-      incompleteRecoveries.add(raised);
-      throw raised;
+      throw error instanceof GatewayServiceAuthorityError
+        ? new GatewayServiceAuthorityError(failure, "recovery-pending")
+        : failure;
     }
     throw error instanceof GatewayServiceAuthorityError
       ? new GatewayServiceAuthorityError(

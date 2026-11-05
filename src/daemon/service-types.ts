@@ -47,9 +47,10 @@ export type GatewayServiceInstallArgs = {
   preserveAutoStart?: boolean;
   beforeMutation?: () => Promise<void>;
   /**
-   * Runs when a failed install recovers, before native recovery restores and restarts the
-   * previous definition, so state that definition depends on is back in place first. It reports
-   * its own failures instead of throwing.
+   * Runs only when a failed install's native recovery has stopped the replacement and is about to
+   * restart the previous service, so state that service depends on is back in place first. Its
+   * running is the proof that recovery settled; it does not run when recovery refuses, fails or
+   * never starts. It reports its own failures instead of throwing.
    */
   beforeRecovery?: () => Promise<void>;
   /** Live caller authority, retained at every native write boundary. */

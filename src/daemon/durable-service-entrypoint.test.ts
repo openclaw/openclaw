@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FileLockOptions } from "../infra/file-lock.js";
 import type { PackageUpdateTransaction } from "../infra/package-update-swap-contract.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   installDurableServiceCli,
@@ -194,10 +195,12 @@ describe("resolveDurableServiceCli", () => {
     const gateway = installDurableServiceCli({
       env: stateEnv(),
       replacement: await plan("2.0.0", "gateway"),
-      install: async (beforeMutation) => {
+      // Native recovery settles: it stops the replacement and calls the hook before restarting.
+      install: async (beforeMutation, beforeRecovery) => {
         await beforeMutation?.();
         gatewaySwapped.resolve();
         await gatewayFails.promise;
+        await beforeRecovery?.();
         throw new Error("gateway install failed");
       },
       verify: async () => true,
@@ -239,32 +242,53 @@ describe("resolveDurableServiceCli", () => {
     },
   );
 
-  it("puts the previous copy back before native recovery restarts the old service", async () => {
+  it.each([
+    ["restores the previous copy when native recovery settles", "settled", "1.0.0"],
+    ["keeps the new copy when the restart's process cleanup is uncertain", "cleanup", "2.0.0"],
+    ["keeps the new copy when readback fails after a successful install", "readback", "2.0.0"],
+  ] as const)("%s", async (_name, failure, expected) => {
     const liveVersion = liveCopy();
     let restartedOn: string | undefined;
+    const warn = vi.fn();
 
     await expect(
       installDurableServiceCli({
         env: stateEnv(),
         replacement: await plan("2.0.0", "gateway"),
-        // Activating 2.0.0 fails; the installer's recovery restarts the previous definition.
-        install: (beforeMutation, beforeRecovery) =>
-          withGatewayServiceInstallationRecovery(
+        install: async (beforeMutation, beforeRecovery) => {
+          // The real recovery wrapper; its restore stands in for a platform recovery that stops
+          // the replacement, calls the hook, then restarts the previous service.
+          await withGatewayServiceInstallationRecovery(
             async () => {
               await beforeMutation?.();
-              throw new Error("activation failed");
+              if (failure === "settled") {
+                throw new Error("activation failed");
+              }
+              if (failure === "cleanup") {
+                throw new CommandProcessCleanupError();
+              }
             },
             async () => {
+              await beforeRecovery?.();
               restartedOn = liveVersion();
               return true;
             },
-            { beforeRecovery },
-          ),
+          );
+          // The service's definition readback or runtime-pin commit after a native install.
+          throw new Error("SQLITE_FULL: database or disk is full");
+        },
         verify: async () => true,
-        warn: vi.fn(),
+        warn,
       }),
-    ).rejects.toThrow("activation failed");
-    expect(restartedOn).toBe("1.0.0");
-    expect(liveVersion()).toBe("1.0.0");
+    ).rejects.toThrow();
+    expect(liveVersion()).toBe(expected);
+    if (failure === "settled") {
+      expect(restartedOn).toBe("1.0.0");
+    } else {
+      expect(restartedOn).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("without a settled service recovery"),
+      );
+    }
   });
 });

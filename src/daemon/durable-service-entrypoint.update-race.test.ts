@@ -132,7 +132,7 @@ it.each([
     "after-publication",
     "3.0.0",
   ],
-  ["restores the previous copy after its launcher copy fails", "launcher-copy-fails", "1.0.0"],
+  ["keeps its partly published copy after its launcher copy fails", "launcher-copy-fails", "2.0.0"],
   [
     "keeps an update published before its failed launcher copy",
     "update-then-launcher-copy-fails",
@@ -174,7 +174,9 @@ it.each([
         packageRoot: packageRoot(),
         entrypoint: path.join(packageRoot(), "dist", "index.js"),
       },
-      install: async (beforeMutation) => {
+      // A launcher-copy failure stops in beforeMutation; otherwise native activation fails and
+      // native recovery settles, calling the hook before it restarts the previous service.
+      install: async (beforeMutation, beforeRecovery) => {
         await beforeMutation?.();
         expect(liveVersion()).toBe(when === "after-publication" ? "3.0.0" : "2.0.0");
         const update = async () => {
@@ -185,6 +187,7 @@ it.each([
         } else if (when === "during-backup-verification") {
           duringBackupVerification.run = update;
         }
+        await beforeRecovery?.();
         throw new Error("node activation failed");
       },
       verify: async () => true,
@@ -201,8 +204,10 @@ it.each([
   expect(liveVersion()).toBe(expected);
   if (when === "none") {
     expect(warn).not.toHaveBeenCalled();
-  } else if (expected === "1.0.0") {
-    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("replaced by another install"));
+  } else if (when.includes("launcher-copy-fails")) {
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("without a settled service recovery"),
+    );
   } else {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("replaced by another install"));
   }

@@ -143,7 +143,7 @@ describe("Gateway service planned from a disposable npx CLI", () => {
     );
     fs.writeFileSync(durableEntrypoint(), "");
   };
-  const service = (failure?: "refused" | "write-failed" | "not-loaded") =>
+  const service = (failure?: "refused" | "recovered" | "write-failed" | "not-loaded") =>
     ({
       install: vi.fn(async (args: GatewayServiceInstallArgs) => {
         events.push("service-admitted");
@@ -152,6 +152,11 @@ describe("Gateway service planned from a disposable npx CLI", () => {
         }
         await args.beforeMutation?.();
         events.push("definition-written");
+        if (failure === "recovered") {
+          // Native recovery stopped the replacement and is about to restart the previous one.
+          await args.beforeRecovery?.();
+          throw new Error("service write failed");
+        }
         if (failure === "write-failed") {
           throw new Error("service write failed");
         }
@@ -254,14 +259,20 @@ describe("Gateway service planned from a disposable npx CLI", () => {
   it.each([
     ["refuses before its mutation hook", "refused", true, ["staged", "service-admitted"]],
     [
-      "fails after replacing an older copy",
-      "write-failed",
+      "fails and its recovery settles after replacing an older copy",
+      "recovered",
       true,
       ["staged", "service-admitted", "swapped", "definition-written", "restored", "backup-retired"],
     ],
     [
-      "fails after a first install, which keeps its new copy",
+      "fails without a settled recovery, which keeps the new copy and backup",
       "write-failed",
+      true,
+      ["staged", "service-admitted", "swapped", "definition-written", "backup-settled-unverified"],
+    ],
+    [
+      "fails after a first install, which keeps its new copy",
+      "recovered",
       false,
       ["staged", "service-admitted", "swapped", "definition-written", "backup-retired"],
     ],

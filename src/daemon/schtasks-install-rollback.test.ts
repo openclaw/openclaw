@@ -928,7 +928,7 @@ it("keeps the durable copy and its backup when task recovery cannot settle the r
     }),
   ).rejects.toThrow("previous service definition could not be restored");
   expect(await liveVersion()).toBe("2.0.0");
-  expect(warn).toHaveBeenCalledWith(expect.stringContaining("Service recovery did not finish"));
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining("without a settled service recovery"));
   // The package transaction keeps the previous copy's backup rather than retiring it.
   expect(warn).toHaveBeenCalledWith(
     expect.stringContaining("inspect the installation and backups"),

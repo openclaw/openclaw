@@ -124,8 +124,8 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
       unsettled = false;
     },
     /**
-     * `beforeRestart` runs once registration ownership is verified and the replacement task is
-     * stopped and its processes settled, before any file, definition or launch is restored.
+     * `beforeRestart` runs only once registration ownership is verified and the replacement task
+     * is stopped and its processes settled, before any file, definition or launch is restored.
      */
     restore: async (
       files: ScheduledTaskFileRecovery,
@@ -165,8 +165,8 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
           }
         }
         await assertReceipt(true);
+        await beforeRestart?.();
       }
-      await beforeRestart?.();
       const restoredFiles = await files.restore();
       if (!changed && !activated) {
         return restoredFiles;

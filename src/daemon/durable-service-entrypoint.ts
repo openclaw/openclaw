@@ -183,13 +183,14 @@ export async function resolveDurableServiceCli(
  * Runs a service install whose plan carries a durable-copy replacement.
  *
  * Under the package lock the copy is checked again: a copy that still serves this version is
- * reused as is. Otherwise npm stages and verifies the new copy first while an existing service keeps serving the old
- * one. The swap waits at the package updater's activation gate until the service install's
+ * reused as is. Otherwise npm stages and verifies the new copy first while an existing service
+ * keeps serving the old one. The swap waits at the package updater's activation gate until the service install's
  * mutation hook, which runs under the service operation lock just before the service's own
  * runtime-pin checks and definition write. The previous copy stays backed up until the
- * install settles: if the install fails, the previous copy is restored (a first install keeps
- * its new copy, which nothing else uses); if it succeeds, the backup retires only once the
- * service is verified loaded.
+ * install settles. It is restored only when native recovery calls `beforeRecovery`, which it
+ * does after stopping the replacement and before restarting the previous service. Any other
+ * failure keeps the new copy and the backup and warns (a first install has no backup); a
+ * successful install retires the backup once the service is verified loaded.
  *
  * Gateway and node services share the copy but not a service lock, so one package lock covers
  * the check, staging and settlement, including a reuse: a failed install's restore cannot undo
@@ -247,8 +248,6 @@ async function installUnderPackageLock(
   let activation: Promise<void> | undefined;
   let swapped = false;
   let settled = false;
-  let recoveryStarted = false;
-  let installError: unknown;
   let outcome: "installed" | "verified" | "failed" = "failed";
   // Cleanup reports through warn so it never replaces the install's own error.
   const settle = async (decision: "restore" | "retain" | "retire") => {
@@ -261,17 +260,17 @@ async function installUnderPackageLock(
       params.warn(`Durable OpenClaw copy cleanup failed: ${String(error)}`);
     }
   };
-  // A failed first install keeps its swapped-in copy: nothing to restore.
-  const failedInstallDecision = () => (swapped && !replacesExisting ? "retire" : "restore");
-  // Native recovery restarts the previous definition, so its copy must be back first.
+  // The previous copy comes back only on proof that native recovery settled: it calls this
+  // hook after stopping the replacement and before restarting the previous service. Every
+  // other failure after publication keeps the new copy and its backup (see finally).
   const beforeRecovery = async () => {
-    recoveryStarted = true;
     if (!activation || settled) {
       return;
     }
     await activation.catch(() => undefined);
-    if (failedInstallDecision() === "restore") {
-      await settle("restore");
+    if (swapped) {
+      // A first install has no previous copy to restore and keeps its new one.
+      await settle(replacesExisting ? "restore" : "retire");
     }
   };
   try {
@@ -290,9 +289,6 @@ async function installUnderPackageLock(
     // A throwing verify still leaves an installed service.
     outcome = "installed";
     outcome = (await params.verify()) ? "verified" : "installed";
-  } catch (error) {
-    installError = error;
-    throw error;
   } finally {
     if (!activation) {
       try {
@@ -302,29 +298,16 @@ async function installUnderPackageLock(
       } catch (error) {
         params.warn(`Durable OpenClaw copy cleanup failed: ${String(error)}`);
       }
-    } else if (
-      !settled &&
-      !recoveryStarted &&
-      outcome === "failed" &&
-      (await import("./service-update-authority.js")).isGatewayServiceRecoveryIncomplete(
-        installError,
-      )
-    ) {
-      // Native recovery stopped before its hook: the replacement may still be queued or running
-      // on this copy and its definition is still installed, so restoring would change files
-      // under it. Keep the copy and its backup for the operator.
+    } else if (!settled && outcome === "failed" && replacesExisting) {
+      // No proof that native recovery settled: the replacement may still run on this copy, or
+      // the service may run it successfully. Keep the copy and its backup for the operator.
       params.warn(
-        `Service recovery did not finish, so the durable OpenClaw copy at ${replacement.packageRoot} was left as installed and the previous copy's backup was kept. Check the service, then rerun the install.`,
+        `The service install failed without a settled service recovery, so the durable OpenClaw copy at ${replacement.packageRoot} was left as installed and the previous copy's backup was kept. Check the service, then rerun the install.`,
       );
       await settle("retain");
     } else if (!settled) {
-      await settle(
-        outcome === "verified"
-          ? "retire"
-          : outcome === "installed"
-            ? "retain"
-            : failedInstallDecision(),
-      );
+      // A failed first install has nothing to restore and keeps its new copy.
+      await settle(outcome === "installed" ? "retain" : "retire");
     }
   }
 }
