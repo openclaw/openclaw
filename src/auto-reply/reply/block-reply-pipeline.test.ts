@@ -181,6 +181,108 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     },
   );
 
+  it.each([
+    { name: "an oversized caption", maxChars: 16, joiner: " ", caption: "caption", split: true },
+    {
+      name: "a joiner crossing the limit",
+      maxChars: 20,
+      joiner: " ",
+      caption: "caption",
+      split: true,
+    },
+    { name: "an exact-limit caption", maxChars: 21, joiner: " ", caption: "caption", split: false },
+    {
+      name: "captionless media without another joiner",
+      maxChars: 15,
+      joiner: "\n\n",
+      caption: undefined,
+      split: false,
+    },
+  ])("preserves delivery and metadata for $name", async ({ maxChars, joiner, caption, split }) => {
+    const sent: ReplyPayload[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: (payload) => {
+        sent.push(payload);
+      },
+      timeoutMs: 5000,
+      coalescing: { minChars: 1, maxChars, idleMs: 0, joiner },
+    });
+    const routing = { replyToId: "100", replyToCurrent: true };
+    pipeline.enqueue(
+      setReplyPayloadMetadata(
+        { text: "Preview", ...routing },
+        {
+          assistantMessageIndex: 7,
+          replyToIdExplicit: true,
+          blockSourceText: "Preview",
+          blockSourceRange: [0, 7],
+        },
+      ),
+    );
+    pipeline.enqueue(
+      setReplyPayloadMetadata(
+        { text: "below", ...routing },
+        {
+          assistantMessageIndex: 7,
+          blockSourceText: "below",
+          blockSourceRange: [7, 12],
+        },
+      ),
+    );
+    const media = setReplyPayloadMetadata(
+      { text: caption, mediaUrls: ["file:///photo.png"], ...routing },
+      {
+        assistantMessageIndex: 7,
+        assistantTranscriptMediaUrls: ["file:///photo.png"],
+        ...(caption ? { blockSourceText: "caption", blockSourceRange: [12, 19] as const } : {}),
+      },
+    );
+    pipeline.enqueue(media);
+    await pipeline.flush({ force: true });
+
+    const buffered = "Preview" + joiner + "below";
+    expect(sent.map((payload) => ({ text: payload.text, mediaUrls: payload.mediaUrls }))).toEqual(
+      split
+        ? [
+            { text: buffered, mediaUrls: undefined },
+            { text: caption, mediaUrls: ["file:///photo.png"] },
+          ]
+        : [
+            {
+              text: caption ? buffered + joiner + "caption" : buffered,
+              mediaUrls: ["file:///photo.png"],
+            },
+          ],
+    );
+    expect(sent.every((payload) => (payload.text?.length ?? 0) <= maxChars)).toBe(true);
+    for (const payload of sent) {
+      expect(payload).toMatchObject(routing);
+    }
+    expect(sent.map(getReplyPayloadMetadata)).toEqual(
+      split
+        ? [
+            expect.objectContaining({
+              assistantMessageIndex: 7,
+              replyToIdExplicit: true,
+              blockSourceText: "Previewbelow",
+              blockSourceRange: [0, 12],
+            }),
+            getReplyPayloadMetadata(media),
+          ]
+        : [
+            expect.objectContaining({
+              assistantMessageIndex: 7,
+              replyToIdExplicit: true,
+              assistantTranscriptMediaUrls: ["file:///photo.png"],
+              blockSourceText: caption ? "Previewbelowcaption" : "Previewbelow",
+              blockSourceRange: caption ? [0, 19] : [0, 12],
+            }),
+          ],
+    );
+    expect(pipeline.getSentMediaUrls()).toEqual(["file:///photo.png"]);
+    expect(pipeline.hasSentPayload({ text: "Previewbelow" + (caption ?? "") })).toBe(true);
+  });
+
   it("keeps media separate across assistant message boundaries", async () => {
     const sent: Array<{ text?: string; mediaUrls?: string[] }> = [];
     const pipeline = createBlockReplyPipeline({
