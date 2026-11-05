@@ -1,2 +1,2 @@
-107
-# Doctor empty-allow notes across tool, agent, and channel policies.
+131
+# Doctor empty-allow notes across tool, agent, channel, and sandbox inheritance.
