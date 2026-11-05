@@ -87,9 +87,9 @@ it("remember replays an accepted request once and rejects changed payloads", asy
   expect(before.state).toBe("accepted");
   const changed = () => f.remember([{ text: "Changed.", kind: "fact" }], { requestId });
   await expect(changed()).rejects.toThrow();
-  expect((await f.service.mutation({ requestId, includeFiles: false }, f.owner)).receipt).toStrictEqual(
-    before,
-  );
+  expect(
+    (await f.service.mutation({ requestId, includeFiles: false }, f.owner)).receipt,
+  ).toStrictEqual(before);
   const replay = await createKnowledgeService(f.api).remember(input, f.owner);
   expect(replay.receipt!.state).toBe("published");
   expect(replay.receipt!.requestId).toBe(requestId);
