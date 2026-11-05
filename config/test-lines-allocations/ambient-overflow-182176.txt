@@ -1,3 +1,3 @@
-# Issue #182176: overflow priority, terminal receipts, bounded ambient bursts,
-# and deferred steering/active-work protection regressions.
-74
+# Issue #182176: overflow priority, receipts, bursts, steering, and bounded
+# context preservation across routing, redaction, retries, and cancellation.
+191

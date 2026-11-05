@@ -17,6 +17,7 @@ import {
 } from "../../../sessions/session-controller.mailbox.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { applyQueueDropPolicy, countPendingQueueItems } from "../../../utils/queue-helpers.js";
+import { preserveAmbientOverflowContext } from "./ambient-context.js";
 import {
   createOverflowSummaryRetrySource,
   resolveFollowupAuthorizationKey,
@@ -144,7 +145,7 @@ export function enqueueFollowupRun(
         !queue.items.some((item) => !queue.inFlight.has(item) && isDiscardableRoomEvent(item)))
     ) {
       if (isDiscardableRoomEvent(run)) {
-        discardOverflowRoomEvent(run, "queue-cap-new");
+        discardOverflowRoomEvent(run, "queue-cap-new", queue);
       } else {
         run.onQueueDisposition?.("queue-cap-new");
         completeFollowupRunLifecycle(run);
@@ -264,7 +265,11 @@ function isDiscardableRoomEvent(run: FollowupRun): boolean {
 function discardOverflowRoomEvent(
   run: FollowupRun,
   disposition: "queue-cap-old" | "queue-cap-new",
+  queue: ReturnType<typeof getFollowupQueue>,
+  candidates: FollowupRun[] = [],
 ): void {
+  const contextPreserved =
+    queue.dropPolicy === "summarize" && preserveAmbientOverflowContext(run, candidates, queue.cap);
   if (run.controllerInput) {
     run.controllerInput.payload = "unbound";
   }
@@ -272,6 +277,7 @@ function discardOverflowRoomEvent(
   diagnosticLogger.info("followup queue discarded ambient room event at capacity", {
     sessionId: run.run.sessionId,
     disposition,
+    contextPreserved,
   });
   // This is a terminal policy decision, not abandonment: reopening durable ingress
   // would replay the chatter we just shed. Adoption only settles source custody;
@@ -300,11 +306,19 @@ function applyFollowupQueueOverflow(
     // Ambient input must never displace requests or protected work. Same-class
     // drop:new keeps its existing meaning; otherwise retain the newest context.
     if (isDiscardableRoomEvent(run) && (queue.dropPolicy === "new" || ambient.length < needed)) {
-      discardOverflowRoomEvent(run, "queue-cap-new");
+      discardOverflowRoomEvent(
+        run,
+        "queue-cap-new",
+        queue,
+        queue.items.filter((item) => !queue.inFlight.has(item)),
+      );
       return false;
     }
+    const survivors = queue.items.filter(
+      (item) => !queue.inFlight.has(item) && !ambient.includes(item),
+    );
     for (const item of ambient) {
-      discardOverflowRoomEvent(item, "queue-cap-old");
+      discardOverflowRoomEvent(item, "queue-cap-old", queue, [...survivors, run]);
     }
   }
   const elidedSummaryLines: string[] = [];
