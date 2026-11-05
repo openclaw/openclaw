@@ -1,5 +1,4 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   DEVICE_AUTH_STORAGE_KEY_PREFIX,
   LEGACY_DEVICE_AUTH_STORAGE_KEY,
@@ -251,35 +250,24 @@ async function generateIdentity(): Promise<DeviceIdentity> {
 }
 
 /**
- * Synchronous identity probe for render gating: reads the stored device id
- * without creating, repairing, or fingerprint-verifying an identity, so a
- * "do we hold credentials?" check stays side-effect free before connect().
- * Without a usable stored one (missing, unparsable or malformed) it reports the
- * page-lifetime identity, as loadOrCreateDeviceIdentity does, so a credential
- * kept in memory on a storage-blocked page can still be found and forgotten.
+ * Synchronous identity probe for render gating: reports the device id this page's
+ * credentials belong to without creating, repairing, or fingerprint-verifying an
+ * identity, so a "do we hold credentials?" check stays side-effect free before
+ * connect(). Once loadOrCreateDeviceIdentity has run it reports exactly that
+ * identity, including a page-lifetime one minted because the stored identity was
+ * unusable and storage rejects writes; before that, the stored identity it would use.
  */
 export function peekStoredDeviceIdentityId(): string | null {
-  try {
-    const raw = getSafeLocalStorage()?.getItem(DEVICE_IDENTITY_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : null;
-    if (
-      isRecord(parsed) &&
-      parsed.version === 1 &&
-      typeof parsed.deviceId === "string" &&
-      parsed.deviceId
-    ) {
-      return parsed.deviceId;
-    }
-  } catch {
-    // An unreadable stored identity is replaced, like a missing one.
-  }
-  return sessionDeviceIdentity?.deviceId ?? null;
+  return (
+    activeDeviceIdentityId ?? readStoredDeviceIdentity(getSafeLocalStorage())?.deviceId ?? null
+  );
 }
 
 // Storage-blocked pages (for example private browsing) must still present one
 // stable device per page lifetime; minting a fresh key on every reconnect
 // would raise a new unpaired request each time and never retain approval.
 let sessionDeviceIdentity: DeviceIdentity | null = null;
+let activeDeviceIdentityId: string | null = null;
 
 function readStoredDeviceIdentity(storage: Storage | null): StoredIdentity | null {
   try {
@@ -302,6 +290,12 @@ function readStoredDeviceIdentity(storage: Storage | null): StoredIdentity | nul
 }
 
 export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
+  const identity = await resolveDeviceIdentity();
+  activeDeviceIdentityId = identity.deviceId;
+  return identity;
+}
+
+async function resolveDeviceIdentity(): Promise<DeviceIdentity> {
   const storage = getSafeLocalStorage();
   const parsed = readStoredDeviceIdentity(storage);
   try {

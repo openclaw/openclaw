@@ -117,6 +117,7 @@ describe("createApplicationGateway stored device credential", () => {
     ["no stored identity", null],
     ["unparsable", "{not json"],
     ["malformed", JSON.stringify({ version: 1 })],
+    ["incomplete, with an id", JSON.stringify({ version: 1, deviceId: "stale-device" })],
   ])(
     "finds and forgets a credential kept only for this page when storage rejects writes (%s)",
     async (_, storedIdentity) => {
