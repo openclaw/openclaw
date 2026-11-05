@@ -1,4 +1,4 @@
-/** Visible sidebar presentation, excluding transient action hover and reconnect status. */
+/** Sidebar row presentation and saved scroll across cached/live adoption. */
 export function sidebarPresentationProbe() {
   type Row = {
     key: string;
@@ -10,35 +10,12 @@ export function sidebarPresentationProbe() {
     unread: number;
     badges: string[];
   };
-  type Box = { x: number; y: number; width: number; height: number };
-  const box = (element: Element): Box => {
-    const { x, y, width, height } = element.getBoundingClientRect();
-    return { x, y, width, height };
-  };
   type Frame = {
     at: number;
     cached: boolean;
     scrollTop: number;
-    sidebar: Box;
-    rowLabel: { key: string; box: Box } | null;
-    reconnectMasks: Array<Box & { name: string; reason: string }>;
-    chrome: Array<{
-      name: string;
-      opacity: string;
-      disabled: boolean;
-      animations: Array<{ name: string; startTime: number | null }>;
-      images: Array<{
-        src: string;
-        currentSrc: string;
-        complete: boolean;
-        width: number;
-        height: number;
-      }>;
-    }>;
     rows: Row[];
     mountedRows: Array<Pick<Row, "key" | "avatars" | "images">>;
-    links: { href: string | null; class: string }[];
-    mountedKeys: (string | null)[];
     issues: { present: boolean; count: string | null };
   };
   const artwork = (icon: Element) => {
@@ -69,13 +46,12 @@ export function sidebarPresentationProbe() {
       }
     }
   });
-  const imageChanged = (event: Event) => {
-    if (event.target instanceof HTMLImageElement && event.target.closest("aside.sidebar")) {
+  const scrolled = (event: Event) => {
+    if (event.target instanceof Element && event.target.closest("aside.sidebar")) {
       dirty = true;
     }
   };
-  document.addEventListener("load", imageChanged, true);
-  document.addEventListener("error", imageChanged, true);
+  document.addEventListener("scroll", scrolled, true);
   observer.observe(document, {
     subtree: true,
     childList: true,
@@ -100,114 +76,8 @@ export function sidebarPresentationProbe() {
           (!viewport || (rect.bottom > viewport.top && rect.top < viewport.bottom))
         );
       });
-      const sidebarBox = box(sidebar);
-      const rowLabel = (() => {
-        for (const row of rows) {
-          const clip = row.querySelector(".sidebar-recent-session__name");
-          const text = clip?.querySelector(".hover-marquee__text");
-          const node = [...(text?.childNodes ?? [])].find(
-            (child) => child.nodeType === Node.TEXT_NODE && child.textContent?.trim(),
-          );
-          if (!clip || !node) {
-            continue;
-          }
-          const range = document.createRange();
-          range.selectNodeContents(node);
-          const rect = range.getBoundingClientRect();
-          const limit = clip.getBoundingClientRect();
-          const x = Math.max(rect.left, limit.left, viewport?.left ?? 0, sidebarBox.x);
-          const right = Math.min(
-            rect.right,
-            limit.right,
-            viewport?.right ?? Infinity,
-            sidebarBox.x + sidebarBox.width,
-          );
-          const top = Math.max(rect.top, limit.top, viewport?.top ?? 0, sidebarBox.y);
-          const bottom = Math.min(
-            rect.bottom,
-            limit.bottom,
-            viewport?.bottom ?? Infinity,
-            sidebarBox.y + sidebarBox.height,
-          );
-          if (
-            right > x &&
-            bottom > top &&
-            rect.top >= (viewport?.top ?? sidebarBox.y) &&
-            rect.bottom <= (viewport?.bottom ?? sidebarBox.y + sidebarBox.height)
-          ) {
-            return {
-              key: row.getAttribute("data-session-key") ?? "",
-              box: { x, y: top, width: right - x, height: bottom - top },
-            };
-          }
-        }
-        return null;
-      })();
       const presentation = {
-        sidebar: sidebarBox,
-        rowLabel,
-        reconnectMasks: [
-          ...sidebar.querySelectorAll(".sidebar-identity-card__status, .sidebar-connection-flag"),
-        ]
-          .filter(
-            (element) =>
-              element.checkVisibility({ checkOpacity: true }) &&
-              element.getBoundingClientRect().width > 0 &&
-              element.getBoundingClientRect().height > 0,
-          )
-          .map((element, index) =>
-            Object.assign(box(element), {
-              name: `reconnect-${index}`,
-              reason: "Permitted reconnect indicator",
-            }),
-          ),
-        chrome: [
-          ["brand", ".sidebar-agent-card__avatar"],
-          ["ownerPicker", ".sidebar-session-owner-filter .picker-select__trigger"],
-          ["home", ".sidebar-footer-bar__home"],
-          ["inbox", ".sidebar-issues-button"],
-          ["footer", ".sidebar-identity-card__avatar"],
-        ].flatMap(([name, selector]) => {
-          const element = sidebar.querySelector(selector!);
-          return element
-            ? [
-                {
-                  name: name!,
-                  opacity: getComputedStyle(element).opacity,
-                  disabled: element.matches(":disabled"),
-                  animations:
-                    name === "home"
-                      ? element
-                          .getAnimations({ subtree: true })
-                          .filter(
-                            (animation): animation is CSSAnimation =>
-                              animation instanceof CSSAnimation,
-                          )
-                          .map((animation) => ({
-                            name: animation.animationName,
-                            startTime:
-                              typeof animation.startTime === "number" ? animation.startTime : null,
-                          }))
-                      : [],
-                  images: [...element.querySelectorAll("img")].map((image) => ({
-                    src: image.src,
-                    currentSrc: image.currentSrc,
-                    complete: image.complete,
-                    width: image.naturalWidth,
-                    height: image.naturalHeight,
-                  })),
-                },
-              ]
-            : [];
-        }),
         scrollTop: sidebar.querySelector(".sidebar-shell__body")?.scrollTop ?? 0,
-        links: [...sidebar.querySelectorAll("a[href]")].map((link) => ({
-          href: link.getAttribute("href"),
-          class: link.className,
-        })),
-        mountedKeys: [...sidebar.querySelectorAll("[data-session-key]")].map((row) =>
-          row.getAttribute("data-session-key"),
-        ),
         mountedRows: [...sidebar.querySelectorAll(".sidebar-recent-session")].map((row) => ({
           key: row.getAttribute("data-session-key") ?? "",
           avatars: [...row.querySelectorAll('[class*="avatar"]')].map((avatar) => avatar.className),
@@ -283,12 +153,11 @@ export function sidebarPresentationProbe() {
     requestAnimationFrame(sample);
   };
   requestAnimationFrame(sample);
-  Reflect.set(window, "__sidebarPresentation", {
+  const probe = {
     read() {
       stopped = true;
       observer.disconnect();
-      document.removeEventListener("load", imageChanged, true);
-      document.removeEventListener("error", imageChanged, true);
+      document.removeEventListener("scroll", scrolled, true);
       const first = frames.findIndex((frame) => frame.cached && frame.rows.length > 0);
       const visible = first < 0 ? [] : frames.slice(first);
       const handoff = visible.findIndex((frame) => !frame.cached);
@@ -313,46 +182,14 @@ export function sidebarPresentationProbe() {
           }
         }
       }
-      const initial = frames.find((frame) => frame.cached);
-      const final = frames.at(-1);
-      const initialKeys = new Set(initial?.mountedKeys);
-      const finalKeys = new Set(final?.mountedKeys);
-      const parity =
-        initial && final && !final.cached
-          ? {
-              initialRows: initial.mountedKeys.length,
-              finalRows: final.mountedKeys.length,
-              added: [...finalKeys].filter((key) => !initialKeys.has(key)).length,
-              removed: [...initialKeys].filter((key) => !finalKeys.has(key)).length,
-              avatars: initial.mountedRows.filter((row) => {
-                const live = final.mountedRows.find((value) => value.key === row.key);
-                return (
-                  !live ||
-                  JSON.stringify([row.avatars, row.images]) !==
-                    JSON.stringify([live.avatars, live.images])
-                );
-              }).length,
-            }
-          : null;
-      const sidebar = (
-        frames.find((frame) => frame.cached && frame.rows.length > 0) ?? frames.at(-1)
-      )?.sidebar;
-      const reconnectMasks = [
-        ...new Map(
-          frames
-            .flatMap((frame) => frame.reconnectMasks)
-            .map((mask) => [JSON.stringify(mask), mask]),
-        ).values(),
-      ];
       return {
         timeOrigin: performance.timeOrigin,
-        sidebar,
-        reconnectMasks,
         frames,
         waves: Math.max(0, visible.length - 2),
         handoffChanges,
-        parity,
       };
     },
-  });
+  };
+  Reflect.set(window, "__sidebarPresentation", probe);
+  return probe;
 }
