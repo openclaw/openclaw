@@ -1,2 +1,2 @@
-11
+10
 # Full historical upgrade/rollback includes question storage; released integrity scopes exclude future question tables.

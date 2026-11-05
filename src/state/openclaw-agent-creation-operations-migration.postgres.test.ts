@@ -10,7 +10,7 @@ const connection = typeof configured === "string" ? configured : undefined;
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe.skipIf(!connection)("PostgreSQL creation receipt migration", () => {
-  it("upgrades populated agent39 without rewriting sessions and admits agent40 on reopen", () => {
+  it("upgrades populated agent39 without rewriting sessions and admits the current schema on reopen", () => {
     withEngineStoreAdmission(() => {
       const migration = agentEngineSchema.postgresMigrations?.find((step) => step.version === 40);
       if (!migration) {
@@ -59,9 +59,9 @@ describe.skipIf(!connection)("PostgreSQL creation receipt migration", () => {
       const upgraded = fixture.open(agentEngineSchema);
       expect(
         upgraded.prepare("SELECT version FROM openclaw_schema_meta WHERE store='agent'").get(),
-      ).toEqual({ version: 40 });
+      ).toEqual({ version: agentEngineSchema.version });
       expect(upgraded.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-        schema_version: 40,
+        schema_version: agentEngineSchema.version,
       });
       expect(upgraded.prepare("SELECT entry_json FROM session_nodes").all()).toEqual(before);
       expect(upgraded.prepare("SELECT * FROM session_creation_operations").all()).toEqual([]);

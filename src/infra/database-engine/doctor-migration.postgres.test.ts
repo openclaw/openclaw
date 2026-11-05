@@ -807,8 +807,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           : [
               {
                 indexname: "idx_agent_session_windows_conversation",
-                indexdef:
-                  "CREATE INDEX idx_agent_session_windows_conversation ON fixture_namespace.session_windows USING btree (primary_conversation_id NULLS FIRST) WHERE (primary_conversation_id IS NOT NULL)",
+                indexdef: `CREATE INDEX idx_agent_session_windows_conversation ON fixture_namespace.session_windows USING btree (primary_conversation_id${sourceVersion >= 35 ? "" : " NULLS FIRST"}) WHERE (primary_conversation_id IS NOT NULL)`,
               },
             ],
       );
