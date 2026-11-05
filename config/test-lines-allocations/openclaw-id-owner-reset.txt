@@ -1,2 +1,2 @@
-153
-# OpenClaw ID owner reset (OCF-319): a K_gw-vouched RootReset is accepted by the Discovery check and gives old pins owner_reset; each forgery (wrong signer, other claw, non-increasing binding_seq, other root, binding not signed by the new root, changed K_srv or K_gw, mismatched binding) parses and fails on its signature or consistency check; plus the reset statement vectors verifier.
+199
+# OpenClaw ID owner reset (OCF-319): a K_gw-vouched RootReset is accepted by the Discovery check and gives old pins owner_reset; each forgery (wrong signer, tampered signature, other claw, non-increasing binding_seq, other root, binding not signed by the new root, changed K_srv or K_gw, mismatched binding) parses and fails on its signature or consistency check; a leaked old kit cannot fake the reset against a pin that stored K_gw; plus the reset statement vectors verifier.

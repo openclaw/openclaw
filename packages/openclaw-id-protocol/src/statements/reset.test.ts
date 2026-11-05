@@ -46,6 +46,9 @@ async function setup() {
       },
       change.resetSigner ?? world.gateway.signer,
     );
+    if (change.tamperReset) {
+      statement.body = { ...statement.body, issued_at: statement.body.issued_at + 1 };
+    }
     const binding = await signStatement(
       "ServerBinding",
       { ...world.binding.body, binding_seq: 2, issued_at: WORLD_NOW, ...change.binding },
@@ -57,10 +60,12 @@ async function setup() {
       statement,
     });
   };
+  // What the browser stored after verifying binding 1: the pinned root and that binding's K_gw.
   const pin = {
     claw_id: world.state.claw_id,
     root_fp: await fingerprint(world.rootPub),
     binding_seq: 1,
+    k_gw: world.gateway.pub,
   };
   return { world, newRoot, stored, resetDescriptor, pin };
 }
@@ -68,6 +73,8 @@ async function setup() {
 type Forgery = {
   reset?: Partial<RootResetBody>;
   resetSigner?: StatementSigner;
+  /** Changes the reset body after signing. */
+  tamperReset?: boolean;
   binding?: Partial<ServerBindingBody>;
   bindingSigner?: StatementSigner;
 };
@@ -75,6 +82,7 @@ type Forgery = {
 // Each forgery parses; it must fail on a signature or consistency check (code), not at parsing.
 const FORGERIES: [string, string, (mallory: WorldKey) => Forgery][] = [
   ["reset signed by another key", "wrong_signer", (m) => ({ resetSigner: m.signer })],
+  ["reset body changed after K_gw signed it", "bad_signature", () => ({ tamperReset: true })],
   ["reset for another claw", "wrong_claw", () => ({ reset: { claw_id: "e".repeat(32) } })],
   [
     "binding_seq does not increase",
@@ -129,6 +137,44 @@ describe("owner reset", () => {
       ).resolves.toMatchObject({ ok: false, code: "root_mismatch" });
     },
   );
+
+  it("a leaked old kit cannot fake a reset: its predecessor binding must name the pinned K_gw", async () => {
+    const { world, newRoot, stored, pin } = await setup();
+    // R (the leaked kit) signs a predecessor naming Mallory's K_gw; Mallory signs the reset.
+    const previous = await signStatement(
+      "ServerBinding",
+      { ...world.binding.body, k_gw: world.mallory.pub },
+      world.root,
+    );
+    const statement = await signStatement(
+      "RootReset",
+      {
+        claw_id: world.state.claw_id,
+        new_root_pub: newRoot.pub,
+        binding_seq: 2,
+        issued_at: WORLD_NOW,
+      },
+      world.mallory.signer,
+    );
+    const binding = await signStatement(
+      "ServerBinding",
+      { ...previous.body, binding_seq: 2 },
+      newRoot.signer,
+    );
+    const forged: ClawDescriptor = {
+      ...stored,
+      root_pub: newRoot.pub,
+      binding,
+      reset: { previous_root_pub: world.rootPub, previous_binding: previous, statement },
+    };
+    await expect(checkDescriptorConsistency(forged, context)).resolves.toMatchObject({ ok: true });
+    await expect(checkDescriptorRootReset(stored, forged, context)).resolves.toMatchObject({
+      code: "reset_mismatch",
+    });
+    await expect(
+      verifyBindingForPin(descriptorEvidence(forged), pin, context),
+    ).resolves.toMatchObject({ ok: false, code: "root_mismatch" });
+  });
 
   it("Discovery refuses a new root without a reset, or a reset from a binding it never published", async () => {
     const { world, stored, resetDescriptor } = await setup();

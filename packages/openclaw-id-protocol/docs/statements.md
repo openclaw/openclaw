@@ -198,9 +198,10 @@ browser cannot revoke itself from the Control UI.
 
 ## Pins and rollback (spec section 5, step 3)
 
-A client stores per origin `ClawPin = { claw_id, root_fp, binding_seq }`. A pin from an
-invite link (`r=<fp(R)>`) or a kit starts as `{ claw_id: null, binding_seq: 0 }`. A pin never
-moves to another root: after an owner reset the browser is set up again and gets a new pin.
+A client stores per origin `ClawPin = { claw_id, root_fp, binding_seq, k_gw? }`; `k_gw` is the
+K_gw of the last binding verified under the pin (owner reset, below). A pin from an invite link
+(`r=<fp(R)>`) or a kit starts as `{ claw_id: null, binding_seq: 0 }`. A pin never moves to
+another root: after an owner reset the browser is set up again and gets a new pin.
 
 `verifyBindingForPin(evidence, pin, { host, now })` runs before any socket opens.
 Evidence is untrusted Discovery output: `{ root_pub, binding, reset? }` (`descriptorEvidence`).
@@ -217,9 +218,9 @@ On success the caller stores the returned pin and dials only `binding.k_srv`.
 
 ### Owner reset
 
-`owner_reset` means: the descriptor's `reset.previous_binding` passes steps 2-4 under the pinned
-root (`reset.previous_root_pub`), and `verifyRootReset(previous, reset.statement, evidence)`
-passes:
+`owner_reset` means: the pin stored a K_gw, the descriptor's `reset.previous_binding` passes
+steps 2-4 under the pinned root (`reset.previous_root_pub`) and names that same K_gw, and
+`verifyRootReset(previous, reset.statement, evidence)` passes:
 
 1. The RootReset is signed by the previous binding's K_gw (`wrong_signer`, `bad_signature`) for
    the same claw (`wrong_claw`).
@@ -233,7 +234,14 @@ passes:
 Any failure is reported as `root_mismatch` (the detail names the step), so a forged reset
 still shows the substitution warning. `owner_reset` is not a pass: the client dials nothing,
 stores nothing, and offers to set the browser up again with the new kit. It proves only that
-whoever holds the claw's K_gw changed the root, which is what owner reset means.
+whoever holds the K_gw this browser already verified changed the root, which is what owner
+reset means.
+
+The K_gw must come from the pin, not from the descriptor: the previous binding is signed only by
+the old root, and a reset is often done because that root's kit leaked. With the old kit alone,
+an attacker could sign a previous binding naming their own K_gw. A pin without `k_gw` (a fresh
+pin from an invite link or kit that never verified a binding, or a pin stored before this field
+existed) therefore always gets `root_mismatch` for a new root.
 
 Accepted edge case: the descriptor carries only the latest reset. A browser that missed two
 resets (pinned to R, the descriptor shows R' -> R'') gets `root_mismatch` and is set up again
@@ -276,8 +284,8 @@ disagree. It contains: the kit (text, root seed, R, fp, display fp), named keys,
 the vector claw's current owner devices (`owners`, the allowlist device signatures are checked
 against), valid statements with their signing input in hex, invalid statements with the expected
 error code (and anchor when not the default), and pin checks (fresh pin, rollback,
-substitution, host mismatch, a new root, an owner reset vouched for by K_gw, and one whose
-RootReset K_gw did not sign).
+substitution, host mismatch, a new root, an owner reset vouched for by the pinned K_gw, one
+whose RootReset K_gw did not sign, and a genuine reset seen by a pin without `k_gw`).
 
 Regenerate after an intentional change:
 

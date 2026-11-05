@@ -63,7 +63,7 @@ OwnerDeviceCert, ServerBinding and Revocation as the constant 1 (`ROOT_EPOCH`), 
 value is `malformed`. Nothing R signed counts under R'.
 
 A browser pinned to R that reads the new descriptor gets `owner_reset` from
-`verifyBindingForPin` when the reset is valid: it opens no socket, keeps no new pin and shows
+`verifyBindingForPin` when the reset is valid and signed by the K_gw its pin stored: it opens no socket, keeps no new pin and shows
 "The owner reset access to this claw. Set up this browser again." It is set up again with the
 new kit (kit enrollment below) or an approval from a new owner device. A root change without a
 valid RootReset is still `root_mismatch`, the substitution warning.

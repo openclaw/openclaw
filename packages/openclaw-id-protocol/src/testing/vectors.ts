@@ -345,6 +345,8 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
   const anchor: TrustAnchor = { root_pub: rootPub };
   const freshPin: ClawPin = { claw_id: null, root_fp: rootFp, binding_seq: 0 };
   const seenPin: ClawPin = { claw_id: VECTOR_CLAW_ID, root_fp: rootFp, binding_seq: 2 };
+  // What a client stores after verifying binding 2: the pin also keeps that binding's K_gw.
+  const keyedPin: ClawPin = { ...seenPin, k_gw: pub("gateway") };
   const evidence = (binding: SignedStatement<"ServerBinding">, rootKey = rootPub) => ({
     root_pub: rootKey,
     binding,
@@ -467,7 +469,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
         evidence: evidence(binding1),
         expected: {
           ok: true,
-          pin: { claw_id: VECTOR_CLAW_ID, root_fp: rootFp, binding_seq: 1 },
+          pin: { claw_id: VECTOR_CLAW_ID, root_fp: rootFp, binding_seq: 1, k_gw: pub("gateway") },
         },
       },
       {
@@ -475,7 +477,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
         host: VECTOR_HOST,
         pin: seenPin,
         evidence: evidence(binding2),
-        expected: { ok: true, pin: seenPin },
+        expected: { ok: true, pin: keyedPin },
       },
       {
         name: "rollback: seen seq 2, served seq 1",
@@ -515,7 +517,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       {
         name: "owner reset vouched for by the pinned claw's K_gw",
         host: VECTOR_HOST,
-        pin: seenPin,
+        pin: keyedPin,
         evidence: {
           ...evidence(newRootBinding, pub("root-2")),
           reset: { previous_root_pub: rootPub, previous_binding: binding2, statement: rootReset },
@@ -525,10 +527,20 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       {
         name: "a new root with a root reset not signed by K_gw (substitution)",
         host: VECTOR_HOST,
-        pin: seenPin,
+        pin: keyedPin,
         evidence: {
           ...evidence(newRootBinding, pub("root-2")),
           reset: { previous_root_pub: rootPub, previous_binding: binding2, statement: forgedReset },
+        },
+        expected: { ok: false, error: "root_mismatch" },
+      },
+      {
+        name: "a genuine owner reset seen by a pin that never stored K_gw",
+        host: VECTOR_HOST,
+        pin: seenPin,
+        evidence: {
+          ...evidence(newRootBinding, pub("root-2")),
+          reset: { previous_root_pub: rootPub, previous_binding: binding2, statement: rootReset },
         },
         expected: { ok: false, error: "root_mismatch" },
       },

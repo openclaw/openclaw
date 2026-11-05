@@ -1,5 +1,5 @@
 // Client pin and the per-session ServerBinding check (owner-key spec section 5, step 3).
-import { fingerprint, type KeyFingerprint } from "../keys.js";
+import { fingerprint, type Ed25519PublicKey, type KeyFingerprint } from "../keys.js";
 import { verifyRootReset, type RootBinding, type RootResetEvidence } from "./reset.js";
 import type { ServerBindingBody } from "./types.js";
 import {
@@ -11,14 +11,20 @@ import {
 } from "./verify.js";
 
 /**
- * What a client stores per origin: {fp(R), claw_id, highest binding_seq seen}. Only an owner
- * reset replaces the root, and then the client sets up a new pin from the new kit; it never
- * moves this one. A fresh pin from an invite link or kit has `claw_id: null` and `binding_seq: 0`.
+ * What a client stores per origin: {fp(R), claw_id, highest binding_seq seen, K_gw of that
+ * binding}. Only an owner reset replaces the root, and then the client sets up a new pin from the
+ * new kit; it never moves this one. A fresh pin from an invite link or kit has `claw_id: null`,
+ * `binding_seq: 0` and no `k_gw`.
  */
 export type ClawPin = {
   claw_id: string | null;
   root_fp: KeyFingerprint;
   binding_seq: number;
+  /**
+   * K_gw of the last binding verified under this pin. Only a RootReset signed by this key is an
+   * owner reset; without it (fresh or older pins) a new root is always `root_mismatch`.
+   */
+  k_gw?: Ed25519PublicKey;
 };
 
 /** Untrusted binding material, as served by Discovery in a descriptor. */
@@ -42,9 +48,10 @@ type PinContext = Omit<VerifyOptions, "owners"> & { host: string };
  *
  * A different root fails with `root_mismatch` (substitution), except after an owner reset the
  * pinned claw vouched for: the evidence's previous binding passes these same checks under the
- * pinned root and its K_gw signed a valid RootReset to the served root (`verifyRootReset`). That
- * fails with `owner_reset`: nothing is dialed and no pin is returned; the browser must be set up
- * again with the new kit.
+ * pinned root and names the pinned K_gw, and that K_gw signed a valid RootReset to the served
+ * root (`verifyRootReset`). That fails with `owner_reset`: nothing is dialed and no pin is
+ * returned; the browser must be set up again with the new kit. The pinned K_gw matters: the
+ * previous binding alone is signed only by the old root, whose kit may be the one that leaked.
  */
 export async function verifyBindingForPin(
   evidence: BindingEvidence,
@@ -61,6 +68,9 @@ export async function verifyBindingForPin(
   const previous = { root_pub: reset.previous_root_pub, binding: reset.previous_binding };
   if ((await fingerprint(previous.root_pub)) !== pin.root_fp) {
     return failure("root_mismatch", "root reset does not start at the pinned root");
+  }
+  if (pin.k_gw === undefined || previous.binding.body.k_gw !== pin.k_gw) {
+    return failure("root_mismatch", "root reset is not from the pinned K_gw");
   }
   const before = await verifyUnderPin(previous, pin, context);
   if (!before.ok) {
@@ -98,6 +108,11 @@ async function verifyUnderPin(
     ok: true,
     binding,
     anchor,
-    pin: { claw_id: binding.claw_id, root_fp: pin.root_fp, binding_seq: binding.binding_seq },
+    pin: {
+      claw_id: binding.claw_id,
+      root_fp: pin.root_fp,
+      binding_seq: binding.binding_seq,
+      k_gw: binding.k_gw,
+    },
   };
 }
