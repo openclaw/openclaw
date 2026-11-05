@@ -85,3 +85,25 @@ it("leaves catalog-only models alone", () => {
   const cfg = withLocal({}, "anthropic/claude-opus-5-5");
   expect(resolveAgentModelOutputLimit({ cfg, agentId: "main" })).toBeUndefined();
 });
+
+it("finds a configured row written with a model alias", () => {
+  const rootDir = path.resolve("extensions/xai");
+  const loaded = loadPluginManifest(rootDir);
+  if (!loaded.ok) {
+    throw new Error(loaded.error);
+  }
+  registry.plugins = [createPluginManifestRecordFixture({ ...loaded.manifest, rootDir })];
+  const cfg = {
+    agents: { defaults: { model: { primary: "xai/grok-4.3-latest" } } },
+    models: {
+      providers: {
+        xai: { models: [{ id: "grok-4.3-latest", name: "grok", maxTokens: 8192 }] },
+      },
+    },
+  } as unknown as OpenClawConfig;
+  expect(resolveAgentModelOutputLimit({ cfg, agentId: "main" })).toMatchObject({
+    maxTokens: 8192,
+    path: "models.providers.xai.models[0].maxTokens",
+  });
+  registry.plugins = [];
+});

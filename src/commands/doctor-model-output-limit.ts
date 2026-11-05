@@ -66,31 +66,30 @@ export function resolveAgentModelOutputLimit(
       workspaceDir: params.cwd,
       env: params.env ?? process.env,
     }));
-  const materializedRow = (config: OpenClawConfig, index: number) =>
-    applyModelDefaults(config, { loadManifestRegistry }).models?.providers?.[providerKey]?.models?.[
-      index
-    ];
+  const materializedRows = (config: OpenClawConfig) =>
+    applyModelDefaults(config, { loadManifestRegistry }).models?.providers?.[providerKey]?.models;
   const provider = cfg.models?.providers?.[providerKey];
-  const index = provider?.models?.findIndex((model) => model.id === ref.model) ?? -1;
-  const row = materializedRow(cfg, index);
+  // Materialized ids are normalized like the resolved ref (aliases such as `-latest`
+  // collapse), and materialization keeps row order, so the index maps back to the
+  // authored row for its remediation path.
+  const rows = materializedRows(cfg);
+  const index = rows?.findIndex((model) => model.id === ref.model) ?? -1;
+  const row = rows?.[index];
   // A row-level maxTokens wins over the catalog and the provider fallback. Without one,
   // probe whether a higher provider maxTokens would raise the ceiling: only then is the
   // provider setting the one to change (the catalog limit can equal it by coincidence).
   let fromProvider = false;
   if (provider && provider.models?.[index]?.maxTokens === undefined && row?.maxTokens) {
-    const probe = materializedRow(
-      {
-        ...cfg,
-        models: {
-          ...cfg.models,
-          providers: {
-            ...cfg.models?.providers,
-            [providerKey]: { ...provider, maxTokens: row.maxTokens * 2 },
-          },
+    const probe = materializedRows({
+      ...cfg,
+      models: {
+        ...cfg.models,
+        providers: {
+          ...cfg.models?.providers,
+          [providerKey]: { ...provider, maxTokens: row.maxTokens * 2 },
         },
       },
-      index,
-    );
+    })?.[index];
     fromProvider = (probe?.maxTokens ?? 0) > row.maxTokens;
   }
   const ceiling =

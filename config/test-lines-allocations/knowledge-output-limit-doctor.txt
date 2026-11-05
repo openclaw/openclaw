@@ -1,2 +1,2 @@
 # Knowledge doctor check: plugin finding, core limit resolver (ceiling, catalog and request budget), and the plain-doctor rendering path.
-149
+171
