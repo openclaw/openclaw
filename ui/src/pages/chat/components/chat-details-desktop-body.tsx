@@ -1,23 +1,29 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, onCleanup, onSettled } from "solid-js";
+import { Show, createMemo, onSettled } from "solid-js";
 import { DETAILS_SECTION_MOTION } from "../../../components/details-section-motion.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import "../../../styles/chat/details-desktop-body.css";
 
+export type ChatDetailsHandoff = {
+  onLoading: (loading: boolean) => void;
+  onReady: () => void;
+};
+
 /** One scroll owner around Session and Progress; mounted only by the desktop host. */
 export function ChatDetailsDesktopBody(props: {
   presented: boolean;
-  loading?: boolean;
-  children: JSX.Element;
+  children: (handoff: ChatDetailsHandoff) => JSX.Element;
   onScrollPortRef?: (element: HTMLDivElement) => void;
 }) {
+  // Lifecycle callbacks must not initialize a lazy prop inside their effect scope.
+  const isPresented = createMemo(() => props.presented);
   let scroll!: HTMLDivElement;
   let content!: HTMLDivElement;
+  let pending = false;
   let loadingHeight = 0;
   let destination = 0;
   let deadline = 0;
   let animation: Animation | undefined;
-  let mounted = false;
   const finish = () => {
     loadingHeight = 0;
     if (!animation) {
@@ -36,19 +42,21 @@ export function ChatDetailsDesktopBody(props: {
     });
     animation.onfinish = finish;
   };
-  // Only a mounted fallback arms the handoff. Cached opens and settled updates
-  // keep the original frame-batched scrollbar/fade work, without height reads.
-  const handoff = ([presented, loading]: readonly [boolean, boolean]) => {
-    if (!mounted) {
-      return;
-    }
-    if (!presented) {
-      finish();
-      return;
-    }
+  // The actual fallback and loaded composition own these lifecycle events.
+  // Cached content never arms the handoff or adds geometry work to scrolling.
+  const onLoading = (loading: boolean) => {
+    pending = loading;
     if (loading) {
       finish();
-      loadingHeight = scroll.getBoundingClientRect().height;
+      if (isPresented()) {
+        loadingHeight = scroll.getBoundingClientRect().height;
+      }
+    }
+  };
+  const onReady = () => {
+    pending = false;
+    if (!isPresented()) {
+      finish();
       return;
     }
     if (!loadingHeight) {
@@ -65,17 +73,14 @@ export function ChatDetailsDesktopBody(props: {
       animate(from, to, DETAILS_SECTION_MOTION.duration);
     }
   };
-  createEffect(() => [props.presented, props.loading === true] as const, handoff);
-  onSettled(() => {
-    mounted = true;
-    handoff([props.presented, props.loading === true]);
-  });
   const measure = () => {
-    if (props.presented && props.loading) {
+    const presented = isPresented();
+    if (presented && pending) {
       loadingHeight = scroll.getBoundingClientRect().height;
     }
-    const nextHeight = animation ? content.getBoundingClientRect().height : destination;
-    const resize = Boolean(animation) && nextHeight !== destination;
+    const nextHeight =
+      presented && animation ? content.getBoundingClientRect().height : destination;
+    const resize = presented && Boolean(animation) && nextHeight !== destination;
     const from = resize ? scroll.getBoundingClientRect().height : 0;
     const fadeTop = scroll.scrollTop > 1;
     const fadeBottom = scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop > 1;
@@ -91,12 +96,8 @@ export function ChatDetailsDesktopBody(props: {
       scroll.toggleAttribute("data-fade-bottom", fadeBottom);
     };
   };
-  const update = createLayoutMeasurement(() => props.presented, measure, {
+  const update = createLayoutMeasurement(() => isPresented(), measure, {
     targets: () => [scroll, content],
-  });
-  onCleanup(() => {
-    mounted = false;
-    finish();
   });
   return (
     <div
@@ -108,8 +109,14 @@ export function ChatDetailsDesktopBody(props: {
       onScroll={update}
       onFocusIn={finish}
     >
+      <Show when={isPresented() ? finish : undefined} keyed>
+        {(cancel) => {
+          onSettled(() => cancel);
+          return null;
+        }}
+      </Show>
       <div ref={(element) => (content = element)} class="chat-details-desktop-body__content">
-        {props.children}
+        {props.children({ onLoading, onReady })}
       </div>
     </div>
   );

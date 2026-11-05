@@ -89,7 +89,7 @@ suite.define(() => {
     { cpuRate: 4, reducedMotion: "no-preference" },
     { cpuRate: 1, reducedMotion: "reduce" },
   ] as const)(
-    "keeps the first Details handoff continuous ($cpuRate× CPU; $reducedMotion)",
+    "keeps the first Details load quiet and continuous ($cpuRate× CPU; $reducedMotion)",
     async ({ cpuRate, reducedMotion }) => {
       await suite.withPage({ ...options, reducedMotion }, async ({ page }) => {
         const cdp = await page.context().newCDPSession(page);
@@ -109,8 +109,25 @@ suite.define(() => {
         const loading = details.locator("openclaw-panel-loading-skeleton");
         await loading.waitFor();
         await nextPaint(page);
+        const shimmer = await loading
+          .locator(".skeleton")
+          .first()
+          .evaluate((element) => {
+            const style = getComputedStyle(element, "::after");
+            return {
+              opacity: Number(style.opacity),
+              seconds: Number.parseFloat(style.animationDuration),
+              name: style.animationName,
+            };
+          });
         if (artifacts) {
           await capture(page, details, loading, "loading", artifacts);
+        }
+        expect(shimmer.opacity).toBeLessThanOrEqual(0.3);
+        if (reducedMotion === "reduce") {
+          expect(shimmer.name).toBe("none");
+        } else {
+          expect(shimmer.seconds).toBeGreaterThanOrEqual(3);
         }
         const before = (await details.boundingBox())!;
         const firstContentFrame = await details.evaluateHandle((panel) => ({

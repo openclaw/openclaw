@@ -582,30 +582,28 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     );
   }
   function DesktopContent() {
-    const [loading, setLoading] = createSignal(false);
     const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
     return (
-      <ChatDetailsDesktopBody
-        presented={isPresented() && opened()}
-        loading={loading()}
-        onScrollPortRef={setScrollport}
-      >
-        <SessionContent onLoading={setLoading}>
-          <ChatDetailsDesktopComposition
-            scrollport={scrollport()}
-            props={props.chat}
-            presented={isPresented() && opened()}
-            dismissed={intent() === "closed"}
-            progressMenuRef={(menu) => {
-              progressMenu = menu;
-            }}
-            onHideProgress={() => {
-              if (!docked()) {
-                close(true);
-              }
-            }}
-          />
-        </SessionContent>
+      <ChatDetailsDesktopBody presented={isPresented() && opened()} onScrollPortRef={setScrollport}>
+        {(handoff) => (
+          <SessionContent onLoading={handoff.onLoading}>
+            <ChatDetailsDesktopComposition
+              scrollport={scrollport()}
+              onReady={handoff.onReady}
+              props={props.chat}
+              presented={isPresented() && opened()}
+              dismissed={intent() === "closed"}
+              progressMenuRef={(menu) => {
+                progressMenu = menu;
+              }}
+              onHideProgress={() => {
+                if (!docked()) {
+                  close(true);
+                }
+              }}
+            />
+          </SessionContent>
+        )}
       </ChatDetailsDesktopBody>
     );
   }

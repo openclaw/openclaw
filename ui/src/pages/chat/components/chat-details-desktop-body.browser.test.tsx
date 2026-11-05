@@ -1,27 +1,34 @@
 import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
-import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
+import { ChatDetailsDesktopBody, type ChatDetailsHandoff } from "./chat-details-desktop-body.tsx";
 
 function mount(loading: boolean) {
   const container = document.body.appendChild(document.createElement("div"));
-  function Body(props: { loading: boolean; height: number; presented: boolean }) {
+  let handoff!: ChatDetailsHandoff;
+  function Body(props: { height: number; presented: boolean }) {
     return (
-      <ChatDetailsDesktopBody loading={props.loading} presented={props.presented}>
-        <div style={{ height: props.height + "px" }}>Details content</div>
+      <ChatDetailsDesktopBody presented={props.presented}>
+        {(lifecycle) => {
+          handoff = lifecycle;
+          return <div style={{ height: props.height + "px" }}>Details content</div>;
+        }}
       </ChatDetailsDesktopBody>
     );
   }
-  const view = mountSolid(
-    Body,
-    { loading, height: loading ? 210 : 90, presented: true },
-    container,
-  );
+  const view = mountSolid(Body, { height: loading ? 210 : 90, presented: true }, container);
+  if (loading) {
+    handoff.onLoading(true);
+  }
   onTestFinished(() => {
     view.dispose();
     container.remove();
   });
-  return { ...view, body: container.querySelector<HTMLDivElement>(".chat-details-desktop-body")! };
+  return {
+    ...view,
+    ...handoff,
+    body: container.querySelector<HTMLDivElement>(".chat-details-desktop-body")!,
+  };
 }
 
 function trackHandoffReads(body: HTMLDivElement) {
@@ -48,10 +55,11 @@ it("adds no handoff measurements or animations to cached and settled scrolling",
   onTestFinished(() => animations.mockRestore());
   const view = mount(false);
   const reads = trackHandoffReads(view.body);
+  view.onReady();
   await nextFrame();
   view.body.dispatchEvent(new Event("scroll"));
   await nextFrame();
-  view.update({ loading: false, height: 150, presented: true });
+  view.update({ height: 150, presented: true });
   await nextFrame();
   view.body.dispatchEvent(new Event("focusin"));
   for (const read of reads) {
@@ -64,7 +72,9 @@ it("adds no handoff measurements or animations to cached and settled scrolling",
 it("returns to natural height and the original scroll work after the cold handoff", async () => {
   const view = mount(true);
   await nextFrame();
-  view.update({ loading: false, height: 90, presented: true });
+  view.update({ height: 90, presented: true });
+  view.onLoading(false);
+  view.onReady();
   await expect.poll(() => view.body.getAnimations().length).toBe(1);
   await expect.poll(() => view.body.getAnimations().length).toBe(0);
   expect(view.body.style.height).toBe("");
@@ -74,4 +84,12 @@ it("returns to natural height and the original scroll work after the cold handof
   for (const read of reads) {
     expect(read).not.toHaveBeenCalled();
   }
+  view.update({ height: 210, presented: true });
+  view.onLoading(true);
+  view.update({ height: 90, presented: true });
+  view.onLoading(false);
+  view.onReady();
+  view.body.parentElement!.remove();
+  view.update({ height: 90, presented: false });
+  expect(view.body.style.height).toBe("");
 });
