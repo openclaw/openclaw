@@ -334,15 +334,16 @@ export function projectTranscriptIndex(
   return indexes(chain, cacheKey, (): TranscriptIndex => {
     // Smaller transcripts scroll more cheaply without repeatedly mounting fragments.
     let sourceCount = 0;
-    const windowCompletedFrames = chain.transcriptItems.some((item) => {
+    const retainFrameFragments = chain.transcriptItems.some((item) => {
       for (const group of chatItemGroups(item)) {
         sourceCount += group.messages.length;
-        if (sourceCount > 256) {
+        if (sourceCount > 512) {
           return true;
         }
       }
       return false;
     });
+    const windowCompletedFrames = sourceCount > 256;
     const loadedReplySources = new Map<string, LoadedReplySource>();
     const messageRowKeysById = new Map<string, string>();
     const transcriptMessageKeys = new Map<string, string>();
@@ -393,9 +394,10 @@ export function projectTranscriptIndex(
           : [item];
       for (const rowItem of rendered) {
         // Rich work sources include their Markdown and paired tool output.
-        // Only split runs need advance materialization. Ordinary rows already
-        // fit the virtual window; retaining them duplicates mixed-session DOM.
-        const retainDom = rowItem.kind === "agent-run-frame" && Boolean(rowItem.fragment);
+        // Medium histories warm fragment data without mounting offscreen trees.
+        // Larger split runs retain their existing advance materialization.
+        const fragment = rowItem.kind === "agent-run-frame" && Boolean(rowItem.fragment);
+        const retainDom = fragment && retainFrameFragments;
         const estimatedSize =
           rowItem.kind === "agent-run-frame" && rowItem.fragment
             ? rowItem.parts.reduce(
@@ -409,7 +411,12 @@ export function projectTranscriptIndex(
             : rowItem.kind === "group"
               ? estimateMessageGroupSize(rowItem)
               : undefined;
-        rows.push({ ...row(rowItem), estimatedSize, retainDom, prewarm: rowItem.kind === "group" });
+        rows.push({
+          ...row(rowItem),
+          estimatedSize,
+          retainDom,
+          prewarm: rowItem.kind === "group" || (fragment && !retainFrameFragments),
+        });
       }
       if (item.kind === "work-group" && expandedToolCards.get(item.key)) {
         for (const group of item.groups) {
