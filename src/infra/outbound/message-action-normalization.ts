@@ -61,8 +61,9 @@ export function normalizeMessageActionInput(params: {
   const normalizedArgs = { ...params.args };
   const { action, toolContext } = params;
   // Shared param readers also accept each key's snake_case form, and provider handlers may
-  // read `messageThreadId` before `threadId` (Telegram does). Fold every spelling so
-  // cross-context policy, core delivery and the provider all judge one thread.
+  // read `messageThreadId` before `threadId` (Telegram does). Fold every spelling into one
+  // string `threadId` (core reads only strings) so cross-context policy, core delivery and
+  // the provider all judge one thread.
   const threadIds = new Set(
     THREAD_ID_PARAM_KEYS.map((key) => normalizeOptionalStringifiedId(normalizedArgs[key])),
   );
@@ -72,7 +73,7 @@ export function normalizeMessageActionInput(params: {
     throw new Error(`Action ${action} received conflicting thread id values.`);
   }
   const [threadId] = threadIds;
-  if (threadId && normalizeOptionalStringifiedId(normalizedArgs.threadId) !== threadId) {
+  if (threadId && normalizedArgs.threadId !== threadId) {
     normalizedArgs.threadId = threadId;
   }
   const explicitChannel = normalizeOptionalString(normalizedArgs.channel) ?? "";
