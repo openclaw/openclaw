@@ -38,7 +38,7 @@ type Job = {
   permissions?: Record<string, string>;
   "runs-on"?: string;
   steps?: Step[];
-  strategy?: { matrix?: { plugin?: string } };
+  strategy?: { "fail-fast"?: boolean; matrix?: { plugin?: string } };
 };
 type WorkflowInput = {
   default?: boolean | string;
@@ -384,12 +384,16 @@ it("defers registry visibility only after a publish with a final parent verifier
   expect(parsed.on?.workflow_dispatch?.inputs?.defer_registry_verification?.default).toBe(false);
   expect(step(publish, "Publish with trusted publisher").id).toBe("oidc_publish");
   expect(step(publish, "Publish approved bootstrap tarball").id).toBe("bootstrap_publish");
-  expect(step(publish, "Verify immutable npm registry readback").env?.DEFER_VISIBILITY).toBe(
-    "${{ inputs.defer_registry_verification && inputs.release_publish_run_id != '' && (steps.oidc_publish.outcome == 'success' || steps.bootstrap_publish.outcome == 'success') }}",
+  expect(publish?.strategy?.["fail-fast"]).toBe(false);
+  const deferredUpload = step(publish, "Upload deferred trusted-publisher checkpoint");
+  expect(deferredUpload.if).toBe("steps.oidc_publish.outputs.deferred_auth == 'true'");
+  expect(deferredUpload.with?.path).toContain("deferred_auth_path");
+  const readback = step(publish, "Verify immutable npm registry readback");
+  expect(readback.if).toBe("steps.oidc_publish.outputs.deferred_auth != 'true'");
+  expect(readback.env?.DEFER_VISIBILITY).toBe(
+    "${{ inputs.defer_registry_verification && inputs.release_publish_run_id != '' && ((steps.oidc_publish.outcome == 'success' && steps.oidc_publish.outputs.deferred_auth != 'true') || steps.bootstrap_publish.outcome == 'success') }}",
   );
-  expect(step(publish, "Verify immutable npm registry readback").run).toContain(
-    '--defer-visibility "$DEFER_VISIBILITY"',
-  );
+  expect(readback.run).toContain('--defer-visibility "$DEFER_VISIBILITY"');
   const parent = parse(
     readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"),
   ) as Workflow;
@@ -412,16 +416,25 @@ it("keeps push triggers aligned with npm publication authorities", () => {
 it.each([
   { publishTag: "latest" },
   { publishTag: "beta" },
+  { publishTag: "beta", npmErrorCode: "ENEEDAUTH", parentRunId: "42", expectedDeferred: true },
+  { publishTag: "beta", npmErrorCode: "ENEEDAUTH", parentRunId: "42", deferAuthForCore: false },
+  { publishTag: "beta", npmErrorCode: "ENEEDAUTH" },
+  { publishTag: "beta", npmErrorCode: "E401", parentRunId: "42" },
   { publishTag: "extended-stable" },
+  { publishTag: "extended-stable", npmErrorCode: "ENEEDAUTH", parentRunId: "42" },
   { publishTag: "extended-stable", candidateMoved: true },
   { mainVersion: "2026.9.1", expectedFailure: "only the trailing completed month" },
   { mainApiUnavailable: true, expectedFailure: "fixture main API unavailable" },
   { mainVersion: "invalid", expectedFailure: "Protected main package version" },
   { publishTag: "latest", toolingTrusted: false },
 ])(
-  "publishes sealed bytes only with current authority: $publishTag / trusted $toolingTrusted / moved $candidateMoved / main $mainVersion / unavailable $mainApiUnavailable",
+  "publishes sealed bytes only with current authority: $publishTag / npm $npmErrorCode / deferred $expectedDeferred / trusted $toolingTrusted / moved $candidateMoved / main $mainVersion / unavailable $mainApiUnavailable",
   ({
     publishTag = "extended-stable",
+    npmErrorCode,
+    parentRunId = "",
+    expectedDeferred = false,
+    deferAuthForCore = parentRunId !== "",
     toolingTrusted = true,
     candidateMoved = false,
     mainVersion = "2026.8.1",
@@ -479,6 +492,8 @@ const endpoint = process.argv[3];
 fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "gh", endpoint }) + "\\n");
 if (endpoint === "repos/openclaw/openclaw/compare/${toolingSha}...main") {
   process.stdout.write(${JSON.stringify(JSON.stringify({ status: toolingTrusted ? "ahead" : "diverged" }))});
+} else if (endpoint === "repos/openclaw/openclaw/actions/runs/42") {
+  process.stdout.write(JSON.stringify({ id: 42, event: "workflow_dispatch", head_branch: "release-publish/bbbbbbbbbbbb-123", head_sha: "${toolingSha}", repository: { full_name: "openclaw/openclaw" }, run_attempt: 1, path: ".github/workflows/openclaw-release-publish.yml@refs/tags/release-publish/bbbbbbbbbbbb-123", status: "in_progress", conclusion: null }));
 } else if (endpoint === "repos/openclaw/openclaw/git/ref/heads/extended-stable/2026.7.33") {
   process.stdout.write(${JSON.stringify(JSON.stringify(currentRef))});
 } else if (endpoint === "repos/openclaw/openclaw/contents/package.json?ref=refs/heads/main") {
@@ -502,6 +517,10 @@ const args = process.argv.slice(2);
 const npmConfig = ${JSON.stringify(npmConfig)};
 const result = require("node:child_process").spawnSync(npmConfig.command, npmConfig.args, { env: process.env, encoding: "utf8", timeout: 10_000, windowsVerbatimArguments: npmConfig.windowsVerbatimArguments });
 if (result.status !== 0) { process.stderr.write(result.stderr); process.exit(result.status ?? 1); }
+if (process.env.NPM_ERROR_CODE) {
+  process.stderr.write("npm error code " + process.env.NPM_ERROR_CODE + "\\n");
+  process.exit(1);
+}
 fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, bytes: fs.readFileSync(args[1], "utf8"), token: Boolean(process.env.NPM_TOKEN || process.env.NODE_AUTH_TOKEN) }) + "\\n");
 `,
       { mode: 0o755 },
@@ -510,6 +529,8 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
       mode: 0o755,
     });
     const publish = step(workflow().jobs?.publish_plugins_npm, "Publish with trusted publisher");
+    const githubOutput = join(root, "github-output");
+    const stepSummary = join(root, "step-summary");
     const result = spawnSync(
       "/bin/bash",
       ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", publish.run!],
@@ -518,6 +539,14 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
         encoding: "utf8",
         timeout: 15_000,
         env: {
+          DEFER_AUTH_FOR_CORE: deferAuthForCore ? "true" : "false",
+          EXTENSION_ID: "test-plugin",
+          GITHUB_OUTPUT: githubOutput,
+          GITHUB_RUN_ATTEMPT: "1",
+          GITHUB_RUN_ID: "84",
+          GITHUB_STEP_SUMMARY: stepSummary,
+          NPM_ERROR_CODE: npmErrorCode ?? "",
+          PACKAGE_NAME: "@openclaw/test-plugin",
           PATH: `${bin}:/usr/bin:/bin`,
           EVENTS: events,
           RUNNER_TEMP: root,
@@ -533,55 +562,94 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
           OPENCLAW_RELEASE_TOOLING_FULL_REF: "refs/heads/main",
           OPENCLAW_RELEASE_TOOLING_REF: "main",
           OPENCLAW_RELEASE_TOOLING_SHA: toolingSha,
-          OPENCLAW_RELEASE_PUBLISH_RUN_ID: "",
-          OPENCLAW_RELEASE_PUBLISH_RUN_ATTEMPT: "",
-          OPENCLAW_RELEASE_PUBLISH_REF: "",
-          OPENCLAW_RELEASE_PUBLISH_FULL_REF: "",
-          OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY: "",
+          OPENCLAW_RELEASE_PUBLISH_RUN_ID: parentRunId,
+          OPENCLAW_RELEASE_PUBLISH_RUN_ATTEMPT: parentRunId ? "1" : "",
+          OPENCLAW_RELEASE_PUBLISH_REF: parentRunId ? "release-publish/bbbbbbbbbbbb-123" : "",
+          OPENCLAW_RELEASE_PUBLISH_FULL_REF: parentRunId
+            ? "refs/tags/release-publish/bbbbbbbbbbbb-123"
+            : "",
+          OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY: parentRunId ? "active" : "",
           NPM_TOKEN: "fixture-token-must-not-reach-npm",
           NODE_AUTH_TOKEN: "fixture-token-must-not-reach-npm",
         },
       },
     );
-    const allowed = toolingTrusted && !candidateMoved && !expectedFailure;
-    expect(result.status, result.stderr).toBe(allowed ? 0 : 1);
-    expect(readdirSync(root).filter((name) => name.startsWith("plugin-npm-oidc."))).toEqual([]);
+    const authorityAllowed = toolingTrusted && !candidateMoved && !expectedFailure;
+    const deferred =
+      authorityAllowed &&
+      deferAuthForCore &&
+      npmErrorCode === "ENEEDAUTH" &&
+      parentRunId !== "" &&
+      publishTag !== "extended-stable";
+    const allowed = authorityAllowed && (!npmErrorCode || deferred);
+    const combinedOutput = result.stdout + result.stderr;
+    expect(deferred).toBe(expectedDeferred);
+    expect(result.status, combinedOutput).toBe(allowed ? 0 : 1);
+    expect(
+      readdirSync(root).filter(
+        (name) => name.startsWith("plugin-npm-oidc.") || name.startsWith("plugin-npm-publish."),
+      ),
+    ).toEqual([]);
     const calls = readFileSync(events, "utf8")
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
     const npmCalls = calls.filter((call) => call.command === "npm");
-    if (!allowed) {
+    const checkpoints = readdirSync(root).filter((name) =>
+      name.endsWith("-npm-oidc-deferred.json"),
+    );
+    if (!authorityAllowed) {
       expect(result.stderr).toContain(
         expectedFailure ??
           (candidateMoved ? "branch is missing or moved" : "not reachable from current main"),
       );
       expect(npmCalls).toEqual([]);
-    } else {
-      expect(npmCalls).toEqual([
-        {
-          command: "npm",
-          args: [
-            "publish",
-            tarball,
-            "--access",
-            "public",
-            "--ignore-scripts",
-            "--provenance",
-            "--tag",
-            publishTag,
-          ],
-          bytes: "sealed preflight bytes",
-          token: false,
-        },
-      ]);
-      if (publishTag === "extended-stable") {
-        expect(calls.slice(-3).map((call) => call.endpoint ?? call.command)).toEqual([
-          "repos/openclaw/openclaw/git/ref/heads/extended-stable/2026.7.33",
-          "repos/openclaw/openclaw/contents/package.json?ref=refs/heads/main",
-          "npm",
-        ]);
+      expect(checkpoints).toEqual([]);
+      return;
+    }
+    if (npmErrorCode) {
+      expect(combinedOutput).toContain("npm error code " + npmErrorCode);
+      expect(npmCalls).toEqual([]);
+      if (deferred) {
+        expect(readFileSync(githubOutput, "utf8")).toContain("deferred_auth=true");
+        expect(checkpoints).toEqual(["test-plugin-npm-oidc-deferred.json"]);
+        expect(JSON.parse(readFileSync(join(root, checkpoints[0]!), "utf8"))).toMatchObject({
+          kind: "openclaw-plugin-npm-deferred-auth",
+          reason: "npm-oidc-eneedauth",
+          parent: { runId: 42, runAttempt: 1 },
+          sourceSha: targetSha,
+          package: { name: "@openclaw/test-plugin", publishTag },
+          recovery: { publishScope: "selected", requiresParentPublication: false },
+        });
+        expect(readFileSync(stepSummary, "utf8")).toContain("Core publication may continue");
+      } else {
+        expect(checkpoints).toEqual([]);
       }
+      return;
+    }
+    expect(readFileSync(githubOutput, "utf8")).toContain("deferred_auth=false");
+    expect(checkpoints).toEqual([]);
+    expect(npmCalls).toHaveLength(1);
+    expect(npmCalls[0]).toMatchObject({
+      args: [
+        "publish",
+        tarball,
+        "--access",
+        "public",
+        "--ignore-scripts",
+        "--provenance",
+        "--tag",
+        publishTag,
+      ],
+      bytes: "sealed preflight bytes",
+      token: false,
+    });
+    if (publishTag === "extended-stable") {
+      expect(calls.slice(-3).map((call) => call.endpoint ?? call.command)).toEqual([
+        "repos/openclaw/openclaw/git/ref/heads/extended-stable/2026.7.33",
+        "repos/openclaw/openclaw/contents/package.json?ref=refs/heads/main",
+        "npm",
+      ]);
     }
   },
 );
@@ -1026,6 +1094,16 @@ it("routes publication recovery through the read-only trusted-publisher prefligh
   expect(recoveryCommand).not.toContain("publish_scope=all-publishable");
   expect(recoveryCommand).not.toContain("npm_dist_tag=extended-stable");
   expect(recoveryCommand).not.toContain("release_publish_run_id");
+  const deferredCommand = recoveryGuidance
+    ?.split("A regular release parent", 2)[1]
+    ?.split("```bash", 2)[1]
+    ?.split("```", 1)[0];
+  expect(deferredCommand).toContain("-f preflight_only=false");
+  expect(deferredCommand).toContain("-f publish_scope=selected");
+  expect(deferredCommand).toContain("-f plugins=<comma-separated-deferred-package-names>");
+  expect(deferredCommand).toContain("-f ref=<exact-40-character-release-sha>");
+  expect(deferredCommand).not.toContain("release_publish_run_id");
+  expect(recoveryGuidance).toContain("Reconcile every checkpoint independently");
   const extendedCommand = recoveryGuidance
     ?.split("For extended-stable recovery", 2)[1]
     ?.split("```bash", 2)[1]
