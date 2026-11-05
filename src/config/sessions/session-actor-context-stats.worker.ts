@@ -55,8 +55,7 @@ export function initializeSessionActorContextStats(
         sessionKey: state.hot.target.sessionKey,
         sessionId: state.hot.entry.sessionId,
       },
-      // A metadata-only rewrite can change retained-prefix bytes without rotating generation.
-      (projection) => readVisibleTranscriptStats(projection, true),
+      (projection) => readVisibleTranscriptStats(projection),
       state.transcript.complete ? projectSessionTranscriptFacts(state) : undefined,
     );
     if (result.kind === "value") {
