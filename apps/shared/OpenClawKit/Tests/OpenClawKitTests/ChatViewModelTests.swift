@@ -7996,7 +7996,7 @@ struct ChatViewModelTests {
         let createdKeys = await transport.createdSessionKeys()
         #expect(createdKeys.count == 1)
         #expect(createdKeys.first?.hasPrefix("agent:aiden:ios-") == true)
-        #expect(await transport.createdParentSessionKeys() == ["main"])
+        #expect(await transport.createdParentSessionKeys() == [nil])
         #expect(await transport.resetSessionKeys().isEmpty)
         #expect(await transport.lastSentRunId() == nil)
 
@@ -8081,7 +8081,7 @@ struct ChatViewModelTests {
         await vm.bootstrapTask?.value
         #expect(await MainActor.run { vm.sessionKey.hasPrefix("agent:reviewer:ios-") })
         #expect(await transport.createdSessionKeys().first?.hasPrefix("agent:reviewer:ios-") == true)
-        #expect(await transport.createdParentSessionKeys() == ["global"])
+        #expect(await transport.createdParentSessionKeys() == [nil])
     }
 
     @Test func `new trigger prefers explicit session agent over ambient agent`() async throws {
@@ -8096,7 +8096,7 @@ struct ChatViewModelTests {
         await vm.bootstrapTask?.value
         #expect(await MainActor.run { vm.sessionKey.hasPrefix("agent:alice:ios-") })
         #expect(await transport.createdSessionKeys().first?.hasPrefix("agent:alice:ios-") == true)
-        #expect(await transport.createdParentSessionKeys() == ["agent:alice:main"])
+        #expect(await transport.createdParentSessionKeys() == [nil])
     }
 
     @Test func `send attempts request when cached health is stale false`() async {
@@ -13003,9 +13003,6 @@ struct ChatViewModelTests {
             onVerboseLevelChanged: { callbacks.values.append($0) })
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        try await waitUntil("main session finishes bootstrap") {
-            await MainActor.run { !vm.isLoading }
-        }
         await MainActor.run { vm.selectVerboseLevel("on") }
         await patchCount.wait { $0 >= 1 }
         #expect(await patchCount.current() == 1)

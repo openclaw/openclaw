@@ -175,7 +175,11 @@ extension BundledRuntime {
                 fileManager.contentsEqual(atPath: $0.path, andPath: staged.path)
             } ?? false
             return PreparedServiceBun(
-                staged: staged, target: target, backup: backup, previous: previous, replacement: replacement,
+                staged: staged,
+                target: target,
+                backup: backup,
+                previous: previous,
+                replacement: replacement,
                 matchesPrevious: matchesPrevious)
         } catch {
             try? fileManager.removeItem(at: staged)

@@ -1336,10 +1336,12 @@ struct GatewayProcessManagerTests {
                     })
             }
             #expect(await install.value != nil)
-            #expect(try String(contentsOf: runtime.serviceBun, encoding: .utf8) ==
+            let installedExecutable = try String(contentsOf: runtime.serviceBun, encoding: .utf8)
+            #expect(installedExecutable ==
                 (withdrawal == "executable" ? "newer executable" : "installed executable"))
-            #expect(try FileManager.default.contentsOfDirectory(
-                atPath: runtime.serviceBun.deletingLastPathComponent().path) == ["bun"])
+            let serviceDirectoryContents = try FileManager.default.contentsOfDirectory(
+                atPath: runtime.serviceBun.deletingLastPathComponent().path)
+            #expect(serviceDirectoryContents == ["bun"])
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
                 ["status", "--runtime-intent-only", "--json"],
             ])
@@ -1365,10 +1367,12 @@ struct GatewayProcessManagerTests {
             let error = await GatewayLaunchAgentManager.runDaemonCommand(
                 ["install"], runtime: runtime, serviceRuntime: runtime)
             #expect(error == "install failed")
-            #expect(try String(contentsOf: runtime.serviceBun, encoding: .utf8) ==
+            let installedExecutable = try String(contentsOf: runtime.serviceBun, encoding: .utf8)
+            #expect(installedExecutable ==
                 (replaced ? "newer executable" : "installed executable"))
-            #expect(try FileManager.default.contentsOfDirectory(
-                atPath: runtime.serviceBun.deletingLastPathComponent().path) == ["bun"])
+            let serviceDirectoryContents = try FileManager.default.contentsOfDirectory(
+                atPath: runtime.serviceBun.deletingLastPathComponent().path)
+            #expect(serviceDirectoryContents == ["bun"])
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().map { $0.first } ==
                 ["status", "install"])
         }
