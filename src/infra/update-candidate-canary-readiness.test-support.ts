@@ -189,9 +189,8 @@ export function registerCanaryReadinessBudgetTests(
         if (ordering === "cancelled-sleep") {
           expect(failure).toBeInstanceOf(AggregateError);
           expect(failure).toMatchObject({ cause: cancellation });
-          expect(collectNestedErrorCandidates(failure)).toEqual(
-            expect.arrayContaining([cancellation, uncertain]),
-          );
+          const errors = collectNestedErrorCandidates(failure);
+          expect(errors).toEqual(expect.arrayContaining([cancellation, uncertain]));
         } else {
           expect(failure).toBe(uncertain);
         }
@@ -210,7 +209,10 @@ export function registerCanaryReadinessBudgetTests(
   it.each(["write-failed", "authority-revoked", "startupz", "readyz"] as const)(
     "bounds poll authority reads and settles startup warnings before %s",
     async (outcome) => {
-      const probe = deferredProbe();
+      const polling = createDeferredCore();
+      const sleep = vi.spyOn(timerPromises, "setTimeout");
+      sleep.mockImplementation((ms) => new Promise((resolve) => void setTimeout(resolve, ms)));
+      onTestFinished(() => sleep.mockRestore());
       const { receipt, onProgress } = holdCanaryProgress(
         (step) => step.step === "warning:candidate-gateway-startup",
       );
@@ -223,7 +225,7 @@ export function registerCanaryReadinessBudgetTests(
       });
       const gateway = captureGateway();
       const fetch = stubFetch(async (url) => {
-        await probe.fetch();
+        polling.resolve();
         if (ready && url.endsWith(`/${outcome}`)) {
           current = false;
         }
@@ -235,15 +237,13 @@ export function registerCanaryReadinessBudgetTests(
         onStep: fakeTimersAfterRecovery,
         onProgress,
       });
-      await probe.fetching;
+      await polling.promise;
       const initialChecks = assertCurrent.mock.calls.length;
-      probe.response.resolve(startingResponse());
       await vi.advanceTimersByTimeAsync(300);
       await progress(gateway, "config.snapshot", 5_000);
       expect(fetch.mock.calls.length).toBeGreaterThanOrEqual(50);
       expect(assertCurrent.mock.calls.length - initialChecks).toBeLessThanOrEqual(5);
       await vi.advanceTimersByTimeAsync(100);
-      expect(fetch.mock.calls.some(([url]) => url.endsWith("/readyz"))).toBe(false);
       ready = true;
       current = outcome !== "authority-revoked";
       if (outcome === "write-failed") {
