@@ -1,0 +1,6 @@
+# Merging an orphaned external user message must not rewind the transcript leaf: the plan gate
+# (provenance, context visibility, already-persisted turn) needs its own cases, one real-store
+# regression proving no leaf control is published, a production prompt-assembly case proving the
+# durable row does not repeat the preserved orphan text, and one real-Gateway e2e proof
+# (chat.send / chat.history / captured provider request over the repaired session).
+458

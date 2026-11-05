@@ -357,6 +357,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
           sessionManager,
           prompt: attempt.prompt,
           preserveLeaf: attempt.skipPreparedUserTurnMessage === true,
+          currentTurnPersisted: attempt.userTurnTranscriptRecorder?.hasPersisted() === true,
         });
         const reconciledCurrentUser = reconcilePrePersistedCurrentUserTurn({
           activeSession,

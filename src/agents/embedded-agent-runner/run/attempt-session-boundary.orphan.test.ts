@@ -374,6 +374,43 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
     );
   });
 
+  it("keeps a merged external orphan visible without a leaf rewind", async () => {
+    await withPersistedOrphanBoundary(
+      { parent: true, metadata: true, idempotencyKey: "accepted-user:user" },
+      async ({ input, manager, orphanId, target }) => {
+        const before = loadTranscriptEventsSync(target);
+        const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
+
+        expect(boundary.orphanRepair?.removeLeaf).toBe(false);
+        expect(boundary.orphanRepair?.durableLeafCarriesMergedText).toBe(true);
+        expect(boundary.orphanRepair?.contextEnginePrompt.match(/orphan wake/g)).toHaveLength(1);
+        expect(boundary.orphanRepair?.contextEnginePrompt).toContain(input.attempt.prompt);
+        // The merged prompt owns the orphan text for this call, so the durable row
+        // stays out of the provider prefix instead of being rewound.
+        expect(input.activeSession.agent.state.messages).toEqual([]);
+        // No rewind: the accepted user row keeps its branch position and the
+        // transcript gains no leaf control, so the index keeps appending.
+        expect(manager.getBranch().map((entry) => entry.id)).toContain(orphanId);
+        expect(loadTranscriptEventsSync(target)).toEqual(before);
+
+        await manager.appendMessageAsync({
+          role: "user",
+          content: input.attempt.prompt,
+          timestamp: 3,
+        });
+        const reopened = SessionManager.openBounded(target, { maxBytes: 4096, maxEvents: 20 });
+        expect(reopened.getBranch().map((entry) => entry.id)).toContain(orphanId);
+        expect(loadTranscriptEventsSync(target)).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ type: "leaf" })]),
+        );
+        expect(reopened.buildSessionContext().messages).toMatchObject([
+          { role: "user", content: "orphan wake", idempotencyKey: "accepted-user:user" },
+          { role: "user", content: input.attempt.prompt },
+        ]);
+      },
+    );
+  });
+
   it.each(["orphan", "current", "excluded"] as const)(
     "preserves speech finalized while orphan repair waits for write admission: %s",
     async (kind) => {
