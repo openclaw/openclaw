@@ -52,9 +52,10 @@ const controlUiPerformanceBudgets = {
   // First-visit co-location improves Sessions/Cron by 7–8%, accepting 205 B in Chat.
   // Measured 1,280,999 B plus the existing 64 B build-variance headroom.
   chatBootJsGzipBytes: 1_281_063,
-  // Boot composer scroll capture: measured 797,495 B plus 192 B build variance.
-  // vincentkoc approved +292 B for #187742 (2026-11-04).
-  newBootJsGzipBytes: 797_687,
+  // Current main already exceeds the earlier New boot baseline.
+  // vincentkoc approved the measured uplift for #187742 (2026-11-05).
+  // Current canonical output is 799,891 B plus 192 B build variance.
+  newBootJsGzipBytes: 800_083,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
