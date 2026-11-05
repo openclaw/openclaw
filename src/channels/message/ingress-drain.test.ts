@@ -719,14 +719,10 @@ describe("channel ingress drain ownership", () => {
         const writing = createDeferredCore();
         const finish = createDeferredCore();
         const failure = new Error("completion write failed");
-        const write = queue[method].bind(queue);
-        vi.spyOn(queue, method).mockImplementation(async (claim, options) => {
-          if (typeof claim !== "string" && claim.id === "delivered") {
-            writing.resolve();
-            await finish.promise;
-            throw failure;
-          }
-          return write(claim, options);
+        const write = vi.spyOn(queue, method).mockImplementation(async () => {
+          writing.resolve();
+          await finish.promise;
+          throw failure;
         });
         const abort = new AbortController();
         const drain = createChannelIngressDrain(
@@ -759,6 +755,7 @@ describe("channel ingress drain ownership", () => {
           );
           finish.resolve();
           await disposed;
+          write.mockRestore();
           expect(await peer.recoverStaleClaims()).toBe(1);
           await peer.drainOnce();
           await peer.waitForIdle();
