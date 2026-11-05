@@ -8,7 +8,10 @@ import * as commands from "../process/exec.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
-import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
+import {
+  prepareUpdateCandidateStateSnapshot,
+  resolveUpdateCandidateAdmissionTimeoutMs,
+} from "./update-candidate-snapshot.js";
 import { captureUpdateCandidateDeadline } from "./update-candidate-state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -218,3 +221,19 @@ it.each([
     }
   },
 );
+
+it("sizes candidate admission to measured state within the update step deadline", async () => {
+  const stateDir = await fs.realpath(tempDirs.make("admission-budget-"));
+  const params = { config: {}, stateDir, env: { OPENCLAW_STATE_DIR: stateDir } };
+  const resolve = (stepTimeoutMs: number) =>
+    resolveUpdateCandidateAdmissionTimeoutMs({ ...params, stepTimeoutMs });
+  const small = await resolve(Number.MAX_SAFE_INTEGER);
+  expect(small).toBeGreaterThanOrEqual(120_000);
+
+  const database = path.join(stateDir, "state/openclaw.sqlite");
+  await fs.mkdir(path.dirname(database), { recursive: true });
+  await fs.writeFile(database, "");
+  await fs.truncate(database, 3 * 1024 ** 3);
+  expect(await resolve(Number.MAX_SAFE_INTEGER)).toBeGreaterThan(small);
+  expect(await resolve(1_800_000)).toBe(1_800_000);
+});

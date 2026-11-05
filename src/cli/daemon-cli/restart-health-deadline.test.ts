@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import {
   createGatewayRestartDeadline,
   GatewayRestartDeadlineError,
@@ -157,6 +158,25 @@ describe("shared restart observation deadline", () => {
       released.resolve();
       deadline.dispose();
     }
+  });
+
+  it("stops polling a healthy Gateway once its command scope is cancelled", async () => {
+    let observations = 0;
+    await expect(
+      withCommandProcessScope((stop) =>
+        waitForGatewayHealthyRestart({
+          service: makeGatewayService({ status: "unknown" }),
+          port: 18789,
+          attempts: 1_000,
+          requireRunningService: true,
+          onObservation: () => {
+            observations += 1;
+            stop();
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(observations).toBe(1);
   });
 
   it("spends the remaining allowance on reconciliation after managed readiness", async () => {
