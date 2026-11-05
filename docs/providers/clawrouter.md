@@ -454,6 +454,36 @@ does not yet produce the versioned facts remains on managed search. If a route
 rejects hosted search, OpenClaw surfaces that error rather than retrying with a
 different key or silently replacing the configured search provider.
 
+## Music generation
+
+ClawRouter registers the existing `music_generate` consumer for catalog-qualified
+`google/lyria-3-clip-preview` and `google/lyria-3-pro-preview` offers. These finite
+wire contracts are not grants or live availability claims. Selection requires a
+fresh proxy-key catalog, provider `google-gemini`, capability `audio.generate`,
+and the exact `google.music_generate` / `google.music` formats.
+
+The native route is
+`/v1/native/google-gemini/v1beta/models/{upstream}:generateContent`; the manifest
+route is `/v1/proxy/google-gemini/music_generate`, with `pathParams.model` bound
+to the selected native model. Both use only the ClawRouter credential. Unknown
+formats, mixed model capabilities, stale catalogs and foreign scope are rejected.
+No native Google key, static model default, text-only retry or external asset URL
+is used by this consumer.
+
+Prompt, lyrics, instrumental instructions and up to ten inline PNG/JPEG/WebP
+images use the native Google serializer. Duration is unsupported. A format
+selection validates local support; it does not request or promise WAV output.
+One complete track requires explicit MP3 MIME, or PCM WAV for Pro, within the
+service's 4 MiB audio and 8 MiB JSON limits. The Worker owns container validation
+and original input-asset authorization.
+
+Caller cancellation covers discovery, POST, response reading and local delivery.
+Once a POST has started, transport uncertainty, text-only output, invalid responses
+or asset conversion errors stop automatic provider fallback. This replay policy
+does not decide billing: a completed upstream operation can remain spent when
+delivery is cancelled later. Unknown native dollar charges remain unknown;
+separately authorized `policy_fixed` accounting stays a Worker policy.
+
 ## Image generation
 
 The bundled plugin also registers ClawRouter with the native image runtime,

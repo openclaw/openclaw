@@ -107,12 +107,17 @@ describe("ClawRouter provider catalog", () => {
 
   it("maps every supported catalog protocol to its OpenClaw transport", async () => {
     const fetchGuard = buildFetchGuard();
+    // Both registered catalog hooks pass a separately resolved discovery credential.
     const provider = await buildClawRouterProviderConfig({
       apiKey: "clawrouter-test-key",
+      discoveryApiKey: "clawrouter-test-key",
       baseUrl: "https://clawrouter.example/v1",
     });
 
     expect(fetchGuard).toHaveBeenCalledOnce();
+    expect(new Headers(fetchGuard.mock.calls[0]?.[0].init?.headers).get("authorization")).toBe(
+      "Bearer clawrouter-test-key",
+    );
     expect(provider.models.map((model) => model.id)).toEqual([
       "anthropic/claude-sonnet-4-6",
       "deepseek/deepseek-v4-flash",
@@ -185,7 +190,10 @@ describe("ClawRouter provider catalog", () => {
       finalUrl: "https://clawrouter.example/v1/catalog",
       release: async () => undefined,
     }));
-    const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
+    const provider = await buildClawRouterProviderConfig({
+      apiKey: "fixture-key",
+      discoveryApiKey: "fixture-key",
+    });
     expect(Object.fromEntries(provider.models.map((model) => [model.id, model.input]))).toEqual({
       "openai/gpt-6.1-sol": ["text", "image"],
       "openai/gpt-6-sol": ["text", "image"],
@@ -219,7 +227,10 @@ describe("ClawRouter provider catalog", () => {
       finalUrl: "https://clawrouter.example/v1/catalog",
       release: async () => undefined,
     }));
-    const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
+    const provider = await buildClawRouterProviderConfig({
+      apiKey: "fixture-key",
+      discoveryApiKey: "fixture-key",
+    });
     expect(Object.fromEntries(provider.models.map((model) => [model.id, model.input]))).toEqual({
       "declared-vision": ["text", "image"],
       "image-only": ["image"],
@@ -286,7 +297,10 @@ describe("ClawRouter provider catalog", () => {
       finalUrl: "https://clawrouter.example/v1/catalog",
       release: async () => undefined,
     });
-    const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
+    const provider = await buildClawRouterProviderConfig({
+      apiKey: "fixture-key",
+      discoveryApiKey: "fixture-key",
+    });
     expect(provider.models.find((model) => model.id === "openai/gpt-6.1-terra")).toMatchObject({
       input: ["text", "image"],
       contextWindow: 1_050_000,
@@ -329,7 +343,10 @@ describe("ClawRouter provider catalog", () => {
       finalUrl: "https://clawrouter.example/v1/catalog",
       release: async () => undefined,
     });
-    const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
+    const provider = await buildClawRouterProviderConfig({
+      apiKey: "fixture-key",
+      discoveryApiKey: "fixture-key",
+    });
     for (const model of provider.models) {
       expect(model).toMatchObject({ input: ["text"], contextWindow: 200_000, maxTokens: 32_768 });
     }
@@ -339,6 +356,7 @@ describe("ClawRouter provider catalog", () => {
     buildFetchGuard();
     const provider = await buildClawRouterProviderConfig({
       apiKey: "synthetic-router-key",
+      discoveryApiKey: "synthetic-router-key",
       baseUrl: "https://clawrouter.example",
     });
     const row = provider.models.find((model) => model.id === "openai/gpt-5.6")!;
@@ -382,6 +400,7 @@ describe("ClawRouter provider catalog", () => {
     buildFetchGuard();
     const provider = await buildClawRouterProviderConfig({
       apiKey: "clawrouter-test-key",
+      discoveryApiKey: "clawrouter-test-key",
       baseUrl: "https://clawrouter.example",
     });
     const normalize = (id: string) =>
@@ -453,7 +472,10 @@ describe("ClawRouter provider catalog", () => {
       release: async () => undefined,
     }));
 
-    const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
+    const provider = await buildClawRouterProviderConfig({
+      apiKey: "fixture-key",
+      discoveryApiKey: "fixture-key",
+    });
 
     expect(provider.models.map((model) => model.id)).toEqual(["defaults", "duplicate"]);
     expect(provider.models[1]).toMatchObject({
@@ -476,6 +498,7 @@ describe("ClawRouter provider catalog", () => {
     const fetchGuard = buildFetchGuard();
     const params = {
       apiKey: "catalog-key-a",
+      discoveryApiKey: "catalog-key-a",
       baseUrl: "https://clawrouter.example",
     };
     try {

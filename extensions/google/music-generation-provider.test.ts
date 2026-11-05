@@ -102,6 +102,8 @@ it("submits generation and returns inline audio bytes plus lyrics", async () => 
 
   const result = await generateMusic({
     instrumental: true,
+    lyrics: "  wake the city up  ",
+    inputImages: [{ buffer: Buffer.from("synthetic image"), mimeType: "image/png" }],
     cfg: googleConfig({ baseUrl: "https://proxy.example.com/v1beta/route" }),
   });
   expect(createGoogleGenAIMock.mock.calls.at(-1)?.[0].httpOptions).toMatchObject({
@@ -110,7 +112,22 @@ it("submits generation and returns inline audio bytes plus lyrics", async () => 
   });
   expect(generateContentMock.mock.calls[0]?.[0]).toEqual({
     model: "lyria-3-clip-preview",
-    contents: expect.anything(),
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text: "upbeat synthpop anthem\n\nInstrumental only. No vocals, no sung lyrics, no spoken word.\n\nLyrics:\nwake the city up",
+          },
+          {
+            inlineData: {
+              mimeType: "image/png",
+              data: Buffer.from("synthetic image").toString("base64"),
+            },
+          },
+        ],
+      },
+    ],
     config: { responseModalities: ["AUDIO", "TEXT"] },
   });
   expect(result.tracks).toHaveLength(1);
@@ -201,3 +218,30 @@ it("does not retry request errors", async () => {
 it("rejects unsupported wav output on clip model", async () => {
   await expect(generateMusic({ format: "wav" })).rejects.toThrow("supports mp3 output");
 });
+
+it("does not resolve native credentials or dispatch after caller cancellation", async () => {
+  const signal = AbortSignal.abort(new Error("caller stopped music"));
+  await expect(generateMusic({ signal })).rejects.toBe(signal.reason);
+  expect(providerAuthRuntime.resolveApiKeyForProvider).not.toHaveBeenCalled();
+  expect(createGoogleGenAIMock).not.toHaveBeenCalled();
+});
+
+it.each(["text-only", "audio"])(
+  "honors cancellation without retrying a late %s response",
+  async (mode) => {
+    const controller = new AbortController();
+    const reason = new Error("caller stopped music");
+    generateContentMock.mockImplementation(async () => {
+      controller.abort(reason);
+      return mode === "audio"
+        ? googleMusicAudioResponse()
+        : googleMusicResponse([{ text: "late lyrics" }], "STOP");
+    });
+    await expect(generateMusic({ signal: controller.signal })).rejects.toBe(reason);
+    expect(generateContentMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        config: { responseModalities: ["AUDIO", "TEXT"], abortSignal: controller.signal },
+      }),
+    );
+  },
+);

@@ -21,6 +21,8 @@ export type MusicGenerationRequest = {
   agentDir?: string;
   authStore?: AuthProfileStore;
   timeoutMs?: number;
+  /** Cancels music generation and response reads owned by this request. */
+  signal?: AbortSignal;
   lyrics?: string;
   instrumental?: boolean;
   durationSeconds?: number;

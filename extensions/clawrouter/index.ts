@@ -45,6 +45,10 @@ import { buildClawRouterDecisionProvider } from "./decision-provider.js";
 import { clawrouterEmbeddingProvider } from "./embedding-provider.js";
 import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { listClawRouterImageModelCatalog } from "./image-model-catalog.js";
+import {
+  buildClawRouterMusicGenerationProvider,
+  listClawRouterMusicModelCatalog,
+} from "./music-generation-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
@@ -463,6 +467,12 @@ export default defineSingleProviderPluginEntry({
     api.registerMediaUnderstandingProvider(clawrouterMediaUnderstandingProvider);
     api.registerDecisionProvider(buildClawRouterDecisionProvider());
     api.registerImageGenerationProvider(buildClawRouterImageGenerationProvider());
+    api.registerMusicGenerationProvider(buildClawRouterMusicGenerationProvider());
+    api.registerModelCatalogProvider({
+      provider: "clawrouter",
+      kinds: ["music_generation"],
+      liveCatalog: listClawRouterMusicModelCatalog,
+    });
     api.registerModelCatalogProvider({
       provider: "clawrouter",
       kinds: ["image_generation"],

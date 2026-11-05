@@ -5,8 +5,12 @@ import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import {
+  bindProviderCatalogInvocationOrigin,
   getProviderCatalogDiscoveryBudget,
+  providerCatalogBudgetOriginCause,
+  recordProviderCatalogAuthCacheKeyOrigin,
   resolveProviderCatalogDiscoveryTimeoutMs,
+  sampleProviderCatalogBudgetClock,
   withProviderCatalogDiscoveryBudget,
 } from "../plugins/provider-catalog-expiry.js";
 import {
@@ -126,10 +130,12 @@ function buildHeaders(
   const headers = safeReplayHeaders
     ? new Headers(safeReplayHeaders)
     : new Headers(
-        (params.buildRequestHeaders ?? buildDefaultLiveModelCatalogHeaders)({
-          apiKey: normalizeLiveModelCatalogRequestApiKey(params.apiKey),
-          discoveryApiKey: selectLiveModelCatalogRequestApiKey(params),
-        }),
+        params.buildRequestHeaders
+          ? params.buildRequestHeaders({
+              apiKey: normalizeLiveModelCatalogRequestApiKey(params.apiKey),
+              discoveryApiKey: selectLiveModelCatalogRequestApiKey(params),
+            })
+          : buildDefaultLiveModelCatalogHeaders(params),
       );
   if (!headers.has("accept")) {
     headers.set("accept", "application/json");
@@ -327,9 +333,14 @@ export async function fetchLiveProviderModelRows(
 ): Promise<readonly unknown[]> {
   const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
   const budget = getProviderCatalogDiscoveryBudget();
+  const configuredLimit = resolveProviderCatalogDiscoveryTimeoutMs(
+    params.providerId,
+    params.timeoutMs,
+  );
+  const acquisitionClock = sampleProviderCatalogBudgetClock();
   const timeoutMs = Math.min(
-    resolveProviderCatalogDiscoveryTimeoutMs(params.providerId, params.timeoutMs),
-    budget ? budget.deadlineMs - performance.now() : Infinity,
+    configuredLimit,
+    budget ? budget.deadlineMs - acquisitionClock.now : Infinity,
   );
   const startedAt = performance.now();
   const rows: unknown[] = [];
@@ -340,10 +351,23 @@ export async function fetchLiveProviderModelRows(
     if (seenPageUrls.has(pageUrl)) {
       break;
     }
-    const remainingTimeoutMs = Math.floor(timeoutMs - (performance.now() - startedAt));
+    const guardClock = sampleProviderCatalogBudgetClock();
+    const remainingTimeoutMs = Math.floor(timeoutMs - (guardClock.now - startedAt));
     if (remainingTimeoutMs <= 0) {
       throw new Error(
         `${params.providerId} model discovery exceeded ${timeoutMs}ms before the catalog completed`,
+        {
+          cause: providerCatalogBudgetOriginCause(
+            params,
+            acquisitionClock,
+            configuredLimit,
+            timeoutMs,
+            startedAt,
+            guardClock,
+            remainingTimeoutMs,
+            page,
+          ),
+        },
       );
     }
     seenPageUrls.add(pageUrl);
@@ -390,24 +414,39 @@ export function liveModelCatalogAuthCacheKey(
   return selectLiveModelCatalogRequestApiKey(params);
 }
 
+function observedLiveModelCatalogAuthCacheKey(params: LiveModelCatalogHeaderContext, load: object) {
+  // Observe the existing synchronous selection in place; never retain its key.
+  const before = sampleProviderCatalogBudgetClock();
+  const key = liveModelCatalogAuthCacheKey(params);
+  const after = sampleProviderCatalogBudgetClock();
+  recordProviderCatalogAuthCacheKeyOrigin(load, before, after);
+  return key;
+}
+
 export async function getCachedLiveProviderModelRows(
   params: CachedLiveProviderModelRowsParams,
 ): Promise<readonly unknown[]> {
   return await withProviderCatalogDiscoveryBudget(
     resolveProviderCatalogDiscoveryTimeoutMs(params.providerId, params.timeoutMs),
-    () =>
-      getCachedLiveCatalogValue({
+    () => {
+      const load = async (signal?: AbortSignal) => {
+        const invocation = { ...params, signal };
+        bindProviderCatalogInvocationOrigin(load, invocation);
+        return await fetchLiveProviderModelRows(invocation);
+      };
+      return getCachedLiveCatalogValue({
         keyParts: params.cacheKeyParts ?? [
           params.providerId,
           "model-rows",
           params.endpoint,
-          liveModelCatalogAuthCacheKey(params),
+          observedLiveModelCatalogAuthCacheKey(params, load),
         ],
         ttlMs: params.ttlMs,
         signal: params.signal,
-        load: async (signal) => await fetchLiveProviderModelRows({ ...params, signal }),
+        load,
         shouldCache: params.shouldCacheRows,
-      }),
+      });
+    },
   );
 }
 
