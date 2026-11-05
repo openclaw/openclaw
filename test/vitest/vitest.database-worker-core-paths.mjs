@@ -425,6 +425,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/update-run-abandonment.test.ts",
   "src/infra/update-run-interruption.worker.test.ts",
   "src/channels/turn/durable-delivery.reload.test.ts",
+  "src/channels/turn/admitting-gateway-delivery.route-reply.test.ts",
+  "src/auto-reply/reply/route-reply.retired-turn-registry.test.ts",
   "test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts",
   "src/channels/message/durable-receive.test.ts",
   "src/channels/message/ingress-drain-lanes.test.ts",

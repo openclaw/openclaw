@@ -308,7 +308,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     ).sections;
     const disclosure = this.sessionProjection.children;
     const selected = sections.find((section) =>
-      section.rows.some((row) => row.key === disclosure.selectedRootKey),
+      section.rows.some((row) => row.key === disclosure.selectedRootKey && !row.visuallyActive),
     );
     if (
       selected &&
