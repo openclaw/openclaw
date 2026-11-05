@@ -41,7 +41,7 @@ function renderJsoncValue(
     const parts = value.items.map((v, i) => renderJsoncValue(v, guardPath, [...walked, String(i)]));
     return `[${parts.join(",")}]`;
   }
-const parentPath = walked.length ? `${guardPath}/${walked.join("/")}` : guardPath;
+  const parentPath = walked.length ? `${guardPath}/${walked.join("/")}` : guardPath;
   const parts = emitJsoncObjectEntries(
     value.entries,
     parentPath,
