@@ -85,7 +85,7 @@ export function splitSqlList(sql: string): string[] {
   const items: string[] = [];
   let depth = 0;
   let start = 0;
-  for (const index of unquotedSqlIndexes(sql, 0)) {
+  for (let index = 0; (index = nextUnquotedSqlIndex(sql, index)) < sql.length; index += 1) {
     const char = sql[index];
     if (char === "(") {
       depth += 1;
@@ -101,7 +101,7 @@ export function splitSqlList(sql: string): string[] {
 }
 
 export function findSqlCharacter(sql: string, character: string): number {
-  for (const index of unquotedSqlIndexes(sql, 0)) {
+  for (let index = 0; (index = nextUnquotedSqlIndex(sql, index)) < sql.length; index += 1) {
     if (sql[index] === character) {
       return index;
     }
@@ -118,7 +118,7 @@ export function hasUnquotedSqlKeyword(sql: string, keywords: RegExp): boolean {
   if (starts.size === 0) {
     return false;
   }
-  for (const index of unquotedSqlIndexes(sql, 0)) {
+  for (let index = 0; (index = nextUnquotedSqlIndex(sql, index)) < sql.length; index += 1) {
     if (starts.has(index)) {
       return true;
     }
@@ -128,7 +128,7 @@ export function hasUnquotedSqlKeyword(sql: string, keywords: RegExp): boolean {
 
 export function findSqlClosingParenthesis(sql: string, open: number): number {
   let depth = 0;
-  for (const index of unquotedSqlIndexes(sql, open)) {
+  for (let index = open; (index = nextUnquotedSqlIndex(sql, index)) < sql.length; index += 1) {
     const char = sql[index];
     if (char === "(") {
       depth += 1;
@@ -181,7 +181,8 @@ export function quoteSqliteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
 }
 
-function* unquotedSqlIndexes(sql: string, start: number): Generator<number> {
+// Numeric traversal shares quote/comment handling without allocating an iterator result per character.
+function nextUnquotedSqlIndex(sql: string, start: number): number {
   let index = start;
   while (index < sql.length) {
     const quoted = skipSqlQuoted(sql, index, sql[index] ?? "");
@@ -189,10 +190,10 @@ function* unquotedSqlIndexes(sql: string, start: number): Generator<number> {
     if (next !== index) {
       index = next;
     } else {
-      yield index;
-      index += 1;
+      return index;
     }
   }
+  return sql.length;
 }
 
 function skipSqlQuoted(sql: string, index: number, quote: string): number {

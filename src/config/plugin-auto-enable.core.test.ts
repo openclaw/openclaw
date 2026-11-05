@@ -342,9 +342,8 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("firecrawl web fetch configured, enabled automatically.");
   });
 
-  it("bounds repeated model-candidate preference checks without changing plugin precedence", () => {
+  it("deduplicates repeated model candidates without changing plugin precedence", () => {
     const deny = ["blocked"];
-    const denyChecks = vi.spyOn(deny, "includes");
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
@@ -363,7 +362,6 @@ describe("applyPluginAutoEnable core", () => {
       plugins: { deny },
     };
     expect(validateConfigObject(config).ok).toBe(true);
-    denyChecks.mockClear();
 
     const result = autoEnable(config, [
       plugin("primary", { providers: ["primary"] }),
@@ -380,7 +378,6 @@ describe("applyPluginAutoEnable core", () => {
       ),
     ]);
 
-    expect(denyChecks.mock.calls.length).toBeLessThanOrEqual(6);
     expect(result.config.plugins?.entries?.primary?.enabled).toBe(false);
     expect(result.config.plugins?.entries?.secondary?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.blocked).toBeUndefined();

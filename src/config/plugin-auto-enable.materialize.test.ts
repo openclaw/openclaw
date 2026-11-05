@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import * as channelCatalog from "../channels/bundled-channel-catalog-read.js";
+import * as pluginPolicy from "../plugins/config-state.js";
 import { materializePluginAutoEnableCandidates } from "./plugin-auto-enable.js";
 import { makeRegistry } from "./plugin-auto-enable.test-helpers.js";
 
@@ -30,6 +31,29 @@ it("materializes declared non-channel plugins without acquiring channel catalogs
   });
   expect(result.config.channels).toBeUndefined();
   expect(catalog.mock.calls.length).toBe(0);
+});
+
+it("prepares unchanged plugin policy once across candidate preference checks", () => {
+  const normalize = vi.spyOn(pluginPolicy, "normalizePluginsConfig");
+  const ids = ["first", "second", "third", "fourth", "fifth"];
+  const config = {
+    plugins: { entries: Object.fromEntries(ids.map((id) => [id, { enabled: true }])) },
+  };
+  const before = structuredClone(config);
+  const result = materializePluginAutoEnableCandidates({
+    config,
+    candidates: ids.map((pluginId) => ({
+      pluginId,
+      kind: "setup-auto-enable" as const,
+      reason: "plugin configured",
+    })),
+    env: {},
+    manifestRegistry: makeRegistry(ids.map((id) => ({ id, channels: [], origin: "bundled" }))),
+  });
+  expect(result).toEqual({ config: before, changes: [], autoEnabledReasons: {} });
+  expect(result.config).toBe(config);
+  expect(config).toEqual(before);
+  expect(normalize).toHaveBeenCalledTimes(1);
 });
 
 it("keeps a non-channel plugin independent of a same-named disabled channel", () => {
@@ -85,3 +109,34 @@ it("reads mixed-case plugin policy under the canonical lowercase key", () => {
   expect(result.config).toEqual(config);
   expect(result.changes).toEqual([]);
 });
+
+it.each([{ config: { apiKey: "fixture-key" } }, { hooks: { timeoutMs: 1_000 } }])(
+  "preserves original plugin settings during preference and allowlist rewrites: %j",
+  (entry) => {
+    const config = { plugins: { allow: ["existing"], entries: { legacy: entry } } };
+    const before = structuredClone(config);
+    const result = materializePluginAutoEnableCandidates({
+      config,
+      candidates: ["preferred", "legacy"].map((pluginId) => ({
+        pluginId,
+        kind: "setup-auto-enable" as const,
+        reason: "plugin configured",
+      })),
+      env: {},
+      manifestRegistry: makeRegistry([
+        { id: "legacy", channels: [], origin: "global" },
+        {
+          id: "preferred",
+          channels: [],
+          origin: "global",
+          channelConfigs: { preferred: { schema: {}, preferOver: ["legacy"] } },
+        },
+      ]),
+    });
+    expect(result.config.plugins).toEqual({
+      allow: ["existing", "preferred", "legacy"],
+      entries: { legacy: entry, preferred: { enabled: true } },
+    });
+    expect(config).toEqual(before);
+  },
+);
