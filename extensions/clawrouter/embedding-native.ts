@@ -21,6 +21,23 @@ import { sanitizeAndNormalizeEmbedding } from "openclaw/plugin-sdk/memory-core-h
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawRouterCapabilityOffer } from "./capability-offers.js";
 
+// Exact text identities in the qualified embed_text declaration. Recognition is not a grant.
+const BEDROCK_TEXT_UPSTREAMS = new Set([
+  "amazon.titan-embed-text-v2:0",
+  "amazon.titan-embed-text-v1",
+  "amazon.titan-embed-g1-text-02",
+  "cohere.embed-english-v3",
+  "cohere.embed-multilingual-v3",
+  "cohere.embed-v4:0",
+  "amazon.nova-2-multimodal-embeddings-v1:0",
+  "us.twelvelabs.marengo-embed-2-7-v1:0",
+  "twelvelabs.marengo-embed-3-0-v1:0",
+]);
+
+export function isQualifiedClawRouterBedrockEmbeddingModel(model: string): boolean {
+  return model.startsWith("bedrock/") && BEDROCK_TEXT_UPSTREAMS.has(model.slice("bedrock/".length));
+}
+
 export type NativeEmbeddingRequest = {
   offer: ClawRouterCapabilityOffer;
   body: Record<string, unknown>;
@@ -96,8 +113,18 @@ export function prepareNativeEmbeddingRequests(
       offer.routeKind !== "unified" &&
       offer.requestFormat === offer.responseFormat &&
       supported.has(offer.requestFormat) &&
+      (!model.startsWith("bedrock/") || offer.requestFormat === "aws_bedrock.invoke") &&
       Array.isArray(offer.model.capabilities) &&
-      offer.model.capabilities.includes("llm.embeddings"),
+      offer.model.capabilities.includes("llm.embeddings") &&
+      (offer.requestFormat !== "aws_bedrock.invoke" ||
+        (offer.providerId === "aws-bedrock" &&
+          offer.endpoint === "embed_text" &&
+          offer.path === "/model/${model}/invoke" &&
+          offer.methods.length === 1 &&
+          offer.methods[0] === "POST" &&
+          offer.model.capabilities.length === 1 &&
+          isQualifiedClawRouterBedrockEmbeddingModel(model) &&
+          model === `bedrock/${String(offer.model.upstream)}`)),
   );
   // Prefer the bounded synchronous batch contract when it is actually offered.
   const offer =
@@ -223,6 +250,7 @@ export function prepareNativeEmbeddingRequests(
       requests.push({
         offer,
         body,
+        ...(!directCohere && { pathParams: { model: upstream } }),
         maxResponseBytes: 8 * 1024 * 1024,
         read: (payload) => {
           if (payload.error !== undefined) {

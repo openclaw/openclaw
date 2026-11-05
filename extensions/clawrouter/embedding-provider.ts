@@ -24,7 +24,11 @@ import {
   fetchClawRouterCapabilityOffers,
   resolveClawRouterCapabilityHttpContext,
 } from "./capability-offers.js";
-import { embeddingRole, prepareNativeEmbeddingRequests } from "./embedding-native.js";
+import {
+  embeddingRole,
+  isQualifiedClawRouterBedrockEmbeddingModel,
+  prepareNativeEmbeddingRequests,
+} from "./embedding-native.js";
 
 const normalizeModel = (options: EmbeddingProviderCreateOptions) =>
   options.model.trim().replace(/^clawrouter\//u, "");
@@ -145,9 +149,11 @@ export const clawrouterEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
         timeoutMs,
         signal,
         ssrfPolicy: client.ssrfPolicy,
+        requireFreshProxyCatalog: isQualifiedClawRouterBedrockEmbeddingModel(model),
       });
       const offer = offers.find(
         (candidate) =>
+          !model.startsWith("bedrock/") &&
           candidate.model?.id === model &&
           ["openai.embeddings", "voyage.embeddings"].includes(candidate.requestFormat) &&
           candidate.responseFormat === candidate.requestFormat &&

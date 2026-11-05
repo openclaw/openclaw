@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import { buffer } from "node:stream/consumers";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -35,10 +35,9 @@ const cases = [
   ["aws-bedrock", "amazon.titan-embed-text-v2:0", "aws_bedrock.invoke", 256],
   ["aws-bedrock", "amazon.titan-embed-text-v1", "aws_bedrock.invoke", 1536],
   ["aws-bedrock", "amazon.titan-embed-g1-text-02", "aws_bedrock.invoke", 1536],
-  ["aws-bedrock", "amazon.titan-embed-image-v1", "aws_bedrock.invoke", 1024],
   ["aws-bedrock", "cohere.embed-english-v3", "aws_bedrock.invoke", 1024],
   ["aws-bedrock", "cohere.embed-multilingual-v3", "aws_bedrock.invoke", 1024],
-  ["aws-bedrock", "global.cohere.embed-v4:0", "aws_bedrock.invoke", 256],
+  ["aws-bedrock", "cohere.embed-v4:0", "aws_bedrock.invoke", 256],
   ["aws-bedrock", "amazon.nova-2-multimodal-embeddings-v1:0", "aws_bedrock.invoke", 256],
   ["aws-bedrock", "us.twelvelabs.marengo-embed-2-7-v1:0", "aws_bedrock.invoke", 1024],
   ["aws-bedrock", "twelvelabs.marengo-embed-3-0-v1:0", "aws_bedrock.invoke", 512],
@@ -60,61 +59,90 @@ describe("actual ClawRouter native memory embeddings", () => {
   let routeKind = "native",
     eligible = true,
     invalidTail = false;
+  let providerOverride: string | undefined;
+  let upstreamOverride: string | undefined;
+  let endpointOverride: string | undefined;
+  let pathOverride: string | undefined;
+  let responseFormatOverride: string | undefined;
+  let offerRouteOverride: string | undefined;
+  let methods = ["POST"];
+  let capabilities = ["llm.embeddings"];
+  let catalogAgeMs = 0;
+  let scopeAuthType = "proxy_key";
+  let holdResponse = false;
+  let oversizedResponse = false;
+  let heldResponse: ServerResponse | undefined;
+  let onNativePost: (() => void) | undefined;
+  const catalogAuth: Array<string | undefined> = [];
+  const providerId = () => providerOverride ?? selected[0];
+  const modelId = () =>
+    (selected[0] === "aws-bedrock" ? "bedrock" : selected[0]) + "/" + selected[1];
   const wires: Array<{
     path: string;
     auth?: string;
     body: Record<string, unknown>;
     pathModel?: unknown;
+    signingDate?: string;
   }> = [];
   const path = () =>
-    selected[2] === "voyage.embeddings"
+    pathOverride ??
+    (selected[2] === "voyage.embeddings"
       ? "/v1/embeddings"
       : selected[2] === "cohere.embed"
         ? "/v2/embed"
         : selected[2] === "aws_bedrock.invoke"
           ? "/model/${model}/invoke"
           : "/v1beta/models/${model}:" +
-            (selected[2] === "google.embed_content" ? "embedContent" : "batchEmbedContents");
-  const endpoint = () => (selected[2] === "voyage.embeddings" ? "embeddings" : "embed");
+            (selected[2] === "google.embed_content" ? "embedContent" : "batchEmbedContents"));
+  const endpoint = () =>
+    endpointOverride ??
+    (selected[2] === "aws_bedrock.invoke"
+      ? "embed_text"
+      : selected[2] === "voyage.embeddings"
+        ? "embeddings"
+        : "embed");
   const route = () =>
     routeKind === "manifest"
-      ? "/v1/proxy/" + selected[0] + "/" + endpoint()
-      : "/v1/native/" + selected[0] + path();
+      ? "/v1/proxy/" + providerId() + "/" + endpoint()
+      : "/v1/native/" + providerId() + path();
   const server = createServer((req, res) => {
     void (async () => {
       res.setHeader("Content-Type", "application/json");
       if (req.url === "/v1/catalog") {
+        catalogAuth.push(req.headers.authorization);
         res.end(
           JSON.stringify({
             version: "clawrouter.client-catalog.v1",
+            observedAt: new Date(Date.now() - catalogAgeMs).toISOString(),
+            scope: { authType: scopeAuthType, credentialId: "synthetic-memory-grant" },
             providers: [
               {
-                id: selected[0],
+                id: providerId(),
                 allowed: true,
                 executable: true,
-                nativeBaseUrl: "/v1/native/" + selected[0],
+                nativeBaseUrl: "/v1/native/" + providerId(),
                 models: [
                   {
-                    id: selected[0] + "/" + selected[1],
-                    upstream: selected[1],
-                    capabilities: ["llm.embeddings"],
+                    id: modelId(),
+                    upstream: upstreamOverride ?? selected[1],
+                    capabilities,
                   },
                 ],
                 routes: [
                   {
                     endpoint: endpoint(),
                     path: path(),
-                    methods: ["POST"],
+                    methods,
                     requestFormat: selected[2],
-                    responseFormat: selected[2],
+                    responseFormat: responseFormatOverride ?? selected[2],
                   },
                 ],
                 offers: [
                   {
                     endpoint: endpoint(),
-                    modelId: selected[0] + "/" + selected[1],
+                    modelId: modelId(),
                     routeKind,
-                    route: route(),
+                    route: offerRouteOverride ?? route(),
                     transport: "http",
                     eligible,
                     affordability: "request-dependent",
@@ -129,11 +157,29 @@ describe("actual ClawRouter native memory embeddings", () => {
       const envelope = JSON.parse((await buffer(req)).toString()) as Record<string, unknown>;
       const body = (routeKind === "manifest" ? envelope.body : envelope) as Record<string, unknown>;
       const pathModel = (envelope.pathParams as Record<string, unknown> | undefined)?.model;
-      wires.push({ path: req.url ?? "", auth: req.headers.authorization, body, pathModel });
-      // Google manifest selection requires the model path parameter, even for a batch body.
+      wires.push({
+        path: req.url ?? "",
+        auth: req.headers.authorization,
+        body,
+        pathModel,
+        signingDate:
+          typeof req.headers["x-amz-date"] === "string" ? req.headers["x-amz-date"] : undefined,
+      });
+      if (oversizedResponse) {
+        res.end(JSON.stringify({ padding: "x".repeat(8 * 1024 * 1024) }));
+        return;
+      }
+      if (holdResponse) {
+        heldResponse = res;
+        res.writeHead(200);
+        res.write('{"embedding":[');
+        onNativePost?.();
+        return;
+      }
+      // Both native protocols bind manifest selection to the original registered model.
       if (
         routeKind === "manifest" &&
-        selected[2].startsWith("google.") &&
+        (selected[2].startsWith("google.") || selected[2] === "aws_bedrock.invoke") &&
         pathModel !== selected[1]
       ) {
         res.statusCode = 400;
@@ -202,7 +248,10 @@ describe("actual ClawRouter native memory embeddings", () => {
     await closed;
     await releasePort();
   });
-  afterEach(() => setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry()));
+  afterEach(() => {
+    heldResponse?.destroy();
+    setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
+  });
   beforeEach(() => {
     previousRegistry = getActivePluginRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -211,16 +260,31 @@ describe("actual ClawRouter native memory embeddings", () => {
     routeKind = "native";
     eligible = true;
     invalidTail = false;
-    wires.length = 0;
+    providerOverride = upstreamOverride = endpointOverride = pathOverride = undefined;
+    responseFormatOverride = offerRouteOverride = undefined;
+    methods = ["POST"];
+    capabilities = ["llm.embeddings"];
+    catalogAgeMs = 0;
+    scopeAuthType = "proxy_key";
+    holdResponse = false;
+    oversizedResponse = false;
+    heldResponse = undefined;
+    onNativePost = undefined;
+    catalogAuth.length = wires.length = 0;
   });
   const options = (): EmbeddingProviderCreateOptions => ({
-    model: selected[0] + "/" + selected[1],
+    model: modelId(),
     dimensions: selected[3],
     config: {
       plugins: { enabled: false },
       models: {
         providers: {
           clawrouter: { baseUrl, models: [] },
+          "amazon-bedrock": {
+            apiKey: "unused-native-bedrock-key",
+            baseUrl: "https://upstream.example",
+            models: [],
+          },
           google: {
             apiKey: "unused-upstream-key",
             baseUrl: "https://upstream.example",
@@ -256,6 +320,8 @@ describe("actual ClawRouter native memory embeddings", () => {
           axis(dimensions),
         ]);
         expect(wires.every((wire) => wire.auth === "Bearer synthetic-router-key")).toBe(true);
+        expect(catalogAuth.every((auth) => auth === "Bearer synthetic-router-key")).toBe(true);
+        expect(wires.every((wire) => wire.signingDate === undefined)).toBe(true);
         expect(wires[0]?.path).toBe(route().replaceAll("${model}", encodeURIComponent(model)));
         const first = wires[0]!.body;
         if (format === "voyage.embeddings") {
@@ -268,13 +334,13 @@ describe("actual ClawRouter native memory embeddings", () => {
           });
           expect(wires.at(-1)?.body).toMatchObject({ input_type: "search_document" });
         }
-        if (model.includes("marengo-2-7")) {
+        if (model.includes("marengo-embed-2-7")) {
           expect(first).toEqual({ inputType: "text", inputText: "query" });
         }
-        if (model.includes("marengo-3-0")) {
+        if (model.includes("marengo-embed-3-0")) {
           expect(first).toEqual({ inputType: "text", text: { inputText: "query" } });
         }
-        if (format.startsWith("google.")) {
+        if (format.startsWith("google.") || format === "aws_bedrock.invoke") {
           for (const wire of wires) {
             expect(wire.pathModel).toBe(kind === "manifest" ? model : undefined);
           }
@@ -347,7 +413,7 @@ describe("actual ClawRouter native memory embeddings", () => {
     expect(wires).toHaveLength(count);
   });
   it("rejects unqualified options and aborts before native dispatch; dimensions partition indexes", async () => {
-    selected = cases[13];
+    selected = ["aws-bedrock", "cohere.embed-v4:0", "aws_bedrock.invoke", 256];
     const cfg = options();
     expect(adapter().resolveIndexIdentity?.(cfg)).not.toEqual(
       adapter().resolveIndexIdentity?.({ ...cfg, dimensions: 512 }),
@@ -363,5 +429,160 @@ describe("actual ClawRouter native memory embeddings", () => {
     ).rejects.toThrow("text-only");
     await expect(valid!.embed("cancel", { signal: AbortSignal.abort() })).rejects.toThrow();
     expect(wires).toEqual([]);
+  });
+  describe.each(["native", "manifest"])("qualified Bedrock %s offers", (kind) => {
+    beforeEach(() => {
+      selected = ["aws-bedrock", "cohere.embed-v4:0", "aws_bedrock.invoke", 256];
+      routeKind = kind;
+    });
+    it.each([
+      [
+        "foreign provider",
+        () => {
+          providerOverride = "foreign-bedrock";
+        },
+      ],
+      [
+        "wrong endpoint",
+        () => {
+          endpointOverride = "embed";
+        },
+      ],
+      [
+        "wrong path",
+        () => {
+          pathOverride = "/invoke/${model}";
+        },
+      ],
+      [
+        "wrong method",
+        () => {
+          methods = ["GET"];
+        },
+      ],
+      [
+        "additional method",
+        () => {
+          methods = ["POST", "GET"];
+        },
+      ],
+      [
+        "mixed capability",
+        () => {
+          capabilities = ["llm.embeddings", "llm.chat"];
+        },
+      ],
+      [
+        "wrong response format",
+        () => {
+          responseFormatOverride = "openai.embeddings";
+        },
+      ],
+      [
+        "different upstream",
+        () => {
+          upstreamOverride = "cohere.embed-english-v3";
+        },
+      ],
+      [
+        "foreign route",
+        () => {
+          offerRouteOverride = "https://foreign.example/invoke";
+        },
+      ],
+      [
+        "stale observation",
+        () => {
+          catalogAgeMs = 61_000;
+        },
+      ],
+      [
+        "future observation",
+        () => {
+          catalogAgeMs = -10_000;
+        },
+      ],
+      [
+        "foreign scope",
+        () => {
+          scopeAuthType = "admin";
+        },
+      ],
+    ] as const)("denies %s before POST", async (_label, change) => {
+      change();
+      const { provider } = await create(options());
+      await expect(provider!.embed("denied")).rejects.toThrow();
+      expect(wires).toEqual([]);
+    });
+    it.each([
+      "global.cohere.embed-v4:0",
+      "twelvelabs.marengo-embed-2-7-v1:0",
+      "eu.twelvelabs.marengo-embed-2-7-v1:0",
+      "amazon.titan-embed-image-v1",
+    ])("denies unregistered model or profile %s without suffix inheritance", async (model) => {
+      selected = ["aws-bedrock", model, "aws_bedrock.invoke", 256];
+      const { provider } = await create(options());
+      await expect(provider!.embed("denied")).rejects.toThrow("no eligible");
+      expect(wires).toEqual([]);
+    });
+    it("does not substitute a native provider key for a missing proxy key", async () => {
+      await expect(
+        (async () => {
+          const { provider } = await create({ ...options(), remote: { apiKey: "" } });
+          return provider!.embed("denied");
+        })(),
+      ).rejects.toThrow();
+      expect(wires).toEqual([]);
+      expect(catalogAuth).toEqual([]);
+    });
+    it("batches Cohere at 96 and rejects a malformed later vector", async () => {
+      const { provider } = await create(options());
+      const inputs = Array.from({ length: 97 }, (_, i) => "document " + i);
+      expect(await provider!.embedBatch(inputs)).toHaveLength(97);
+      expect(wires.map((wire) => (wire.body.texts as string[]).length)).toEqual([96, 1]);
+      expect(wires.every((wire) => wire.body.input_type === "search_document")).toBe(true);
+      invalidTail = true;
+      const onUsage = vi.fn();
+      await expect(provider!.embedBatch(["valid", "invalid"], { onUsage })).rejects.toThrow(
+        "dimensions",
+      );
+      expect(onUsage).not.toHaveBeenCalled();
+    });
+    it("validates all 2 MiB requests before sending any part of a batch", async () => {
+      selected = ["aws-bedrock", "amazon.titan-embed-text-v2:0", "aws_bedrock.invoke", 256];
+      const { provider } = await create(options());
+      await expect(provider!.embedBatch(["small", "x".repeat(2 * 1024 * 1024)])).rejects.toThrow(
+        "byte limit",
+      );
+      expect(wires).toEqual([]);
+    });
+    it("rejects an oversized response without vectors or invented usage", async () => {
+      oversizedResponse = true;
+      const { provider } = await create(options());
+      const onUsage = vi.fn();
+      await expect(provider!.embed("large response", { onUsage })).rejects.toThrow();
+      expect(wires).toHaveLength(1);
+      expect(onUsage).not.toHaveBeenCalled();
+    });
+    it("cancels an actual response read without sending the next request", async () => {
+      selected = ["aws-bedrock", "amazon.titan-embed-text-v2:0", "aws_bedrock.invoke", 256];
+      holdResponse = true;
+      const controller = new AbortController();
+      const started = new Promise<void>((resolve) => {
+        onNativePost = resolve;
+      });
+      const { provider } = await create(options());
+      const onUsage = vi.fn();
+      const result = provider!.embedBatch(["first", "never sent"], {
+        signal: controller.signal,
+        onUsage,
+      });
+      const rejected = expect(result).rejects.toThrow();
+      await started;
+      controller.abort();
+      await rejected;
+      expect(wires).toHaveLength(1);
+      expect(onUsage).not.toHaveBeenCalled();
+    });
   });
 });

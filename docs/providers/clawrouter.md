@@ -231,6 +231,28 @@ cross-provider recovery. These settings do not add image or audio embeddings.
 See [Memory search](/concepts/memory-search) and
 [embedding dimensions](/reference/memory-config#provider-specific-config).
 
+### Native Bedrock text embeddings
+
+The native ClawRouter memory adapter (`memory.search.provider: "clawrouter"`)
+also understands qualified Bedrock text embedding offers. This requires an
+eligible `aws-bedrock` catalog offer for the selected `bedrock/...` model and a
+deployment that implements the `embed_text` endpoint. Local codec support does
+not establish a deployment's availability, your key's grant, or a price.
+
+Each call refreshes the catalog with the configured router key. Both native
+Invoke and manifest transports bind the exact catalog `model.upstream`; the
+manifest envelope includes `pathParams.model`. Profile prefixes are identities,
+not interchangeable aliases: the qualified Marengo 2.7 identity is
+`us.twelvelabs.marengo-embed-2-7-v1:0`. Titan image-text is not enabled by this
+text-only contract. Stale, foreign, or mismatched offers fail before inference.
+
+The adapter uses the existing native formatters and vector validation, with
+2 MiB request and 8 MiB response bounds. Cohere requests contain at most 96
+texts. Only an observed Titan input-token count supplies usage; absent usage or
+pricing is not zero. OpenClaw sends only the router credential and does not
+resolve AWS credentials or sign AWS requests. Keep `fallback: "none"` to prevent
+cross-provider recovery.
+
 ## Managed non-interactive deployment
 
 Keep the ClawRouter key in the workload's secret injection and store only a
