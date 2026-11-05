@@ -171,7 +171,22 @@ it("records a refused main-session event as one failure without enqueuing a repl
   expect(f.history(job.id)).toMatchObject([{ status: "error", completionStatus: "failed" }]);
 });
 
-it("consumes a scratch-empty one-shot without replaying it after restart", async () => {
+it.each([
+  ["explicitly empty", ""],
+  [
+    "legacy heartbeat scaffold",
+    `\`\`\`markdown
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+\`\`\`
+
+## Related
+
+- [Heartbeat config](/gateway/config-agents)
+`,
+  ],
+] as const)("consumes a %s one-shot without replaying it after restart", async (_name, scratch) => {
   let now = atMs;
   await using f = await fixture({ nowMs: () => now });
   const job = await f.cron.add(
@@ -179,7 +194,7 @@ it("consumes a scratch-empty one-shot without replaying it after restart", async
       payload: { kind: "agentTurn", message: "Check the scratch", skipIfScratchEmpty: true },
     }),
   );
-  await f.cron.writeScratch(job.id, { content: "" });
+  await f.cron.writeScratch(job.id, { content: scratch });
   await f.cron.run(job.id, "due");
   expect(f.cron.getJob(job.id)).toMatchObject({
     enabled: false,
