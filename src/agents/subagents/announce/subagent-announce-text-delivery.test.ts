@@ -81,7 +81,7 @@ it("reports complete delivery before destination history settles", async () => {
   try {
     await beforeSettled(mirrorGate.entered, delivery, "Delivery missed its mirror");
     expect(fixture.sendText).toHaveBeenCalledTimes(2);
-    expect(fixture.received.join(" ")).toBe(content);
+    expect(fixture.received.join("")).toBe(content);
     expect(fixture.onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ delivered: true, deliveredAt: expect.any(Number) }),
     );
@@ -102,6 +102,6 @@ it.each(["history", "report"] as const)("keeps delivery after %s rejects", async
   }
 
   await expect(fixture.deliver()).resolves.toMatchObject({ delivered: true, path: "direct" });
-  expect(fixture.received.join(" ")).toBe(content);
+  expect(fixture.received.join("")).toBe(content);
   expect(fixture.onDeliveryResult).toHaveBeenCalledOnce();
 });

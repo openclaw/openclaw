@@ -88,12 +88,22 @@ export function chunkTextByBreakResolver(
       normalizedLimit,
       resolveBreakIndex(window),
     );
-    const chunk = trimEndWhitespaceGraphemes(remaining, safeBreakIdx);
-    if (chunk.length > 0) {
-      chunks.push(chunk);
+    // The separator at the cut belongs to the chunk, not to the gap between chunks. Skipping
+    // it rewrites the reply: "alpha beta" split at 6 arrives as "alphabeta", and a code block
+    // loses the newline plus indentation. Budget it, though: the helper's bound is a hard
+    // limit, so when the run overflows it we keep today's trimming instead.
+    const sepEnd = skipWhitespaceGraphemes(remaining, safeBreakIdx);
+    if (sepEnd > safeBreakIdx && sepEnd <= normalizedLimit) {
+      chunks.push(remaining.slice(0, sepEnd));
+      remaining = remaining.slice(sepEnd);
+    } else {
+      const chunk = trimEndWhitespaceGraphemes(remaining, safeBreakIdx);
+      if (chunk.length > 0) {
+        chunks.push(chunk);
+      }
+      // Consume only complete disposable separators before the next window.
+      remaining = remaining.slice(skipWhitespaceGraphemes(remaining, safeBreakIdx));
     }
-    // Consume only complete disposable separators before the next window.
-    remaining = remaining.slice(skipWhitespaceGraphemes(remaining, safeBreakIdx));
   }
   const finalChunk = trimEndWhitespaceGraphemes(remaining);
   if (finalChunk.length) {

@@ -19,7 +19,7 @@ type PlanCase = { text: string; expected: string[]; options: Partial<TextPlan> }
 
 it.each`
   name                       | text                           | expected                                | options
-  ${"plain text"}            | ${"aa bb cc dd"}               | ${["aa bb", "cc dd"]}                   | ${{ chunker: chunkText, chunkerMode: "text" }}
+  ${"plain text"}            | ${"aa bb cc dd"}               | ${["aa bb ", "cc dd"]}                  | ${{ chunker: chunkText, chunkerMode: "text" }}
   ${"unfenced Markdown"}     | ${"aa bb\ncc dd\nee ff gg hh"} | ${["aa bb", "cc dd", "ee ff", "gg hh"]} | ${{}}
   ${"Markdown paragraphs"}   | ${"first\n\nsecond"}           | ${["first", "second"]}                  | ${{ chunkMode: "newline" }}
   ${"Unicode length"}        | ${unicodeCode}                 | ${[unicodeCode]}                        | ${{ textLimit: 4000 }}
