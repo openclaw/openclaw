@@ -2010,6 +2010,7 @@ openclaw-approvals-page .data-table-pagination__info {
 }
 
 .approval-log__request {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
