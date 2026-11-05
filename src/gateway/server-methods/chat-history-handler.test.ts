@@ -823,6 +823,20 @@ it("projects manually linked Slack mentions for the captured account without rew
       await requestHistory("chat.history", { sessionKey: scope.sessionKey }, context, aliceClient),
     );
     expect(JSON.stringify(response.messages)).toContain("@Gateway Alice, ask @Roboclaw");
+    await setCanonicalUserProfileDisplayName(profile.id, `Gateway ${"A".repeat(100)}`);
+    await prepareUserProfileCatalog();
+    const capped = expectSuccess(
+      await requestHistory(
+        "chat.history",
+        { sessionKey: scope.sessionKey, maxChars: 32 },
+        context,
+        aliceClient,
+      ),
+    );
+    expect(JSON.stringify(capped.messages)).toContain("@Gateway");
+    expect(JSON.stringify(capped.messages)).not.toContain("A".repeat(40));
+    await setCanonicalUserProfileDisplayName(profile.id, "Gateway Alice");
+    await prepareUserProfileCatalog();
     expect(JSON.stringify(response.messages)).toContain("<@U3333333333>");
     expect(JSON.stringify(response.messages)).toContain("`<@U1111111111> (Slack Alice)`");
     expect(JSON.stringify(response.messages)).toContain("@Slack Alice, ask @Roboclaw");

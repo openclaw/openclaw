@@ -11,6 +11,7 @@ import type {
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
 import { projectForwardedMessages } from "../chat-display-projection.history.js";
+import { sanitizeChatHistoryMessages } from "../chat-display-projection.sanitize.js";
 import { readChatHistoryPageKernel } from "../chat-history-page-kernel.js";
 import { projectChatHistoryWithReplies } from "../chat-history-reply-messages.js";
 import { encodeChatHistoryResponsePage } from "../chat-history-response-page.js";
@@ -163,7 +164,11 @@ export async function readChatHistoryPage(
   if (!displayProjector || page.encodedResponse) {
     return page;
   }
-  const messages = await displayProjector.project(page.messages);
+  const messages = sanitizeChatHistoryMessages(
+    await displayProjector.project(page.messages),
+    input.effectiveMaxChars,
+    { toolResultMaxChars: input.toolResultMaxChars },
+  );
   signal?.throwIfAborted();
   return encodeChatHistoryResponsePage({ ...page, messages }, prepareChatHistoryParams(input));
 }
