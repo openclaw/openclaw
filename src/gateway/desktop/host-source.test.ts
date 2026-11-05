@@ -379,6 +379,53 @@ describe("gateway host desktop source", () => {
     expect(responses).toBe(0);
   });
 
+  it("status sends no VNC credential after the live desktop configuration changes", async () => {
+    const releaseChallenge = createDeferred<void>();
+    const selected = createDeferred<void>();
+    let responses = 0;
+    const { server } = createSocketServer(cleanups, (socket) => {
+      const pending: Buffer[] = [];
+      let offered = false;
+      let held = false;
+      socket.on("data", (chunk: Buffer) => {
+        pending.push(chunk);
+        const data = Buffer.concat(pending);
+        if (!offered && data.length >= 12) {
+          offered = true;
+          socket.write(Buffer.from([1, 2]));
+        }
+        if (!held && data.length >= 13) {
+          held = true;
+          selected.resolve();
+          void releaseChallenge.promise.then(() => {
+            socket.write(Buffer.alloc(16, 3));
+          });
+        }
+        if (data.length >= 29) {
+          responses += 1;
+        }
+      });
+      socket.write(Buffer.from("RFB 003.008\n"));
+    });
+    const port = await listenLoopback(server);
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-desktop-"));
+    const passwordFile = path.join(root, "passwd");
+    await fs.writeFile(passwordFile, "desktop-secret\n");
+    cleanups.push(async () => {
+      await fs.rm(root, { recursive: true, force: true });
+    });
+    let config: DesktopHostConfig = { enabled: true, port, passwordFile };
+    const { service } = hostService(() => config);
+    const pendingStatus = service.status();
+    await selected.promise;
+    config = { ...config, enabled: false };
+    releaseChallenge.resolve();
+    await expect(pendingStatus).rejects.toThrow(
+      "gateway host desktop configuration changed; retry",
+    );
+    expect(responses).toBe(0);
+  });
+
   it("starts managed mode when the attach password file cannot be read", async () => {
     const managed = fakeManagedDesktop();
     const source = createHostDesktopSource({

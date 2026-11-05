@@ -106,9 +106,15 @@ type HostDesktopInspectionParams = {
   managedDesktop?: ManagedLinuxDesktop;
 };
 
+type HostDesktopProbeAuthority = {
+  assertCurrent?: () => void;
+  signal?: AbortSignal;
+};
+
 /** Probes the configured host desktop and does not return password material. */
 export async function inspectHostDesktop(
   params: HostDesktopInspectionParams,
+  authority?: HostDesktopProbeAuthority,
 ): Promise<HostDesktopInspection> {
   if (params.config?.enabled !== true) {
     return {
@@ -120,7 +126,7 @@ export async function inspectHostDesktop(
       detail: "disabled; enable the Desktop lab with desktop.host.enabled=true",
     };
   }
-  return inspectConfiguredHostDesktop(params, true);
+  return inspectConfiguredHostDesktop(params, true, authority);
 }
 
 /** Setup inspection discovers a source without enabling access or starting a desktop. */
@@ -169,18 +175,23 @@ async function readConfiguredVncPassword(
 async function inspectConfiguredHostDesktop(
   params: HostDesktopInspectionParams,
   authenticate: boolean,
+  authority?: HostDesktopProbeAuthority,
 ): Promise<HostDesktopInspection> {
   const port = params.config?.port ?? DEFAULT_HOST_DESKTOP_PORT;
   const platform = params.platform ?? process.platform;
   // Disabled setup discovery stays credential-free. Enabled readiness finishes
   // VncAuth when the password file can be read, so TigerVNC does not blacklist it.
+  authority?.assertCurrent?.();
   const configuredPassword = authenticate
     ? await readConfiguredVncPassword(params.config?.passwordFile)
     : {};
+  authority?.assertCurrent?.();
   const probe = await probeRfbServer({
     host: "127.0.0.1",
     port,
     timeoutMs: HOST_DESKTOP_PROBE_TIMEOUT_MS,
+    signal: authority?.signal,
+    assertCurrent: authority?.assertCurrent,
     ...(configuredPassword.password ? { vncPassword: configuredPassword.password } : {}),
   });
   const unavailable = (
@@ -330,12 +341,15 @@ export function createHostDesktopSource(params: {
           return managedDesktop.stop();
         }
       : undefined,
-    inspect: () =>
-      inspectHostDesktop({
-        config: params.config,
-        platform,
-        managedDesktop,
-      }),
+    inspect: (authority?: HostDesktopProbeAuthority) =>
+      inspectHostDesktop(
+        {
+          config: params.config,
+          platform,
+          managedDesktop,
+        },
+        authority,
+      ),
   };
 }
 
@@ -527,7 +541,13 @@ export function createHostDesktopService(params: {
       if (!runtime) {
         return (await inspectHostDesktop({ config: params.getConfig() })).status;
       }
-      return (await runtime.source.inspect()).status;
+      assertCurrent(runtime);
+      return (
+        await runtime.source.inspect({
+          assertCurrent: () => assertCurrent(runtime),
+          signal: runtime.controller.signal,
+        })
+      ).status;
     },
     reconcileRuntimePolicy,
   };
