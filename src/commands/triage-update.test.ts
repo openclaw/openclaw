@@ -1,6 +1,8 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeTriageUpdateFailure } from "../infra/update-failure-report-artifact.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
@@ -9,6 +11,45 @@ import { readTriageUpdateFailure } from "./triage-update.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("update failure triage diagnostics", () => {
+  it.runIf(process.platform !== "win32")("rejects a writerless FIFO without blocking", async () => {
+    const home = tempDirs.make("openclaw-update-triage-");
+    const stateDir = path.join(home, ".openclaw");
+    const env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
+    // This directory must outlive afterEach so the deadline cleanup can release the FIFO.
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-triage-fifo-"));
+    const inputPath = path.join(directory, "failure.fifo");
+    execFileSync("mkfifo", [inputPath]);
+    const reading = readTriageUpdateFailure(inputPath, { env, stateDir });
+    onTestFinished(async () => {
+      const home = tempDirs.make("openclaw-update-triage-");
+      const stateDir = path.join(home, ".openclaw");
+      const env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
+      // Release a regressed blocking open after the deadline so cleanup can finish.
+      const release = await fs.open(inputPath, fs.constants.O_RDWR | fs.constants.O_NONBLOCK);
+      try {
+        await reading.catch(() => undefined);
+      } finally {
+        await release.close();
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    });
+    await expect(reading).rejects.toThrow("Update failure diagnostics must be a regular file.");
+    expect((await fs.lstat(inputPath)).isFIFO()).toBe(true);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "reads a symlink to a regular failure artifact",
+    async () => {
+      const inputPath = path.join(home, "failure.json");
+      const linkPath = path.join(home, "failure-link.json");
+      await fs.writeFile(inputPath, JSON.stringify({ error: "synthetic update failure" }));
+      await fs.symlink(inputPath, linkPath);
+      await expect(readTriageUpdateFailure(linkPath, { env, stateDir })).resolves.toEqual({
+        error: "synthetic update failure",
+      });
+    },
+  );
+
   it.each(["package-post-install-doctor"] as const)(
     "writes bounded sanitized failure evidence without changing the result (%s)",
     async (advisoryKind) => {
