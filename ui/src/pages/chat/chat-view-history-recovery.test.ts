@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { admitChatHistoryPages } from "./chat-history-snapshot.ts";
 import { setChatHistoryRetrying } from "./chat-history-state.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
@@ -21,6 +22,42 @@ afterEach(() => {
 });
 
 describe("chat history recovery status", () => {
+  it("replaces the committed transcript with an admitted single-source around packet", async () => {
+    const row = (id: string, seq: number, role: string) => ({
+      role,
+      content: id === "target" ? "Short reader target" : `${id} answer`,
+      __openclaw: { id, seq },
+    });
+    const messages = [
+      row("previous", 1, "assistant"),
+      row("target", 2, "user"),
+      row("newer", 3, "assistant"),
+    ];
+    const state = makeChatHost({ chatMessages: messages });
+    const transcript = createChatTranscript(() => "around-replacement");
+    const props = { transcript, sessionKey: state.sessionKey, messages: state.chatMessages };
+    const container = renderChatView(props);
+    await vi.waitFor(() => expect(container.textContent).toContain("previous answer"));
+    const target = row("target", 2, "user");
+    admitChatHistoryPages(
+      state,
+      [{ messages: [target], olderCursor: "before-target", newerCursor: "after-target" }],
+      "around",
+    );
+    expect(state.chatMessages).toEqual([target]);
+    renderChatInto(container, { ...props, messages: state.chatMessages });
+    await vi.waitFor(() =>
+      expect(
+        [...container.querySelectorAll<HTMLElement>(".chat-bubble[data-message-id]")].map(
+          (bubble) => bubble.dataset.messageId,
+        ),
+      ).toEqual(["msg:id:target:0"]),
+    );
+    expect(container.textContent).not.toContain("previous answer");
+    expect(container.textContent).not.toContain("newer answer");
+    transcript.dispose();
+  });
+
   it("keeps the cached transcript and draft visible during a quiet automatic retry", () => {
     const messages = [{ role: "assistant", content: "Cached conversation" }];
     const state = makeChatHost({ chatMessages: messages, chatMessage: "Unsent draft" });

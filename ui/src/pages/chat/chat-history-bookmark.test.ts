@@ -27,15 +27,22 @@ it("reopens an evicted bookmark without stitching the missing interval into the 
   const saved = bookmark();
   expect(state.chatMessages).toHaveLength(80);
   expect(await restoreChatHistoryBookmark(state, saved, () => true)).toBe(true);
+  const items = buildMessageItems(state.chatMessages);
+  const target = items.findIndex((item) => item.key === saved.messageKey);
+  // A short bubble needs following context to restore its saved inner offset.
+  expect(items[target + 1]?.key).toBe(bookmark(81).messageKey);
+  expect(items.map((item) => item.key)).toEqual(
+    Array.from({ length: 80 }, (_, index) => bookmark(index + 41).messageKey),
+  );
   expect(requests.at(-1)).toMatchObject({
     messageId: "source-80",
+    limit: 80,
     cursor: undefined,
     offset: undefined,
   });
-  expect(buildMessageItems(state.chatMessages).map((item) => item.key)).toEqual([saved.messageKey]);
   expect(state.chatHistoryPagination).toMatchObject({
-    olderCursor: "before-80",
-    newerCursor: "after-80",
+    olderCursor: "before-41",
+    newerCursor: "after-120",
     hasNewer: true,
   });
 });

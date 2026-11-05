@@ -112,9 +112,15 @@ export async function restoreChatHistoryBookmark(
     return true;
   }
   try {
+    // A saved inner offset needs surrounding rows. A boundary's one-source
+    // reopen can clamp a short target to the bottom before that offset is reached.
     const result = await loadOlderChatHistoryPage(
       state,
-      { messageId: bookmark.messageId, sessionId: bookmark.sessionId },
+      {
+        messageId: bookmark.messageId,
+        sessionId: bookmark.sessionId,
+        limit: CHAT_HISTORY_REQUEST_LIMIT,
+      },
       signal,
       isCurrent,
     );

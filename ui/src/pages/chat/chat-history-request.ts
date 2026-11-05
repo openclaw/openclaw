@@ -14,6 +14,7 @@ import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.
 import {
   chatHistoryRequestParams,
   type ChatHistoryRequestBudget,
+  type CHAT_HISTORY_REQUEST_LIMIT,
 } from "./chat-history-request-params.ts";
 import { retryChatHistoryRead } from "./chat-history-retry.ts";
 import {
@@ -401,6 +402,12 @@ export type OlderHistorySelector =
       >;
     };
 
+export type ChatHistoryPageReadSelector =
+  | OlderHistorySelector
+  | (Extract<OlderHistorySelector, { messageId: string }> & {
+      limit: typeof CHAT_HISTORY_REQUEST_LIMIT;
+    });
+
 export function chatHistoryPageSelector(
   state: ChatState,
   direction: "older" | "newer",
@@ -430,7 +437,7 @@ export async function requestOlderChatHistoryPage(
   client: GatewayBrowserClient,
   sessionKey: string,
   requestAgentId: string | undefined,
-  selector: OlderHistorySelector,
+  selector: ChatHistoryPageReadSelector,
   isCurrent: () => boolean,
   signal?: AbortSignal,
   requestBudget?: ChatHistoryRequestBudget,
@@ -483,7 +490,7 @@ export function createChatHistoryPageRead(state: ChatState, speculative = false)
     claim,
     isCurrent: () => acceptsHistoryResult(state, claim),
     read: async (
-      selector: OlderHistorySelector,
+      selector: ChatHistoryPageReadSelector,
       signal: AbortSignal,
       budget?: ChatHistoryRequestBudget,
       ownsIntent?: () => boolean,
@@ -505,7 +512,7 @@ export function createChatHistoryPageRead(state: ChatState, speculative = false)
 
 export async function loadOlderChatHistoryPage(
   state: ChatState,
-  selector: OlderHistorySelector,
+  selector: ChatHistoryPageReadSelector,
   signal = new AbortController().signal,
   ownsIntent?: () => boolean,
 ): Promise<ChatHistoryResult | undefined> {

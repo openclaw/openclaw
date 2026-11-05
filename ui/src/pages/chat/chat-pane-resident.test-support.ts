@@ -54,7 +54,10 @@ export function residentPane(
     }
     if (selector.messageId) {
       const seq = Number(selector.messageId.replace("source-", ""));
-      return page(seq, seq);
+      const limit = selector.limit ?? 1;
+      const older = limit - Math.floor(limit / 2) - 1;
+      const start = Math.min(Math.max(1, seq - older), Math.max(1, total - limit + 1));
+      return page(start, Math.min(total, start + limit - 1));
     }
     const limit = selector.limit ?? CHAT_HISTORY_REQUEST_LIMIT;
     if (selector.cursor?.startsWith("before-")) {

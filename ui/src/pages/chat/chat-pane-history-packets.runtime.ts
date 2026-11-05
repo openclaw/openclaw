@@ -15,7 +15,7 @@ import {
 } from "./chat-history-request-params.ts";
 import {
   attachHistoryActivity,
-  type OlderHistorySelector,
+  type ChatHistoryPageReadSelector,
   createChatHistoryPageRead,
   chatHistoryPageSelector,
   type StagedOlderHistoryPage,
@@ -41,7 +41,7 @@ export async function requestOlderChatHistoryPage(
   client: GatewayBrowserClient,
   sessionKey: string,
   requestAgentId: string | undefined,
-  selector: OlderHistorySelector,
+  selector: ChatHistoryPageReadSelector,
   isCurrent: () => boolean,
   signal?: AbortSignal,
   requestBudget?: ChatHistoryRequestBudget,
