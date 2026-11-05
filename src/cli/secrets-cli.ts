@@ -172,7 +172,7 @@ export function registerSecretsCli(program: Command): void {
         // (Exit codes are unchanged; see docs/cli/secrets.md for gating.)
         const coverage =
           skippedExecRefs > 0
-            ? ` (UNMEASURED \u2014 ${skippedExecRefs} exec resolvability check(s) skipped; re-run with --allow-exec for a complete audit)`
+            ? ` (UNMEASURED — ${skippedExecRefs} exec resolvability check(s) skipped; re-run with --allow-exec for a complete audit)`
             : "";
         defaultRuntime.log(
           terminalText`Secrets audit: ${report.status}${coverage}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, storeResidue=${report.summary.storeResidueCount}, legacy=${report.summary.legacyResidueCount}.`,
