@@ -677,7 +677,8 @@ describe("memory.search gateway method", () => {
         results: [],
         stale: true,
         warning: "Memory index has pending updates. Results use the last published index.",
-        action: "Retry after background indexing, or run: openclaw memory index",
+        action:
+          "Retry after background indexing, or run: openclaw memory status --index --agent main. Rebuilding uses keyword indexing only and does not call an embedding provider.",
       },
       undefined,
     );

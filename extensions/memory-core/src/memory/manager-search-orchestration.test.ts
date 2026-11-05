@@ -123,7 +123,8 @@ describe("memory index", () => {
   const writeMemory = (name: string, content: string) =>
     fs.writeFile(path.join(fixture.paths.memory, name), content);
 
-  it("keeps nested bootstrap failure details redacted", async () => {
+  it.each(["bootstrap", "recovery"])("keeps nested %s failure details redacted", async (mode) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const manager = await getPersistentManager(keywordConfig());
     const failure = new Error("memory index maintenance failed", {
       cause: Object.assign(new Error("database is not open; password=memory-warning-secret"), {
@@ -131,14 +132,25 @@ describe("memory index", () => {
       }),
     });
     const sync = vi
-      .spyOn(manager as unknown as MaintenanceFields, "syncMemoryFiles")
+      .spyOn(MemoryIndexManager.prototype as unknown as MaintenanceFields, "syncMemoryFiles")
       .mockRejectedValue(failure);
     try {
       memoryWarnings.mockClear();
-      await expect(manager.search("zebra", { minScore: 0 })).resolves.toEqual([]);
+      if (mode === "recovery") {
+        await vi.advanceTimersByTimeAsync(300_000);
+        await awaitIdle(manager);
+      } else {
+        await expect(manager.search("zebra", { minScore: 0 })).resolves.toEqual([]);
+      }
       const warning = memoryWarnings.mock.calls
         .map((call) => String(call[0]))
-        .find((message) => message.startsWith("memory sync failed (search-bootstrap):"));
+        .find((message) =>
+          message.startsWith(
+            mode === "recovery"
+              ? "memory session update failed:"
+              : "memory sync failed (search-bootstrap):",
+          ),
+        );
       expect(warning).toContain("memory index maintenance failed");
       expect(warning).toContain("database is not open");
       expect(warning).toContain("ERR_INVALID_STATE");

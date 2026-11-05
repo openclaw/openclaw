@@ -1,6 +1,7 @@
 // Memory Core plugin module owns session event and delta synchronization.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
   onInternalSessionTranscriptUpdate,
@@ -435,7 +436,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
           return;
         }
         const failed = (err: unknown) => {
-          log.warn(`memory session update failed: ${String(err)}`);
+          log.warn(`memory session update failed: ${formatErrorMessage(err)}`);
         };
         try {
           void this.runInBackgroundContext(() =>

@@ -397,7 +397,7 @@ export function resolveMemorySearchStaleness(
       ? {
           stale: true,
           warning: "Memory index has pending updates. Results use the last published index.",
-          action: "Retry after background indexing, or run: openclaw memory index",
+          action: `Retry after background indexing, or run: ${formatMemoryIndexRebuildGuidance(status, agentId)}`,
         }
       : null;
   }
