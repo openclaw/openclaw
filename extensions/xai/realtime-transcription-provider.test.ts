@@ -42,6 +42,16 @@ const transcript = (text: string, final = false) => ({
   speech_final: final,
 });
 
+function observeText(matches: (text: string) => boolean) {
+  const done = createDeferred<void>();
+  const callback = vi.fn((text: string) => {
+    if (matches(text)) {
+      done.resolve();
+    }
+  });
+  return { callback, done: done.promise };
+}
+
 afterEach(async () => {
   await cleanup?.();
   cleanup = undefined;
@@ -110,86 +120,64 @@ async function createRealtimeSttServer(params?: {
 }
 
 describe("xai realtime transcription provider", () => {
-  it("normalizes provider config for voice-call streaming", () => {
-    const config = {
-      apiKey: "xai-test-key",
-      baseUrl: "https://api.x.ai/v1",
-      sampleRate: 24000,
-      encoding: "pcm",
-      interimResults: false,
-      endpointingMs: 500,
-      language: "en",
-    };
-    expect(
-      provider.resolveConfig?.({
-        cfg: {} as never,
-        rawConfig: { providers: { xai: config } },
-      }),
-    ).toEqual(config);
-  });
+  it.each(["direct", "profile"])(
+    "streams binary audio and transcripts with %s auth",
+    async (auth) => {
+      vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
+      resolveKey.mockResolvedValue(authResult("oauth-bearer"));
+      const server = await createRealtimeSttServer();
+      const onPartial = vi.fn();
+      const final = observeText((text) => text === "hello openclaw final");
+      const onSpeechStart = vi.fn();
+      const cfg = { agents: { defaults: {} } };
+      const config = {
+        apiKey: auth === "direct" ? "xai-test-key" : undefined,
+        baseUrl: server.baseUrl,
+        sampleRate: 24000,
+        encoding: "pcm",
+        interimResults: auth === "profile" ? false : undefined,
+        endpointingMs: 500,
+        language: "en",
+      };
+      expect(provider.resolveConfig?.({ cfg, rawConfig: { providers: { xai: config } } })).toEqual(
+        config,
+      );
+      const session = createSession(server.baseUrl, {
+        cfg,
+        providerConfig: config,
+        onPartial,
+        onTranscript: final.callback,
+        onSpeechStart,
+      });
 
-  it("streams raw binary audio and maps partial and final transcript events", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    const server = await createRealtimeSttServer();
-    const onPartial = vi.fn();
-    const finalTranscript = createDeferred<void>();
-    const onTranscript = vi.fn((text: string) => {
-      if (text === "hello openclaw final") {
-        finalTranscript.resolve();
+      session.sendAudio(Buffer.from("queued-before-ready"));
+      await session.connect();
+      session.sendAudio(Buffer.from("after-ready"));
+      await final.done;
+      session.close();
+      await server.donePromise;
+
+      const { url, headers } = server.requests[0]!;
+      expect(url.pathname).toBe("/v1/stt");
+      expect(Object.fromEntries(url.searchParams)).toMatchObject({
+        sample_rate: "24000",
+        encoding: "pcm",
+        interim_results: auth === "profile" ? "false" : "true",
+        endpointing: "500",
+        language: "en",
+      });
+      expect(headers["user-agent"]).toBeUndefined();
+      expect(headers.authorization).toBe(
+        auth === "direct" ? "Bearer xai-test-key" : "Bearer oauth-bearer",
+      );
+      if (auth === "profile") {
+        expect(resolveKey).toHaveBeenCalledWith({ provider: "xai", cfg });
       }
-    });
-    const onSpeechStart = vi.fn();
-
-    const session = createSession(server.baseUrl, {
-      providerConfig: { sampleRate: 24000, encoding: "pcm", endpointingMs: 500 },
-      onPartial,
-      onTranscript,
-      onSpeechStart,
-    });
-
-    session.sendAudio(Buffer.from("queued-before-ready"));
-    await session.connect();
-    session.sendAudio(Buffer.from("after-ready"));
-    await finalTranscript.promise;
-    session.close();
-    await server.donePromise;
-
-    const { url, headers } = server.requests[0]!;
-    expect(url.pathname).toBe("/v1/stt");
-    expect(Object.fromEntries(url.searchParams)).toMatchObject({
-      sample_rate: "24000",
-      encoding: "pcm",
-      interim_results: "true",
-      endpointing: "500",
-    });
-    expect(headers["user-agent"]).toBeUndefined();
-    expect(headers.authorization).toBe("Bearer xai-test-key");
-    const audio = Buffer.concat(server.binaryFrames).toString();
-    expect(audio).toContain("queued-before-ready");
-    expect(audio).toContain("after-ready");
-    expect(onSpeechStart).toHaveBeenCalled();
-    expect(onPartial).toHaveBeenCalledWith("hello openclaw");
-  });
-
-  it("preserves identical final transcripts from separate speech turns", async () => {
-    const server = await createRealtimeSttServer({
-      transcriptionEvents: [transcript("yes", true), transcript("yes", true)],
-    });
-    const onTranscript = vi.fn();
-    const onSpeechStart = vi.fn();
-    const session = createSession(server.baseUrl, {
-      onTranscript,
-      onSpeechStart,
-    });
-
-    await session.connect();
-    session.sendAudio(Buffer.from("two speech turns"));
-    await vi.waitFor(() => expect(onSpeechStart).toHaveBeenCalledTimes(2));
-    session.close();
-    await server.donePromise;
-
-    expect(onTranscript.mock.calls).toEqual([["yes"], ["yes"]]);
-  });
+      expect(Buffer.concat(server.binaryFrames).toString()).toBe("queued-before-readyafter-ready");
+      expect(onSpeechStart).toHaveBeenCalled();
+      expect(onPartial).toHaveBeenCalledWith("hello openclaw");
+    },
+  );
 
   it("rejects setup errors before the stream is ready", async () => {
     const server = await createRealtimeSttServer({
@@ -212,24 +200,73 @@ describe("xai realtime transcription provider", () => {
     vi.stubEnv("XAI_API_KEY", key);
     profileAuth.mockResolvedValue(configured);
     expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig: {} })).toBe(configured);
-    expect(profileAuth).toHaveBeenCalledWith({ provider: "xai", cfg: {} });
   });
+});
 
-  it("threads cfg into the lazy WebSocket bearer resolver", async () => {
-    resolveKey.mockResolvedValue(authResult("oauth-bearer"));
-    const server = await createRealtimeSttServer();
-
-    const cfg = { agents: { defaults: {} } };
-    const session = provider.createSession({
-      cfg,
-      providerConfig: { baseUrl: server.baseUrl },
+describe("xai chunk-final retention", () => {
+  it("keeps successive chunks and emits stitched finals without duplication", async () => {
+    const server = await createRealtimeSttServer({
+      transcriptionEvents: [
+        transcript("First."),
+        { ...transcript("First.", true), speech_final: false },
+        transcript("Second."),
+        { ...transcript("Second.", true), speech_final: false },
+        transcript("Third."),
+        transcript("First. Second. Third.", true),
+        transcript("Next turn."),
+        transcript("Next turn.", true),
+        transcript("Next turn.", true),
+      ],
     });
-
+    const onPartial = vi.fn();
+    const onSpeechStart = vi.fn();
+    let repeatedFinals = 0;
+    const final = observeText((text) => text === "Next turn." && ++repeatedFinals === 2);
+    const onTranscript = final.callback;
+    const session = createSession(server.baseUrl, { onPartial, onTranscript, onSpeechStart });
     await session.connect();
+    session.sendAudio(Buffer.from("audio"));
+    await final.done;
+    expect(onPartial.mock.calls).toEqual([
+      ["First."],
+      ["First."],
+      ["First. Second."],
+      ["First. Second."],
+      ["First. Second. Third."],
+      ["Next turn."],
+    ]);
+    expect(onTranscript.mock.calls).toEqual([
+      ["First. Second. Third."],
+      ["Next turn."],
+      ["Next turn."],
+    ]);
+    expect(onSpeechStart).toHaveBeenCalledTimes(3);
     session.close();
     await server.donePromise;
+  });
 
-    expect(resolveKey).toHaveBeenCalledWith({ provider: "xai", cfg });
-    expect(server.requests[0]?.headers.authorization).toBe("Bearer oauth-bearer");
+  it("settles locked chunks before replacement-stream partials arrive", async () => {
+    const events = [
+      { ...transcript("Locked.", true), speech_final: false },
+      transcript("unfinished"),
+    ];
+    const server = await createRealtimeSttServer({ transcriptionEvents: events });
+    const partial = observeText((text) => text.endsWith("unfinished"));
+    const final = observeText((text) => text === "New stream.");
+    const onPartial = partial.callback;
+    const onTranscript = final.callback;
+    const session = createSession(server.baseUrl, { onPartial, onTranscript });
+    await session.connect();
+    session.sendAudio(Buffer.from("first stream"));
+    await partial.done;
+    events.splice(0, events.length, transcript("New stream."), transcript("New stream.", true));
+    await session.connect();
+    expect(onTranscript.mock.calls).toEqual([["Locked."]]);
+    session.sendAudio(Buffer.from("replacement stream"));
+    await final.done;
+    expect(onPartial).toHaveBeenLastCalledWith("New stream.");
+    expect(onTranscript.mock.calls).toEqual([["Locked."], ["New stream."]]);
+    session.close();
+    await server.donePromise;
   });
 });

@@ -5,7 +5,6 @@ import { runWithDiagnosticTraceContext } from "openclaw/plugin-sdk/plugin-test-r
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CodexAppServerRpcError } from "./rpc-error.js";
 
 const shared = vi.hoisted(() => ({
   acquire: vi.fn(),
@@ -85,17 +84,26 @@ function start(run: Parameters<typeof withCodexAppServerJsonClient>[1], options:
   ).catch((error: unknown) => error);
 }
 
+function pendingOperation<T = void>() {
+  const entered = createDeferred<void>();
+  const finish = createDeferred<T>();
+  return {
+    entered: entered.promise,
+    finish: finish.resolve,
+    run: async () => {
+      entered.resolve();
+      return await finish.promise;
+    },
+  };
+}
+
 describe("scoped Codex timeout diagnostics", () => {
   it("reports acquisition without guessing startup, authentication, a client, or a method", async () => {
-    const entered = createDeferred<void>();
-    const acquired = createDeferred<ReturnType<typeof client>>();
-    shared.acquire.mockImplementation(() => {
-      entered.resolve();
-      return acquired.promise;
-    });
+    const acquisition = pendingOperation<ReturnType<typeof client>>();
+    shared.acquire.mockImplementation(acquisition.run);
     const run = vi.fn(async () => undefined);
     const result = start(run);
-    await entered.promise;
+    await acquisition.entered;
     await vi.advanceTimersByTimeAsync(150);
     expect(await result).toMatchObject({ name: "AgentHarnessPreflightError" });
     expect((await record()).attributes).toMatchObject({
@@ -105,7 +113,7 @@ describe("scoped Codex timeout diagnostics", () => {
     });
     expect(records[0]?.attributes).not.toHaveProperty("clientInstanceId");
     expect(shared.acquire.mock.calls[0]?.[0].abandonSignal.aborted).toBe(true);
-    acquired.resolve(client());
+    acquisition.finish(client());
     await vi.advanceTimersByTimeAsync(0);
     expect(run).not.toHaveBeenCalled();
     expect(shared.release).toHaveBeenCalledOnce();
@@ -151,9 +159,7 @@ describe("scoped Codex timeout diagnostics", () => {
     expect(await result).toMatchObject({ message: "codex app-server request timed out" });
     const logged = await record();
     expect(logged.trace).toMatchObject(trace);
-    expect(logged.attributes).toMatchObject({
-      phase: "client-request",
-    });
+    expect(logged.attributes).toMatchObject({ phase: "client-request" });
     expect(JSON.stringify(logged)).not.toContain(privateText);
     expect(JSON.stringify(logged)).not.toContain("account/read");
     expect(logged.attributes).not.toHaveProperty("runId");
@@ -167,97 +173,71 @@ describe("scoped Codex timeout diagnostics", () => {
   });
 
   it("reports release separately and preserves isolated shutdown budgets", async () => {
-    const closing = createDeferred<void>();
-    const finish = createDeferred<void>();
+    const closing = pendingOperation();
     const acquired = client();
-    acquired.closeAndWait.mockImplementation(async () => {
-      closing.resolve();
-      await finish.promise;
-    });
+    acquired.closeAndWait.mockImplementation(closing.run);
     shared.acquire.mockResolvedValue(acquired);
     const result = start(async (send) => send({ method: "model/list" }), {
       isolated: true,
       timeoutMessage: "custom timeout",
       isolatedShutdown: { exitTimeoutMs: 200, forceKillDelayMs: 300 },
     });
-    await closing.promise;
+    await closing.entered;
     await vi.advanceTimersByTimeAsync(50);
     expect(await result).toMatchObject({ message: "custom timeout" });
-    expect((await record()).attributes).toMatchObject({
-      phase: "release-client",
-    });
+    expect((await record()).attributes).toMatchObject({ phase: "release-client" });
     expect(acquired.closeAndWait).toHaveBeenCalledExactlyOnceWith({
       exitTimeoutMs: 200,
       forceKillDelayMs: 300,
     });
     expect(shared.release).not.toHaveBeenCalled();
-    finish.resolve();
+    closing.finish();
   });
 
-  it("keeps the default 60 second callback deadline", async () => {
-    const entered = createDeferred<void>();
-    const finish = createDeferred<void>();
-    shared.acquire.mockResolvedValue(client());
-    const result = withCodexAppServerJsonClient({}, async () => {
-      entered.resolve();
-      await finish.promise;
-    }).catch((error: unknown) => error);
-    await entered.promise;
-    await vi.advanceTimersByTimeAsync(59_999);
-    expect(records).toEqual([]);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(await result).toMatchObject({ message: "codex app-server request timed out" });
-    expect((await record()).attributes).toMatchObject({ timeoutMs: 60_000, elapsedMs: 60_000 });
-    finish.resolve();
-  });
-
-  it.each(["disabled", "throwing sink"] as const)(
+  it.each(["default deadline", "disabled", "throwing sink"] as const)(
     "keeps timeout and abandonment semantics with %s diagnostics",
     async (mode) => {
       if (mode === "disabled") {
         vi.mocked(diagnostics.areDiagnosticsEnabledForProcess).mockReturnValue(false);
-      } else {
+      } else if (mode === "throwing sink") {
         vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {
           throw new Error("sink");
         });
       }
-      const entered = createDeferred<void>();
-      const finish = createDeferred<void>();
+      const operation = pendingOperation();
       shared.acquire.mockResolvedValue(client());
-      const result = start(async () => {
-        entered.resolve();
-        await finish.promise;
-      });
-      await entered.promise;
-      await vi.advanceTimersByTimeAsync(50);
+      const result =
+        mode === "default deadline"
+          ? withCodexAppServerJsonClient({}, operation.run).catch((error: unknown) => error)
+          : start(operation.run);
+      await operation.entered;
+      const deadline = mode === "default deadline" ? 60_000 : 50;
+      await vi.advanceTimersByTimeAsync(deadline - 1);
+      expect(records).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
       expect(await result).toMatchObject({ message: "codex app-server request timed out" });
       expect(shared.acquire.mock.calls[0]?.[0].abandonSignal.aborted).toBe(true);
-      expect(records).toEqual([]);
-      finish.resolve();
+      if (mode === "default deadline") {
+        expect((await record()).attributes).toMatchObject({
+          timeoutMs: deadline,
+          elapsedMs: deadline,
+        });
+      } else {
+        expect(records).toEqual([]);
+      }
+      operation.finish();
       await vi.advanceTimersByTimeAsync(0);
       expect(shared.release).toHaveBeenCalledOnce();
     },
   );
 
-  it("preserves RPC errors and caller cancellation without emitting a timeout", async () => {
-    const error = new CodexAppServerRpcError(
-      { code: -32601, message: "unsupported" },
-      "model/list",
-    );
-    shared.acquire.mockResolvedValue(
-      client(
-        vi.fn(async () => {
-          throw error;
-        }),
-      ),
-    );
-    expect(await start(async (send) => send({ method: "model/list" }))).toBe(error);
+  it("preserves caller cancellation without emitting a timeout", async () => {
     const controller = new AbortController();
     const cancelled = new Error("cancelled");
     controller.abort(cancelled);
     expect(await start(async () => undefined, { signal: controller.signal })).toBe(cancelled);
     expect(records).toEqual([]);
-    expect(shared.acquire).toHaveBeenCalledOnce();
-    expect(shared.release).toHaveBeenCalledOnce();
+    expect(shared.acquire).not.toHaveBeenCalled();
+    expect(shared.release).not.toHaveBeenCalled();
   });
 });

@@ -12,11 +12,9 @@ import {
 import { PLUGIN_COMMAND_SCHEDULE_MESSAGE } from "../cron/plugin-command-schedule.types.js";
 import type { CronJobCreate } from "../cron/types.js";
 import { captureQueuedOperatorRecoverySource } from "../gateway/operator-run-recovery-source.js";
+import { getPluginInstanceCodeIdentity } from "../plugins/plugin-code-identity.js";
 import { pluginCommandSupportsChannel } from "../plugins/plugin-command-metadata.js";
-import {
-  getPluginInstanceIncarnation,
-  getPluginInstanceSourceDigest,
-} from "../plugins/plugin-instance-scope.js";
+import { getPluginInstanceIncarnation } from "../plugins/plugin-instance-scope.js";
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginCommandScheduledTurns } from "../plugins/runtime/types-scheduled-turns.js";
@@ -39,7 +37,7 @@ export function preparePluginCommandScheduledTurns(params: {
   const plugin = registry?.plugins.find((candidate) => candidate.id === params.pluginId);
   const pluginIncarnation = plugin && getPluginInstanceIncarnation(plugin);
   // Restart continuity re-arms only onto an instance that loaded exactly this code.
-  const sourceDigest = plugin && getPluginInstanceSourceDigest(plugin);
+  const sourceDigest = plugin && getPluginInstanceCodeIdentity(plugin);
   const operatorSource = captureQueuedOperatorRecoverySource(params.source.operatorAuthority);
   if (
     !registry ||

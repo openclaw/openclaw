@@ -47,7 +47,6 @@ import {
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 import { resolveFastModeSupport } from "./fast-mode-policy.js";
-import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { createAnthropicAuthMethods, createAnthropicProvider } from "./provider-contract-api.js";
 import anthropicProviderDiscovery from "./provider-discovery.js";
@@ -311,16 +310,6 @@ function buildAnthropicForwardCompatModel(
   };
 }
 
-function resolveAnthropicForwardCompatModel(
-  ctx: ProviderResolveDynamicModelContext,
-): ProviderRuntimeModel | undefined {
-  return (
-    resolveAnthropicSnapshotModel(ctx) ??
-    resolveAnthropic4xForwardCompatModel(ctx) ??
-    buildAnthropicForwardCompatModel(ctx)
-  );
-}
-
 function isAnthropicMandatoryClaude5Model(modelId: string): boolean {
   return (
     resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined ||
@@ -489,6 +478,19 @@ export function buildAnthropicProvider(): ProviderPlugin {
   const providerId = "anthropic";
   const defaultAnthropicModel = CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF;
   const { cli, setupToken, apiKey: apiKeyMethod } = createAnthropicAuthMethods();
+  const apiKeyAuth = createProviderApiKeyAuthMethod({
+    providerId,
+    methodId: apiKeyMethod.id,
+    label: apiKeyMethod.label,
+    hint: apiKeyMethod.hint,
+    optionKey: "anthropicApiKey",
+    flagName: "--anthropic-api-key",
+    envVar: "ANTHROPIC_API_KEY",
+    promptMessage: "Enter Anthropic API key",
+    defaultModel: defaultAnthropicModel,
+    expectedProviders: ["anthropic"],
+    wizard: apiKeyMethod.wizard,
+  });
   return {
     ...createAnthropicProvider(),
     deprecatedProfileIds: [CLAUDE_CLI_PROFILE_ID],
@@ -532,19 +534,10 @@ export function buildAnthropicProvider(): ProviderPlugin {
             defaultAnthropicModel,
           ),
       },
-      createProviderApiKeyAuthMethod({
-        providerId,
-        methodId: apiKeyMethod.id,
-        label: apiKeyMethod.label,
-        hint: apiKeyMethod.hint,
-        optionKey: "anthropicApiKey",
-        flagName: "--anthropic-api-key",
-        envVar: "ANTHROPIC_API_KEY",
-        promptMessage: "Enter Anthropic API key",
-        defaultModel: defaultAnthropicModel,
-        expectedProviders: ["anthropic"],
-        wizard: apiKeyMethod.wizard,
-      }),
+      {
+        ...apiKeyAuth,
+        run: async (ctx) => (await loadAuthRuntime()).runAnthropicApiKeyAuth(ctx, apiKeyAuth.run),
+      },
     ],
     // A single-provider result is republished under every hook alias, which would
     // list these API rows as `claude-cli/*` too. Claude CLI membership comes
@@ -597,7 +590,10 @@ export function buildAnthropicProvider(): ProviderPlugin {
       normalizeAnthropicProviderConfigForProvider({ provider, providerConfig }),
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
     resolveDynamicModel: (ctx) => {
-      const model = resolveAnthropicForwardCompatModel(ctx);
+      const model =
+        resolveAnthropicSnapshotModel(ctx) ??
+        resolveAnthropic4xForwardCompatModel(ctx) ??
+        buildAnthropicForwardCompatModel(ctx);
       if (!model) {
         return undefined;
       }
@@ -665,7 +661,15 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
       return async (...args) => (await loadStream())(...args);
     },
   });
-  api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
+  api.registerMediaUnderstandingProvider({
+    id: "anthropic",
+    capabilities: ["image"],
+    defaultModels: { image: "claude-opus-5-5" },
+    autoPriority: { image: 20 },
+    nativeDocumentInputs: ["pdf"],
+    describeImage: undefined,
+    describeImages: undefined,
+  });
   registerClaudeSessionDiscovery(api);
   for (const policy of createClaudeSessionNodeInvokePolicies()) {
     api.registerNodeInvokePolicy(policy);

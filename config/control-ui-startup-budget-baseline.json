@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 315967,
-  "reason": "Measured cd982fce7e5 startup at 315967 B: +37 B vs c4fd27d76ca (shared UI chunk +13 B with self-profile scopes; hash-only chunks +24 B), no new eager modules; correct the below-measurement baseline from #180890.",
-  "updatedAt": "2026-10-22"
+  "startupJsGzipBytes": 92861,
+  "reason": "Mobile Profile status reservation removes repeated 0.0545–0.1138 CLS in ten interleaved 1x triplets. Exact-base startup is 92477 B; measured head is 92861 B. All 45 startup/Chat/New assets are identical after normalizing hashed import names, with unchanged raw bytes and requests. Accept the 384 B gzip hash variance and 86 B gzip / 398 B raw lazy CSS reservation for the measured layout-stability win; keep growth allowances unchanged.",
+  "updatedAt": "2026-11-05"
 }

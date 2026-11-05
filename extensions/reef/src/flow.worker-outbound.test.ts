@@ -204,7 +204,9 @@ describe("Reef worker outbound composition", () => {
     const carolReview = reviews.find((entry) => entry.to === "carol#1");
     expect(carolReview).toMatchObject({ id, direction: "outbound" });
     expect(carolReview?.approvalDigest).not.toBe(review!.approvalDigest);
-    expect(await stores.reviews.lookupDecision(carolReview!.approvalDigest)).toBe("pending");
+    expect((await stores.reviews.observeDecision(carolReview!.approvalDigest)).value).toBe(
+      "pending",
+    );
     expect(fetcher).not.toHaveBeenCalled();
     expect(await trusted.readOutboundDelivery("alice", id)).toBeUndefined();
     expect(await trusted.readOutboundDelivery("carol", id)).toBeUndefined();

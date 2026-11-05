@@ -10,6 +10,7 @@ import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
 } from "../../lib/sessions/catalog-key.ts";
+import { resolveHomeSession } from "../../lib/sessions/home-session.ts";
 import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   findUiSessionRow,
@@ -274,7 +275,8 @@ export async function loadChatRoute(
   if (
     target.kind === "literal" &&
     context.sessions.cachedRoutingDefaults &&
-    (!target.slugCandidate || context.sessions.cachedRoutingDefaults.scope === "per-sender")
+    target.slugCandidate &&
+    context.sessions.cachedRoutingDefaults.scope === "per-sender"
   ) {
     // Literal keys and display-name links share the scoped roster used by short links.
     await context.sessions.whenCachedRosterSettled();
@@ -310,6 +312,11 @@ export async function loadChatRoute(
     (context.offlineSessionDefaults?.scope ?? context.agents.state.agentsList?.scope) !== "global";
   const catalogKey = catalogSessionKeyFromSearch(routeLocation.search);
   if (target.kind === "main" && catalogKey) {
+    const { resolveCatalogContinuation } = await import("./route-loader-catalog-share.runtime.ts");
+    const continued = await resolveCatalogContinuation(context, catalogKey, target.agentId, signal);
+    if (continued) {
+      return { kind: "session", ...continued, ...sessionRouteHints(routeLocation), face };
+    }
     const sessionKey = buildCatalogSessionKey(catalogKey);
     let canonicalLocation = preferenceDerived
       ? locationWithoutNavigationHints(routeLocation)
@@ -347,6 +354,24 @@ export async function loadChatRoute(
       await waitForGatewayClient(context.gateway, signal);
     }
     const sessionKey = mainSessionKey(context, target);
+    const homeSnapshot = context.gateway.snapshot;
+    if (homeSnapshot.hello?.auth?.sessionCap === "none") {
+      const available = await resolveHomeSession(homeSnapshot, {
+        sessionKey,
+        agentId: target.agentId,
+        mainKey: configuredMainKey(context),
+      });
+      signal.throwIfAborted();
+      if (
+        context.gateway.snapshot.client !== homeSnapshot.client ||
+        context.gateway.snapshot.hello !== homeSnapshot.hello
+      ) {
+        throw new Error("The Gateway connection changed while resolving Home.");
+      }
+      if (!available) {
+        return { kind: "unavailable-home", agentId: target.agentId, face };
+      }
+    }
     if (preferenceDerived) {
       const resolution = await resolveReference(sessionKey);
       if (resolution?.kind === "unique") {
@@ -510,7 +535,16 @@ export async function loadChatRoute(
       ? { kind: "unique" as const, session: localRow, isCurrent: isResolutionSourceCurrent }
       : await resolveShortSessionReference(context, target, routeLocation, signal);
   if (resolution.kind === "prepared") {
-    const canonicalLocationReady = resolution.resolution
+    const data: Extract<ChatRouteData, { kind: "session" }> = {
+      kind: "session",
+      sessionKey: resolution.session.key,
+      agentId: resolution.session.agentId,
+      face,
+      routeLoadingSkeleton: true,
+      ...(target.shortId.length > 8 ? { shortId: target.shortId } : {}),
+      canonicalLocationSource: routeLocation,
+    };
+    data.canonicalLocationReady = resolution.resolution
       .then((resolved) => {
         if (
           !resolution.isCurrent() ||
@@ -528,19 +562,16 @@ export async function loadChatRoute(
           preferenceDerived: false,
           shortId: target.shortId,
         });
-        return canonical?.canonicalLocation ?? null;
+        const confirmedLocation = canonical ? (canonical.canonicalLocation ?? routeLocation) : null;
+        if (confirmedLocation) {
+          // The shell observes completion when the page republishes this route.
+          data.canonicalLocation = confirmedLocation;
+          delete data.canonicalLocationReady;
+        }
+        return confirmedLocation;
       })
       .catch(() => null);
-    return {
-      kind: "session",
-      sessionKey: resolution.session.key,
-      agentId: resolution.session.agentId,
-      face,
-      routeLoadingSkeleton: true,
-      ...(target.shortId.length > 8 ? { shortId: target.shortId } : {}),
-      canonicalLocationReady,
-      canonicalLocationSource: routeLocation,
-    };
+    return data;
   }
   if (resolution.kind === "not-found") {
     if (revalidatedResolution) {
@@ -611,9 +642,9 @@ export async function loadSessionPage(
       ? { sessionKey: data?.kind === "session" ? data.sessionKey : undefined }
       : undefined,
   );
-  const creation = context.chatSubmissions.creation;
   if ("kind" in result && result.kind === "session") {
-    if (creation?.sessionKey === result.sessionKey) {
+    const creation = context.chatSubmissions.creationFor(result.sessionKey);
+    if (creation) {
       result.creation = creation;
     }
     if (result.creation || context.placementStartup.get(result.sessionKey)?.initialTurn) {
@@ -634,16 +665,18 @@ export async function verifyChatSessionRoute(
 ): Promise<void> {
   // SAFETY: Only chat/dashboard matches loaded here reach this owner.
   const data = target.data as ChatRouteData | undefined;
-  if (
-    !current() ||
-    data?.kind !== "session" ||
-    (!verifySession && !data.sessionResolutionFromCache)
-  ) {
+  if (!current() || data?.kind !== "session") {
     return;
   }
   const reference = sessionRouteTargetFromLocation(context, target.location)?.target;
-  // Home and explicit literal creation routes need not exist in storage.
+  // Warm Home can render before hello reveals that its access needs confirmation.
+  if (reference?.kind === "main" && context.gateway.snapshot.hello?.auth?.sessionCap === "none") {
+    await revalidate();
+    return;
+  }
+  // Other Home and explicit literal creation routes need not exist in storage.
   if (
+    (!verifySession && !data.sessionResolutionFromCache) ||
     !reference ||
     !(reference.kind === "short" || (reference.kind === "literal" && reference.slugCandidate))
   ) {

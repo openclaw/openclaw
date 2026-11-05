@@ -20,6 +20,31 @@ function runtimeOutput(): string {
   return runtimeLogs.join("\n");
 }
 
+function expectOutput(...fragments: string[]) {
+  const output = runtimeOutput();
+  for (const fragment of fragments) {
+    expect(output).toContain(fragment);
+  }
+}
+
+function pendingEntry(
+  id: string,
+  request: Record<string, string>,
+  createdAgo: number,
+  expiresIn = 60_000,
+) {
+  const now = Date.now();
+  return { id, request, createdAtMs: now - createdAgo, expiresAtMs: now + expiresIn };
+}
+
+const resolveArgs = (id: string, decision: string, ...options: string[]) => [
+  "approvals",
+  "resolve",
+  id,
+  decision,
+  ...options,
+];
+
 function approvalDisplayId(id: string): string {
   return /^[A-Za-z0-9._:][A-Za-z0-9._:-]{0,127}$/.test(id)
     ? id
@@ -28,7 +53,7 @@ function approvalDisplayId(id: string): string {
 
 function pendingApprovalSnapshot(params: {
   id: string;
-  kind?: "exec" | "plugin" | "system-agent";
+  kind?: "exec" | "system-agent";
   allowedDecisions?: string[];
   expiresAtMs?: number;
 }) {
@@ -37,23 +62,11 @@ function pendingApprovalSnapshot(params: {
     approval: {
       id: params.id,
       status: "pending",
-      urlPath: `/approve/${params.id}`,
-      createdAtMs: Date.now() - 1_000,
       expiresAtMs: params.expiresAtMs ?? Date.now() + 60_000,
-      presentation:
-        kind === "exec"
-          ? {
-              kind,
-              commandText: "echo ready",
-              allowedDecisions: params.allowedDecisions ?? ["allow-once", "allow-always", "deny"],
-            }
-          : {
-              kind,
-              title: kind === "plugin" ? "Plugin action" : "OpenClaw change",
-              description: "Apply the requested change",
-              ...(kind === "plugin" ? { severity: "warning" } : { proposalHash: "a".repeat(64) }),
-              allowedDecisions: params.allowedDecisions ?? ["allow-once", "deny"],
-            },
+      presentation: {
+        kind,
+        allowedDecisions: params.allowedDecisions ?? ["allow-once", "allow-always", "deny"],
+      },
     },
   };
 }
@@ -141,14 +154,9 @@ describe("exec approvals pending and resolve CLI", () => {
       mockResolution("lifetime-invalid", "allow-always");
 
       await expect(
-        runApprovalsCommand([
-          "approvals",
-          "resolve",
-          "lifetime-invalid",
-          "allow-always",
-          "--expires-in-days",
-          expiresInDays,
-        ]),
+        runApprovalsCommand(
+          resolveArgs("lifetime-invalid", "allow-always", "--expires-in-days", expiresInDays),
+        ),
       ).rejects.toThrow("__exit__:1");
 
       expect(runtimeErrors).toEqual([
@@ -161,15 +169,9 @@ describe("exec approvals pending and resolve CLI", () => {
   it.each(["3650"])("preserves the maximum grant lifetime (%s)", async (expiresInDays) => {
     mockResolution("lifetime-valid", "allow-always");
 
-    await runApprovalsCommand([
-      "approvals",
-      "resolve",
-      "lifetime-valid",
-      "allow-always",
-      "--expires-in-days",
-      expiresInDays,
-      "--json",
-    ]);
+    await runApprovalsCommand(
+      resolveArgs("lifetime-valid", "allow-always", "--expires-in-days", expiresInDays, "--json"),
+    );
 
     expect(callGatewayFromCli.mock.calls[1]?.[0]).toBe("approval.resolve");
     expect(callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
@@ -182,58 +184,50 @@ describe("exec approvals pending and resolve CLI", () => {
   });
 
   it("renders pending approvals from all three approval kinds", async () => {
-    const now = Date.now();
     callGatewayFromCli.mockImplementation(async (method: string) => {
       if (method === "exec.approval.list") {
         return [
-          {
-            id: "exec-\u202E1",
-            request: {
+          pendingEntry(
+            "exec-\u202E1",
+            {
               command: `printf '${"x".repeat(120)}' \u001B]52;c;--osc-hidden-action\u0007 --full-command-tail`,
               agentId: "m\u202Ea",
               sessionKey: "agent:main:discord:dm:1",
             },
-            createdAtMs: now - 5_000,
-            expiresAtMs: now + 60_000,
-          },
+            5_000,
+          ),
         ];
       }
       if (method === "plugin.approval.list") {
         return [
-          {
-            id: "plugin:1",
-            request: {
+          pendingEntry(
+            "plugin:1",
+            {
               title: "Publish package",
               description: "Publish the prepared plugin package",
               agentId: "release",
               sessionKey: "agent:release:main",
             },
-            createdAtMs: now - 4_000,
-            expiresAtMs: now + 55_000,
-          },
-          {
-            id: "plugin:blank",
-            request: { title: " ", description: "\t" },
-            createdAtMs: now - 3_500,
-            expiresAtMs: now + 54_000,
-          },
+            4_000,
+            55_000,
+          ),
+          pendingEntry("plugin:blank", { title: " ", description: "\t" }, 3_500, 54_000),
         ];
       }
       if (method === "openclaw.approval.list") {
         return [
-          {
-            id: "system-agent:1",
-            request: {
+          pendingEntry(
+            "system-agent:1",
+            {
               title: "OpenClaw change",
               description: "Change the system configuration",
               command: "apply-system-change --force",
               agentId: "main",
               sessionKey: "agent:main:main",
             },
-            createdAtMs: now - 3_000,
-            // The Gateway list is authoritative even when the CLI clock is ahead.
-            expiresAtMs: now - 500,
-          },
+            3_000,
+            -500,
+          ), // The Gateway list is authoritative despite the CLI clock.
         ];
       }
       return [];
@@ -249,54 +243,38 @@ describe("exec approvals pending and resolve CLI", () => {
     for (const call of callGatewayFromCli.mock.calls) {
       expect(call[3]).toEqual({ scopes: ["operator.admin"] });
     }
-    const output = runtimeOutput();
     const execDisplayId = approvalDisplayId("exec-\u202E1");
-    expect(output).toContain("Pending approvals");
-    expect(output).toContain(execDisplayId);
-    expect(output).toContain("m\\u{202E}a");
-    expect(output).toContain(approvalDisplayId("plugin:1"));
-    expect(output).toContain(approvalDisplayId("system-agent:1"));
-    expect(output).toContain(approvalDisplayId("plugin:blank"));
-    expect(output).toContain("Publish package");
+    expectOutput(
+      "Pending approvals",
+      execDisplayId,
+      "m\\u{202E}a",
+      approvalDisplayId("plugin:1"),
+      approvalDisplayId("system-agent:1"),
+      approvalDisplayId("plugin:blank"),
+      "Publish package",
+      "OpenClaw change: Change the system configuration",
+      "\\u{9}",
+      "Full request text",
+      "--osc-hidden-action",
+      "\\u{1B}]52;c;",
+      "--full-command-tail",
+      "Agent / Session",
+      "Expires In",
+    );
     // System-agent approvals show only their reviewer-safe presentation; the
     // raw host-local operation must never reach the terminal.
-    expect(output).not.toContain("apply-system-change");
-    expect(output).toContain("OpenClaw change: Change the system configuration");
-    expect(output).toContain("\\u{9}");
-    expect(output).toContain("Full request text");
-    expect(output).toContain("--osc-hidden-action");
-    expect(output).toContain("\\u{1B}]52;c;");
-    expect(output).toContain("--full-command-tail");
-    expect(output).toContain("Agent / Session");
-    expect(output).toContain("Expires In");
+    expect(runtimeOutput()).not.toContain("apply-system-change");
     expect(runtimeErrors).toHaveLength(0);
   });
 
   it("preserves whitespace-bearing ids verbatim and keeps them distinct", async () => {
-    const now = Date.now();
     callGatewayFromCli.mockImplementation(async (method: string) => {
       if (method === "exec.approval.list") {
         return [
-          {
-            id: " victim ",
-            request: { command: "echo padded" },
-            createdAtMs: now - 2_000,
-            expiresAtMs: now + 60_000,
-          },
-          {
-            id: "victim",
-            request: { command: "echo exact" },
-            createdAtMs: now - 1_000,
-            expiresAtMs: now + 60_000,
-          },
-          {
-            // Ill-formed ids are unresolvable through the unified schema and
-            // must be skipped rather than listed with a dead token.
-            id: "bad-\uD800",
-            request: { command: "echo surrogate" },
-            createdAtMs: now - 500,
-            expiresAtMs: now + 60_000,
-          },
+          pendingEntry(" victim ", { command: "echo padded" }, 2_000),
+          pendingEntry("victim", { command: "echo exact" }, 1_000),
+          // Ill-formed ids cannot resolve through the unified schema; omit dead tokens.
+          pendingEntry("bad-\uD800", { command: "echo surrogate" }, 500),
         ];
       }
       return [];
@@ -338,16 +316,16 @@ describe("exec approvals pending and resolve CLI", () => {
       },
     );
 
-    await runApprovalsCommand([
-      "approvals",
-      "resolve",
-      displayId,
-      "allow-once",
-      "--url",
-      "ws://127.0.0.1:18789",
-      "--token",
-      "test-token",
-    ]);
+    await runApprovalsCommand(
+      resolveArgs(
+        displayId,
+        "allow-once",
+        "--url",
+        "ws://127.0.0.1:18789",
+        "--token",
+        "test-token",
+      ),
+    );
 
     expect(callGatewayFromCli.mock.calls[2]?.[0]).toBe("approval.resolve");
     expect(callGatewayFromCli.mock.calls[2]?.[2]).toEqual({
@@ -370,7 +348,7 @@ describe("exec approvals pending and resolve CLI", () => {
     const approvalId = "job\\u{41}";
     mockResolution(approvalId, "deny", false, "other-device");
 
-    await runApprovalsCommand(["approvals", "resolve", approvalId, "deny"]);
+    await runApprovalsCommand(resolveArgs(approvalId, "deny"));
 
     expect(callGatewayFromCli.mock.calls[0]?.[2]).toEqual({ id: approvalId });
     expect(callGatewayFromCli.mock.calls[1]?.[2]).toMatchObject({ id: approvalId });
@@ -393,9 +371,7 @@ describe("exec approvals pending and resolve CLI", () => {
       },
     );
 
-    await expect(runApprovalsCommand(["approvals", "resolve", displayId, "deny"])).rejects.toThrow(
-      "__exit__:1",
-    );
+    await expect(runApprovalsCommand(resolveArgs(displayId, "deny"))).rejects.toThrow("__exit__:1");
 
     expect(runtimeErrors[0]).toContain("matches both a raw id and a displayed id token");
     expect(callGatewayFromCli).toHaveBeenCalledTimes(2);
@@ -404,9 +380,9 @@ describe("exec approvals pending and resolve CLI", () => {
   it("exits non-zero when an approval already has a different decision", async () => {
     mockResolution("approval-3", "deny", false);
 
-    await expect(
-      runApprovalsCommand(["approvals", "resolve", "approval-3", "allow-once"]),
-    ).rejects.toThrow("__exit__:1");
+    await expect(runApprovalsCommand(resolveArgs("approval-3", "allow-once"))).rejects.toThrow(
+      "__exit__:1",
+    );
 
     expect(runtimeErrors[0]).toContain("already resolved with deny by device:device-1");
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
@@ -416,9 +392,7 @@ describe("exec approvals pending and resolve CLI", () => {
     const prefix = `approval not found: ${"x".repeat(279)}`;
     callGatewayFromCli.mockRejectedValue(new Error(`${prefix}\u{1F680}tail\nignored`));
 
-    await expect(runApprovalsCommand(["approvals", "resolve", "missing", "deny"])).rejects.toThrow(
-      "__exit__:1",
-    );
+    await expect(runApprovalsCommand(resolveArgs("missing", "deny"))).rejects.toThrow("__exit__:1");
 
     expect(runtimeErrors).toEqual([`${prefix}...`]);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
@@ -441,9 +415,9 @@ describe("exec approvals pending and resolve CLI", () => {
       };
     });
 
-    await expect(
-      runApprovalsCommand(["approvals", "resolve", "expired-1", "deny"]),
-    ).rejects.toThrow("__exit__:1");
+    await expect(runApprovalsCommand(resolveArgs("expired-1", "deny"))).rejects.toThrow(
+      "__exit__:1",
+    );
 
     expect(runtimeErrors[0]).toBe(`Approval ${approvalDisplayId("expired-1")} expired.`);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(2);
@@ -459,7 +433,7 @@ describe("exec approvals pending and resolve CLI", () => {
     );
 
     await expect(
-      runApprovalsCommand(["approvals", "resolve", "system-agent:2", "allow-always"]),
+      runApprovalsCommand(resolveArgs("system-agent:2", "allow-always")),
     ).rejects.toThrow("__exit__:1");
 
     expect(runtimeErrors[0]).toContain(
@@ -492,8 +466,6 @@ describe("exec approvals pending and resolve CLI", () => {
 
     const output = runtimeOutput();
     expect(output).not.toContain("\u001B");
-    expect(output).toContain("revoked by ops\\u{1B}");
-    expect(output).toContain("night\\u{1B}");
-    expect(output).toContain("\\u{1B}]52;c;steal");
+    expectOutput("revoked by ops\\u{1B}", "night\\u{1B}", "\\u{1B}]52;c;steal");
   });
 });

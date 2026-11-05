@@ -11,6 +11,7 @@ import {
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { reloadChatDocumentStorage } from "./chat-delivery-attachments.test-support.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   makeChatHost,
@@ -44,7 +45,40 @@ const paused: GatewaySessionRow = {
     canContinue: true,
   },
 };
-
+const continuedRow = (at: number): GatewaySessionRow => ({
+  ...paused,
+  providerReview: undefined,
+  updatedAt: at,
+  snapshotAt: at,
+});
+const queueItem = (id: string, text = `Retained ${id} input`) => ({
+  id,
+  text,
+  createdAt: 1,
+  sessionKey: paused.key,
+  agentId: "main",
+  sendState: "waiting-idle" as const,
+  sendRunId: `unsent-${id}`,
+});
+function reviewHost(
+  request: ReturnType<typeof makeRequestMock>,
+  row: GatewaySessionRow,
+  overrides: Parameters<typeof makeChatHost>[0] = {},
+) {
+  return makeChatHost({
+    client: createTestGatewayClient(request),
+    sessionKey: row.key,
+    currentSessionId: row.sessionId,
+    chatHistoryPagination: { hasMore: false },
+    sessionsResult: sessionsResult([row], row.snapshotAt ?? 0),
+    ...overrides,
+  });
+}
+type ReviewHost = ReturnType<typeof reviewHost>;
+async function refreshHistory(host: ReviewHost) {
+  await loadChatHistory(host, { deferBranches: true });
+  await flushChatQueueForEvent(host);
+}
 async function createReviewHost(
   request: ReturnType<typeof makeRequestMock>,
   initialRow: GatewaySessionRow,
@@ -54,20 +88,13 @@ async function createReviewHost(
   const { gateway, emitEvent } = createGatewayHarness(client);
   const sessions = createTestSessionCapability(gateway);
   await sessions.refresh({ agentId: "main", force: true });
-  const host = makeChatHost({
-    client,
-    sessions,
-    sessionKey: initialRow.key,
-    currentSessionId: initialRow.sessionId,
-    sessionsResult: sessionsResult([initialRow], initialRow.snapshotAt ?? 0),
-    chatMessage,
-  });
-  const publish = (row: GatewaySessionRow, clearReview = false) =>
+  const host = reviewHost(request, initialRow, { client, sessions, chatMessage });
+  const publish = (row: Partial<GatewaySessionRow>, clearReview = false) =>
     emitEvent({
       type: "event",
       event: "sessions.changed",
       payload: {
-        sessionKey: row.key,
+        sessionKey: paused.key,
         agentId: "main",
         session: clearReview ? { ...row, providerReview: null } : row,
       },
@@ -96,15 +123,9 @@ it.each([
     sessionsResult: sessionsResult(rows, 1),
     sessions: {
       state: {
+        ...makeChatHost().sessions.state,
         result: sessionsResult([fallback], 1),
         agentId: "main",
-        modelOverrides: {},
-        loading: false,
-        error: null,
-        deletedSessions: [],
-        groups: [],
-        groupSettings: [],
-        sectionOrder: [],
       },
     },
   };
@@ -121,25 +142,16 @@ it("holds composer and queued inputs across the provider pause and only retries 
     "chat.send": { runId: "accepted-input", status: "started" },
   });
   const { host, publish } = await createReviewHost(request, row, "Keep this draft");
-  const outbox = { sessionKey: paused.key, agentId: "main" };
   for (const id of ["first", "second"]) {
     expect(
       admitQueuedMessageForSession(
         host,
         {
-          ...captureChatOutboxAdmission(host, outbox.sessionKey, outbox.agentId),
-          scope: outbox,
+          ...captureChatOutboxAdmission(host, paused.key, "main"),
+          scope: { sessionKey: paused.key, agentId: "main" },
           awaitingDefaults: false,
         },
-        {
-          id,
-          text: `Retained ${id} input`,
-          createdAt: 1,
-          sessionKey: paused.key,
-          agentId: "main",
-          sendState: "waiting-idle",
-          sendRunId: `unsent-${id}`,
-        },
+        queueItem(id),
       ),
     ).toBe(true);
   }
@@ -148,79 +160,41 @@ it("holds composer and queued inputs across the provider pause and only retries 
   await retryQueuedChatMessage(host, "first");
   expect(host.chatMessage).toBe("Keep this draft");
   expect(requestCalls(request, "chat.send")).toHaveLength(0);
-  expect(listStoredChatOutboxes(host)[0]?.queue).toEqual([
-    expect.objectContaining({
-      id: "first",
-      text: "Retained first input",
-      sendState: "held",
-    }),
-    expect.objectContaining({
-      id: "second",
-      text: "Retained second input",
-      sendState: "held",
-    }),
+  expect(listStoredChatOutboxes(host)[0]?.queue).toMatchObject([
+    { id: "first", text: "Retained first input", sendState: "held" },
+    { id: "second", text: "Retained second input", sendState: "held" },
   ]);
 
-  row = { ...paused, providerReview: undefined, updatedAt: 11, snapshotAt: 11 };
+  row = continuedRow(11);
   publish(row, true);
   expect(chatProviderReviewRow(host)?.providerReview).toBeUndefined();
   await flushChatQueueForEvent(host);
   expect(requestCalls(request, "chat.send")).toHaveLength(0);
   await retryQueuedChatMessage(host, "first");
-  expect(requestCalls(request, "chat.send")).toEqual([
-    expect.arrayContaining([
-      "chat.send",
-      expect.objectContaining({ message: "Retained first input" }),
-    ]),
-  ]);
-  expect(listStoredChatOutboxes(host)[0]?.queue).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        id: "second",
-        text: "Retained second input",
-        sendState: "held",
-      }),
-    ]),
-  );
+  const sends = requestCalls(request, "chat.send");
+  expect(sends).toHaveLength(1);
+  expect(sends[0]?.[1]).toMatchObject({ message: "Retained first input" });
+  expect(listStoredChatOutboxes(host)[0]?.queue.find(({ id }) => id === "second")).toMatchObject({
+    id: "second",
+    text: "Retained second input",
+    sendState: "held",
+  });
 });
 
 it("keeps provider review receipts through partial events and rejects a stale read after authoritative clearing", async () => {
   const request = makeRequestMock({ "sessions.list": sessionsResult([paused], 10) });
-  const { gateway, emitEvent } = createGatewayHarness(createTestGatewayClient(request));
-  const sessions = createTestSessionCapability(gateway);
-  await sessions.refresh({ agentId: "main", force: true });
+  const { host, publish } = await createReviewHost(request, paused, "");
+  const { sessions } = host;
   const readBeforeClear = sessions.captureReconcile();
-  emitEvent({
-    type: "event",
-    event: "sessions.changed",
-    payload: {
-      sessionKey: paused.key,
-      agentId: "main",
-      session: {
-        key: paused.key,
-        sessionId: paused.sessionId,
-        updatedAt: 11,
-        snapshotAt: 11,
-        label: "Renamed",
-      },
-    },
+  const partial = (at: number) => ({
+    key: paused.key,
+    sessionId: paused.sessionId,
+    updatedAt: at,
+    snapshotAt: at,
   });
+  publish({ ...partial(11), label: "Renamed" });
   expect(sessions.state.result?.sessions[0]?.providerReview).toEqual(paused.providerReview);
-  emitEvent({
-    type: "event",
-    event: "sessions.changed",
-    payload: {
-      sessionKey: paused.key,
-      agentId: "main",
-      session: {
-        key: paused.key,
-        sessionId: paused.sessionId,
-        updatedAt: 12,
-        snapshotAt: 12,
-        providerReview: null,
-      },
-    },
-  });
+  publish(partial(12), true);
   readBeforeClear(paused);
   expect(sessions.state.result?.sessions[0]?.providerReview).toBeUndefined();
 });
@@ -228,21 +202,9 @@ it("keeps provider review receipts through partial events and rejects a stale re
 it("keeps a paused queue input held when its earlier settings wait finishes after continuation", async () => {
   const settings = createDeferred<boolean>();
   const waiting = createDeferred();
-  const host = makeChatHost({
-    requestHandlers: { "chat.send": { status: "started" } },
-    sessionKey: paused.key,
-    currentSessionId: paused.sessionId,
-    sessionsResult: sessionsResult([{ ...paused, providerReview: undefined }], 10),
-  });
-  const item = {
-    id: "settings-delayed-input",
-    text: "Keep this queued input",
-    createdAt: 1,
-    sessionKey: paused.key,
-    agentId: "main",
-    sendRunId: "not-dispatched",
-    sendState: "waiting-idle" as const,
-  };
+  const request = makeRequestMock({ "chat.send": { status: "started" } });
+  const host = reviewHost(request, continuedRow(10));
+  const item = queueItem("settings-delayed-input", "Keep this queued input");
   expect(
     admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, paused.key, "main"), item),
   ).toBe(true);
@@ -258,57 +220,50 @@ it("keeps a paused queue input held when its earlier settings wait finishes afte
     settings.resolve(true);
     await delivery;
     await flushChatQueueForEvent(host);
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
-    expect(host.chatQueue[0]).toMatchObject({ text: item.text, sendState: "held" });
-    expect(host.chatQueue[0]?.sendRunId).toBe(item.sendRunId);
+    expect(requestCalls(request, "chat.send")).toHaveLength(0);
+    expect(host.chatQueue[0]).toMatchObject({
+      text: item.text,
+      sendState: "held",
+      sendRunId: item.sendRunId,
+    });
   } finally {
     stop();
   }
 });
 
 it.each(["lost-ack", "accepted-unconsumed"] as const)(
-  "retains %s input across pause clearing and reload until server consumption",
+  "transfers %s input to server custody across pause clearing and reload",
   async (outcome) => {
-    let row: GatewaySessionRow = {
-      ...paused,
-      providerReview: undefined,
-      updatedAt: 9,
-      snapshotAt: 9,
-    };
+    let row = continuedRow(9);
     let attemptedRunId: string | undefined;
     let attempts = 0;
     let consumed = false;
     const request = makeRequestMock({
       "sessions.list": () => sessionsResult([row], row.snapshotAt ?? 0),
-      "chat.history": () => ({
-        messages: [],
-        sessionId: row.sessionId,
-        sessionInfo: { ...row, hasActiveRun: false, status: "done" },
-        pendingInputs: {
-          items:
-            attemptedRunId && !consumed
-              ? [
-                  {
-                    id: "accepted-input",
-                    runId: attemptedRunId,
-                    acceptedAt: 1,
-                    state: "interrupted",
-                    message: { role: "user", content: "Keep this delivery identity" },
-                  },
-                ]
-              : [],
-          total: attemptedRunId && !consumed ? 1 : 0,
-        },
-        inputReceipts: attemptedRunId
-          ? [
-              {
-                runId: attemptedRunId,
-                state: consumed ? "consumed" : "pending",
-                ...(consumed ? { consumedByEventId: "server-recovered-input" } : {}),
-              },
-            ]
-          : [],
-      }),
+      "chat.history": () => {
+        const ids = attemptedRunId ? [attemptedRunId] : [];
+        const items = consumed
+          ? []
+          : ids.map((runId) => ({
+              id: "accepted-input",
+              runId,
+              acceptedAt: 1,
+              state: "interrupted",
+              message: { role: "user", content: "Keep this delivery identity" },
+            }));
+        return {
+          messages: [],
+          sessionId: row.sessionId,
+          sessionInfo: { ...row, hasActiveRun: false, status: "done" },
+          pendingInputs: { items, total: items.length },
+          inputReceipts: ids.map((runId) =>
+            Object.assign(
+              { runId, state: consumed ? "consumed" : "pending" },
+              consumed ? { consumedByEventId: "server-recovered-input" } : {},
+            ),
+          ),
+        };
+      },
       "chat.send": (params: unknown) => {
         const runId = requireRecord(params, "chat.send").idempotencyKey;
         if (typeof runId !== "string") {
@@ -327,66 +282,48 @@ it.each(["lost-ack", "accepted-unconsumed"] as const)(
     });
     const { host, publish } = await createReviewHost(request, row, "Keep this delivery identity");
     await handleSendChat(host);
-    expect(attempts).toBe(1);
-    const attempted = host.chatQueue[0];
-    expect(attempted).toMatchObject({
-      sendAttempts: 1,
-      sendState: outcome === "lost-ack" ? "waiting-reconnect" : "sending",
-      sendRunId: attemptedRunId,
-    });
+    if (outcome === "lost-ack") {
+      expect(host.chatQueue[0]).toMatchObject({
+        sendAttempts: 1,
+        sendState: "waiting-reconnect",
+        sendRunId: attemptedRunId,
+      });
+    } else {
+      expect(host.chatQueue).toEqual([]);
+      expect(listStoredChatOutboxes(host)).toEqual([]);
+    }
     row = paused;
     publish(row);
     expect(chatProviderReviewRow(host)?.providerReview).toEqual(paused.providerReview);
     await flushChatQueueForEvent(host);
-    expect(host.chatQueue[0]).toMatchObject({
-      id: attempted?.id,
-      text: attempted?.text,
-      createdAt: attempted?.createdAt,
-      sessionKey: attempted?.sessionKey,
-      sendState: "held",
-      sendAttempts: 1,
-      sendRunId: attemptedRunId,
-    });
+    if (outcome === "lost-ack") {
+      expect(host.chatQueue[0]).toMatchObject({
+        text: "Keep this delivery identity",
+        sendState: "held",
+        sendAttempts: 1,
+        sendRunId: attemptedRunId,
+      });
+    }
 
-    row = { ...paused, providerReview: undefined, updatedAt: 11, snapshotAt: 11 };
+    row = continuedRow(11);
     publish(row, true);
-    await loadChatHistory(host, { deferBranches: true });
-    await flushChatQueueForEvent(host);
-    expect(attempts).toBe(1);
+    await refreshHistory(host);
+    expect(host.chatQueue).toEqual([]);
+    expect(listStoredChatOutboxes(host)).toEqual([]);
+    expect(getChatHistoryLoadState(host)).toMatchObject({ phase: "committed" });
+    const expectPending = (target: ReviewHost) =>
+      expect(target.chatPendingInputs?.page.items).toMatchObject([
+        { runId: attemptedRunId, state: "interrupted" },
+      ]);
+    expectPending(host);
     reloadChatDocumentStorage([]);
-    const reloaded = makeChatHost({
-      client: createTestGatewayClient(request),
-      sessionKey: row.key,
-      currentSessionId: row.sessionId,
-      sessionsResult: sessionsResult([row], 11),
-    });
-    expect(new ChatComposerPersistence(() => reloaded).restore()).toBe(true);
-    expect(reloaded.chatQueue[0]).toMatchObject({
-      sendState: "held",
-      sendAttempts: 1,
-      sendRunId: attemptedRunId,
-    });
-    await loadChatHistory(reloaded, { deferBranches: true });
-    await flushChatQueueForEvent(reloaded);
-    expect(attempts).toBe(1);
-    expect(reloaded.chatQueue[0]).toMatchObject({
-      sendState: "held",
-      sendAttempts: 1,
-      sendRunId: attemptedRunId,
-      sessionId: row.sessionId,
-    });
-    await retryQueuedChatMessage(reloaded, attempted!.id);
-    expect(attempts).toBe(1);
-    expect(reloaded.chatQueue[0]).toMatchObject({
-      id: attempted?.id,
-      text: attempted?.text,
-      sendState: "waiting-idle",
-      sendAttempts: 1,
-      sendRunId: attemptedRunId,
-    });
+    const reloaded = reviewHost(request, row);
+    new ChatComposerPersistence(() => reloaded).restore();
+    expect(reloaded.chatQueue).toEqual([]);
+    await refreshHistory(reloaded);
+    expectPending(reloaded);
     consumed = true;
-    await loadChatHistory(reloaded, { deferBranches: true });
-    await flushChatQueueForEvent(reloaded);
+    await refreshHistory(reloaded);
     expect(listStoredChatOutboxes(reloaded)).toEqual([]);
     expect(attempts).toBe(1);
   },
@@ -397,7 +334,7 @@ it.each(["consumed", "pending", "disconnected"] as const)(
   async (outcome) => {
     const started = createDeferred();
     const acknowledgment = createDeferred<unknown>();
-    const initial = { ...paused, providerReview: undefined, updatedAt: 9, snapshotAt: 9 };
+    const initial = continuedRow(9);
     const request = makeRequestMock({
       "sessions.list": () => sessionsResult([initial], 9),
       "chat.send": () => {
@@ -423,7 +360,7 @@ it.each(["consumed", "pending", "disconnected"] as const)(
       sendState: "held",
       sendError: expect.any(String),
     });
-    const continued = { ...paused, providerReview: undefined, updatedAt: 11, snapshotAt: 11 };
+    const continued = continuedRow(11);
     host.sessionsResult = sessionsResult([continued], 11);
     publish(continued, true);
     expect(chatProviderReviewRow(host)?.providerReview).toBeUndefined();
@@ -439,16 +376,16 @@ it.each(["consumed", "pending", "disconnected"] as const)(
     await sending;
     await flushChatQueueForEvent(host);
     expect(requestCalls(request, "chat.send")).toHaveLength(1);
-    if (outcome === "consumed") {
+    if (outcome !== "disconnected") {
       expect(listStoredChatOutboxes(host)).toEqual([]);
     } else {
-      expect(listStoredChatOutboxes(host)[0]?.queue).toEqual([
-        expect.objectContaining({
+      expect(listStoredChatOutboxes(host)[0]?.queue).toMatchObject([
+        {
           text: inFlight?.text,
           sendRunId: inFlight?.sendRunId,
           sendAttempts: 1,
           sendState: "held",
-        }),
+        },
       ]);
     }
   },

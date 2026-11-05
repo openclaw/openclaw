@@ -69,96 +69,6 @@ function resolveRepoBoundFile(repoRoot: string, filePath: string, label: string)
   return resolved;
 }
 
-function renderRemoteScript(params: {
-  browserUrl: string;
-  browserProfileArchiveEnv: string;
-  browserProfileDir?: string;
-  htmlBase64?: string;
-  remoteOutputDir: string;
-  videoDurationSeconds: number;
-}) {
-  const profileArchiveEnv = params.browserProfileArchiveEnv;
-  const profilePath = params.browserProfileDir ?? `${params.remoteOutputDir}/chrome-profile`;
-  const homePrefix = /^(?:~|\$HOME)\//u.exec(profilePath)?.[0];
-  const profileDir = homePrefix
-    ? `"$HOME"/${shellQuote(profilePath.slice(homePrefix.length))}`
-    : shellQuote(profilePath);
-  return `set -euo pipefail
-out=${shellQuote(params.remoteOutputDir)}
-url=${shellQuote(params.browserUrl)}
-url_json=${shellQuote(JSON.stringify(params.browserUrl))}
-html_b64=${shellQuote(params.htmlBase64 ?? "")}
-input_mode_json=${shellQuote(JSON.stringify(params.htmlBase64 ? "html-file" : "url"))}
-opened_url_json=${shellQuote(JSON.stringify(params.htmlBase64 ? `file://${params.remoteOutputDir}/input.html` : params.browserUrl))}
-rm -rf "$out"
-mkdir -p "$out"
-if [ -n "$html_b64" ]; then
-  printf '%s' "$html_b64" | base64 -d >"$out/input.html"
-  url="file://$out/input.html"
-fi
-export DISPLAY="\${DISPLAY:-:99}"
-if ! command -v scrot >/dev/null 2>&1; then
-  sudo apt-get update -y >"$out/apt.log" 2>&1
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y scrot >>"$out/apt.log" 2>&1
-fi
-profile=${profileDir}
-temporary_profile=${params.browserProfileDir ? "false" : "true"}
-mkdir -p "$profile"
-profile_restored=false
-profile_archive_b64="\${${profileArchiveEnv}:-}"
-if [ -n "$profile_archive_b64" ]; then
-  profile_archive="$profile/openclaw-mantis-browser-profile.tgz"
-  printf '%s' "$profile_archive_b64" | base64 -d >"$profile_archive"
-  tar -xzf "$profile_archive" -C "$profile"
-  rm -f "$profile_archive"
-  profile_restored=true
-fi
-${renderMantisBrowserDiscoveryScript()}
-${renderMantisDesktopRecordingScript("desktop-browser-smoke.mp4", params.videoDurationSeconds)}
-"$browser_bin" \
-  --user-data-dir="$profile" \
-  --no-first-run \
-  --no-default-browser-check \
-  --disable-dev-shm-usage \
-  --window-size=1280,900 \
-  --window-position=0,0 \
-  --class=mantis-desktop-browser-smoke \
-  "$url" >"$out/chrome.log" 2>&1 &
-chrome_pid=$!
-cleanup() {
-  kill "$chrome_pid" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-sleep 8
-scrot "$out/desktop-browser-smoke.png"
-if [ -n "$video_pid" ]; then
-  wait "$video_pid" || true
-fi
-cleanup
-trap - EXIT
-sleep 1
-if [ "$temporary_profile" = "true" ]; then
-  rm -rf "$profile" || true
-fi
-cat >"$out/remote-metadata.json" <<MANTIS_REMOTE_METADATA
-{
-  "browserUrl": $url_json,
-  "browserBinary": "$browser_bin",
-  "display": "$DISPLAY",
-  "chromePid": $chrome_pid,
-  "browserProfileArchiveEnv": "${profileArchiveEnv}",
-  "browserProfileDir": "$profile",
-  "browserProfileRestored": $profile_restored,
-  "temporaryBrowserProfile": $temporary_profile,
-  "inputMode": $input_mode_json,
-  "openedUrl": $opened_url_json,
-  "capturedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-MANTIS_REMOTE_METADATA
-test -s "$out/desktop-browser-smoke.png"
-`;
-}
-
 function renderReport(summary: MantisDesktopBrowserSmokeSummary) {
   return renderMantisCrabboxReport({
     artifactRows: [
@@ -236,15 +146,87 @@ export async function runMantisDesktopBrowserSmoke(
   try {
     await session.acquire();
     const inspected = await session.inspect();
+    const profileArchiveEnv = browserProfileArchiveEnv;
+    const profilePath = browserProfileDir ?? `${remoteOutputDir}/chrome-profile`;
+    const homePrefix = /^(?:~|\$HOME)\//u.exec(profilePath)?.[0];
+    const profileDir = homePrefix
+      ? `"$HOME"/${shellQuote(profilePath.slice(homePrefix.length))}`
+      : shellQuote(profilePath);
     await session.runShell(
-      renderRemoteScript({
-        browserProfileArchiveEnv,
-        browserProfileDir,
-        browserUrl,
-        htmlBase64,
-        remoteOutputDir,
-        videoDurationSeconds,
-      }),
+      `set -euo pipefail
+out=${shellQuote(remoteOutputDir)}
+url=${shellQuote(browserUrl)}
+url_json=${shellQuote(JSON.stringify(browserUrl))}
+html_b64=${shellQuote(htmlBase64 ?? "")}
+input_mode_json=${shellQuote(JSON.stringify(htmlBase64 ? "html-file" : "url"))}
+opened_url_json=${shellQuote(JSON.stringify(htmlBase64 ? `file://${remoteOutputDir}/input.html` : browserUrl))}
+rm -rf "$out"
+mkdir -p "$out"
+if [ -n "$html_b64" ]; then
+  printf '%s' "$html_b64" | base64 -d >"$out/input.html"
+  url="file://$out/input.html"
+fi
+export DISPLAY="\${DISPLAY:-:99}"
+if ! command -v scrot >/dev/null 2>&1; then
+  sudo apt-get update -y >"$out/apt.log" 2>&1
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y scrot >>"$out/apt.log" 2>&1
+fi
+profile=${profileDir}
+temporary_profile=${browserProfileDir ? "false" : "true"}
+mkdir -p "$profile"
+profile_restored=false
+profile_archive_b64="\${${profileArchiveEnv}:-}"
+if [ -n "$profile_archive_b64" ]; then
+  profile_archive="$profile/openclaw-mantis-browser-profile.tgz"
+  printf '%s' "$profile_archive_b64" | base64 -d >"$profile_archive"
+  tar -xzf "$profile_archive" -C "$profile"
+  rm -f "$profile_archive"
+  profile_restored=true
+fi
+${renderMantisBrowserDiscoveryScript()}
+${renderMantisDesktopRecordingScript("desktop-browser-smoke.mp4", videoDurationSeconds)}
+"$browser_bin" \
+  --user-data-dir="$profile" \
+  --no-first-run \
+  --no-default-browser-check \
+  --disable-dev-shm-usage \
+  --window-size=1280,900 \
+  --window-position=0,0 \
+  --class=mantis-desktop-browser-smoke \
+  "$url" >"$out/chrome.log" 2>&1 &
+chrome_pid=$!
+cleanup() {
+  kill "$chrome_pid" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+sleep 8
+scrot "$out/desktop-browser-smoke.png"
+if [ -n "$video_pid" ]; then
+  wait "$video_pid" || true
+fi
+cleanup
+trap - EXIT
+sleep 1
+if [ "$temporary_profile" = "true" ]; then
+  rm -rf "$profile" || true
+fi
+cat >"$out/remote-metadata.json" <<MANTIS_REMOTE_METADATA
+{
+  "browserUrl": $url_json,
+  "browserBinary": "$browser_bin",
+  "display": "$DISPLAY",
+  "chromePid": $chrome_pid,
+  "browserProfileArchiveEnv": "${profileArchiveEnv}",
+  "browserProfileDir": "$profile",
+  "browserProfileRestored": $profile_restored,
+  "temporaryBrowserProfile": $temporary_profile,
+  "inputMode": $input_mode_json,
+  "openedUrl": $opened_url_json,
+  "capturedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+MANTIS_REMOTE_METADATA
+test -s "$out/desktop-browser-smoke.png"
+`,
       ["--no-sync"],
     );
     await copyCrabboxArtifacts({

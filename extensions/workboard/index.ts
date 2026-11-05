@@ -10,7 +10,6 @@ import { registerWorkboardCommand } from "./src/command.js";
 import {
   createWorkboardLifecycleService,
   readWorkboardLifecycleSessions,
-  syncWorkboardAgentEnded,
   syncWorkboardSubagentEnded,
 } from "./src/lifecycle-sync.js";
 import { createWorkboardSessionsBoardService } from "./src/sessions-board.js";
@@ -71,6 +70,38 @@ const columnSchema = strictObject({
   ),
 });
 
+const sessionsBoardReadSchema = strictObject({ boardId: boardIdField });
+
+const sessionsBoardUpdateSchema = strictObject({
+  boardId: boardIdField,
+  columns: Type.Optional(Type.Array(columnSchema, { minItems: 2, maxItems: 12 })),
+  scope: Type.Optional(
+    strictObject({
+      agentIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      includeArchived: Type.Optional(Type.Boolean()),
+      includeAutomation: Type.Optional(
+        Type.Boolean({
+          description: "Include automation (cron) and system sessions. Defaults to false.",
+        }),
+      ),
+      includeHome: Type.Optional(
+        Type.Boolean({
+          description: "Include each agent's Home session. Defaults to false.",
+        }),
+      ),
+      maxAgeHours: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
+    }),
+  ),
+});
+
+const sessionsBoardMoveSchema = strictObject({
+  boardId: boardIdField,
+  sessionKey: Type.String({ description: "Exact session key from the board read." }),
+  columnId: Type.String({
+    description: "Destination column id from the board read.",
+  }),
+});
+
 export default definePluginEntry({
   id: "workboard",
   name: "Workboard",
@@ -108,6 +139,7 @@ export default definePluginEntry({
     }
     const store = WorkboardStore.openSqlite(
       resolveWorkboardSqliteWorkerModuleUrl(api.runtimeSource),
+      { lazy: api.registrationMode === "tool-discovery" },
     );
     const resourceServices: Array<{ stop(): void | Promise<void> }> = [];
     registerWorkboardStoreLifecycle(api, store, async () => {
@@ -170,17 +202,13 @@ export default definePluginEntry({
         });
       }),
     );
-    api.on("agent_end", (event, context) =>
-      store.runOperation(async () => {
-        await syncWorkboardAgentEnded({
-          store,
-          event,
-          context,
-          readSessions: lifecycleSync.readSessions,
-          onMatched: automationNudge.nudge,
-        });
-      }),
-    );
+    api.agent.events.registerAgentEventSubscription({
+      id: "workboard-run-settlement",
+      streams: ["lifecycle"],
+      phases: ["end", "error"],
+      payload: "metadata",
+      handle: (event) => lifecycleSync.onRunSettled(event),
+    });
     api.registerTool(
       (context) =>
         guardWorkboardToolsForWorkspaceAccess(
@@ -222,7 +250,7 @@ export default definePluginEntry({
               label: "Sessions Board Read",
               description:
                 "Read a Sessions board and its session placements. Columns match Gateway-owned session status, observer health, and pull-request facts in order; operator pins take precedence. Card tools do not apply to Sessions boards.",
-              parameters: strictObject({ boardId: boardIdField }),
+              parameters: sessionsBoardReadSchema,
               execute: async (_toolCallId, rawParams) => {
                 const record = asNonArrayRecord(rawParams);
                 return jsonResult(
@@ -235,28 +263,7 @@ export default definePluginEntry({
               label: "Sessions Board Update",
               description:
                 "Edit a Sessions board's columns, match rules, or scope. columns replaces the full ordered list; preserve ids when renaming labels. All fields in each rule must match; a match array accepts any rule, and the first matching column wins. Exactly one fallback is required. Card tools do not apply to Sessions boards.",
-              parameters: strictObject({
-                boardId: boardIdField,
-                columns: Type.Optional(Type.Array(columnSchema, { minItems: 2, maxItems: 12 })),
-                scope: Type.Optional(
-                  strictObject({
-                    agentIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-                    includeArchived: Type.Optional(Type.Boolean()),
-                    includeAutomation: Type.Optional(
-                      Type.Boolean({
-                        description:
-                          "Include automation (cron) and system sessions. Defaults to false.",
-                      }),
-                    ),
-                    includeHome: Type.Optional(
-                      Type.Boolean({
-                        description: "Include each agent's Home session. Defaults to false.",
-                      }),
-                    ),
-                    maxAgeHours: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
-                  }),
-                ),
-              }),
+              parameters: sessionsBoardUpdateSchema,
               execute: async (_toolCallId, rawParams) => {
                 const record = asNonArrayRecord(rawParams);
                 const boardId = await resolveBoardId(record);
@@ -269,13 +276,7 @@ export default definePluginEntry({
               label: "Sessions Board Move",
               description:
                 "Pin a session in a Sessions board column. The pin overrides match rules while the column exists. Card tools do not apply to Sessions boards.",
-              parameters: strictObject({
-                boardId: boardIdField,
-                sessionKey: Type.String({ description: "Exact session key from the board read." }),
-                columnId: Type.String({
-                  description: "Destination column id from the board read.",
-                }),
-              }),
+              parameters: sessionsBoardMoveSchema,
               execute: async (_toolCallId, rawParams) => {
                 const record = asNonArrayRecord(rawParams);
                 return jsonResult(

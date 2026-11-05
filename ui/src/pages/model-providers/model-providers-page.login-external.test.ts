@@ -48,12 +48,13 @@ describe("Models provider login", () => {
         const buttons = [
           ...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button"),
         ];
-        expect(buttons.find((button) => button.textContent?.trim() === "Cancel")?.disabled).toBe(
-          false,
-        );
-        expect(buttons.find((button) => button.textContent?.trim() === "Copy link")?.disabled).toBe(
-          false,
-        );
+        expect(
+          buttons.find((button) => button.getAttribute("aria-label") === "Cancel sign-in")
+            ?.disabled,
+        ).toBe(false);
+        expect(
+          buttons.find((button) => button.textContent?.trim() === "Copy sign-in link")?.disabled,
+        ).toBe(false);
       });
       expect(request.mock.calls.filter(([method]) => method === "models.authLogin")).toHaveLength(
         1,

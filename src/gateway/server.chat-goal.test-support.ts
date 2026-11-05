@@ -96,7 +96,6 @@ export function registerGoalChatRestartSettlementCase(fixture: {
         status: "failed",
         lastRunId: request.idempotencyKey,
         abortedLastRun: false,
-        restartRecoveryDeliveryRunId: request.idempotencyKey,
         goal: { objective: request.message },
       });
       expect(readGoalChatUserMessages(fixture.scope())).toHaveLength(1);
@@ -175,4 +174,19 @@ export function registerGoalChatOperationCollisionCases(fixture: {
       });
     },
   );
+}
+
+export function goalAgentResult(sessionId: string, text: string) {
+  return {
+    payloads: [{ text }],
+    meta: {
+      durationMs: 0,
+      agentMeta: {
+        sessionId,
+        provider: "test",
+        model: "test",
+        usage: { input: 1, output: 1 },
+      },
+    },
+  };
 }

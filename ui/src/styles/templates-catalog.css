@@ -1,0 +1,134 @@
+.templates-add-consent {
+  display: grid;
+  gap: 12px;
+}
+
+.templates-add-consent__item {
+  display: grid;
+  gap: 6px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.templates-add-consent__item > span,
+.templates-add-consent__item li {
+  color: var(--muted);
+}
+
+.templates-add-consent__item ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.templates-add-consent__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.templates-content-skeleton {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.templates-content-skeleton__title {
+  width: min(220px, 60%);
+  height: 22px;
+}
+
+.templates-content-skeleton__row {
+  height: 58px;
+}
+
+.templates-content-skeleton .skeleton {
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+@media (max-width: 560px) {
+  .templates-content-skeleton__row {
+    height: 52px;
+  }
+}
+
+[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
+  -webkit-line-clamp: 1;
+}
+/* Keep the existing row controls local without repeating their selectors. */
+.templates-workspace-file {
+  position: relative;
+  &:has(.templates-workspace-file__open:hover) {
+    background: var(--surface-hover);
+  }
+  &.templates-workspace-file--all {
+    min-height: 72px;
+    padding-block: var(--space-4);
+    border-top: 1px solid var(--border);
+    .settings-row__title {
+      line-height: 20px;
+    }
+  }
+  /* The route omits settings.css; reserve the existing 18px navigation lane. */
+  .settings-row__chevron {
+    display: grid;
+    place-items: center;
+    flex: 0 0 18px;
+    width: 18px;
+    height: 18px;
+    color: var(--muted);
+    opacity: 0.5;
+    svg {
+      width: 13px;
+      height: 13px;
+    }
+  }
+  .templates-workspace-file__title {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  :where(button) {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: var(--cursor-action);
+  }
+}
+.templates-workspace-file__open {
+  min-width: 0;
+  text-align: left;
+
+  /* Cover the row while keeping help above the navigation target. */
+  &::after {
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius-md);
+    content: "";
+  }
+  &:focus-visible::after {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+}
+.templates-workspace-file__info {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  svg {
+    width: 14px;
+    height: 14px;
+  }
+  &:hover,
+  &:focus-visible {
+    color: var(--accent);
+  }
+}

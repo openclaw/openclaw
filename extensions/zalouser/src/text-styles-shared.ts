@@ -2,7 +2,6 @@ import type { markdownToIRWithMeta } from "openclaw/plugin-sdk/text-chunking";
 import { TextStyle, type Style } from "./zca-constants.js";
 
 export type MarkdownIRWithMetadata = ReturnType<typeof markdownToIRWithMeta>["ir"];
-export type MarkdownBlockSpan = NonNullable<MarkdownIRWithMetadata["blocks"]>[number];
 
 export type InlineStyle = (typeof TextStyle)[keyof typeof TextStyle];
 

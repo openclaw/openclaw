@@ -42,6 +42,7 @@ export function tryResetGatewaySessionForCreation(
     // the prepared transcript or catalog-owned model/runtime pair is persisted.
     !params.initialAssistantMessage &&
     !params.catalogTarget &&
+    params.cyberAccessProgram === undefined &&
     params.cfg.session?.dmScope === "main"
   ) {
     const parentAgentId = normalizeAgentId(
@@ -74,11 +75,13 @@ async function resetGatewaySessionForCreation(
   const execCwd = normalizeOptionalString(params.execCwd);
   const resetResult = await performGatewaySessionReset({
     key: canonicalParentSessionKey,
+    operatorAuthority: (await params.operatorAuthority)?.authority,
     ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
     ...(params.requestingOperatorProfileId
       ? { requestingOperatorProfileId: params.requestingOperatorProfileId }
       : {}),
     ...(params.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
+    creationOperation: params.creationOperation,
     reason: "new",
     commandSource: params.commandSource,
     ...(params.creation ? { creation: params.creation } : {}),

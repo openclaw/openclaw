@@ -31,6 +31,7 @@ import {
 } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
 import { registerCommandGroups } from "./program/register-command-groups.js";
 import {
@@ -177,14 +178,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   };`,
   );
   if (options.sdkProvider) {
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id,
-        providers: [id],
-        configSchema: { type: "object", properties: {}, additionalProperties: false },
-      }),
-    );
+    writeFixtureJsonSync(path.join(plugin.dir, "openclaw.plugin.json"), {
+      id,
+      providers: [id],
+      configSchema: { type: "object", properties: {}, additionalProperties: false },
+    });
   }
   const config = { plugins: { allow: [id], load: { paths: [plugin.dir] } } };
   const env = {
@@ -194,29 +192,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   };
   const fixture = {
     id,
-    key,
     state,
     config,
     env,
     resolveProviders: () => resolvePluginProviders({ config, env, onlyPluginIds: [id] }),
-    load: async () => {
-      const acquisition = await acquirePluginRegistryForInspection({
-        config,
-        env,
-        logger: quietLogger,
-      });
-      try {
-        expect(
-          acquisition.registry.plugins.find((record) => record.id === id),
-          JSON.stringify(acquisition.registry.diagnostics),
-        ).toMatchObject({ source: plugin.file, status: "loaded" });
-        expect(state.database).toBeDefined();
-        return acquisition;
-      } catch (error) {
-        await acquisition.release().catch(() => {});
-        throw error;
-      }
-    },
+    load: () => acquirePluginRegistryForInspection({ config, env, logger: quietLogger }),
   };
   fixtureCleanups.push(() => {
     state.resume.resolve();
@@ -519,7 +499,7 @@ it("leaves standalone command programs with their caller after registration retu
   fixture.state.resume.resolve();
   const program = new Command();
   const configPath = path.join(fixture.env.HOME, "openclaw.json");
-  fs.writeFileSync(configPath, JSON.stringify(fixture.config));
+  writeFixtureJsonSync(configPath, fixture.config);
   await withEnvAsync({ ...fixture.env, OPENCLAW_CONFIG_PATH: configPath }, () =>
     registerPluginCliCommandsFromValidatedConfig(program, fixture.env),
   );

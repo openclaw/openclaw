@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import type { WorkerRetentionPolicy } from "../../plugins/worker-retention.types.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { PreparedEnvironmentSelection } from "./environment-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -36,7 +37,11 @@ describe("prepared environment ownership", () => {
     preparationKey: PREPARATION_KEY,
     assertCurrent,
   };
-  function reserve(environmentId = "prepared-1", purpose: "reserve" | "build" = "reserve") {
+  function reserve(
+    environmentId = "prepared-1",
+    purpose: "reserve" | "build" = "reserve",
+    retention?: WorkerRetentionPolicy,
+  ) {
     return environments.ensurePreparedIntent({
       intent: {
         environmentId,
@@ -44,6 +49,7 @@ describe("prepared environment ownership", () => {
         profileId: "test-profile",
         provisionOperationId: `provision:${environmentId}`,
         profileSnapshot: fixture.profile(PROJECT_KEY),
+        retention,
         preparation: { purpose, key: PREPARATION_KEY, demandAtMs: 900, expiresAtMs: 2_000 },
       },
       projectKey: PROJECT_KEY,
@@ -89,6 +95,13 @@ describe("prepared environment ownership", () => {
     expect(environments.isPreparedIntentWithinCapacity(capacity)).toBe(true);
     await reopenStores();
     expect(environments.get("build-1")?.preparation?.purpose).toBe("build");
+    await expect(
+      reserve("build-1", "build", {
+        version: 1,
+        ownerBinding: "session-original",
+        computeWindowSeconds: 600,
+      }),
+    ).rejects.toThrow("intent identity changed");
     expect(await reserve("build-2", "build")).toEqual(environments.get("build-1"));
     expect(environments.list()).toHaveLength(1);
   });
@@ -163,28 +176,24 @@ describe("prepared environment ownership", () => {
       const admission = vi
         .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
         .mockImplementationOnce((admit, attachment) =>
-          createAdmission((admissionRequest, grant) => {
-            if (admissionRequest.stage === stage) {
+          createAdmission((entry, grant) => {
+            if (entry.stage === stage) {
               revoked = true;
             }
-            admit(admissionRequest, grant);
+            admit(entry, grant);
           }, attachment),
         );
-      try {
-        await expect(
-          placements.bindPreparedEnvironment({
-            ...request,
-            assertCurrent: () => {
-              if (revoked) {
-                throw new Error("caller revoked");
-              }
-            },
-          }),
-        ).rejects.toThrow("caller revoked");
-      } finally {
-        admission.mockRestore();
-      }
-      expect(revoked).toBe(true);
+      onTestFinished(() => admission.mockRestore());
+      await expect(
+        placements.bindPreparedEnvironment({
+          ...request,
+          assertCurrent: () => {
+            if (revoked) {
+              throw new Error("caller revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("caller revoked");
       unconsumed(request.sessionId);
     },
   );

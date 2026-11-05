@@ -118,10 +118,7 @@ export function registerConfigWritePreflightTests({
           {
             ...snapshot.sourceConfig,
             env: { vars: { [key]: "new-prefix" } },
-            messages: {
-              ...snapshot.sourceConfig.messages,
-              responsePrefix: "${FINAL_WRITE_PREFIX}",
-            },
+            messages: messageConfig,
           },
           {
             inputBase: "source",

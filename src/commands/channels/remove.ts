@@ -20,16 +20,14 @@ import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
 import { type ChatChannel, requireValidConfigForWrite } from "./shared.js";
 
-type ChannelsRemoveOptions = {
-  agent?: string;
-  channel?: string;
-  account?: string;
-  delete?: boolean;
-};
-
 /** Disable or delete a channel account, stopping gateway runtime state before mutation. */
 export async function channelsRemoveCommand(
-  opts: ChannelsRemoveOptions,
+  opts: {
+    agent?: string;
+    channel?: string;
+    account?: string;
+    delete?: boolean;
+  },
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean },
 ) {

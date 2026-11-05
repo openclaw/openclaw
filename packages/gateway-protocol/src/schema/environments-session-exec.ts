@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { hasValidSessionExecAction } from "./validation-invariants.js";
 
 /** Commands always run in the environment attached to the authenticated conversation. */
 export const EnvironmentsSessionExecParamsSchema = Type.Refine(
@@ -24,17 +25,7 @@ export const EnvironmentsSessionExecParamsSchema = Type.Refine(
     input: Type.Optional(Type.String({ maxLength: 131_072 })),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 600_000 })),
   }),
-  (value) => {
-    const action = value.action ?? "run";
-    return action === "run"
-      ? value.argv !== undefined && value.processId === undefined
-      : action === "start"
-        ? value.argv !== undefined && value.processId !== undefined
-        : value.processId !== undefined &&
-          value.argv === undefined &&
-          value.input === undefined &&
-          value.timeoutMs === undefined;
-  },
+  hasValidSessionExecAction,
   () =>
     "run/start require argv; start/status/stop require processId; status/stop accept no command",
 );

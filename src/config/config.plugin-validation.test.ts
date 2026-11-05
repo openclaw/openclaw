@@ -10,6 +10,7 @@ import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.j
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import type { OpenClawConfigWithLegacyRoster } from "./legacy.roster.js";
+import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 import { validateConfigObjectWithPlugins as validateConfigObjectWithPluginsRaw } from "./validation.js";
 
 vi.unmock("../version.js");
@@ -215,6 +216,29 @@ describe("config plugin validation", () => {
 
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  it("identifies both copies in duplicate plugin config warnings without loading either runtime", async () => {
+    const id = "duplicate-path-fixture";
+    const selected = path.join(fixtureRoot, "selected");
+    const ignored = path.join(fixtureRoot, "ignored");
+    const copies = [selected, ignored];
+    for (const dir of copies) {
+      await writePluginFixture({ dir, id });
+      await fs.writeFile(path.join(dir, "index.js"), 'throw new Error("runtime must not load");');
+    }
+    const result = validatePluginRefs({
+      enabled: true,
+      load: { paths: copies },
+      allow: [id],
+      entries: { [id]: { enabled: true } },
+    });
+    expectValid(result);
+    const warning = result.warnings.find(({ message }) => message.includes("duplicate plugin id"));
+    expect(warning?.message).toContain(`ignored plugin source: ${path.join(ignored, "index.js")}`);
+    expect(warning?.message).toContain(
+      `overridden by config plugin (${path.join(selected, "index.js")})`,
+    );
   });
 
   it("reports a malformed plugin configSchema as an issue instead of throwing", () => {
@@ -776,11 +800,6 @@ describe("config plugin validation", () => {
       false,
       "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
     ],
-    [
-      "skill-workshop",
-      true,
-      'plugin removed: skill-workshop (stale plugin config ignored; Skill Workshop is built into OpenClaw skills now. Set skills.workshop.autonomous.mode to "auto" or "off" and use openclaw skills workshop commands, then remove this plugins config entry)',
-    ],
   ] as const)("warns across all references to removed %s", (id, enabled, message) => {
     const res = validatePluginRefs({
       enabled: false,
@@ -798,6 +817,32 @@ describe("config plugin validation", () => {
     ]) {
       expectMessage(res.warnings, warningPath, message);
     }
+  });
+
+  it("ignores Skill Workshop policy written while it was built in, then validates it", () => {
+    const plugins = { entries: { "skill-workshop": { config: { maxSkillBytes: 0 } } } };
+    const env = {
+      ...suiteEnv(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+    };
+    const unmarked = validate({ plugins }, { env });
+    expect(unmarked.ok).toBe(true);
+    expect(unmarked.warnings.map(({ message }) => message).join("\n")).toContain("doctor --fix");
+    const meta = { migrations: { skillWorkshopPlugin: true } };
+    expect(validate({ meta, plugins }, { env }).ok).toBe(false);
+  });
+
+  it("keeps a restrictive allowlist when the default memory plugin has no authored config", () => {
+    const res = validate({
+      agents: { entries: { openclaw: {} } },
+      plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
+    });
+    expectValid(res);
+    // Runtime activation re-derives enablement from the validated config; its
+    // materialized empty default must not read as operator config.
+    expect(res.config.plugins?.entries?.["memory-core"]).toEqual({ config: {} });
+    const activated = applyPluginAutoEnable({ config: res.config, env: {} });
+    expect(activated.config.plugins?.allow).not.toContain("memory-core");
   });
 
   it("does not auto-allow config-loaded overrides of bundled web search plugin ids", () => {

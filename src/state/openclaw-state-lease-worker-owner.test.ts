@@ -30,6 +30,7 @@ function fixture(uncertain = false) {
   const databasePath = "/synthetic-state/lease.sqlite";
   const lease: OpenClawStateLeaseContext = {
     signal: new AbortController().signal,
+    assertCurrent() {},
     assertOwned() {},
     assertOwnedInTransaction() {},
   };
@@ -75,91 +76,75 @@ function fixture(uncertain = false) {
 }
 
 it.each([
-  "none",
-  "transaction",
-  "commit",
-  "beforeTransaction replacement",
-  "beforeTransaction expiry",
-  "beforeCommit expiry",
-] as const)("keeps caller authority and expiry live through commit (%s)", async (withdrawAt) => {
+  ["transaction", "revoked"],
+  ["transaction", "replacement"],
+  ["transaction", "expired"],
+  ["commit", "revoked"],
+  ["commit", "expired"],
+  ["commit", "allowed"],
+] as const)("keeps authority live at %s: %s", async (stage, outcome) => {
   await using f = fixture();
-  const expireCommit = withdrawAt === "beforeCommit expiry";
-  const expireTransaction = withdrawAt === "beforeTransaction expiry";
-  const replaceGuard = withdrawAt === "beforeTransaction replacement";
   const withdrawn = new Error("Synthetic login was retired");
   const now = Date.now();
-  const clock =
-    expireCommit || expireTransaction ? vi.spyOn(Date, "now").mockReturnValue(now) : undefined;
-  const beforeTransaction = vi.fn(() => {
-    if (replaceGuard) {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const effects: string[] = [];
+  let current = true;
+  const prepare = (step: "transaction" | "commit") => {
+    effects.push(step);
+    if (stage !== step) {
+      return;
+    }
+    if (outcome === "expired") {
+      clock.mockReturnValue(now + 30_000);
+    }
+    if (outcome === "replacement") {
       throw withdrawn;
     }
-    if (expireTransaction) {
-      clock?.mockReturnValue(now + 30_000);
-    }
-  });
-  const beforeCommit = vi.fn(() => {
-    clock?.mockReturnValue(now + 30_000);
-  });
-  let current = true;
+  };
   const authority = {
     assertCurrent() {
       if (!current) {
         throw withdrawn;
       }
     },
-    beforeTransaction,
-    beforeCommit,
+    beforeTransaction: () => prepare("transaction"),
+    beforeCommit: () => prepare("commit"),
   };
-  if (replaceGuard) {
-    const replacement = vi.fn();
+  if (outcome === "replacement") {
     f.lease.assertOwned = () => {
-      authority.beforeTransaction = replacement;
+      authority.beforeTransaction = () => {};
     };
   }
   await f.run(async (scope) => {
     const { admission } = scope.createAdmission({ settled: f.settled.promise });
-    scope.assertCurrent();
-    expect(beforeTransaction).not.toHaveBeenCalled();
-    expect(beforeCommit).not.toHaveBeenCalled();
-    const request = (stage: "transaction" | "commit") =>
-      requestLeaseAdmission(admission, stage, {
+    const request = (step: "transaction" | "commit") =>
+      requestLeaseAdmission(admission, step, {
         kind: "state-lease",
         identity: scope.identity,
         expiresAt: Date.now() + 30_000,
       });
     try {
-      current = withdrawAt !== "transaction";
-      expect(request("transaction")).toBe(current && !expireTransaction && !replaceGuard ? 1 : 2);
-      expect(beforeCommit).not.toHaveBeenCalled();
-      if (!current || replaceGuard) {
-        expect(admission.failure).toBe(withdrawn);
-        if (replaceGuard) {
-          expect(beforeTransaction).toHaveBeenCalledOnce();
-        }
-        return;
+      scope.assertCurrent();
+      expect(effects).toEqual([]);
+      if (stage === "commit") {
+        expect(request("transaction")).toBe(1);
+        expect(request("transaction")).toBe(1);
+        expect(effects).toEqual(["transaction"]);
       }
-      expect(beforeTransaction).toHaveBeenCalledOnce();
-      if (expireTransaction) {
+      current = outcome !== "revoked";
+      expect(request(stage)).toBe(outcome === "allowed" ? 1 : 2);
+      const expectedEffects = stage === "commit" ? ["transaction"] : [];
+      if (outcome !== "revoked") {
+        expectedEffects.push(stage);
+      }
+      expect(effects).toEqual(expectedEffects);
+      if (outcome === "expired") {
         expect(admission.failure).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
-        return;
-      }
-      // One bounded mutation can verify its lease before several statements.
-      expect(request("transaction")).toBe(1);
-      expect(beforeTransaction).toHaveBeenCalledOnce();
-      current = withdrawAt !== "commit";
-      expect(request("commit")).toBe(current && !expireCommit ? 1 : 2);
-      if (current) {
-        expect(beforeCommit).toHaveBeenCalledOnce();
-        if (expireCommit) {
-          expect(admission.failure).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
-        }
-        // Acknowledgement remains deliverable after the commit grant.
-        current = false;
-      } else {
-        expect(beforeCommit).not.toHaveBeenCalled();
+      } else if (outcome !== "allowed") {
         expect(admission.failure).toBe(withdrawn);
       }
+      // Acknowledgement remains deliverable after the commit grant.
+      current = false;
     } finally {
       admission.finish();
       f.settled.resolve({ kind: "completed" });
@@ -185,11 +170,10 @@ it.each(["reject", "handled failure"] as const)(
     });
     const error: unknown = await operation.catch((failure: unknown) => failure);
     expect(error).toMatchObject({ code: "outcome-unknown" });
-    const causes = collectNestedErrorCandidates(error);
-    expect(causes).toContain(settlementError);
-    if (completion === "reject") {
-      expect(causes).toContain(commandError);
-    }
+    const commandCauses = completion === "reject" ? [commandError] : [];
+    expect(collectNestedErrorCandidates(error)).toEqual(
+      expect.arrayContaining([settlementError, ...commandCauses]),
+    );
     expect(f.owner.canRelease()).toBe(false);
     await expect(Promise.resolve().then(() => f.run(nextOperation))).rejects.toMatchObject({
       code: "outcome-unknown",
@@ -209,13 +193,9 @@ it.each(["reject", "handled failure"] as const)(
       code: "outcome-unknown",
       cause: expect.any(AggregateError),
     });
-    const combinedCauses = collectNestedErrorCandidates(combined);
-    expect(combinedCauses).toContain(error);
-    expect(combinedCauses).toContain(settlementError);
-    expect(combinedCauses).toContain(authorityError);
-    if (completion === "reject") {
-      expect(combinedCauses).toContain(commandError);
-    }
+    expect(collectNestedErrorCandidates(combined)).toEqual(
+      expect.arrayContaining([error, settlementError, authorityError, ...commandCauses]),
+    );
     await expect(f.owner.drain()).rejects.toMatchObject({ code: "outcome-unknown" });
   },
 );
@@ -233,7 +213,6 @@ it.each(["completed", "not-entered"] as const)(
     await expect(operation).rejects.toBe(commandError);
     expect(f.owner.canRelease()).toBe(true);
     await expect(f.run(nextOperation)).resolves.toBe("continued");
-    expect(nextOperation).toHaveBeenCalledOnce();
   },
 );
 

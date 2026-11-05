@@ -7,6 +7,7 @@ import {
 } from "../agents/execution-auth-binding.js";
 import * as harnessRegistry from "../agents/harness/registry.js";
 import { committedConfigFiles as hostedConfigFiles } from "../commands/committed-config.test-support.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { runSetupMemoryImportStep } from "../wizard/setup.memory-import.js";
 import { runSystemAgentTurn as runTurn } from "./agent-turn.js";
@@ -139,19 +140,10 @@ export function useTempStateDir(): string {
 
 export function configSnapshot(config: OpenClawConfig): ConfigFileSnapshot {
   return {
-    exists: true,
-    valid: true,
-    path: "/tmp/openclaw.json",
+    ...createTestConfigSnapshot(config),
     hash: "h",
-    config,
-    runtimeConfig: config,
-    sourceConfig: config,
     raw: null,
     parsed: config,
-    resolved: config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
   };
 }
 

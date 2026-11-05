@@ -7,14 +7,19 @@ import { probeTreeClone } from "@openclaw/fs-safe/copy";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   sqliteMaintenanceFixture,
+  sqliteSchedulerClock,
   spySqliteExec,
   thrownBy,
 } from "./sqlite-maintenance-fixture.test-support.js";
 import { sqliteMaintenanceEntrypoints } from "./sqlite-maintenance-runtime.test-support.js";
+import { admitSqliteSchema } from "./sqlite-schema-facts.js";
+import { detectSqliteWalSplitBrain } from "./sqlite-wal-split-brain.js";
+import { registerSqliteWalWorkerMaintenance } from "./sqlite-wal-write-admission.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
@@ -23,6 +28,7 @@ import {
 
 const resources = sqliteMaintenanceFixture();
 const tempDirs = { make: resources.dir };
+const directoryFs: { readdir(pathname: fs.PathLike): Promise<string[]> } = fs.promises;
 
 vi.mock("@openclaw/fs-safe/copy", { spy: true });
 
@@ -348,61 +354,213 @@ describe("sqlite WAL maintenance", () => {
     }
   });
 
-  it.runIf(process.platform === "linux").each([
-    { kind: "unlinked", sidecar: "wal" },
-    { kind: "replaced", sidecar: "shm" },
-  ] as const)("hard-stops without closing a $kind -$sidecar handle", async ({ kind, sidecar }) => {
-    vi.useFakeTimers();
-    const tempDir = tempDirs.make("openclaw-sqlite-wal-split-brain-");
-    const databasePath = path.join(tempDir, "state.sqlite");
-    fs.writeFileSync(databasePath, "fixture");
-    const db = createMockDb();
-    const close = vi.spyOn(db, "close");
-    const maintenance = configureSqliteWalMaintenance(db, {
-      checkpointIntervalMs: 100,
-      databaseLabel: "split-brain-test",
-      databasePath,
-    });
-    const sidecarPath = `${databasePath}-${sidecar}`;
-    vi.spyOn(fs, "readdirSync").mockReturnValue(["42"] as unknown as ReturnType<
-      typeof fs.readdirSync
-    >);
-    vi.spyOn(fs, "readlinkSync").mockReturnValue(
-      kind === "unlinked" ? `${sidecarPath} (deleted)` : sidecarPath,
-    );
-    vi.spyOn(fs, "fstatSync").mockReturnValue({
-      dev: 10n,
-      ino: 20n,
-      nlink: kind === "unlinked" ? 0n : 1n,
-    } as fs.BigIntStats);
-    vi.spyOn(fs, "statSync").mockImplementation((pathname) => {
-      if (pathname !== sidecarPath) {
-        throw new Error(`unexpected stat: ${String(pathname)}`);
+  it.each([false, true])(
+    "joins a delayed sidecar scan without blocking host work (retire: %s)",
+    async (retire) => {
+      const clock = sqliteSchedulerClock();
+      const databasePath = resources.file();
+      const db = resources.open(databasePath);
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      const maintenance = resources.maintain(db, { databasePath, checkpointIntervalMs: 100 });
+      const execute = vi.fn(async () => undefined);
+      registerSqliteWalWorkerMaintenance(db, execute);
+      const scanned = createDeferredCore<string[]>();
+      const readdir = vi.spyOn(directoryFs, "readdir").mockImplementation(() => scanned.promise);
+      const syncRead = vi.spyOn(fs, "readdirSync").mockReturnValue([]);
+      let closing: Promise<void> | undefined;
+      const running = clock.advanceBy(100);
+      try {
+        expect(syncRead).not.toHaveBeenCalled();
+        expect(readdir).toHaveBeenCalledOnce();
+        await Promise.resolve();
+        expect(execute).not.toHaveBeenCalled();
+        if (retire) {
+          closing = maintenance.stop();
+        }
+      } finally {
+        scanned.resolve([]);
+        await running;
+        await closing;
       }
-      if (kind === "unlinked") {
-        const error = new Error("missing sidecar") as NodeJS.ErrnoException;
-        error.code = "ENOENT";
-        throw error;
+      expect(execute).toHaveBeenCalledTimes(retire ? 0 : 1);
+      if (!retire) {
+        expect(execute).toHaveBeenCalledWith(expect.objectContaining({ maxPages: 512 }));
       }
-      return { dev: 10n, ino: 21n } as fs.BigIntStats;
-    });
-    const write = vi.spyOn(fs, "writeSync").mockReturnValue(1);
-    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-    const abort = vi.spyOn(process, "abort").mockImplementation(() => {
-      throw new Error("process abort intercepted");
-    });
+    },
+  );
 
-    await vi.advanceTimersByTimeAsync(100);
+  it.each([false, true])(
+    "holds checkpoint ticks and explicit maintenance behind sidecar inspection (tracked: %s)",
+    async (tracked) => {
+      const clock = sqliteSchedulerClock();
+      const databasePath = resources.file();
+      const db = resources.open(databasePath, {}, tracked);
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      const maintenance = resources.maintain(db, { databasePath, checkpointIntervalMs: 60_000 });
+      db.exec("CREATE TABLE entries (value TEXT);");
+      await clock.advanceBy(50_000);
+      db.prepare("INSERT INTO entries VALUES ('pending');").run();
+      const prepare = vi.spyOn(db, "prepare");
+      const close = vi.spyOn(db, "close");
+      const disposeDependent = vi.fn();
+      registerNodeSqliteDisposeCallback(db, disposeDependent);
+      const inspecting = createDeferredCore();
+      const inspected = createDeferredCore<fs.BigIntStats>();
+      const sidecarPath = `${databasePath}-wal`;
+      vi.spyOn(directoryFs, "readdir").mockResolvedValue(["42"]);
+      vi.spyOn(fs.promises, "readlink").mockResolvedValue(sidecarPath);
+      vi.spyOn(fs, "fstat").mockImplementation((_fd, _options, callback) =>
+        callback(null, { dev: 10n, ino: 20n, nlink: 1n } as fs.BigIntStats),
+      );
+      vi.spyOn(fs.promises, "stat").mockImplementation(async () => {
+        inspecting.resolve();
+        return inspected.promise;
+      });
+      vi.spyOn(fs, "writeSync").mockReturnValue(1);
+      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+      vi.spyOn(process, "abort").mockImplementation(() => {
+        throw new Error("process abort intercepted");
+      });
+      const running = clock.advanceBy(10_000);
+      try {
+        await inspecting.promise;
+        expect(prepare).not.toHaveBeenCalled();
+        expect(maintenance.checkpoint()).toBe(false);
+        expect(() => maintenance.reclaimFreePages()).toThrow("owner is unavailable");
+        expect(maintenance.close()).toBe(false);
+        expect(() => db.close()).toThrow("SQLite WAL inspection is pending");
+        expect(db.isOpen).toBe(true);
+        expect(disposeDependent).not.toHaveBeenCalled();
+        close.mockClear();
+        expect(prepare).not.toHaveBeenCalled();
+      } finally {
+        inspected.resolve({ dev: 10n, ino: 21n } as fs.BigIntStats);
+        await running;
+      }
+      expect(kill).toHaveBeenCalledWith(process.pid, "SIGKILL");
+      expect(prepare).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+    },
+  );
 
-    expect(kill).toHaveBeenCalledWith(process.pid, "SIGKILL");
-    expect(abort).toHaveBeenCalledOnce();
-    expect(close).not.toHaveBeenCalled();
-    expect(maintenance.checkpoint()).toBe(false);
-    expect(write).toHaveBeenCalledWith(
-      2,
-      expect.stringContaining(`"sidecarPath":"${sidecarPath}"`),
-    );
-  });
+  it.each([
+    { kind: "unlinked", sidecar: "wal", stopping: false },
+    { kind: "replaced", sidecar: "shm", stopping: false },
+    { kind: "replaced", sidecar: "shm", stopping: true },
+  ] as const)(
+    "hard-stops without closing a $kind -$sidecar handle (stopping: $stopping)",
+    async ({ kind, sidecar, stopping }) => {
+      const clock = sqliteSchedulerClock();
+      const tempDir = tempDirs.make("openclaw-sqlite-wal-split-brain-");
+      const databasePath = path.join(tempDir, "state.sqlite");
+      fs.writeFileSync(databasePath, "fixture");
+      const db = createMockDb();
+      const close = vi.spyOn(db, "close");
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      const maintenance = configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 100,
+        databaseLabel: "split-brain-test",
+        databasePath,
+      });
+      const prepare = vi.spyOn(db, "prepare");
+      prepare.mockClear();
+      const inspecting = createDeferredCore();
+      const resumeInspection = createDeferredCore();
+      const sidecarPath = `${databasePath}-${sidecar}`;
+      vi.spyOn(directoryFs, "readdir").mockResolvedValue(["42"]);
+      vi.spyOn(fs.promises, "readlink").mockResolvedValue(
+        kind === "unlinked" ? `${sidecarPath} (deleted)` : sidecarPath,
+      );
+      vi.spyOn(fs, "fstat").mockImplementation((_fd, _options, callback) =>
+        callback(null, {
+          dev: 10n,
+          ino: 20n,
+          nlink: kind === "unlinked" ? 0n : 1n,
+        } as fs.BigIntStats),
+      );
+      vi.spyOn(fs.promises, "stat").mockImplementation(async (pathname) => {
+        if (pathname !== sidecarPath) {
+          throw new Error(`unexpected stat: ${String(pathname)}`);
+        }
+        inspecting.resolve();
+        if (stopping) {
+          await resumeInspection.promise;
+        }
+        if (kind === "unlinked") {
+          const error = new Error("missing sidecar") as NodeJS.ErrnoException;
+          error.code = "ENOENT";
+          throw error;
+        }
+        return { dev: 10n, ino: 21n } as fs.BigIntStats;
+      });
+      const write = vi.spyOn(fs, "writeSync").mockReturnValue(1);
+      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+      const abort = vi.spyOn(process, "abort").mockImplementation(() => {
+        throw new Error("process abort intercepted");
+      });
+
+      const running = clock.advanceBy(100);
+      if (stopping) {
+        await inspecting.promise;
+        const stopped = vi.fn();
+        const closing = maintenance.stop().then(stopped);
+        try {
+          await Promise.resolve();
+          expect(stopped).not.toHaveBeenCalled();
+        } finally {
+          resumeInspection.resolve();
+          await closing;
+        }
+      }
+      await running;
+
+      expect(kill).toHaveBeenCalledWith(process.pid, "SIGKILL");
+      expect(abort).toHaveBeenCalledOnce();
+      expect(close).not.toHaveBeenCalled();
+      expect(maintenance.checkpoint()).toBe(false);
+      expect(maintenance.close()).toBe(false);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(write).toHaveBeenCalledWith(
+        2,
+        expect.stringContaining(`"sidecarPath":"${sidecarPath}"`),
+      );
+    },
+  );
+
+  it.each(["closed", "reused"] as const)(
+    "discards a stale mismatch when its descriptor was %s during target inspection",
+    async (retirement) => {
+      const databasePath = resources.file();
+      const db = resources.open(databasePath);
+      const identity = fs.statSync(databasePath, { bigint: true });
+      const target = createDeferredCore<fs.BigIntStats>();
+      const inspecting = createDeferredCore();
+      vi.spyOn(directoryFs, "readdir").mockResolvedValue(["42"]);
+      vi.spyOn(fs.promises, "readlink").mockResolvedValue(`${databasePath}-wal`);
+      const descriptor = vi
+        .spyOn(fs, "fstat")
+        .mockImplementation((_fd, _options, callback) => callback(null, identity));
+      vi.spyOn(fs.promises, "stat").mockImplementation(async () => {
+        inspecting.resolve();
+        return target.promise;
+      });
+      const observation = detectSqliteWalSplitBrain(databasePath);
+      await inspecting.promise;
+      descriptor.mockImplementation((_fd, _options, callback) => {
+        if (retirement === "closed") {
+          callback(Object.assign(new Error("closed"), { code: "EBADF" }), identity);
+        } else {
+          callback(null, Object.assign({}, identity, { ino: identity.ino + 1n }));
+        }
+      });
+      target.resolve(Object.assign({}, identity, { ino: identity.ino + 2n }));
+      expect(await observation).toBeUndefined();
+      expect(db.isOpen).toBe(true);
+    },
+  );
 
   it.runIf(process.platform === "linux").each(["main", "worker", "agent", "shared"] as const)(
     "preserves the replacement WAL family across fatal containment and reopen from a %s owner",
@@ -577,7 +735,7 @@ describe("sqlite WAL maintenance", () => {
       vi.useFakeTimers();
       const { writer, databasePath } = resources.wal({ checkpointIntervalMs: 100 });
       const prepare = vi.spyOn(writer, "prepare");
-      const readdir = vi.spyOn(fs, "readdirSync").mockImplementationOnce(() => {
+      const readdir = vi.spyOn(fs.promises, "readdir").mockImplementationOnce(async () => {
         const error = new Error("restricted procfs");
         (error as NodeJS.ErrnoException).code = "EACCES";
         throw error;
@@ -746,6 +904,43 @@ describe("sqlite WAL maintenance", () => {
         databaseLabel: "test-db",
       }),
     ).toThrow("test-db could not enable WAL; SQLite kept journal_mode=delete");
+  });
+
+  it("preserves incremental auto-vacuum initialization after empty schema admission", () => {
+    const db = resources.open(resources.file(), {}, true);
+    admitSqliteSchema(db);
+    const probes = resources.count(db, "pageCount", /^PRAGMA page_count$/);
+
+    configureSqlitePreSchemaPragmas(db);
+
+    expect(probes.counts.pageCount).toBe(1);
+    expect(db.prepare("PRAGMA auto_vacuum").get()).toMatchObject({ auto_vacuum: 2 });
+  });
+
+  it("skips freshness probes for admitted nonempty databases across reopen", () => {
+    const pathname = resources.file();
+    const db = resources.open(pathname, {}, true);
+    admitSqliteSchema(db);
+    db.exec(
+      "PRAGMA auto_vacuum = FULL; CREATE TABLE payload (value INTEGER); INSERT INTO payload VALUES (7);",
+    );
+    admitSqliteSchema(db);
+    const probes = resources.count(db, "pageCount", /^PRAGMA page_count$/);
+
+    configureSqlitePreSchemaPragmas(db);
+
+    expect(probes.counts.pageCount).toBe(0);
+    expect(db.prepare("PRAGMA auto_vacuum").get()).toMatchObject({ auto_vacuum: 1 });
+    db.close();
+
+    const reopened = resources.open(pathname, {}, true);
+    admitSqliteSchema(reopened);
+    const reopenedProbes = resources.count(reopened, "pageCount", /^PRAGMA page_count$/);
+    configureSqlitePreSchemaPragmas(reopened);
+
+    expect(reopenedProbes.counts.pageCount).toBe(0);
+    expect(reopened.prepare("PRAGMA auto_vacuum").get()).toMatchObject({ auto_vacuum: 1 });
+    expect(reopened.prepare("SELECT value FROM payload").get()).toMatchObject({ value: 7 });
   });
 
   it("configures lock retry before inspecting a fresh database header", () => {

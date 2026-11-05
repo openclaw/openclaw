@@ -63,6 +63,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("model-backed transcript summaries", () => {
@@ -250,6 +251,25 @@ describe("model-backed transcript summaries", () => {
       held.resolve(completion(JSON.stringify(notes)));
       expect(await pending).toBeUndefined();
       expect(runIsolatedCompletion).toHaveBeenCalledOnce();
+    } finally {
+      held.resolve(completion(JSON.stringify(notes)));
+      await pending;
+    }
+  });
+
+  it("keeps the completion timeout at the full budget when the wall clock rewinds", async () => {
+    const held = createDeferred<ReturnType<typeof completion>>();
+    runIsolatedCompletion.mockReturnValue(held.promise);
+    const dateSpy = vi.spyOn(Date, "now");
+    let wallClock = 1_000_000;
+    dateSpy.mockImplementation(() => wallClock);
+    const pending = summarizeTranscriptsWithModel(params);
+    wallClock -= 30_000;
+    try {
+      await vi.waitFor(() => expect(runIsolatedCompletion).toHaveBeenCalledOnce());
+      const request = runIsolatedCompletion.mock.calls[0]![0];
+      expect(request.timeoutMs).toBeGreaterThanOrEqual(19_000);
+      expect(request.timeoutMs).toBeLessThan(20_100);
     } finally {
       held.resolve(completion(JSON.stringify(notes)));
       await pending;

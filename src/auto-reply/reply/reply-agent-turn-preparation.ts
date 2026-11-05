@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -12,7 +13,9 @@ import { logVerbose } from "../../globals.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { ReplyRunLifecycleAdmissionBlockedError } from "../../sessions/session-controller.contracts.js";
 import type { ReplyOperation, ReplyTurnKind } from "../../sessions/session-controller.js";
+import { deferSessionControllerClaimBeforeExecution } from "../../sessions/session-controller.mailbox-claim.js";
 import {
   attachSessionControllerInputOperation,
   bindSessionControllerInputOperation,
@@ -34,17 +37,17 @@ import type { ReplyPayload } from "../types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
 import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
-import {
-  resolveQueuedReplyExecutionConfig,
-  resolveQueuedReplyRuntimeConfig,
-} from "./agent-runner-utils.js";
+import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import {
   shouldNotifyUserAboutCompaction,
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
 import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { isGoalContinuationCurrent, isSupportedWorkerGoalPlacement } from "./goal-continuation.js";
+import {
+  isGoalContinuationCurrent,
+  isGoalContinuationPlacementCurrent,
+} from "./goal-continuation.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { getFollowupQueueDepth } from "./queue/enqueue.js";
 import {
@@ -52,10 +55,13 @@ import {
   resolveFollowupAbortSignal,
   type FollowupRun,
 } from "./queue/types.js";
-import { prepareReplySourceAdmission } from "./reply-source-admission.js";
+import {
+  admitReplyMaintenance,
+  prepareReplySourceAdmission,
+  prepareReplySystemPrincipalAuthority,
+} from "./reply-source-admission.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import type { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
-import type { ReplyRestartRecoveryClaimController } from "./restart-recovery-claim.types.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import type { TypingController } from "./typing.js";
 
@@ -86,29 +92,16 @@ export type AdmittedFollowupTurn = {
   sessionStore?: Record<string, SessionEntry>;
   sendPolicy: "allow" | "deny";
   preflightCompactionApplied: boolean;
+  memoryFlushAttempted?: boolean;
   preflightFailurePayload?: ReplyPayload;
   preflightError?: Error;
-  restartRecovery?: ReplyRestartRecoveryClaimController;
   releaseSourceAdmission?: () => Promise<void>;
 };
-
-function isSameSessionGeneration(
-  left: SessionEntry | undefined,
-  right: SessionEntry | undefined,
-): boolean {
-  return Boolean(
-    left &&
-    right &&
-    left.sessionId === right.sessionId &&
-    left.lifecycleRevision === right.lifecycleRevision,
-  );
-}
 
 type PrepareReplyAgentTurnParams<TConfigured> = {
   queued: FollowupRun;
   defaults: FollowupRunnerParams;
   kind?: ReplyTurnKind;
-  recoveryAdmissionRunId?: string;
   resetTriggered?: boolean;
   routeThreadId?: string | number;
   providedReplyOperation?: ReplyOperation;
@@ -145,11 +138,11 @@ export function prepareReplyAgentTurn(
 export async function prepareReplyAgentTurn<TConfigured>(
   params: PrepareReplyAgentTurnParams<TConfigured>,
 ): Promise<PreparedReplyAgentTurn<TConfigured | undefined>> {
-  const assertOperatorCurrent = () => params.queued.operatorAuthority?.assertCurrent();
+  let operatorAuthority = params.queued.operatorAuthority;
+  const assertOperatorCurrent = () => operatorAuthority?.assertCurrent();
   assertOperatorCurrent();
   const readAdmissionConfig = () =>
-    params.queued.readAdmissionConfig?.() ??
-    resolveQueuedReplyRuntimeConfig(params.queued.run.config);
+    params.queued.readAdmissionConfig?.() ?? selectLiveRuntimeConfig(params.queued.run.config);
   let config = captureRuntimeConfig(params.queued.run.config);
   const existingClaim = params.queued.controllerInput?.claim;
   const claimQueuedFirst = !params.providedReplyOperation && !params.claimSource;
@@ -188,7 +181,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
         }
       : await admitReplyTurn({
           mailboxClaim,
-          recoveryAdmissionRunId: params.recoveryAdmissionRunId,
           rotationEvidence: params.rotationEvidence,
           runId: params.queued.controllerInput?.protocolRunId,
           onDatabaseRegistration: params.defaults.opts?.onDatabaseRegistration,
@@ -219,10 +211,20 @@ export async function prepareReplyAgentTurn<TConfigured>(
                 : undefined,
               hasSessionModelOverride: selected.hasSessionModelOverride,
               modelOverrideSource: selected.modelOverrideSource,
+              // Scheduled fallback policy is derived from the selection; its authority stays bound.
+              ...(run.scheduledAutomation
+                ? {
+                    scheduledAutomation: {
+                      ...run.scheduledAutomation,
+                      modelFallbackPolicy: selected.scheduledAutomation?.modelFallbackPolicy,
+                    },
+                  }
+                : {}),
               authProfileId: selected.authProfileId,
               authProfileIdSource: selected.authProfileIdSource,
               thinkLevel: selected.thinkLevel,
               thinkingCatalog: selected.thinkingCatalog,
+              cyberAccessProgram: selected.cyberAccessProgram,
             };
           },
           resetTriggered: params.resetTriggered === true,
@@ -263,10 +265,15 @@ export async function prepareReplyAgentTurn<TConfigured>(
     }
     const selectionEntry = admission.sessionEntry ?? initialEntry;
     const admittedSelectionEntry = selectionEntry ? { ...selectionEntry } : undefined;
+    // An edit before enqueue can miss the queue refresh; admission owns the saved preference.
+    if (kind === "queued_followup" && admission.sessionEntry) {
+      run.cyberAccessProgram = admittedSelectionEntry?.cyberAccessProgram;
+    }
     let queuedFollowupAdmitted = false;
     let admissionFailed = false;
     let callerOwnsOperation = false;
     let releaseSourceAdmission: (() => Promise<void>) | undefined;
+    let principalAuthority: Awaited<ReturnType<typeof prepareReplySystemPrincipalAuthority>>;
     try {
       callerOwnsOperation = params.onOperationOwned?.(operation) === true;
       params.queued.run.onOperationAdmitted?.(operation);
@@ -287,13 +294,25 @@ export async function prepareReplyAgentTurn<TConfigured>(
       });
       assertAdmissionCurrent();
       run = { ...run, config };
+      principalAuthority = await prepareReplySystemPrincipalAuthority({
+        followupRun: { ...params.queued, run },
+        sessionKey: replySessionKey,
+        sessionId: operation.sessionId,
+        storePath: params.defaults.storePath,
+        resolveGatewayContext: params.defaults.resolveGatewayContext,
+        assertCurrent: () => operation.abortSignal.throwIfAborted(),
+      });
+      operatorAuthority = principalAuthority?.authority ?? operatorAuthority;
+      assertAdmissionCurrent();
       const origin = run.requesterOrigin;
       if (
+        !principalAuthority &&
         !params.providedReplyOperation &&
         origin?.messageProvider &&
         !origin.operatorProfileId &&
         origin.messageProvider !== INTERNAL_MESSAGE_CHANNEL &&
-        !run.internalEventExecution
+        !run.internalEventExecution &&
+        !run.sessionEventOrigin
       ) {
         const owner = await prepareCommandOwnerAuthority(config, {
           channel: origin.messageProvider,
@@ -368,7 +387,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
         entry: admittedSelectionEntry,
         sessionKey: replySessionKey,
       });
-      const queued: FollowupRun = { ...params.queued, run };
+      const queued: FollowupRun = { ...params.queued, operatorAuthority, run };
       const sessionEntryHandle = createReplySessionEntryHandle({
         sessionEntry: activeEntry,
         sessionKey: replySessionKey,
@@ -432,7 +451,12 @@ export async function prepareReplyAgentTurn<TConfigured>(
         entry: SessionEntry | undefined,
         previousEntry: SessionEntry | undefined,
       ) => {
-        const generationRotated = Boolean(entry && !isSameSessionGeneration(entry, previousEntry));
+        const generationRotated = Boolean(
+          entry &&
+          (!previousEntry ||
+            entry.sessionId !== previousEntry.sessionId ||
+            entry.lifecycleRevision !== previousEntry.lifecycleRevision),
+        );
         if (entry && generationRotated) {
           operation.updateSessionId(entry.sessionId);
           turn.queued = {
@@ -484,12 +508,21 @@ export async function prepareReplyAgentTurn<TConfigured>(
               await params.onCompactionNotice?.(phase, text, turn);
             }
           : undefined;
-      releaseSourceAdmission = await prepareReplySourceAdmission({
+      const releaseInput = await prepareReplySourceAdmission({
         operation,
         followupRun: turn.queued,
         recorder: turn.queued.userTurnTranscriptRecorder,
         runId: turn.runId,
       });
+      const principal = principalAuthority;
+      releaseSourceAdmission = async () => {
+        try {
+          await releaseInput?.();
+        } finally {
+          principal?.release();
+        }
+      };
+      principalAuthority = undefined;
       turn.releaseSourceAdmission = releaseSourceAdmission;
       const preflightEntry = session.current();
       try {
@@ -530,6 +563,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
               // Compaction decides whether work is needed, then replans from the
               // checkpoint result. A queued source must not bypass this memory write.
               beforeCompaction: async (entry) => {
+                await admitReplyMaintenance(turn, replySessionKey, assertAdmissionCurrent);
                 const flushed = await tracePhase("reply.memory_flush", () =>
                   runMemoryFlushIfNeeded({
                     ...preparation,
@@ -539,6 +573,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
                     sessionEntry: entry,
                   }),
                 );
+                turn.memoryFlushAttempted ||= flushed.outcome !== "skipped";
                 session.publish(flushed.sessionEntry);
                 operation.abortSignal.throwIfAborted();
                 if (flushed.outcome === "exhausted") {
@@ -623,17 +658,16 @@ export async function prepareReplyAgentTurn<TConfigured>(
                 sessionKey: replySessionKey,
               })
             : session.current();
-        const workerPlacementCurrent =
-          !goalContinuation.workerGoal ||
-          (Boolean(params.queued.operatorAuthority) &&
-            (await isSupportedWorkerGoalPlacement({
-              agentId: run.agentId,
-              sessionKey: replySessionKey ?? "",
-              sessionId: goalContinuation.sessionId,
-            })));
+        const placementCurrent = await isGoalContinuationPlacementCurrent({
+          continuation: goalContinuation,
+          agentId: run.agentId,
+          sessionKey: replySessionKey ?? "",
+          hasOperatorAuthority: Boolean(operatorAuthority),
+          requiresWorker: Boolean(run.config?.cloudWorkers?.requiredProfile),
+        });
         assertOperatorCurrent();
         if (
-          !workerPlacementCurrent ||
+          !placementCurrent ||
           operation.abortSignal.aborted ||
           !isGoalContinuationCurrent(goalContinuation, currentEntry) ||
           getFollowupQueueDepth(replySessionKey ?? "") > 0
@@ -659,7 +693,11 @@ export async function prepareReplyAgentTurn<TConfigured>(
         }
       } finally {
         try {
-          await releaseSourceAdmission?.();
+          try {
+            await releaseSourceAdmission?.();
+          } finally {
+            principalAuthority?.release();
+          }
         } finally {
           if (admissionFailed && !callerOwnsOperation) {
             operation.complete();
@@ -668,6 +706,15 @@ export async function prepareReplyAgentTurn<TConfigured>(
       }
     }
   } catch (error) {
+    if (
+      error instanceof ReplyRunLifecycleAdmissionBlockedError &&
+      mailboxClaim &&
+      !mailboxClaim.operation
+    ) {
+      // The admission owner refused before acquiring an operation; its receipt retains
+      // the exact sources for the existing FIFO drain.
+      deferSessionControllerClaimBeforeExecution(mailboxClaim);
+    }
     if (!existingClaim && mailboxClaim) {
       releaseSessionControllerClaim(mailboxClaim);
     }

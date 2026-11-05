@@ -94,6 +94,7 @@ import {
   makeZeroDebounceHookWrite,
   ownedConfigReloadOptions,
   prepareConfigReloadTest,
+  registerReverseHotReloadTest,
   startGatewayConfigReloader,
   waitForReloadState,
 } from "./config-reload.test-support.js";
@@ -1570,7 +1571,15 @@ describe("startGatewayConfigReloader", () => {
     );
   });
 
-  it.each(["direct", "watcher-echo", "failed-cleanup", "committed", "carried-successor"] as const)(
+  const writeReceiptScenarios = [
+    "direct",
+    "watcher-first",
+    "watcher-echo",
+    "failed-cleanup",
+    "committed",
+    "carried-successor",
+  ] as const;
+  it.each(writeReceiptScenarios)(
     "settles an RPC write inside its originating gateway root (%s)",
     async (scenario) => {
       const { clock, scheduler } = createConfigReloadTestClock();
@@ -1595,6 +1604,18 @@ describe("startGatewayConfigReloader", () => {
       const watcher = installWatcherMock();
       const hotReloadGate = createDeferred();
       const hotReloadStarted = createDeferred();
+      const hotReloadChecked = createDeferred();
+      const writeAuditStarted = createDeferred();
+      const writeAuditGate = createDeferred();
+      let ownWriteStillBlocks = false;
+      if (scenario === "watcher-first") {
+        configAuditMocks.append.mockImplementation(async ({ record }) => {
+          if (record.event === "config.write") {
+            writeAuditStarted.resolve();
+            await writeAuditGate.promise;
+          }
+        });
+      }
       const competingRootCounts: number[] = [];
       const onHotReload = vi.fn(
         async (
@@ -1605,8 +1626,17 @@ describe("startGatewayConfigReloader", () => {
           competingRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
           hotReloadStarted.resolve();
           await hotReloadGate.promise;
+          if (scenario === "watcher-first") {
+            ownWriteStillBlocks =
+              ownership.isCurrent() && getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0;
+            hotReloadChecked.resolve();
+            if (!ownership.isCurrent()) {
+              throw new GatewayConfigReloadSupersededError();
+            }
+          }
           if (
             scenario !== "direct" &&
+            scenario !== "watcher-first" &&
             scenario !== "carried-successor" &&
             competingRootCounts.length === 1
           ) {
@@ -1670,25 +1700,43 @@ describe("startGatewayConfigReloader", () => {
             if (!request) {
               throw new Error("expected gateway request admission");
             }
-            const writeResult = await request.run(async () => {
-              const prepared = await readConfigFileSnapshotForWrite();
-              return await commitGatewayConfigWrite({
-                snapshot: prepared.snapshot,
-                writeOptions: prepared.writeOptions,
-                nextConfig,
-                awaitRuntimeApplication: true,
-              });
-            });
             let successorRequest: ReturnType<typeof tryBeginGatewayRootWorkAdmission> = null;
-            let successorWrite: typeof writeResult | undefined;
             try {
+              const writing = request.run(async () => {
+                const prepared = await readConfigFileSnapshotForWrite();
+                return await commitGatewayConfigWrite({
+                  snapshot: prepared.snapshot,
+                  writeOptions: prepared.writeOptions,
+                  nextConfig,
+                  awaitRuntimeApplication: true,
+                });
+              });
+              let fileApplication: Promise<void> | undefined;
+              if (scenario === "watcher-first") {
+                // The physical rename is visible before the writer finishes its audit.
+                await awaitGateBeforeSettlement(
+                  writeAuditStarted.promise,
+                  writing,
+                  "write completed before its audit gate",
+                );
+                watcher.emit("change", configPath);
+                fileApplication = Promise.resolve(clock.wake());
+                await awaitGateBeforeSettlement(
+                  hotReloadStarted.promise,
+                  fileApplication,
+                  "file observation finished before hot reload",
+                );
+                writeAuditGate.resolve();
+              }
+              const writeResult = await writing;
+              let successorWrite: typeof writeResult | undefined;
               let settled = false;
               void writeResult.application?.then(() => {
                 settled = true;
                 request.release();
               });
 
-              const applying = clock.wake();
+              const applying = fileApplication ?? clock.wake();
               await hotReloadStarted.promise;
               expect(onHotReload).toHaveBeenCalledOnce();
               expect(settled).toBe(false);
@@ -1712,21 +1760,30 @@ describe("startGatewayConfigReloader", () => {
               }
 
               hotReloadGate.resolve();
+              if (scenario === "watcher-first") {
+                await hotReloadChecked.promise;
+                expect(ownWriteStillBlocks).toBe(false);
+              }
               await applying;
               await clock.wake();
               await writeResult.application;
               expect(settled).toBe(true);
               const applied =
                 scenario === "direct" ||
+                scenario === "watcher-first" ||
                 scenario === "watcher-echo" ||
                 scenario === "carried-successor";
               await expect(writeResult.application).resolves.toBe(applied ? "applied" : "failed");
               if (successorWrite) {
                 await expect(successorWrite.application).resolves.toBe("applied");
               }
-              expect(competingRootCounts).toEqual(
-                scenario === "watcher-echo" || scenario === "failed-cleanup" ? [0, 0] : [0],
-              );
+              if (scenario === "watcher-first") {
+                expect(competingRootCounts).toEqual([1, 0]);
+              } else {
+                expect(competingRootCounts).toEqual(
+                  scenario === "watcher-echo" || scenario === "failed-cleanup" ? [0, 0] : [0],
+                );
+              }
               if (applied) {
                 expect(log.error).not.toHaveBeenCalled();
               } else {
@@ -1734,6 +1791,7 @@ describe("startGatewayConfigReloader", () => {
               }
             } finally {
               hotReloadGate.resolve();
+              writeAuditGate.resolve();
               request.release();
               successorRequest?.release();
             }
@@ -1934,67 +1992,7 @@ describe("startGatewayConfigReloader", () => {
     },
   );
 
-  it("plans the reverse hot reload when config A commits before config B supersedes its tail", async () => {
-    const initialConfig = configWithReload({
-      hooks: { enabled: true, token: "test-token", path: "/old" },
-    }) satisfies OpenClawConfig;
-    const configA = {
-      ...initialConfig,
-      hooks: { ...initialConfig.hooks, path: "/a" },
-    } satisfies OpenClawConfig;
-    const readSnapshot = vi
-      .fn<() => Promise<ConfigFileSnapshot>>()
-      .mockResolvedValueOnce(snapshotOf(configA, "post-commit-a"))
-      .mockResolvedValue(snapshotOf(initialConfig, "reverse-b"));
-    const { promise: committed, resolve: recordCommitted } = createDeferred();
-    const { promise: tailGate, resolve: releaseTail } = createDeferred();
-    const onHotReload = vi.fn(
-      async (
-        plan: GatewayReloadPlan,
-        nextConfig: OpenClawConfig,
-        ownership: GatewayConfigReloadTransactionOwnership,
-      ) => {
-        ownership.markRuntimeCommitted(nextConfig, plan);
-        if (nextConfig === configA) {
-          recordCommitted?.();
-          await tailGate;
-        }
-        return "applied" as const;
-      },
-    );
-    const promoteSnapshot = vi.fn(async (_snapshot: ConfigFileSnapshot, _reason: string) => true);
-    const harness = await createReadyReloader(readSnapshot, {
-      initialConfig,
-      onHotReload,
-      promoteSnapshot,
-    });
-
-    harness.watcher.emit("change");
-    await vi.advanceTimersByTimeAsync(0);
-    await committed;
-
-    harness.watcher.emit("change");
-    releaseTail();
-    await flushReload(harness.reloader);
-
-    expect(onHotReload).toHaveBeenCalledTimes(2);
-    expect(onHotReload.mock.calls.map(([, config]) => config)).toEqual([configA, initialConfig]);
-    expect(onHotReload.mock.calls[1]?.[0].hotReasons).toContain("hooks.path");
-    expect(harness.onConfigAccepted).toHaveBeenCalledTimes(2);
-    expect(harness.onConfigAccepted.mock.calls.map((call) => call[0])).toEqual([
-      configA,
-      initialConfig,
-    ]);
-    expect(harness.onConfigApplied).toHaveBeenCalledTimes(2);
-    expect(harness.onConfigApplied.mock.calls.map(([, config]) => config)).toEqual([
-      configA,
-      initialConfig,
-    ]);
-    expect(promoteSnapshot.mock.calls.map(([snapshot]) => snapshot.hash)).toEqual([
-      "post-commit-a",
-      "reverse-b",
-    ]);
-  });
+  registerReverseHotReloadTest();
 
   it("prepares a superseding config against the env owner committed at the runtime edge", async () => {
     const envKey = "OPENCLAW_TEST_COMMITTED_ENV_SOURCE";

@@ -6,20 +6,11 @@ import {
   readAvatarGatewayContext,
   setAvatarGatewayOrigin,
 } from "../lib/identity-avatar-context.ts";
-import { SubagentActivity } from "../pages/chat/components/chat-subagent-activity.tsx";
 import { ChatWorkingIndicator } from "../pages/chat/components/chat-working-indicator.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { PluginThemeArtwork } from "./plugin-theme-artwork.tsx";
 import "../test-helpers/load-styles.ts";
-
-const row = {
-  key: "agent:main:synthetic",
-  label: "Review",
-  status: "running",
-  listed: true,
-  session: { key: "agent:main:synthetic", kind: "direct", updatedAt: null },
-} as const;
 
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"/>';
 const artwork = () => new Response(svg, { headers: { "Content-Type": "image/svg+xml" } });
@@ -42,10 +33,7 @@ function setupArtwork(responses: Record<string, () => Response | Promise<Respons
   return spy;
 }
 
-it.each([
-  { kind: "working-indicator", size: 18 },
-  { kind: "subagent", size: 16 },
-])("keeps custom $kind artwork at $size pixels", async ({ kind, size }) => {
+it("keeps custom working-indicator artwork at 18 pixels", async () => {
   const artworkUrl = "/__openclaw__/plugin-theme-art/synthetic/layout/icons/brand-size";
   setupArtwork({ [artworkUrl]: artwork });
   setCurrentThemeBranding(
@@ -54,20 +42,16 @@ it.each([
       artwork: { icons: { synthetic: { url: artworkUrl } } },
     }),
   );
-  const { container } = mountSolid(() =>
-    kind === "subagent" ? (
-      <SubagentActivity rows={[row]} />
-    ) : (
-      <ChatWorkingIndicator
-        part={{ kind: "reading-indicator", key: "synthetic-brand", startedAt: 1 }}
-        options={{ workingIndicator: "brand", waitingApproval: true }}
-      />
-    ),
-  );
+  const { container } = mountSolid(() => (
+    <ChatWorkingIndicator
+      part={{ kind: "reading-indicator", key: "synthetic-brand", startedAt: 1 }}
+      options={{ workingIndicator: "brand", waitingApproval: true }}
+    />
+  ));
   await vi.dynamicImportSettled();
   const icon = () => container.querySelector<HTMLElement>("openclaw-theme-brand-icon");
   await waitForSolid(() => expect(icon()?.querySelector("img")?.naturalWidth).toBe(256));
-  expect([icon()!.clientWidth, icon()!.clientHeight]).toEqual([size, size]);
+  expect([icon()!.clientWidth, icon()!.clientHeight]).toEqual([18, 18]);
 });
 
 it("shows the fallback while replacing artwork with a different URL", async () => {

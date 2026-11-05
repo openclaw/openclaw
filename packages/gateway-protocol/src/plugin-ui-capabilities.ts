@@ -6,6 +6,7 @@ export const PLUGIN_UI_CAPABILITIES = [
   "action",
   "accessory",
   "widget",
+  "inline",
   "replacement",
   "link-reader",
 ] as const;

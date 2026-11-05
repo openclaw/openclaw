@@ -24,9 +24,7 @@ export const batchInput = (frameIds: number[], startMs = 1, endMs = 2, day = DAY
 
 export function useLogbookFixture(prefix: string) {
   const closers: Array<() => unknown> = [];
-  const defer = (close: () => unknown) => {
-    closers.push(close);
-  };
+  const defer = (close: () => unknown) => void closers.push(close);
   const dirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async () => {
       try {

@@ -29,6 +29,6 @@ export function providerPageOptions(
   return { locale: "en-US", serviceWorkers: "block", viewport: { width, height }, ...options };
 }
 
-export function configAuth(provider: string) {
-  return { provider, profiles: [], apiKey: { source: "config" } };
+export function configAuth(provider: string, display?: { displayName: string; status: "static" }) {
+  return { provider, ...display, profiles: [], apiKey: { source: "config" } };
 }

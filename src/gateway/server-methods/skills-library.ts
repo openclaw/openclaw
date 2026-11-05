@@ -151,6 +151,21 @@ export async function activateLibrarySelection(
   }
 }
 
+function assertPluginMutationCurrent(
+  options: SkillLibraryRequestOwner,
+  current: SessionSharingTarget,
+): void {
+  const error = resolvePluginSessionOwnershipError({
+    action: "patch",
+    entry: current.entry,
+    key: current.canonicalKey,
+    pluginOwnerId: options.client?.internal?.pluginRuntimeOwnerId,
+  });
+  if (error) {
+    throw new SessionMutationAuthorizationChangedError(error);
+  }
+}
+
 async function selectedSession(
   options: SkillLibraryRequestOwner,
   sessionKey: string,
@@ -225,18 +240,7 @@ async function selectedSession(
         return { ...current.target, entry };
       };
       const target = currentTarget();
-      const assertMutationCurrent = () => {
-        const current = currentTarget();
-        const error = resolvePluginSessionOwnershipError({
-          action: "patch",
-          entry: current.entry,
-          key: current.canonicalKey,
-          pluginOwnerId: options.client?.internal?.pluginRuntimeOwnerId,
-        });
-        if (error) {
-          throw new SessionMutationAuthorizationChangedError(error);
-        }
-      };
+      const assertMutationCurrent = () => assertPluginMutationCurrent(options, currentTarget());
       const source = composeSessionSourceAssertion([entryRead.source], (assertSources) => {
         assertSources();
         assertMutationCurrent();
@@ -324,18 +328,7 @@ async function selectedSession(
         throw new SkillLibraryError("CONFLICT", "Session selection changed; refresh and retry.");
       }
     };
-    const assertMutationCurrent = () => {
-      const current = currentTarget();
-      const error = resolvePluginSessionOwnershipError({
-        action: "patch",
-        entry: current.entry,
-        key: current.canonicalKey,
-        pluginOwnerId: options.client?.internal?.pluginRuntimeOwnerId,
-      });
-      if (error) {
-        throw new SessionMutationAuthorizationChangedError(error);
-      }
-    };
+    const assertMutationCurrent = () => assertPluginMutationCurrent(options, currentTarget());
     assertCurrent();
     const source: SessionSourceAssertion = Object.assign(assertMutationCurrent, {
       async prepareSessionSource() {

@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { expect, it } from "vitest";
-import { executeDeps } from "../agents/cli-runner/execute-deps.js";
+import { expect, it, vi } from "vitest";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStorePath } from "../plugin-sdk/session-store-runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as nodeRuntime from "./node-agent-cli-runtime.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
 it(
@@ -49,7 +49,7 @@ it(
           tools: { profile: "minimal" },
         } satisfies OpenClawConfig;
         let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-        const originalInvoke = executeDeps.invokeNodeClaudeCliRun;
+        const invokeNode = vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun");
         let invokedCwd: string | undefined;
         try {
           gateway = await startGatewayWithClient({
@@ -86,7 +86,7 @@ it(
             spawnedCwd: nodeCwd,
           });
           await expect(fs.access(nodeCwd)).rejects.toThrow();
-          executeDeps.invokeNodeClaudeCliRun = async (request) => {
+          invokeNode.mockImplementation(async (request) => {
             invokedCwd = request.cwd;
             request.onProgress(
               [
@@ -107,7 +107,7 @@ it(
               ok: true,
               payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
             };
-          };
+          });
           const run = await gateway.client.request<{ runId: string }>("chat.send", {
             sessionKey: created.key,
             message: "Reply exactly PONG",
@@ -128,7 +128,7 @@ it(
           expect(invokedCwd).toBe(nodeCwd);
           await expect(fs.access(nodeCwd)).rejects.toThrow();
         } finally {
-          executeDeps.invokeNodeClaudeCliRun = originalInvoke;
+          invokeNode.mockRestore();
           if (gateway) {
             await disconnectGatewayClient(gateway.client);
             await gateway.server.close({ reason: "test complete" });

@@ -1,5 +1,8 @@
 import { Buffer } from "node:buffer";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  isTranscriptOnlyOpenClawAssistantMessage,
+  type AgentMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -307,7 +310,11 @@ export function projectBoundedCodexVisibleSessionHistory(
 ): JsonValue[] {
   const projected: ProjectedCodexHistoryMessage[] = [];
   for (const { message } of entries) {
-    if ((message.role !== "user" && message.role !== "assistant") || !("content" in message)) {
+    if (
+      (message.role !== "user" && message.role !== "assistant") ||
+      !("content" in message) ||
+      isTranscriptOnlyOpenClawAssistantMessage(message)
+    ) {
       continue;
     }
     if (

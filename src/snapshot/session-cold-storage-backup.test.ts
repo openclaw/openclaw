@@ -3,7 +3,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
-import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import { backupCreateCommand } from "../commands/backup.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
@@ -16,6 +15,8 @@ import {
   historicalId as sessionId,
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -94,18 +95,16 @@ async function captureFixture(
     await provider.restoreFresh(snapshot.ref, targetPath);
   } else {
     const repositoryPath = path.join(root, "git-backups");
-    await createGitBackup({
-      repositoryPath,
-      stateDir,
-      databases: [{ path: sourcePath, identity }],
-      gitEnv: {
-        ...process.env,
+    await withEnvAsync(
+      {
         GIT_AUTHOR_NAME: "OpenClaw Backup Test",
         GIT_AUTHOR_EMAIL: "backup@example.invalid",
         GIT_COMMITTER_NAME: "OpenClaw Backup Test",
         GIT_COMMITTER_EMAIL: "backup@example.invalid",
       },
-    });
+      () =>
+        createGitBackup({ repositoryPath, stateDir, databases: [{ path: sourcePath, identity }] }),
+    );
     await restoreGitBackupDirectory({
       sourcePath: path.join(repositoryPath, "agents", "main"),
       targetPath,

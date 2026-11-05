@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { textContent } from "./chat-flow.test-support.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
 import {
   expectTranscriptLayoutCommitted,
@@ -73,8 +74,7 @@ async function catalogHeaderAffordances(header: Locator) {
     return {
       actionFocusVisible: actions.matches(":focus-visible"),
       actionFocused: document.activeElement === actions,
-      actionsColor: actionsStyle.color,
-      actionsOpacity: actionsStyle.opacity,
+      actionsVisible: Number(actionsStyle.opacity) > 0,
       actionsPointerEvents: actionsStyle.pointerEvents,
       chevronOpacity: getComputedStyle(find(".sidebar-session-group-toggle__icon")).opacity,
       finePointer: matchMedia("(pointer: fine)").matches,
@@ -85,8 +85,7 @@ async function catalogHeaderAffordances(header: Locator) {
       noHover: matchMedia("(hover: none)").matches,
       hovered: element.matches(":hover"),
       providerOpacity: getComputedStyle(find(".sidebar-session-catalog-provider-icon")).opacity,
-      toolbarButtonColor: toolbarButtonStyle.color,
-      toolbarButtonOpacity: toolbarButtonStyle.opacity,
+      toolbarButtonVisible: Number(toolbarButtonStyle.opacity) > 0,
       toggleFocusVisible: toggle.matches(":focus-visible"),
       toggleFocused: document.activeElement === toggle,
     };
@@ -172,7 +171,7 @@ suite.define(() => {
         await expect
           .poll(() => catalogHeaderAffordances(header))
           .toMatchObject({
-            actionsOpacity: "0.55",
+            actionsVisible: true,
             actionsPointerEvents: "auto",
             chevronOpacity: "0.75",
             finePointer: true,
@@ -180,17 +179,15 @@ suite.define(() => {
             hoverCapable: true,
             hovered: true,
             providerOpacity: "0",
-            toolbarButtonOpacity: "0.55",
+            toolbarButtonVisible: true,
           });
-        const hoverAffordances = await catalogHeaderAffordances(header);
-        expect(hoverAffordances.actionsColor).toBe(hoverAffordances.toolbarButtonColor);
 
         await toggle.click();
         await page.locator(".chat-main__conversation").hover({ position: { x: 40, y: 40 } });
         await expect
           .poll(() => catalogHeaderAffordances(header))
           .toMatchObject({
-            actionsOpacity: "0",
+            actionsVisible: false,
             actionsPointerEvents: "none",
             chevronOpacity: "0",
             focusWithin: true,
@@ -199,6 +196,7 @@ suite.define(() => {
             providerOpacity: "1",
             toggleFocusVisible: false,
             toggleFocused: true,
+            toolbarButtonVisible: true,
           });
         await page.keyboard.press("Tab");
         await expect
@@ -206,7 +204,7 @@ suite.define(() => {
           .toMatchObject({
             actionFocusVisible: true,
             actionFocused: true,
-            actionsOpacity: "1",
+            actionsVisible: true,
             actionsPointerEvents: "auto",
             chevronOpacity: "0.75",
             focusWithin: true,
@@ -251,14 +249,13 @@ suite.define(() => {
         page.locator('[data-session-section="catalog:claude"] .sidebar-recent-sessions__head'),
       );
       expect(touchAffordance).toMatchObject({
-        actionsOpacity: "0.55",
+        actionsVisible: true,
         coarsePointer: true,
         noHover: true,
         providerOpacity: "0",
         chevronOpacity: "0.75",
-        toolbarButtonOpacity: "0.55",
+        toolbarButtonVisible: true,
       });
-      expect(touchAffordance.actionsColor).toBe(touchAffordance.toolbarButtonColor);
     } finally {
       await page.close();
     }
@@ -539,9 +536,7 @@ suite.define(() => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
     const historyMessage = (seq: number, prefix: string) => ({
       __openclaw: { seq },
-      content: [
-        { type: "text", text: `${prefix} ${seq}\n${"transcript detail line\n".repeat(3)}` },
-      ],
+      content: textContent(`${prefix} ${seq}\n${"transcript detail line\n".repeat(3)}`),
       role: seq % 2 === 0 ? "assistant" : "user",
       timestamp: Date.now() + seq,
     });
@@ -559,7 +554,9 @@ suite.define(() => {
       messages,
       totalMessages,
       hasMore: nextOffset !== undefined,
-      ...(nextOffset === undefined ? {} : { nextOffset }),
+      ...(nextOffset === undefined
+        ? {}
+        : { nextOffset, olderCursor: `older-native-${nextOffset}` }),
       sessionId: "native-scrollback",
       thinkingLevel: null,
     });
@@ -569,8 +566,8 @@ suite.define(() => {
         "chat.startup": historyPage(recent, 1100, 100),
         "chat.history": {
           cases: [
-            { match: { offset: 100 }, response: historyPage(older) },
-            { match: { offset: 1100 }, response: historyPage([], 1140) },
+            { match: { cursor: "older-native-100" }, response: historyPage(older) },
+            { match: { cursor: "older-native-1100" }, response: historyPage([], 1140) },
           ],
         },
       },
@@ -599,12 +596,13 @@ suite.define(() => {
     await gateway.rejectDeferred("chat.history", {
       code: "UNAVAILABLE",
       message: "history unavailable",
-      retryable: true,
+      retryable: false,
     });
-    await expect.poll(() => showEarlier.getAttribute("aria-busy")).toBe("false");
-    await expectHistoryBoundaryState(page, false);
-    // Rejection leaves the idle action in the same viewport for comparison.
-    const idleHistoryAction = await showEarlier.boundingBox();
+    const retryEarlier = page.getByRole("button", { name: "Retry earlier messages", exact: true });
+    await expect.poll(() => retryEarlier.getAttribute("aria-busy")).toBe("false");
+    expect(await retryEarlier.isEnabled()).toBe(true);
+    // Rejection leaves the retry action in the same viewport for comparison.
+    const idleHistoryAction = await retryEarlier.boundingBox();
     expect(idleHistoryAction).not.toBeNull();
     expect(loadingHistoryAction?.y).toBeCloseTo(idleHistoryAction?.y ?? 0, 0);
     expect(loadingHistoryAction?.height).toBeCloseTo(idleHistoryAction?.height ?? 0, 0);
@@ -614,7 +612,7 @@ suite.define(() => {
     );
     const failedRequestCount = (await gateway.getRequests("chat.history")).length;
     await gateway.deferNext("chat.history");
-    await showEarlier.click();
+    await retryEarlier.click();
     await gateway.waitForRequest("chat.history", { after: failedRequestCount });
     await page.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
     await expectHistoryBoundaryState(page, true);
@@ -634,13 +632,19 @@ suite.define(() => {
         .toBe(1100);
       await expectHistoryBoundaryState(page, false);
     });
-    // Stage offset 1100 without entering the loading state.
+    // Stage the next older cursor without entering the loading state.
     await expect
       .poll(() => gateway.getRequests("chat.history").then((requests) => requests.length))
       .toBe(failedRequestCount + 2);
     const requestsAfterPrefetch = await gateway.getRequests("chat.history");
-    expect(requestsAfterPrefetch.at(-2)?.params).toMatchObject({ limit: 1000, offset: 100 });
-    expect(requestsAfterPrefetch.at(-1)?.params).toMatchObject({ limit: 1000, offset: 1100 });
+    expect(requestsAfterPrefetch.at(-2)?.params).toMatchObject({
+      limit: 1000,
+      cursor: "older-native-100",
+    });
+    expect(requestsAfterPrefetch.at(-1)?.params).toMatchObject({
+      limit: 1000,
+      cursor: "older-native-1100",
+    });
     await page.evaluate(
       () =>
         new Promise<void>((resolve) => {

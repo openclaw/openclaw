@@ -24,7 +24,7 @@ import {
   transport,
   tunnelLaunchPlan,
 } from "./node-worker-tunnel.test-support.js";
-import type { NodeWorkerWorkspaceBinding } from "./node-worker-workspace-actions.js";
+import type { NodeWorkerWorkspaceBinding } from "./node-worker-tunnel.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const nodeCommand = (source: string) => ({

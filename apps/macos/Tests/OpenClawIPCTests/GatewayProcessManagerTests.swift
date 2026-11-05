@@ -406,7 +406,7 @@ struct GatewayProcessManagerTests {
         }
     }
 
-    private func withLaunchAgentEnvironment<T>(
+    func withLaunchAgentEnvironment<T>(
         mode: String = "local",
         port: Int? = nil,
         homeDirectory: URL? = nil,
@@ -980,13 +980,21 @@ struct GatewayProcessManagerTests {
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
                 ["status", "--runtime-intent-only", "--json"],
             ])
+            try makeExecutableForTests(at: replacement.bun)
+            defer { try? FileManager.default.removeItem(at: state.appendingPathComponent("runtime")) }
             let resumed = GatewayProcessManager()
             #expect(await resumed.enableLaunchAgentIfNeeded(port: 29871).installed)
             let command = try #require(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
                 .first { $0.contains("install") })
+            // The resumed service keeps the stable Bun path its macOS grants belong to.
             let expected = operatorRuntime ? original : GatewayLaunchAgentManager.InstalledServiceCLI(
-                prefix: replacement.cliCommand, sqliteLibrary: replacement.sqliteLibrary.path)
+                prefix: [replacement.serviceBun.path, replacement.cliCommand[1]],
+                sqliteLibrary: replacement.sqliteLibrary.path)
             #expect(Array(command.prefix(2)) == expected.prefix)
+            let runtimePath = try #require(command.firstIndex(of: "--runtime-path"))
+            #expect(command[runtimePath + 1] == expected.prefix[0])
+            #expect(FileManager.default.contentsEqual(
+                atPath: replacement.serviceBun.path, andPath: replacement.bun.path) == !operatorRuntime)
             #expect(resumed.retainedServiceCLI?.sqliteLibrary == expected.sqliteLibrary)
             #expect(resumed.retainedServiceCLI?.environment["OPENCLAW_SQLITE_LIBRARY"] == expected.sqliteLibrary)
         }
@@ -1276,6 +1284,30 @@ struct GatewayProcessManagerTests {
             manager.launchAgentEnableTask = nil
             #expect(manager.lastFailureReason == "operator changed the service")
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `stale service replacement keeps the custody captured at detection`(operatorReplaced: Bool) async throws {
+        try await self.withLaunchAgentEnvironment {
+            try self.writeManagedLaunchAgent()
+            let previous = try #require(GatewayLaunchAgentManager.installedServiceCLI())
+            let runtime = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/current-build"))
+            let replacement = try #require(StaleGatewayServiceReplacement.replacing(
+                previous, with: runtime, allowUnconfigured: false))
+            if operatorReplaced {
+                // The operator reassigns the service while this build seeds its runtime.
+                let plist = try #require(previous.serviceAuthority?.plist)
+                try Data("operator-owned replacement".utf8).write(to: plist)
+            }
+            let error = await replacement.stop()
+            if operatorReplaced {
+                #expect(error == "The Gateway service changed before dispatch; retry.")
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            } else {
+                #expect(error == nil)
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [["stop", "--force"]])
+            }
         }
     }
 
@@ -2393,7 +2425,7 @@ struct GatewayProcessManagerTests {
                     },
                     wait: {
                         await exits[index].wait()
-                        return "fixture startup failed"
+                        return .launch("fixture startup failed")
                     },
                     terminate: { exits[index].open() })
             }
@@ -3080,6 +3112,47 @@ struct GatewayProcessManagerTests {
 
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test func `stopped launchd startup surfaces recent ownership refusal without extra polling`() async throws {
+        let port = 19117
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask()
+        }
+        let payload = """
+        {"service":{"loaded":true,"runtime":{"status":"stopped"}},
+        "lastError":"Gateway ownership could not be verified. If the recorded holder has stopped, run `openclaw gateway recover-lock` to inspect it."}
+        """
+        try await self.withLaunchAgentEnvironment(port: port, statusPayload: payload) {
+            manager.lastFailureReason = nil
+            manager._testClearLaunchAgentReadinessFailure()
+            manager._testClearLaunchAgentInstallEvidence()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+            defer {
+                manager.lastFailureReason = nil
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testClearLaunchAgentInstallEvidence()
+            }
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            manager._testStartLaunchdGatewayReadiness(
+                port: port, pid: nil, firstInstallReadinessBudget: 0.1)
+            await manager.waitForStartupAttempt()
+
+            guard case let .failed(reason) = manager.status else {
+                Issue.record("stopped Gateway did not expose its startup failure")
+                await connection.shutdown()
+                return
+            }
+            #expect(reason.contains("may be from an earlier run"))
+            #expect(reason.contains("openclaw gateway recover-lock"))
+            #expect(manager.lastFailureReason == reason)
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "--json", "--no-probe"],
+            ])
+            await connection.shutdown()
         }
     }
 

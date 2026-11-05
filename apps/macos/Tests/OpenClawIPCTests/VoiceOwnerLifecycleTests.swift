@@ -246,15 +246,21 @@ struct VoiceOwnerLifecycleTests {
         try await withVoiceOwnerFixture(activate: false) { fixture, state, _ in
             let voice = state.voiceRuntime
             let celebration = state.sendCelebrationTick
+            let lease = UUID()
+            await voice.wake.pauseForPushToTalk(lease: lease)
+            await fixture.sendPreparation.hold()
             let token = voice.sessions.startSession(text: "owned transcript")
             voice.overlay.updateText("edited owned transcript")
             #expect(voice.sessions.snapshot().text == "edited owned transcript")
             voice.overlay.requestSend(token: token)
+            // Ordinary PTT lease release refreshes Wake while route preparation is pending.
+            await voice.wake.resumeAfterPushToTalk(lease: lease)
+            await fixture.sendPreparation.releaseAll()
             try await fixture.log.wait(for: "forward:edited owned transcript")
             try await fixture.log.wait(for: "overlay.request:\(token)")
             #expect(fixture.log.count("forward:edited owned transcript") == 1)
             #expect(fixture.log.count("overlay.request:\(token)") == 1)
-            #expect(voice.sessions.snapshot().token == token)
+            #expect(voice.sessions.snapshot().token == nil)
             fixture.completeDismissal(token)
             #expect(voice.sessions.snapshot().token == nil)
             #expect(!voice.overlay.isVisible)

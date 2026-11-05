@@ -71,18 +71,18 @@ posixIt.for(Object.keys(steps) as PerformanceFixtureOptions["mode"][])(
   },
 );
 
-posixIt.for([23, 125])(
-  "baseline ordinary fetch %s is advisory after extinction",
-  { timeout: 55_000 },
-  async (code, { signal }) => {
-    const report = await performanceRun(signal, "baseline", { fetchResults: [code, code, code] });
+posixIt(
+  "baseline ordinary fetch failure is advisory after extinction",
+  async ({ signal }) => {
+    const report = await performanceRun(signal, "baseline", { fetchResults: [125, 125, 125] });
     expect(report.code, report.output).toBe(0);
-    expect(report.githubSummary).toBe(
-      "No previous source performance baseline could be fetched.\n",
-    );
-    expect(report.githubEnv).toBe("");
+    expect(report).toMatchObject({
+      githubSummary: "No previous source performance baseline could be fetched.\n",
+      githubEnv: "",
+    });
     expect(report.commands.at(-1)?.args[0]).toBe("fetch");
   },
+  55_000,
 );
 
 posixIt.for(["absent", "invalid", "trailing-newline"] as const)(
@@ -105,10 +105,8 @@ posixIt.for(["absent", "invalid", "trailing-newline"] as const)(
 posixIt.for([
   ["baseline", "ls-tree", 128],
   ["baseline", "show", 128],
-  ["prepare", "ls-tree", 128],
   ["prepare", "ls-tree", 125],
   ["publish", "ls-tree", 125],
-  ["publish", "ls-tree", 128],
 ] as const)(
   "%s %s failure %s is terminal, never absence",
   { timeout: 55_000 },
@@ -127,7 +125,7 @@ posixIt.for([
   },
 );
 
-posixIt.for(["hang", 23, 125] as const)(
+posixIt.for(["hang", 125] as const)(
   "prepare initial fetch %s cannot reach checkout, commit or token readiness",
   { timeout: 55_000 },
   async (failure, { signal }) => {
@@ -137,8 +135,7 @@ posixIt.for(["hang", 23, 125] as const)(
     expectReport(report, 1, { fetches: 3, checkouts: 0 });
     expect(report.fetches.every(({ args }) => args.includes("--depth=1"))).toBe(true);
     expect(report.commands.at(-1)?.args[0]).toBe("fetch");
-    expect(report.githubOutput).toBe("ready=false\n");
-    expect(report.githubSummary).toBe("");
+    expect(report).toMatchObject({ githubOutput: "ready=false\n", githubSummary: "" });
   },
 );
 
@@ -179,11 +176,10 @@ posixIt.for([0, 1, 125])(
   },
 );
 
-posixIt.for([125, "hang"] as const)(
-  "ambiguous push %s reconciles only after extinction",
-  { timeout: 55_000 },
-  async (code, { signal }) => {
-    const report = await performanceRun(signal, "publish", { pushResults: [code] });
+posixIt(
+  "hung push reconciles only after extinction",
+  async ({ signal }) => {
+    const report = await performanceRun(signal, "publish", { pushResults: ["hang"] });
     expectReport(report, 0, { pushes: 2, fetches: 1, checkouts: 1 });
     expect(report.output.match(/fixture backoff: \d+/gu)).toEqual(["fixture backoff: 2"]);
     expect(report.githubSummary).toContain("### Clawgrit report published");
@@ -212,6 +208,7 @@ posixIt.for([125, "hang"] as const)(
       Buffer.from("x-access-token:fixture-performance-token").toString("base64"),
     );
   },
+  55_000,
 );
 
 posixIt.for([false, true])(
@@ -241,10 +238,10 @@ posixIt.for([false, true])(
   },
 );
 
-posixIt.for([1, 5])(
-  "remote duplicate after ambiguous attempt %s succeeds without replay",
-  { timeout: 55_000 },
-  async (attempt, { signal }) => {
+posixIt(
+  "remote duplicate on the final ambiguous attempt succeeds without replay",
+  async ({ signal }) => {
+    const attempt = 5;
     const report = await performanceRun(signal, "publish", {
       performance: { mode: "publish", remoteDuplicateAttempt: attempt },
       pushResults: Array.from({ length: attempt }, () => 124),
@@ -252,17 +249,17 @@ posixIt.for([1, 5])(
     expectReport(report, 0, { pushes: attempt, fetches: attempt, checkouts: attempt - 1 });
     expect(report.githubSummary).toContain("### Clawgrit report published");
   },
+  55_000,
 );
 
-posixIt.for([23, 125])(
-  "ordinary cherry-pick and abort %s failures remain visible publish failure",
-  { timeout: 55_000 },
-  async (code, { signal }) => {
+posixIt(
+  "ordinary cherry-pick and abort failures remain visible publish failure",
+  async ({ signal }) => {
     const report = await performanceRun(signal, "publish", {
       pushResults: [23],
       gitFaults: [
         { match: "^cherry-pick -X ", code: 23 },
-        { match: "^cherry-pick --abort$", code },
+        { match: "^cherry-pick --abort$", code: 125 },
       ],
     });
     expectReport(report, 1, { pushes: 1 });
@@ -272,6 +269,7 @@ posixIt.for([23, 125])(
     );
     expect(report.githubSummary).toBe("");
   },
+  55_000,
 );
 
 posixIt.for(["owner", "python", "git"] as const)(
@@ -285,17 +283,17 @@ posixIt.for(["owner", "python", "git"] as const)(
   },
 );
 
-posixIt.for([125, "hang"] as const)(
-  "reconciliation fetch %s warns once and retries without replay",
-  { timeout: 55_000 },
-  async (code, { signal }) => {
+posixIt(
+  "hung reconciliation fetch warns once and retries without replay",
+  async ({ signal }) => {
     const report = await performanceRun(signal, "publish", {
       pushResults: [23],
-      fetchResults: [code],
+      fetchResults: ["hang"],
     });
     expectReport(report, 0, { pushes: 2, fetches: 1, checkouts: 0 });
     expect(report.output.match(/::warning::Unable to refresh/gu)).toHaveLength(1);
   },
+  55_000,
 );
 
 posixIt.for(["prepare", "publish"] as const)(

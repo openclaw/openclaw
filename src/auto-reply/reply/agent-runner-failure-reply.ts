@@ -5,7 +5,6 @@ import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
-  formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
@@ -26,7 +25,7 @@ import {
 } from "../../agents/failover/assistant-request-failure-copy.js";
 import {
   ContextPreparationTimeoutError,
-  findLocalWorkerTaskTimeout,
+  findLocalWorkerTaskFailure,
 } from "../../agents/failover/local-preparation-error.js";
 import { resolveExecutionApprovalFailureMessage } from "../../agents/failover/message-patterns.js";
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
@@ -57,6 +56,7 @@ import {
   formatErrorMessage,
   readErrorCauses,
 } from "../../infra/errors.js";
+import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
 import {
@@ -198,18 +198,15 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
   });
 }
 
-function resolveExternalRunFailureDetail(message: string): string | undefined {
+function formatForwardedExternalRunFailureText(message: string): string {
   const sanitized = message
     .trim()
     .replace(/^⚠️\s*/u, "")
     .replace(/\s+/gu, " ");
-  return sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
-    ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
-    : sanitized || undefined;
-}
-
-function formatForwardedExternalRunFailureText(message: string): string {
-  const detail = resolveExternalRunFailureDetail(message);
+  const detail =
+    sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
+      ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
+      : sanitized || undefined;
   return detail
     ? `⚠️ Agent failed before reply: ${detail}${/[.!?]$/u.test(detail) ? "" : "."} Please try again, or use /new to start a fresh session.`
     : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
@@ -262,13 +259,15 @@ export function buildExternalRunFailureReply(
     }
     return buildUnclassifiedReply();
   }
-  const localTimeout = findLocalWorkerTaskTimeout(error);
-  if (localTimeout) {
+  const localFailure = findLocalWorkerTaskFailure(error);
+  if (localFailure) {
     return {
       text:
-        localTimeout instanceof ContextPreparationTimeoutError
-          ? localTimeout.message
-          : "A local worker task timed out. Please try again.",
+        localFailure.code === "overloaded"
+          ? "OpenClaw's local workers are at capacity. Check the conversation for completed work before trying again."
+          : localFailure instanceof ContextPreparationTimeoutError
+            ? localFailure.message
+            : "A local worker task timed out. Please try again.",
       isGenericRunnerFailure: false,
     };
   }
@@ -300,7 +299,7 @@ export function buildExternalRunFailureReply(
     const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider, {
       profileId: options?.includeAuthProfileId ? oauthRefreshFailure.profileId : undefined,
     });
-    const loginCommandMarkdown = formatOAuthRefreshFailureLoginCommandMarkdown(loginCommand);
+    const loginCommandMarkdown = formatInlineCodeSpan(loginCommand);
     const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
     const retryLoginHint = providerLoginRecovery
       ? "send `/login` from a private chat or Control UI session to choose a provider, or re-auth"
@@ -496,16 +495,16 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
 }): ReplyPayload | undefined {
   // Preflight diagnostics are not provider failures. Only explicit public copy
   // can bypass the caller's diagnostic disclosure policy.
-  if (isAgentHarnessPreflightError(params.err)) {
+  const message = formatErrorMessage(params.err);
+  if (isAgentHarnessPreflightError(params.err) || findLocalWorkerTaskFailure(params.err)) {
     const reply = buildExternalRunFailureReply({
-      message: params.err.message,
+      message,
       error: params.err,
     });
     return reply.isGenericRunnerFailure
       ? undefined
       : markAgentRunFailureReplyPayload({ text: reply.text });
   }
-  const message = formatErrorMessage(params.err);
   const failoverFacts = resolveReplyFailoverFacts(params.err, message);
   const failureSummary = resolveReplyFailureSummary({
     error: params.err,

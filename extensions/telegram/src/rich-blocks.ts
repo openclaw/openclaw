@@ -19,6 +19,7 @@ import {
   normalizeRichText,
   richTextLink,
   type InputRichBlock,
+  type InputRichBlockListItem,
   type InputRichBlockParagraph,
   type RichBlockTableCell,
   type RichText,
@@ -31,12 +32,80 @@ import {
   parseHtmlFragment,
   type HtmlNode,
 } from "./rich-blocks-html.js";
-import {
-  collectMarkdownRichListSources,
-  renderMarkdownRichListSource,
-  type MarkdownRichListSource,
-} from "./rich-blocks-list.js";
 import { renderTelegramMonospaceGrid } from "./text-width.js";
+
+type MarkdownRichListItemSource = {
+  start: number;
+  end: number;
+  contentStart: number;
+  task: boolean;
+  checked: boolean;
+  value?: number;
+};
+
+type MarkdownRichListSource = {
+  start: number;
+  end: number;
+  items: MarkdownRichListItemSource[];
+};
+
+/** Groups exact parser-owned item spans by list identity without reparsing Markdown. */
+function collectMarkdownRichListSources(ir: MarkdownIR): MarkdownRichListSource[] {
+  const byListId = new Map<number, MarkdownRichListItemSource[]>();
+  for (const item of ir.listItems ?? []) {
+    if (
+      !item.listMarker ||
+      item.listId === undefined ||
+      item.start === undefined ||
+      item.end === undefined
+    ) {
+      continue;
+    }
+    const markerText = ir.text.slice(item.listMarker.start, item.listMarker.end);
+    const taskText = item.taskMarker
+      ? ir.text.slice(item.taskMarker.start, item.taskMarker.end)
+      : "";
+    const value = item.kind === "ordered" ? Number.parseInt(markerText, 10) : undefined;
+    const source = {
+      start: item.start,
+      end: item.end,
+      contentStart: item.taskMarker?.end ?? item.listMarker.end,
+      task: item.task === true,
+      checked: /^\[[xX]\]/u.test(taskText),
+      ...(value !== undefined && Number.isFinite(value) ? { value } : {}),
+    } satisfies MarkdownRichListItemSource;
+    const list = byListId.get(item.listId) ?? [];
+    list.push(source);
+    byListId.set(item.listId, list);
+  }
+  return [...byListId.values()].map((items) => {
+    items.sort((left, right) => left.start - right.start);
+    return {
+      start: Math.min(...items.map((item) => item.start)),
+      end: Math.max(...items.map((item) => item.end)),
+      items,
+    };
+  });
+}
+
+type RenderRange = (start: number, end: number) => InputRichBlock[];
+
+/** Renders one parser list; nested containers arrive through renderRange. */
+function renderMarkdownRichListSource(
+  source: MarkdownRichListSource,
+  renderRange: RenderRange,
+): InputRichBlock {
+  const items: InputRichBlockListItem[] = source.items.map((item) => {
+    const blocks = renderRange(item.contentStart, item.end);
+    return {
+      blocks: blocks.length > 0 ? blocks : [{ type: "paragraph", text: "" }],
+      ...(item.task ? { has_checkbox: true as const } : {}),
+      ...(item.checked ? { is_checked: true as const } : {}),
+      ...(item.value !== undefined ? { value: item.value } : {}),
+    };
+  });
+  return { type: "list", items };
+}
 
 const TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT = 20;
 
@@ -283,7 +352,7 @@ function splitParagraphs(
   }
   const sourceText = ir.text.slice(start, end);
   const paragraphs: InputRichBlockParagraph[] = [];
-  const pushParagraph = (rangeStart: number, rangeEnd: number) => {
+  const pushParagraph = (rangeStart: number, rangeEnd: number, paragraphBreak: string) => {
     // Trim the range so style/link offsets stay aligned with the source.
     const raw = ir.text.slice(rangeStart, rangeEnd);
     const absStart = rangeStart + raw.length - raw.trimStart().length;
@@ -295,17 +364,27 @@ function splitParagraphs(
     // Inline island conversion can normalize a leaf to nothing (e.g. an anchor
     // with empty label); an empty paragraph is invalid wire content.
     if (text !== "") {
-      paragraphs.push({ type: "paragraph", text });
+      // Telegram supplies one line between paragraphs and hides trailing newlines.
+      // Keep additional authored breaks at the start of the following paragraph.
+      paragraphs.push({
+        type: "paragraph",
+        text:
+          paragraphs.length > 0 && paragraphBreak
+            ? normalizeRichText([paragraphBreak, text])
+            : text,
+      });
     }
   };
-  const blankLine = /\n[ \t]*\n+/g;
+  const blankLine = /\n(?:[ \t]*\n)+/g;
   let last = 0;
+  let paragraphBreak = "";
   let match: RegExpExecArray | null;
   while ((match = blankLine.exec(sourceText)) !== null) {
-    pushParagraph(start + last, start + match.index);
+    pushParagraph(start + last, start + match.index, paragraphBreak);
+    paragraphBreak = match[0].replace(/[ \t]/g, "").slice(1);
     last = match.index + match[0].length;
   }
-  pushParagraph(start + last, end);
+  pushParagraph(start + last, end, paragraphBreak);
   return paragraphs;
 }
 
@@ -544,22 +623,26 @@ export function markdownToTelegramRichBlocks(
       switch (segment.kind) {
         case "html": {
           blocks.push(
-            ...renderTelegramHtmlIsland(segment.node, (nodes) => {
-              const content: InputRichBlock[] = [];
-              let first = 0;
-              for (let last = 0; last < nodes.length; last += 1) {
-                if (nodes[last + 1]?.start === nodes[last]!.end) {
-                  continue;
+            ...renderTelegramHtmlIsland(
+              segment.node,
+              (nodes) => {
+                const content: InputRichBlock[] = [];
+                let first = 0;
+                for (let last = 0; last < nodes.length; last += 1) {
+                  if (nodes[last + 1]?.start === nodes[last]!.end) {
+                    continue;
+                  }
+                  const start = nodes[first]!.start;
+                  const end = nodes[last]!.end;
+                  // Removed summaries, credits, and checkboxes split body ranges.
+                  // Render the remaining tree with the same Markdown owner as the root.
+                  content.push(...renderChildRange(start, end, nodes.slice(first, last + 1)));
+                  first = last + 1;
                 }
-                const start = nodes[first]!.start;
-                const end = nodes[last]!.end;
-                // Removed summaries, credits, and checkboxes split body ranges.
-                // Render the remaining tree with the same Markdown owner as the root.
-                content.push(...renderChildRange(start, end, nodes.slice(first, last + 1)));
-                first = last + 1;
-              }
-              return content;
-            }),
+                return content;
+              },
+              (start, end) => irRangeToRichText(ir, start, end, skipEntityDetection),
+            ),
           );
           break;
         }

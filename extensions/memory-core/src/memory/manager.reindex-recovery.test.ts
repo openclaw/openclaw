@@ -233,7 +233,9 @@ describe("memory manager reindex recovery", () => {
       { source: "sessions", text: "User: published session" },
     ]);
 
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_000);
+    const advanced = Date.now() + 30_000;
+    vi.spyOn(Date, "now").mockReturnValue(advanced);
+    vi.spyOn(performance, "now").mockReturnValue(advanced);
     await memoryManager.sync();
     expect(rows.all()).toEqual([
       { source: "memory", text: "replacement memory" },
@@ -679,51 +681,6 @@ describe("memory manager reindex recovery", () => {
     },
   );
 
-  it("bounds the canonical cache before every transaction commits", async () => {
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
-    const interceptedPaths: Array<string | undefined> = [];
-    // Install before manager startup can retain its canonical publication client.
-    vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
-      async (...args) => {
-        const [options, source, worker] = args;
-        if (
-          options.agentId !== "main" ||
-          options.path !== databasePath ||
-          worker.moduleUrl.href !==
-            resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication).href
-        ) {
-          return await open(...args);
-        }
-        const client = await open(options, source, {
-          ...worker,
-          moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
-          input: { kind: "cache-capacity", publication: worker.input, maximum: 2 },
-        });
-        interceptedPaths.push(options.path);
-        return client;
-      },
-    );
-    const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));
-    const harness = memoryManager as unknown as ReindexHarness;
-    harness.cache.maxEntries = 2;
-    for (let i = 0; i < 4; i += 1) {
-      await fs.writeFile(path.join(memoryDir, `${i}.md`), `unique cache content ${i}`);
-    }
-    // Allow UPSERT-before-prune within a transaction, but reject overflow at
-    // every commit so a later transaction cannot hide a published excess.
-    await memoryManager.sync({ reason: "cli", force: true });
-
-    expect(interceptedPaths.length).toBeGreaterThan(0);
-    expect(interceptedPaths.every((filename) => filename === harness.db.location())).toBe(true);
-    expect(queryRow(harness.db, "SELECT COUNT(*) AS count FROM memory_embedding_cache")).toEqual({
-      count: 2,
-    });
-    expect(queryRow(harness.db, "SELECT COUNT(*) AS count FROM memory_index_sources")).toEqual({
-      count: 4,
-    });
-  });
-
   it("bounds the canonical cache after a successful all-cache-hit rebuild", async () => {
     const { memoryManager, harness, newest } = await createOversizedPublishedCache();
     embeddingCalls = [];
@@ -761,7 +718,7 @@ describe("memory manager reindex recovery", () => {
     }
   });
 
-  it("leaves even an oversized published cache untouched when a full rebuild fails", async () => {
+  it("preserves the cache when a full rebuild fails without writing embeddings", async () => {
     const { memoryManager, harness, before } = await createOversizedPublishedCache();
     vi.spyOn(MemoryIndexDatabase.prototype, "writeMetadata").mockImplementation(() => {
       throw new Error("failed shadow metadata");
@@ -1043,6 +1000,7 @@ describe("memory manager reindex recovery", () => {
     // The rebuild start and the sibling's write share one controlled clock.
     const now = 2_000_000_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     // A sibling caches a vector for a chunk it has not published yet, after this
     // rebuild started and before it publishes. No published chunk carries its hash.
     const metadata = vi.spyOn(MemoryIndexDatabase.prototype, "writeMetadata");

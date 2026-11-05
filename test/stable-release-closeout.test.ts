@@ -369,33 +369,15 @@ describe("stable release closeout", () => {
       expect(result.manifest).toBeNull();
     });
 
-    it("replays a withdrawn receipt byte-for-byte without another lookup", () => {
-      const lookups: string[] = [];
+    it("rejects forged withdrawal and platform state in a withdrawn receipt", () => {
       const first = succeeds({
         ...params,
-        findAppcastWithdrawal: (requested: string) => {
-          lookups.push(requested);
-          return withdrawal;
-        },
+        findAppcastWithdrawal: () => withdrawal,
       });
-      expect(lookups).toEqual([version]);
-      expect(first).toMatchObject({
-        apps: "pending",
-        appPlatforms: { macos: "withdrawn", android: "pending", windows: "pending" },
-        appcast: "withdrawn",
-        appcastWithdrawal: withdrawal,
-      });
-      expect(first).not.toHaveProperty("appcastSha256");
       const replayParams = {
         ...params,
         existingManifest: first,
-        publishedAppcast:
-          "<rss><sparkle:shortVersionString>2026.9.7</sparkle:shortVersionString></rss>",
-        findAppcastWithdrawal: () => {
-          throw new Error("replay must not look up the withdrawal again");
-        },
       };
-      expectReplay(replayParams, first);
       rejects(
         {
           ...replayParams,

@@ -29,9 +29,9 @@ const teams = [
   { id: "team-2", displayName: "Infra" },
 ];
 const channels = [
-  { id: "chan-1", displayName: "Deployments" },
+  { id: "chan-1", displayName: "Cafe\u0301" },
   { id: "chan-2", displayName: "General" },
-  { id: "chan-3", displayName: "Deployments-West" },
+  { id: "chan-3", displayName: "Café-West" },
 ];
 const users = [
   { id: "user-1", displayName: "Alice", userPrincipalName: "alice@example.com" },
@@ -71,7 +71,7 @@ describe("msteams directory live", () => {
     await expect(
       listMSTeamsDirectoryPeersLive({
         cfg: {},
-        query: "  ali  ",
+        query: "  CaFe\u0301 Raw  ",
       }),
     ).resolves.toEqual([
       entry("user", "user:user-1", "Alice", "@alice@example.com", users[0]),
@@ -80,7 +80,7 @@ describe("msteams directory live", () => {
 
     expect(searchGraphUsersMock).toHaveBeenCalledWith({
       token: "graph-token",
-      query: "ali",
+      query: "CaFe\u0301 Raw",
       top: 20,
     });
   });
@@ -113,28 +113,25 @@ describe("msteams directory live", () => {
     ).resolves.toEqual([entry("group", "team:team-1", "Platform", "#Platform", teams[0])]);
   });
 
-  it("searches channels within matching teams when a team/channel query is used", async () => {
-    listTeamsByNameMock.mockResolvedValue({ items: teams, truncated: false });
-    listChannelsForTeamMock
-      .mockResolvedValueOnce({ items: channels.slice(0, 2), truncated: false })
-      .mockResolvedValueOnce({ items: channels.slice(2), truncated: false });
+  it.each(["NFC", "NFD"] as const)(
+    "searches canonical channel names within matching teams (%s)",
+    async (form) => {
+      listTeamsByNameMock.mockResolvedValue({ items: teams, truncated: false });
+      listChannelsForTeamMock
+        .mockResolvedValueOnce({ items: channels.slice(0, 2), truncated: false })
+        .mockResolvedValueOnce({ items: channels.slice(2), truncated: false });
 
-    await expect(
-      listMSTeamsDirectoryGroupsLive({
-        cfg: {},
-        query: "plat / deploy",
-      }),
-    ).resolves.toEqual([
-      entry("group", "conversation:chan-1", "Platform/Deployments", "#Deployments", channels[0]),
-      entry(
-        "group",
-        "conversation:chan-3",
-        "Infra/Deployments-West",
-        "#Deployments-West",
-        channels[2],
-      ),
-    ]);
+      await expect(
+        listMSTeamsDirectoryGroupsLive({
+          cfg: {},
+          query: `plat / ${"CAFÉ".normalize(form)}`,
+        }),
+      ).resolves.toEqual([
+        entry("group", "conversation:chan-1", "Platform/Cafe\u0301", "#Cafe\u0301", channels[0]),
+        entry("group", "conversation:chan-3", "Infra/Café-West", "#Café-West", channels[2]),
+      ]);
 
-    expect(listTeamsByNameMock).toHaveBeenCalledWith("graph-token", "plat");
-  });
+      expect(listTeamsByNameMock).toHaveBeenCalledWith("graph-token", "plat");
+    },
+  );
 });
