@@ -113,6 +113,7 @@ export type CodexStartOrResumeThreadParams = Omit<
 };
 
 export type CodexThreadResumePreparation = {
+  model?: string | null;
   modelProvider?: string | null;
   assertConfigured: () => void;
   assertCurrent: () => void;

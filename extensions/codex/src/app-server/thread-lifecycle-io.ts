@@ -118,6 +118,12 @@ export async function resumeExistingCodexThread(
   try {
     // Preparation reads must share resume recovery, before any subscription is acquired.
     const configuration = await context.prepareResume();
+    // Supervision resumes keep Codex's current selection, which a native switch can move
+    // past the stored binding; render the prompt for that model, as the supervised start does.
+    const promptBinding =
+      resumeBinding.connectionScope === "supervision" && configuration.model
+        ? { ...resumeBinding, model: configuration.model }
+        : resumeBinding;
     const assertHandoffCurrent = configuration.assertConfigured;
     disposeConfiguration = configuration.dispose;
     await context.releaseRetainedThread(configuration.assertCurrent);
@@ -178,7 +184,7 @@ export async function resumeExistingCodexThread(
       finalConfigPatch.configPatch,
     );
     const resumeParams = await lifecycleTiming.measure("thread-resume-params", () =>
-      context.buildResumeParams(resumeBinding, authProfileId, resumeConfig),
+      context.buildResumeParams(promptBinding, authProfileId, resumeConfig),
     );
     if (!isRestrictedThreadConfigCompatible(params, context, resumeParams, authProfileId)) {
       stageBindingReplacement("rotating changed restricted thread configuration");
@@ -367,7 +373,7 @@ export async function resumeExistingCodexThread(
         },
         params,
       ),
-      preparedOpenClawBaseInstructions: context.resolveOpenClawBaseInstructions(resumeBinding),
+      preparedOpenClawBaseInstructions: context.resolveOpenClawBaseInstructions(promptBinding),
       lifecycle: {
         action: "resumed",
         ...(activeTurnIds.length ? { activeTurnIds } : {}),

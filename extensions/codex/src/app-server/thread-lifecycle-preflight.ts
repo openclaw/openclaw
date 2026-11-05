@@ -244,6 +244,11 @@ export async function prepareCodexThreadRequestContext(
     assertCodexThreadInferenceAuthority(params, modelPolicyEnforced);
   };
   params.assertCurrent();
+  // Supervision threads render for the native model they resume on, not the outer route's.
+  const resumeAttempt = (binding: CodexAppServerThreadBinding) =>
+    binding.connectionScope === "supervision" && binding.model
+      ? { ...params.params, modelId: binding.model }
+      : params.params;
   const resumeOptions = (binding: CodexAppServerThreadBinding) => ({
     ...params,
     threadId: binding.threadId,
@@ -287,7 +292,7 @@ export async function prepareCodexThreadRequestContext(
       authProfileId: string | undefined,
       config: JsonObject | undefined,
     ) =>
-      await buildThreadResumeParams(params.params, {
+      await buildThreadResumeParams(resumeAttempt(binding), {
         ...resumeOptions(binding),
         authProfileId,
         config,
@@ -295,7 +300,7 @@ export async function prepareCodexThreadRequestContext(
     // Start requests take their prompt options from `params`, as this omitted binding does.
     resolveOpenClawBaseInstructions: (binding?: CodexAppServerThreadBinding) =>
       resolveCodexOpenClawBaseInstructions(
-        params.params,
+        binding ? resumeAttempt(binding) : params.params,
         binding
           ? resumeOptions(binding)
           : { ...params, hostSystemAgentActive: options.preflight.hostSystemAgentActive },
