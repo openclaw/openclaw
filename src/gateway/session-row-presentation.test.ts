@@ -170,6 +170,28 @@ it("does not derive discarded diagnostics while interleaving row modes and viewe
     const diagnostics = vi.spyOn(sharingPolicy, "authorizeSessionAgentRun");
     using runStates = vi.spyOn(display, "projectGatewaySessionRunState");
     const summaryEligibility = vi.spyOn(sharingPolicy, "authorizeIncognitoSessionTarget");
+    const compareWire = (
+      client: ReturnType<typeof profileClient>,
+      options: Parameters<ReturnType<typeof prepareProjectedSessionPresentation>["snapshot"]>[1],
+    ) => {
+      const now = Date.now();
+      const read = () =>
+        prepareProjectedSessionPresentation(projection, client, now).snapshot(
+          { agentId: "main", key: "agent:main:shared" },
+          options,
+        ).row!;
+      const prepared = read();
+      const present = projection.present.bind(projection);
+      using standalone = vi
+        .spyOn(projection, "present")
+        .mockImplementation((record, opts) =>
+          present(record, { ...opts, preparedRunState: undefined }),
+        );
+      const unprepared = read();
+      expect(standalone).toHaveBeenCalledOnce();
+      expect(JSON.stringify(prepared)).toBe(JSON.stringify(unprepared));
+      expect(serializeSessionRow(prepared)).toBe(serializeSessionRow(unprepared));
+    };
     for (const rowMode of ["sidebar", "compact", "dashboard", undefined, "sidebar"] as const) {
       for (const [index, client] of clients.entries()) {
         diagnostics.mockClear();
@@ -198,6 +220,7 @@ it("does not derive discarded diagnostics while interleaving row modes and viewe
             index === 0 ? null : "session is shared for this connection",
           );
         }
+        compareWire(client, { rowMode, includeActivitySummary: true });
       }
     }
     for (const role of ["write", "view"] as const) {
@@ -217,6 +240,7 @@ it("does not derive discarded diagnostics while interleaving row modes and viewe
           expect(row.activitySummary).toBeUndefined();
           expect(summaryEligibility).not.toHaveBeenCalled();
         }
+        compareWire(clients[1]!, { rowMode: "compact", includeActivitySummary });
       }
     }
     setUserProfileRole(guest.id, "none");
