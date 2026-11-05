@@ -301,7 +301,7 @@ it("reuses trusted simulator libraries and shared package downloads without publ
   for (const [file, job] of [
     ["macos-periphery.yml", "ios-index"],
     ["ios-store-release.yml", "screenshots"],
-  ]) {
+  ] as const) {
     const consumer = readWorkflow(`.github/workflows/${file}`).jobs[job].steps.find(
       (step: WorkflowStep) => step.name === "Restore Watch RTC build inputs",
     );
