@@ -473,6 +473,31 @@ describe("captured model decisions", () => {
     expectAvailable(owner.evaluateEntry(entry, [entry], "openclaw"), "openai:chosen");
   });
 
+  it("keeps a stored credential available when an existing session personal pin is missing", () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    const missingPin =
+      "personal:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002";
+    const claude = model("anthropic", "claude-opus-5-5");
+    const preparedAuthStore = authStore(
+      { "anthropic:work": apiKey("anthropic") },
+      { order: { anthropic: ["anthropic:work"] } },
+    );
+    const snapshot = catalogSnapshot([claude]);
+    const preparedPersonalCatalog = { profiles: {}, links: [], isCurrent: () => true };
+    const open = decisions({ preparedAuthStore, snapshot, preparedPersonalCatalog });
+    expect(open.evaluateEntry(claude).availability).toBe(true);
+    const pinned = decisions({
+      preferredProfileId: missingPin,
+      preparedAuthStore,
+      snapshot,
+      preparedPersonalCatalog,
+    });
+    expect(pinned.evaluateEntry(claude)).toMatchObject({
+      availability: true,
+      selectedProfileId: "anthropic:work",
+    });
+  });
+
   it("retains native provenance and mode without blessing a same-name bearer credential", () => {
     expect(
       resolveUsableAgentCredentialModes({
