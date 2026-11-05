@@ -47,7 +47,7 @@ export function renderSidebarSessionIndicators(
   });
   const ownerActor = createMemo(() => {
     const readSessionValue = readSession();
-    return (host().sidebarSnapshot?.ownershipAvatars ?? host().sessionOwnershipVisibility.avatars)
+    return host().sessionOwnershipVisibility.avatars
       ? host().sessionsStatusFilter === "archived"
         ? readSessionValue.archivedBy
         : readSessionValue.owner?.actor
@@ -57,7 +57,7 @@ export function renderSidebarSessionIndicators(
     const ownerActorValue = ownerActor();
     const readSessionValue = readSession();
     return ownerActorValue?.identity?.type === "profile"
-      ? projectPresencePayload(host().sidebarPresencePayload).users.some(
+      ? projectPresencePayload(host().sessionData.presencePayload).users.some(
           (user) =>
             presenceMatchesProfile(user, ownerActorValue.identity) &&
             user.watchedSessions.includes(readSessionValue.key),
@@ -76,8 +76,7 @@ export function renderSidebarSessionIndicators(
   // archive attribution visible; the participant count includes unshown faces.
   const selfUser = createMemo(() => {
     const gateway = host().sessionDataContext?.gateway;
-    const scopedUser = gateway && gatewayPresentationScope(gateway).displayUser;
-    return scopedUser ?? host().sidebarSnapshot?.footer ?? null;
+    return gateway ? gatewayPresentationScope(gateway).displayUser : null;
   });
   const selfProfileId = createMemo(() => selfUser()?.identity?.id ?? selfUser()?.id);
   const ownerRepeatedByFilter = createMemo(() => {
@@ -233,7 +232,7 @@ export function renderSidebarSessionIndicators(
         {" "}
         <span class="sidebar-recent-session__details-endcap">
           <openclaw-viewer-facepile
-            prop:presencePayload={host().sidebarPresencePayload}
+            prop:presencePayload={host().sessionData.presencePayload}
             prop:selfUser={selfUser()}
             prop:selfInstanceId={host().sessionData.presenceInstanceId}
             prop:sessionKey={readSession().key}

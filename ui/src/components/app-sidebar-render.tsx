@@ -331,17 +331,13 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
   const context = useApplication();
   const profileGateway = projectGateway(context.gateway);
   const home = () => host.visibleHomeSession(host.expandedAgentId());
-  const homeAvailable = () =>
-    profileGateway.read().snapshot.hello
-      ? isHomePanelAvailable(context.gateway)
-      : host.sidebarSnapshot?.homeAllowed;
   const connectionStatus = () => host.connectionStatus;
-  const displayUser = createMemo(() => {
+  const selfUser = createMemo(() => {
     profileGateway.read();
     const gateway = host.sessionDataContext?.gateway;
-    const user = gateway && gatewayPresentationScope(gateway).displayUser;
-    return user ?? host.sidebarSnapshot?.footer;
+    return gateway ? gatewayPresentationScope(gateway).displayUser : null;
   });
+  const displayUser = () => selfUser() ?? host.sidebarSnapshot?.footer;
   const selfLabel = () => displayUser()?.name ?? displayUser()?.email ?? t("nav.owner");
   const avatarUser = createMemo(() => ({
     id: "owner",
@@ -350,6 +346,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
     watchedSessions: [],
   }));
   const gateway = () => readSidebarNativeGateway(host);
+  const buildSubtitle = () => formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO);
   const gatewayPrimaryTag = () => (gateway()?.isPrimary ? t("nav.gateway.primaryTag") : null);
   const identityMenuLabel = () => t("profilePage.identity.menuButtonLabel", { name: selfLabel() });
   const statusLabel = () =>
@@ -365,7 +362,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
       status ??
       (selectedGateway
         ? `${selectedGateway.name}${gatewayPrimaryTag() ? `, ${gatewayPrimaryTag()}` : ""}`
-        : formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO))
+        : buildSubtitle())
     );
   };
   const identityLabel = () =>
@@ -425,13 +422,8 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
             type="button"
             class="sidebar-brand__icon sidebar-footer-bar__home"
             aria-label={t("assistantPanel.toggle")}
-            disabled={!homeAvailable()}
+            disabled={!isHomePanelAvailable(host.sessionDataContext?.gateway)}
             onClick={(event) => {
-              if (host.sidebarSnapshot && !context.gateway.snapshot.hello) {
-                // Before Home accepts panel requests, its cached target can open as a conversation.
-                host.selectSession(host.sidebarSnapshot.homeSessionKey, host.expandedAgentId());
-                return;
-              }
               window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
               if (
                 !isMobileNavLayout() &&

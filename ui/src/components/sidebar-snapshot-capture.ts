@@ -1,22 +1,17 @@
-import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import { parseSidebarEntry } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { isHomePanelAvailable } from "../app/panel-availability.ts";
 import { loadSettings } from "../app/settings.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
-import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { presenceViewerLastActivity, profilePresenceViewer } from "../lib/presence-users.ts";
-import { profileDirectory } from "../lib/profile-directory.ts";
-import type { SessionCreatedActor } from "../lib/session-owner.ts";
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { hasSidebarListFilter } from "./session-data-events.ts";
 import { sidebarSessionBadgeFacts } from "./session-row-badge-presentation.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
-import { resolveSidebarOnline } from "./sidebar-online-state.ts";
+import { resolveSidebarOnline, sidebarOnlineOrder } from "./sidebar-online-state.ts";
 import {
   parseSidebarSnapshot,
   snapshotSections,
@@ -115,7 +110,7 @@ export function captureSidebarSnapshotModel(
   ) {
     return null;
   }
-  const online = resolveSidebarOnline(host);
+  const online = sidebarOnlineOrder(host);
   const plugins = [...zone.pluginTabs].map(([key, tab]) => ({
     key,
     pluginId: tab.pluginId,
@@ -126,31 +121,13 @@ export function captureSidebarSnapshotModel(
   for (const { key, pluginId, value } of host.pluginNavigation()) {
     plugins.push({ key, pluginId, id: value.page.id, label: value.label, icon: value.icon });
   }
-  const displayPerson = <T extends SessionCreatedActor | SessionParticipant>(person: T): T => {
-    const identity = person.identity;
-    const avatarUrl =
-      identity?.type === "agent"
-        ? (resolveAgentAvatarUrl(
-            agents.agents.find((agent) => agent.id === identity.id) ?? {},
-            context.agentIdentity.get(identity.id),
-          ) ?? undefined)
-        : profileDirectory(context.gateway).avatarIdentity({
-            identity,
-            profileAvatarUrl: person.avatarUrl,
-          }).profileAvatarUrl;
-    return { ...person, avatarUrl };
-  };
   const presentation = (row: SidebarRecentSession) => ({
-    owner: row.owner && { ...row.owner, actor: displayPerson(row.owner.actor) },
-    archivedBy: row.archivedBy && displayPerson(row.archivedBy),
-    participants: row.participants?.map(displayPerson),
     childrenDisplayMode: host.sessionProjection.children.capture(row.key),
     snapshotSubtitle: row.snapshot
       ? row.snapshotSubtitle
       : resolveSidebarSessionRowSubtitle(host, row),
     state: sidebarSessionBadgeFacts(host.sessionPullRequests, row),
   });
-  const home = host.visibleHomeSession(host.expandedAgentId());
   return parseSidebarSnapshot({
     routingDefaults: {
       mainKey: agents.mainKey,
@@ -189,13 +166,14 @@ export function captureSidebarSnapshotModel(
     collapsedAgentIds:
       loadSettings(context.gateway.connection.gatewayUrl).sidebarCollapsedAgentIds ?? [],
     plugins,
-    onlineUsers: online.users.map((user) => ({
-      ...displayUser(user),
-      watchedSessions: user.watchedSessions.filter(
-        (key) => zone.sessionRows.has(key) && !isIncognitoSessionKey(key),
-      ),
-      entries: [{ ts: 0, lastActivityAt: presenceViewerLastActivity(user) }],
-    })),
+    onlineUsers: online.users.map((user) => {
+      const lastActivityAt = presenceViewerLastActivity(user);
+      return {
+        ...displayUser(user),
+        watchedSessions: [],
+        entries: [{ ts: 0, lastActivityAt }],
+      };
+    }),
     onlineCounts: [...(online.counts ?? [])],
     peopleSortMode: host.people.sortMode,
     peopleStatusFilter: host.people.statusFilter,
@@ -205,11 +183,6 @@ export function captureSidebarSnapshotModel(
       .map(profilePresenceViewer),
     ownerId: host.sessionOwnerFilterId,
     involvingMe: host.sessionInvolvingMeFilterActive,
-    home: snapshotSessions(home ? [home] : [], presentation)[0] ?? null,
-    homeAllowed: isHomePanelAvailable(context.gateway),
-    homeSessionKey: host.selectedAgentMainSessionKey(host.expandedAgentId()),
-    ownershipAvatars: host.sessionOwnershipVisibility.avatars,
-    newSessionAllowed: host.readNewSessionAccess().allowed,
     windowKeys: [...host.mountedPresence().sessionKeys].filter(
       (key) => !isIncognitoSessionKey(key),
     ),

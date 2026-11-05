@@ -178,10 +178,3 @@
     text-align: start;
   }
 }
-
-.sidebar[data-snapshot-state="cached"]
-  .sidebar-session-owner-filter
-  .picker-select__trigger:disabled,
-.sidebar[data-snapshot-state="cached"] .sidebar-issues-button:disabled {
-  opacity: 1;
-}

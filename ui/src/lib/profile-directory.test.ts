@@ -97,13 +97,6 @@ it("shares directory reads, resolves merged identities, and advertises uploaded 
   const second = profileDirectory(gateway).subscribe(vi.fn());
   expect(request).toHaveBeenCalledTimes(1);
   expect(profileAvatarUrl(directory.get("photo"))).toBeUndefined();
-  const input = { identity: { type: "profile" as const, id: "photo" } };
-  Object.assign(gateway, {
-    readPresence: () => [
-      { user: { id: "photo", ...input, avatarUrl: "/api/users/photo/avatar?v=6" } },
-    ],
-  });
-  expect(directory.avatarIdentity(input).profileAvatarUrl).toBe("/api/users/photo/avatar?v=6");
   reply.resolve({
     profiles: [
       photo,
@@ -125,7 +118,6 @@ it("shares directory reads, resolves merged identities, and advertises uploaded 
   });
   await directory.load();
   expect(profileAvatarUrl(directory.get("photo"))).toBe("/api/users/photo/avatar?v=7");
-  expect(directory.avatarIdentity(input).profileAvatarUrl).toBe("/api/users/photo/avatar?v=7");
   expect(profileAvatarUrl(directory.get("old"))).toBe("/api/users/photo/avatar?v=7");
   expect(profileAvatarUrl(directory.get("absent"))).toBe("/api/users/absent/avatar?v=7");
   expect(profileAvatarUrl(directory.get("github"))).toBe("/api/users/github/avatar?v=7");

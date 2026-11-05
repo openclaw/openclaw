@@ -15,7 +15,7 @@ import {
 } from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
-import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
+import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
 import type { SessionDataOwner } from "./session-data.ts";
@@ -310,9 +310,6 @@ export abstract class AppSidebarBase {
   }
 
   readNewSessionAccess(): SessionMethodAccess {
-    if (this.sidebarSnapshot?.newSessionAllowed) {
-      return { allowed: true, requiredScope: "operator.write" };
-    }
     return this.readSessionMutationAccess({
       method: "sessions.create",
       params: {},
@@ -328,10 +325,6 @@ export abstract class AppSidebarBase {
   }
 
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void {
-    if (this.sidebarSnapshot?.newSessionAllowed) {
-      this.context.navigate("new-session", { search: newSessionSearch(agentId, target) });
-      return;
-    }
     if (this.readNewSessionAccess().allowed) {
       if (target) {
         this.onOpenNewSession?.(agentId, target);
