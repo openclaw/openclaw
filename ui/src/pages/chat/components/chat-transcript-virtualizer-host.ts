@@ -136,6 +136,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     });
   };
   private readonly rowRefs: TranscriptRowRefs;
+  // The retained renderer must not capture a historical render snapshot.
+  private readonly measureRowRefFor = (key: string) => this.rowRefs.forKey(key);
   private readonly readerAnchor = new TranscriptReaderAnchor(this);
   private readonly captureInteractionResize = (event: Event) => {
     const anchor = resolveChatTranscriptInteractionAnchor(event);
@@ -578,7 +580,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           header: header?.content ?? null,
           scrollElementRef: this.scrollElementRef,
           captureInteractionResize: this.captureInteractionResize,
-          measureRowRefFor: (key) => this.rowRefs.forKey(key),
+          measureRowRefFor: this.measureRowRefFor,
           measureRows:
             // The first correction reveals new rows; their real sizes must land before retiring the anchor.
             this.initialRange.pending ||
@@ -756,8 +758,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private queueLayout(): void {
     if (
       (this.initialRange.pending && this.rowKeys.length) ||
-      this.offsetState.scrollCommand?.target === "message"
- ||
+      this.offsetState.scrollCommand?.target === "message" ||
       this.bookmarkState.bookmark
     ) {
       this.renderer.queueAfterCommit(this.completeLayout);

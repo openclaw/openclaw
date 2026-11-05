@@ -294,10 +294,12 @@ it("measures newly committed rows before observer registration using fractional 
   const row = requireElement(container, ".chat-virtual-row");
   const prepared = requireElement(container, '[data-virtual-row-key="prepared"]');
   const getStyle = globalThis.getComputedStyle;
-  vi.spyOn(globalThis, "getComputedStyle").mockImplementation((element, pseudo) => {
-    expect(element).not.toBe(prepared);
-    return getStyle(element, pseudo);
-  });
+  const readStyle = vi
+    .spyOn(globalThis, "getComputedStyle")
+    .mockImplementation((element, pseudo) => {
+      expect(element).not.toBe(prepared);
+      return getStyle(element, pseudo);
+    });
   vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 50.1875));
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
     count: 2,
@@ -344,6 +346,8 @@ it("measures newly committed rows before observer registration using fractional 
     };
     expect(measureTranscriptRow(prepared, undefined, virtualizer)).toBe(87.625);
     expect(measureTranscriptRow(prepared, receipt, virtualizer)).toBe(87.625);
+    readStyle.mockRestore();
+    prepared.style.height = "120.375px";
     prepared.setAttribute("data-preparing-row", "true");
     expect(measureTranscriptRow(prepared, receipt, virtualizer)).toBe(120.375);
     expect(readConnectedTranscriptRows(container, virtualizer, rowRefs.elements)?.()).toBe(false);

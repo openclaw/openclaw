@@ -538,12 +538,17 @@ it("preserves independent session seeds and peer-published rows during partial r
     expect(getChatItemsGeneration(otherNext)).toBeGreaterThan(otherGeneration);
     expect(getExpandedToolCards(props.sessionKey).get("remembered-choice")).toBe(true);
     const next = buildCachedChatItems({ ...props, messages: messages.slice(2) });
-    expect(
-      next
-        .filter((item) => item.kind === "group")
-        .flatMap((item) => item.messages.map((entry) => entry.message)),
-    ).toEqual(messages.slice(2));
-    expect(next.every((row) => original.includes(row))).toBe(true);
+    const retainedMessages = next
+      .filter((item) => item.kind === "group")
+      .flatMap((item) => item.messages.map((entry) => entry.message));
+    expect(retainedMessages).toEqual(messages.slice(2));
+    expect(retainedMessages[0]).toBe(messages[2]);
+    expect(next).toHaveLength(2);
+    // Retiring the preceding reply changes only the new boundary's adjacent-reply chrome.
+    expect(original[2]).toMatchObject({ replyPreviousMessageId: "retired-answer" });
+    expect(next[0]).not.toBe(original[2]);
+    expect(next[0]).toMatchObject({ key: original[2]!.key, replyPreviousMessageId: undefined });
+    expect(next[1]).toBe(original[3]);
     resetChatThreadState(paneId);
     expect(buildCachedChatItems(peer)).toBe(peerRows);
   } finally {

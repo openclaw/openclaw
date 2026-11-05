@@ -91,7 +91,12 @@ it("releases repeated hidden retirements without losing independent raw survivor
         view === "visible" ? "visible" : "unfiltered",
       ).filter((item) => item.kind === "group");
       expect(next).toHaveLength(2);
-      expect(next.every((row, rowIndex) => row === prior[index]![rowIndex])).toBe(true);
+      const boundary = prior[index]![0]!;
+      expect(boundary).toMatchObject({ replyPreviousMessageId: "hidden-1" });
+      expect(next[0]).not.toBe(boundary);
+      expect(next[0]).toMatchObject({ key: boundary.key, replyPreviousMessageId: undefined });
+      expect(next[0]!.messages[0]!.message).toBe(retained[0]);
+      expect(next[1]).toBe(prior[index]![1]);
     }
   } finally {
     resetChatThreadState(paneId);

@@ -27,6 +27,12 @@ import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { respondChatHistoryUnavailable, type ChatHistoryMethod } from "./chat-history-recovery.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+export type RetainedChatHistoryRead = {
+  sessionId: string;
+  requireCurrentSession?: boolean;
+  verifyRetainedState?: () => Promise<boolean>;
+};
+
 /** Select and revalidate history metadata through its prepared row and sharing owners. */
 export async function prepareChatHistorySessionRead({
   context,

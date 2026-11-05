@@ -24,7 +24,7 @@ import {
 import { type getChatSessionProjection, readChatSessionProjection } from "./history-merge.ts";
 
 /** Estimate only the next wire read; exact admission still owns every exception. */
-export function prepareChatHistoryRequestBudget(
+function prepareChatHistoryRequestBudget(
   projection: SessionProjectionState,
   messages: readonly unknown[],
   requiredSources: ReadonlySet<string>,

@@ -8,6 +8,7 @@ import {
 } from "./chat-transcript-geometry.ts";
 import type { TranscriptInitialRange } from "./chat-transcript-initial-range.ts";
 import type { ChatTranscriptRenderer } from "./chat-transcript-layout-solid.tsx";
+import type { TranscriptMessageElements } from "./chat-transcript-message-elements.ts";
 import type { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 import type { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import {
@@ -145,6 +146,7 @@ type TranscriptLayoutRestoreHost = {
   messageReveal: ChatMessageReveal;
   messageRowKeysById: ReadonlyMap<string, string>;
   presentation: ReturnType<typeof createTranscriptPresentation>;
+  messageElements: TranscriptMessageElements;
   renderer: ChatTranscriptRenderer;
   scrollRestoreHost: TranscriptScrollRestoreHost;
   canAutoFollow(): boolean;
@@ -218,10 +220,10 @@ export function completeTranscriptLayout(owner: TranscriptLayoutRestoreHost): vo
     owner.messageRowKeysById,
     owner.rowIndexesByKey,
   );
-  if (!owner.initialRange.measuring || !owner.rowCount || !owner.scrollElement?.clientHeight) {
+  if (!owner.initialRange.pending || !owner.rowCount || !owner.scrollElement?.clientHeight) {
     return;
   }
-  const measured = owner.presentation.measureRows();
+  const [measured, applyRail] = owner.presentation.measureInitialRows(owner.messageElements);
   if ((owner.initialRange.pending && owner.initialRange.extend(owner.scrollElement)) || measured) {
     owner.invalidate();
     return;
@@ -231,7 +233,6 @@ export function completeTranscriptLayout(owner: TranscriptLayoutRestoreHost): vo
     return;
   }
   if (
-    (owner.initialRange.pending || owner.offsetState.scrollCommand?.target === "end") &&
     owner.canAutoFollow() &&
     !(owner.offsetState.pendingInteractionAnchor || owner.offsetState.touchActive)
   ) {
@@ -240,6 +241,7 @@ export function completeTranscriptLayout(owner: TranscriptLayoutRestoreHost): vo
     owner.offsetState.syncNativeOffset?.();
   }
   if (isTranscriptRangeCommitted(owner.threadInnerElement, owner.virtualizer)) {
+    applyRail?.();
     owner.initialRange.complete();
     owner.renderer.syncInitialPosition();
   }

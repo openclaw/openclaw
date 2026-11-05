@@ -100,7 +100,9 @@ export async function readChatHistoryPageKernel(
       maxMessages: max + (direction === "older" ? 2 : direction === "newer" ? 1 : 0),
       direction,
       allowResetArchiveFallback: !continuity,
-      ...(continuity ? { continuity, maxBytes: maxHistoryBytes } : {}),
+      // Keep the bounded raw source available for projection; the response budget applies
+      // after display truncation, including when continuity authenticates the anchor.
+      ...(continuity ? { continuity } : {}),
       readOnly: options.readOnly,
     });
     const source = readPage.displaySource

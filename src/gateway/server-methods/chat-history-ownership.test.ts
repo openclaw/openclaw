@@ -185,6 +185,73 @@ it("refuses continuity into a retained physical session while preserving ordinar
   });
 });
 
+it.each([false, true])(
+  "preserves displayable oversized anchors through continuity (incognito: %s)",
+  async (incognito) => {
+    await withHistoryState(async () => {
+      await captureRuntimeConfigAsyncReader()();
+      const scope = {
+        agentId: "main",
+        sessionKey: incognito
+          ? "agent:main:dashboard:incognito-oversized-continuity"
+          : "agent:main:dashboard:oversized-continuity",
+        sessionId: `oversized-current-${incognito}`,
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        incognito: incognito ? true : undefined,
+      });
+      const maxBytes = 256 * 1024;
+      for (const [eventId, role, content] of [
+        ["preceding", "assistant", "preceding answer"],
+        ["anchor", "user", "large source ".repeat(30_000)],
+      ] as const) {
+        await appendTranscriptMessage(scope, { eventId, message: { role, content } });
+      }
+      const request = historyRpc(await createHistoryReadContext(), scope.sessionKey);
+      const before = historyPayload(await request("chat.history"));
+      assert(typeof before.deltaCursor === "string");
+      expect(before.sessionInfo).toMatchObject({ activeLeafEntryId: "anchor" });
+      await appendTranscriptMessage(scope, {
+        eventId: "newer",
+        message: { role: "assistant", content: "newer answer" },
+      });
+      const selector = {
+        sessionId: scope.sessionId,
+        messageId: "anchor",
+        limit: 80,
+        maxBytes,
+        maxChars: 1024,
+      };
+      const ordinary = historyPayload(await request("chat.history", selector));
+      expect(ordinary.messages).toMatchObject([
+        { __openclaw: { id: "preceding" } },
+        { __openclaw: { id: "anchor", truncated: true } },
+        { __openclaw: { id: "newer" } },
+      ]);
+      const ordinaryBytes = Buffer.byteLength(JSON.stringify(ordinary.messages));
+      expect(ordinaryBytes).toBeLessThanOrEqual(maxBytes);
+      const continued = historyPayload(
+        await request("chat.history", {
+          ...selector,
+          continuity: { cursor: before.deltaCursor, activeLeafEntryId: "anchor" },
+        }),
+      );
+      expect(continued).toMatchObject({
+        continuity: {
+          cursor: before.deltaCursor,
+          activeLeafEntryId: "anchor",
+          accepted: true,
+        },
+        sessionInfo: { sessionId: scope.sessionId, activeLeafEntryId: "newer" },
+      });
+      expect(continued.messages).toEqual(ordinary.messages);
+      expect(Buffer.byteLength(JSON.stringify(continued.messages))).toBe(ordinaryBytes);
+    });
+  },
+);
+
 it("validates explicit incognito continuity through actor custody without a native history worker", async () => {
   await withHistoryState(async () => {
     await captureRuntimeConfigAsyncReader()();

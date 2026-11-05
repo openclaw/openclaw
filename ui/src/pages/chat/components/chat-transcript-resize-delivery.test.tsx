@@ -119,6 +119,8 @@ it.each([
       count: rows.length,
       initialOffset: 250,
       estimateSize: () => 100,
+      // This handoff exercises independent changes in both mounted predecessors.
+      overscan: 2,
       getItemKey: (index) => `row:${index}`,
       getScrollElement: () => scroller,
       observeElementRect: (_, callback) => callback({ width: 800, height: 100 }),
@@ -145,8 +147,9 @@ it.each([
     const { _didMount: mount, _willUpdate: update } = virtualizer;
     const dispose = mount();
     update();
-    virtualizer.getVirtualItems();
     try {
+      // Every observed row belongs to this fixture's accepted physical range.
+      expect(virtualizer.getVirtualItems().map((item) => item.index)).toEqual([0, 1, 2]);
       for (const row of rows) {
         reader.observe(row);
         virtualizer.measureElement(row);
@@ -169,7 +172,6 @@ it.each([
           scroller,
           virtualizer,
           separateRow ? rows.slice(0, 1) : rows,
-          undefined,
           reader.recordOwnedMeasurement,
         )?.() ?? false;
       prepend.update(scroller, virtualizer, measure);

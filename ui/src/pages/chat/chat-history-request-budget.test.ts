@@ -1,13 +1,10 @@
-import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expect, it } from "vitest";
-import {
-  prepareChatHistoryRequestBudget,
-  readChatHistoryRequestBudget,
-} from "./chat-history-request-budget.ts";
+import { readChatHistoryRequestBudget } from "./chat-history-request-budget.ts";
 import { prepareChatHistoryPages, admitChatHistoryPages } from "./chat-history-snapshot.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import {
   getChatSessionProjection,
+  readChatSessionProjection,
   reduceChatSessionProjection,
   setChatRunOwner,
 } from "./history-merge.ts";
@@ -22,44 +19,44 @@ it("reserves source fragments and repeated occurrences once across bridge and ca
   const fragment = source(1);
   const sibling = source(1, "another projection");
   const native = [...Array.from({ length: 100 }, () => fragment), sibling];
-  let projection = createSessionProjection({ sessionKey: "budget" }, native);
+  const host = makeChatHost();
+  admitChatHistoryPages(host, [{ messages: native }], "around");
   const pending = { role: "user", content: "pending" };
-  projection = reduceSessionProjection(projection, {
+  reduceChatSessionProjection(host, {
     type: "sendPending",
     runId: "pending",
     message: pending,
   });
   const live = { role: "assistant", content: "live" };
-  projection = reduceSessionProjection(projection, {
+  reduceChatSessionProjection(host, {
     type: "runDelta",
     runId: "active",
     message: live,
   });
-  projection = reduceSessionProjection(projection, {
+  reduceChatSessionProjection(host, {
     type: "messagePersisted",
     message: live,
     envelope: { runId: "active" },
   });
   const failed = { role: "assistant", content: "error" };
-  projection = reduceSessionProjection(projection, {
+  reduceChatSessionProjection(host, {
     type: "runTerminal",
     runId: "failed",
     status: "error",
     message: failed,
   });
-  projection = reduceSessionProjection(projection, {
+  reduceChatSessionProjection(host, {
     type: "messagePersisted",
     message: failed,
     envelope: { runId: "failed" },
   });
   const local = { role: "system", content: "local" };
-  projection = reduceSessionProjection(projection, { type: "localOutput", message: local });
+  const projection = reduceChatSessionProjection(host, { type: "localOutput", message: local });
   expect(projection.messages).toHaveLength(105);
-  const budget = prepareChatHistoryRequestBudget(
-    projection,
-    projection.messages,
-    new Set(["id:source-1"]),
-  );
+  const budget = readChatHistoryRequestBudget(host, {
+    messages: projection.messages,
+    requiredSources: new Set(["id:source-1"]),
+  });
   expect(budget?.limit).toBe(295);
   expect(budget?.maxBytes).toBe(3 * 1024 * 1024 - JSON.stringify(projection.messages).length);
 });
@@ -88,13 +85,17 @@ it("uses the publication owner's terminal pin, independently of the active run o
 });
 
 it("reserves newest local weight without spending its unavoidable pair exemption", () => {
-  let projection = createSessionProjection({ sessionKey: "budget" }, [source(1)]);
-  projection = reduceSessionProjection(projection, {
+  const host = makeChatHost();
+  admitChatHistoryPages(host, [{ messages: [source(1)] }], "around");
+  const projection = reduceChatSessionProjection(host, {
     type: "localOutput",
     message: { role: "system", content: "x".repeat(3 * 1024 * 1024 - 100_000) },
   });
   expect(
-    prepareChatHistoryRequestBudget(projection, projection.messages, new Set(["id:source-1"])),
+    readChatHistoryRequestBudget(host, {
+      messages: projection.messages,
+      requiredSources: new Set(["id:source-1"]),
+    }),
   ).toBeUndefined();
 });
 
@@ -104,11 +105,13 @@ it("does not estimate unknown coverage or acquire a projection while reading cap
   const facts = { messages: [source(1)], requiredSources: new Set(["id:source-1"]) };
   expect(readChatHistoryRequestBudget(host, facts)).toBeUndefined();
   expect(host.chatMessages).toBe(before);
+  expect(readChatSessionProjection(host)).toBeUndefined();
   admitChatHistoryPages(host, [{ messages: facts.messages }], "around");
+  const sessionId = host.currentSessionId;
   host.currentSessionId = "successor";
   expect(readChatHistoryRequestBudget(host, facts)).toBeUndefined();
-  const projection = createSessionProjection({ sessionKey: "budget" }, facts.messages);
+  host.currentSessionId = sessionId;
   expect(
-    prepareChatHistoryRequestBudget(projection, facts.messages, new Set(["id:missing"])),
+    readChatHistoryRequestBudget(host, { ...facts, requiredSources: new Set(["id:missing"]) }),
   ).toBeUndefined();
 });

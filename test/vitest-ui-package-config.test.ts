@@ -188,6 +188,7 @@ describe("ui package vitest config", () => {
         "ui/src/pages/chat/chat-pane-resident-navigation.test.ts",
         "ui/src/pages/chat/chat-thread-retention.test.ts",
         "ui/src/pages/chat/components/chat-transcript-layout-retention.test.ts",
+        "ui/src/pages/chat/components/chat-transcript-message-index-long-runs.test.ts",
         "ui/src/pages/chat/session-message-cache-retention.test.ts",
         "ui/src/pages/chat/session-snapshot-store-retention.test.ts",
         "ui/src/pages/usage/usage-page-retention.test.ts",

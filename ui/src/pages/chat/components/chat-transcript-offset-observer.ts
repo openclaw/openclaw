@@ -69,24 +69,28 @@ export class TranscriptOffsetState {
 export function isTranscriptMaintenanceScroll(
   state: TranscriptOffsetState,
   element: HTMLDivElement | null,
+  offset?: number,
+  maintenanceTarget = state.maintenanceScrollOffset,
 ): boolean {
   return (
     element !== null &&
-    state.maintenanceScrollOffset !== null &&
-    Math.min(state.maintenanceScrollOffset, maxTranscriptScrollOffset(element) ?? 0) ===
-      element.scrollTop
+    maintenanceTarget !== null &&
+    Math.min(maintenanceTarget, maxTranscriptScrollOffset(element) ?? 0) ===
+      (offset ?? element.scrollTop)
   );
 }
 
 export function isTranscriptProgrammaticScroll(
   state: TranscriptOffsetState,
   element: HTMLDivElement | null,
+  offset?: number,
+  maintenanceTarget = state.maintenanceScrollOffset,
 ): boolean {
   return (
     state.pendingScrollOffset !== null ||
-    isTranscriptMaintenanceScroll(state, element) ||
+    isTranscriptMaintenanceScroll(state, element, offset, maintenanceTarget) ||
     (state.scrollCommand !== null &&
-      (maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0) >
+      (maxTranscriptScrollOffset(element) ?? 0) - (offset ?? element?.scrollTop ?? 0) >
         CHAT_TRANSCRIPT_END_THRESHOLD_PX)
   );
 }
@@ -203,10 +207,7 @@ export function observeTranscriptOffset(
   let maintenanceTarget: number | null = null;
   let maintenanceRevision = 0;
   let maintenanceFrame: number | null = null;
-  let capturedNativeScroll:
-    | { scroll: TranscriptNativeScroll; before: number }
-    | null
-    = null;
+  let capturedNativeScroll: { scroll: TranscriptNativeScroll; before: number } | null = null;
   let touchY: number | undefined;
   const contactIds = new Set<number>();
   const localTouchY = (event: TouchEvent) =>
@@ -221,6 +222,14 @@ export function observeTranscriptOffset(
   };
   const recordProgrammaticScroll = (before: number, after: number) => {
     const delta = before - nativeOffset;
+    // Writers report after moving the element. Classify preceding movement at
+    // its old coordinate/target, before the new correction owns the viewport.
+    const programmatic = isTranscriptProgrammaticScroll(
+      owner.state,
+      element,
+      before,
+      maintenanceTarget,
+    );
     nativeOffset = after;
     // Record a real write before subscribers can remap the viewport. An exact
     // composer correction can cover a browser clamp captured before layout.
@@ -228,9 +237,11 @@ export function observeTranscriptOffset(
       maintenanceTarget = owner.state.maintenanceScrollOffset = after;
       maintenanceRevision += 1;
       const captured = capturedNativeScroll;
-      if (captured &&
+      if (
+        captured &&
         ((before === captured.before && after === captured.scroll.viewport.scrollTop) ||
-          (after === captured.before && before === captured.scroll.viewport.scrollTop))) {
+          (after === captured.before && before === captured.scroll.viewport.scrollTop))
+      ) {
         captured.scroll = { ...captured.scroll, programmatic: true, maintenance: true };
       }
     }
@@ -239,7 +250,7 @@ export function observeTranscriptOffset(
       delta,
       scrolling: instance.isScrolling,
       touching: owner.state.touching,
-      programmatic: owner.isProgrammaticScroll(),
+      programmatic,
     });
   };
   const recordVirtualizerScroll = (before: number, after: number, maintenance: boolean) => {
@@ -282,17 +293,17 @@ export function observeTranscriptOffset(
   const readNativeScroll = (offset: number): TranscriptNativeScroll => {
     reconcileMaintenanceOffset();
     return {
-      viewport: { scrollTop: offset, clientHeight: element?.clientHeight ?? 0, scrollHeight: element?.scrollHeight ?? 0 },
+      viewport: {
+        scrollTop: offset,
+        clientHeight: element?.clientHeight ?? 0,
+        scrollHeight: element?.scrollHeight ?? 0,
+      },
       delta: offset - nativeOffset,
       programmatic: owner.isProgrammaticScroll(),
       maintenance: owner.isMaintenanceScroll(),
     };
   };
-  const publishOffset = (
-    offset: number,
-    scrolling: boolean,
-    scroll?: TranscriptNativeScroll,
-  ) => {
+  const publishOffset = (offset: number, scrolling: boolean, scroll?: TranscriptNativeScroll) => {
     // Native policy uses only the root event's captured geometry. Explicit
     // synchronization and idle notifications do not manufacture reader input.
     if (scrolling && offset !== nativeOffset && owner.state.touchActive) {

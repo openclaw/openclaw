@@ -58,10 +58,12 @@ import {
   resolveEmbeddedAgentRunRecoverySnapshot,
   respondChatHistoryReadError,
   respondChatHistoryUnavailable,
-  respondChatHistoryReadError,
   type ChatHistoryMethod,
 } from "./chat-history-recovery.js";
-import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
+import {
+  prepareChatHistorySessionRead,
+  type RetainedChatHistoryRead,
+} from "./chat-history-session-read.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { captureQueuedChatInputRunIds, readChatPendingInputs } from "./chat-pending-inputs.js";
 import { withChatStartupDiagnostics } from "./chat-server-timing.js";
@@ -86,11 +88,7 @@ export async function handleChatHistoryRequest({
 }: Omit<GatewayRequestHandlerOptions, "params"> & {
   params: ChatHistoryParams;
   method: ChatHistoryMethod;
-  retainedTranscript?: {
-    sessionId: string;
-    requireCurrentSession?: boolean;
-    verifyRetainedState?: () => Promise<boolean>;
-  };
+  retainedTranscript?: RetainedChatHistoryRead;
 }) {
   const {
     sessionKey,

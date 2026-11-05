@@ -169,9 +169,22 @@ it("reuses complete survivor turns across real older and newer residency cuts", 
         );
         expect(kept).toHaveLength(320);
         expect(kept.every((item) => prior.has(item.key))).toBe(true);
+        const boundary = kept[0]!;
+        const oldBoundary = prior.get(boundary.key)!;
+        // The cut changes only source-241's adjacent-reply attribution, not its raw source.
+        expect(boundary).not.toBe(oldBoundary);
+        expect(boundary).toMatchObject({
+          key: oldBoundary.key,
+          replyPreviousMessageId: direction === "older" ? "source-240" : undefined,
+        });
+        expect(boundary.messages[0]!.key).toBe(oldBoundary.messages[0]!.key);
+        expect(boundary.messages[0]!.message).toBe(survivors[0]);
+        expect(oldBoundary).toMatchObject({
+          replyPreviousMessageId: direction === "older" ? undefined : "source-240",
+        });
         expect
           .soft(
-            kept.every((item) => prior.get(item.key) === item),
+            kept.slice(1).every((item) => prior.get(item.key) === item),
             direction + ": " + views[index],
           )
           .toBe(true);

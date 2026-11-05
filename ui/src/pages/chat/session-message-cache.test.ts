@@ -163,6 +163,26 @@ describe("session message cache", () => {
     expect(read()?.sessionState?.chrome).toEqual(chrome);
   });
 
+  it("publishes changed context usage once while retaining the admitted conversation", () => {
+    const { cache, write, read } = createCacheContext();
+    const persisted = vi.fn();
+    observeChatCache(cache, { write: persisted, delete: vi.fn() });
+    const contextUsage = { used: 1_800, limit: 96_000, approximate: false, fromLastPrompt: true };
+    const sessionState = { unarchiveAllowed: true, contextUsage };
+    const snapshot = widgetSnapshot(["saved conversation"], "session-1", { sessionState });
+    write(snapshot);
+    write({ ...snapshot, sessionState: { ...sessionState, contextUsage: { ...contextUsage } } });
+    expect(persisted).toHaveBeenCalledTimes(1);
+    const nextUsage = { ...contextUsage, used: 2_000 };
+    write({ ...snapshot, sessionState: { ...sessionState, contextUsage: nextUsage } });
+    expect(persisted).toHaveBeenCalledTimes(2);
+    expect(read()?.sessionState?.contextUsage).toEqual(nextUsage);
+    expect(read()?.messages).toBe(snapshot.messages);
+    write({ ...snapshot, sessionState: { ...sessionState, contextUsage: undefined } });
+    expect(persisted).toHaveBeenCalledTimes(3);
+    expect(read()?.sessionState?.contextUsage).toBeUndefined();
+  });
+
   it("publishes each admitted snapshot once with its pruned thumbnail weight", () => {
     const { cache, read, write, append } = createCacheContext();
     const thumbnail = new Blob([new Uint8Array(256 * 1024)], { type: "image/webp" });
