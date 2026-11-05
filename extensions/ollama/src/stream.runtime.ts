@@ -18,12 +18,10 @@ import {
   createProviderOperationDeadline,
   readProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
-import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import {
   applyProviderPayloadHook,
   buildAssistantMessage as buildStreamAssistantMessage,
   createEmptyTransportUsage,
-  mergeTransportHeaders,
   createPlainTextToolCallCompatWrapper,
   createProviderWaitObserver,
   failTransportStream,
@@ -73,6 +71,7 @@ import {
 } from "./stream-scheduler.js";
 import {
   buildOllamaChatRequest,
+  buildOllamaRequestHeaders,
   type OllamaStreamTransport,
   type OllamaTool,
   resolveOllamaRemainingTimeout,
@@ -455,14 +454,11 @@ function createRawOllamaStreamFn(
         if (bodyMode) {
           throwIfOllamaStreamAborted(options?.signal);
         }
-        const headers =
-          omitNullRequestHeaders(
-            mergeTransportHeaders(
-              { "Content-Type": "application/json" },
-              defaultHeaders,
-              options?.headers,
-            ),
-          ) ?? {};
+        const headers = buildOllamaRequestHeaders(
+          defaultHeaders,
+          options?.headers,
+          bodyMode && options?.apiKey ? { Authorization: `Bearer ${options.apiKey}` } : undefined,
+        );
         if (
           options?.apiKey &&
           (!headers.Authorization || !isNonSecretApiKeyMarker(options.apiKey))

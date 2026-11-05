@@ -1,8 +1,10 @@
-import type { Model } from "openclaw/plugin-sdk/llm";
+import type { Model, ModelRequestHeaders } from "openclaw/plugin-sdk/llm";
 import {
   type createProviderOperationDeadline,
   resolveProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
+import { mergeTransportHeaders } from "openclaw/plugin-sdk/provider-stream-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { applyOllamaThinkingFloor } from "./model-reasoning.js";
@@ -15,6 +17,23 @@ export type OllamaStreamTransport = {
   requestUrl: string;
   bodyMode: "native" | "manifest";
 };
+
+export function buildOllamaRequestHeaders(
+  defaultHeaders: ModelRequestHeaders | undefined,
+  requestHeaders: ModelRequestHeaders | undefined,
+  routedAuthorization: { Authorization: string } | undefined,
+): Record<string, string> {
+  return (
+    omitNullRequestHeaders(
+      mergeTransportHeaders(
+        { "Content-Type": "application/json" },
+        defaultHeaders,
+        requestHeaders,
+        routedAuthorization,
+      ),
+    ) ?? {}
+  );
+}
 
 export function resolveOllamaTransportUrl(
   baseUrl: string,

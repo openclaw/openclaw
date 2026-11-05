@@ -108,7 +108,12 @@ function catalog(route: Route, changes: Record<string, unknown> = {}) {
   };
 }
 
-type Post = { url: string | undefined; headers: IncomingMessage["headers"]; body: unknown };
+type Post = {
+  url: string | undefined;
+  headers: IncomingMessage["headers"];
+  rawHeaders: IncomingMessage["rawHeaders"];
+  body: unknown;
+};
 async function withRouter(
   route: Route,
   respond: (response: ServerResponse, request: IncomingMessage) => void,
@@ -142,6 +147,7 @@ async function withRouter(
           posts.push({
             url: request.url,
             headers: request.headers,
+            rawHeaders: request.rawHeaders,
             body: JSON.parse(await text(request)),
           });
           respond(response, request);
@@ -351,6 +357,45 @@ describe.each(["native", "manifest"] as const)("registered ClawRouter Ollama %s"
           if (route === "manifest") {
             expect(Object.keys(f.posts[0]?.body ?? {})).toEqual(["body"]);
           }
+          await Promise.all([f.responseClosed, f.socketClosed]);
+        },
+      );
+    },
+  );
+
+  it.each([
+    [false, "authorization"],
+    [false, "aUtHoRiZaTiOn"],
+    [true, "authorization"],
+    [true, "aUtHoRiZaTiOn"],
+  ] as const)(
+    "keeps one original proxy Authorization (simple=%s, header=%s)",
+    async (simple, name) => {
+      await withRouter(
+        route,
+        (response) => response.end(terminal),
+        async (f) => {
+          const { model, stream } = await f.discover();
+          if (!model) {
+            throw new Error("Missing selected model");
+          }
+          const result = await (
+            await stream(simple)(model, context, {
+              apiKey: KEY,
+              headers: { [name]: "Bearer conflicting-synthetic-key" },
+              timeoutMs: 5000,
+            })
+          ).result();
+          expect(result.stopReason).toBe("stop");
+          expect(f.posts).toHaveLength(1);
+          expect(f.arrivals).toEqual([
+            `POST /prefix/v1/${route === "native" ? "native/ollama/api/chat" : "proxy/ollama/chat"}`,
+          ]);
+          expect(f.posts[0]?.headers.authorization).toBe(`Bearer ${KEY}`);
+          const authorizationValues = f.posts[0]?.rawHeaders.flatMap((value, index, headers) =>
+            index % 2 === 0 && value.toLowerCase() === "authorization" ? [headers[index + 1]] : [],
+          );
+          expect(authorizationValues).toEqual([`Bearer ${KEY}`]);
           await Promise.all([f.responseClosed, f.socketClosed]);
         },
       );
