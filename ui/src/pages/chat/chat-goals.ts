@@ -17,6 +17,7 @@ import type {
   ChatGoalMutationAction,
   ChatGoalRecovery,
 } from "../../lib/chat/chat-types.ts";
+import { chatGoalDraftObjective } from "../../lib/chat/goal-draft.ts";
 import {
   goalOperationExpired,
   goalOperationScopePrefix,
@@ -242,6 +243,40 @@ export function chatGoalRecovery(host: ChatHost): ChatGoalRecovery | undefined {
   }
 }
 
+const GOAL_CREATION_ACTIONS = ["start", "set", "create"];
+const GOAL_MANAGEMENT_ACTIONS = [
+  "status",
+  "edit",
+  "pause",
+  "resume",
+  "complete",
+  "done",
+  "block",
+  "blocked",
+  "clear",
+];
+
+/** Keep command completion until the draft unambiguously names an objective. */
+export function isChatGoalCreationDraft(message: string): boolean {
+  const match = /^\s*\/goal\s+(\S+)([\s\S]*)$/iu.exec(message);
+  if (!match?.[1]) {
+    return false;
+  }
+  const action = match[1].toLowerCase();
+  if (GOAL_MANAGEMENT_ACTIONS.includes(action)) {
+    return false;
+  }
+  if (GOAL_CREATION_ACTIONS.includes(action)) {
+    return Boolean(match[2]);
+  }
+  return (
+    Boolean(match[2]) ||
+    ![...GOAL_CREATION_ACTIONS, ...GOAL_MANAGEMENT_ACTIONS].some((known) =>
+      known.startsWith(action),
+    )
+  );
+}
+
 /** Only creation syntax is intercepted; explicit management commands keep their normal path. */
 export function chatGoalCreationObjective(message: string): string | undefined {
   const args = matchSlashCommandToken(message, "/goal");
@@ -249,14 +284,10 @@ export function chatGoalCreationObjective(message: string): string | undefined {
     return undefined;
   }
   const parsed = splitCommandAction(args);
-  if (["start", "set", "create"].includes(parsed.action)) {
+  if (GOAL_CREATION_ACTIONS.includes(parsed.action)) {
     return parsed.args || undefined;
   }
-  if (
-    ["status", "edit", "pause", "resume", "complete", "done", "block", "blocked", "clear"].includes(
-      parsed.action,
-    )
-  ) {
+  if (GOAL_MANAGEMENT_ACTIONS.includes(parsed.action)) {
     return undefined;
   }
   return args;
@@ -360,8 +391,8 @@ export async function submitChatGoalDraft(
       objective: draft.objective,
     });
   }
-  // The composer commits its literal objective before calling the normal admission owner.
-  if (host.chatMessage !== draft.objective) {
+  // Keep the original draft for admission cleanup and failed-send recovery.
+  if (chatGoalDraftObjective(host.chatGoalDraftMode, host.chatMessage) !== draft.objective) {
     return false;
   }
   return Boolean(

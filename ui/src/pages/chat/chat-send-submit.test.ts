@@ -178,6 +178,21 @@ describe("structured Goal admission", () => {
     );
   });
 
+  it.each(["/goal ", "/goal start ", "/goal set ", "/goal create "])(
+    "admits %s without rewriting its source draft",
+    async (prefix) => {
+      const objective = "land it\n  keep every space  ";
+      const host = makeChatHost({
+        chatMessage: prefix + objective,
+        chatGoalDraftMode: { action: "start", commandDraft: true },
+        requestHandlers: {},
+      });
+      await handleSendChat(host, undefined, { intent });
+      expect(findChatSendPayload(host)).toMatchObject({ message: objective, intent });
+      expect(host.chatMessage).toBe("");
+    },
+  );
+
   it.each(["/stop", "  /goal clear\nkeep   this literal  "])(
     "sends %j as an objective without command interpretation",
     async (objective) => {

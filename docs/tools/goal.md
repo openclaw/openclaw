@@ -246,17 +246,23 @@ provides the next execution opportunity.
 
 Select **Goal** from the command picker with Enter, Tab, or a click, then type
 the objective and choose **Start goal**. Typing `/goal start` followed by a
-space, or submitting `/goal start` without an objective, also opens Goal mode.
-Sending bare `/goal`, even after dismissing
-the picker, opens the composer instead of adding a command to the conversation.
-An empty objective cannot be submitted.
+space (also `set` or `create`), or submitting an empty creation
+command, also opens Goal mode. Sending bare `/goal` opens the composer instead
+of adding a command to the conversation. An empty objective cannot be submitted.
+
+Shorthand typing opens Goal mode immediately once the objective cannot be a
+supported subcommand: `/goal l` is enough. Valid command prefixes such as
+`/goal sta` keep command completion. This transition is reversible: edit back
+to a valid command prefix to return to command mode. The original command draft,
+selection, and native undo/redo history are preserved; pasted creation commands
+use the same mode. Enter submits the objective immediately, without a timer.
+Explicit management commands such as `/goal status` remain commands.
 
 The composer shows a Goal label and an objective prompt so you can see what
-Send will do. The objective is literal text: words such as `clear` and text
-such as `/stop` do not become commands in Goal mode. Escape or Cancel leaves
-the objective as a normal chat draft. Complete pasted commands such as
-`/goal start Fix the tests` and explicit management commands such as
-`/goal status` retain their text-command behavior.
+Send will do. When opened from the picker, the objective is literal text: words
+such as `clear` and text such as `/stop` do not become commands. Escape or
+Cancel leaves the draft text unchanged; a shorthand draft still contains its
+`/goal` command prefix.
 
 Starting a Goal saves the Goal and its user turn together with the operation
 receipt before acknowledging Send. A failed admission leaves the draft intact and

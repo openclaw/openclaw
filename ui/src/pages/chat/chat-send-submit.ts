@@ -12,6 +12,7 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { canSubmitBeforeChatHistory, parseSlashCommand } from "../../lib/chat/commands.ts";
 import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
+import { chatGoalDraftObjective } from "../../lib/chat/goal-draft.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
@@ -130,7 +131,12 @@ export async function handleSendChat(
   const rawMessage = messageOverride ?? host.chatMessage;
   const draftMentions = messageOverride == null ? previousMentions : opts?.mentionsOverride;
   const submitted = trimHumanMentions(rawMessage, draftMentions);
-  const userMessage = intent ? rawMessage : submitted.text;
+  const userMessage =
+    intent?.kind === "session-goal-start"
+      ? chatGoalDraftObjective(previousGoalDraftMode, rawMessage)
+      : intent
+        ? rawMessage
+        : submitted.text;
   const submittedAtMs = performance.now();
   const submittedSessionKey = host.sessionKey;
   const submittedSessionId = host.currentSessionId;

@@ -2,7 +2,9 @@ import type { SessionGoal } from "../../../api/types.ts";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalDraftMode } from "../../../lib/chat/chat-types.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
+import { chatGoalDraftObjective } from "../../../lib/chat/goal-draft.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { isChatGoalCreationDraft } from "../chat-goals.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -59,19 +61,42 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
   };
   const activateDraft = (draft: string, submitting = false) => {
     const props = readProps();
-    if (liveMode(props) || !props.connected || !props.canSend || !props.onGoalSubmit) {
+    const current = liveMode(props);
+    if (
+      !props.connected ||
+      !props.canSend ||
+      !props.onGoalSubmit ||
+      !props.onGoalDraftModeChange ||
+      pendingNow(current)
+    ) {
       return false;
     }
-    const match = /^\s*\/goal(?:\s+(start|set|create))?\s*$/iu.exec(draft);
-    // A separator commits the action word; prefixes remain ordinary objectives.
-    if (!match || (!submitting && (!match[1] || !/\s$/u.test(draft)))) {
+    if (current && !(current.action === "start" && current.commandDraft)) {
       return false;
     }
-    return begin();
+    if (isChatGoalCreationDraft(draft)) {
+      if (!current) {
+        props.onGoalDraftModeChange({
+          ...(props.currentSessionId ? { sessionId: props.currentSessionId } : {}),
+          action: "start",
+          commandDraft: true,
+        });
+        state.slashMenu.reset();
+        state.skillMenu.reset();
+      }
+      // Presentation only: preserve the native value, selection and undo history.
+      return false;
+    }
+    if (current) {
+      props.onGoalDraftModeChange(null);
+    }
+    return submitting && /^\s*\/goal(?:\s+(?:start|set|create))?\s*$/iu.test(draft)
+      ? begin()
+      : false;
   };
   return {
     get active() {
-      return mode() !== null;
+      return liveMode(readProps()) !== null;
     },
     get pending() {
       return Boolean(mode() && pending() === mode());
@@ -94,11 +119,14 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
       return begin();
     },
     cancel,
+    canSubmit: (draft: string) =>
+      Boolean(chatGoalDraftObjective(liveMode(readProps()), draft).trim()),
     async submit(submissionAction?: Event) {
       const props = readProps();
       const current = liveMode(props);
       const key = composerDraftKey(props);
-      const objective = state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft;
+      const draft = state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft;
+      const objective = chatGoalDraftObjective(current, draft);
       if (!current || !props.onGoalSubmit || !objective.trim()) {
         return;
       }
@@ -113,7 +141,6 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
       if (!admitted) {
         return;
       }
-      replaceDraft(objective);
       try {
         const submitted = await props.onGoalSubmit(
           {
