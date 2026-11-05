@@ -51,7 +51,7 @@ export type WorktreeCleanupMutation = <T>(
 
 export type WorktreeCleanupOwnerPolicy = {
   retryDeferred?: boolean;
-  beforeRemoval?: () => Promise<void>;
+  beforeRemoval?: (record: ManagedWorktreeRecord) => Promise<void>;
   prepareOwners?: (
     records: readonly ManagedWorktreeRecord[],
   ) => Promise<Pick<WorktreeCleanupOwnerPolicy, "readOwnerState">>;
@@ -496,7 +496,7 @@ export function createWorktreeGcRemoval(context: {
             progress.result.eligibleCount += 1;
             // Wait outside owner/checkout custody; removal still acquires and
             // validates live authority after admission.
-            await policy.beforeRemoval?.();
+            await policy.beforeRemoval?.(record);
             await withOwnerCleanup(record, async (withOwnerMutation) => {
               const assertOwnerCurrent = await prepareOwnerCurrent(record, retiredOwner);
               return context.remove({

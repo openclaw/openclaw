@@ -331,6 +331,26 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
   --bundle-dir dist/control-ui --pairs 10 --viewport both
 ```
 
+Giant completed runs are opt-in: `--steps completed-direct-run-2000-open,completed-direct-run-2000-scroll,completed-single-run-2000-expand,completed-single-run-2000-scroll`.
+Replace `2000` with `400` for the scaling control. These reuse the cold-load
+long-session fixture and desktop 61-frame scroll trajectory in both engines. Open checks
+the complete cached message count and ready tail; dashboard expansion checks the
+first output; scrolling checks both endpoint entries, zero blank frames and a
+two-pixel endpoint tolerance. Evidence includes fragment/DOM counts and geometry.
+Use `--compare-bundle-dir` and `--control-bundle-dir` for candidate and A/A triplets;
+keep `--trace` attribution separate from untraced timing. These synthetic sweeps
+do not measure native reader scroll latency.
+
+Native clipboard measurements use `--steps chat-actions-native-paste-text,chat-actions-native-paste-image`.
+They paste a 256 KiB draft or a synthetic 2048×2048 PNG through the browser's
+clipboard and keyboard shortcut, and require trusted paste events. Evidence
+separates keydown-to-paste dispatch, paste-to-ready-frame, and their combined
+latency; a ready animation frame is not a paint timestamp. Clipboard preparation
+and image encoding happen before measurement. Use Chromium at `--cpu-throttle 1`
+and `4`; WebKit supports only native CPU speed.
+Generic CPU counters cover the whole scenario, including work before the paste
+keypress. Use a separate trace to attribute CPU within the native input interval.
+
 `--pages` selects the route-catalog census: first visit after boot, each page's
 primary interaction, and route leave. The manifest records redirects,
 unavailable states and pages excluded for an active campaign; none silently

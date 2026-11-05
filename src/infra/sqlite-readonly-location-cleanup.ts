@@ -170,10 +170,12 @@ export function retainSnapshotWork<T>(work: Promise<T>, stop: () => void = () =>
   return work;
 }
 
-/** Keep signal cleanup behind the consumer, including private transforms and publication. */
+/** Keep signal cleanup behind the consumer, including private transforms and publication.
+ * Strict by default; best-effort callers log a failed removal and keep their result. */
 export async function withPreparedSqliteSnapshot<T>(
   snapshot: PreparedSqliteReadOnlyLocation,
   read: (location: string) => T | Promise<T>,
+  options: { bestEffortCleanup?: boolean } = {},
 ): Promise<T> {
   let outcome: { value: T } | { cause: unknown };
   try {
@@ -183,7 +185,22 @@ export async function withPreparedSqliteSnapshot<T>(
   } catch (cause) {
     outcome = { cause };
   }
-  if (!(await snapshot.cleanupAsync().catch(() => false))) {
+  let cleanupError: unknown;
+  const removed = await snapshot.cleanupAsync().catch((error: unknown) => {
+    cleanupError = error;
+    return false;
+  });
+  if (!removed && options.bestEffortCleanup) {
+    // Leave the copy for the exit retry and the Gateway sweep; the read still stands.
+    // A refused removal was already reported by its owner; only a throw is new here.
+    if (cleanupError !== undefined) {
+      emitSnapshotCleanupFailure({
+        cleanupRoot: snapshot.cleanupRoot ?? path.dirname(snapshot.location),
+        operation: "rm",
+        code: extractErrorCode(cleanupError),
+      });
+    }
+  } else if (!removed) {
     // An exit retry is best-effort, not proof that this private copy was removed.
     const readFailure =
       "cause" in outcome

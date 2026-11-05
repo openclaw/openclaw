@@ -38,6 +38,7 @@ import {
 import {
   normalizeAssistantMediaSource,
   openAssistantMedia,
+  respondAssistantMediaReadFailure,
   resolveAssistantMediaAvailability,
   resolveAssistantMediaSource,
 } from "./control-ui-assistant-media-read.js";
@@ -422,11 +423,9 @@ export async function handleControlUiAssistantMediaRequest(
     });
     await delivery;
     return true;
-  } catch {
+  } catch (error) {
     await byteStream?.close();
-    if (!res.destroyed && !res.writableEnded) {
-      respondControlUiNotFound(res);
-    }
+    await respondAssistantMediaReadFailure(error, source, res, publishResponse);
     return true;
   }
 }

@@ -138,5 +138,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me prepare Microsoft Teams meeting participation and choose captions or spoken interaction.",
+    "Help me plan Microsoft Teams meeting notes with participant consent before joining."
+  ]
 }

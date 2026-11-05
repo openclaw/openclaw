@@ -339,9 +339,10 @@ it.each([false, true])(
         ],
       });
       const laterOriginal = row(original.pluginId);
+      // The later decision survives and is reported; nothing else needs restoring.
       await expect(
         restorePluginCohortMigrationPublications(publications, authority),
-      ).rejects.toThrow("Plugin migration obligation changed after update publication");
+      ).resolves.toEqual([original.pluginId]);
       expect(row(original.pluginId)).toEqual(laterOriginal);
       expect(row(unrelated.pluginId)).toEqual(laterUnrelated);
     } finally {
@@ -422,14 +423,13 @@ it.each(["present", "originally absent", "originally present"] as const)(
         env: f.options.env,
         assertCurrent: () => fence.assertCurrent(),
       });
-    if (table === "originally present") {
-      await expect(restore()).rejects.toThrow("missing its original obligations");
-    } else {
-      await restore();
-      await restore();
-      if (table === "present") {
-        expect(readDeferredPluginMigrations(f.options)).toEqual([obligation]);
-      }
+    // An older backup without the obligation table keeps that state rather than
+    // initializing the candidate schema; its original obligation is reported as kept.
+    const kept = table === "originally present" ? [obligation.pluginId] : [];
+    await expect(restore()).resolves.toEqual(kept);
+    await expect(restore()).resolves.toEqual(kept);
+    if (table === "present") {
+      expect(readDeferredPluginMigrations(f.options)).toEqual([obligation]);
     }
     expect(inspect()).toEqual(before);
   },

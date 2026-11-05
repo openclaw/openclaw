@@ -612,7 +612,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       definitionTransaction,
     });
   };
-  const successMessage = `Gateway service installed. Runtime readiness has not been checked; startup may still be in progress. Check with ${formatCliCommand("openclaw gateway status")} and ${formatCliCommand("openclaw health")}.`;
+  const successMessage = `Gateway service installed. Runtime readiness has not been checked; startup may still be in progress. Run ${formatCliCommand("openclaw gateway start")} to wait until it is ready.`;
   await installDaemonServiceAndEmit({
     serviceNoun: "Gateway",
     service,
