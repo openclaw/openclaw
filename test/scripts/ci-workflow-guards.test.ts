@@ -2737,7 +2737,9 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     writeFileSync(path.join(source, "base.txt"), "base\n");
     mkdirSync(path.join(source, "config"));
     writeFileSync(path.join(source, "config/test-lines-baseline.txt"), "0\n");
-    for (const file of ["scripts/check-test-lines-ratchet.mts", "scripts/lib/shrink-ratchet.mts"]) {
+    for (const file of collectRuntimeImportClosure(process.cwd(), [
+      "scripts/check-test-lines-ratchet.mts",
+    ])) {
       mkdirSync(path.dirname(path.join(source, file)), { recursive: true });
       copyFileSync(file, path.join(source, file));
     }
