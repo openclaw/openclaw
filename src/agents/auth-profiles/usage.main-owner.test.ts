@@ -97,7 +97,7 @@ describe("main-agent auth-profile usage", () => {
   function readPersistedState(location: Location): PersistedState | undefined {
     return location === "state-db"
       ? readConfigMachineState<PersistedState>(SHARED_AUTH_CELL_KEYS.state)
-      : loadPersistedAuthProfileStore(mainAgentDir);
+      : (loadPersistedAuthProfileStore(mainAgentDir) ?? undefined);
   }
 
   it.each(["agent-db", "state-db"] as const)(
