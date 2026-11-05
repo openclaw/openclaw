@@ -6,38 +6,73 @@ struct SessionDashboardScreen: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
     @State private var showsDesktop = false
+    @State private var failedAccessBoundaryIdentity: Int?
     let sessionKey: String
     let agentId: String?
 
     var body: some View {
         let config = self.appModel.activeGatewayConnectConfig
         let storedOperatorToken = AuthenticatedControlUI.storedOperatorToken(config: config)
-        ZStack {
-            OpenClawProBackground()
-            if let url = Self.dashboardURL(
+        let nativeAuthProvider = IOSDashboardNativeGatewayAuthProvider(appModel: self.appModel, config: config)
+        let authorization = config?.ingressAuthorization
+        let webContentIdentity = AuthenticatedControlUI.webContentIdentity(
+            config: config,
+            storedOperatorToken: storedOperatorToken,
+            authorizationRevision: authorization?.revision)
+        let url = Self.dashboardURL(config: config, sessionKey: self.sessionKey, agentId: self.agentId)
+        let accessCookieAdmission = AuthenticatedControlUI.dashboardAccessCookieAdmission(
+            url: url,
+            requiresCookie: authorization != nil,
+            cookieForURL: { authorization?.dashboardCookie($0) })
+        let authScript: String?
+        let authScriptProvider: (@MainActor () async -> String?)?
+        if authorization != nil {
+            authScript = AuthenticatedControlUI.authUserScript(
                 config: config,
-                sessionKey: self.sessionKey,
-                agentId: self.agentId)
+                pageURL: url,
+                usesNativeNavigationChrome: true)
+            authScriptProvider = {
+                let credentials = await nativeAuthProvider?.legacyCredentials()
+                return AuthenticatedControlUI.authUserScript(
+                    config: config,
+                    pageURL: url,
+                    legacyCredentials: credentials,
+                    usesNativeNavigationChrome: true)
+            }
+        } else {
+            authScript = AuthenticatedControlUI.authUserScript(
+                config: config,
+                pageURL: url,
+                storedOperatorToken: storedOperatorToken,
+                usesNativeNavigationChrome: true)
+            authScriptProvider = nil
+        }
+        return ZStack {
+            OpenClawProBackground()
+            if let url,
+               accessCookieAdmission.isAvailable,
+               self.failedAccessBoundaryIdentity != webContentIdentity
             {
                 AuthenticatedControlUIWebView(
                     url: url,
-                    authScript: AuthenticatedControlUI.authUserScript(
-                        config: config,
-                        pageURL: url,
-                        storedOperatorToken: storedOperatorToken,
-                        usesNativeNavigationChrome: true),
+                    authScript: authScript,
                     tls: config?.tls,
+                    authScriptProvider: authScriptProvider,
+                    nativeGatewayAuthProvider: nativeAuthProvider,
+                    basicProxyCredentialProvider: {
+                        AuthenticatedControlUI.basicProxyCredential(config: config)
+                    },
                     allowedMainFramePathPrefix: Self.dashboardPathPrefix(config: config),
                     onMainFrameNavigationOutsideScope: {
                         self.dismiss()
                     },
-                    nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
-                        config: config,
-                        storedOperatorToken: storedOperatorToken,
-                        appModel: self.appModel))
-                    .id(AuthenticatedControlUI.webContentIdentity(
-                        config: config,
-                        storedOperatorToken: storedOperatorToken))
+                    accessCookie: accessCookieAdmission.cookie,
+                    accessAdmissionIsCurrent: authorization.map { authorization in
+                        { authorization.isCurrent() }
+                    },
+                    accessResponseCheck: authorization?.checkResponse,
+                    onAccessCookieBoundaryFailure: { self.failedAccessBoundaryIdentity = webContentIdentity })
+                    .id(webContentIdentity)
                     .ignoresSafeArea(.container, edges: .bottom)
             } else {
                 self.unavailableCard

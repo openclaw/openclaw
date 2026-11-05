@@ -200,8 +200,15 @@ it("declares complete success and closed error contracts", async () => {
         state: "queued",
         queued: true,
       },
+      {
+        id: "pending-stopped",
+        message: { role: "user", content: "Stopped before execution" },
+        acceptedAt: 2,
+        state: "cancelled",
+        cancelledByUser: true,
+      },
     ],
-    total: 1,
+    total: 2,
     queuedCount: 1,
   };
   expect(Value.Check(ChatPendingInputsPageSchema, pendingInputs)).toBe(true);
@@ -209,7 +216,7 @@ it("declares complete success and closed error contracts", async () => {
     true,
   );
   expect(compactToolOutputHint(tool.outputSchema)).toBe(
-    '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; pendingInputs?: { items: Array<{ acceptedAt: number; id: string; message: unknown; state: "queued" | "cancelled" | "interrupted"; queued?: true; runId?: string }>; total: number; nextBefore?: number; queuedCount?: number }; sessionLinkRule?: string; totalMessages?: number; windowReset?: boolean } | { error: string; status: "error" | "forbidden" }',
+    '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; pendingInputs?: { items: Array<{ acceptedAt: number; id: string; message: unknown; state: "queued" | "cancelled" | "interrupted"; cancelledByUser?: true; queued?: true; runId?: string }>; total: number; nextBefore?: number; queuedCount?: number }; sessionLinkRule?: string; totalMessages?: number; windowReset?: boolean } | { error: string; status: "error" | "forbidden" }',
   );
 });
 

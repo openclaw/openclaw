@@ -19,7 +19,6 @@ type QuotaBudgetSummary = {
 };
 
 export type ProviderQuotaGroup = {
-  /** Auth provider ids sharing this usage payload (e.g. anthropic + claude-cli). */
   providers: string[];
   displayName: string;
   plan?: string;
@@ -27,3 +26,7 @@ export type ProviderQuotaGroup = {
   windows: QuotaLimitSummary[];
   budgets: QuotaBudgetSummary[];
 };
+
+export type ProviderQuotaSelection =
+  | { status: "known"; group: ProviderQuotaGroup }
+  | { status: "unknown" | "unavailable"; group?: never };
