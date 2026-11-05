@@ -1,0 +1,5 @@
+# Question continuation receipts: reconnect recovery, stale-response and cross-client
+# ownership regressions plus standalone/chat browser receipts and native screenshot frames.
+# Allocation covers only this PR net literal-LF test growth against pinned main 4a43644e7a7b.
+# Existing main test-line debt is unchanged.
+655
