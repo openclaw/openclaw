@@ -109,17 +109,18 @@ function continuesEnclosingOrderedList(lines: readonly string[], index: number):
   if (!next) {
     return false;
   }
+  const nextIndent = next[1]?.length ?? 0;
   const bulletIndent = /^[ \t]*/.exec(lines[index - 1] ?? "")?.[0].length ?? 0;
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const line = lines[cursor] ?? "";
     const indent = /^[ \t]*/.exec(line)?.[0].length ?? 0;
-    if (!line.trim() || indent > next[1].length) {
+    if (!line.trim() || indent > nextIndent) {
       continue;
     }
     const parent = TELEGRAM_ORDERED_ITEM_PATTERN.exec(line);
     return (
       parent !== null &&
-      indent === next[1].length &&
+      indent === nextIndent &&
       parent[2] === next[2] &&
       bulletIndent >= parent[0].length
     );
