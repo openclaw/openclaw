@@ -1,4 +1,5 @@
 # OpenClaw ID tunnel and sign-in: new tests for the tunnel child, supervisor, ingress listener,
 # tunnel API, OIDC sign-in and the Gateway auth boundary for relayed devices, including saved
-# token bindings refused on HTTP after a start with the switch off. No existing tests replaced.
-3143
+# token bindings refused on HTTP after a start with the switch off, and HTTP requests that lose
+# authority when their device is removed or its role changes. No existing tests replaced.
+3248

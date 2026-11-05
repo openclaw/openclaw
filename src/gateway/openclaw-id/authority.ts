@@ -240,6 +240,30 @@ export function createOpenClawIdAuthority(
     }
   };
 
+  // Who the tunnel device `peerKey` is in the record already loaded, synchronously.
+  const currentPeer = (peerKey: string): OpenClawIdTunnelPrincipal | undefined => {
+    if (!isIrohEndpointKey(peerKey)) {
+      return undefined;
+    }
+    const state = record?.authority;
+    const now = nowSeconds();
+    if (!state || !isAdmitted(state, peerKey, now)) {
+      return undefined;
+    }
+    const isOwner = Object.values(state.owner_devices).some(
+      (device) => isOwnerDeviceActive(device, now) && device.cert.body.peer_keys.includes(peerKey),
+    );
+    if (isOwner) {
+      return { kind: "owner", peerKey };
+    }
+    const member = Object.entries(state.members).find(([, entry]) =>
+      entry.peer_keys.includes(peerKey),
+    );
+    return member
+      ? { kind: "member", peerKey, accountId: member[0], role: member[1].role }
+      : undefined;
+  };
+
   return {
     /** Loads the record (once); call before reading state synchronously. */
     load,
@@ -624,28 +648,11 @@ export function createOpenClawIdAuthority(
      */
     async resolvePeer(peerKey: string): Promise<OpenClawIdTunnelPrincipal | undefined> {
       await load();
-      if (!isIrohEndpointKey(peerKey)) {
-        return undefined;
-      }
-      const state = record?.authority;
-      const now = nowSeconds();
-      if (!state || !isAdmitted(state, peerKey, now)) {
-        return undefined;
-      }
-      const isOwner = Object.values(state.owner_devices).some(
-        (device) =>
-          isOwnerDeviceActive(device, now) && device.cert.body.peer_keys.includes(peerKey),
-      );
-      if (isOwner) {
-        return { kind: "owner", peerKey };
-      }
-      const member = Object.entries(state.members).find(([, entry]) =>
-        entry.peer_keys.includes(peerKey),
-      );
-      return member
-        ? { kind: "member", peerKey, accountId: member[0], role: member[1].role }
-        : undefined;
+      return currentPeer(peerKey);
     },
+
+    /** resolvePeer against the record already loaded, synchronously; undefined before a load. */
+    currentPeer,
 
     /**
      * Records that the tunnel admitted `peerKey` now (its inactivity clock restarts).

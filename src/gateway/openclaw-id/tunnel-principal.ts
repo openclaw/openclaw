@@ -29,7 +29,13 @@ export type OpenClawIdTunnelPrincipalResolver = (
   peerKey: string,
 ) => Promise<OpenClawIdTunnelPrincipal | undefined>;
 
+/** Synchronously resolves a peer key against the membership already loaded. */
+export type OpenClawIdTunnelPrincipalLookup = (
+  peerKey: string,
+) => OpenClawIdTunnelPrincipal | undefined;
+
 let resolver: OpenClawIdTunnelPrincipalResolver | undefined;
+let lookup: OpenClawIdTunnelPrincipalLookup | undefined;
 
 /** Publishes or clears the resolver (the OpenClaw ID service does this while it is on). */
 export function setOpenClawIdTunnelPrincipalResolver(
@@ -49,6 +55,31 @@ export async function resolveOpenClawIdTunnelPrincipal(
     return null;
   }
   return await resolver(peerKey);
+}
+
+/** Publishes or clears the synchronous lookup, alongside the resolver. */
+export function setOpenClawIdTunnelPrincipalLookup(
+  next: OpenClawIdTunnelPrincipalLookup | undefined,
+): void {
+  lookup = next;
+}
+
+/**
+ * True while the membership authority still admits `principal` as it did at
+ * admission: same kind, account and role. A removed device, a role change, or
+ * OpenClaw ID turning off (no lookup published) makes it false.
+ */
+export function isOpenClawIdTunnelPrincipalCurrent(principal: OpenClawIdTunnelPrincipal): boolean {
+  const current = lookup?.(principal.peerKey);
+  if (!current || current.kind !== principal.kind) {
+    return false;
+  }
+  return (
+    current.kind === "owner" ||
+    (principal.kind === "member" &&
+      current.accountId === principal.accountId &&
+      current.role === principal.role)
+  );
 }
 
 /** The trusted-proxy user of a member; owners act as the Gateway owner and carry none. */

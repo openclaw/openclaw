@@ -25,7 +25,11 @@ import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
-import { openclawIdTunnelRolePolicy } from "./openclaw-id/tunnel-principal.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  openclawIdTunnelRolePolicy,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 import {
   GatewayOperatorAccessDeniedError,
   hasGatewayOperatorAccessPolicies,
@@ -65,22 +69,31 @@ function failedHttpProfileAuthentication(error?: unknown): HttpUserProfileAuthRe
   };
 }
 
+// An OpenClaw ID tunnel device is capped by its membership role on every HTTP
+// surface, and its request keeps authority only while that membership is
+// unchanged: a removal or role change fails every later authority check.
+function withOpenClawIdPrincipal(
+  profile: AuthenticatedHttpUserProfile,
+  principal: OpenClawIdTunnelPrincipal,
+): AuthenticatedHttpUserProfile {
+  const rolePolicy = openclawIdTunnelRolePolicy(principal);
+  const hasCurrentProfileAuthority = profile.hasCurrentProfileAuthority;
+  return {
+    ...profile,
+    ...(rolePolicy ? { operatorRolePolicy: rolePolicy } : {}),
+    hasCurrentProfileAuthority: () =>
+      hasCurrentProfileAuthority?.() !== false && isOpenClawIdTunnelPrincipalCurrent(principal),
+  };
+}
+
 export async function checkAuthenticatedHttpUserProfile(
   params: Parameters<typeof resolveAuthenticatedHttpUserProfile>[0],
 ): Promise<HttpUserProfileAuthResult> {
   try {
     const profile = await resolveAuthenticatedHttpUserProfile(params);
-    // OpenClaw ID members are capped by their membership role on every HTTP surface.
-    const openclawIdRolePolicy =
-      params.authResult.method === "trusted-proxy"
-        ? openclawIdTunnelRolePolicy(params.authResult.openclawId)
-        : undefined;
-    return {
-      ok: true,
-      profile: openclawIdRolePolicy
-        ? { ...profile, operatorRolePolicy: openclawIdRolePolicy }
-        : profile,
-    };
+    const principal =
+      params.authResult.method === "trusted-proxy" ? params.authResult.openclawId : undefined;
+    return { ok: true, profile: principal ? withOpenClawIdPrincipal(profile, principal) : profile };
   } catch (error) {
     return failedHttpProfileAuthentication(error);
   }
