@@ -107,7 +107,7 @@ export function stripMinimaxToolCallXml(
   let result = "";
   let cursor = 0;
   for (const match of normalized.matchAll(minimaxToolXmlRe)) {
-    const start = match.index ?? 0;
+    const start = match.index;
     if (start < cursor || isInsideCode(start, codeRegions)) {
       continue;
     }
@@ -215,7 +215,7 @@ export function stripRelevantMemoriesTags(text: string): string {
   let inMemoryBlock = false;
 
   for (const match of text.matchAll(MEMORY_TAG_RE)) {
-    const idx = match.index ?? 0;
+    const idx = match.index;
     if (isInsideCode(idx, codeRegions)) {
       continue;
     }
