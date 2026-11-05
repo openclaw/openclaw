@@ -11,6 +11,8 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { formatSchemaMigrationFailure } from "../infra/schema-migration-diagnostics.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { revokeSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import {
   repairDoctorSqliteIndexCorruption,
   prepareDoctorSqliteIndexCorruption,
@@ -715,8 +717,8 @@ function* repairOpenedStateSchemaSteps(
     return {
       changes: indexChanges,
       warnings: [`${diagnostic}${reason}`],
-      // Warnings stay text; callers that refuse on them keep the cause's classification.
-      failure: err,
+      // Warnings stay text; a caller refusing on them can still tell blocked from failed.
+      ...(isSqliteLockError(err) ? { failure: err } : {}),
     };
   } finally {
     if (!ownershipRefused) {

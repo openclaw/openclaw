@@ -17,18 +17,23 @@ vi.mock("node:timers/promises", () => ({
     clock.nowMs += ms;
   },
 }));
+// mock-isolation: activation owns the outcome; Doctor and state are exercised natively.
 vi.mock("../../commands/doctor-database-preflight.js", () => ({
   prepareDoctorDatabasePreflight: mocks.preflight,
 }));
+// mock-isolation: activation owns the outcome; Doctor and state are exercised natively.
 vi.mock("../../commands/doctor-maintenance.js", () => ({
   beginDoctorMaintenance: mocks.begin,
 }));
+// mock-isolation: activation owns the outcome; Doctor and state are exercised natively.
 vi.mock("../../commands/doctor-schema-migrations.js", () => ({
   prepareDoctorDatabaseMigrations: async () => ({ changes: [], warnings: [] }),
 }));
+// mock-isolation: activation owns the outcome; Doctor and state are exercised natively.
 vi.mock("../../state/openclaw-state-db.js", () => ({
   prepareOpenClawStateDatabaseSchema: mocks.fullRepair,
 }));
+// mock-isolation: activation owns the outcome; Doctor and state are exercised natively.
 vi.mock("../run-main-service-installation.js", () => ({
   readOwnGatewayServiceCommand: async () => ({ programArguments: ["openclaw"] }),
 }));
