@@ -157,12 +157,9 @@ export function scanLegacyBracketToolCallBlocks(
   text: string,
   codeRegions: ReturnType<typeof findCodeRegions>,
 ): LegacyBracketBlockScan {
-  if (!text || !LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE.test(text)) {
-    return { text, pending: false };
-  }
-
   let result = "";
   let cursor = 0;
+  // An unfinished header can cross a Markdown checkpoint before its closing bracket.
   let pending = text.lastIndexOf("[") > text.lastIndexOf("]");
   for (const openMatch of text.matchAll(/\[\s*TOOL_(CALL|RESULT)\s*\]/gi)) {
     const openStart = openMatch.index;
@@ -184,10 +181,8 @@ export function scanLegacyBracketToolCallBlocks(
         /\b(?:tool|result|output|content)\s*:/i.test(payload)
       : /\btool\s*=>\s*["'][A-Za-z_][A-Za-z0-9_.:-]{0,119}["']/i.test(payload) &&
         /\bargs\s*=>/i.test(payload);
-    if (!closeMatch) {
-      // A later close can complete the hidden payload or the payload test.
-      pending = true;
-    }
+    // A later close can complete the hidden payload or the payload test.
+    pending ||= !closeMatch;
     if (!isToolPayload) {
       continue;
     }
