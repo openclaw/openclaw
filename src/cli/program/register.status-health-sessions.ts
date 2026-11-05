@@ -512,4 +512,60 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         );
       });
     });
+
+  addSessionsGatewayOptions(sessionsCmd.command("artifacts <sessionKey> [artifactId]"))
+    .description("List or fetch artifacts a session produced")
+    .option("--run <id>", "Scope artifacts to one run")
+    .option("--output <path>", "Save the fetched artifact bytes to a file")
+    .addHelpText(
+      "after",
+      () =>
+        `
+${theme.heading("Examples:")}
+${formatHelpExamples([
+  ['openclaw sessions artifacts "agent:main:main"', "List the artifacts a session produced."],
+  ['openclaw sessions artifacts "agent:main:main" --run run-1', "Scope the list to one run."],
+  [
+    'openclaw sessions artifacts "agent:main:main" art-1 --output art-1.png',
+    "Fetch one artifact to a file.",
+  ],
+  ['openclaw sessions artifacts "agent:main:main" --json', "Raw artifacts.list response."],
+])}
+
+${theme.muted(
+  "Backed by the artifacts gateway RPCs; inline bytes are base64 and url-mode prints the signed URL.",
+)}`,
+    )
+    .action(async (sessionKey: string, artifactId: string | undefined, opts, command) => {
+      // The Gateway resolves the artifact scope from the key and --run; list selectors cannot apply.
+      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined; // SAFETY: the sessions parent registers the list options rejected below.
+      rejectUnsupportedSessionsParentOptions(
+        "artifacts",
+        parentOpts,
+        ["store", "allAgents", "active", "limit", "verbose"],
+        "the gateway resolves the artifact scope from the session key and --run",
+      );
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
+      if (opts.timeout !== undefined && timeoutMs === undefined) {
+        throwExpectedCliError("--timeout must be a positive integer (milliseconds).");
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsArtifactsCommand } = await import("../../commands/sessions-artifacts.js");
+        await sessionsArtifactsCommand(
+          {
+            sessionKey,
+            artifactId,
+            run: opts.run as string | undefined, // SAFETY: Commander parses --run as a string.
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent, // SAFETY: Commander parses --agent as a string.
+            output: opts.output as string | undefined, // SAFETY: Commander parses --output as a string.
+            timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+            url: opts.url as string | undefined, // SAFETY: Commander parses transport options as strings.
+            token: opts.token as string | undefined, // SAFETY: Commander parses transport options as strings.
+            password: opts.password as string | undefined, // SAFETY: Commander parses transport options as strings.
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
 }
