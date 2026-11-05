@@ -557,7 +557,10 @@ struct CommandCenterTab: View {
         }
     }
 
-    static var mainSessionTitle: String { String(localized: "Main Session") }
+    static var mainSessionTitle: String {
+        String(localized: "Main Session")
+    }
+
     static let mainSessionSymbol = "bubble.left.and.bubble.right"
 
     nonisolated static func isMainSession(_ key: String, mainSessionKey: String?) -> Bool {
@@ -586,7 +589,7 @@ struct CommandCenterTab: View {
     }
 
     static func sessionTitle(_ session: OpenClawChatSessionEntry, mainSessionKey: String? = nil) -> String {
-        if Self.isMainSession(session.key, mainSessionKey: mainSessionKey) { return Self.mainSessionTitle }
+        if self.isMainSession(session.key, mainSessionKey: mainSessionKey) { return self.mainSessionTitle }
         if let label = session.label?.trimmedNonEmpty {
             return label
         }
@@ -669,9 +672,14 @@ struct CommandCenterTab: View {
 
     /// All Sessions includes the current agent's resolved main row; Overview
     /// keeps it separate from recent chats, alongside its existing shortcut.
-    nonisolated static func isListedChatSession(_ key: String, mainSessionKey: String) -> Bool {
+    /// Keep the configured base for filtering when an incomplete roster cannot resolve main.
+    nonisolated static func isListedChatSession(
+        _ key: String,
+        mainSessionKey: String,
+        defaultSessionKey: String) -> Bool
+    {
         self.isMainSession(key, mainSessionKey: mainSessionKey) ||
-            self.isRecentChatSession(key, defaultSessionKey: mainSessionKey)
+            self.isRecentChatSession(key, defaultSessionKey: defaultSessionKey)
     }
 
     nonisolated static func isRecentChatSession(_ key: String, defaultSessionKey: String) -> Bool {
@@ -996,7 +1004,8 @@ struct CommandSessionsScreen: View {
     private var visibleSessions: [OpenClawChatSessionEntry] {
         let mainKey = self.resolvedMainSessionKey
         return self.sessions
-            .filter { CommandCenterTab.isListedChatSession($0.key, mainSessionKey: mainKey) }
+            .filter { CommandCenterTab.isListedChatSession(
+                $0.key, mainSessionKey: mainKey, defaultSessionKey: self.appModel.mainSessionKey) }
             // A stale list must still obey the selected scope while its replacement loads.
             .filter {
                 self.statusScope.includes(

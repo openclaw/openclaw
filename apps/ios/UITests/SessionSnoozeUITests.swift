@@ -144,7 +144,7 @@ final class SessionSnoozeUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Delete…"].exists)
         XCTAssertFalse(app.buttons["Snooze"].exists)
         self.capture(app, named: "main-session-protected-actions")
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.05)).tap()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         XCTAssertTrue(app.buttons["Pin"].waitForNonExistence(timeout: 5))
     }
 

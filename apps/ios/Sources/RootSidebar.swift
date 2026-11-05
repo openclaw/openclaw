@@ -427,8 +427,11 @@ struct RootSidebar: View {
                     }
                     if !self.searchText.isEmpty || !self.collapsedGroups.contains(section.id) {
                         ForEach(Self.sessionNodes(
-                            for: section, mainSessionKey: rowPass.mainSessionKey, searchText: self.searchText,
-                            collapsedParents: self.collapsedParents)) { row in
+                            for: section,
+                            mainSessionKey: rowPass.mainSessionKey,
+                            searchText: self.searchText,
+                            collapsedParents: self.collapsedParents))
+                        { row in
                             self.sessionTreeRow(row, rowPass: rowPass)
                         }
                     }
@@ -640,7 +643,9 @@ struct RootSidebar: View {
             nodes.insert(main, at: 0)
             limit = recentLimit + 1
         }
-        let rows = ChatSessionSidebarModel.rows(nodes, showsChildren: { !collapsedParents.contains($0.id) })
+        let rows = ChatSessionSidebarModel.rows(nodes, showsChildren: {
+            !searchText.isEmpty || !collapsedParents.contains($0.id)
+        })
         return limit.map { Array(rows.prefix($0)) } ?? rows
     }
 

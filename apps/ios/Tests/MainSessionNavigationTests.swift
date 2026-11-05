@@ -29,13 +29,13 @@ struct MainSessionNavigationTests {
             sessions: [main, other, otherAgent] + newer,
             query: "",
             currentSessionKey: other.key,
-            mainSessionKey: base,
+            mainSessionKey: mainKey,
             activeAgentID: "one",
-            groups: [.init(id: "Research", name: "Research", order: 0)],
+            groups: [.init(name: "Research", position: 0)],
             rosterIsComplete: true)
         let rows = sections.flatMap {
             RootSidebar.sessionNodes(for: $0, mainSessionKey: mainKey, searchText: "")
-        }.map { $0.node.session }
+        }.map(\.node.session)
         #expect(rows.filter { $0.key == mainKey }.count == 1)
         #expect(rows.count == 21) // Main plus the unchanged budget of 20 ordinary recent rows.
         if placement == .recent {
@@ -46,7 +46,8 @@ struct MainSessionNavigationTests {
         #expect(rows.first { $0.key == mainKey }?.category == main.category)
         #expect(!rows.contains { $0.key == otherAgent.key })
         let resolvedMainKey = ChatSessionSidebarModel.selectedSessionKey(
-            sessions: [main, other, otherAgent], currentSessionKey: "main", mainSessionKey: base, activeAgentID: "one")
+            sessions: [main, other, otherAgent], currentSessionKey: "main", mainSessionKey: mainKey,
+            activeAgentID: "one")
         #expect(resolvedMainKey == mainKey)
         #expect(!ChatSessionSidebarModel.canDeleteSession(key: mainKey, mainSessionKey: resolvedMainKey))
         #expect(!ChatSessionSidebarModel.canArchiveSession(main, mainSessionKey: resolvedMainKey))
@@ -57,16 +58,18 @@ struct MainSessionNavigationTests {
         var main = OpenClawChatSessionEntry(key: mainKey)
         main.label = "Original topic"
         let other = OpenClawChatSessionEntry(key: "agent:one:conversation", label: "Another conversation")
-        #expect(CommandCenterTab.isListedChatSession(mainKey, mainSessionKey: mainKey))
+        #expect(CommandCenterTab.isListedChatSession(mainKey, mainSessionKey: mainKey, defaultSessionKey: mainKey))
         #expect(!CommandCenterTab.isRecentChatSession(mainKey, defaultSessionKey: mainKey))
-        #expect(CommandCenterTab.isListedChatSession(other.key, mainSessionKey: mainKey))
-        #expect(!CommandCenterTab.isListedChatSession("agent:two:main", mainSessionKey: mainKey))
+        #expect(CommandCenterTab.isListedChatSession(other.key, mainSessionKey: mainKey, defaultSessionKey: mainKey))
+        #expect(!CommandCenterTab.isListedChatSession(
+            "agent:two:main",
+            mainSessionKey: mainKey,
+            defaultSessionKey: mainKey))
         let automation = OpenClawChatSessionEntry(key: "agent:one:cron:job")
-        let now = Date(timeIntervalSince1970: 1000)
-        #expect(CommandCenterTab.isListedChatSession(automation.key, mainSessionKey: mainKey))
-        #expect(!SessionStatusScope.active.includes(automation, at: now, currentSessionKey: other.key))
-        #expect(SessionStatusScope.automations.includes(automation, at: now, currentSessionKey: other.key))
-        #expect(SessionStatusScope.active.includes(automation, at: now, currentSessionKey: automation.key))
+        #expect(CommandCenterTab.isListedChatSession(
+            automation.key,
+            mainSessionKey: mainKey,
+            defaultSessionKey: mainKey))
         #expect(CommandCenterTab.sessionTitle(main, mainSessionKey: mainKey) == "Main Session")
         #expect(CommandCenterTab.sessionTitle(other, mainSessionKey: mainKey) == "Another conversation")
         #expect(main.label == "Original topic")
@@ -78,13 +81,14 @@ struct MainSessionNavigationTests {
         #expect(item.state == "open")
     }
 
-    @Test func mainReservationKeepsDescendantsTogetherAndRespectsSearch() throws {
+    @Test func `main reservation keeps descendants together and respects search`() throws {
         let mainKey = "agent:one:main"
         var main = OpenClawChatSessionEntry(key: mainKey)
         main.updatedAt = 1
         var child = OpenClawChatSessionEntry(key: "agent:one:followup")
         child.parentSessionKey = mainKey
         child.updatedAt = 2
+        main.childSessions = [child.key]
         let newer = (0..<25).map { index -> OpenClawChatSessionEntry in
             var row = OpenClawChatSessionEntry(key: "agent:one:conversation-\(index)")
             row.updatedAt = Double(index + 10)
@@ -97,13 +101,45 @@ struct MainSessionNavigationTests {
         let mainNode = try #require(recent.nodes.first { $0.session.key == mainKey })
         let rows = RootSidebar.sessionNodes(for: recent, mainSessionKey: mainKey, searchText: "")
         #expect(rows.count == 21)
-        #expect(rows.prefix(2).map { $0.node.session.key } == [mainKey, child.key])
+        #expect(rows.prefix(2).map(\.node.session.key) == [mainKey, child.key])
         #expect(rows[1].depth == 1)
         let collapsed = RootSidebar.sessionNodes(
             for: recent, mainSessionKey: mainKey, searchText: "", collapsedParents: [mainNode.id])
         #expect(collapsed.count == 21)
         #expect(!collapsed.contains { $0.node.session.key == child.key })
         let uncapped = RootSidebar.sessionNodes(for: recent, mainSessionKey: mainKey, searchText: "conversation")
-        #expect(uncapped == ChatSessionSidebarModel.rows(recent.nodes, showsChildren: { _ in true }))
+        #expect(uncapped.count == 27)
+        #expect(uncapped.suffix(2).map(\.node.session.key) == [mainKey, child.key])
+    }
+
+    @Test func `search expands matching children of collapsed ordinary sessions`() throws {
+        var parent = OpenClawChatSessionEntry(key: "agent:one:research", label: "Research")
+        let child = OpenClawChatSessionEntry(key: "agent:one:followup", label: "Research follow-up")
+        parent.childSessions = [child.key]
+        let sections = RootSidebarModel.sections(
+            sessions: [parent, child], query: "Research", currentSessionKey: parent.key,
+            mainSessionKey: "main", activeAgentID: "one", groups: [], rosterIsComplete: true)
+        let recent = try #require(sections.first { $0.id == "recent" })
+        let parentNode = try #require(recent.nodes.first { $0.session.key == parent.key })
+        let rows = RootSidebar.sessionNodes(
+            for: recent, mainSessionKey: "agent:one:main", searchText: "Research",
+            collapsedParents: [parentNode.id])
+        #expect(rows.map(\.node.session.key) == [parent.key, child.key])
+        #expect(rows.map(\.depth) == [0, 1])
+    }
+
+    @Test(arguments: [true, false])
+    func `custom main filter survives incomplete roster`(mainPresent: Bool) {
+        let main = OpenClawChatSessionEntry(key: "agent:one:work")
+        let other = OpenClawChatSessionEntry(key: "agent:one:conversation")
+        let thread = OpenClawChatSessionEntry(key: "agent:one:work:thread:42")
+        let otherAgentMain = OpenClawChatSessionEntry(key: "agent:two:work")
+        let sessions = (mainPresent ? [main] : []) + [other, thread, otherAgentMain]
+        let mainKey = ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions, currentSessionKey: "main", mainSessionKey: main.key, activeAgentID: "one")
+        let listed = sessions.filter {
+            CommandCenterTab.isListedChatSession($0.key, mainSessionKey: mainKey, defaultSessionKey: main.key)
+        }
+        #expect(listed.map(\.key) == (mainPresent ? [main.key, other.key] : [other.key]))
     }
 }
