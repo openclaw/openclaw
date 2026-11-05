@@ -100,9 +100,9 @@ never on the release's critical path.
 
 Follow the [FRV wall-time loop](../release-openclaw-ci/SKILL.md#keep-frv-off-the-idle-path):
 start remote validation promptly, repair failures as diagnostics drain, and
-minimize downtime between cycles. Every known non-flake failure affecting the
-next run must be fixed before dispatch; optional local checks overlap remote
-validation instead of delaying it.
+minimize downtime between cycles. Include every known non-flake fix affecting
+the next run rather than knowingly carrying failures forward; overlap useful
+local checks with remote validation. This guides scheduling, not new gates.
 
 The operating objectives are approximately 20 minutes to seal validation and
 publication within an hour, not measured guarantees. Source-only children start

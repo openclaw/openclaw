@@ -192,48 +192,38 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 
 ## Keep FRV off the idle path
 
-Optimize time to the next **passing** Full Release Validation, not the number
-of local checks completed or parents dispatched. Remote FRV wall time is the
-critical path; use its runtime for diagnosis, repairs, review, and focused proof.
+Optimize time to the next **passing** Full Release Validation. Remote FRV is
+usually the long pole; use its runtime for diagnosis, repairs, review, and
+focused proof. This is scheduling guidance, not a new checklist, approval step,
+or demand for certainty before dispatch. Existing release gates still apply.
 
-- **Start remote qualification promptly.** Once required preflight/admission
-  gates pass and every known non-flake failure affecting the selected validation
-  is fixed, dispatch the exact candidate without waiting for optional local
-  checks. When uncertain whether additional local proof will find a defect,
-  err toward running remote FRV and that useful local proof concurrently. A
-  passing remote run saves an entire cycle; a newly discovered defect can
-  supersede it through the existing cancellation/settlement rules. This does
-  not authorize duplicate same-tuple parents or bypass mandatory preflight.
-- **Repair as failures arrive.** Keep one watcher running through Diagnostic
-  Drain. Preserve and classify each failure immediately, prioritize known
-  non-flake failures over optional checks, and start its owner repair without
-  waiting for the parent or unrelated children to finish. Use independent
-  repair lanes where useful, with one integration owner and serialized branch
-  writes. Keep useful diagnostics draining while fixes, focused regression
-  proof, review, and required landings/backports proceed in parallel.
-- **Drain time is repair time, not a waiting phase.** Aim to have all fixes for
-  drained failures reviewed, proven, and on the appropriate branch by the time
-  diagnostics finish. Keep each failure's disposition, fix, and remaining gate
-  in the existing release ledger. If a repair outlasts the drain, name that
-  blocker and continue it immediately; do not add optional checks to the gap.
-- **Fix the whole known set before the next FRV.** Reconcile terminal
-  diagnostics with the ledger before freezing the next candidate. Every known
-  non-flake failure affecting that run must be fixed, including candidate,
-  qualification-harness, and trusted-tooling defects. Verify candidate fixes
-  are actually on the selected branch and tooling fixes in the selected P.
-  Never spend a full cycle fixing one failure while knowingly carrying another
-  into the next run. Unknown or unclassified failures need diagnosis, not an
-  assumed flake label. Preserve release scope and required review/proof gates;
-  a repair needing authority is a concrete blocker, not permission to dispatch
-  a knowingly failing candidate.
-- **Use retries to save wall time.** Apply the attempt-aware controller and
-  [retry budget](#run-identity-and-retry-budget) as soon as an eligible failed
-  child is terminal; unrelated diagnostics can keep draining. Retry evidenced
-  flakes or repaired external prerequisites narrowly, preserving valid green
-  evidence. Do not rerun unchanged deterministic failures, retry an old SHA to
-  test a new fix, or launch a full parent to repair collection. When changed
-  C/Q or recovery eligibility requires a fresh parent, settle the owned tree,
-  include the complete known repair set, and dispatch promptly.
+- **Start remote qualification promptly.** Favor starting remote FRV while
+  useful local checks run alongside it, rather than finishing those checks
+  first. If the remote run passes, that overlap saves an entire cycle; if local
+  work finds a defect, the run can be superseded through the existing recovery
+  path. Uncertainty alone is not a reason to leave remote validation idle.
+- **Repair as failures arrive.** Use the watcher to spot failures and start
+  diagnosis and fixes while other lanes drain. Prioritize known non-flake
+  failures over optional confidence checks. Use independent repair lanes when
+  helpful, and integrate fixes as they become ready rather than waiting for
+  the final diagnostic report to start work.
+- **Aim to be ready when diagnostics finish.** Ideally, fixes for the drained
+  failures are already on the branch, with focused proof and review done, by
+  drain completion. This is an overlap goal, not a deadline or another gate.
+  If a repair takes longer, keep working it; avoid filling the gap with
+  redundant checks or process overhead.
+- **Fix the whole known set before the next FRV.** Include fixes for every
+  known non-flake failure affecting the next run, whether in the candidate,
+  qualification harness, or trusted tooling. The waste to avoid is knowingly
+  launching another full cycle with failure B still unfixed after fixing A.
+  This does not mean proving there are no undiscovered failures or resolving
+  unrelated issues before running again.
+- **Use retries strategically.** An eligible targeted retry can run while
+  unrelated diagnostics continue. Use the existing
+  [retry budget](#run-identity-and-retry-budget) for flakes or repaired external
+  prerequisites and retain valid green evidence. A repeat of an unchanged
+  deterministic failure buys little; fix it instead. When a fresh parent is
+  needed, include the known fixes and get it running without optional delays.
 
 ## Deferred CI recovery
 

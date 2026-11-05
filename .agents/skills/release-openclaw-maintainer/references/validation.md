@@ -189,11 +189,11 @@ Local proof is targeted: never mirror Full Release Validation locally or put
 redundant local suites ahead of remote dispatch. Follow the
 [FRV wall-time loop](../../release-openclaw-ci/SKILL.md#keep-frv-off-the-idle-path):
 after required preflight and known non-flake repairs, start remote FRV while
-useful local checks run concurrently. Each local check needs a named unknown,
-failure diagnosis, or repair invariant; reuse equivalent exact-SHA evidence.
-Local diagnosis or regression checks need not wait for a remote failure, but
-must not delay dispatch merely for extra confidence. Bound local lane diagnosis
-to 15 minutes; a lane that needs longer reruns in CI through its focused
+useful local checks run concurrently. Favor checks that answer a concrete
+question or validate a repair, and reuse equivalent exact-SHA evidence.
+Local diagnosis or regression checks need not wait for a remote failure;
+avoid making optional extra confidence a prerequisite for dispatch. Bound local
+lane diagnosis to 15 minutes; a lane that needs longer reruns in CI through its focused
 `rerun_group`. Individual npm install/update phases cap at 300 seconds.
 On timeout, inspect the affected lane instead of leaving it running. Serialize
 build/package mutations before VM packing so a concurrent build cannot remove
