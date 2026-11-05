@@ -1,2 +1,2 @@
-111
-# Doctor empty-allow notes across tool, agent, and channel policies (107) and block bodies for the MCP app fullscreen e2e promise executors (4).
+107
+# Doctor empty-allow notes across tool, agent, and channel policies.
