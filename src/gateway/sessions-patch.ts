@@ -270,6 +270,7 @@ function* projectSessionPatchSteps(
       model,
       catalog: selected ? [selected] : catalog,
       agentRuntime,
+      configuredReasoning: logical?.configuredReasoning ?? logical?.reasoning,
     });
   }
 
