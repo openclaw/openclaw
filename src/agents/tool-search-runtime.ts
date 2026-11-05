@@ -3,6 +3,7 @@ import {
   attachInternalToolResultContentSource,
   copyInternalToolResultState,
 } from "../../packages/agent-core/src/internal-hooks.js";
+import { validateToolArguments } from "../../packages/agent-core/src/validation.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
@@ -150,6 +151,21 @@ async function validateCatalogSchemaValue(
   }
 }
 
+function coerceCatalogInput(entry: ToolSearchCatalogEntry, input: unknown): unknown {
+  const parameters = resolveAgentToolExecutionSchema(entry.tool, entry.parameters);
+  if (!isRecord(input) || !isRecord(parameters)) {
+    return input;
+  }
+  try {
+    return validateToolArguments(
+      { name: entry.name, description: entry.description, parameters: parameters as never },
+      { type: "toolCall", id: entry.id, name: entry.name, arguments: input },
+    );
+  } catch {
+    return input;
+  }
+}
+
 async function assertCatalogInputMatchesSchema(
   entry: ToolSearchCatalogEntry,
   value: unknown,
@@ -220,6 +236,7 @@ export class ToolSearchRuntime {
     private readonly options: {
       prepareInput?: boolean;
       validateInput?: boolean;
+      coerceInput?: boolean;
       callIdScope?: string;
     } = {},
   ) {}
@@ -400,7 +417,9 @@ export class ToolSearchRuntime {
   ) => {
     this.pluginRuntimeRefresh.assertCurrent();
     catalog.callCount += 1;
-    const normalizedInput = input ?? {};
+    const normalizedInput = this.options.coerceInput
+      ? coerceCatalogInput(entry, input ?? {})
+      : (input ?? {});
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
     const scope = this.options.callIdScope
       ? `${sanitizeToolCallIdPart(this.options.callIdScope)}:`
