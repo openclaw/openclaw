@@ -130,6 +130,12 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mockConfig.getRuntimeConfig(),
   readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
 }));
+
+const mockLoadCostUsageSummary = vi.hoisted(() => vi.fn());
+// mock-isolation: Fixture cost totals prove executor rendering of fresh, incomplete, and unpriced states without loading the real usage cache.
+vi.mock("../infra/session-cost-usage.js", () => ({
+  loadCostUsageSummary: mockLoadCostUsageSummary,
+}));
 const opTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("system agent operations", () => {
@@ -182,6 +188,72 @@ describe("system agent operations", () => {
     await run({ kind: "agents" });
     expect(loggedOutput()).toContain("main | default | model=not configured");
     expect(loggedOutput()).toContain("work | model=openai/gpt-5.2");
+  });
+
+  it("formats the usage cost summary loaded through the session cost loader", async () => {
+    mockLoadCostUsageSummary.mockResolvedValue({
+      updatedAt: 0,
+      days: 30,
+      daily: [],
+      totals: {
+        input: 1_000,
+        output: 500,
+        cacheRead: 200,
+        cacheWrite: 50,
+        totalTokens: 1_750,
+        totalCost: 0.1234,
+        inputCost: 0.01,
+        outputCost: 0.02,
+        cacheReadCost: 0.001,
+        cacheWriteCost: 0.002,
+        missingCostEntries: 2,
+      },
+    });
+    await run(
+      { kind: "usage" },
+      {
+        requesterAgentId: "qa",
+      },
+    );
+    expect(mockLoadCostUsageSummary).toHaveBeenCalledWith({ agentId: "qa" });
+    expect(loggedOutput()).toContain("Usage (last 30 days, agent qa):");
+    expect(loggedOutput()).toContain("Tokens: 1,750");
+    expect(loggedOutput()).toContain("Cost: $0.1234 (session-derived estimate");
+    expect(loggedOutput()).toContain("2 entries had no cost data");
+  });
+
+  it("warns when the usage summary is not fresh and renders unpriced totals distinctly", async () => {
+    mockLoadCostUsageSummary.mockResolvedValue({
+      updatedAt: 0,
+      days: 30,
+      daily: [],
+      cacheStatus: { status: "refreshing" },
+      totals: {
+        input: 1_000,
+        output: 500,
+        cacheRead: 200,
+        cacheWrite: 50,
+        totalTokens: 1_750,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 2,
+      },
+    });
+    await run(
+      { kind: "usage" },
+      {
+        requesterAgentId: "qa",
+      },
+    );
+    const output = loggedOutput();
+    expect(output).toContain("Usage totals may be incomplete (refreshing)");
+    expect(output).toContain("Cost: unavailable (cost data missing for 2 entries)");
+    expect(output).not.toContain("session-derived estimate");
+    expect(output).not.toContain("Cost: $0.0000");
+    expect(output).toContain("2 entries had no cost data");
   });
 
   it("redacts sensitive config values using their complete paths", async () => {
