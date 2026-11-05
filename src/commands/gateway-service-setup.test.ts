@@ -16,8 +16,9 @@ const mocks = vi.hoisted(() => ({
   runGlobalPackageUpdateSteps: vi.fn(),
 }));
 
-// mock-isolation: the package updater's npm staging is its own contract; this fake keeps its
-// activation hooks and transaction so install ordering, restore and retirement stay observable.
+// The fake keeps the updater's activation hooks and transaction, so install ordering, restore
+// and retirement stay observable.
+// mock-isolation: npm staging is the package updater's own contract and must not run here.
 vi.mock("../infra/package-update-steps.js", () => ({
   runGlobalPackageUpdateSteps: mocks.runGlobalPackageUpdateSteps,
 }));

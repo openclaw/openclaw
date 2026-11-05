@@ -16,8 +16,8 @@ const { runGlobalPackageUpdateSteps, duringBackupVerification, failLauncherCopy 
   }),
 );
 
-// mock-isolation: npm staging is replaced by a prepared stage; the real package swap and its
-// rollback still run against the durable copy on disk.
+// The real package swap and its rollback still run against the durable copy on disk.
+// mock-isolation: npm staging is replaced by a prepared stage.
 vi.mock("../infra/package-update-steps.js", () => ({ runGlobalPackageUpdateSteps }));
 // mock-isolation: the real backup verification runs; this only lets a competing update publish
 // while a rollback awaits it, after any earlier identity check and before the rollback's renames.
