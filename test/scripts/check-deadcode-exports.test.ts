@@ -570,16 +570,17 @@ const unrelatedArgs = [
     expect(compiled).not.toContain("prepareTtsRequest as");
   });
 
-  it("models telemetry only through live source imports", () => {
+  it("models named consumers only through live source imports", () => {
     const compile = createDynamicConsumerCompiler();
     for (const [relative, name] of [
       ["scripts/perf/transcript-broadcast-measure.ts", "installTeamStressTelemetryIpc"],
       ["test/scripts/team-shape-stress.test.ts", "startTeamStressTelemetry"],
+      ["scripts/perf/update-doctor-generation-measure.ts", "readUpdatePhysicalDatabaseGenerations"],
     ] as const) {
       const file = path.resolve(relative);
       const source = fs.readFileSync(file, "utf8");
       expect(compile()).toContain(`${name} as __dynamic`);
-      const removed = replaceFixture(source, name, "");
+      const removed = replaceFixture(source, name, "otherConsumer");
       expect(compile(new Map([[file, removed]]))).not.toContain(`${name} as __dynamic`);
     }
   });

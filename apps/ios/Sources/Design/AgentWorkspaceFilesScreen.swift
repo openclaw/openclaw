@@ -224,6 +224,10 @@ struct AgentWorkspaceDirectoryList: View {
             let known = Set(self.entries.map(\.path))
             self.entries.append(contentsOf: result.entries.filter { !known.contains($0.path) })
             self.totalEntries = result.totalentries
+            // Clear the stale error before consume/reload: a failed reload
+            // must be able to leave its own new error visible, and clearing
+            // after the await would erase it.
+            self.errorText = nil
             if self.pagination.consume(
                 requestOffset: requestOffset,
                 fetchedCount: result.entries.count,
