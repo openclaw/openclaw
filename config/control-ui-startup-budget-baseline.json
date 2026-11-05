@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 90111,
-  "reason": "First-pane snapshot admission starts the scoped read and validation before application loading: 11 interleaved warm chat pairs improve first rows by a 96 ms paired median, with breadcrumb and archived footer present at first mount in all 11. Exact-base startup grows 794 B to 90111 B; complete Chat/New boot shrinks 279/200 B, with unchanged request counts and FCP/hello/LoAF within A/A. Record the measured earlier-load redistribution; keep existing growth and variance allowances.",
-  "updatedAt": "2026-10-31"
+  "startupJsGzipBytes": 92855,
+  "reason": "Long-session windowing measures 92855 B startup (+380 B against d0eb40dc015): identical raw connection code and 148 source modules, with generated asset/export-name compression churn. Requests stay unchanged. Prior committed-head proof reduced direct 2000-message readiness 11422 to 1075 ms and retained heap 292 to 71 MiB; refreshed final-head proof must retain the win. Record the measured value under the campaign allowance for small boot growth accompanying a measured performance win; route remainder accepted by the coordinator for #183800.",
+  "updatedAt": "2026-11-05"
 }
