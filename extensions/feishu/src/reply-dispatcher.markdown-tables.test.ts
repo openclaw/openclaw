@@ -341,6 +341,17 @@ describe("createFeishuReplyDispatcher markdown table modes", () => {
       expect(run.chat).toBe(`om_stream:P om-1:T#@ om-2:${first}  @ om-3:${rest}@`);
     });
 
+    it("delivers the sentence after an unmappable converted late chunk on retry", async () => {
+      await useRealMarkdownChunker(120);
+      const rest =
+        "Everyone on the roster has confirmed attendance for the quarterly planning session on Monday morning.";
+      const run = await drive("block", `${early}; preview P+T+W; idle; end`, {
+        rejectPost: 3,
+        names: { W: `${grace}\n\n${rest}` },
+      });
+      expect(run.chat.split(rest)).toHaveLength(2);
+    });
+
     it("posts a new assistant message with the prefix the settled one had", async () => {
       expect(await drive("block", `${early}; message; preview P+T+S; end`)).toMatchObject({
         chat: "om_stream:P om-1:T#@ om-2:P+T#+S@",
