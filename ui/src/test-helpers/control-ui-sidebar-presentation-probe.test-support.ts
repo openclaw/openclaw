@@ -20,11 +20,13 @@ export function sidebarPresentationProbe() {
     cached: boolean;
     scrollTop: number;
     sidebar: Box;
+    rowLabel: { key: string; box: Box } | null;
     reconnectMasks: Array<Box & { name: string; reason: string }>;
     chrome: Array<{
       name: string;
       opacity: string;
       disabled: boolean;
+      animations: Array<{ name: string; startTime: number | null }>;
       images: Array<{
         src: string;
         currentSrc: string;
@@ -97,8 +99,50 @@ export function sidebarPresentationProbe() {
           (!viewport || (rect.bottom > viewport.top && rect.top < viewport.bottom))
         );
       });
+      const sidebarBox = box(sidebar);
+      const rowLabel = (() => {
+        for (const row of rows) {
+          const clip = row.querySelector(".sidebar-recent-session__name");
+          const text = clip?.querySelector(".hover-marquee__text");
+          const node = [...(text?.childNodes ?? [])].find(
+            (child) => child.nodeType === Node.TEXT_NODE && child.textContent?.trim(),
+          );
+          if (!clip || !node) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          const rect = range.getBoundingClientRect();
+          const limit = clip.getBoundingClientRect();
+          const x = Math.max(rect.left, limit.left, viewport?.left ?? 0, sidebarBox.x);
+          const right = Math.min(
+            rect.right,
+            limit.right,
+            viewport?.right ?? Infinity,
+            sidebarBox.x + sidebarBox.width,
+          );
+          const top = Math.max(rect.top, limit.top, viewport?.top ?? 0, sidebarBox.y);
+          const bottom = Math.min(
+            rect.bottom,
+            limit.bottom,
+            viewport?.bottom ?? Infinity,
+            sidebarBox.y + sidebarBox.height,
+          );
+          if (
+            right > x &&
+            bottom > top &&
+            rect.top >= (viewport?.top ?? sidebarBox.y) &&
+            rect.bottom <= (viewport?.bottom ?? sidebarBox.y + sidebarBox.height)
+          ) {
+            return {
+              key: row.getAttribute("data-session-key") ?? "",
+              box: { x, y: top, width: right - x, height: bottom - top },
+            };
+          }
+        }
+        return null;
+      })();
       const presentation = {
-        sidebar: box(sidebar),
+        sidebar: sidebarBox,
+        rowLabel,
         reconnectMasks: [
           ...sidebar.querySelectorAll(".sidebar-identity-card__status, .sidebar-connection-flag"),
         ]
@@ -127,6 +171,20 @@ export function sidebarPresentationProbe() {
                   name: name!,
                   opacity: getComputedStyle(element).opacity,
                   disabled: element.matches(":disabled"),
+                  animations:
+                    name === "home"
+                      ? element
+                          .getAnimations({ subtree: true })
+                          .filter(
+                            (animation): animation is CSSAnimation =>
+                              animation instanceof CSSAnimation,
+                          )
+                          .map((animation) => ({
+                            name: animation.animationName,
+                            startTime:
+                              typeof animation.startTime === "number" ? animation.startTime : null,
+                          }))
+                      : [],
                   images: [...element.querySelectorAll("img")].map((image) => ({
                     src: image.src,
                     currentSrc: image.currentSrc,

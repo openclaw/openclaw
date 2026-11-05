@@ -139,6 +139,7 @@ import {
 } from "./perf/warm-reload-browser.ts";
 import {
   analyzeReloadFrames,
+  reloadRegionHasVariation,
   type ReloadMask,
   type ReloadRegion,
 } from "./perf/warm-reload-frames.ts";
@@ -151,6 +152,7 @@ type SidebarPresentationSnapshot = {
     at: number;
     cached: boolean;
     sidebar: Omit<ReloadRegion, "name">;
+    rowLabel: { key: string; box: Omit<ReloadRegion, "name"> } | null;
     scrollTop: number;
     mountedKeys: Array<string | null>;
     mountedRows: Array<{ key: string; avatars: string[]; images: string[] }>;
@@ -192,13 +194,45 @@ async function readSidebarPixelProof(
       atMs: frame.epochMs - presentation.timeOrigin,
     }))
     .toSorted((a, b) => a.atMs - b.atMs);
-  const first =
+  const timestampCandidate =
     populated &&
     live &&
     frames.find(
       (frame) =>
         frame.clockSource === "surface" && frame.atMs >= populated.at && frame.atMs < live.at,
     );
+  const label = populated?.rowLabel;
+  let populatedSurface: (typeof frames)[number] | undefined;
+  let labelGap = false;
+  if (populated && live && label) {
+    for (const frame of frames.filter(
+      (surface) => surface.atMs >= populated.at && surface.atMs < live.at,
+    )) {
+      const sampled = presentation.frames.findLast((value) => value.at <= frame.atMs);
+      if (!sampled?.rows.some((row) => row.key === label.key)) {
+        labelGap = true;
+        break;
+      }
+      if (await reloadRegionHasVariation(frame.file, { name: "row-label", ...label.box })) {
+        populatedSurface = frame;
+        break;
+      }
+    }
+  }
+  const first = populatedSurface;
+  const paintQualification = {
+    method:
+      "First timestamp-eligible nonuniform RGB pixels in frozen text-node bounds. Never waits for avatars or matches final appearance. Selected, previous and all pre-population surfaces require visual audit for semantic firstness.",
+    auditRequired: true,
+    rowLabel: label,
+    timestampCandidate,
+    selected: first,
+    previous: first ? frames[frames.indexOf(first) - 1] : undefined,
+    prePopulationSurfaces: first
+      ? frames.filter((frame) => frame.atMs >= 0 && frame.atMs < first.atMs)
+      : [],
+    labelGap,
+  };
   await writeFile(
     path.join(outputDir, "frames.json"),
     JSON.stringify(
@@ -207,6 +241,7 @@ async function readSidebarPixelProof(
         frames,
         cachedInterval: populated && live ? { fromMs: populated.at, untilMs: live.at } : null,
         settled: { file: settledFile, captureStartedMs, captureFinishedMs },
+        paintQualification,
       },
       null,
       2,
@@ -219,10 +254,11 @@ async function readSidebarPixelProof(
     !final ||
     final.cached ||
     !first ||
+    labelGap ||
     surfaces.some((frame) => frame.clockSource !== "surface")
   ) {
     throw new Error(
-      `No qualified cached/live sidebar compositor capture; inspect ${outputDir}/frames.json`,
+      `No populated cached/live sidebar compositor candidate; inspect ${outputDir}/frames.json`,
     );
   }
   if (presentation.reconnectMasks.some((mask) => mask.reason !== "Permitted reconnect indicator")) {
@@ -368,6 +404,7 @@ async function readSidebarPixelProof(
     firstCachedFrameMs: initial.at,
     firstPopulatedCachedFrameMs: populated.at,
     cachedSurface: first,
+    paintQualification,
     firstLiveFrameMs: live.at,
     settled: { file: settledFile, captureStartedMs, captureFinishedMs },
     initialRows: initial.mountedKeys.length,
@@ -396,7 +433,7 @@ async function readSidebarPixelProof(
       "Every native surface through final capture, losslessly cropped at native pixel density. Zero consecutive differences requires all surfaces to match settle. The settled PNG uses its recorded capture-completion upper bound, not an inferred compositor timestamp.",
     maxFrameToFrameChangedPixels,
     restorationPixelTransitions: restorationSidebar.transitionCount,
-    strictParity:
+    strictParityCandidate:
       browserErrors.length === 0 &&
       changedPixels === 0 &&
       restorationSidebar.transitionCount === 0 &&
