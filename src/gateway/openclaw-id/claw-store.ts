@@ -80,10 +80,18 @@ export function assertSameClawIdentity(
   }
 }
 
+/** Refuses oversized opaque metadata without truncating account identities or mailbox cursors. */
+export function assertStoredClawText(value: unknown, field: string): void {
+  if (value !== null && (typeof value !== "string" || value.length > 256)) {
+    throw new Error(`OpenClaw ID ${field} must be null or at most 256 characters`);
+  }
+}
+
 /** Keeps verified display claims JSON-safe without retaining missing fields or token metadata. */
 export function storedOwnerProfile(
   account: OpenClawIdAccount,
 ): NonNullable<StoredClaw["owner_profile"]> {
+  assertStoredClawText(account.sub, "owner account ID");
   return {
     sub: account.sub,
     ...(typeof account.email === "string" ? { email: truncateUtf16Safe(account.email, 256) } : {}),

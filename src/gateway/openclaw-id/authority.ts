@@ -37,6 +37,7 @@ import { verifyBinding } from "./binding-check.js";
 import { needsAllowlistUpgrade, upgradeToAllowlist } from "./claw-migration.js";
 import {
   assertSameClawIdentity,
+  assertStoredClawText,
   clawStoreRows,
   readStoredClaw,
   writeStoredClaw,
@@ -731,6 +732,11 @@ export function createOpenClawIdAuthority(
     /** Records mirror progress; recovery may require the same committed binding through settlement. */
     recordDiscovery(update: Partial<StoredClaw["discovery"]>, expected?: StoredClaw) {
       return serialize(async () => {
+        for (const field of ["owner_account_id", "mailbox_cursor"] as const) {
+          if (Object.hasOwn(update, field)) {
+            assertStoredClawText(update[field], field);
+          }
+        }
         const current = await load();
         if (expected) {
           assertSameClawIdentity(current, expected);
