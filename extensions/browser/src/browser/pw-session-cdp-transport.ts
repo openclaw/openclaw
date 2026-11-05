@@ -93,12 +93,11 @@ async function openCdpTransportSocket(
     send: (message) => ws.send(JSON.stringify(message)),
     close: () => {
       ws.close();
-      const timer = setTimeout(() => {
+      setTimeout(() => {
         if (ws.readyState !== WebSocket.CLOSED) {
           ws.terminate();
         }
-      }, 100);
-      timer.unref?.();
+      }, 100).unref();
     },
   };
   ws.on("message", (raw) => {

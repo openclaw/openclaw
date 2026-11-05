@@ -379,9 +379,9 @@ describe("release-note verification", () => {
   it("credits human maintainers but excludes automation identities", () => {
     expect(isEligibleHandle("human-contributor")).toBe(true);
     expect(isEligibleHandle("steipete")).toBe(true);
-    expect(isEligibleHandle("steipete-oai")).toBe(false);
-    expect(isEligibleHandle("hugin-bot")).toBe(false);
-    expect(isEligibleHandle("roboclaw-bot")).toBe(false);
+    for (const handle of ["steipete-oai", "hugin-bot", "roboclaw-bot", "tideclaw-bot"]) {
+      expect(isEligibleHandle(handle)).toBe(false);
+    }
   });
 
   it("accepts only canonical commit PR suffixes", () => {
@@ -704,7 +704,7 @@ Release provenance for ${hash} -> #3`
     },
   );
 
-  it("requires release provenance PRs to be merged into current main", () => {
+  it("requires main provenance PRs to be merged into current main", () => {
     const releaseCommit = "a".repeat(40);
     const mainCommit = "b".repeat(40);
     const mergeCommit = "c".repeat(40);
@@ -729,11 +729,68 @@ Release provenance for ${hash} -> #3`
     expect(() => validate(validNode)).not.toThrow();
     for (const node of [
       { ...validNode, baseRefName: "release/2026.7.1" },
+      { ...validNode, baseRefName: "feature/unrelated" },
       { ...validNode, mergedAt: null },
     ]) {
-      expect(() => validate(node)).toThrow("references non-main PR #104905");
+      expect(() => validate(node)).toThrow("references invalid source PR #104905");
     }
-    expect(() => validate(validNode, false)).toThrow("references non-main PR #104905");
+    expect(() => validate(validNode, false)).toThrow("references invalid source PR #104905");
+  });
+
+  it("checks canonical main origins through the production Git matcher", () => {
+    const { cwd, base } = seedRepository("openclaw-release-original-", "main");
+    writeFileSync(join(cwd, "shared.txt"), "main\n");
+    const main = commitAll(cwd, "fix: durable  writes (#7)");
+    const mainNode = {
+      baseRefName: "main",
+      mergedAt: "2026-07-12T00:00:00Z",
+      mergeCommit: { oid: main },
+    };
+    const cases = [
+      {
+        subject: "fix: renamed original",
+        body: "(cherry picked from commit " + main + ")",
+        shared: true,
+      },
+      {
+        subject: "fix: renamed original",
+        body: "Backport of #7 to release/2026.7.1.",
+        shared: true,
+      },
+      { subject: "fix: durable writes", body: "", shared: true },
+      {
+        subject: "fix: independent original",
+        body: "(cherry picked from commit " + main + ")",
+        shared: false,
+      },
+    ];
+    for (const [index, scenario] of cases.entries()) {
+      git(cwd, ["checkout", "-qb", "release/case-" + index, base]);
+      writeFileSync(join(cwd, scenario.shared ? "shared.txt" : "independent.txt"), "release\n");
+      const source = commitAll(cwd, scenario.subject + "\n\n" + scenario.body);
+      const node = {
+        __typename: "PullRequest",
+        baseRefName: "release/2026.7.1",
+        mergedAt: mainNode.mergedAt,
+        mergeCommit: { oid: source },
+      };
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `import { validateReleaseProvenanceOverrides as validate } from ${JSON.stringify(verifier)};
+const { source, node, main, mainNode } = ${JSON.stringify({ source, node, main, mainNode })};
+validate(new Map([[source, [9]]]), new Map([[9, node]]), main, undefined, () => new Map([[7, mainNode]]));`,
+        ],
+        { cwd, encoding: "utf8" },
+      );
+      if (scenario.shared) {
+        expect(result.stderr).toContain("references invalid source PR #9");
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+      }
+    }
   });
 
   it("validates release provenance PRs that shipped-ref subtraction left unresolved", () => {
@@ -763,7 +820,7 @@ Release provenance for ${hash} -> #3`
     expect(() => validate(mainNode)).not.toThrow();
     expect(requested).toEqual([[104905]]);
     for (const node of [{ ...mainNode, baseRefName: "release/2026.7.1" }, undefined]) {
-      expect(() => validate(node)).toThrow("references non-main PR #104905");
+      expect(() => validate(node)).toThrow("references invalid source PR #104905");
     }
   });
 

@@ -23,6 +23,7 @@ import {
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
+import { controlUiBenchOrder } from "./lib/control-ui-bench-order.ts";
 import {
   createChatComposerScenarios,
   installChatActionObservation,
@@ -126,10 +127,10 @@ if (cpuThrottle !== 1 && engines.includes("webkit")) {
   );
 }
 const networkProfiles = values["network-profiles"].split(",").map((name) => {
-  if (name !== "localhost" && name !== "rtt-100ms") {
+  if (name !== "localhost" && name !== "rtt-100ms" && name !== "rtt-250ms") {
     throw new Error(`Unsupported network profile: ${name}`);
   }
-  const latencyMs = name === "localhost" ? 0 : 100;
+  const latencyMs = name === "localhost" ? 0 : name === "rtt-100ms" ? 100 : 250;
   return { name, httpLatencyMs: latencyMs, gatewayLatencyMs: latencyMs };
 });
 type NetworkProfile = (typeof networkProfiles)[number];
@@ -240,6 +241,7 @@ type Observation = {
   step: string;
   bundle: number;
   pair: number;
+  position: number;
   status: "passed" | "failed" | "skipped";
   skipReason?: string;
   wallMs?: number;
@@ -382,6 +384,7 @@ try {
           "./lib/control-ui-engine-page-scenarios.ts",
           "./lib/control-ui-page-observer.ts",
           "./lib/control-ui-bench-gateway-server.ts",
+          "./lib/control-ui-bench-order.ts",
         ].map(async (file) => [
           file,
           createHash("sha256")
@@ -414,7 +417,7 @@ try {
         ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
         : "Untraced wall time; Chromium CDP counters only, unavailable WebKit counters are null",
     order:
-      "Serial network profile, engine and bundle order alternates each pair; fresh browser context per observation",
+      "Serial network profile and engine order alternates each pair; bundle positions rotate and reverse across pairs; fresh browser context per observation",
     acceptance:
       "Census ranks >1.3x WebKit/Chromium. Fix proof: ten interleaved pairs plus A/A control; median regression <=5% and p95 no worse, otherwise ten more pairs. Profile/CPU and structural counts decide on a noisy host; >20% attributable regression blocks.",
     frameCadence:
@@ -442,7 +445,7 @@ try {
     for (const item of scenarios) {
       for (let pair = 0; pair < pairs; pair++) {
         const orderedEngines = pair % 2 ? engines.toReversed() : engines;
-        const slots = pair % 2 ? [...servers.entries()].toReversed() : [...servers.entries()];
+        const slots = controlUiBenchOrder([...servers.entries()], pair);
         const orderedProfiles = pair % 2 ? networkProfiles.toReversed() : networkProfiles;
         for (const { networkProfile, engine } of orderedProfiles.flatMap((selectedProfile) =>
           orderedEngines.map((selectedEngine) => ({
@@ -450,7 +453,7 @@ try {
             engine: selectedEngine,
           })),
         )) {
-          for (const [bundle, slot] of slots) {
+          for (const [position, [bundle, slot]] of slots.entries()) {
             slot.server.setAssetLatencyMs(networkProfile.httpLatencyMs);
             const scenario =
               createEngineBootScenarios(slot.server.baseUrl, networkProfile.gatewayLatencyMs).find(
@@ -464,6 +467,7 @@ try {
               step: scenario.id,
               bundle,
               pair,
+              position,
               status: "failed",
               hostLoadAverage: os.loadavg(),
               artifactPrefix,
@@ -1082,7 +1086,7 @@ await writeFile(
           "",
           "## Per-page phases",
           "",
-          `CPU throttle: ${cpuThrottle}x (Chromium only). Long-task target: ${cpuThrottle === 1 ? 50 : 200} ms. CLS target: 0; all-shift sum also includes shifts within 500 ms of user input. Missing WebKit observer entries are unavailable, never zero. Inspector phases require a separate traced run and are elapsed wall time in WebKit, thread CPU in Chromium. Wall includes driver and assertions.`,
+          `CPU throttle: ${cpuThrottle}x (Chromium only). Long-task target: ${50 * cpuThrottle} ms. CLS target: 0; all-shift sum also includes shifts within 500 ms of user input. Missing WebKit observer entries are unavailable, never zero. Inspector phases require a separate traced run and are elapsed wall time in WebKit, thread CPU in Chromium. Wall includes driver and assertions.`,
           "",
           "Visit and departure comparisons use browser-local route readiness; content complete also waits for the fixture's full row/control counts. CPU and task collection spans both boundaries. Action comparisons above use native-input-to-commit timing.",
           "",

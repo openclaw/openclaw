@@ -281,8 +281,10 @@ With `--install-method git`, `install.sh` and `install-cli.sh` accept a full
 40-character commit SHA through `--version`. The installer uses the existing
 object or fetches that exact commit from `origin`, checks it out detached, and
 installs dependencies with a frozen lockfile. A branch with the same name cannot
-replace the requested commit. `--no-git-update` skips branch rebasing; it does not
-prevent fetching a missing requested commit. The install fails if the requested
+replace the requested commit. `--no-git-update` skips rebasing local `main` onto
+`origin/main`, but the installer still fetches `origin/main` when selecting
+that branch. Other branch and tag selectors still contact `origin`, and a
+missing requested commit is still fetched. The install fails if the requested
 object is unavailable or cannot resolve to a commit.
 
 ### Examples (install.sh)
@@ -333,7 +335,7 @@ object is unavailable or cannot resolve to a commit.
 | `--version <version\|dist-tag\|spec>`   | npm version, dist-tag, or package spec (default: `latest`)              |
 | `--beta`                                | Use beta dist-tag if available, else fall back to `latest`              |
 | `--git-dir \| --dir <path>`             | Checkout directory (default: `~/openclaw`)                              |
-| `--no-git-update`                       | Skip `git pull` for existing checkout                                   |
+| `--no-git-update`                       | Skip rebasing local `main`. Git fetches can still occur.                |
 | `--no-prompt`                           | Disable prompts                                                         |
 | `--no-onboard`                          | Skip onboarding                                                         |
 | `--onboard`                             | Enable onboarding                                                       |
@@ -355,7 +357,7 @@ object is unavailable or cannot resolve to a commit.
 | `OPENCLAW_BETA=0\|1`                              | Use beta if available                                              |
 | `OPENCLAW_HOME=<path>`                            | Base directory for OpenClaw state and default git/onboarding paths |
 | `OPENCLAW_GIT_DIR=<path>`                         | Checkout directory                                                 |
-| `OPENCLAW_GIT_UPDATE=0\|1`                        | Toggle git updates                                                 |
+| `OPENCLAW_GIT_UPDATE=0\|1`                        | Set to `0` to skip rebasing local `main`                           |
 | `OPENCLAW_NO_PROMPT=1`                            | Disable prompts                                                    |
 | `OPENCLAW_VERIFY_INSTALL=1`                       | Run the post-install smoke verify                                  |
 | `OPENCLAW_NO_ONBOARD=1`                           | Skip onboarding                                                    |
@@ -489,7 +491,7 @@ its existing service-refresh behavior.
 | `--npm`                                 | Shortcut for npm method                                                           |
 | `--git \| --github`                     | Shortcut for git method                                                           |
 | `--git-dir \| --dir <path>`             | Git checkout directory (default: `~/openclaw`)                                    |
-| `--no-git-update`                       | Skip `git pull` for an existing git checkout                                      |
+| `--no-git-update`                       | Skip rebasing local `main`. Git fetches can still occur.                          |
 | `--version <ver>`                       | OpenClaw version or dist-tag (default: `latest`)                                  |
 | `--compatible-with <ver>`               | Refuse a CLI that cannot modify config written by `<ver>`                         |
 | `--node-version <ver>`                  | Node version (default: `24.22.1`)                                                 |
@@ -513,7 +515,7 @@ its existing service-refresh behavior.
 | `OPENCLAW_NODE_VERSION=<ver>`               | Node version                                                       |
 | `OPENCLAW_HOME=<path>`                      | Base directory for OpenClaw state and default git/onboarding paths |
 | `OPENCLAW_GIT_DIR=<path>`                   | Git checkout directory for git installs                            |
-| `OPENCLAW_GIT_UPDATE=0\|1`                  | Toggle git updates for existing checkouts                          |
+| `OPENCLAW_GIT_UPDATE=0\|1`                  | Set to `0` to skip rebasing local `main`                           |
 | `OPENCLAW_NO_ONBOARD=1`                     | Skip onboarding                                                    |
 | `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice` | npm log level (default: `error`)                                   |
 
