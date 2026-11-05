@@ -8,7 +8,12 @@ import {
   createSocketServer,
   listenLoopback,
 } from "./desktop.test-support.js";
-import { classifyRfbSecurity, connectRfbServer, probeRfbServer } from "./rfb-probe.js";
+import {
+  buildVncAuthResponse,
+  classifyRfbSecurity,
+  connectRfbServer,
+  probeRfbServer,
+} from "./rfb-probe.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 const VERSION = Buffer.from("RFB 003.008\n");
@@ -94,6 +99,84 @@ describe("RFB server probe", () => {
   it("times out a server that never speaks", async () => {
     const port = await listenScriptedRfb(() => undefined);
     await expect(probe(port, 50)).resolves.toEqual({ kind: "timeout" });
+  });
+});
+
+describe("configured VncAuth probe", () => {
+  it("finishes the handshake before closing and rejects a wrong password", async () => {
+    const password = "secret12";
+    const challenge = Buffer.alloc(16, 4);
+    let incomplete = 0;
+    let authenticated = 0;
+    let rejected = 0;
+    const port = await listenScriptedRfb((socket) => {
+      const pending: Buffer[] = [];
+      let stage: "version" | "select" | "response" | "init" | "done" = "version";
+      let settled = false;
+      socket.on("close", () => {
+        if (!settled) {
+          incomplete += 1;
+        }
+      });
+      socket.on("data", (chunk) => {
+        pending.push(Buffer.from(chunk));
+        const body = Buffer.concat(pending).subarray(VERSION.length);
+        if (stage === "version" && Buffer.concat(pending).length >= VERSION.length) {
+          socket.write(OFFER);
+          stage = "select";
+        }
+        if (stage === "select" && body.length >= 1) {
+          socket.write(challenge);
+          stage = "response";
+        }
+        if (stage === "response" && body.length >= 17) {
+          const ok = body.subarray(1, 17).equals(buildVncAuthResponse(password, challenge));
+          const status = Buffer.alloc(4);
+          if (!ok) {
+            status.writeUInt32BE(1, 0);
+            const reason = Buffer.from("password rejected");
+            const length = Buffer.alloc(4);
+            length.writeUInt32BE(reason.length, 0);
+            socket.write(Buffer.concat([status, length, reason]));
+            rejected += 1;
+            settled = true;
+            stage = "done";
+            return;
+          }
+          socket.write(status);
+          stage = "init";
+        }
+        if (stage === "init" && body.length >= 18) {
+          const name = Buffer.from("desk");
+          const init = Buffer.alloc(24 + name.length);
+          init.writeUInt16BE(8, 0);
+          init.writeUInt16BE(8, 2);
+          init.writeUInt32BE(name.length, 20);
+          name.copy(init, 24);
+          socket.write(init);
+          authenticated += 1;
+          settled = true;
+          stage = "done";
+        }
+      });
+      socket.write(VERSION);
+    });
+
+    await expect(probe(port)).resolves.toEqual({ kind: "rfb", securityTypes: [2] });
+    await vi.waitFor(() => expect(incomplete).toBe(1));
+    expect(authenticated).toBe(0);
+
+    await expect(
+      probeRfbServer({ host: "127.0.0.1", port, timeoutMs: 2_000, vncPassword: password }),
+    ).resolves.toEqual({ kind: "rfb", securityTypes: [2] });
+    expect(authenticated).toBe(1);
+    expect(incomplete).toBe(1);
+
+    await expect(
+      probeRfbServer({ host: "127.0.0.1", port, timeoutMs: 2_000, vncPassword: "wrongpwd" }),
+    ).resolves.toEqual({ kind: "auth-rejected", reason: "password rejected" });
+    expect(rejected).toBe(1);
+    expect(incomplete).toBe(1);
   });
 });
 

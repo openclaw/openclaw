@@ -1,3 +1,4 @@
+import { createCipheriv } from "node:crypto";
 import net from "node:net";
 import { Duplex } from "node:stream";
 
@@ -8,9 +9,41 @@ const RFB_38_BANNER = Buffer.from("RFB 003.008\n", "ascii");
 
 export type RfbProbeResult =
   | { kind: "rfb"; securityTypes: number[] }
+  | { kind: "auth-rejected"; reason: string }
   | { kind: "not-rfb"; banner: string }
   | { kind: "unreachable" }
   | { kind: "timeout" };
+
+const MAX_RFB_REASON_BYTES = 1024;
+const MAX_RFB_DESKTOP_NAME_BYTES = 4096;
+const RFB_SERVER_INIT_BYTES = 24;
+
+class RfbAuthenticationRejected extends Error {
+  override name = "RfbAuthenticationRejected";
+}
+
+function reverseByteBits(value: number): number {
+  let input = value;
+  let output = 0;
+  for (let index = 0; index < 8; index += 1) {
+    output = (output << 1) | (input & 1);
+    input >>= 1;
+  }
+  return output;
+}
+
+/** RFB VncAuth response. Single DES is the wire primitive. */
+export function buildVncAuthResponse(password: string, challenge: Buffer): Buffer {
+  const key = Buffer.alloc(8);
+  Buffer.from(password, "utf8").copy(key, 0, 0, 8);
+  for (let index = 0; index < key.length; index += 1) {
+    key[index] = reverseByteBits(key[index] ?? 0);
+  }
+  // EDE with K1=K2 matches DES-ECB on OpenSSL builds that omit des-ecb.
+  const cipher = createCipheriv("des-ede", Buffer.concat([key, key]), null);
+  cipher.setAutoPadding(false);
+  return Buffer.concat([cipher.update(challenge), cipher.final()]);
+}
 
 /** Parses the fixed-width RFB ProtocolVersion banner without socket state. */
 export function parseRfbVersionBanner(buffer: Buffer):
@@ -170,7 +203,14 @@ export async function connectRfbServer(params: {
   timeoutMs: number;
   signal?: AbortSignal;
 }): Promise<
-  | { kind: "rfb"; securityTypes: number[]; stream: Duplex }
+  | {
+      kind: "rfb";
+      securityTypes: number[];
+      stream: Duplex;
+      protocolMinor: number;
+      versionReply: Buffer;
+      inspectedPrefixLength: number;
+    }
   | Exclude<RfbProbeResult, { kind: "rfb" }>
 > {
   params.signal?.throwIfAborted();
@@ -234,9 +274,17 @@ export async function connectRfbServer(params: {
     const stream = new ConnectedRfbStream(socket, version.reply);
     // The Gateway still receives the original RFB wire contract. Only its version
     // reply is consumed locally, since inspection already sent it to this peer.
-    socket.unshift(Buffer.concat([bannerBytes, securityBuffer]));
+    const inspectedPrefix = Buffer.concat([bannerBytes, securityBuffer]);
+    socket.unshift(inspectedPrefix);
     retained = true;
-    return { kind: "rfb", securityTypes, stream };
+    return {
+      kind: "rfb",
+      securityTypes,
+      stream,
+      protocolMinor: version.minor,
+      versionReply: version.reply,
+      inspectedPrefixLength: inspectedPrefix.length,
+    };
   } catch (error) {
     params.signal?.throwIfAborted();
     if (error instanceof SocketTimeoutError) {
@@ -252,18 +300,140 @@ export async function connectRfbServer(params: {
   }
 }
 
-/** Status-only inspection; streaming callers retain the connected result instead. */
+function writeStream(stream: Duplex, chunk: Buffer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    stream.write(chunk, (error) => (error ? reject(error) : resolve()));
+  });
+}
+
+function readStreamExactly(stream: Duplex, length: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let got = 0;
+    const finish = (error?: Error) => {
+      stream.off("data", onData);
+      stream.off("error", onError);
+      stream.off("end", onEnd);
+      stream.off("close", onEnd);
+      if (error) {
+        reject(error);
+      }
+    };
+    const onData = (chunk: Buffer) => {
+      chunks.push(chunk);
+      got += chunk.length;
+      if (got < length) {
+        return;
+      }
+      stream.pause();
+      finish();
+      const all = Buffer.concat(chunks);
+      const extra = all.subarray(length);
+      if (extra.length > 0) {
+        stream.unshift(extra);
+      }
+      resolve(all.subarray(0, length));
+    };
+    const onError = (error: Error) => {
+      finish(error);
+    };
+    const onEnd = () => {
+      finish(new SocketEndedError(Buffer.alloc(0)));
+    };
+    stream.on("data", onData);
+    stream.once("error", onError);
+    stream.once("end", onEnd);
+    stream.once("close", onEnd);
+    stream.resume();
+  });
+}
+
+/**
+ * TigerVNC blacklists a loopback client that disconnects after the security
+ * offer. A configured password has to finish VncAuth through ServerInit on
+ * that same socket before the probe closes it.
+ */
+async function finishConfiguredVncAuth(params: {
+  stream: Duplex;
+  versionReply: Buffer;
+  protocolMinor: number;
+  prefixLength: number;
+  password: string;
+}): Promise<void> {
+  const selection = params.protocolMinor < RFB_37_MINOR ? Buffer.alloc(0) : Buffer.from([2]);
+  await writeStream(params.stream, Buffer.concat([params.versionReply, selection]));
+  await readStreamExactly(params.stream, params.prefixLength);
+  const challenge = await readStreamExactly(params.stream, 16);
+  await writeStream(params.stream, buildVncAuthResponse(params.password, challenge));
+  const status = (await readStreamExactly(params.stream, 4)).readUInt32BE(0);
+  if (status !== 0) {
+    let reason = "";
+    if (params.protocolMinor >= RFB_37_MINOR) {
+      try {
+        const length = (await readStreamExactly(params.stream, 4)).readUInt32BE(0);
+        if (length > 0 && length <= MAX_RFB_REASON_BYTES) {
+          reason = (await readStreamExactly(params.stream, length)).toString("utf8");
+        }
+      } catch {
+        // A peer may close as soon as it sends the failure status.
+      }
+    }
+    throw new RfbAuthenticationRejected(reason || "VNC authentication failed");
+  }
+  // Shared ClientInit keeps an existing viewer attached while readiness checks the server.
+  await writeStream(params.stream, Buffer.from([1]));
+  const header = await readStreamExactly(params.stream, RFB_SERVER_INIT_BYTES);
+  const nameLength = header.readUInt32BE(20);
+  if (nameLength > MAX_RFB_DESKTOP_NAME_BYTES) {
+    throw new Error(`RFB desktop name is too large (${nameLength})`);
+  }
+  if (nameLength > 0) {
+    await readStreamExactly(params.stream, nameLength);
+  }
+}
+
+/** Status-only inspection. Streaming callers retain connectRfbServer instead. */
 export async function probeRfbServer(params: {
   host: "127.0.0.1";
   port: number;
   timeoutMs: number;
+  signal?: AbortSignal;
+  vncPassword?: string;
 }): Promise<RfbProbeResult> {
   const result = await connectRfbServer(params);
   if (result.kind !== "rfb") {
     return result;
   }
-  result.stream.destroy();
-  return { kind: "rfb", securityTypes: result.securityTypes };
+  if (!params.vncPassword || classifyRfbSecurity(result.securityTypes) !== "vnc-password") {
+    result.stream.destroy();
+    return { kind: "rfb", securityTypes: result.securityTypes };
+  }
+  const deadline = setTimeout(() => {
+    result.stream.destroy(new SocketTimeoutError("RFB handshake timed out"));
+  }, params.timeoutMs);
+  deadline.unref();
+  try {
+    await finishConfiguredVncAuth({
+      stream: result.stream,
+      versionReply: result.versionReply,
+      protocolMinor: result.protocolMinor,
+      prefixLength: result.inspectedPrefixLength,
+      password: params.vncPassword,
+    });
+    return { kind: "rfb", securityTypes: result.securityTypes };
+  } catch (error) {
+    params.signal?.throwIfAborted();
+    if (error instanceof RfbAuthenticationRejected) {
+      return { kind: "auth-rejected", reason: error.message };
+    }
+    if (error instanceof SocketTimeoutError) {
+      return { kind: "timeout" };
+    }
+    return { kind: "unreachable" };
+  } finally {
+    clearTimeout(deadline);
+    result.stream.destroy();
+  }
 }
 
 /** Maps standard RFB security numbers into the credential UX supported by OpenClaw. */

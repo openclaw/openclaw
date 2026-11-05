@@ -29,12 +29,36 @@ afterEach(async () => {
 async function listenRfb(params?: { banner?: string; securityTypes?: number[] }) {
   const shutdown = params ? cleanups : [];
   const { server } = createSocketServer(shutdown, (socket) => {
-    socket.write(Buffer.from(params?.banner ?? "RFB 003.008\n", "ascii"));
-    if (params?.securityTypes) {
-      socket.once("data", () => {
-        socket.write(Buffer.from([params.securityTypes!.length, ...params.securityTypes!]));
-      });
+    const banner = Buffer.from(params?.banner ?? "RFB 003.008\n", "ascii");
+    const securityTypes = params?.securityTypes;
+    socket.write(banner);
+    if (!securityTypes) {
+      return;
     }
+    socket.once("data", () => {
+      socket.write(Buffer.from([securityTypes.length, ...securityTypes]));
+      if (!securityTypes.includes(2)) {
+        return;
+      }
+      socket.once("data", (selection) => {
+        if (selection[0] !== 2) {
+          return;
+        }
+        socket.write(Buffer.alloc(16, 1));
+        socket.once("data", () => {
+          socket.write(Buffer.alloc(4));
+          socket.once("data", () => {
+            const name = Buffer.from("desk");
+            const init = Buffer.alloc(24 + name.length);
+            init.writeUInt16BE(1, 0);
+            init.writeUInt16BE(1, 2);
+            init.writeUInt32BE(name.length, 20);
+            name.copy(init, 24);
+            socket.write(init);
+          });
+        });
+      });
+    });
   });
   const port = await listenLoopback(server);
   if (!params) {
@@ -123,7 +147,7 @@ describe("gateway host desktop source", () => {
     } else {
       expect(inspection).toMatchObject({ state });
     }
-    expect(readFile).not.toHaveBeenCalled();
+    expect(readFile).toHaveBeenCalledWith("/nonexistent/desktop-password", "utf8");
     expect(config.enabled).toBe(false);
   });
 
@@ -219,6 +243,63 @@ describe("gateway host desktop source", () => {
       }
     },
   );
+
+  it("completes configured VncAuth for inspect and acquire before closing", async () => {
+    let abandoned = 0;
+    let finished = 0;
+    const { server } = createSocketServer(cleanups, (socket) => {
+      const pending: Buffer[] = [];
+      let stage = 0;
+      let done = false;
+      socket.on("close", () => {
+        if (!done) {
+          abandoned += 1;
+        }
+      });
+      socket.on("data", (chunk: Buffer) => {
+        pending.push(chunk);
+        const data = Buffer.concat(pending);
+        if (stage === 0 && data.length >= 12) {
+          socket.write(Buffer.from([1, 2]));
+          stage = 1;
+        }
+        if (stage === 1 && data.length >= 13) {
+          socket.write(Buffer.alloc(16, 3));
+          stage = 2;
+        }
+        if (stage === 2 && data.length >= 29) {
+          socket.write(Buffer.alloc(4));
+          stage = 3;
+        }
+        if (stage === 3 && data.length >= 30) {
+          const name = Buffer.from("desk");
+          const init = Buffer.alloc(24 + name.length);
+          init.writeUInt32BE(name.length, 20);
+          name.copy(init, 24);
+          socket.write(init);
+          finished += 1;
+          done = true;
+        }
+      });
+      socket.write(Buffer.from("RFB 003.008\n"));
+    });
+    const port = await listenLoopback(server);
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-desktop-"));
+    const passwordFile = path.join(root, "passwd");
+    await fs.writeFile(passwordFile, "desktop-secret\n");
+    cleanups.push(async () => {
+      await fs.rm(root, { recursive: true, force: true });
+    });
+    const config = { enabled: true, port, passwordFile };
+    await expect(inspectHostDesktop({ config })).resolves.toMatchObject({
+      status: { state: "attached", security: "VncAuth" },
+    });
+    await expect(
+      createHostDesktopSource({ config, platform: "linux" }).acquire(),
+    ).resolves.toMatchObject({ auth: "vnc-password", vncPassword: "desktop-secret" });
+    await vi.waitFor(() => expect(finished).toBe(2));
+    expect(abandoned).toBe(0);
+  });
 
   it("attaches ARD and keeps account credentials only in the observer token", async () => {
     const port = await listenRfb({ banner: "RFB 003.889\n", securityTypes: [30] });
