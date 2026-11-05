@@ -88,6 +88,7 @@ describe("Doctor shared auth health", () => {
       writePersistedAuthProfileStateRaw(
         {
           version: 1,
+          order: { "diagnostic-provider": [profileId] },
           usageStats: {
             [profileId]: { cooldownUntil: Date.now() + 600_000, cooldownReason: "session_expired" },
           },
@@ -123,6 +124,71 @@ describe("Doctor shared auth health", () => {
       );
     });
   });
+
+  it("reports an ordered profile absent from the effective store without repairing it", async () => {
+    await withFleet(async (state, cfg) => {
+      const agentDir = state.agentDir("alpha");
+      profiles({}, agentDir);
+      writePersistedAuthProfileStateRaw(
+        { version: 1, order: { "diagnostic-provider": [profileId] } },
+        agentDir,
+      );
+
+      expect(await collectAuthProfileHealthFindings({ cfg })).toEqual([
+        expect.objectContaining({
+          checkId: "core/doctor/auth-profiles",
+          severity: "warning",
+          category: "fix-now",
+          target: profileId,
+          path: resolveAuthProfileDatabasePath(agentDir),
+          message: expect.stringContaining("missing from the effective auth profile store"),
+          fixHint: expect.stringContaining("openclaw models auth list --agent alpha"),
+        }),
+      ]);
+      expect(await inspect(cfg, true)).toEqual([
+        expect.objectContaining({ target: profileId, severity: "warning" }),
+      ]);
+      expect(refreshProfile).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(["api_key", "token", "native-command", "credentialless"] as const)(
+    "does not warn for a healthy %s route",
+    async (kind) => {
+      await withFleet(async (state, cfg) => {
+        const agentDir = state.agentDir("alpha");
+        const stored = kind === "api_key" || kind === "token";
+        profiles(
+          kind === "api_key"
+            ? { [profileId]: { type: kind, provider: "diagnostic-provider", key: "test-key" } }
+            : kind === "token"
+              ? { [profileId]: { type: kind, provider: "diagnostic-provider", token: "test-token" } }
+              : {},
+          agentDir,
+        );
+        writePersistedAuthProfileStateRaw(
+          { version: 1, order: { "diagnostic-provider": stored ? [profileId] : [] } },
+          agentDir,
+        );
+        if (!stored) {
+          cfg.models = {
+            providers: {
+              "diagnostic-provider": {
+                baseUrl: "http://127.0.0.1:11434",
+                ...(kind === "native-command"
+                  ? { auth: "native-command", agentRuntime: { id: "codex" } }
+                  : { api: "ollama" }),
+                models: [],
+              },
+            },
+          };
+          await state.writeConfig(cfg);
+        }
+
+        expect(await collectAuthProfileHealthFindings({ cfg })).toEqual([]);
+      });
+    },
+  );
 
   it("reports a missing host profile without importing the native Codex account", async () => {
     await withFleet(async (state, cfg) => {
