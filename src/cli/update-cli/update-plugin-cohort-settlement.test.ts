@@ -151,12 +151,18 @@ async function supersededCohort(params: {
 }
 
 it.each([
-  ["pending", undefined],
-  ["refused rollback", { disposition: "rollback", settledPublications: 0 }],
+  ["pending", candidate, undefined],
+  ["refused rollback", candidate, { disposition: "rollback", settledPublications: 0 }],
+  // Deploying a repair build replaces the candidate's build ID but not the original's absence.
+  [
+    "refused rollback under a later build",
+    { version: candidate.version, buildId: "2026.10.11-repair" },
+    { disposition: "rollback", settledPublications: 0 },
+  ],
 ] as const)(
-  "settles a %s cohort forward when its verified candidate serves",
-  async (_label, recorded) => {
-    const f = await supersededCohort({ installed: candidate, servedCandidate: true, recorded });
+  "settles a %s cohort forward once its candidate verified serving",
+  async (_label, installed, recorded) => {
+    const f = await supersededCohort({ installed, servedCandidate: true, recorded });
     await f.settle();
     expect(loadPluginCohortRecovery(f.runId, f.options)).toBeUndefined();
     expect(await inspectPluginCohortRecoveryAdmission(f.options)).toBeUndefined();

@@ -1,5 +1,6 @@
 # PR #193132: update repair settles a verified candidate's plugin cohort forward.
-# Real SQLite fixtures cover the reported pending and refused-rollback shapes, plus
-# the three refusals that must hold: original core installed, candidate never
-# verified serving, and a rollback that already settled a publication.
-183
+# Real SQLite fixtures cover the reported pending and refused-rollback shapes, also
+# under a later repair build, plus the three refusals that must hold: original core
+# installed, candidate never verified serving, and a rollback that already settled
+# a publication.
+189

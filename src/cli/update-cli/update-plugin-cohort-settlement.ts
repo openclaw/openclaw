@@ -16,9 +16,9 @@ import {
 
 /**
  * Settle an interrupted run's saved plugin cohort under the caller's installation
- * ownership. Without a verified candidate, a pending cohort rolls back; finalization
- * then converges plugins to whichever core is installed. A recorded commit requires
- * its candidate.
+ * ownership. Unless its candidate verified serving and the original core is gone,
+ * a pending cohort rolls back; finalization then converges plugins to whichever core
+ * is installed. A recorded commit requires its candidate.
  */
 export async function settleInterruptedUpdatePluginCohort(params: {
   expected: PluginCohortRecoveryPair;
@@ -50,14 +50,15 @@ export async function settleInterruptedUpdatePluginCohort(params: {
       "Plugin cohort commit does not match the installed candidate version and build.",
     );
   }
-  // Once the candidate is installed and verified serving, rollback would only be
-  // converged forward again, and it refuses obligations its Doctor later decided.
-  // A rollback that has settled no publication has not changed candidate state.
+  // Rollback restores plugin state for the original core. Once the candidate has
+  // verified serving and the original core is no longer installed, rollback would
+  // only be converged forward again, and it refuses obligations a later Doctor
+  // decided. A rollback that has settled no publication has not changed state.
   const verification = getUpdateRun(current.cohort.runId, options)?.verification;
   const forward =
     current.cohort.disposition !== "commit" &&
     current.cohort.settledPublications === 0 &&
-    installed(to) &&
+    version !== null &&
     !installed(from) &&
     verification?.serviceRunning === true &&
     verification.versionMatch === true &&
