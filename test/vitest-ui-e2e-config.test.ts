@@ -60,6 +60,7 @@ const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecyc
   device-alias-rename.real-gateway device-platform-family.real-gateway logs-lifecycle model-api-keys.real-gateway
   model-catalog-partial-refresh.real-gateway model-connection-check.real-gateway
   model-key-save-check.real-gateway
+  model-provider-remove-in-use.real-gateway
   model-picker-search.real-gateway
   model-setup-provider-errors.real-gateway profile-page.real-gateway
   provider-browser-login.real-gateway quota-reset-status.real-gateway
