@@ -909,3 +909,103 @@ it("does not submit input after abort wins an awaited conversion", async () => {
   expect(steer).not.toHaveBeenCalled();
   expect(agent.cancelSteeringMessage((message) => message === update)).toBe(update);
 });
+
+it("interrupts safe tools, waits for their cleanup, and continues with ordered steering", async () => {
+  const started = createDeferred();
+  const aborted = createDeferred();
+  const cleanup = createDeferred();
+  const observedSignals: AbortSignal[] = [];
+  const first = user("first correction", 2);
+  const second = user("second correction", 3);
+  const { agent, requests, events } = makeAgent(
+    [
+      {
+        ...makeTool("wait"),
+        interruptible: true,
+        execute: async (_id, _args, signal) => {
+          if (!signal) {
+            throw new Error("Agent calls must carry their cancellation signal");
+          }
+          observedSignals.push(signal);
+          if (observedSignals.length === 1) {
+            signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+            started.resolve();
+            await aborted.promise;
+            await cleanup.promise;
+            throw signal.reason;
+          }
+          return emptyResult();
+        },
+      },
+    ],
+    { steeringMode: "all" },
+    [[makeCall("wait", "before")], [makeCall("wait", "after")], done],
+  );
+  const run = agent.prompt("start");
+  await started.promise;
+  agent.steer(first);
+  agent.steer(second);
+  expect(agent.hasPendingSteeringMessage((message) => message === second)).toBe(true);
+  expect(agent.interruptTools()).toEqual({
+    status: "interrupted",
+    tools: [{ toolCallId: "before", toolName: "wait" }],
+  });
+  await aborted.promise;
+  expect(agent.signal?.aborted).toBe(false);
+  expect(requests).toHaveLength(1);
+  expect(agent.hasPendingSteeringMessage((message) => message === first)).toBe(true);
+  cleanup.resolve();
+  await run;
+  expect(requests[1]?.slice(-2)).toEqual([first, second]);
+  expect(requests[1]).toContainEqual(
+    expect.objectContaining({
+      role: "toolResult",
+      toolCallId: "before",
+      isError: true,
+      content: text("Interrupted by the user to send a pending message."),
+    }),
+  );
+  expectInjectedOnce(events, first);
+  expectInjectedOnce(events, second);
+  expect(observedSignals.map((signal) => signal.aborted)).toEqual([true, false]);
+  expect(agent.hasPendingSteeringMessage((message) => message === first)).toBe(false);
+  expect(agent.interruptTools()).toEqual({ status: "idle", tools: [] });
+  expect(agent.state.messages.at(-1)).toMatchObject({ role: "assistant", content: done });
+});
+
+it("reports a non-interruptible sibling without aborting any parallel tool", async () => {
+  const running = createDeferred();
+  const finish = createDeferred();
+  const signals: AbortSignal[] = [];
+  const { agent } = makeAgent(
+    [true, false].map((safe) => {
+      const tool = makeTool(safe ? "safe" : "blocked");
+      tool.interruptible = () => safe;
+      tool.execute = async (_id, _args, signal) => {
+        if (!signal) {
+          throw new Error("Agent calls must carry their cancellation signal");
+        }
+        signals.push(signal);
+        if (signals.length === 2) {
+          running.resolve();
+        }
+        await finish.promise;
+        return emptyResult();
+      };
+      return tool;
+    }),
+  );
+  const run = agent.prompt("start");
+  await running.promise;
+  expect(agent.getToolInterruptionStatus()).toEqual({
+    interruptible: [{ toolCallId: "safe", toolName: "safe" }],
+    blocked: [{ toolCallId: "blocked", toolName: "blocked" }],
+  });
+  expect(agent.interruptTools()).toEqual({
+    status: "blocked",
+    tools: [{ toolCallId: "blocked", toolName: "blocked" }],
+  });
+  expect(signals.some((signal) => signal.aborted)).toBe(false);
+  finish.resolve();
+  await run;
+});

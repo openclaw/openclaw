@@ -3,16 +3,21 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
   CHAT_INPUT_RUN_ID_MAX_CHARS,
+  CHAT_PENDING_INPUT_MESSAGE_PREFIX,
 } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import type {
   ChatInputReceipts,
   ChatPendingInputsDismissResult,
   ChatPendingInputsPage,
+  ChatSteerNowResult,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatItem, ChatQueueDisplayItem } from "../../lib/chat/chat-types.ts";
-import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
+import {
+  findChatSubmissionMessage,
+  readChatThreadMessageIdentity,
+} from "../../lib/chat/history-message-identity.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -25,7 +30,10 @@ import {
   removeQueuedMessage,
 } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { describeChatQueueAttachmentLabels } from "./chat-send-presentation.ts";
+import {
+  describeChatQueueAttachmentLabels,
+  describePendingSteerWait,
+} from "./chat-send-presentation.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { buildMessageItems } from "./chat-thread-items.ts";
@@ -413,6 +421,37 @@ export function loadChatPendingInputs(state: ChatState, before?: number): Promis
   return requestPendingInputPage(state, before, "navigation");
 }
 
+export async function sendPendingSteerNow(state: ChatState, runId: string): Promise<void> {
+  const view = getChatPendingInputs(state);
+  const client = state.client;
+  if (!view?.sessionId || !client || !state.connected) {
+    return;
+  }
+  const ownsConnection = captureChatConnectionOwner(state, false);
+  const current = () => ownsConnection() && getChatPendingInputs(state) === view;
+  try {
+    const result = await client.request<ChatSteerNowResult>("chat.steerNow", {
+      sessionKey: view.sessionKey,
+      sessionId: view.sessionId,
+      ...(view.agentId ? { agentId: view.agentId } : {}),
+      runId,
+    });
+    if (!current()) {
+      return;
+    }
+    await requestPendingInputPage(state, view.before, "refresh");
+    if (current() && (result.status === "blocked" || result.status === "unavailable")) {
+      view.error = describePendingSteerWait(result.tools);
+      chatRunPresentation(state).publish();
+    }
+  } catch (error) {
+    if (current()) {
+      view.error = formatUiError(error);
+      chatRunPresentation(state).publish();
+    }
+  }
+}
+
 /** Hide the selected retired inputs at once, then keep or restore them by the Gateway outcome. */
 export async function dismissChatPendingInputs(
   state: ChatState,
@@ -474,4 +513,26 @@ export async function dismissChatPendingInputs(
       chatRunPresentation(state).publish();
     }
   }
+}
+
+export function createPendingSteerLookup(inputs: ChatPendingInputsPage["items"] | undefined) {
+  const pendingSteers = new Map(
+    (inputs ?? []).flatMap((input) =>
+      input.steerNow && input.runId
+        ? ([
+            [input.runId, input],
+            [`${CHAT_PENDING_INPUT_MESSAGE_PREFIX}${input.id}`, input],
+          ] as const)
+        : [],
+    ),
+  );
+  return (message: unknown) => {
+    if (!pendingSteers.size) {
+      return undefined;
+    }
+    const identity = readChatThreadMessageIdentity(message);
+    return identity?.role === "user"
+      ? pendingSteers.get(identity.sendId ?? identity.id ?? "")
+      : undefined;
+  };
 }

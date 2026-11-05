@@ -502,7 +502,6 @@
 
 :is(.chat-group-footer-actions, .chat-message-actions-row)
   :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind),
-.chat-group-footer .chat-send-status__action,
 .chat-comment-preview__actions button {
   background: none;
   border: none;
@@ -697,24 +696,28 @@
   color: var(--muted);
 }
 
-.chat-group-footer .chat-send-status__action {
-  width: auto;
-  min-width: 0;
-  min-height: 0;
+.chat-send-status__action {
   padding: 0;
+  border: 0;
   border-radius: 0;
-  color: var(--link);
-  font: inherit;
-  opacity: 1 !important;
+  background: none;
   pointer-events: auto;
 }
 
-.chat-group-footer .chat-send-status__discard {
+.chat-send-status__retry {
+  color: var(--link);
+}
+
+.chat-send-status__discard {
   color: var(--muted);
 }
 
-.chat-group-footer .chat-send-status__action:hover {
+.chat-send-status__action:hover {
   text-decoration: underline;
+}
+
+.chat-steer-now {
+  margin-block-start: 4px;
 }
 
 /* Chat divider (e.g., compaction marker) */

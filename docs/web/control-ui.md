@@ -374,6 +374,16 @@ non-success outcomes remain visible even when collapsed, such as
 Still-streaming assistant text stays at the bottom of its run, below saved output, and
 takes its transcript position once saved.
 
+While steering waits for a running tool, the message appears as an ordinary user
+bubble with a small **Send now** link underneath. Session writers can click it to
+interrupt supported running tools and deliver the waiting steer sooner, keeping
+the same agent run alive. The model receives a tool result explaining the user
+interruption. The link disappears when the steer is injected. Tools that cannot
+be interrupted safely, and runtimes without tool interruption, show a quiet
+waiting explanation instead of an action.
+This includes Code Mode aggregate tools and native or remote backends, which
+do not support tool-only interruption.
+
 Accepted steering messages keep their saved transcript positions. Earlier saved
 output stays above the message; later answers and live output appear below it,
 including when the same run continues after steering. Reloading or reconnecting

@@ -231,6 +231,15 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           userTurnRecorder,
           beginCapturedMessageInjection,
         );
+        void messageInjectionAttempt?.acceptance.then(
+          (accepted) => {
+            if (accepted) {
+              const change = { sessionKey, agentId, reason: "agent.input.steering" };
+              emitSessionsChanged(context, change, { accessChanged: false });
+            }
+          },
+          () => undefined,
+        );
         injectionPhase?.mark("detail.run_admission.steer_settlement");
         acceptedMessageInjection = await settleChatSendMessageInjection(messageInjectionAttempt);
         messageInjectionAttempt = await injectionDisposition.observe(messageInjectionAttempt);

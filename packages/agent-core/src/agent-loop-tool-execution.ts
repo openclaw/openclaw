@@ -20,6 +20,7 @@ import {
   type AgentToolExecutionContext,
   runWithAgentToolExecutionContext,
 } from "./tool-execution-context.js";
+import { USER_TOOL_INTERRUPTION_MESSAGE, type ToolInterruptions } from "./tool-interruption.js";
 import type { AgentTool, AgentToolCall, AgentToolResult, ToolLoopIntervention } from "./types.js";
 import { validateToolArguments } from "./validation.js";
 
@@ -79,13 +80,29 @@ export type PreparedToolCallExecution =
   | { kind: "immediate"; outcome: ExecutedToolCallOutcome }
   | ReadyToolCallExecution;
 
+function interruptedResult(result?: AgentToolResult<unknown>): AgentToolResult<unknown> {
+  return {
+    content: [...(result?.content ?? []), { type: "text", text: USER_TOOL_INTERRUPTION_MESSAGE }],
+    details: { status: "interrupted", reason: "user_steer", partialResult: result?.details },
+  };
+}
+
 export async function prepareToolCallExecution(
   prepared: PreparedToolCall,
   executionContext: AgentToolExecutionContext,
-  signal: AbortSignal | undefined,
+  runSignal: AbortSignal | undefined,
   emit: AgentEventSink,
   isLocalError?: AgentCoreStreamRuntimeDeps["isLocalError"],
+  interruptions?: ToolInterruptions,
 ): Promise<PreparedToolCallExecution> {
+  const interruption = interruptions?.register(
+    prepared.toolCall,
+    prepared.tool.interruptible === true ||
+      (typeof prepared.tool.interruptible === "function" &&
+        prepared.tool.interruptible(prepared.args)),
+    runSignal,
+  );
+  const signal = interruption?.signal ?? runSignal;
   const updateEvents: Promise<void>[] = [];
   let acceptingUpdates = true;
   let pendingInput = executionContext.pendingInput;
@@ -116,6 +133,7 @@ export async function prepareToolCallExecution(
       : undefined,
   };
   const closeUpdates = () => {
+    interruption?.dispose();
     acceptingUpdates = false;
     scopedExecutionContext.pendingInput = undefined;
     pendingInput = undefined;
@@ -190,7 +208,9 @@ export async function prepareToolCallExecution(
         try {
           if (signal?.aborted) {
             return {
-              result: createErrorToolResult("Operation aborted"),
+              result: interruption?.interrupted
+                ? interruptedResult()
+                : createErrorToolResult("Operation aborted"),
               isError: true,
               executionStarted: false,
             };
@@ -208,7 +228,14 @@ export async function prepareToolCallExecution(
             if (implementationStartError) {
               throw implementationStartError.error;
             }
-            return { result, isError: false, executionStarted };
+            return interruption?.interrupted
+              ? {
+                  result: interruptedResult(result),
+                  isError: true,
+                  executionStarted,
+                  callerCancelled: true,
+                }
+              : { result, isError: false, executionStarted };
           } catch (error) {
             if (implementationStartError?.error instanceof InternalToolLoopBlocked) {
               const { intervention } = implementationStartError.error;
@@ -231,10 +258,13 @@ export async function prepareToolCallExecution(
               throw error;
             }
             return {
-              result: createToolExecutionErrorResult(error),
+              result: interruption?.interrupted
+                ? interruptedResult()
+                : createToolExecutionErrorResult(error),
               isError: true,
               executionStarted,
-              ...(executionStarted && signal?.aborted && error === signal.reason
+              ...(executionStarted &&
+              (interruption?.interrupted || (signal?.aborted && error === signal.reason))
                 ? { callerCancelled: true }
                 : {}),
             };
@@ -286,7 +316,9 @@ export async function prepareToolCallExecution(
     return {
       kind: "immediate",
       outcome: {
-        result: createToolExecutionErrorResult(error),
+        result: interruption?.interrupted
+          ? interruptedResult()
+          : createToolExecutionErrorResult(error),
         isError: true,
         executionStarted: false,
       },
@@ -308,8 +340,17 @@ export async function prepareToolCallExecution(
     }
     return {
       kind: "immediate",
-      outcome:
-        internalPreparation.outcome.kind === "result"
+      outcome: interruption?.interrupted
+        ? {
+            result: interruptedResult(
+              internalPreparation.outcome.kind === "result"
+                ? internalPreparation.outcome.result
+                : undefined,
+            ),
+            isError: true,
+            executionStarted: false,
+          }
+        : internalPreparation.outcome.kind === "result"
           ? {
               result: internalPreparation.outcome.result,
               isError: internalPreparation.outcome.isError,

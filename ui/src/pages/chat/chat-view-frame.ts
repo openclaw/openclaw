@@ -24,6 +24,7 @@ import {
   dismissChatPendingInputs,
   getChatPendingInputs,
   isPendingInputDismissHidden,
+  sendPendingSteerNow,
 } from "./chat-pending-inputs.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
@@ -63,6 +64,7 @@ export type ChatProps = Omit<
   | "onRetryQueuedMessage"
   | "onDiscardQueuedMessage"
   | "onDismissPendingInput"
+  | "onSteerNow"
   | "onFocusComposer"
   | "commentAttachments"
   | "commentsDisabled"
@@ -100,6 +102,7 @@ export type ChatProps = Omit<
     historyState?: ChatState;
     /** Session access presentation for dismissing retired inputs; independent of model availability. */
     canDismissPendingInputs?: boolean;
+    canSteerNow?: boolean;
     environmentStartStatus?: import("../../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
     providerPolicyNotice?: ProviderPolicyNotice | null;
     // Resolve after the first pane frame prepares the Solid owner's permission facts.
@@ -288,6 +291,10 @@ export function createChatViewFrame(
     onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
     onDiscardQueuedMessage: props.onQueueRemove,
     onDismissPendingInput: dismissPendingInput,
+    onSteerNow:
+      props.connected && props.canSteerNow && historyState
+        ? (runId: string) => void sendPendingSteerNow(historyState, runId)
+        : undefined,
     onCompanionSelection:
       props.canSend && !props.suggestionComposer && props.onCompanionStageAttachment
         ? (selection, anchorRect) =>

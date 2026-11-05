@@ -1,3 +1,4 @@
+import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
@@ -54,4 +55,5 @@ export type RenderMessageGroupOptions = Omit<
     frameContent?: readonly unknown[];
     frameActionOwner?: MessageGroup["messages"][number] | null;
     latestAssistant?: boolean;
+    pendingSteer?: (message: unknown) => ChatPendingInputsPage["items"][number] | undefined;
   } & MessageReactionOptions;

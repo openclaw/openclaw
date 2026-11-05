@@ -13,6 +13,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
+import { canInterruptExec } from "./bash-tools.exec-target.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import {
   createExecCompletionSchema,
@@ -67,6 +68,7 @@ export function createLazyExecTool(
     {
       name: "exec",
       label: "exec",
+      interruptible: (args) => canInterruptExec(args, defaults),
       displaySummary: presentation?.displaySummary ?? EXEC_TOOL_DISPLAY_SUMMARY,
       getExecutionTimeoutMs: createExecToolExecutionTimeoutResolver(defaults),
       get description() {
