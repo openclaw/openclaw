@@ -226,6 +226,7 @@ export type CreateUserTurnTranscriptRecorderParams = {
 
 type UserTurnPersistenceOptions = {
   target?: UserTurnTranscriptTargetResolver;
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   /** Pin admitted storage without replacing the recorder's target resolver or metadata. */
   storageTarget?: Readonly<
     Pick<UserTurnTranscriptTarget, "agentId" | "sessionKey" | "sessionId"> & { storePath: string }
@@ -306,7 +307,6 @@ export type UserTurnTranscriptRecorder = {
     params?: UserTurnPersistenceOptions & {
       expectedSessionId?: string;
       expectedSessionState?: SessionTranscriptTurnExpectedState;
-      sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
       beforeFreshMessageCommit?: SessionSourceAssertion;
       /** Allow a later explicit persistence attempt when this attempt appends nothing. */
       retryIfUnpersisted?: boolean;
