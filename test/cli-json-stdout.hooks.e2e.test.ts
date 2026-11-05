@@ -44,7 +44,6 @@ describe("cli json stdout contract", () => {
       name: "blank parent agent",
       args: ["hooks", "--agent", "", "--json", "list"],
       message: "--agent must not be blank",
-      genericStderr: true,
     },
     {
       name: "human report",
@@ -194,12 +193,7 @@ describe("cli json stdout contract", () => {
             ...("missingHook" in testCase ? { hook: "missing-hook" } : {}),
           });
           if (!("missingHook" in testCase)) {
-            if ("genericStderr" in testCase) {
-              expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-              expect(result.stderr).not.toContain(message);
-            } else {
-              expect(result.stderr).toContain(message);
-            }
+            expect(result.stderr).toContain(message);
           }
         }
         expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");

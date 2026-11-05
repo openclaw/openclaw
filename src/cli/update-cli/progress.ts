@@ -35,8 +35,18 @@ const activeUpdateProgress = new Map<
   {
     finish: (record: UpdateRunRecord | undefined) => void;
     pause: () => void;
+    suspendForDoctor: () => Promise<() => void>;
   }
 >();
+
+/**
+ * Update Doctor children take exclusive SQLite custody of shared state. Any open
+ * parent reader blocks that lock, so observation stops, and its in-flight read
+ * settles, before the caller closes parent handles and spawns the child.
+ */
+export async function suspendUpdateProgressForDoctor(runId: string): Promise<() => void> {
+  return (await activeUpdateProgress.get(runId)?.suspendForDoctor()) ?? (() => {});
+}
 const UPDATE_PROGRESS_POLL_MS = 250;
 const UPDATE_STEP_NOTICE_MS = 30_000;
 
@@ -87,6 +97,7 @@ export function createUpdateProgress(
   let stepNotice: ReturnType<typeof setInterval> | undefined;
   let currentRecord: UpdateRunRecord | undefined;
   let pendingRead: AbortController | undefined;
+  let pendingPoll: Promise<void> | undefined;
   let polling = true;
   let observation: "active" | "suspended" | "disposed" = "active";
   const seenPhases = new Set<UpdateRunPhase>();
@@ -173,18 +184,45 @@ export function createUpdateProgress(
     } finally {
       pendingRead = undefined;
       if (polling && observation === "active") {
-        timer = setTimeout(() => void poll(), UPDATE_PROGRESS_POLL_MS);
+        timer = setTimeout(startPoll, UPDATE_PROGRESS_POLL_MS);
         timer.unref?.();
       }
     }
   };
+  const startPoll = () => {
+    pendingPoll = poll();
+  };
+  const suspend = () => {
+    if (observation === "active") {
+      observation = "suspended";
+      currentRecord = undefined;
+      pausePolling();
+      stop();
+    }
+  };
+  const resume = () => {
+    if (observation === "suspended") {
+      observation = "active";
+      polling = true;
+      startPoll();
+    }
+  };
   if (run) {
-    void poll();
+    startPoll();
     activeUpdateProgress.set(run.runId, {
       finish: finalize,
       pause: () => {
         pausePolling();
         stop();
+      },
+      suspendForDoctor: async () => {
+        // Another owner's suspension stays theirs to resume.
+        if (observation !== "active") {
+          return () => {};
+        }
+        suspend();
+        await pendingPoll;
+        return resume;
       },
     });
   }
@@ -215,21 +253,8 @@ export function createUpdateProgress(
   return {
     progress,
     stop,
-    suspend: () => {
-      if (observation === "active") {
-        observation = "suspended";
-        currentRecord = undefined;
-        pausePolling();
-        stop();
-      }
-    },
-    resume: () => {
-      if (observation === "suspended") {
-        observation = "active";
-        polling = true;
-        void poll();
-      }
-    },
+    suspend,
+    resume,
     dispose: () => finalize(currentRecord, true),
   };
 }
@@ -291,6 +316,7 @@ export async function prepareResult(
     nextAction?: string;
     record?: UpdateRunRecord;
     readHistory?: boolean;
+    writeArtifacts?: boolean;
   } = {},
   assertCurrent?: () => void,
 ): Promise<(additionalSteps?: readonly UpdateStepResult[]) => void> {
@@ -325,7 +351,7 @@ export async function prepareResult(
     return report;
   };
   const reportPath =
-    result.reason === "dry-run"
+    reportHints.writeArtifacts === false
       ? undefined
       : await writeUpdateRunReportArtifact({
           result,

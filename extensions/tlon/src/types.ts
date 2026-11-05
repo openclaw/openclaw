@@ -28,6 +28,7 @@ export type TlonResolvedAccount = {
   /** Ships allowed to invite us to groups (security: prevent malicious group invites) */
   groupInviteAllowlist: string[];
   autoDiscoverChannels: boolean | null;
+  crossChannelCitations: boolean | null;
   showModelSignature: boolean | null;
   autoAcceptDmInvites: boolean | null;
   autoAcceptGroupInvites: boolean | null;
@@ -93,6 +94,7 @@ export function resolveTlonAccount(
     dmAllowlist: merged.dmAllowlist ?? [],
     groupInviteAllowlist: merged.groupInviteAllowlist ?? [],
     autoDiscoverChannels: merged.autoDiscoverChannels ?? null,
+    crossChannelCitations: merged.crossChannelCitations ?? null,
     showModelSignature: merged.showModelSignature ?? null,
     autoAcceptDmInvites: merged.autoAcceptDmInvites ?? null,
     autoAcceptGroupInvites: merged.autoAcceptGroupInvites ?? null,

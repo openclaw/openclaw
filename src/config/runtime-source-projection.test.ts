@@ -142,3 +142,41 @@ it("keeps a source-free capture pinned when its mutable origin later matches the
   setSnapshot({ gateway: { port: 19003 } }, source);
   expect(read()).toBe(pinned);
 });
+
+const pluginRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+const pluginConfig = (apiKey: unknown, meta?: object) =>
+  ({
+    plugins: { entries: { secretful: { enabled: true, config: { apiKey } } } },
+    ...(meta ? { meta } : {}),
+  }) as OpenClawConfig;
+const pluginSource = (config: OpenClawConfig) =>
+  projectSource(config).plugins?.entries?.secretful?.config;
+
+it("keeps an older runtime generation on its own published source", () => {
+  const held = pluginConfig("resolved-key");
+  setSnapshot(held, pluginConfig(pluginRef("PLUGIN_KEY")));
+  // A later config write adds top-level metadata the held generation never had.
+  setSnapshot(
+    pluginConfig("resolved-key", { lastTouchedVersion: "x" }),
+    pluginConfig(pluginRef("PLUGIN_KEY"), { lastTouchedVersion: "x" }),
+  );
+  expect(pluginSource(held)).toEqual({ apiKey: pluginRef("PLUGIN_KEY") });
+  // A rebuild still captures an isolated, frozen pair from the held generation.
+  const captured = capture(held);
+  expect(captured).not.toBe(held);
+  expect(Object.isFrozen(captured)).toBe(true);
+  expect(pluginSource(captured)).toEqual({ apiKey: pluginRef("PLUGIN_KEY") });
+});
+
+it("follows a newer source republished for the same runtime object", () => {
+  const runtime = pluginConfig("resolved-key");
+  setSnapshot(runtime, pluginConfig(pluginRef("PLUGIN_KEY_A")));
+  setSnapshot(runtime, pluginConfig(pluginRef("PLUGIN_KEY_B")));
+  expect(pluginSource(runtime)).toEqual({ apiKey: pluginRef("PLUGIN_KEY_B") });
+  setSnapshot(pluginConfig("resolved-key", { lastTouchedVersion: "x" }));
+  expect(pluginSource(runtime)).toEqual({ apiKey: pluginRef("PLUGIN_KEY_B") });
+  // Republishing without a source makes the runtime object its own source again.
+  setSnapshot(runtime);
+  expect(pluginSource(runtime)).toEqual({ apiKey: "resolved-key" });
+  expect(pluginSource(capture(runtime))).toEqual({ apiKey: "resolved-key" });
+});

@@ -79,7 +79,9 @@ suite.define(() => {
         }
       });
       await expect
-        .poll(() => picker.getByRole("searchbox").evaluate((element) => element.matches(":focus")))
+        .poll(() =>
+          picker.locator(".header-search__toggle").evaluate((element) => element.matches(":focus")),
+        )
         .toBe(true);
       const profile = picker.locator('[data-value="cloud:aws"]');
       await profile[input]();
@@ -139,7 +141,7 @@ suite.define(() => {
     await expect
       .poll(() => tooltipTitleText(profile))
       .toBe(
-        "Cloud worker provider: crabbox, The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
+        "Cloud provider: crabbox, The codex runtime can’t use this cloud device. Choose a compatible cloud device or run on this computer.",
       );
     await page.keyboard.press("Escape");
 

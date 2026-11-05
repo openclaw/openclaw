@@ -62,6 +62,13 @@ ancestry. A Git permission failure can fall back to GraphQL only for a linear
 range; a merge preserves the original Git failure instead. Uncertain outcomes
 never authorize another publication.
 
+The explicit pending-proof publication purpose always requires the original
+signed Git commit. It rejects unsigned overrides and GraphQL commit aliases,
+including permission-error fallback. Its canonical landing observation must
+show no auto-merge request or queue membership before publication; missing facts
+refuse. This purpose produces publication evidence only, leaving the correction
+review and ordinary landing gates unresolved.
+
 Ordinary immediate squash prefers REST. Explicit recovery of a validated retained
 intent starts with GraphQL; normal fallback and immediate-only recovery gates
 still apply. Admission reads switch transports only

@@ -158,7 +158,14 @@ native output are excluded.
 
 ## Node and global install permissions
 
-If package recovery reports `nlink=2` (or another value above 1), let updater
+An updater containing the completed-journal repair automatically archives a
+multiply linked receipt from a completed, verified package update and reports a
+warning before continuing. Recovery evidence is preserved, not deleted. Runtime
+retention copies owner-private files so their link count and recovery fingerprint
+stay unchanged. In-flight recovery still requires a single-link journal; the
+completion receipt cannot authorize publication or rollback.
+
+If an older updater or in-flight package recovery reports `nlink=2` (or another value above 1), let updater
 workers finish, then run `openclaw doctor --fix` from the affected installation.
 Doctor can reclaim an abandoned updater runtime, including one retained in an
 npm prefix's `lib/` directory, and release its extra journal link. Then retry

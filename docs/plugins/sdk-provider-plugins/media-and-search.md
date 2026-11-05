@@ -106,7 +106,7 @@ merging a nested value such as voice settings.
     and embedding-cache identities.
 
     The returned `runtime` can set `inlineIndexConcurrency` to cap how many
-    inline embedding requests memory indexing sends at once. Use a positive safe
+    non-batch file indexing jobs memory runs at once. Use a positive safe
     integer; omit it to keep the host default of 4. Invalid declarations are
     ignored, and provider batch jobs keep their own concurrency. Servers that
     answer requests in arrival order on the same host, such as Ollama and the
@@ -362,6 +362,10 @@ merging a nested value such as voice settings.
     requests and check cancellation after asynchronous work. Existing
     one-argument implementations remain valid; OpenClaw rejects late fetch
     results after cancellation before publishing them to its fetch cache.
+
+    Forward the same signal to `resolveCitationRedirectUrl(url, signal)` when
+    enriching search citations. Caller cancellation rejects with its original
+    reason; ordinary redirect failures and timeouts keep the original URL.
 
   </Tab>
 </Tabs>

@@ -100,27 +100,26 @@ export function* decodeSseFrames(limit?: {
         break;
       }
     }
-    const pending = buffer.slice(start);
     // Scan only new text plus the maximum delimiter overlap; scanning an ever-growing
     // concatenated string would flatten/copy the entire pending frame on every read.
     // Keep only trailing newline characters, so UTF-8 length accounting never
     // splits a surrogate pair between a retained fragment and the overlap.
-    let split = pending.length;
-    while (split > 0 && pending.length - split < 3) {
-      const last = pending.charCodeAt(split - 1);
+    let split = buffer.length;
+    while (split > start && buffer.length - split < 3) {
+      const last = buffer.charCodeAt(split - 1);
       if (last !== 10 && last !== 13) {
         break;
       }
       split--;
     }
-    if (split > 0) {
-      const part = pending.slice(0, split);
+    if (split > start) {
+      const part = buffer.slice(start, split);
       parts.push(part);
       if (limit) {
         partsLength += lengthOf(part);
       }
     }
-    tail = pending.slice(split);
+    tail = buffer.slice(split);
     if (limit) {
       assertWithinLimit(partsLength + lengthOf(tail));
     }
@@ -440,22 +439,23 @@ export function copyProviderAcceptanceObserver<T extends object>(source: unknown
   return observer ? writeProviderAcceptanceObserver(target, observer) : target;
 }
 
-async function awaitProviderLifecycleCallback(
-  callback: (() => void | Promise<void>) | undefined,
+export async function awaitProviderLifecycleCallback<T>(
+  callback: (() => T | Promise<T>) | undefined,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<T | undefined> {
   if (signal?.aborted) {
     throw transportAbortError(signal);
   }
   if (!callback) {
-    return;
+    return undefined;
   }
   const callbackPromise = Promise.resolve().then(callback);
   getAiTransportHost().observePendingProviderWork?.(callbackPromise);
-  await racePromiseWithAbortSignal(callbackPromise, signal, transportAbortError);
+  const result = await racePromiseWithAbortSignal(callbackPromise, signal, transportAbortError);
   if (signal?.aborted) {
     throw transportAbortError(signal);
   }
+  return result;
 }
 
 function startProviderStreamCancellation(cancelStream: ProviderStreamCancel, error: unknown): void {

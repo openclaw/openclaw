@@ -6,9 +6,11 @@ import { setImmediate } from "node:timers/promises";
 import { readEngineAnchorIdentity } from "../infra/database-engine/physical-store.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { readFiniteSqliteNumber } from "../infra/sqlite-number.js";
-import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
+import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
+import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
@@ -145,10 +147,37 @@ export async function enableDoctorSqliteReclamation(params: {
     let verified = false;
     try {
       assertIdentity();
-      // Inspect committed WAL content without creating a new source WAL index after drainage.
-      const requiresConversion = withArtifactPreservingStateReads(
-        () => {
-          const database = openSqliteReadOnlyDatabase(sqlitePath);
+      // Drainage makes the main file authoritative when no recovery pages remain.
+      // An immutable reader preserves the absent WAL index without copying the database.
+      const requiresConversion = await withArtifactPreservingStateReads(
+        async () => {
+          const recoveryPending =
+            fs.existsSync(`${sqlitePath}-journal`) ||
+            (fs.statSync(`${sqlitePath}-wal`, { throwIfNoEntry: false })?.size ?? 0) > 0;
+          await using snapshot = {
+            prepared: recoveryPending
+              ? await prepareSqliteReadOnlyLocation(sqlitePath, {
+                  preserveSourceArtifacts: true,
+                  signal: params.signal,
+                  requireCleanup: true,
+                })
+              : undefined,
+            readerClosed: true,
+            async [Symbol.asyncDispose]() {
+              if (this.readerClosed && this.prepared && !(await this.prepared.cleanupAsync())) {
+                throw new SqliteSnapshotCleanupError(
+                  "SQLite reclamation inspection cleanup failed.",
+                );
+              }
+            },
+          };
+          assertAdmission();
+          assertIdentity();
+          const database = openNodeSqliteDatabase(
+            snapshot.prepared?.location ?? resolveImmutableSqliteFileUri(sqlitePath),
+            { readOnly: true },
+          );
+          snapshot.readerClosed = false;
           try {
             if (readEngineAnchorIdentity(database, sqlitePath).engine === "postgres") {
               return false;
@@ -165,6 +194,7 @@ export async function enableDoctorSqliteReclamation(params: {
             return required;
           } finally {
             database.close();
+            snapshot.readerClosed = true;
           }
         },
         { agentDatabases: true },

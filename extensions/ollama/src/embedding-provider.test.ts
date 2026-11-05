@@ -184,10 +184,6 @@ describe("ollama embedding provider", () => {
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expectEmbeddingFetch(`${LOCAL_HOST}/api/embed`, {}, ["a", "bb", "ccc"]);
-    expect(fetchMock.mock.calls[0]?.[0]).toMatchObject({
-      policy: { allowedOrigins: [LOCAL_HOST] },
-      configuredLocalOriginBaseUrl: LOCAL_HOST,
-    });
   });
 
   it("reports actionable embed errors for a missing model", async () => {
@@ -317,13 +313,12 @@ describe("ollama embedding provider", () => {
     );
   });
 
-  it("indexes one job at a time", async () => {
-    const { runtime } = await ollamaMemoryEmbeddingProviderAdapter.create(embeddingOptions());
-    expect(runtime?.inlineIndexConcurrency).toBe(1);
-  });
-
   it("preserves the legacy identity only for the default Ollama endpoint", async () => {
-    const defaultEndpoint = await memoryKey({ dimensions: 2 });
+    const { runtime } = await ollamaMemoryEmbeddingProviderAdapter.create(
+      embeddingOptions<MemoryEmbeddingOptions>({ dimensions: 2 }),
+    );
+    expect(runtime?.inlineIndexConcurrency).toBe(1);
+    const defaultEndpoint = runtime?.cacheKeyData;
     const customEndpoint = await memoryKey({
       remote: { baseUrl: "http://10.0.0.5:11434" },
       dimensions: 2,

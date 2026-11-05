@@ -11,8 +11,8 @@ read_when:
 wording differs from the original text. It chunks memory into small pieces and
 searches them with embeddings, keywords, or both.
 
-The built-in index supports SQLite and PostgreSQL agent databases. The PostgreSQL
-engine remains experimental. Search uses engine-local text ranking, so scores and ordering
+The built-in index supports SQLite and [qualified PostgreSQL runtimes](/gateway/postgresql#support-matrix).
+Search uses engine-local text ranking, so scores and ordering
 can differ from SQLite. It requires `unaccent` for text search, `pg_trgm` for the
 trigram tokenizer, and `vector` for semantic search. Explicit
 `memory.search.provider: "none"` enables keyword-only search without `vector`;
@@ -24,8 +24,9 @@ for extension setup.
 On PostgreSQL, both body keywords and filename/path lookup use the admitted
 index. Source and selected-agent scope restrict candidates before the result
 limit; semantic retrieval also filters the embedding model. Text uses native
-full-text ranking; semantic retrieval uses exact
-cosine distance over a derived float32 vector projection. Hybrid search keeps
+full-text ranking; semantic retrieval preselects candidates with binary sketches,
+then reranks them by exact cosine distance over a derived float32 vector projection.
+Small candidate-ID scopes use exact search. Hybrid search keeps
 the same vector/text weights, but PostgreSQL text scores are not SQLite BM25
 scores. A phrase with nearby terms can rank above scattered terms without
 promising identical ordering across engines.
@@ -92,10 +93,11 @@ Choose llama.cpp once in interactive setup. OpenClaw installs a verified
 `llama-server`, downloads the embedding GGUF, and writes its managed service
 configuration.
 
-Managed `local` and Ollama embeddings index one file at a time when batch
-indexing is disabled. This bounds background embedding requests during a full
-rebuild; large indexes can take longer on hosts that previously ran several
-local jobs in parallel.
+Managed `local`, Ollama, and OpenAI-compatible endpoints on loopback addresses
+(`localhost`, `127.0.0.0/8`, `::1`) index one file at a time when batch indexing
+is disabled. This limits the backlog that interactive searches share with
+background indexing. Other endpoints default to four indexing jobs. Serial
+indexing can make large rebuilds slower on servers with spare parallel capacity.
 
 EmbeddingGemma uses its trained task prefixes automatically for queries and
 indexed documents, including through Ollama, LM Studio, and OpenAI-compatible
@@ -338,11 +340,6 @@ incognito exclusions still apply.
 **Local embeddings time out?** `ollama`, `lmstudio`, and `local` use longer
 provider-owned batch deadlines. Run `openclaw memory status --deep` to inspect
 the managed server endpoints before rebuilding the index.
-
-`local`, `ollama`, and `openai-compatible` endpoints on a loopback address
-(`localhost`, `127.0.0.1`, `::1`) send one indexing request at a time, so a
-search waits behind at most one indexing request on the same server. Other
-endpoints send up to four at once.
 
 OpenAI-compatible embedding requests honor the caller's deadline, including
 the longer indexing budget, without an earlier HTTP header or body timeout.

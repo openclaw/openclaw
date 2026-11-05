@@ -1,69 +1,43 @@
-// Memory Core tests cover manager non-batch index concurrency policy behavior.
-import { describe, expect, it } from "vitest";
+// Memory Core tests cover provider-owned non-batch index concurrency.
+import { expect, it } from "vitest";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 
-type IndexConcurrencyHarness = { getIndexConcurrency: () => number };
+type IndexGeneration = {
+  kind: "semantic" | "fts-only";
+  runtime?: { inlineIndexConcurrency?: number };
+};
 
-// Exercise the real concurrency policy without opening a memory index or
-// acquiring an external embedding provider (same seam as
-// manager-embedding-ops.retry.test.ts).
-function createIndexConcurrencyHarness(params: {
-  providerId: string;
-  inlineIndexConcurrency?: number;
-  batch?: { enabled: boolean; concurrency: number };
-  /** Full rebuilds resolve the runtime through an active sync generation instead. */
-  generationInlineIndexConcurrency?: number;
-}): IndexConcurrencyHarness {
-  const runtime = (inlineIndexConcurrency?: number) => ({
-    id: params.providerId,
-    ...(inlineIndexConcurrency === undefined ? {} : { inlineIndexConcurrency }),
-  });
-  const provider = { id: params.providerId, model: `${params.providerId}-model` };
-  return Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
-    batch: params.batch ?? { enabled: false, concurrency: 8 },
-    provider,
-    providerRuntime: runtime(params.inlineIndexConcurrency),
-    syncProviderGeneration:
-      params.generationInlineIndexConcurrency === undefined
-        ? undefined
-        : {
-            kind: "semantic",
-            provider,
-            runtime: runtime(params.generationInlineIndexConcurrency),
-          },
-  }) as IndexConcurrencyHarness;
+function getIndexConcurrency(
+  inlineIndexConcurrency?: number,
+  syncProviderGeneration?: IndexGeneration,
+  batch = { enabled: false, concurrency: 8 },
+): number {
+  const manager = Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
+    batch,
+    provider: { id: "openai-compatible" },
+    providerRuntime: { id: "openai-compatible", inlineIndexConcurrency },
+    syncProviderGeneration,
+  }) as { getIndexConcurrency: () => number };
+  return manager.getIndexConcurrency();
 }
 
-describe("memory index concurrency", () => {
-  it("uses the concurrency the provider runtime declares", () => {
-    expect(
-      createIndexConcurrencyHarness({
-        providerId: "openai-compatible",
-        inlineIndexConcurrency: 1,
-      }).getIndexConcurrency(),
-    ).toBe(1);
-  });
+it.each([1, 3])("uses provider-declared index concurrency %s", (declared) => {
+  expect(getIndexConcurrency(declared)).toBe(declared);
+});
 
-  it("keeps the parallel default when the provider declares none", () => {
-    expect(createIndexConcurrencyHarness({ providerId: "openai" }).getIndexConcurrency()).toBe(4);
-  });
+it.each([undefined, 0, -1, 1.5, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+  "keeps the host default for omitted or invalid index concurrency %s",
+  (declared) => expect(getIndexConcurrency(declared)).toBe(4),
+);
 
-  it("uses the active sync generation's runtime during a full rebuild", () => {
-    expect(
-      createIndexConcurrencyHarness({
-        providerId: "openai-compatible",
-        generationInlineIndexConcurrency: 1,
-      }).getIndexConcurrency(),
-    ).toBe(1);
-  });
+it.each<[IndexGeneration, number]>([
+  [{ kind: "semantic", runtime: { inlineIndexConcurrency: 2 } }, 2],
+  [{ kind: "semantic" }, 4],
+  [{ kind: "fts-only" }, 4],
+])("uses only the active sync generation's runtime: %j", (generation, expected) => {
+  expect(getIndexConcurrency(1, generation)).toBe(expected);
+});
 
-  it("keeps the batch concurrency when batch embedding is enabled", () => {
-    expect(
-      createIndexConcurrencyHarness({
-        providerId: "local",
-        inlineIndexConcurrency: 1,
-        batch: { enabled: true, concurrency: 3 },
-      }).getIndexConcurrency(),
-    ).toBe(3);
-  });
+it("keeps batch concurrency independent of the inline declaration", () => {
+  expect(getIndexConcurrency(1, undefined, { enabled: true, concurrency: 3 })).toBe(3);
 });

@@ -221,6 +221,23 @@ const pluginPolicies = new WeakMap<
   PreparedPluginNodePolicy
 >();
 
+export function canInvokeNodeMcpLocally(commands: readonly string[]): boolean {
+  return (
+    commands.includes(NODE_MCP_TOOLS_CALL_COMMAND) &&
+    !requiresGatewayNodeInvokePolicy(NODE_MCP_TOOLS_CALL_COMMAND)
+  );
+}
+
+/** A local transport cannot run the Gateway's registered node.invoke policy or its missing-policy check. */
+function requiresGatewayNodeInvokePolicy(command: string): boolean {
+  return (
+    getPreparedPluginNodePolicy()?.dangerous.has(command) === true ||
+    getActivePluginGatewayNodePolicyRegistry()?.nodeInvokePolicies.some((entry) =>
+      entry.policy.commands.includes(command),
+    ) === true
+  );
+}
+
 function getPreparedPluginNodePolicy(): PreparedPluginNodePolicy | undefined {
   const registry = getActivePluginGatewayNodePolicyRegistry();
   if (!registry) {

@@ -152,6 +152,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
             skillsSnapshot: params.skillsSnapshot,
             workspaceDir: resolvedWorkspace,
             assertCurrent,
+            abortSignal: params.abortSignal,
             admittedRunContext: params.admittedRunContext,
             preparedRuntimeStatus: sandboxRuntimeStatus,
           })
