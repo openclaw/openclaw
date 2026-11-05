@@ -24,12 +24,18 @@ the Gateway returns a retryable `UNAVAILABLE` error instead of an empty branch
 list. Retry after database preparation finishes. Required integrity checks and
 already-admitted storage cleanup keep their own lifetimes.
 
-Reading a compressed transcript file allows at most its stored size plus 1 MiB of
-decompressed output. Archives exceeding that budget fail with a visible error and
-remain unchanged. This includes valid archives with larger expansion; export
-those as uncompressed JSONL to read them.
+Compressed transcript archives are decoded directly from their source files;
+history, discovery, usage, and memory indexing do not create plaintext copies in
+the temporary directory. History retains navigation metadata and reads selected
+byte ranges through a bounded-memory stream. An archive that
+would expand past 4 GiB fails with a visible error and remains unchanged.
 Archive publication verifies compressed output against the original plaintext byte
 count, preserving compression and disk-budget retention.
+Doctor reports the size of read-cache directories left by older versions.
+`openclaw doctor --fix` (also run during updates) removes recognized cache files
+and the directory if empty, preserving unrelated entries. Cleanup is best effort:
+files still open on Windows may remain until a later run; current readers do not
+use them.
 
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).

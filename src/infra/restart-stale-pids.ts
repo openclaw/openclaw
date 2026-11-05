@@ -157,9 +157,68 @@ function inspectProcfsAncestors(
   return { pids, complete: false };
 }
 
+type AncestorIdentity = { pid: number; parentPid: number; startTimeMicros: number };
+
+/** The kernel process table still exposes a root-owned parent's PPID and start second. */
+function readDarwinHiddenParentSync(pid: number, timeoutMs: number): AncestorIdentity | null {
+  const result = spawnSync("ps", ["-o", "ppid=,lstart=", "-p", String(pid)], {
+    env: { ...resolveDiagnosticProcessEnv(), LC_ALL: "C", TZ: "UTC" },
+    encoding: "utf8",
+    killSignal: "SIGKILL",
+    timeout: timeoutMs,
+  });
+  const match = /^\s*(\d+)\s+(\S.*\S)\s*$/u.exec(result.stdout ?? "");
+  const startedAt = Date.parse(`${match?.[2]} UTC`);
+  return result.status === 0 && match && Number.isFinite(startedAt)
+    ? { pid, parentPid: Number(match[1]), startTimeMicros: startedAt * 1000 }
+    : null;
+}
+
+/**
+ * Darwin denies identity reads for root-owned setuid ancestors (login, sudo, sshd),
+ * so a Terminal shell's native walk stops below launchd. Resume it through ps,
+ * keeping start ordering at ps's one-second resolution.
+ */
+function resumeDarwinAncestry(
+  chain: AncestorIdentity[],
+  maxDepth: number,
+  throughPid: number | undefined,
+  timeoutMs: number,
+): boolean {
+  while (chain.length < maxDepth) {
+    const child = chain.at(-1)!;
+    const hidden = readDarwinHiddenParentSync(child.parentPid, timeoutMs);
+    if (!hidden || hidden.startTimeMicros > child.startTimeMicros) {
+      return false;
+    }
+    chain.push(hidden);
+    if (hidden.pid === throughPid || hidden.parentPid <= 1) {
+      return true;
+    }
+    let next: ReturnType<typeof readProcessAncestry>;
+    try {
+      next = readProcessAncestry(hidden.parentPid, {
+        maxDepth: maxDepth - chain.length,
+        ...(throughPid === undefined ? {} : { throughPid }),
+      });
+    } catch {
+      // Another root-owned ancestor: read it through ps on the next pass.
+      continue;
+    }
+    if (!next || next.chain[0]!.startTimeMicros >= hidden.startTimeMicros + 1_000_000) {
+      return false;
+    }
+    chain.push(...next.chain);
+    if (next.stoppedBy !== "unreadable-parent") {
+      return next.complete;
+    }
+  }
+  return false;
+}
+
 /** Protect the caller and every known ancestor, including an unreadable parent, from cleanup. */
 export function inspectSelfAndAncestorPidsSync(
-  _spawnTimeoutMs = PROCESS_INSPECTION_TIMEOUT_MS,
+  spawnTimeoutMs = PROCESS_INSPECTION_TIMEOUT_MS,
   options: { requireVerifiedParent?: boolean; throughPid?: number } = {},
 ): { pids: Set<number>; complete: boolean } {
   const pids = new Set<number>([process.pid]);
@@ -176,24 +235,29 @@ export function inspectSelfAndAncestorPidsSync(
     return { pids, complete: true };
   }
   try {
+    const maxDepth = MAX_ANCESTOR_WALK_DEPTH + 2;
     const ancestry = readProcessAncestry(process.pid, {
-      maxDepth: MAX_ANCESTOR_WALK_DEPTH + 2,
+      maxDepth,
       ...(options.throughPid === undefined ? {} : { throughPid: options.throughPid }),
     });
     if (!ancestry) {
       return { pids, complete: false };
     }
-    for (const identity of ancestry.chain) {
+    const chain: AncestorIdentity[] = [...ancestry.chain];
+    let complete = ancestry.complete;
+    let stoppedUnreadable = ancestry.stoppedBy === "unreadable-parent";
+    if (stoppedUnreadable && process.platform === "darwin") {
+      complete = resumeDarwinAncestry(chain, maxDepth, options.throughPid, spawnTimeoutMs);
+      stoppedUnreadable = !complete;
+    }
+    for (const identity of chain) {
       pids.add(identity.pid);
     }
-    const parentPid = ancestry.chain.at(-1)?.parentPid;
-    if (
-      parentPid === 1 ||
-      (!options.requireVerifiedParent && ancestry.stoppedBy === "unreadable-parent" && parentPid)
-    ) {
+    const parentPid = chain.at(-1)?.parentPid;
+    if (parentPid === 1 || (!options.requireVerifiedParent && stoppedUnreadable && parentPid)) {
       pids.add(parentPid);
     }
-    return { pids, complete: ancestry.complete };
+    return { pids, complete };
   } catch {
     // Older glibc hosts can read the same kernel identities without loading proc-safe.
     return inspectProcfsAncestors(pids, options);

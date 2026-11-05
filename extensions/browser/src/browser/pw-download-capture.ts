@@ -13,7 +13,9 @@ type BrowserDownloadCaptureState = {
 
 type BrowserDownloadPage = {
   on(event: "download", handler: (download: Download) => void): unknown;
+  on(event: "close", handler: () => void): unknown;
   off(event: "download", handler: (download: Download) => void): unknown;
+  off(event: "close", handler: () => void): unknown;
 };
 
 export type BrowserDownloadCaptureOptions = {
@@ -102,11 +104,14 @@ export function createDownloadCaptureForPage(
   let handler: ((download: Download) => void) | undefined;
   let activeDownload: Download | undefined;
   let abort = () => {};
+  let onClose = () => {};
 
   const releaseWaiter = () => {
     if (handler) {
       state.downloadWaiterDepth = Math.max(0, state.downloadWaiterDepth - 1);
       page.off("download", handler);
+      // An accepted transfer can outlive its page; close only interrupts the event wait.
+      page.off("close", onClose);
       handler = undefined;
     }
   };
@@ -148,14 +153,15 @@ export function createDownloadCaptureForPage(
         .finally(cleanup)
         .then(resolve, reject);
     };
+    onClose = () => rejectCapture(new Error("Page closed before download started."));
+    page.on("close", onClose);
     page.on("download", handler);
     timer = setTimeout(
       () => {
         rejectCapture(new Error(opts.timeoutMessage ?? "Timeout waiting for download"));
       },
       Math.max(1, timeoutMs),
-    );
-    timer.unref?.();
+    ).unref();
     abort = () => {
       const reason = opts.signal?.reason;
       rejectCapture(reason instanceof Error ? reason : new Error("Download wait was cancelled"));

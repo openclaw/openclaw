@@ -25,6 +25,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as cronGrants from "../gateway/cron-creator-authority-grant.js";
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
+import { InvocationFrame } from "./plugin-instance-invocation.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
@@ -364,8 +365,8 @@ it("enters the registered owner's scopes and retains the execution cancellation 
     expect(tool.prepareArguments?.(args)).toBe(args);
     await tool.execute("probe", args);
     expect(observed).toEqual(["probe", "probe", "probe"]);
-    // Each of the four async resources installs one invocation/recovery frame.
-    expect(frames).toHaveBeenCalledTimes(4);
+    // Count invocation/recovery frames independently of the source-authority store.
+    expect(frames.mock.calls.filter(([frame]) => frame instanceof InvocationFrame)).toHaveLength(4);
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
   } finally {
     frames.mockRestore();

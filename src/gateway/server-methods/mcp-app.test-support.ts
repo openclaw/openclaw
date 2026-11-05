@@ -3,8 +3,8 @@ import { vi } from "vitest";
 import type {
   McpCatalogTool,
   McpToolCatalog,
-  SessionMcpRuntime,
-} from "../../agents/agent-bundle-mcp-types.js";
+} from "../../agents/agent-bundle-mcp-catalog.types.js";
+import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import type { McpAppViewLease } from "../../agents/mcp-ui-resource.js";
 
 export function appCatalog(

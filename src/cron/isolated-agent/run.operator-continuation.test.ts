@@ -16,8 +16,8 @@ import {
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import { captureGatewayAuthPolicy } from "../../gateway/auth-policy.js";
 import * as publicationIdentity from "../../gateway/github-publication-availability.js";
 import * as publicationTransport from "../../gateway/github-publication-git-transport.js";
 import { createGitHubPublicationCoordinator } from "../../gateway/github-publication.js";
@@ -33,10 +33,10 @@ import {
   SESSION_ID,
   stateDir,
 } from "../../gateway/server-methods/requester-cron-authority.test-support.js";
-import { createOperatorClient } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { getPluginRegistryState } from "../../plugins/runtime-state.js";
 import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
@@ -61,6 +61,18 @@ import {
   publication,
   publicationCommandResult,
 } from "./run.operator-continuation.test-support.js";
+import {
+  prepareContinuationClient,
+  PRINCIPAL_POLICY_CASES,
+  isPrincipalPolicyScenario,
+  preparePrincipalPolicyChange,
+  principalGatewayPolicy,
+  captureRealIngressOperator,
+  expectRetryableOriginalOneShot,
+  principalRecoveryFixture,
+  registerScheduledPrincipalFixture,
+  prepareRestartBeforeScheduling,
+} from "./run.operator-restart.test-support.js";
 import {
   loadRunCronIsolatedAgentTurn,
   loadSessionEntryMock,
@@ -88,7 +100,11 @@ const session = await vi.importActual<typeof import("./session.js")>("./session.
 const accessor = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
   "../../config/sessions/session-accessor.js",
 );
-installRequesterCronAuthorityTestHooks();
+installRequesterCronAuthorityTestHooks(() => ({
+  type: "human",
+  source: "profile",
+  id: ensureProfileForEmail("scheduled-operator@example.test").id,
+}));
 
 const toolConstructionPlan = {
   includeBaseCodingTools: false,
@@ -122,6 +138,17 @@ it.each([
   "self removal then session replaced during merge",
   "paused force run",
   "restart",
+  "principal reload",
+  ...PRINCIPAL_POLICY_CASES,
+  "principal owner unavailable",
+  "principal store unavailable",
+  "restart before scheduling",
+  "restart before scheduling revoked ingress",
+  "restart before scheduling without source",
+  "principal ingress revoked",
+  "principal ingress replaced",
+  "principal role revoked",
+  "principal access revoked",
   "guest",
   "legacy attribution",
   "foreign target",
@@ -134,6 +161,16 @@ it.each([
   "owner capture races manager payload",
   "recurring trigger reload",
 ] as const)("scheduled continuation preserves the %s boundary", async (scenario) => {
+  const restartBeforeScheduling = scenario.startsWith("restart before scheduling");
+  const principalSource = scenario.startsWith("principal") || restartBeforeScheduling;
+  const unavailableSource =
+    scenario === "principal owner unavailable" || scenario === "principal store unavailable";
+  const personPolicySource = isPrincipalPolicyScenario(scenario);
+  const personPolicyRemoved = personPolicySource && scenario !== "principal allowlist allowed";
+  const realPrincipal = principalSource;
+  let restoreIngressOwner: (() => void) | undefined;
+  let releaseIngressOwner: (() => void) | undefined;
+  const roleRevoked = scenario === "role revoked" || scenario === "principal role revoked";
   const restarting = scenario === "restart";
   const ownerEdit = scenario === "queued owner payload edit";
   const managerRename = scenario === "queued manager rename";
@@ -145,6 +182,7 @@ it.each([
     scenario === "write-scoped operator" || scenario === "cron-scoped operator";
   const config = await prepareAuthorityConfig({
     tools: { allow: [AUTOMATIONS_TOOL_NAME, "github_publish"] },
+    ...(realPrincipal ? { gateway: principalGatewayPolicy(personPolicySource) } : {}),
     ...(recurring ? { cron: { triggers: { enabled: true } } } : {}),
   });
   const fixture = createCronFixture(undefined, config);
@@ -152,25 +190,15 @@ it.each([
   const resolveGatewayContext = () => context;
   context.resolveGatewayContext = resolveGatewayContext;
   const profile = ensureProfileForEmail("scheduled-operator@example.test");
-  const client = createOperatorClient({
+  if (realPrincipal) {
+    await setCanonicalUserProfileRole(profile.id, "writer");
+  }
+  const { client, revokePersonPolicy } = prepareContinuationClient({
+    config,
+    context,
     profileId: profile.id,
-    scopes:
-      scenario === "guest"
-        ? ["operator.sessions.write"]
-        : scenario === "write-scoped operator"
-          ? ["operator.write"]
-          : scenario === "cron-scoped operator"
-            ? ["operator.sessions.write", "operator.cron"]
-            : ["operator.admin"],
+    scenario,
   });
-  client.connect.client.id = "openclaw-control-ui";
-  client.connect.client.mode = "webchat";
-  client.internal = {
-    authenticatedOperator: true,
-    ...(client.connect.scopes?.includes("operator.admin") ? { controlUiAdmin: true } : {}),
-  };
-  client.authPolicy = captureGatewayAuthPolicy(config, { role: "operator", authMethod: "token" });
-  context.getRuntimeConfig = () => config;
   const target = {
     agentId: "main",
     sessionKey: SESSION,
@@ -188,6 +216,9 @@ it.each([
     abortedLastRun: false,
   };
   await accessor.replaceSessionEntry(target, entry);
+  if (restartBeforeScheduling) {
+    expect((await readSessionEntryReadOnlyInWorker(target))?.createdActor?.id).toBe(profile.id);
+  }
   const captureAuthority = async () =>
     expectDefined(
       await captureGatewayOperatorRunAuthority({
@@ -198,7 +229,17 @@ it.each([
       "fresh authenticated operator source",
     );
   // Legacy attribution is not admission; other cases capture a fresh authenticated source.
-  const original = scenario === "legacy attribution" ? undefined : await captureAuthority();
+  const original =
+    scenario === "legacy attribution"
+      ? undefined
+      : realPrincipal
+        ? await captureRealIngressOperator({
+            context,
+            config,
+            profileId: profile.id,
+            scopes: client.connect.scopes ?? [],
+          })
+        : await captureAuthority();
   const foreignKey = "agent:main:dashboard:foreign-continuation";
   if (scenario === "foreign target") {
     replaceSessionEntrySync(
@@ -231,7 +272,31 @@ it.each([
   const updateCreator = createDeferredCore();
   const creatorUpdated = createDeferredCore();
   const releaseCreator = createDeferredCore();
+  if (scenario === "principal access revoked" && original) {
+    original.authority = principalRecoveryFixture(
+      original.authority,
+      scenario === "principal access revoked",
+    );
+  }
+  if (restartBeforeScheduling) {
+    expect(config.gateway?.roles).toBeDefined();
+    const proceed = await prepareRestartBeforeScheduling({
+      original: expectDefined(original, "initiating authenticated turn"),
+      target,
+      context,
+      profile,
+      readJobs: fixture.read,
+      revoked: scenario === "restart before scheduling revoked ingress",
+      sourceLess: scenario === "restart before scheduling without source",
+    });
+    if (!proceed) {
+      creatorCron.stop();
+      await creatorCron.waitForIdle();
+      return;
+    }
+  }
   let creation: Promise<unknown> | undefined;
+  let releaseAccessPolicy: (() => void) | undefined;
   const managerUpdate = async (patch: Record<string, unknown>) => {
     const stored = expectDefined((await fixture.read())[0], "manager target");
     const respond = vi.fn();
@@ -291,7 +356,7 @@ it.each([
                     name: "Finish authorized landing",
                     enabled: scenario !== "paused force run",
                     schedule:
-                      recurring || scenario === "role revoked"
+                      recurring || roleRevoked
                         ? { kind: "every", everyMs: 180_000 }
                         : {
                             kind: "at",
@@ -373,6 +438,41 @@ it.each([
       await creatorCron.waitForIdle();
     }
   }
+  if (principalSource) {
+    if (scenario === "principal access revoked") {
+      const registry = expectDefined(
+        getPluginRegistryState()?.activeRegistry,
+        "live access policy registry",
+      );
+      const previousPolicies = [...registry.gatewayAccessPolicies];
+      releaseAccessPolicy = () => {
+        registry.gatewayAccessPolicies = previousPolicies;
+      };
+      registry.gatewayAccessPolicies.push({
+        pluginId: "principal-access",
+        source: "test",
+        policy: { authorize: () => undefined, resume: () => undefined },
+      });
+    }
+    const recovery = registerScheduledPrincipalFixture({
+      context,
+      profileId: profile.id,
+      scopes: client.connect.scopes ?? [],
+      state:
+        scenario === "principal owner unavailable"
+          ? "owner-unavailable"
+          : scenario === "principal store unavailable"
+            ? "store-unavailable"
+            : scenario === "principal ingress revoked"
+              ? "revoked"
+              : scenario === "principal ingress replaced"
+                ? "replaced"
+                : "current",
+    });
+    restoreIngressOwner = recovery.restore;
+    releaseIngressOwner = recovery.release;
+  }
+  await preparePrincipalPolicyChange(scenario, revokePersonPolicy);
   // No operator request, original admitted run or human follow-up survives this point.
   const job = expectDefined((await fixture.read())[0], "durably stored continuation");
   if (scopedOperator) {
@@ -387,7 +487,7 @@ it.each([
   if (scenario === "current tool deny") {
     config.tools = { ...config.tools, deny: ["github_publish"] };
     setRuntimeConfigSnapshot(config);
-  } else if (scenario === "role revoked") {
+  } else if (roleRevoked) {
     await setCanonicalUserProfileRole(profile.id, "blocked");
   } else if (scenario === "session replaced") {
     replaceSessionEntrySync(
@@ -661,7 +761,14 @@ it.each([
         await creatorCron.waitForIdle();
       }
       if (restarting) {
-        await restartEntered.promise;
+        await Promise.race([
+          restartEntered.promise,
+          tick.then(() => {
+            throw new Error(
+              `Continuation failed before restart: ${execution.getJob(job.id)?.state.lastError}`,
+            );
+          }),
+        ]);
         restartContinue.resolve();
       }
       await tick;
@@ -692,7 +799,28 @@ it.each([
       expect(completed.status).not.toBe("killed");
       return;
     }
+    if (unavailableSource) {
+      const pending = expectDefined(execution.getJob(job.id), "same retryable one-shot");
+      const next = expectRetryableOriginalOneShot(pending, job.id, clock.clock.now());
+      expect(entered).toBe(0);
+      expect(writes).toEqual([]);
+      expect((await fixture.read()).map((item) => item.id)).toEqual([job.id]);
+      expectDefined(restoreIngressOwner, "restored original owner")();
+      clock.setTime(next);
+      await onTimer(schedulerState);
+      await execution.waitForIdle();
+      expect((await fixture.read()).map((item) => item.id)).toEqual([job.id]);
+    }
     const state = expectDefined(execution.getJob(job.id), "finished scheduled job").state;
+    if (personPolicyRemoved) {
+      expect(reads, "Current person policy must fence protected RPC reads").toBe(0);
+      expect(writes).toEqual([]);
+      expect(rejected ?? finishedEvent?.error).toMatch(
+        /allow|authority|principal|policy|Person ingress requires trusted-proxy/i,
+      );
+      expect(entered).toBe(0);
+      return;
+    }
     if (managerRename || captureRace) {
       expect(admittedOperator).toBe(false);
       expect((await fixture.read())[0]?.operatorSource).toBeUndefined();
@@ -732,15 +860,21 @@ it.each([
       expect(entered).toBe(2);
       return;
     }
-    if (scenario === "role revoked" || scenario === "session replaced") {
+    if (
+      roleRevoked ||
+      scenario === "session replaced" ||
+      scenario === "principal ingress revoked" ||
+      scenario === "principal ingress replaced" ||
+      scenario === "principal access revoked"
+    ) {
       expect(entered).toBe(0);
       expect(state.lastRunStatus, state.lastError).toBe("error");
       expect(state.lastError).toMatch(
-        scenario === "role revoked"
+        roleRevoked
           ? /operator identity changed/i
-          : /authority|source|conversation|session|role/i,
+          : /authority|source|conversation|session|role|ingress/i,
       );
-      if (scenario === "role revoked") {
+      if (roleRevoked) {
         expect(execution.getJob(job.id)?.enabled).toBe(false);
         expect(state.nextRunAtMs).toBeUndefined();
         expect(state.consecutiveErrors).toBe(1);
@@ -755,6 +889,10 @@ it.each([
       );
       expect(entered).toBe(1);
       if (
+        unavailableSource ||
+        scenario === "restart before scheduling" ||
+        scenario === "principal allowlist allowed" ||
+        scenario === "principal reload" ||
         scenario === "operator" ||
         scenario === "write-scoped operator" ||
         scenario === "paused force run" ||
@@ -795,6 +933,10 @@ it.each([
       }
     }
     if (
+      !unavailableSource &&
+      scenario !== "restart before scheduling" &&
+      scenario !== "principal reload" &&
+      scenario !== "principal allowlist allowed" &&
       scenario !== "operator" &&
       scenario !== "write-scoped operator" &&
       scenario !== "paused force run" &&
@@ -854,5 +996,7 @@ it.each([
     restartContinue.resolve();
     execution.stop();
     await execution.waitForIdle();
+    releaseAccessPolicy?.();
+    releaseIngressOwner?.();
   }
 });

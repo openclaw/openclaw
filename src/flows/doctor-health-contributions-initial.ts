@@ -175,7 +175,11 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
     ),
     createDoctorHealthContribution("doctor:legacy-state", "Legacy state", {
-      healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
+      healthCheckIds: [
+        "core/doctor/legacy-state",
+        "core/doctor/removed-workspaces-state",
+        "core/doctor/session-archive-read-cache",
+      ],
       run: params.runLegacyStateHealth,
     }),
     createDoctorHealthContribution("doctor:session-transcripts", "Session transcripts", {
@@ -595,7 +599,11 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
     }),
     createDoctorHealthContribution("doctor:legacy-cron", "Legacy cron", {
-      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab", "core/doctor/legacy-cron-store"],
+      healthCheckIds: [
+        "core/doctor/legacy-whatsapp-crontab",
+        "core/doctor/legacy-cron-store",
+        "core/doctor/cron-inference-accounts",
+      ],
       run: runLegacyCronHealth,
     }),
     createDoctorHealthContribution("doctor:sandbox", "Sandbox", {

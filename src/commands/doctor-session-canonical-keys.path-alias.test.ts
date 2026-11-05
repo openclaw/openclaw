@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { readSessionArchiveText } from "../../test/helpers/session-archive.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import {
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -73,7 +73,7 @@ it.each([false, true])(
           .readdirSync(directory)
           .filter((name) => name.startsWith("older-history.jsonl.deleted."))
           .map((name) =>
-            readSessionArchiveContentSync(path.join(directory, name))
+            readSessionArchiveText(path.join(directory, name))
               .trim()
               .split("\n")
               .map((line) => JSON.parse(line)),

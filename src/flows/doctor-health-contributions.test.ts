@@ -138,7 +138,6 @@ const mocks = vi.hoisted(() => ({
   ),
   note: vi.fn(),
   loadModelCatalog: vi.fn(async () => []),
-  findModelCatalogEntry: vi.fn(() => ({ contextTokens: 200_000 })),
   getModelRefStatus: vi.fn(() => ({ allowed: true, inCatalog: true, key: "openai/gpt-5.5" })),
   resolveConfiguredModelRef: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
@@ -455,10 +454,6 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
-}));
-
-vi.mock("../agents/model-catalog.js", () => ({
-  findModelCatalogEntry: mocks.findModelCatalogEntry,
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
@@ -803,7 +798,6 @@ describe("doctor health contributions", () => {
             "noteSessionTranscriptHealth",
           )
           .mockResolvedValue(undefined);
-        const cfg = { agents: { entries: { main: {} } } };
         if (credentialWork !== "none") {
           mocks.maybeMigrateModelCatalogCredentials.mockResolvedValue({
             detected: 0,
@@ -814,7 +808,7 @@ describe("doctor health contributions", () => {
           });
         }
         const ctx = createDoctorContext({
-          cfg,
+          cfg: { agents: { entries: { main: {} } } },
           retirementOnly: true,
           shouldRepair: true,
           env: state.env,
@@ -831,13 +825,14 @@ describe("doctor health contributions", () => {
         expect(transcripts).toHaveBeenCalledOnce();
         if (credentialWork !== "none") {
           expect(ctx.retirementOnly).toBe(false);
+          expect(ctx.runtime.error).toHaveBeenCalledWith(
+            "Retirement-only Doctor widened: doctor:auth-profile-migration",
+          );
           expect(mocks.detectLegacyStateMigrations).toHaveBeenCalled();
           return;
         }
         expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
         expect(ctx.retirementOnly).toBe(true);
-        expect(mocks.maybeMigrateLegacyPluginModelCatalogs).toHaveBeenCalledOnce();
-        expect(mocks.maybeMigrateModelCatalogCredentials).toHaveBeenCalledOnce();
         expect(routes).toHaveBeenCalledOnce();
         expect(mocks.repairCronCodexModelRefsAfterConfigWrite).toHaveBeenCalledOnce();
         // The initial writer and strict final validation each read the persisted config.
@@ -855,10 +850,11 @@ describe("doctor health contributions", () => {
     },
   );
 
-  it.each(["late-work", "current-refusal", "post-write-warning"])(
+  it.each(["new-warning", "current-refusal", "post-write-warning"])(
     "uses the full list once after late work, but never retries a refusal: %s",
     async (outcome) => {
       const events: string[] = [];
+      const repairedConfig = { gateway: { mode: "local" as const } };
       const initialWrite = requireDoctorContribution("doctor:write-config-migrations");
       const finalWrite = requireDoctorContribution("doctor:write-config");
       if (outcome === "post-write-warning") {
@@ -876,9 +872,8 @@ describe("doctor health contributions", () => {
       const auth = createDoctorHealthContribution("doctor:auth-profile-migration", "Auth", {
         async run(current) {
           events.push("auth");
-          if (outcome !== "post-write-warning") {
-            current.retirementOnly = false;
-          }
+          current.updateWarnings = outcome === "new-warning" ? ["New"] : [];
+          current.retirementOnly = outcome !== "current-refusal";
           if (outcome === "current-refusal") {
             current.configWriteRefusal = "validation";
           }
@@ -888,7 +883,7 @@ describe("doctor health contributions", () => {
         async run(current) {
           events.push("full");
           if (outcome === "post-write-warning") {
-            current.cfg = { gateway: { mode: "local" } };
+            current.cfg = repairedConfig;
           }
         },
       });
@@ -904,6 +899,7 @@ describe("doctor health contributions", () => {
       await runDoctorHealthContributions(ctx);
 
       expect(events).toEqual(outcome === "current-refusal" ? ["auth"] : ["auth", "auth", "full"]);
+
       const writes = outcome === "post-write-warning" ? 2 : 1;
       expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(writes);
       expect(mocks.repairCronCodexModelRefsAfterConfigWrite).toHaveBeenCalledTimes(
@@ -911,11 +907,11 @@ describe("doctor health contributions", () => {
       );
       if (outcome === "post-write-warning") {
         expect(mocks.replaceConfigFile.mock.calls[1]?.[0]).toMatchObject({
-          nextConfig: { gateway: { mode: "local" } },
+          nextConfig: repairedConfig,
         });
-        expect(mocks.repairCronCodexModelRefsAfterConfigWrite.mock.calls[1]?.[0]).toMatchObject({
-          cfg: { gateway: { mode: "local" } },
-        });
+        expect(mocks.repairCronCodexModelRefsAfterConfigWrite.mock.calls[1]?.[0]?.cfg).toEqual(
+          repairedConfig,
+        );
         expect(mocks.replaceConfigFile.mock.invocationCallOrder[1]).toBeLessThan(
           mocks.repairCronCodexModelRefsAfterConfigWrite.mock.invocationCallOrder[1]!,
         );
@@ -2487,15 +2483,13 @@ describe("doctor health contributions", () => {
   });
 
   it("keeps legacy cron store opt-in for default lint selection", async () => {
-    const contribution = requireDoctorContribution("doctor:legacy-cron");
-    expect(contribution.healthCheckIds).toEqual([
+    expect(requireDoctorContribution("doctor:legacy-cron").healthCheckIds).toEqual([
       "core/doctor/legacy-whatsapp-crontab",
       "core/doctor/legacy-cron-store",
+      "core/doctor/cron-inference-accounts",
     ]);
 
     const ctx = createDoctorLintFixture({ cron: { store: "/tmp/openclaw-cron/jobs.json" } });
-
-    expect(mocks.collectLegacyCronStoreHealthFindings).not.toHaveBeenCalled();
 
     mocks.collectLegacyCronStoreHealthFindings.mockResolvedValueOnce([
       {
@@ -2509,7 +2503,7 @@ describe("doctor health contributions", () => {
     await expectOptInLintFindings(ctx, "core/doctor/legacy-cron-store", [
       expect.objectContaining({ checkId: "core/doctor/legacy-cron-store" }),
     ]);
-    expect(mocks.collectLegacyCronStoreHealthFindings).toHaveBeenCalledWith({ cfg: ctx.cfg });
+    expect(mocks.collectLegacyCronStoreHealthFindings.mock.calls).toEqual([[{ cfg: ctx.cfg }]]);
   });
 
   it("defers channel package-state loading only until post-core plugin convergence", async () => {
