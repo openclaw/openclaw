@@ -201,6 +201,14 @@ browser state. They do not share a running Gateway or warmed profile.
 
 ## Fixture
 
+`--dashboard-mcp-app` replaces the HTML board with one full-width page-chrome
+MCP App using the official SDK and a local stdio MCP server. Its tool result
+supplies synthetic KPI tiles and two charts in a 1,400 px document. Use
+`--init-script scripts/perf/board-widgets.init.js` for per-frame board/skeleton
+states and initialize/input/result milestones. The fixture's `paint` message
+is a font-ready/two-animation-frame DOM marker, not a protocol paint receipt;
+inspect the captured board pixels for first content.
+
 The existing Team-shape generator owns the base inventory (3,000 sessions by
 default), people, eight settled child runs, and eight disabled automations. The
 tool appends nine tall assistant results to each route, including a 42-row table,
