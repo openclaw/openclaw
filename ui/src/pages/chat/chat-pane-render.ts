@@ -279,9 +279,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     });
     const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
     const presence = this.presence.snapshot;
-    const composerSessionKey = state.sessionKey;
     const catalogCanContinue = this.history.catalogSession?.canContinue === true;
-    const composerPendingReason = state.connected ? null : pendingReason;
     const auth = gatewaySnapshot.hello?.auth ?? null;
     const hasWriteScope = hasOperatorWriteAccess(auth);
     const composerAccess = catalogKey
@@ -323,7 +321,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         presence,
         gatewaySnapshot.selfUser,
         gatewaySnapshot.client?.instanceId,
-        composerSessionKey,
+        state.sessionKey,
       );
     const composerAvailability = {
       canCompose: composerAccess && available,
@@ -338,7 +336,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
           ? placementComposer.failedUnavailableMessage
           : null) ??
         // Offline sending stays available for the outbox; this band explains pending recovery.
-        composerPendingReason,
+        (state.connected ? null : pendingReason),
       disabledReasonTone:
         !composerAccess ||
         disabledReason ||
@@ -403,7 +401,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onDiscardSessionPlacementStartup: placementStartup?.initialTurn
         ? this.discardSessionPlacementStartup
         : undefined,
-      canAbort: sessionParticipationBlocked ? false : hasAbortableSessionRun(state),
+      canAbort: sessionParticipationBlocked
+        ? false
+        : (cachedSession?.runActive ?? hasAbortableSessionRun(state)),
       runActive,
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),

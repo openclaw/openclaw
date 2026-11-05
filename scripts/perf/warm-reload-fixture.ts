@@ -24,6 +24,7 @@ export type WarmReloadFixtureOptions = {
   pluginActivation?: boolean;
   detailsSessionFacts?: boolean;
   activeTargets?: boolean;
+  composerControls?: boolean;
   admission?: Pick<
     Awaited<ReturnType<typeof startWarmReloadAdmission>>,
     "origin" | "gatewayAuth" | "viewerEmail" | "peerSessions"
@@ -359,6 +360,17 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
         },
       },
     };
+    if (options.composerControls) {
+      config.plugins.allow!.push("anthropic");
+      config.plugins.entries!.anthropic = { enabled: true };
+      config.models.providers!.anthropic = {
+        baseUrl: mock.baseUrl,
+        apiKey: "synthetic-loopback-provider-key",
+        api: "anthropic-messages",
+        models: [],
+      };
+      config.agents.defaults!.modelPolicy = { allow: ["openai/*", "anthropic/*"] };
+    }
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
     const [
       agentDb,
@@ -482,6 +494,15 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
             target.key,
             {
               ...old.entry,
+              ...(options.composerControls
+                ? {
+                    providerOverride: "anthropic",
+                    modelOverride: "claude-haiku-5-5",
+                    modelOverrideSource: "user",
+                    thinkingLevel: "high",
+                    contextWindow: "200k",
+                  }
+                : {}),
               label: target.label,
               displayName: target.label,
               ...(options.detailsSessionFacts
