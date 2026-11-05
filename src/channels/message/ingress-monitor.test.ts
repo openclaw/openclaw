@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { waitForAbortSignal as waitForAbort } from "../../infra/abort-signal.js";
+import { createPluginRuntimeStore } from "../../plugin-sdk/runtime-store.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -531,95 +533,86 @@ describe("channel ingress monitor", () => {
     });
   });
 
-  it("keeps a started delivery admissible after its detached pump root releases", async () => {
-    await withQueue(async (queue) => {
-      const { promise: deliverGate, resolve: releaseDeliver } = createDeferred();
-      let admissionClosedDuringDelivery: boolean | undefined;
-      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
-        await deliverGate;
-        admissionClosedDuringDelivery = isGatewaySubordinateWorkAdmissionClosed();
-        await lifecycle.onAdopted();
-      });
-      const { promise: pumpTaskSettled, resolve: markPumpTaskSettled } = createDeferred();
-      // Mirror the production webhook-spool combination: the pump runs on its
-      // own detached root and does not wait for deliveries before returning.
-      const monitor = createMonitor(queue, deliver, {
-        waitForDeliveryIdleBeforeRepump: false,
-        runPumpTask: (work) =>
-          runWithGatewayIndependentRootWorkContinuation(work).finally(() => markPumpTaskSettled()),
-      });
-      monitor.start();
-      try {
-        // Admit inside its own root and let it release right away, the way an
-        // ack-first webhook request root releases once the 200 is written.
-        await runWithGatewayIndependentRootWorkAdmission(async () => {
-          await monitor.admit({ id: "event-detached-root", lane: "a", text: "hello" });
+  it.each(["detached", "released"] as const)(
+    "preserves its plugin runtime after a %s pump root ends",
+    async (mode) => {
+      await withQueue(async (queue) => {
+        const creator = new PluginInstance("ingress-runtime");
+        const foreign = new PluginInstance("foreign-runtime");
+        const runtime = createPluginRuntimeStore<string>({
+          pluginId: "ingress-runtime",
+          errorMessage: "Ingress runtime not initialized",
         });
-        await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
-        // The pump returns while the delivery is still in flight; every root
-        // the dispatch could have inherited is released at this point.
-        await pumpTaskSettled;
-        releaseDeliver();
-
-        await vi.waitFor(() => expect(admissionClosedDuringDelivery).toBeDefined());
-        expect(admissionClosedDuringDelivery).toBe(false);
-        await monitor.waitForIdle();
-        await expect(queue.listPending()).resolves.toEqual([]);
-        await expect(queue.listClaims()).resolves.toEqual([]);
-      } finally {
-        releaseDeliver();
-        await monitor.stop();
-      }
-    });
-  });
-
-  it("dispatches outside an already-released inherited root instead of refusing", async () => {
-    await withQueue(async (queue) => {
-      const { promise: deliverGate, resolve: releaseDeliver } = createDeferred();
-      let admissionClosedDuringDelivery: boolean | undefined;
-      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
-        await deliverGate;
-        admissionClosedDuringDelivery = isGatewaySubordinateWorkAdmissionClosed();
-        await lifecycle.onAdopted();
-      });
-      // No runPumpTask: the pump chain inherits the admitting caller's context,
-      // the way a transport request that enqueues an event does.
-      const monitor = createMonitor(queue, deliver, {}, undefined, undefined, 60_000);
-      const { promise: pendingScanStarted, resolve: markPendingScanStarted } = createDeferred();
-      const { promise: pendingScanGate, resolve: releasePendingScan } = createDeferred();
-      const listUnsettled = queue.listUnsettled!.bind(queue);
-      let gateNextPendingScan = true;
-      queue.listUnsettled = async (...args) => {
-        if (gateNextPendingScan) {
-          gateNextPendingScan = false;
-          markPendingScanStarted();
-          await pendingScanGate;
+        const entered = createDeferred();
+        const gate = createDeferred();
+        const delivered = createDeferred<{ admissionClosed: boolean; runtime: string | null }>();
+        const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+          entered.resolve();
+          await gate.promise;
+          delivered.resolve({
+            admissionClosed: isGatewaySubordinateWorkAdmissionClosed(),
+            runtime: runtime.tryGetRuntime(),
+          });
+          await lifecycle.onAdopted();
+        });
+        let pumpTail: Promise<void> | undefined;
+        const monitor = creator.run(() => {
+          runtime.setRuntime("creator");
+          return createMonitor(queue, deliver, {
+            pollIntervalMs: 60_000,
+            ...(mode === "detached"
+              ? {
+                  runPumpTask: (work) => {
+                    pumpTail = runWithGatewayIndependentRootWorkContinuation(work);
+                    return pumpTail;
+                  },
+                }
+              : {}),
+          });
+        });
+        const scanned = createDeferred();
+        const scanGate = createDeferred();
+        const listUnsettled = queue.listUnsettled!.bind(queue);
+        let holdScan = mode === "released";
+        queue.listUnsettled = async (...args) => {
+          if (holdScan) {
+            holdScan = false;
+            scanned.resolve();
+            await scanGate.promise;
+          }
+          return await listUnsettled(...args);
+        };
+        monitor.start();
+        try {
+          await foreign.run(() =>
+            runWithGatewayIndependentRootWorkAdmission(async () => {
+              runtime.setRuntime("foreign");
+              await monitor.admit({ id: "event-ended-root", lane: "a", text: "hello" });
+              if (mode === "released") {
+                await scanned.promise;
+              }
+            }),
+          );
+          scanGate.resolve();
+          await entered.promise;
+          if (mode === "detached") {
+            await pumpTail;
+          }
+          gate.resolve();
+          expect(await delivered.promise).toEqual({ admissionClosed: false, runtime: "creator" });
+          expect(deliver).toHaveBeenCalledOnce();
+          await monitor.waitForIdle();
+          await expect(queue.listPending()).resolves.toEqual([]);
+          await expect(queue.listClaims()).resolves.toEqual([]);
+        } finally {
+          gate.resolve();
+          scanGate.resolve();
+          await monitor.stop();
+          await Promise.all([creator.dispose(), foreign.dispose()]);
         }
-        return await listUnsettled(...args);
-      };
-      monitor.start();
-      try {
-        // Admit inside a root that releases as soon as the enqueue returns;
-        // the gated scan keeps the claim from happening until after that.
-        await runWithGatewayIndependentRootWorkAdmission(async () => {
-          await monitor.admit({ id: "event-released-root", lane: "a", text: "hello" });
-          await pendingScanStarted;
-        });
-        releasePendingScan();
-        await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
-        releaseDeliver();
-
-        await vi.waitFor(() => expect(admissionClosedDuringDelivery).toBeDefined());
-        expect(admissionClosedDuringDelivery).toBe(false);
-        await monitor.waitForIdle();
-        await expect(queue.listClaims()).resolves.toEqual([]);
-      } finally {
-        releaseDeliver();
-        releasePendingScan();
-        await monitor.stop();
-      }
-    });
-  });
+      });
+    },
+  );
 
   it("completes deliveries whose terminal result races a stop abort", async () => {
     await withQueue(async (queue) => {

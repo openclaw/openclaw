@@ -1,5 +1,6 @@
 /** Shared durable channel-ingress admission, pump, retention, and shutdown lifecycle. */
 import { formatErrorMessage } from "../../infra/errors.js";
+import { wrapCurrentPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import {
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
@@ -57,6 +58,8 @@ export const CHANNEL_INGRESS_RETENTION_DEFAULTS = Object.freeze({
 export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetadata = unknown>(
   options: CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata>,
 ) {
+  // Deferred pumps can be woken outside the creating plugin's runtime scope.
+  options = wrapCurrentPluginInstance(options);
   const now = options.now ?? Date.now;
   const waitForDeliveryIdleBeforeRepump = options.waitForDeliveryIdleBeforeRepump ?? false;
   const retention =
