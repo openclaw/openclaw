@@ -322,7 +322,9 @@ it.runIf(process.platform !== "win32")(
       await fs.writeFile(tokenFile, "fixture-auth\n", { mode: 0o600 });
       const opClient = new OpClient({ opBin, tokenFile, timeoutMs: 5_000 });
       let clock = 1_000;
+      let elapsed = 0;
       vi.spyOn(Date, "now").mockImplementation(() => clock);
+      vi.spyOn(performance, "now").mockImplementation(() => elapsed);
       const configured = { ...config(), cacheTtlSeconds: 1 };
       const audit = new MemoryKeyedStore<AuditRow>(() => clock);
       const grants = new MemoryKeyedStore<StandingGrant>(() => clock);
@@ -334,10 +336,10 @@ it.runIf(process.platform !== "win32")(
       });
       const first = await (await prepareGet(broker, "real-1", "automatic")).get();
       expect(first).toMatchObject({ value: "secret-real" });
+      // The wall clock steps backwards while elapsed time advances past the TTL,
+      // so only the monotonic clock can expire the cached secret.
       clock -= 60 * 60 * 1000;
-      await new Promise((resolve) => {
-        setTimeout(resolve, 1_100);
-      });
+      elapsed = 2_000;
       const second = await (await prepareGet(broker, "real-2", "automatic")).get();
       expect(second).toMatchObject({ value: "secret-real" });
       expect(await fs.readFile(counterFile, "utf8")).toBe("1\n1\n");
