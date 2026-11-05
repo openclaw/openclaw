@@ -95,8 +95,7 @@ export class OpenAIQuicksilverAudioClock {
       );
       nextFrameAt += (skippedFrames + 1) * OPENAI_QUICKSILVER_AUDIO_FRAME_DURATION_MS;
       // Publish before delivery so synchronous teardown also cancels the first tick's successor.
-      this.timer = setTimeout(tick, Math.max(0, nextFrameAt - performance.now()));
-      this.timer.unref?.();
+      this.timer = setTimeout(tick, Math.max(0, nextFrameAt - performance.now())).unref();
       this.onFrame(skippedFrames);
     };
     tick();

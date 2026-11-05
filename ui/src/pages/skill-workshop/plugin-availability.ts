@@ -2,7 +2,7 @@ import type { PluginsListResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { setPluginEnabled } from "../../lib/plugins/index.ts";
 
-export const SKILL_WORKSHOP_PLUGIN_ID = "skill-workshop";
+const SKILL_WORKSHOP_PLUGIN_ID = "skill-workshop";
 
 /** Why the Gateway serves no Workshop methods, and whether the page can turn the plugin on. */
 export type WorkshopPluginAvailability =
@@ -15,7 +15,7 @@ export type WorkshopPluginAvailability =
   | { status: "error"; error: unknown };
 
 /** How long a successful enable may wait for the Gateway to publish the Workshop. */
-export const WORKSHOP_PUBLISH_TIMEOUT_MS = 15_000;
+const WORKSHOP_PUBLISH_TIMEOUT_MS = 15_000;
 
 /**
  * Reads the plugin's catalog entry for one connection and turns it on. Results for a retired

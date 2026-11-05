@@ -81,6 +81,15 @@ describe("Template project CLI", () => {
     expect(first).toEqual(devPlan(4));
     expect(JSON.stringify(first)).not.toContain("openclaw-template-artifact-");
     expect(first.template.packageRoot).toMatch(/^template-artifact:sha256:/u);
+    await expect(runTemplatesDevCommand(root, { ...options, agentId: "" })).rejects.toThrow(
+      "__exit__:1",
+    );
+    expect(devPlan(5)).toMatchObject({
+      agent: { finalId: "" },
+      blockers: [expect.objectContaining({ code: "invalid_agent_id" })],
+      actions: expect.arrayContaining([expect.objectContaining({ kind: "agent", blocked: true })]),
+    });
+    expect(existsSync(options.workspace)).toBe(false);
   });
 
   it.for([

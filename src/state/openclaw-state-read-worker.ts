@@ -14,6 +14,7 @@ import {
 } from "../infra/worker-native-lifecycle.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
@@ -276,8 +277,8 @@ class StateReadTransport {
     private readonly onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
     private readonly awaitedOnly = false,
   ) {
-    // Capture nested input before the read owner can yield during snapshot preparation.
-    this.capturedCommand = structuredClone(command);
+    // Immutable owner snapshots can cross preparation waits without another private copy.
+    this.capturedCommand = isDeeplyFrozenPlainData(command) ? command : structuredClone(command);
   }
 
   private async closeTask(task: ReadTask): Promise<void> {
@@ -322,7 +323,7 @@ class StateReadTransport {
         expectedIdentity,
         snapshotRoot,
         postgresSnapshot,
-        command: { ...readCommand },
+        command: readCommand,
       };
       const pool = readPool(this.source.state, this.source.ownsAdmission(), this.awaitedOnly);
       // Maintenance reuses this reader; standalone inspection releases it before metadata loads.

@@ -7,7 +7,6 @@ import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-c
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { WORKSHOP_PUBLISH_TIMEOUT_MS } from "./plugin-availability.ts";
 import { createContext, createRuntimeConfigStub } from "./skill-workshop-page.test-support.ts";
 import { SkillWorkshopPage } from "./skill-workshop-page.tsx";
 
@@ -268,7 +267,7 @@ describe("without the skill-workshop plugin", () => {
     const timers: Array<{ run: () => void; delay?: number }> = [];
     const realSetTimeout = globalThis.setTimeout;
     vi.spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay?: number) => {
-      if (delay === WORKSHOP_PUBLISH_TIMEOUT_MS) {
+      if (delay === 15_000) {
         timers.push({ run, delay });
         return 0 as unknown as ReturnType<typeof setTimeout>;
       }
@@ -312,6 +311,25 @@ describe("without the skill-workshop plugin", () => {
 
     await waitText(page, "An admin can turn it on from Plugins.");
     expect(button(page, "Turn on Skill Workshop")).toBeNull();
+    // Non-admins are not told to turn it on themselves.
+    expect(page.textContent).not.toContain("Turn it on to let");
+  });
+
+  it("does not offer the button when plugins are turned off on the Gateway", async () => {
+    const request = pluginGateway({ enabled: false });
+    const runtimeConfig = createRuntimeConfigStub({
+      sourceConfig: { plugins: { enabled: false } },
+    });
+    const page = await mount(request, {
+      withoutPlugin: true,
+      methods: pluginMethods,
+      runtimeConfig,
+    });
+
+    await waitText(page, "Plugins are turned off on this Gateway.");
+    expect(button(page, "Turn on Skill Workshop")).toBeNull();
+    expect(runtimeConfig.ensureLoaded).toHaveBeenCalled();
+    expect(request.mock.calls.some(([method]) => method === "plugins.setEnabled")).toBe(false);
   });
 
   it.each([

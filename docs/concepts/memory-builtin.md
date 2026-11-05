@@ -185,15 +185,22 @@ When the index identity reports an OpenClaw chunking-implementation change,
 a normal or CLI search rebuilds it before returning results. The rebuild uses
 the agent's current embedding settings; status inspection remains read-only.
 
-Search-triggered maintenance applies pending memory-file changes incrementally
-while searches remain available. Session transcript indexing waits until the
+Resident searches read the published index without starting source-wide
+reconciliation. Pending updates remain visible as a stale-result warning.
+File watchers apply changes incrementally. Session transcript indexing waits until the
 agent has had no transcript changes or running turns for 30 seconds. While the
 agent is active, pending changes keep their original age. After about five minutes,
 indexing starts in the next gap between turns without waiting for another quiet
-period. It never starts during a running turn. One pass covers the agent's pending
+period. Ordinary session passes wait for a gap between turns. One pass covers the agent's pending
 sessions, sharing transcript preparation, embedding-cache reads, and bounded
 publication transactions. If a turn starts during a pass, indexing finishes its
 current bounded group and resumes after the next quiet period.
+The same indexing timer also checks for missed file and transcript events every
+five minutes, using the existing maximum-deferral interval. This recovery pass
+runs even during an active turn and keeps the published index available to searches.
+The deadline bounds when recovery starts; source size, embedding failures, and
+full-rebuild backoff can delay completion. Standalone `openclaw memory search`
+refreshes sources before returning because it has no resident maintenance timer.
 Repeated notifications for an unchanged transcript do not rewrite its source
 metadata; changes to its content, timestamp, or size still update the index.
 
@@ -230,7 +237,7 @@ still publish when its identity is valid. Explicit CLI repair bypasses the
 process-local cooldown.
 
 Optional embedding-provider failures also share their 30-second recovery cooldown
-with search-triggered maintenance. Searches retain keyword recall, and existing
+with background maintenance. Searches retain keyword recall, and existing
 semantic indexes remain intact. An already keyword-only index can still accept
 file updates during the cooldown; semantic indexing resumes after recovery.
 
@@ -245,7 +252,7 @@ If the shared file worker exits unexpectedly, Memory Core reports unavailable
 watcher health and logs a warning. It restarts after 0.5, 2, and 5 seconds,
 restoring live subscriptions and rescanning their scopes to catch missed edits.
 Four failures within one minute stop automatic restarts; health remains unavailable
-and searches refresh memory in the background. Restart the Gateway after resolving
+and the indexing timer continues to reconcile memory. Restart the Gateway after resolving
 the worker failure to resume observation. Normal shutdown does not restart the worker.
 
 When native file watching is unavailable, Memory Core uses background polling
@@ -272,9 +279,9 @@ the warning says when no reason was reported. Restart the Gateway after resolvin
 the native backend problem to try native watching again.
 
 If the host runs out of native file-watch capacity, Memory Core logs one warning
-and disables its watchers. Later searches trigger incremental synchronization
-to discover file changes. A search can return the previous index while that
-background work finishes; subsequent searches see the updated content. Restart
+and disables its watchers. The indexing timer continues incremental synchronization
+to discover file changes at its five-minute recovery interval. Searches use the
+previous index while that work finishes and report pending updates. Restart
 the Gateway after restoring watch capacity to enable native watching again.
 
 Incremental indexing, stale-source cleanup, and cache pruning wait asynchronously when

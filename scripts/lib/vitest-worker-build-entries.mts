@@ -264,6 +264,7 @@ export const preservedModuleBuildSources = [
 
 // Source-relative script readers retain their exact input bytes in the prepared layout.
 export const preservedModuleBuildAssets = [
+  "scripts/e2e/lib/kitchen-sink-plugin/npm-version.txt",
   "test/fixtures/acp/owner-agent.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/agents.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/channels-discord.json",

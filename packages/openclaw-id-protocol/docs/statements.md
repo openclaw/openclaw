@@ -73,7 +73,7 @@ additive change. v1-draft accepts only `ed25519`.
 
 | Type               | Body                                                                                                     | Valid signer                             | Owner capability needed                                        |
 | ------------------ | -------------------------------------------------------------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------- |
-| OwnerDeviceCert    | device_pub, peer_keys[W] (<= 5), label, scope `owner`, caps, issued_at, expires_at\|null, root_epoch     | R, or a current owner device of the claw | `approve_device`; caps within the signer's (`caps_escalation`) |
+| OwnerDeviceCert    | device_pub, peer_keys[W] (<= 10), label, scope `owner`, caps, issued_at, expires_at\|null, root_epoch    | R, or a current owner device of the claw | `approve_device`; caps within the signer's (`caps_escalation`) |
 | ServerBinding      | claw_id, hostname, k_srv, k_gw, binding_seq, root_epoch, issued_at                                       | R only                                   | n/a                                                            |
 | InviteCap          | claw_id, invite_id, role, audience {kind, value}, label, created_at, expires_at, single_use, secret_hash | current owner device (or R)              | `invite`                                                       |
 | MembershipChange   | claw_id, seq, target (by op), issued_at                                                                  | current owner device (or R)              | `manage_members`; `approve_device` for `add_owner_device`      |
@@ -150,15 +150,35 @@ nothing else. There are no certificate chains and no list of revoked keys.
   one member browser; `remove` removes a member. The Gateway disconnects the removed keys and
   invalidates their device tokens. Nothing is remembered: a later Revocation of a key the
   claw no longer lists changes nothing.
+- **A revocation covers what its signer saw.** A Revocation names its `claw_id` and the
+  membership `seq` its signer last saw (the snapshot's seq; it may not be ahead of the claw's,
+  `seq_conflict`). Every listed key records the seq at which it was listed (`listed_seq`, and
+  per peer key on owner devices); listing a key that is still listed anywhere at the claw keeps
+  its earliest seq, so re-adding or copying it never puts it out of reach. A
+  Revocation removes a target only if it was listed at or before the Revocation's seq; the
+  devices the target approved go with it whenever they were listed. A key listed again after
+  that seq is a new approval the signer never saw: replaying the captured bytes is refused
+  with `seq_conflict` and changes nothing, and stopping the replay needs no list of past
+  revocations. To remove the new listing, sign a new Revocation at the current seq.
+- **Invites expire.** An InviteCap may expire at most a week after the Gateway registers it
+  (`MAX_INVITE_LIFETIME_SECONDS`, `limit_reached`), one that already expired is refused
+  (`expired`), and a claw keeps at most 100 invites (`MAX_INVITES`, `limit_reached`). An
+  invite record is deleted once its cap expired (plus the 300 seconds of clock skew) unless a
+  redemption is still pending on it: registration and redemption already refuse an expired
+  cap, so nothing is left to replay. Removing an owner device also deletes the open invites
+  it registered (`created_by`).
 - **Inactivity.** The Gateway records `last_seen` per owner device and per member browser
   whenever the tunnel admits it (at most once an hour). Owner devices unused for 90 days and
   member browsers unused for 30 days are dropped (Gateway config
   `ownerDeviceInactivityDays` / `memberDeviceInactivityDays`). Inactivity never cascades: the
   devices a dropped device approved stay.
-- **Caps.** A claw lists at most 20 owner devices (`MAX_OWNER_DEVICES`), 50 members
-  (`MAX_MEMBERS`) and 5 browsers per member (`MAX_MEMBER_PEER_KEYS`); an owner device
-  certificate carries at most 5 peer keys. Adding past a cap is refused with `limit_reached`
-  ("remove one to add another"). The snapshot therefore always fits the 256-entry list limit.
+- **Caps.** A claw lists at most 20 owner devices (`MAX_OWNER_DEVICES`), 256 members
+  (`MAX_MEMBERS`) and 10 browsers per member (`MAX_MEMBER_PEER_KEYS`); an owner device
+  certificate carries at most 10 peer keys (`MAX_OWNER_DEVICE_PEER_KEYS`). Adding past a cap is
+  refused with `limit_reached` ("remove one to add another"). The snapshot therefore always fits
+  the 256-entry list limit: at most 256 members and 200 owner peer keys. A snapshot at every cap,
+  with 256-character account ids, is about 275 KiB of JSON (about 600 KiB if every id
+  character needs a JSON escape); Discovery sizes its snapshot publication limit for it.
 - **Snapshots** carry current state only: each owner device's key and granted caps, owner peer
   keys and members. Readers outside the claw (Discovery) take an owner device's caps from the
   snapshot; a certificate a browser presents is only the Gateway's approval record.
@@ -241,6 +261,9 @@ node --import ./scripts/tsx.mjs -e 'const { buildStatementVectors } = await impo
   certificate cannot exceed its approver's caps.
 - No certificate chains or revocation lists: each claw keeps an allowlist (see The allowlist
   model); bindings are signed by R only.
+- Revocation carries `claw_id` and `seq` and covers only keys listed at or before that seq, so
+  a replayed revocation cannot remove a key that was approved again.
+- An InviteCap lasts at most a week, and a claw keeps at most 100 invites.
 - Owner devices are added at a claw with `MembershipChange { op: "add_owner_device", cert }`;
   a pending redemption is declined with `{ op: "deny_invite", invite_id }`.
 - MembershipChange.seq is a compare-and-set on the Gateway's seq.
