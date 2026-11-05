@@ -118,6 +118,7 @@ describe("release:prepush", () => {
     expect(deps.runCommand.mock.calls.every(([command]) => command.cwd === process.cwd())).toBe(
       true,
     );
+    expect(deps.runCommand.mock.calls[0]?.[0].env?.OPENCLAW_RELEASE_CONTEXT_REF).toBeUndefined();
   });
 
   it("stops at the first failed integrated gate", async () => {
@@ -137,29 +138,28 @@ describe("release:prepush", () => {
     expect(deps.assertCleanWorktree).toHaveBeenCalledTimes(2);
   });
 
-  it("refreshes main and pushes only the captured SHA to the canonical branch", async () => {
+  it.each([false, true])("pushes only the validated cut (explicit: %s)", async (explicit) => {
     const { deps, run } = fixture();
     deps.assertAuditBounds.mockReturnValueOnce(MERGE_BASE_SHA).mockReturnValueOnce(RELEASE_SHA);
     deps.refreshReleaseBranch.mockReturnValue(RELEASE_SHA);
-    expect(await run({ push: true })).toBe(0);
+    const options = explicit
+      ? { branch: "release/2026.10.6", head: HEAD_SHA, push: true }
+      : { push: true };
+    expect(await run(options)).toBe(0);
     expect(deps.refreshMain).toHaveBeenCalledOnce();
-    expect(deps.currentBranch).toHaveBeenCalledTimes(2);
+    expect(deps.currentBranch).toHaveBeenCalledTimes(explicit ? 0 : 2);
+    expect(deps.resolveCommit).toHaveBeenCalledWith(explicit ? HEAD_SHA : "HEAD");
+    expect(
+      deps.runCommand.mock.calls.every(
+        ([command]) => command.env?.OPENCLAW_RELEASE_CONTEXT_REF === "release/2026.10.6",
+      ),
+    ).toBe(true);
     expect(deps.runCommand.mock.calls[0]?.[0].args).toEqual([
       "diff",
       "--check",
       RELEASE_SHA,
       HEAD_SHA,
     ]);
-    expect(deps.pushValidatedHead).toHaveBeenCalledWith(HEAD_SHA, "release/2026.10.6");
-  });
-
-  it("validates and pushes an orchestrator-supplied exact cut to its canonical branch", async () => {
-    const { deps, run } = fixture();
-    deps.assertAuditBounds.mockReturnValueOnce(MERGE_BASE_SHA).mockReturnValueOnce(RELEASE_SHA);
-    deps.refreshReleaseBranch.mockReturnValue(RELEASE_SHA);
-    expect(await run({ branch: "release/2026.10.6", head: HEAD_SHA, push: true })).toBe(0);
-    expect(deps.resolveCommit).toHaveBeenCalledWith(HEAD_SHA);
-    expect(deps.currentBranch).not.toHaveBeenCalled();
     expect(deps.pushValidatedHead).toHaveBeenCalledWith(HEAD_SHA, "release/2026.10.6");
   });
 
