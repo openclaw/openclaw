@@ -1,0 +1,2 @@
+# Real-Gateway contract test: removing a provider that serves the default model names that default in the confirm dialog, then chat fails visibly without sending an unauthenticated request; plus the matching view unit test.
+208
