@@ -68,7 +68,7 @@ it("reports used URL assets but not discarded URL calculations", () => {
   visitPluginSourceReferences(
     codec,
     fs.readFileSync(codec, "utf8"),
-    createJiti(codec, { fsCache: false, moduleCache: false }),
+    () => createJiti(codec, { fsCache: false, moduleCache: false }),
     (reference, kind) => visited.push(`${kind} ${reference}`),
   );
   expect(visited).toEqual(["asset ./codec.wasm", "import ./glue.mjs"]);
