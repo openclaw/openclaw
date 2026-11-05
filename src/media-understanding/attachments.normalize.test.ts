@@ -69,4 +69,25 @@ describe("resolveAttachmentKind", () => {
       }),
     ).toBe("image");
   });
+
+  it("classifies by file name when the channel reports unknown as the MIME type", () => {
+    expect(
+      resolveAttachmentKind({
+        path: "/Users/openclaw/Library/Messages/Attachments/ab/Audio Message.caf",
+        kind: "unknown",
+        mime: "unknown",
+        index: 0,
+      }),
+    ).toBe("audio");
+  });
+
+  it("keeps an unclassified declared MIME type authoritative over the file name", () => {
+    expect(
+      resolveAttachmentKind({
+        path: "/tmp/voice.caf",
+        mime: "application/x-custom",
+        index: 0,
+      }),
+    ).toBe("unknown");
+  });
 });

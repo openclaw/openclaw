@@ -308,7 +308,13 @@ export function resolveMediaFactKind(fact: MediaFactInput): MediaKind | undefine
       return mimeKind;
     }
     // Legacy channel-mode projections persist bare image or sticker kind as MediaType.
-    return isMediaKind(normalizedContentType) ? normalizedContentType : undefined;
+    if (isMediaKind(normalizedContentType) && normalizedContentType !== "unknown") {
+      return normalizedContentType;
+    }
+    // A declared type/subtype stays authoritative; sentinels such as "unknown" fall back to the file name.
+    if (normalizedContentType.includes("/")) {
+      return undefined;
+    }
   }
   const source = normalizeOptionalString(fact.path) ?? normalizeOptionalString(fact.url);
   if (!source) {
