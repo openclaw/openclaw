@@ -1,16 +1,17 @@
 /**
- * Cold actor accounting after entry-only invalidation, on synthetic SQLite history.
+ * Actor hydration after entry-only invalidation, on synthetic SQLite history.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-actor-accounting-reuse-measure.ts \
  *   --output .local/actor-accounting-base --iterations 1000 [--baseline-dir <overlay>]
  * Repeat alternating base/candidate, then separately with --mode allocation.
  * Overlay the original hydration and context-stats worker modules at their source paths.
  * Measures the real hydration owner with an unchanged transcript and previously owned
  * totals; the actor boundary regression separately proves invalidation and append behavior.
- * Acceptance: identical hydrated facts, one fewer full-history aggregate per hydration,
- * lower CPU/allocation, no material GC increase. Fresh/changed histories still scan.
+ * Acceptance: identical hydrated facts, no repeated unchanged transcript-window load,
+ * lower CPU/allocation, no material GC increase. Fresh/changed histories still load.
  * Setup and cleanup are excluded. Each run deletes its synthetic state; keeps result.json.
  */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
@@ -140,6 +141,9 @@ try {
     iterations,
     historyEvents: events.length,
     historyBytes: previous.transcript.contextStats.sizeBytes,
+    transcriptDigest: createHash("sha256")
+      .update(JSON.stringify(previous.transcript.navigation))
+      .digest("hex"),
     elapsedMs,
     cpuMs: (used.user + used.system) / 1000,
     sampledAllocationBytes: profile ? sumSampledHeapBytes(profile.profile.head) : undefined,
