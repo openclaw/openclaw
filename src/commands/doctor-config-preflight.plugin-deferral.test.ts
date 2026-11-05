@@ -22,7 +22,10 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-d
 import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
-import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import {
+  trackDoctorPreflightCache,
+  useDoctorConfigPreflightHome,
+} from "./doctor-config-preflight.test-support.js";
 import { prepareLegacyConfigMigrationRuntime } from "./doctor/shared/legacy-config-migrate.test-support.js";
 
 const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
@@ -127,8 +130,10 @@ function makeFixture(home: string, pluginId: string) {
   };
 }
 
-function doctor(options: Parameters<typeof runDoctorConfigPreflight>[0] = {}) {
-  return runDoctorConfigPreflight({ ...doctorOptions, ...options });
+async function doctor(options: Parameters<typeof runDoctorConfigPreflight>[0] = {}) {
+  return trackDoctorPreflightCache(
+    await runDoctorConfigPreflight({ ...doctorOptions, ...options }),
+  );
 }
 
 function expectPending(pluginId: string, details: Record<string, unknown> = {}) {
@@ -322,9 +327,13 @@ module.exports.stateMigrations = ${JSON.stringify(actions)}.map(action => ({
             },
           ],
         });
-        await doctor();
+        const result = await doctor();
         expect((await f.read()).plugins).toEqual(config.plugins);
         if (source === "absent") {
+          expect(result.configChanged).toBe(true);
+          expect(result.snapshot.config.plugins?.entries?.[f.pluginId]?.config).toEqual({
+            enabled: false,
+          });
           expect(readDeferredPluginMigrations({ includeDeferred: true })).toEqual([]);
         } else {
           f.pending({ requiresStateMigration: true });
@@ -779,7 +788,7 @@ module.exports.stateMigrations = ${JSON.stringify(actions)}.map(action => ({
         await fs.unlink(path.join(f.root, "doctor-contract-api.cjs"));
         await f.stateless();
         const original = await f.raw();
-        await doctor(prepared);
+        expect((await doctor(prepared)).configChanged).toBe(false);
         expect(readDeferredPluginMigrations()).toEqual([]);
         expect(note).toHaveBeenCalledWith(
           '- Plugin "fixture" version "1.0.0": no plugin migration contract. No migration ran; existing data and settings have been kept.',

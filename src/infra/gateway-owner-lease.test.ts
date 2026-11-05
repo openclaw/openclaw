@@ -692,9 +692,10 @@ describe("Gateway owner lease", () => {
     await using owner = fixture();
     const { env } = owner;
     const startHeartbeat = leaseHeartbeat.startOpenClawStateLeaseHeartbeat;
-    vi.spyOn(leaseHeartbeat, "startOpenClawStateLeaseHeartbeat").mockImplementation((params) =>
-      startHeartbeat({ ...params, heartbeatMs: 100 }),
-    );
+    vi.spyOn(leaseHeartbeat, "startOpenClawStateLeaseHeartbeat").mockImplementation((params) => {
+      expect(params.heartbeatMs).toBe(100_000);
+      return startHeartbeat({ ...params, heartbeatMs: 100 });
+    });
     const lookup = vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(null);
     const lease = owner.acquire();
     expect(readGatewayOwnerLease({ env })).toMatchObject({ startedAt: null, state: "unknown" });
