@@ -180,6 +180,12 @@ export async function ensureLoaded(
       continue;
     }
     const hydrated = hydratedRaw;
+    const loadWarning = state.deps.describeJobLoadWarning?.(hydrated);
+    const loadWarningKey = `host:${hydrated.id}`;
+    if (loadWarning && !state.warnedInvalidPersistedJobKeys.has(loadWarningKey)) {
+      state.warnedInvalidPersistedJobKeys.add(loadWarningKey);
+      state.deps.log.warn({ jobId: hydrated.id, name: hydrated.name }, loadWarning);
+    }
     jobs.push(hydrated);
     durableNextRunAtMsByJobId.set(hydrated.id, hydrated.state.nextRunAtMs);
   }

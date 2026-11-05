@@ -1,7 +1,10 @@
 // Exercise durable auth identity through isolated cron orchestration, stopping at provider I/O.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
-import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
+import {
+  removeAuthProfilesAcrossOwnerStores,
+  setAuthProfileOrder,
+} from "../agents/auth-profiles/profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
@@ -16,6 +19,7 @@ import {
 } from "../agents/test-helpers/model-fallback-runner.test-support.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { captureCronUpdatedInferenceBinding } from "../gateway/server-methods/cron-input-validation.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -71,6 +75,7 @@ function runWithConfig(
 }
 
 function setupClaudeCliBackend(): void {
+  isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
   cliBackendsTesting.setDepsForTest({
     resolveRuntimeCliBackends: () => [
       {
@@ -85,6 +90,12 @@ function setupClaudeCliBackend(): void {
     resolvePluginSetupCliBackend: () => undefined,
   });
 }
+
+const claudeToken = (): AuthProfileCredential => ({
+  type: "token",
+  provider: "anthropic",
+  token: "synthetic-claude-token",
+});
 
 function oauth(provider = "openai"): AuthProfileCredential {
   return {
@@ -413,4 +424,152 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       expect(runCliAgentMock).not.toHaveBeenCalled();
     },
   );
+  // Claude CLI forwards a stored Anthropic account the same way interactive chat does.
+  const claudeCliConfig = (): OpenClawConfig => {
+    const cfg = config("anthropic/claude-opus-4-6");
+    cfg.agents!.defaults!.models = {
+      "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+    };
+    cfg.auth = {
+      profiles: { "anthropic:default": { provider: "anthropic", mode: "token" } },
+      order: { anthropic: ["anthropic:default"] },
+    };
+    return cfg;
+  };
+
+  it.each([
+    { model: undefined, source: "auto" },
+    { model: "anthropic/claude-opus-4-6@anthropic:default", source: "user" },
+  ] as const)(
+    "records and runs the stored account a Claude CLI runtime forwards (model=$model)",
+    async ({ model, source }) => {
+      await saveProfiles({ "anthropic:default": claudeToken() });
+      setupClaudeCliBackend();
+      const cfg = claudeCliConfig();
+      const binding = await captureCronInferenceBinding({ cfg, agentId: "main", model });
+      expect(binding).toMatchObject({
+        provider: "anthropic",
+        profileId: "anthropic:default",
+        authRequirement: "subscription",
+        source,
+      });
+      resolveConfiguredModelRefMock.mockReturnValue({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+      let assertCurrent: (() => void) | undefined;
+      runCliAgentMock.mockImplementation(async (request) => {
+        assertCurrent = request.assertCurrent;
+        expect(assertCurrent).toBeTypeOf("function");
+        assertCurrent?.();
+        return {
+          payloads: [{ text: "stored account reply" }],
+          meta: { agentMeta: { provider: "claude-cli", model: "claude-opus-4-6" } },
+        };
+      });
+
+      mockRunCronFallbackPassthrough();
+      const result = await runWithConfig(
+        cfg,
+        makeIsolatedAgentJobFixture({ agentId: "main", inferenceBinding: binding }),
+      );
+
+      expect(result.status, result.error).toBe("ok");
+      expect(runCliAgentMock).toHaveBeenCalledOnce();
+      expect(runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
+        provider: "claude-cli",
+        authProfileId: "anthropic:default",
+      });
+      expect(runCliAgentMock.mock.lastCall?.[0].nativeAuthOnly).toBeUndefined();
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(() => assertCurrent?.()).toThrow(/disconnected|replaced|settlement/i);
+    },
+  );
+
+  it.each(["removed", "reconnected"] as const)(
+    "rejects a %s account during CLI preparation before credential use",
+    async (change) => {
+      await saveProfiles({ "anthropic:default": claudeToken() });
+      setupClaudeCliBackend();
+      const cfg = claudeCliConfig();
+      const binding = await captureCronInferenceBinding({ cfg, agentId: "main" });
+      resolveConfiguredModelRefMock.mockReturnValue({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+      const credentialUse = vi.fn();
+      runCliAgentMock.mockImplementation(async (request) => {
+        expect(request.assertCurrent).toBeTypeOf("function");
+        request.assertCurrent?.();
+        await removeAuthProfilesAcrossOwnerStores({
+          profileIds: ["anthropic:default"],
+          agentDir: state.agentDir(),
+        });
+        if (change === "reconnected") {
+          await saveProfiles({ "anthropic:default": claudeToken() });
+        }
+        request.assertCurrent?.();
+        credentialUse();
+        return { payloads: [{ text: "must not run" }], meta: {} };
+      });
+      mockRunCronFallbackPassthrough();
+      const result = await runWithConfig(
+        cfg,
+        makeIsolatedAgentJobFixture({ agentId: "main", inferenceBinding: binding }),
+      );
+      expect(result.status).toBe("error");
+      expect(result.error).toMatch(/disconnected|replaced/i);
+      expect(credentialUse).not.toHaveBeenCalled();
+    },
+  );
+
+  it("leaves a native Claude CLI login unbound and rejects a missing explicit account", async () => {
+    await saveProfiles({ "anthropic:default": claudeToken() });
+    setupClaudeCliBackend();
+    const cfg = claudeCliConfig();
+
+    await expect(
+      captureCronInferenceBinding({
+        cfg,
+        agentId: "main",
+        model: "anthropic/claude-opus-4-6@anthropic:claude-cli",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      captureCronInferenceBinding({
+        cfg,
+        agentId: "main",
+        model: "anthropic/claude-opus-4-6@anthropic:missing",
+      }),
+    ).rejects.toThrow(/No credentials found for profile "anthropic:missing"/);
+  });
+
+  it("binds an unbound Claude CLI job from an explicit model@profile update", async () => {
+    await saveProfiles({ "anthropic:default": claudeToken() });
+    setupClaudeCliBackend();
+    const cfg = claudeCliConfig();
+    const update = async (model: string) => {
+      const payload = { kind: "agentTurn" as const, message: "check status", model };
+      return await captureCronUpdatedInferenceBinding(
+        makeIsolatedAgentJobFixture({ payload }),
+        { payload },
+        cfg,
+        {} as Parameters<typeof captureCronUpdatedInferenceBinding>[3],
+      );
+    };
+
+    const selected = await update("anthropic/claude-opus-4-6@anthropic:default");
+    try {
+      expect(selected?.inferenceBinding).toMatchObject({
+        provider: "anthropic",
+        profileId: "anthropic:default",
+        authRequirement: "subscription",
+        source: "user",
+      });
+    } finally {
+      selected?.disposeInferenceAuthorization?.();
+    }
+    // The native login stays the CLI's own and leaves the job unbound.
+    await expect(update("anthropic/claude-opus-4-6@anthropic:claude-cli")).resolves.toBeUndefined();
+  });
 });

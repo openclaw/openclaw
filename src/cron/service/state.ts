@@ -110,6 +110,8 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
+  /** Host-owned, read-only diagnostics before startup recovery can dispatch loaded jobs. */
+  describeJobLoadWarning?: (job: CronStoredJob) => string | undefined;
   /** List enabled, configured channel ids without exposing channel machinery to cron core. */
   listConfiguredChannels?: () => readonly string[] | Promise<readonly string[]>;
   evaluateCronTrigger?: (params: {

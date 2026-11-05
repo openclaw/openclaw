@@ -43,8 +43,8 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { acquireCronInferenceAuthorization } from "../inference-binding.runtime.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
+import { prepareCronRunInference } from "../run-inference.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
@@ -168,15 +168,14 @@ export function createCronPromptExecutor(
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
     using inferenceLease = new DisposableStack();
     const binding = params.job.inferenceBinding;
-    const inferenceAuthorization = binding
-      ? await acquireCronInferenceAuthorization({
-          binding,
-          cfg: params.cfgWithAgentDefaults,
-          agentDir: params.agentDir,
-        })
-      : undefined;
-    if (inferenceAuthorization) {
-      inferenceLease.defer(() => inferenceAuthorization.dispose());
+    const inference = await prepareCronRunInference({
+      binding,
+      cfg: params.cfgWithAgentDefaults,
+      agentDir: params.agentDir,
+    });
+    const inferenceAuthorization = inference?.runParams.authProfileBinding;
+    if (inference) {
+      inferenceLease.defer(() => inference.dispose());
     }
     let canReusePreparedSession = preparedSessionAvailable;
     preparedSessionAvailable = false;
@@ -368,12 +367,7 @@ export function createCronPromptExecutor(
           catalog: thinkingCatalog,
           agentRuntime: candidateRuntime,
         });
-        if (binding && (providerOverride !== binding.provider || cliExecution)) {
-          throw new Error(
-            "Automation candidate is incompatible with its recorded inference account and route.",
-          );
-        }
-        inferenceAuthorization?.assertCurrent();
+        inference?.assertCandidate(providerOverride, cliExecution);
         assertCronRuntimeAuthorityCandidate({
           authority: params.job.runtimeAuthority,
           candidateRuntime,
@@ -495,22 +489,31 @@ export function createCronPromptExecutor(
                 const cliSessionBinding = params.cronSession.isNewSession
                   ? undefined
                   : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
-                const authProfileId = allowCliAuthProfileForwarding
-                  ? await resolveCliExecutionAuthProfileId({
-                      cliExecutionProvider: executionProvider,
-                      authProfileProvider: providerOverride,
-                      config: params.cfgWithAgentDefaults,
-                      agentDir: params.agentDir,
-                      sessionBinding: cliSessionBinding,
-                      selected: params.liveSelection.authProfileId
+                const resolveForwardedProfile = (
+                  selected: Parameters<typeof resolveCliExecutionAuthProfileId>[0]["selected"],
+                ) =>
+                  allowCliAuthProfileForwarding
+                    ? resolveCliExecutionAuthProfileId({
+                        cliExecutionProvider: executionProvider,
+                        authProfileProvider: providerOverride,
+                        config: params.cfgWithAgentDefaults,
+                        agentDir: params.agentDir,
+                        sessionBinding: cliSessionBinding,
+                        selected,
+                      })
+                    : Promise.resolve(undefined);
+                // A recorded account runs only when this backend forwards exactly that account.
+                const authProfileId = inference
+                  ? await inference.resolveCliAuthProfile(resolveForwardedProfile)
+                  : await resolveForwardedProfile(
+                      params.liveSelection.authProfileId
                         ? {
                             authProfileId: params.liveSelection.authProfileId,
                             authProfileIdSource:
                               params.liveSelection.authProfileIdSource === "user" ? "user" : "auto",
                           }
                         : undefined,
-                    })
-                  : undefined;
+                    );
                 if (trigger === "cron" && !binding && authProfileId) {
                   const refusal = new Error(
                     "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
@@ -540,6 +543,13 @@ export function createCronPromptExecutor(
                   ),
                   provider: executionProvider,
                   authProfileId,
+                  // Keep the recorded credential lifetime live through CLI preparation and launch.
+                  assertCurrent: inference
+                    ? () => {
+                        assertSettlementCurrent();
+                        inference.runParams.authProfileBinding?.assertCurrent();
+                      }
+                    : undefined,
                   nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,

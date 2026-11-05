@@ -1,11 +1,14 @@
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { enrollAuthProfileAuthorizationInDatabase } from "./authorization-enrollment.js";
 import type {
   AuthProfileAuthorizationEnrollment,
   AuthProfileAuthorizationOperations,
@@ -54,6 +57,35 @@ export async function enrollOwnedAuthProfileAuthorization(params: {
           },
         },
       );
+    } else if (params.context.maintenanceScope?.ownsSchemaMaintenance) {
+      // Doctor already owns offline maintenance. It must not enter the Gateway-only executor.
+      // The same credential-preserving CAS and native commit owner retain replacement/refusal semantics.
+      receipt = runOpenClawAgentWriteTransaction(
+        ({ db }) => {
+          assertCurrent();
+          const result = enrollAuthProfileAuthorizationInDatabase(db, "agent", params.input);
+          stageSqliteTransactionState(db, {
+            stage() {},
+            prepareCommit() {
+              assertCurrent();
+              settle ??= fenceAuthProfileAuthorizationWrite(databasePath);
+            },
+            commit: () => settle?.(true, result.raw),
+            rollback: () => settle?.(true),
+            invalidate() {
+              settle ??= fenceAuthProfileAuthorizationWrite(databasePath);
+              settle(false);
+            },
+          });
+          return result;
+        },
+        { agentId: params.agentId, path: databasePath, env: params.env },
+        {
+          operationLabel: "auth-profiles.doctor-enroll-authorization",
+          repairAdmission: { assertCurrent },
+        },
+      );
+      noteAuthProfileFileWrite(databasePath);
     } else {
       const options = { agentId: params.agentId, path: databasePath, env: params.env };
       const execution = captureOpenClawAgentDatabaseExecution(options);

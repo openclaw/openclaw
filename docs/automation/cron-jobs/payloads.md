@@ -198,12 +198,27 @@ than falling back to another account. Model and route compatibility still apply.
 
 To change an account deliberately, update the job with a model/profile selection,
 for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
-Legacy jobs without a recorded inference owner require this explicit adoption
-before using host credentials; OpenClaw does not guess their historical account
-from current defaults. Environment-only and provider-config API keys have no durable
-account ownership, so new host-managed jobs reject them at creation. Store the key
-in an auth profile and select that profile instead. Credentialless models remain
-usable without an account.
+For legacy jobs, repairing Doctor records the currently selected eligible shared account,
+or the first eligible account from the normal runtime planner. It does not use past
+run telemetry to guess an account, pin inherited models, or change fallback lists.
+Doctor preserves valid approval references and saves a verified backup before committing.
+Missing accounts and personal accounts requiring their owner’s authorization stay unchanged
+with adoption instructions. Managed updates and the standard container entrypoint run
+repairing Doctor; manual source upgrades must run `openclaw doctor --fix` before startup.
+Startup diagnostics do not capture credentials or rewrite jobs.
+
+Environment and provider-config keys have no stored account to record: new and legacy
+jobs on those routes stay unbound and use the configured key. If the route instead
+selects a stored account, the unbound job stops until that account is adopted.
+An account refusal ends the run without trying another model or provider.
+Credentialless models remain usable without an account.
+
+CLI backends that forward stored profiles record the account their normal selector
+would forward. An explicit `model@profile` update can adopt that account for an unbound
+CLI job. A bound CLI run must forward exactly the recorded account and retain its live
+authorization through preparation and launch. Native CLI logins and backends that never
+forward profiles remain unbound; missing or incompatible explicit forwarded accounts
+are rejected.
 Native runtime-owned jobs retain their runtime’s existing authorization checks, and a
 native connection cannot silently replace a job’s recorded host-managed inference account.
 An explicit update from an authorized native creator can adopt its runtime authority.

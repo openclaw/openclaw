@@ -12,8 +12,30 @@ export type CronRunInference = {
     | "authProfileIdSource"
   >;
   assertCandidate: (provider: string, cliExecution: boolean) => void;
+  /**
+   * A CLI candidate may run only when its backend forwards exactly the recorded account,
+   * selected explicitly; `resolve` is the same selector interactive CLI turns use.
+   */
+  resolveCliAuthProfile: (
+    resolve: (selected: {
+      authProfileId: string;
+      authProfileIdSource: "user";
+    }) => Promise<string | undefined>,
+  ) => Promise<string>;
   dispose: () => void;
 };
+
+function incompatibleCandidateError(cliExecution: boolean, cause?: unknown): Error {
+  return new Error(
+    "Automation candidate is incompatible with its recorded inference account and route. " +
+      (cliExecution
+        ? "The selected runtime uses a CLI login that cannot use this job's stored account. "
+        : "The selected model uses a different provider from this job's stored account. ") +
+      "Select a model compatible with the recorded account, or explicitly select a stored account with " +
+      "openclaw automations edit <jobId> --model <provider/model>@<profileId>.",
+    cause === undefined ? undefined : { cause },
+  );
+}
 
 /** Both Cron execution paths keep the recorded account bound through turn settlement. */
 export async function prepareCronRunInference(params: {
@@ -45,17 +67,27 @@ export async function prepareCronRunInference(params: {
       authProfileIdSource: binding.source,
     },
     assertCandidate(provider, cliExecution) {
-      if (provider !== binding.provider || cliExecution) {
-        throw new Error(
-          "Automation candidate is incompatible with its recorded inference account and route. " +
-            (cliExecution
-              ? "The selected runtime uses a CLI login, which cannot replace this job's stored account. "
-              : "The selected model uses a different provider from this job's stored account. ") +
-            "Select a model compatible with the recorded account, or explicitly select a stored account with " +
-            "openclaw automations edit <jobId> --model <provider/model>@<profileId> using a host-managed runtime.",
-        );
+      if (provider !== binding.provider) {
+        throw incompatibleCandidateError(cliExecution);
+      }
+      // CLI candidates finish this check in resolveCliAuthProfile, before the process starts.
+      authorization.assertCurrent();
+    },
+    async resolveCliAuthProfile(resolve) {
+      let profileId: string | undefined;
+      try {
+        profileId = await resolve({
+          authProfileId: binding.profileId,
+          authProfileIdSource: "user",
+        });
+      } catch (error) {
+        throw incompatibleCandidateError(true, error);
+      }
+      if (profileId !== binding.profileId) {
+        throw incompatibleCandidateError(true);
       }
       authorization.assertCurrent();
+      return profileId;
     },
     dispose: authorization.dispose,
   };

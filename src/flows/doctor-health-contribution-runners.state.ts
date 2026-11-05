@@ -228,6 +228,16 @@ export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise
     options: ctx.options,
     prompter: ctx.prompter,
   });
+  const { maybeRepairCronInferenceBindings } =
+    await import("../commands/doctor/cron/inference-binding-migration.js");
+  const inference = await maybeRepairCronInferenceBindings({
+    cfg: ctx.cfg,
+    env: ctx.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+  const { note } = await import("../../packages/terminal-core/src/note.js");
+  noteDoctorRepairResult(inference, note);
+  recordDoctorHealthWarnings(ctx, [], inference.warnings);
 }
 
 export async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
