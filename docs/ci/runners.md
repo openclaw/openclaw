@@ -390,6 +390,10 @@ Mantis Discord and web UI actor authorization, request resolution, and ref
 validation use `ubuntu-24.04`. Their live proof jobs retain separate runtime
 placement and deadlines.
 
+Mantis scenario dispatch and QA actor/ref validation also use `ubuntu-24.04`.
+The QA controls honor their `runner_group` input. QA profile planning, builds,
+shards, aggregation, and live transport workloads keep their existing runners.
+
 Ordinary iOS smoke CI builds the app and embedded Watch targets for the runner's
 architecture, using the same iPhone simulator for compilation and voice-cleanup
 tests. It omits compiler indexes, which CI does not consume, and finishes

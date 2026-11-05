@@ -222,6 +222,43 @@ it is an existing operator-owned service input, not a new installer. Preserve
 all current service limits, environment, locks, and drop-ins. Do not install the
 old mutable wrapper, enable the historical timer, or invent a second cadence.
 
+## Host maintenance launcher and health check
+
+The host maintenance sources are imported from the private ops repository's
+installed bytes. Original SHA-256 prefixes (provenance, not installation approval):
+
+| File                                   | Original SHA-256 prefix |
+| -------------------------------------- | ----------------------- |
+| `disk-maintenance-launcher.py`         | `c3ed27ebf9b0b512`      |
+| `openclaw-health-check`                | `a4629a05040d8025`      |
+| `openclaw-hourly-health-check.service` | `03ac7f1c43509605`      |
+| `openclaw-hourly-health-check.timer`   | `0b55981e1f794115`      |
+
+The launcher admits the two fixed maintenance jobs by service cgroup. Install it
+at `/usr/local/lib/openclaw-team/disk-maintenance-launcher.py` as `root:root`,
+mode `0644`; install the health body at
+`/usr/local/lib/openclaw-team/openclaw-health-check` as `root:root`, mode `0755`.
+The health body checks Gateway health/readiness and update freshness as the runtime
+user. The service invokes the launcher; the timer schedules it hourly. Both units
+belong in `/etc/systemd/system/` as `root:root`, mode `0644`.
+
+The launcher now takes the deployment lock exclusively and nonblockingly, then
+hands it to the release proofs as FD 9. The host's currently installed release
+library requires that lock on FD 9 before any command; this repository's library
+accepts the handoff unchanged. Runtime bodies and status reporters do not inherit
+either lock descriptor.
+Proof failures print their command, exit code, and last 2000 stderr bytes. The
+disk-maintenance body remains outside this closure; its launcher job entry is
+unchanged. Landing does not install these files: publication is a separate
+operator adoption under the canonical lock, approved per deployment.
+
+Run the four focused launcher tests on Linux as a non-root user (Node and Python
+stdlib only), from the repository root:
+
+```sh
+docker run --rm -u 1000:1000 -v "$PWD":/src:ro -w /src node:24-bookworm python3 -B .agents/skills/update-team-server/controller/disk-maintenance-launcher.test.py -v
+```
+
 ## Private operator configuration
 
 Supply `OPENCLAW_TEAM_OPERATOR_PROFILE` as JSON in the updater's private,
