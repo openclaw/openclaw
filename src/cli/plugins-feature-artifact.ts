@@ -5,7 +5,6 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { create as createArchive } from "tar";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { hasErrnoCode } from "../infra/errors.js";
 import { root } from "../infra/fs-safe.js";
 import { readPluginControlUiAssets } from "../plugins/control-ui-assets.js";
 import { safePluginInstallFileName } from "../plugins/install-paths.js";
@@ -26,13 +25,7 @@ export type PluginsPackOptions = { root?: string; out?: string; json?: boolean }
 
 /** Produce one reviewable import: bundled code, immutable UI assets, no install scripts. */
 async function packFeaturePlugin(opts: PluginsPackOptions) {
-  const requestedRoot = path.resolve(opts.root ?? process.cwd());
-  const rootDir = await fs.realpath(requestedRoot).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
-      throwExpectedCliError(`Plugin root not found: ${requestedRoot}`);
-    }
-    throw error;
-  });
+  const rootDir = await fs.realpath(path.resolve(opts.root ?? process.cwd()));
   const validation = await collectPluginsValidationResult({ root: rootDir });
   if (!validation.valid) {
     throwExpectedCliError(validation.errors.join("\n"));
@@ -164,14 +157,7 @@ async function packFeaturePlugin(opts: PluginsPackOptions) {
       throwExpectedCliError("Plugin artifacts must be at most 32 MiB.");
     }
     // Exclusive creation preserves existing artifacts and their approval digests.
-    await fs.writeFile(outputPath, bytes, { flag: "wx", mode: 0o600 }).catch((error: unknown) => {
-      if (hasErrnoCode(error, "EEXIST")) {
-        throwExpectedCliError(
-          `Refusing to overwrite existing plugin artifact: ${outputPath}. Pass a new --out path.`,
-        );
-      }
-      throw error;
-    });
+    await fs.writeFile(outputPath, bytes, { flag: "wx", mode: 0o600 });
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     return {
       path: outputPath,

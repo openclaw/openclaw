@@ -543,7 +543,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
     },
   );
 
-  void it("explains why a missing root or a directory without a plugin manifest cannot be packed", async () => {
+  void it("shows why a directory without a plugin manifest cannot be packed", async () => {
     const rootDir = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feature-pack-empty-")),
     );
@@ -553,30 +553,19 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
       runPluginsPackCommand({ root: rootDir }),
       (error: unknown) =>
         error instanceof ExpectedCliError &&
-        error.message ===
+        error.humanOutput ===
           `plugin manifest not found: ${path.join(rootDir, "openclaw.plugin.json")}`,
     );
     assert.deepEqual(await fs.readdir(rootDir), ["package.json"]);
-    const missingRoot = path.join(rootDir, "missing");
-    await assert.rejects(
-      runPluginsPackCommand({ root: missingRoot }),
-      (error: unknown) =>
-        error instanceof ExpectedCliError &&
-        error.message === `Plugin root not found: ${missingRoot}`,
-    );
   });
 
   void it("rejects stale browser source and never overwrites an existing approval artifact", async () => {
     const { rootDir, parent } = await fixture();
     const out = path.join(parent, "review.tgz");
     await fs.writeFile(out, "existing review");
-    await assert.rejects(
-      runPluginsPackCommand({ root: rootDir, out }),
-      (error: unknown) =>
-        error instanceof ExpectedCliError &&
-        error.message ===
-          `Refusing to overwrite existing plugin artifact: ${out}. Pass a new --out path.`,
-    );
+    await assert.rejects(runPluginsPackCommand({ root: rootDir, out }), {
+      code: "EEXIST",
+    });
     assert.equal(await fs.readFile(out, "utf8"), "existing review");
     await fs.writeFile(path.join(rootDir, "src/control-ui.ts"), "export default null;");
     await assert.rejects(runPluginsPackCommand({ root: rootDir }), hasMessage("missing or stale"));

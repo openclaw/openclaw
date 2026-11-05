@@ -1,2 +1,2 @@
-# Regression subtests check plugins pack names an existing --out artifact, a missing manifest and a missing root instead of the generic failure.
-28
+# Show plugins pack guard messages (for example a missing manifest) instead of the generic CLI failure.
+17
