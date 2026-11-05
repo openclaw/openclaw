@@ -46,7 +46,7 @@ export let stateDir: string;
 export let cron: CronService;
 
 export function installRequesterCronAuthorityTestHooks(
-  createdActor: SessionCreatedActor = CREATOR,
+  createdActor: SessionCreatedActor | (() => SessionCreatedActor) = CREATOR,
 ) {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -56,7 +56,12 @@ export function installRequesterCronAuthorityTestHooks(
     runtimeConfig.setRuntimeConfigSnapshot(cfg);
     replaceSessionEntrySync(
       { sessionKey: SESSION },
-      { sessionId: SESSION_ID, updatedAt: 1, lifecycleRevision: "original", createdActor },
+      {
+        sessionId: SESSION_ID,
+        updatedAt: 1,
+        lifecycleRevision: "original",
+        createdActor: typeof createdActor === "function" ? createdActor() : createdActor,
+      },
     );
   });
 

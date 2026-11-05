@@ -34,6 +34,10 @@ import { isOperatorScope } from "./operator-scopes.js";
 import { resolveRemoteControlUiHttpRoute } from "./remote-control-ui-http-routing.js";
 import type { GatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { createRemoteControlUiTransport } from "./remote-control-ui-transport.js";
+import {
+  captureIngressPrincipalRecovery,
+  registerIngressPrincipalRecovery,
+} from "./remote-ingress-principal-recovery.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import type {
@@ -218,6 +222,15 @@ export function createGatewayControlUiIngressFactory(params: {
   ): Promise<GatewayIngressPrincipalBindingV1> {
     const operatorScopeCeiling = validatePrincipalOptions(options);
     const principal = Object.freeze({ ...options.principal });
+    const recoveryContext = host.resolveGatewayContext?.();
+    const recoverySource = recoveryContext
+      ? await captureIngressPrincipalRecovery(
+          recoveryContext,
+          { pluginId, audienceId: options.audienceId },
+          principal.kind === "owner" ? GATEWAY_OWNER_PROFILE_ID : principal.profileId,
+          operatorScopeCeiling,
+        )
+      : undefined;
     const grantSignal = AbortSignal.any([params.signal, host.signal, options.signal]);
     const grantAssertion = options.assertCurrent;
     const assertGrant = () => {
@@ -336,6 +349,7 @@ export function createGatewayControlUiIngressFactory(params: {
             const display = projectUserProfileDisplay(row);
             return {
               bindingId,
+              ...(recoverySource ? { recoverySource } : {}),
               authenticatedUserProfile: {
                 profileId,
                 displayName: display.displayName,
@@ -669,6 +683,17 @@ export function createGatewayControlUiIngressFactory(params: {
   return {
     capabilityVersion: 2,
     bindPrincipal,
+    registerPrincipalRecovery: async (resume) => {
+      const context = host.resolveGatewayContext?.();
+      if (!context) {
+        throw new Error("The ingress Gateway is unavailable.");
+      }
+      registerIngressPrincipalRecovery(context, pluginId, {
+        resume,
+        signal: params.signal,
+        assertCurrent: params.assertCurrent,
+      });
+    },
     async open(options) {
       const binding = await bindPrincipal(options);
       try {

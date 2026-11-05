@@ -46,6 +46,7 @@ import {
   decodeQueuedOperatorRecoverySource,
   type OperatorRunRecoverySnapshot,
 } from "./operator-run-recovery-source.codec.js";
+import { restoreIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-types.js";
 
@@ -117,6 +118,20 @@ async function restoreGatewayOperatorSnapshot(params: {
       return undefined;
     }
     const snapshot = prepared.snapshot;
+    const ingress =
+      snapshot.sourceIngress === "principal"
+        ? await restoreIngressPrincipalRecovery(
+            context,
+            snapshot.ingress,
+            snapshot.profileId,
+            snapshot.scopes,
+          )
+        : undefined;
+    assertLifetime();
+    if (ingress) {
+      ingress.signal.addEventListener("abort", revoke, { once: true });
+      subscriptions.push(() => ingress.signal.removeEventListener("abort", revoke));
+    }
     const generationOwner = context.sharedGatewaySessionGenerationState;
     if (snapshot.sharedGeneration !== undefined) {
       if (!generationOwner || generationOwner.requiredGeneration !== snapshot.sharedGeneration) {
@@ -140,12 +155,13 @@ async function restoreGatewayOperatorSnapshot(params: {
     if (releaseDeviceNotification) {
       subscriptions.push(releaseDeviceNotification);
     }
-    let authPolicy: GatewayAuthPolicy = snapshot.authPolicy;
+    let authPolicy: GatewayAuthPolicy | undefined = snapshot.authPolicy;
     let sourceConfig: OpenClawConfig | undefined;
     let sourceRevision: object | undefined;
     let sourcePublication: object | undefined;
     const assertSourcePolicy = () => {
       assertLifetime();
+      ingress?.assertCurrent();
       const cfg = getConfig();
       const revision = readOperatorRoleConfigRevision(gatewayOwner);
       const publication = runtimeConfigPublication.current?.revision;
@@ -172,14 +188,16 @@ async function restoreGatewayOperatorSnapshot(params: {
             ),
             snapshot.scopes,
           )) ||
-        !isGatewayAuthGrantCurrent(authPolicy, cfg)
+        (authPolicy !== undefined && !isGatewayAuthGrantCurrent(authPolicy, cfg))
       ) {
         throw new GatewayOperatorRecoveryAuthorizationError(
           "Restart recovery operator source policy changed.",
         );
       }
       // Retain this config's issued policy only after validating the original grant.
-      authPolicy = captureGatewayAuthPolicy(cfg, authPolicy);
+      if (authPolicy) {
+        authPolicy = captureGatewayAuthPolicy(cfg, authPolicy);
+      }
       // The decoded admission is frozen. Reconcile it once per live owner's publication;
       // profile assignments, device lifetime, and plugin grants still check every use.
       sourceConfig = cfg;

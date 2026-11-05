@@ -6,7 +6,11 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { ownsGrant, type RelayCaller } from "./caller.js";
 import type { GatewayRequest } from "./gateway-request.js";
-import { GrantBindings, isRetiredBindingError } from "./grant-bindings.js";
+import {
+  registerRelayPrincipalRecovery,
+  GrantBindings,
+  isRetiredBindingError,
+} from "./grant-bindings.js";
 import {
   capResult,
   codeHash,
@@ -78,7 +82,18 @@ export class RelayService {
   }
 
   start(): void {
-    this.#options.scheduler.schedule({ id: "connect", delayMs: 0, run: () => this.#connect() });
+    this.#options.scheduler.schedule({
+      id: "connect",
+      delayMs: 0,
+      run: async () => {
+        await registerRelayPrincipalRecovery(
+          this.#ingress,
+          this.#options.state,
+          this.#options.scheduler.signal,
+        );
+        this.#connect();
+      },
+    });
   }
 
   async stop(): Promise<void> {
