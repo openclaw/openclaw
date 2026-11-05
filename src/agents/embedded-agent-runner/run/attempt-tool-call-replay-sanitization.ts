@@ -378,7 +378,9 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       transcriptPolicy?.validateAnthropicTurns &&
       shouldMergeConsecutiveTurns(transcriptPolicy, modelApi)
     ) {
-      nextMessages = mergeConsecutiveUserMessages(nextMessages);
+      nextMessages = mergeConsecutiveUserMessages(nextMessages, {
+        preserveContextBoundaries: modelApi !== "bedrock-converse-stream",
+      });
     }
     if (isOpenAIResponsesApi) {
       nextMessages = normalizeOpenAIResponsesToolCallIds(nextMessages);

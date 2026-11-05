@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasRuntimeContextMarker } from "../../llm/types.js";
 import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -225,6 +226,7 @@ function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(p
     previous: Extract<AgentMessage, { role: TRole }>,
     current: Extract<AgentMessage, { role: TRole }>,
   ) => Extract<AgentMessage, { role: TRole }>;
+  canMerge?: (message: Extract<AgentMessage, { role: TRole }>) => boolean;
 }): AgentMessage[] {
   const { messages, role, merge } = params;
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -240,7 +242,13 @@ function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(p
       if (msgRole === lastRole && lastRole === role) {
         const lastMsg = result[result.length - 1];
         const currentMsg = msg as Extract<AgentMessage, { role: TRole }>;
-        if (lastMsg && typeof lastMsg === "object") {
+        if (
+          lastMsg &&
+          typeof lastMsg === "object" &&
+          (!params.canMerge ||
+            (params.canMerge(lastMsg as Extract<AgentMessage, { role: TRole }>) &&
+              params.canMerge(currentMsg)))
+        ) {
           const lastTyped = lastMsg as Extract<AgentMessage, { role: TRole }>;
           result[result.length - 1] = merge(lastTyped, currentMsg);
           continue;
@@ -312,8 +320,19 @@ function normalizeUserContentForMerge(content: unknown): UserContentBlock[] {
   return [];
 }
 
-export const mergeConsecutiveUserMessages = (messages: AgentMessage[]): AgentMessage[] =>
-  validateTurnsWithConsecutiveMerge({ messages, role: "user", merge: mergeConsecutiveUserTurns });
+export const mergeConsecutiveUserMessages = (
+  messages: AgentMessage[],
+  options: { preserveContextBoundaries?: boolean } = {},
+): AgentMessage[] =>
+  validateTurnsWithConsecutiveMerge({
+    messages,
+    role: "user",
+    merge: mergeConsecutiveUserTurns,
+    // Carriers and operator updates own their authority and cache lifetime.
+    canMerge: options.preserveContextBoundaries
+      ? (message) => !hasRuntimeContextMarker(message) && !message.operatorMessage
+      : undefined,
+  });
 
 /**
  * Repair Anthropic tool-use/result pairing; turn merging stays optional
