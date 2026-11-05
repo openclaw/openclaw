@@ -38,7 +38,7 @@ export type DurableQuestion = {
 export type SessionQuestionOperation =
   | { kind: "register"; question: DurableQuestion }
   | { kind: "get"; id: string }
-  | { kind: "list" }
+  | { kind: "list"; recoveryProbe?: true }
   | {
       kind: "settle";
       id: string;

@@ -1,0 +1,2 @@
+# Recovery probes one physical row and preserves expired-only pruning.
+33

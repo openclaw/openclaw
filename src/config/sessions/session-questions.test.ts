@@ -384,58 +384,91 @@ describe("durable question custody", () => {
     ).toEqual([second.record.id, third.record.id].toSorted());
   });
 
-  it("counts settled receipts toward capacity and hides expired receipts before pruning", async () => {
-    const question = await register();
-    await operate({
-      kind: "settle",
-      id: question.record.id,
-      outcome: { id: question.record.id, status: "cancelled" },
-      resolutionId: "retained",
-    });
-    await operate({
-      kind: "claim",
-      id: question.record.id,
-      runId: "retained-run",
-      gatewayEpoch: "gateway",
-    });
-    const finished = (await operate({
-      kind: "finish",
-      id: question.record.id,
-      runId: "retained-run",
-    })) as DurableQuestion;
-    expect(finished.retainUntilMs).toBeGreaterThan(Date.now());
-    await closeOpenClawAgentDatabasesAsync();
-    const db = new DatabaseSync(question.sessionBinding.databasePath);
-    try {
-      // Isolated fixture copies canonical terminal rows; production writes remain worker-owned.
-      db.exec(`WITH RECURSIVE ids(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM ids WHERE i < 4095)
+  it.each(["register", "recover"] as const)(
+    "counts settled receipts toward capacity and prunes expired receipts via %s",
+    async (pruneWith) => {
+      const question = await register();
+      await operate({
+        kind: "settle",
+        id: question.record.id,
+        outcome: { id: question.record.id, status: "cancelled" },
+        resolutionId: "retained",
+      });
+      await operate({
+        kind: "claim",
+        id: question.record.id,
+        runId: "retained-run",
+        gatewayEpoch: "gateway",
+      });
+      const finished = (await operate({
+        kind: "finish",
+        id: question.record.id,
+        runId: "retained-run",
+      })) as DurableQuestion;
+      expect(finished.retainUntilMs).toBeGreaterThan(Date.now());
+      await closeOpenClawAgentDatabasesAsync();
+      const db = new DatabaseSync(question.sessionBinding.databasePath);
+      try {
+        // Isolated fixture copies canonical terminal rows; production writes remain worker-owned.
+        db.exec(`WITH RECURSIVE ids(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM ids WHERE i < 4095)
         INSERT INTO session_questions SELECT 'receipt-' || i, session_key, session_id, lifecycle_revision,
           definition_json, provenance_json, session_binding_json, result_json, resolution_id,
           continuation_state, continuation_run_id, gateway_epoch, continuation_reason, terminal_at
         FROM session_questions CROSS JOIN ids WHERE question_id = 'durable-question'`);
-    } finally {
-      db.close();
-    }
-    const next = structuredClone(question);
-    next.record.id = "next-question";
-    await expect(operate({ kind: "register", question: next })).rejects.toThrow(
-      "Too many retained questions",
-    );
-    expect((await operate({ kind: "list" })) as DurableQuestion[]).toHaveLength(4096);
-    await closeOpenClawAgentDatabasesAsync();
-    const expired = new DatabaseSync(question.sessionBinding.databasePath);
-    try {
-      expired
-        .prepare("UPDATE session_questions SET terminal_at = ?")
-        .run(Date.now() - 24 * 60 * 60 * 1000 - 1);
-    } finally {
-      expired.close();
-    }
-    expect(await operate({ kind: "get", id: question.record.id })).toBeUndefined();
-    expect(await operate({ kind: "list" })).toEqual([]);
-    expect(await operate({ kind: "register", question: next })).toEqual(next);
-    expect(await operate({ kind: "list" })).toEqual([next]);
-  });
+      } finally {
+        db.close();
+      }
+      const next = structuredClone(question);
+      next.record.id = "next-question";
+      await expect(operate({ kind: "register", question: next })).rejects.toThrow(
+        "Too many retained questions",
+      );
+      expect((await operate({ kind: "list" })) as DurableQuestion[]).toHaveLength(4096);
+      await closeOpenClawAgentDatabasesAsync();
+      const expired = new DatabaseSync(question.sessionBinding.databasePath);
+      try {
+        expired
+          .prepare("UPDATE session_questions SET terminal_at = ?")
+          .run(Date.now() - 24 * 60 * 60 * 1000 - 1);
+      } finally {
+        expired.close();
+      }
+      expect(await operate({ kind: "get", id: question.record.id })).toBeUndefined();
+      expect(await operate({ kind: "list" })).toEqual([]);
+      if (pruneWith === "recover") {
+        expect(await operate({ kind: "list", recoveryProbe: true })).toHaveLength(1);
+        const scheduler = createTestGatewayScheduler();
+        const manager = new QuestionManager(scheduler);
+        try {
+          await recoverDurableQuestions(
+            manager,
+            [scope()],
+            () => {
+              throw new Error("Expired receipts must not resume continuation work");
+            },
+            () => {},
+            "new-gateway",
+          );
+          expect(manager.observe(question.record.id)).toBeNull();
+          await closeOpenClawAgentDatabasesAsync();
+          const pruned = new DatabaseSync(question.sessionBinding.databasePath, { readOnly: true });
+          try {
+            expect(pruned.prepare("SELECT COUNT(*) AS count FROM session_questions").get()).toEqual(
+              { count: 0 },
+            );
+          } finally {
+            pruned.close();
+          }
+        } finally {
+          manager.close();
+          await manager.drain();
+          await scheduler.stop();
+        }
+      }
+      expect(await operate({ kind: "register", question: next })).toEqual(next);
+      expect(await operate({ kind: "list" })).toEqual([next]);
+    },
+  );
 
   it.each(["blocked", "interrupted"] as const)(
     "does not renew an expired %s receipt during generation retirement",

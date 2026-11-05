@@ -114,18 +114,19 @@ function readSessionQuestions(
   if (input.kind === "get") {
     return readQuestion(database, input.id);
   }
-  return executeSqliteQuerySync(
-    database.db,
-    questionKysely(database)
-      .selectFrom("session_questions")
-      .selectAll()
-      .where((eb) =>
-        eb.or([
-          eb("terminal_at", "is", null),
-          eb("terminal_at", ">", Date.now() - TERMINAL_RECEIPT_RETENTION_MS),
-        ]),
-      ),
-  ).rows.map(decodeQuestion);
+  let query = questionKysely(database).selectFrom("session_questions").selectAll();
+  if (input.recoveryProbe) {
+    // Recovery only needs physical nonemptiness, including receipts its writer must prune.
+    query = query.limit(1);
+  } else {
+    query = query.where((eb) =>
+      eb.or([
+        eb("terminal_at", "is", null),
+        eb("terminal_at", ">", Date.now() - TERMINAL_RECEIPT_RETENTION_MS),
+      ]),
+    );
+  }
+  return executeSqliteQuerySync(database.db, query).rows.map(decodeQuestion);
 }
 
 /** Read-only custody repair requires exact physical and session facts in one native snapshot. */

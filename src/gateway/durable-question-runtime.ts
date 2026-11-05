@@ -149,7 +149,7 @@ export async function recoverDurableQuestions(
   for (const scope of scopes) {
     let result = await executeSessionQuestionOperation(
       { ...scope, assertCurrent },
-      { kind: "list" },
+      { kind: "list", recoveryProbe: true },
     );
     assertCurrent();
     if (!Array.isArray(result)) {
