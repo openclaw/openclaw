@@ -1,0 +1,2 @@
+# Regression proof that a successful Slack fallback card settles when the final reply is delivered as a media block.
+5

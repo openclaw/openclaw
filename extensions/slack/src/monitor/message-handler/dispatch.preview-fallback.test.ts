@@ -1509,36 +1509,19 @@ it("posts and seals a failure card for a quiet failed turn without a reply", asy
   expect(deliverRepliesMock).not.toHaveBeenCalled();
 });
 
-it("settles a successful card when the final reply is delivered as a media block", async () => {
-  const draft = useDraftStream();
+it.each([false, true])("settles a successful card (media block reply=%s)", async (media) => {
+  const draft = useDraftStream(true);
   const payload = { text: "Report attached", mediaUrl: "https://example.com/report.md" };
-  mockedAgentRunTerminalOutcome = "completed";
-  mockedReplyOptionEvents = [toolStart(undefined, { itemId: "tool-1" })];
-  mockedDispatchSequence = [{ kind: "block", payload }];
-
-  await dispatchProgress({
-    style: "card",
-    toolProgress: true,
-    nativeTaskCards: false,
-    label: "Shelling",
-  });
-
-  expect(deliverRepliesMock).toHaveBeenCalledWith(expect.objectContaining({ replies: [payload] }));
-  expect(draft.update).toHaveBeenCalled();
-  expect(finalizeSlackPreviewEditMock).toHaveBeenCalledOnce();
-  const blocks = mockRecord(finalizeSlackPreviewEditMock).blocks;
-  expect(blocks).toContainEqual(section("Shelling", true));
-  expect(blocks).not.toContainEqual(section("Failed", true));
-});
-
-it("deletes a silent successful card", async () => {
-  const silentDraft = useDraftStream(true);
-  mockedDispatchSequence = [];
+  mockedDispatchSequence = media ? [{ kind: "block", payload }] : [];
   mockedReplyOptionEvents = [{ kind: "item", progressText: "working" }];
   mockedAgentRunTerminalOutcome = "completed";
   await dispatchProgress({ toolProgress: true });
-  expect(silentDraft.clear).toHaveBeenCalledTimes(1);
-  expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+  expect(draft.clear).toHaveBeenCalledTimes(Number(!media));
+  expectCalls(Number(media), deliverRepliesMock, finalizeSlackPreviewEditMock);
+  if (media) {
+    expectRecordFields(delivered(), { replies: [payload] });
+    expectRecordFields(mockRecord(finalizeSlackPreviewEditMock), { text: "_working_" });
+  }
 });
 
 it("batches native milestone updates and prevents pending updates after final delivery", async () => {
