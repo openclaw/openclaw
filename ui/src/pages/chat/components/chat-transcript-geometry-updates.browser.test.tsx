@@ -719,6 +719,56 @@ it("renders new viewport rows before paint when a measurement reads a fast scrol
   }
 });
 
+it("keeps a pending native jump when outgoing rows resize before paint", async () => {
+  let onResize: (() => void) | undefined;
+  // Deliver the native jump before the transcript's row observers in the same
+  // resize delivery, with its scroll event still waiting for the next frame.
+  const observer = new ResizeObserver(() => onResize?.());
+  onTestFinished(() => observer.disconnect());
+  const { host, viewport } = await mountPane(false, 120, undefined, 480);
+  scrollReader(viewport, 480);
+  await settleLayout();
+  const outgoing = requireElement(host, '.chat-virtual-row[data-index="6"]');
+  await new Promise<void>((resolve) => {
+    onResize = resolve;
+    observer.observe(outgoing, { box: "border-box" });
+  });
+
+  const target = 1800;
+  const firstPaint = await new Promise<{
+    offset: number;
+    top: number;
+    bottom: number;
+    viewportTop: number;
+    viewportBottom: number;
+  }>((resolve) => {
+    onResize = () => {
+      onResize = undefined;
+      viewport.scrollTop = target;
+      requestAnimationFrame(() => {
+        const bounds = viewport.getBoundingClientRect();
+        const rows = [
+          ...host.querySelectorAll<HTMLElement>(".chat-virtual-row:not([data-prepared-row])"),
+        ].map((row) => row.getBoundingClientRect());
+        resolve({
+          offset: viewport.scrollTop,
+          top: Math.min(...rows.map((row) => row.top)),
+          bottom: Math.max(...rows.map((row) => row.bottom)),
+          viewportTop: bounds.top,
+          viewportBottom: bounds.bottom,
+        });
+      });
+    };
+    outgoing.style.height = "180px";
+  });
+
+  expect(firstPaint.offset).toBe(target);
+  expect(firstPaint.top).toBeLessThanOrEqual(firstPaint.viewportTop);
+  expect(firstPaint.bottom).toBeGreaterThanOrEqual(firstPaint.viewportBottom);
+  await settleLayout();
+  expect(viewport.scrollTop).toBe(target);
+});
+
 it("commits rows before paint when an uncompensated extent shrink clamps the reader", async () => {
   const { host, viewport, virtualizer } = await mountPane(
     false,

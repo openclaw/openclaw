@@ -95,8 +95,15 @@ export class TranscriptReaderAnchor {
     if (!element?.clientHeight) {
       return;
     }
-    const readerTop = element.getBoundingClientRect().top;
     const { virtualizer } = this.host;
+    // A fast native jump can arrive before its scroll event. Retiring rows may
+    // still deliver sizes, but their old window must not move the new reader.
+    if (!this.host.initialRange.pending) {
+      this.host.offsetState.syncNativeOffset?.(true);
+    }
+    const range = virtualizer.calculateRange();
+    const overscan = virtualizer.options.overscan;
+    const readerTop = element.getBoundingClientRect().top;
     const compensating = !this.positionOwned() && !this.ownedSinceDelivery;
     this.ownedSinceDelivery = false;
     // Earlier rows in this delivery push later ones; recover each row's pre-change top.
@@ -130,8 +137,12 @@ export class TranscriptReaderAnchor {
       const delta = height - previous;
       const previousTop = top - moved;
       moved += delta;
+      const index = virtualizer.indexFromElement(row);
       if (
         !compensating ||
+        !range ||
+        index < range.startIndex - overscan ||
+        index > range.endIndex + overscan ||
         Math.abs(delta) < 0.5 ||
         !isAboveReader(previousTop, previous, first, readerTop)
       ) {
@@ -142,12 +153,6 @@ export class TranscriptReaderAnchor {
     }
     if (!correction) {
       return;
-    }
-    // Native end arrival can precede its scroll event; preserve it before a
-    // maintenance write consumes that movement. Interior reads keep their
-    // existing deferred window rather than remounting it during resize delivery.
-    if (element.scrollTop === maxTranscriptScrollOffset(element)) {
-      this.host.offsetState.syncNativeOffset?.(true);
     }
     if (this.holdsNativeOffset()) {
       this.columnShift += correction;
@@ -302,5 +307,6 @@ export class TranscriptReaderAnchor {
     element.scrollTo({ top: (offset ?? before) + delta, behavior: "instant" });
     // Maintenance provenance keeps offset observers from reading the write as reader movement.
     this.host.offsetState.recordProgrammaticScroll?.(before, element.scrollTop, true);
+    this.host.offsetState.syncNativeOffset?.(true);
   }
 }
