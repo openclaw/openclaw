@@ -39,7 +39,7 @@ final class AgentWorkspaceFilesUITests: XCTestCase {
         self.expectation(for: NSPredicate(format: "value == %@", "ready:files"), evaluatedWith: readiness)
         self.waitForExpectations(timeout: 10)
 
-        let readFailure = "Could not read this file. It may no longer be available."
+        let readFailure = "Could not read this file. Return to Files and reopen it when available."
         let unsupported = "This file cannot be previewed. It may be binary or too large."
         let restored = "Restored project notes."
         let updated = "Updated project notes."
