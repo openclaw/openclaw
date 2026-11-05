@@ -223,16 +223,20 @@ function splitOversizedRichBlock(block: InputRichBlock, limits: RichBlockLimits)
     return pieces;
   }
   if (block.type === "list") {
-    const expandedItems = block.items.flatMap((item) => {
+    const expandedItems: typeof block.items = [];
+    for (const item of block.items) {
       if (measureInputRichBlocks(item.blocks).media <= TELEGRAM_RICH_MEDIA_LIMIT) {
-        return [item];
+        expandedItems.push(item);
+        continue;
       }
-      return splitTelegramRichBlocks(item.blocks, {
+      for (const blocks of splitTelegramRichBlocks(item.blocks, {
         textLimit,
         // Reserve one block for the list wrapper and one for the item itself.
         blockLimit: Math.max(1, blockLimit - 2),
-      }).map((blocks) => ({ ...item, blocks }));
-    });
+      })) {
+        expandedItems.push({ ...item, blocks });
+      }
+    }
     return groupRichBlockItems(
       expandedItems,
       limits,
