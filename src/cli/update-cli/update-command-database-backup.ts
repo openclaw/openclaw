@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { hasActiveGatewayStateOwner } from "../../infra/gateway-state-owner.js";
@@ -12,6 +13,7 @@ import {
   type UpdateDatabaseBackup,
 } from "../../infra/update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "../../infra/update-database-restore.js";
+import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -31,19 +33,8 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 
 type Progress = MutableUpdateExecutionParams["progress"];
 
-export async function captureUpdateDatabases(params: {
-  transaction: PackageUpdateTransaction;
-  execution: MutableUpdateExecutionParams;
-  context: OwnedManagedUpdateContext | undefined;
-  assertCurrent: () => void;
-}) {
-  const assertCurrent = params.assertCurrent;
-  const startedAt = Date.now();
-  const { execution, context, transaction } = params;
-  const env = context?.env ?? execution.opts.run!.env;
-  params.assertCurrent();
-  const source = await readUpdateCandidateSource(env, execution.legacyConfigPlan);
-  params.assertCurrent();
+/** Exclusive state ownership for capture; `unavailable` names why it was not acquired. */
+async function acquireUpdateCaptureOwnership(env: NodeJS.ProcessEnv | undefined) {
   let maintenance: Awaited<ReturnType<typeof acquireGatewayLock>> = null;
   let unavailable: string | undefined;
   try {
@@ -62,6 +53,47 @@ export async function captureUpdateDatabases(params: {
   } catch (error) {
     unavailable = formatErrorMessage(error);
   }
+  return { maintenance, unavailable };
+}
+
+/**
+ * PostgreSQL capture refuses without exclusive state ownership, and capture runs after
+ * activation replaces the install. Refuse here, before activation, so a Gateway the
+ * updater did not stop keeps serving an unchanged install.
+ */
+export async function assertUpdatePostgresCaptureOwnership(params: {
+  config: Parameters<typeof resolveDatabaseFamilyEngines>[0];
+  env: NodeJS.ProcessEnv;
+}): Promise<void> {
+  if (!Object.values(resolveDatabaseFamilyEngines(params.config)).includes("postgres")) {
+    return;
+  }
+  const { maintenance, unavailable } = await acquireUpdateCaptureOwnership(params.env);
+  await maintenance?.release();
+  if (unavailable !== undefined) {
+    throw new UpdatePreMutationError(
+      "database-engine-preflight",
+      `Update refused before changing the install: PostgreSQL database backup requires exclusive state ownership (${unavailable}). Stop the Gateway through its service owner, then rerun openclaw update.`,
+    );
+  }
+}
+
+export async function captureUpdateDatabases(params: {
+  transaction: PackageUpdateTransaction;
+  execution: MutableUpdateExecutionParams;
+  context: OwnedManagedUpdateContext | undefined;
+  assertCurrent: () => void;
+}) {
+  const assertCurrent = params.assertCurrent;
+  const startedAt = Date.now();
+  const { execution, context, transaction } = params;
+  const env = context?.env ?? execution.opts.run!.env;
+  params.assertCurrent();
+  const source = await readUpdateCandidateSource(env, execution.legacyConfigPlan);
+  params.assertCurrent();
+  const ownership = await acquireUpdateCaptureOwnership(env);
+  const maintenance = ownership.maintenance;
+  let unavailable = ownership.unavailable;
   let outcome: { value: UpdateDatabaseBackup } | { error: unknown };
   try {
     const capture = async () => {
@@ -123,6 +155,10 @@ export async function captureUpdateDatabases(params: {
         nodeRunner: execution.packageUpdateNodeRunner,
         postgresOffline: maintenance !== null && unavailable === undefined,
       });
+      if (execution.updateInstallKind === "git") {
+        // Git runtime transactions have no package journal; retire these snapshots with them.
+        transaction.databaseBackupRoot = backupRoot;
+      }
       params.assertCurrent();
       maintenance?.assertCurrent();
       return captured;

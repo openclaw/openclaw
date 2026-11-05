@@ -25,7 +25,13 @@ export type ChatNoticeProps = {
   modelCatalog?: ModelCatalogEntry[];
   recovery?: Pick<
     ChatThreadProps,
-    "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun" | "onDismissPendingInput"
+    | "failureActionsRunId"
+    | "runActive"
+    | "runWorking"
+    | "onRetryRun"
+    | "failedMessageEditSource"
+    | "onFocusComposer"
+    | "onDismissPendingInput"
   >;
 };
 
@@ -74,7 +80,9 @@ function SystemLine(props: {
             <Icon name="check" />
           </span>
         </Show>
-        <span class="chat-divider__title">{props.children ?? props.label}</span>
+        <span class={["chat-divider__title", { "text-shimmer": props.compaction === "active" }]}>
+          {props.children ?? props.label}
+        </span>
         <Show when={props.metric}>
           <span class="chat-divider__separator" aria-hidden="true">
             ·

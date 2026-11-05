@@ -17,6 +17,7 @@ export async function spawnProcessToFile(
   output: ProcessOutputFile,
   initiateSpawn?: SpawnInitiation,
   executionIntent: ProcessExecutionIntent = "gateway-internal",
+  executionScopeKey?: string,
 ): Promise<{ child: ChildProcess; output: Promise<number> }> {
   const target = { ...output, path: path.resolve(output.path) };
   const broker = getSpawnBroker();
@@ -28,7 +29,7 @@ export async function spawnProcessToFile(
       prepared,
       target,
       initiateSpawn,
-      executionIntent === "agent-tool" ? getAgentExecCgroup() : undefined,
+      executionIntent === "agent-tool" ? getAgentExecCgroup(executionScopeKey) : undefined,
     );
     recordChildProcessSpawn(command, spawned.child, undefined, args);
     return spawned;
@@ -44,6 +45,7 @@ export async function spawnProcessToFile(
       { ...options, stdio: entries },
       initiateSpawn,
       executionIntent,
+      executionScopeKey,
     );
     return { child, output: destination.start(child, options.detached) };
   } catch (error) {

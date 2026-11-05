@@ -1,6 +1,7 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { pbkdf2Sync, scryptSync } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createStallFlightRecorder } from "./diagnostic-stall-flight-recorder.js";
@@ -426,5 +427,42 @@ it.skipIf(
       expect(sample.io).toHaveLength(7);
       expect(sample.ctxt).toHaveLength(2);
     }
+  },
+);
+
+it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".")[0]) < 26)(
+  "reports the spinning function from the observer before the main thread can return",
+  async () => {
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        import.meta.resolve("tsx"),
+        fileURLToPath(new URL("./diagnostic-stall-spin.test-support.ts", import.meta.url)),
+        "--fast",
+      ],
+      { timeout: 5_000, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let output = "";
+    let report = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      report += chunk.toString();
+      if (report.includes("main-thread stall in progress:") && report.endsWith("\n")) {
+        child.kill("SIGKILL");
+      }
+    });
+    await new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", () => resolve());
+    });
+    expect(output).toContain("spin-entered");
+    expect(report).toContain("main-thread stall in progress:");
+    expect(report).toContain(
+      "stallProbeSpin@openclaw:src/logging/diagnostic-stall-spin.test-support.ts",
+    );
+    expect(Buffer.byteLength(report)).toBeLessThanOrEqual(2_200);
   },
 );

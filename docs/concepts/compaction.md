@@ -24,6 +24,8 @@ The full conversation history stays on disk. Compaction only changes what the mo
 
 Compaction loads the complete current context: the latest reset or compaction boundary, its retained messages and previous summary, and the following history. Obsolete history before that window stays on disk without being loaded again, even when daily resets or `/new` keep the same session ID. The history hydration byte limit for ordinary turns does not clip compaction input; the summarizer's existing input budget still applies.
 
+Recovery keeps a bounded copy of the active human request in the summary, including across repeated compactions after its original message leaves the current context. Internal updates retain their source labels without replacing that request; newer human steering can update it. An independent internal run does not revive completed human work. An admitted input that has not been processed must remain intact.
+
 OpenAI Responses native compaction and checkpoint replay follow
 [context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership),
 including legacy defaults, explicit opt-in, and handling of preexisting checkpoints
@@ -86,6 +88,14 @@ next request. The request boundary also checks projected occupancy, including
 new tool results, against the full window even when proactive compaction is
 disabled. It stops an over-window submission and uses the existing safe recovery
 path. Native Codex and Claude CLI keep their own compaction policies.
+
+Scheduled turns in an existing session use the same built-in request checks.
+Their context totals update during requests and after completion even when the
+automation preserves the conversation's displayed model and billing snapshot.
+
+Preflight uses published context totals, falling back to a bounded recent usage
+tail or the same bounded context view used by the runtime. Missing usage does not
+trigger a second accounting pass over the entire conversation history.
 
 In the built-in runtime, native ChatGPT sign-in uses V2 compaction at normal
 request boundaries, including between completed tool rounds. It starts when the
@@ -239,6 +249,14 @@ This works with local models too, for example a second Ollama model dedicated to
 
 When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
 
+If the summarizer refuses the request, built-in compaction keeps the prepared recent
+history without requesting another summary. This applies to automatic maintenance
+and `/compact`. A persisted marker records that older messages were omitted without
+a new summary; saved history remains intact. A warning always explains the trim and
+asks you to resend essential older details, even when ordinary compaction notices
+are disabled. If the current request cannot fit, reduce it or use `/new` and resend
+the context needed to continue. Provider refusals do not switch models.
+
 Preflight compaction also uses that chain when the primary auth profile is already in cooldown. Each candidate must pass auth admission before summarization; a healthy fallback can compact the session without waiting for the primary cooldown to expire.
 
 In safeguard mode, provider timeouts and rate limits from built-in summarization remain eligible for that chain when no earlier summary can be reused. A summary deadline or an HTTP 408 or 504 instead uses the automatic timeout fallback (see [Auto-compaction](#auto-compaction)). Caller cancellation and failed safeguard quality checks do not trigger a model switch.
@@ -304,6 +322,8 @@ of the available byte capacity, subject to event and turn sizes, then grows towa
 the cap. Its existing prefix stays unchanged between steps, including across
 worker or process restarts. An independent event-count limit can still shorten
 unusually dense histories.
+If the previous turn exceeds the cap, the loader keeps its newest affordable
+atomic frames rather than starting the next turn with only the new prompt.
 
 This selection does not delete saved history, create a summary, run a memory
 flush, or trigger compaction notifications. Older context can therefore remain
@@ -390,6 +410,9 @@ cleanup; removing checkpoint controls does not delete stored conversation histor
 ## Pluggable compaction providers
 
 Plugins can register a custom compaction provider via `registerCompactionProvider()` on the plugin API. When a provider is registered and configured, OpenClaw delegates summarization to it instead of the built-in LLM pipeline.
+
+Surrounding whitespace in a registered ID is ignored for lookup and duplicate
+checks; matching remains case-sensitive. The plugin-owned descriptor is not rewritten.
 
 To use a registered provider, set its id in your config:
 

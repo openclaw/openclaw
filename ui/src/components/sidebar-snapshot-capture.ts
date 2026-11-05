@@ -41,7 +41,7 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
   const sessions = context.sessions;
   const rootsSettled =
     !sessions.state.loading &&
-    (Boolean(host.sessionData.sessionMutationError ?? sessions.state.error) ||
+    (Boolean(host.sessionData.sessionListError ?? sessions.state.error) ||
       (sessions.canonicalListReady &&
         Boolean(sessions.presentation.result) &&
         !sessions.presentation.resultCached));
@@ -59,9 +59,11 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
   ) {
     return false;
   }
-  const people = resolveSidebarOnline(host).users;
   if (
-    people.some((person) => person.identity?.type === "profile") &&
+    host.navigationView === "online" &&
+    host.navigationVisible &&
+    !host.navigationCollapsed &&
+    resolveSidebarOnline(host).users.some((person) => person.identity?.type === "profile") &&
     host.sessionData.ownerCounts.counts === null &&
     host.sessionData.ownerCounts.error === null
   ) {
@@ -100,9 +102,9 @@ export function captureSidebarSnapshotModel(
     host.sidebarSnapshot ||
     (host.navigationView === "pages" &&
       host.navigationCatalog.dashboards?.readSucceeded !== true) ||
-    host.sessionData.sessionMutationError !== null ||
+    host.sessionData.sessionListError !== null ||
     context.sessions.state.error !== null ||
-    host.sessionData.ownerCounts.error !== null ||
+    (host.navigationView === "online" && host.sessionData.ownerCounts.error !== null) ||
     (host.sidebarAgentsMode === "roster" && roster.error !== null) ||
     (context.plugins.registryStatus !== "complete" && !host.sidebarPluginSnapshot)
   ) {

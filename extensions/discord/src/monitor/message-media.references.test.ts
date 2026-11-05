@@ -68,7 +68,7 @@ describe("resolveReferencedReplyMediaList", () => {
     expect(result).toEqual([]);
     expect(saveRemoteMediaMock).not.toHaveBeenCalled();
   });
-  it("merges provided ssrfPolicy with Discord CDN defaults", async () => {
+  it("merges caller hostname exceptions with Discord CDN defaults", async () => {
     mockDownload("b.png");
     await resolveMediaList(
       asMessage({
@@ -86,7 +86,6 @@ describe("resolveReferencedReplyMediaList", () => {
 
     expect(saveRemoteMediaMock.mock.calls[0]?.[0]).toMatchObject({
       ssrfPolicy: {
-        allowPrivateNetwork: true,
         allowRfc2544BenchmarkRange: true,
         hostnameAllowlist: expect.arrayContaining(["assets.example.com", "cdn.discordapp.com"]),
       },

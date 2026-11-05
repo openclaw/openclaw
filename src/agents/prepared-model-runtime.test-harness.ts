@@ -161,11 +161,8 @@ vi.mock("./prepared-model-catalog-worker.js", async (importOriginal) => ({
   },
 }));
 
-vi.mock("./model-catalog.js", async () => ({
-  findModelCatalogEntry: (await import("./model-catalog-lookup.js")).findModelCatalogEntry,
-  loadManifestModelCatalog: (
-    await vi.importActual<typeof import("./model-catalog.js")>("./model-catalog.js")
-  ).loadManifestModelCatalog,
+vi.mock("./model-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-catalog.js")>()),
   buildPreparedModelCatalogSnapshot: (...args: Parameters<BuildPreparedModelCatalogSnapshot>) =>
     preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot(...args),
 }));

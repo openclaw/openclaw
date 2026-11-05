@@ -5,7 +5,6 @@ import { Command } from "commander";
 import { afterAll, aroundEach, describe, expect, it, vi } from "vitest";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { applyDevUpdateTargetEnv } from "../infra/update-dev-target.js";
-import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -293,7 +292,6 @@ describe("update-cli", () => {
       expect(cli.listUpdateRuns()).toEqual(runsBefore);
       check.expectNoSideEffects(
         cli.readConfigFileSnapshot,
-        cleanupStaleManagedServiceUpdateHandoffs,
         cli.runDaemonInstall,
         cli.runDaemonRestart,
       );
@@ -321,7 +319,6 @@ describe("update-cli", () => {
       runtime.exit,
       runtime.writeJson,
       cli.readConfigFileSnapshot,
-      cleanupStaleManagedServiceUpdateHandoffs,
       cli.runDaemonInstall,
       cli.runDaemonRestart,
     );
@@ -515,7 +512,6 @@ describe("update-cli", () => {
       expect(runtime.exit).not.toHaveBeenCalled();
       check.expectNoSideEffects(
         cli.runUpdateFailureTriage,
-        cleanupStaleManagedServiceUpdateHandoffs,
         gitUpdate,
         cli.replaceConfigFile,
         cli.mutateConfigFileWithRetry,

@@ -8,6 +8,7 @@ import {
   isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./classify.js";
+import { shouldRetryFailoverSignal } from "./retry-evidence.js";
 import { renderRateLimitOrOverloadedCopy } from "./user-copy.js";
 
 const noPlugin = { providerPlugin: null };
@@ -32,6 +33,15 @@ const validationError = {
 };
 
 describe("failover classification", () => {
+  it.each([400, 503])("does not retry an unavailable provider route on HTTP %i", (status) => {
+    const signal = { status, message: "Upstream service unavailable; try again later" };
+    const classification = classifyFailoverSignal(signal, {
+      providerPlugin: { id: "prepared-owner", classifyFailoverReason: () => "route_unavailable" },
+    });
+    expect(classification).toEqual({ kind: "reason", reason: "route_unavailable" });
+    expect(shouldRetryFailoverSignal({ signal, classification })).toBe(false);
+  });
+
   it.each([
     ["403", true, "auth"],
     ["response_code=403", true, "auth"],
@@ -106,6 +116,16 @@ describe("failover classification", () => {
         classifyFailoverSignal(typeof signal === "string" ? { message: signal } : signal, opts),
       ).toEqual(reason ? { kind: "reason", reason } : null),
   );
+
+  it.each([400, 422])("preserves provider-owned service failures on HTTP %i", (status) => {
+    const signal = { status, message: "Upstream account unavailable", errorType: "server_error" };
+    expect(classifyFailoverSignal(signal, noPlugin)).toEqual({ kind: "reason", reason: "format" });
+    expect(
+      classifyFailoverSignal(signal, {
+        providerPlugin: { id: "prepared-owner", classifyFailoverReason: () => "server_error" },
+      }),
+    ).toEqual({ kind: "reason", reason: "server_error" });
+  });
 
   it.each([400, 422])("leaves placeholder-only HTTP %i failures unclassified", (status) => {
     for (const body of [

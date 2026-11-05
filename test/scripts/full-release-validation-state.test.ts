@@ -818,7 +818,7 @@ describe("full release execution plan", () => {
     });
   });
 
-  it("does not require candidate acquisition when reusing release evidence", () => {
+  it("routes candidate acquisition for fresh qualified packages but not reused evidence", () => {
     expect(
       plan({
         candidateAcquisitionResult: "skipped",
@@ -831,6 +831,16 @@ describe("full release execution plan", () => {
       required: false,
       result: "skipped",
     });
+
+    const result = plan({
+      candidateRequired: true,
+      childPhaseVersion: 3,
+      rerunGroup: "qualified-package",
+    });
+    const selected = result.children.filter((entry) => entry.selected);
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.key).toBe("releaseChecksCandidate");
+    expect(result.gates.at(-1)?.required).toBe(true);
   });
 
   it("retains every required artifact qualification result as a parent gate", () => {

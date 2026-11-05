@@ -24,6 +24,16 @@
     outline-offset: 2px;
   }
 
+  &[data-stopping] {
+    .chat-details-processes__badge {
+      visibility: hidden;
+    }
+
+    .chat-details-processes__stop {
+      background: none;
+    }
+  }
+
   &:is(:hover, :focus-within, [data-stopping]) {
     &[data-actionable] .chat-details-processes__name {
       mask-image: linear-gradient(to right, black calc(100% - 42px), transparent calc(100% - 26px));
@@ -90,8 +100,9 @@
   display: block;
   width: 8px;
   height: 8px;
-  border: 1.25px solid color-mix(in srgb, var(--accent) 30%, var(--details-surface, var(--card)));
-  border-top-color: var(--accent);
+  color: var(--accent);
+  background: currentColor;
+  mask: var(--spinner-mask-small);
   border-radius: 50%;
   corner-shape: round;
   animation: btn-spinner-spin 1.5s linear infinite;
@@ -99,6 +110,10 @@
   @media (prefers-reduced-motion: reduce) {
     animation: none;
   }
+}
+
+.chat-details-processes__stop .chat-details-processes__spinner {
+  color: var(--muted);
 }
 
 .chat-details-processes__name {

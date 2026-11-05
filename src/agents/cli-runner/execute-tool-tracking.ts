@@ -40,6 +40,7 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "../embedded-agent-tool-media.js";
+import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
 import { readToolResultDetails } from "../tool-result-error.js";
 import { closeCliLiveSession } from "./cli-live-session-registry.js";
 import {
@@ -54,7 +55,6 @@ import {
   extractCliMessagingContent,
   extractCliMessagingTarget,
 } from "./execute-messaging.js";
-import { stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const CLI_LOOPBACK_CORRELATION_MAX_CALLS = 64;

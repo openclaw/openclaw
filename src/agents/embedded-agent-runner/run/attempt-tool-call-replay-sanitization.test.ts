@@ -1,9 +1,13 @@
 // Coverage for provider replay tool-call sanitization.
 
+import type { Context } from "@openclaw/llm-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import * as pairing from "../../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
+import { transformTransportMessages } from "../../transport-message-transform.js";
 import { createFakeStream } from "./attempt-stream.test-helpers.js";
 import {
   sanitizeReplayToolCallIdsForStream,
@@ -96,6 +100,32 @@ function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): Agent
   void wrapped({ api: "openai-responses" } as never, { messages } as never);
   return forwardedMessages(baseFn, 0);
 }
+
+it("classifies paired replay once across sanitization and transport, rechecking mutations", () => {
+  const classify = vi.spyOn(pairing, "classifyToolUseResultPairing");
+  try {
+    const messages = [
+      imageCall("call_a"),
+      replayResult("call_a", "image_generate", "saved output"),
+    ];
+    const model = makeProviderModelFixture({
+      api: "openai-responses",
+      provider: "openai",
+      id: "synthetic",
+      baseUrl: "https://example.test",
+    });
+    const prepared = sanitizeOpenAIResponsesReplayForStream(messages);
+    expect(transformTransportMessages(prepared as Context["messages"], model)).toEqual(prepared);
+    expect(classify).toHaveBeenCalledTimes(1);
+    requireToolResultMessage(prepared[1]).toolCallId = "orphan";
+    const repaired = transformTransportMessages(prepared as Context["messages"], model);
+    expect(classify).toHaveBeenCalledTimes(2);
+    expect(repaired[1]).toMatchObject({ toolCallId: "call_a", isError: true });
+    expect(JSON.stringify(repaired)).not.toContain("saved output");
+  } finally {
+    classify.mockRestore();
+  }
+});
 
 describe("sanitizeReplayToolCallIdsForStream", () => {
   it("skips strict stream id sanitization when provider policy opts out", () => {

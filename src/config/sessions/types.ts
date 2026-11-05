@@ -642,6 +642,14 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Atomic history-cut receipt for the exact settled local projection, cleared after adoption. */
+  localWorkspaceHandoff?: {
+    worktreeId: string;
+    fromSessionId: string;
+    toSessionId: string;
+    lifecycleRevision: string | null;
+    projectionRevision: number;
+  };
   /** Original unbound files, private to this conversation's adopted workspace. */
   priorWorkspace?: {
     worktreeId: string;
@@ -676,6 +684,14 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Written only by committed graceful shutdown, consumed by the next startup. */
   resumeAfterRestart?: { queuedInputIds: string[]; hadBackgroundExec?: true };
+  /**
+   * Latest authenticated source per person who sent input here, keyed by profile ID. Restored only
+   * through current device, auth, profile and role revalidation; never an executable grant.
+   */
+  operatorSources?: Record<
+    string,
+    import("../../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot
+  >;
   /** Upgrade-only cycle; remove once stable includes the restart redesign (#185730). */
   mainRestartRecovery?: { cycleId: string };
 };

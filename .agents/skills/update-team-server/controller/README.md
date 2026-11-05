@@ -169,6 +169,27 @@ Complete any transaction created by the former controller using its original
 installed closure before adopting this version. Its edge-specific journals and
 rehearsal artifacts are not inputs to the generic update path.
 
+## Explicit operator recovery
+
+`--operator-restart-current SHA PID START_TICKS` recovers an unresponsive Gateway
+on its current sealed release under the canonical lock. It requires three direct
+HTTP timeouts with no response, retains generation and protected-state checks,
+and records operator intent and verified recovery. It does not promote a release
+or promise preservation of in-memory work.
+
+The system unit must use `KillMode=control-group` or `KillMode=mixed`,
+`SendSIGKILL=yes`, and a bounded `TimeoutStopUSec`. Both modes apply the final
+kill to all remaining processes in the cgroup. The shipped `mixed` policy first
+signals only the Gateway, allowing it to drain its children; systemd kills the
+remaining processes after the Gateway exits or the stop timeout expires.
+`KillMode=process`/`none`, disabled final killing, and infinite timeouts remain
+refused. See [systemd.kill](https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html).
+
+Adopt the complete reviewed controller closure using the procedure below before
+using this recovery with `mixed`. No service-unit edit, daemon reload, or Gateway
+restart is part of controller adoption. Any subsequent operator recovery requires
+its own incident authorization and coordinated restart window.
+
 ## Installed closure
 
 Install from one reviewed, merged OpenClaw commit. These four files are one
@@ -200,6 +221,43 @@ The effective existing updater service must execute
 it is an existing operator-owned service input, not a new installer. Preserve
 all current service limits, environment, locks, and drop-ins. Do not install the
 old mutable wrapper, enable the historical timer, or invent a second cadence.
+
+## Host maintenance launcher and health check
+
+The host maintenance sources are imported from the private ops repository's
+installed bytes. Original SHA-256 prefixes (provenance, not installation approval):
+
+| File                                   | Original SHA-256 prefix |
+| -------------------------------------- | ----------------------- |
+| `disk-maintenance-launcher.py`         | `c3ed27ebf9b0b512`      |
+| `openclaw-health-check`                | `a4629a05040d8025`      |
+| `openclaw-hourly-health-check.service` | `03ac7f1c43509605`      |
+| `openclaw-hourly-health-check.timer`   | `0b55981e1f794115`      |
+
+The launcher admits the two fixed maintenance jobs by service cgroup. Install it
+at `/usr/local/lib/openclaw-team/disk-maintenance-launcher.py` as `root:root`,
+mode `0644`; install the health body at
+`/usr/local/lib/openclaw-team/openclaw-health-check` as `root:root`, mode `0755`.
+The health body checks Gateway health/readiness and update freshness as the runtime
+user. The service invokes the launcher; the timer schedules it hourly. Both units
+belong in `/etc/systemd/system/` as `root:root`, mode `0644`.
+
+The launcher now takes the deployment lock exclusively and nonblockingly, then
+hands it to the release proofs as FD 9. The host's currently installed release
+library requires that lock on FD 9 before any command; this repository's library
+accepts the handoff unchanged. Runtime bodies and status reporters do not inherit
+either lock descriptor.
+Proof failures print their command, exit code, and last 2000 stderr bytes. The
+disk-maintenance body remains outside this closure; its launcher job entry is
+unchanged. Landing does not install these files: publication is a separate
+operator adoption under the canonical lock, approved per deployment.
+
+Run the four focused launcher tests on Linux as a non-root user (Node and Python
+stdlib only), from the repository root:
+
+```sh
+docker run --rm -u 1000:1000 -v "$PWD":/src:ro -w /src node:24-bookworm python3 -B .agents/skills/update-team-server/controller/disk-maintenance-launcher.test.py -v
+```
 
 ## Private operator configuration
 

@@ -26,6 +26,7 @@ export {
 
 export const FULL_RELEASE_SOURCE_ADMISSION_CONTRACT = "1";
 export const FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT = "1";
+const PUBLICATION_OBSERVATION_WINDOW_MS = 300_000;
 const sha = /^[a-f0-9]{40}$/u;
 const digest = /^[a-f0-9]{64}$/u;
 const coverageInputs = {
@@ -654,7 +655,11 @@ function validatePublicationObservations(source, value) {
   const prerequisites = observationTime(value.prerequisitesCompletedAt);
   const start = observationTime(value.collectionStartedAt);
   const end = observationTime(value.collectionCompletedAt);
-  if (prerequisites > start || start > end || end - prerequisites > 300_000) {
+  if (
+    prerequisites > start ||
+    start > end ||
+    end - prerequisites > PUBLICATION_OBSERVATION_WINDOW_MS
+  ) {
     throw new Error("publication observation time ordering is invalid");
   }
   const required = (registry) =>
@@ -953,11 +958,12 @@ export function validatePublicationAdmissionBinding(record, expected = {}) {
     throw new Error("invalid publication observation artifact descriptor");
   }
   const admitted = observationTime(binding.admittedAt);
+  const completed = observationTime(observations.collectionCompletedAt);
   if (
-    admitted < observationTime(observations.collectionCompletedAt) ||
-    admitted - observationTime(observations.prerequisitesCompletedAt) > 300_000 ||
+    admitted < completed ||
+    admitted - completed > PUBLICATION_OBSERVATION_WINDOW_MS ||
     [...observations.npm.filter((row) => row.required), ...observations.clawhub].some(
-      (row) => admitted - observationTime(row.observedAt) > 300_000,
+      (row) => completed - observationTime(row.observedAt) > PUBLICATION_OBSERVATION_WINDOW_MS,
     )
   ) {
     throw new Error("publication admission freshness window exceeded");

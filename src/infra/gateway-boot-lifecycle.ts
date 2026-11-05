@@ -70,6 +70,8 @@ export type GatewayCrashLoopBreakerDecision = ReturnType<
   typeof buildGatewayCrashLoopBreakerDecision
 >;
 
+export type GatewayRestartResumeWindow = { startedAt: number; endedAt: number };
+
 /** Inspection keeps snapshot preparation off the caller's event loop. */
 export async function readGatewayLastShutdownAsync(env = process.env) {
   const reply = await executeExistingOpenClawStateRead(
@@ -91,7 +93,11 @@ export async function readGatewayLastInstallationReplacementAsync(env = process.
 export async function beginGatewayBootLifecycle(
   env: NodeJS.ProcessEnv = process.env,
   nowMs = Date.now(),
-): Promise<{ decision: GatewayCrashLoopBreakerDecision; id: string | undefined }> {
+): Promise<{
+  decision: GatewayCrashLoopBreakerDecision;
+  id: string | undefined;
+  restartResumeWindow?: GatewayRestartResumeWindow;
+}> {
   try {
     const context = captureOpenClawStateWorkerContext({ env });
     return await runOpenClawStateWorkerOperation(context, (scope) =>

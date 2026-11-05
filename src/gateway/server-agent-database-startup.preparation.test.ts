@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
+import {
+  PreparedModelRuntimePluginGenerationRetiredError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { AgentDatabaseSchemaAdmissionChangedError } from "../state/agent-database-admission-error.js";
@@ -62,6 +65,11 @@ vi.mock("../agents/auth-profiles/sqlite.js", () => ({
 // mock-isolation: Exercise admission and Gateway sequencing without native worker processes.
 vi.mock("../infra/sqlite-readonly-worker.js", () => ({
   withSqliteReadOnlyWorkerScope: (run: () => Promise<unknown>) => run(),
+}));
+// mock-isolation: Retry delays are not the behavior under test.
+vi.mock("../infra/backoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/backoff.js")>()),
+  sleepWithAbort: async () => {},
 }));
 // mock-isolation: Journal transport is independent of the real pending-admission owner.
 vi.mock("../state/agent-deletion-journal.read.js", () => ({
@@ -438,6 +446,22 @@ it("holds the publication turn through models and the final deletion check", asy
   });
 });
 
+it("retries publication when a config reload retires its plugin generation", async ({ signal }) => {
+  const fleet = createFleet(["idle"]);
+  mocks.refreshModels.mockRejectedValueOnce(
+    new PreparedModelRuntimePluginGenerationRetiredError(
+      "Prepared plugin generation retired before publication",
+    ),
+  );
+  await fleet.run(async (admission) => {
+    fleet.inspect(0);
+    await withinTest(admission.waitForAgentPreparation("idle", fleet)!, signal);
+    expectAdmission(fleet, "idle");
+    expect(mocks.refreshModels).toHaveBeenCalledTimes(2);
+    expectLog(mocks.warn, supersededRetryMessage, { agentId: "idle", attempt: 1 });
+  });
+});
+
 it("keeps database opens off readiness and retains the four-agent migration pool", async ({
   signal,
 }) => {
@@ -646,7 +670,7 @@ it.for(["secrets", "model runtime"] as const)(
       expect(readAgentDatabaseAdmissionRefusal("large", fleet)).toMatchObject({
         code: "agent-database-inspection-failed",
         reason: expect.stringContaining("preparation was superseded"),
-        repairHint: expect.stringContaining("openclaw doctor --fix"),
+        repairHint: expect.stringContaining("does not require database repair"),
       });
       expect(mocks.refreshModels).toHaveBeenCalledTimes(4);
       expect(mocks.opened).toHaveBeenCalledTimes(1);

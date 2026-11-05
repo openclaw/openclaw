@@ -310,10 +310,9 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
     hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock,
 }));
 
-vi.mock("../../../tts/tts-settings.js", () => ({
-  buildTtsSystemPromptHint: () => undefined,
-  resolveModelOverridePolicy: () => undefined,
-  setTtsMachinePrefsPathResolver: () => undefined,
+vi.mock("../../../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: async () => undefined,
 }));
 
 vi.mock("../../bootstrap-files.js", async (importOriginal) => ({
