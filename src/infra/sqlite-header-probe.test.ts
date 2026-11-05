@@ -39,7 +39,9 @@ it.each([
   } catch (error) {
     failure = error;
   }
-  if (!(failure instanceof Error)) throw new Error("Expected an unreadable-source failure");
+  if (!(failure instanceof Error)) {
+    throw new Error("Expected an unreadable-source failure");
+  }
   expect(failure.message).toContain(shortenHomePath(candidate));
   expect(failure.message).toContain(code);
   expect(failure.cause).toMatchObject({ code, path: candidate, errno: -4082 });
