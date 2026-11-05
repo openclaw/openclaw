@@ -1167,7 +1167,9 @@ console.log("full-ws loaded without node_modules");
         .files.filter((file: { category: string }) => file.category !== "dependencyMetadata")
         .map((file: { source: string }) => path.relative(owner, path.join(root, file.source)))
         .toSorted();
-      expect(actual).toEqual(retained.toSorted());
+      expect(actual).toEqual(
+        retained.toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+      );
     },
   );
 
