@@ -532,6 +532,10 @@ export async function settleUpdatePluginCohort(
               if (!alreadyRestored && !isDeepStrictEqual(current, change.after)) {
                 kept.push(`plugin ${change.pluginId} install record`);
               }
+              // The kept record still installs this owner's other plugins at their later state.
+              sourceSnapshotRestorations = sourceSnapshotRestorations.filter(
+                (restoration) => !snapshotBelongsToInstallation(restoration, change.pluginId),
+              );
               continue;
             }
             if (!alreadyRestored && !isDeepStrictEqual(current, change.after)) {
