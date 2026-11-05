@@ -40,6 +40,7 @@ it("commits a cached run's message body with its row shell", async () => {
       },
       options: {
         streamOptions: {},
+        workPreviews: new Map(),
         renderGroupOptions: () => ({ showReasoning: false }),
         isWorkExpanded: () => false,
         onToggleWork: () => {},
@@ -48,8 +49,10 @@ it("commits a cached run's message body with its row shell", async () => {
   ]);
   // The helper renders synchronously before waiting for deferred row cleanup.
   const firstCommit = document.querySelector(".chat-virtual-row")?.textContent;
+  const firstGroup = document.querySelector(".chat-virtual-row .chat-group.assistant");
   const view = await mounting;
   try {
+    expect(firstGroup).not.toBeNull();
     expect(firstCommit).toContain("The cached run answer");
   } finally {
     view.transcript.dispose();
@@ -131,6 +134,7 @@ it("loads stream and run rows without losing the adjacent message or the latest 
       },
       options: {
         streamOptions: {},
+        workPreviews: new Map(),
         renderGroupOptions: () => ({ showReasoning: false }),
         isWorkExpanded: () => false,
         onToggleWork: () => {},
