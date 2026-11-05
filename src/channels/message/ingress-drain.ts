@@ -272,6 +272,7 @@ export function createChannelIngressDrainOwner<
     formatError,
     log,
     isStopped,
+    isDisposed: () => disposed,
     onTerminal: retry.clear,
   });
 
@@ -343,16 +344,14 @@ export function createChannelIngressDrainOwner<
 
   const releaseUnadopted = async (
     state: ActiveHandlerState<TPayload, TMetadata>,
-    releaseOptions: { lastError?: string; recordAttempt?: boolean },
+    releaseOptions: { lastError?: string; recordAttempt?: boolean; retryOnShutdown?: boolean },
   ) => {
     if (!isPreAdoptionState(state)) {
       return;
     }
     clearStallTimer(state);
     await state
-      .settleOnce(async () => {
-        await releaseClaim(state.claim, releaseOptions);
-      })
+      .settleOnce(async () => void (await releaseClaim(state.claim, releaseOptions)))
       .catch(() => undefined);
   };
 
@@ -442,14 +441,13 @@ export function createChannelIngressDrainOwner<
         // Keep recovery armed until disposition commits; removeActive clears it after success.
         await state.settleOnce(() => applyFailureDisposition(state.claim, error));
       },
-      onCancelled: async () => {
-        // Cancellation means ownership ended before delivery, so preserve every
-        // prior retry fact while reopening the canonical row for replacement.
-        await releaseUnadopted(state, { recordAttempt: false });
-      },
-      onAbandoned: async () => {
-        await releaseUnadopted(state, { lastError: "turn-abandoned" });
-      },
+      // Cancellation ends delivery ownership without consuming the retry budget.
+      onCancelled: () =>
+        releaseUnadopted(state, {
+          recordAttempt: false,
+          retryOnShutdown: retainOwnerUntilDispose && options.abortSignal?.aborted === true,
+        }),
+      onAbandoned: () => releaseUnadopted(state, { lastError: "turn-abandoned" }),
     };
   };
 
