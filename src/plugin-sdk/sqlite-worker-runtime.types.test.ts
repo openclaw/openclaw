@@ -26,7 +26,7 @@ it("rejects inferred thenables at the private worker boundary and preserves rele
     "extensions/memory-core/src/standing-intents.worker.ts",
     "extensions/memory-core/src/memory/manager-publication.worker.ts",
     "src/infra/sqlite-transaction.ts",
-    "src/infra/sqlite-worker-transaction-types.ts",
+    "src/infra/sqlite-transaction-types.ts",
     "src/infra/sqlite-source-fence.ts",
     "src/infra/sqlite-store.worker.ts",
     "src/agents/auth-profiles/inline-usage.worker.ts",

@@ -1,23 +1,23 @@
 // SQLite backends use native primitives without loading host database lifecycle owners.
 import type { DatabaseSync } from "node:sqlite";
 import type { PostgresSqlConnection } from "../infra/sql-connection.js";
+import type {
+  SqliteWorkerTransactionOptions,
+  SyncReturnGuard,
+  SynchronousSqliteCallback,
+} from "../infra/sqlite-transaction-types.js";
 import {
   runSqliteDeferredTransactionSync as runDeferredTransaction,
   runSqliteImmediateTransactionSync as runImmediateTransaction,
   runSqliteReadSnapshotSync as runReadSnapshot,
   runSqliteSingleStatementSync as runSingleStatement,
 } from "../infra/sqlite-transaction.js";
-import type {
-  SqliteWorkerTransactionOptions,
-  SyncReturnGuard,
-  SynchronousSqliteCallback,
-} from "../infra/sqlite-worker-transaction-types.js";
 import { ensureOpenClawAgentStandingIntentsSchema as ensureStandingIntentsSchema } from "../state/openclaw-agent-standing-intents-schema.js";
 
 export type {
   SqliteWorkerTransactionOptions,
   SynchronousSqliteCallback,
-} from "../infra/sqlite-worker-transaction-types.js";
+} from "../infra/sqlite-transaction-types.js";
 
 type WorkerTransaction = <Result, CommitResult = void>(
   database: DatabaseSync | PostgresSqlConnection,

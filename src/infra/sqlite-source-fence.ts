@@ -16,6 +16,7 @@ import {
   type SqliteSourceFenceGrant,
   type SqliteSourceFenceIdentity,
 } from "./sqlite-source-fence-contract.js";
+import type { SynchronousSqliteCallback } from "./sqlite-transaction-types.js";
 import { assertTransactionUsable, runSqliteReservedTransactionSync } from "./sqlite-transaction.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import { assertDatabasePathIdentity } from "./sqlite-worker-identity.js";
@@ -25,7 +26,6 @@ import {
   takeSqliteWorkerOperationAdmissionAttachment,
 } from "./sqlite-worker-operation-admission.js";
 import { currentSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-settlement.js";
-import type { SynchronousSqliteCallback } from "./sqlite-worker-transaction-types.js";
 
 const bindings = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteSourceFenceBindings"),
