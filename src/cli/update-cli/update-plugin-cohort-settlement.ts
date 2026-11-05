@@ -1,5 +1,14 @@
+import fs from "node:fs";
 import { readPackageVersion } from "../../infra/package-json.js";
-import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
+import {
+  assertPackageActivationLayout,
+  isPackageActivationComplete,
+  openPackageActivationJournal,
+  resolvePackageActivationAnchor,
+  resolvePackageActivationControl,
+  resolvePackageActivationJournalPath,
+} from "../../infra/package-update-activation-journal.js";
+import { readReleasedPackageActivationReceipt } from "../../infra/package-update-activation-status.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
@@ -15,12 +24,25 @@ import {
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
 
-/** A pending, incomplete or released package activation can still restore the original core. */
+/**
+ * Only an absent or completed package activation has given up restoring the
+ * original core. Dry-run admission also passes unfinished ones whose candidate is
+ * installed, so it is not evidence here; unreadable records keep authority.
+ */
 function hasPackageRecoveryAuthority(installKey: string): boolean {
   try {
-    // A completed journal is a read-only fact; anything else keeps its owner's authority.
-    assertNoPendingPackageActivation(installKey, { dryRun: true });
-    return false;
+    if (readReleasedPackageActivationReceipt(installKey)) {
+      return true;
+    }
+    const anchor = resolvePackageActivationAnchor(installKey);
+    assertPackageActivationLayout(anchor);
+    if (!fs.lstatSync(resolvePackageActivationJournalPath(anchor), { throwIfNoEntry: false })) {
+      return [anchor, resolvePackageActivationControl(anchor)].some(
+        (file) => fs.lstatSync(file, { throwIfNoEntry: false }) !== undefined,
+      );
+    }
+    const record = openPackageActivationJournal(anchor, { readOnly: true }).read();
+    return !isPackageActivationComplete(anchor, record);
   } catch {
     return true;
   }

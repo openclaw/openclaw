@@ -10,7 +10,6 @@ import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migr
 import { createPackageActivationLifetimeFixture } from "../../infra/package-update-activation-lifetime.test-support.js";
 import {
   resolvePackageActivationAnchor,
-  resolvePackageActivationControl,
   resolvePackageActivationJournalPath,
 } from "../../infra/package-update-activation-paths.js";
 import { settlePendingPackageActivation } from "../../infra/package-update-activation.js";
@@ -28,6 +27,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createInterruptedPackagePublication } from "./update-package-publication.test-support.js";
 import { settleInterruptedUpdatePluginCohort } from "./update-plugin-cohort-settlement.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -267,32 +267,41 @@ it.each([
   expect(f.row()).toEqual(later);
 });
 
-it.skipIf(process.platform === "win32")(
-  "settles a verified npm cohort forward after its package activation completed",
-  async () => {
+it.skipIf(process.platform === "win32").each(["completed", "unfinished"] as const)(
+  "decides an npm cohort by its %s package activation",
+  async (activationState) => {
     const lifetime = createPackageActivationLifetimeFixture();
     try {
-      lifetime.setup();
-      const activation = await lifetime.prepare();
-      // The settled journal remains as a completion fact, not restoration authority.
-      await settlePendingPackageActivation(activation.packageRoot, () => {});
-      const anchor = resolvePackageActivationAnchor(activation.packageRoot);
-      expect(
-        fs.existsSync(resolvePackageActivationJournalPath(anchor)) ||
-          fs.existsSync(resolvePackageActivationControl(anchor)),
-      ).toBe(true);
-      const version = JSON.parse(
-        fs.readFileSync(path.join(activation.packageRoot, "package.json"), "utf8"),
-      ).version as string;
+      const { root: base } = lifetime.setup();
+      let packageRoot: string;
+      if (activationState === "completed") {
+        const prepared = await lifetime.prepare();
+        packageRoot = prepared.packageRoot;
+        // The settled journal remains as a completion fact, not restoration authority.
+        await settlePendingPackageActivation(packageRoot, () => {});
+      } else {
+        // The candidate is installed, but the journal still holds restoration custody.
+        packageRoot = (await createInterruptedPackagePublication(base, "publication-complete"))
+          .packageRoot;
+      }
+      const anchor = resolvePackageActivationAnchor(packageRoot);
+      expect(fs.existsSync(resolvePackageActivationJournalPath(anchor))).toBe(true);
+      const version = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"))
+        .version as string;
       const f = await interruptedCohort({
-        root: activation.packageRoot,
+        root: packageRoot,
         from: { version: `${version}-original`, buildId: null },
         to: { version, buildId: null },
       });
       f.serve();
       const later = await f.completeLater();
-      await f.settle();
-      expect(f.cohort()).toBeUndefined();
+      if (activationState === "completed") {
+        await f.settle();
+        expect(f.cohort()).toBeUndefined();
+      } else {
+        await expect(f.settle()).rejects.toThrow(SUPERSEDED);
+        expect(f.cohort()?.disposition).toBe("rollback");
+      }
       expect(f.row()).toEqual(later);
     } finally {
       await lifetime.cleanup();
