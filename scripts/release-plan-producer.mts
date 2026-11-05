@@ -31,7 +31,6 @@ const TOOLING_MODULE_PATHS = [
   "packages/normalization-core/src/string-coerce.ts",
   "packages/plugin-package-contract/src/categories.ts",
   "packages/plugin-package-contract/src/index.ts",
-  "packages/plugin-package-contract/src/recommended-prompts.ts",
   "scripts/lib/actions-artifact-archive.mjs",
   "scripts/lib/bounded-response.mjs",
   "scripts/lib/canonical-json.mjs",

@@ -1144,7 +1144,7 @@ process.stdout.write(${JSON.stringify(
         `const OriginalDate = Date;
 globalThis.Date = class extends OriginalDate {
   constructor(...args) {
-    super(...(args.length ? args : [${Date.parse(observation.prerequisitesCompletedAt) + 300_001}]));
+    super(...(args.length ? args : [${Date.parse(observation.collectionCompletedAt) + 300_001}]));
   }
 };
 `,
@@ -1436,7 +1436,7 @@ describe("FRV required registry admission", () => {
     async (uploadFault, { command: processFixture, expect: check }) =>
       processFixture.lifetime.run(async () => {
         const result = await fixture(processFixture, check, { registry: "healthy", uploadFault });
-        check(result.uploadedObservations).toBe(result.observationText);
+        check(result.uploadedObservations, result.stderr).toBe(result.observationText);
         check(result.effects.indexOf("Upload immutable publication observations")).toBeLessThan(
           result.effects.indexOf("Finalize publication admission"),
         );
@@ -1483,7 +1483,7 @@ describe("FRV required registry admission", () => {
         check(result.targetSha).not.toBe(result.toolingSha);
         check(result.effects).toContain("Provision trusted admission parser");
         check(result.effects).toContain("Admit publication source");
-        check(result.registryCalls).toContainEqual({
+        check(result.registryCalls, result.stderr).toContainEqual({
           kind: "runtime",
           worker: true,
           inherited: [],
@@ -1710,7 +1710,7 @@ describe("FRV observation worker boundary", () => {
           selection: { ...selection, route, npmDistTag },
         });
         check(result.effects).toContain("Admit publication source");
-        check(result.registryCalls).toContainEqual({
+        check(result.registryCalls, result.stderr).toContainEqual({
           kind: "request",
           origin: "https://registry.npmjs.org",
           path: `/${encodeURIComponent(absentNpmPackage)}`,
@@ -1794,7 +1794,7 @@ describe("FRV observation worker boundary", () => {
           parentSignal,
         });
         check(result.registryCalls).not.toContainEqual({ kind: "fixture-termination" });
-        check(result.registryCalls).toContainEqual({ kind: "worker-termination" });
+        check(result.registryCalls, result.stderr).toContainEqual({ kind: "worker-termination" });
         check(result.scratchCleanedByOwner).toBe(true);
         check(result.status, result.stderr).toBe(1);
         check(result.observations).toBeUndefined();
@@ -1840,7 +1840,7 @@ describe("FRV observation worker boundary", () => {
           selection: { ...selection, route },
         });
         check(result.status, result.stderr).toBe(admitted ? 0 : 1);
-        check(result.registryCalls).toContainEqual({
+        check(result.registryCalls, result.stderr).toContainEqual({
           kind: "runtime",
           worker: true,
           inherited: [],
@@ -1907,7 +1907,7 @@ describe("FRV observation worker boundary", () => {
         const result = await fixture(processFixture, check, { registry: "abort-peer" });
         check(result.status, result.stderr).toBe(1);
         check(result.stderr).toContain("required npm observation http-403");
-        check(result.registryCalls).toContainEqual({ kind: "body-cancelled" });
+        check(result.registryCalls, result.stderr).toContainEqual({ kind: "body-cancelled" });
         check(result.registryCalls).toContainEqual(
           expect.objectContaining({
             kind: "settled",

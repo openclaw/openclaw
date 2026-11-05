@@ -495,33 +495,66 @@ describe("oxlint config", () => {
   });
 
   it("disables release line limits while retaining correctness and other limits", () => {
-    const { root, write } = makeFixture("release-limits", {
-      categories: { correctness: "off" },
-      overrides: [
+    const root = fs.realpathSync(createTempDir("openclaw-oxlint-release-limits-"));
+    fs.mkdirSync(path.join(root, ".git"));
+    fs.writeFileSync(path.join(root, "package.json"), "{}");
+    fs.writeFileSync(
+      path.join(root, ".oxlintrc.json"),
+      JSON.stringify({
+        categories: { correctness: "off" },
+        overrides: [
+          {
+            files: ["*.ts"],
+            rules: {
+              "max-lines": ["error", { max: 1 }],
+              "max-lines-per-function": ["error", { max: 1 }],
+              "max-params": ["error", 1],
+              "no-var": "error",
+            },
+          },
+        ],
+      }),
+    );
+    fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    const write = (file: string, contents: string) =>
+      fs.writeFileSync(path.join(root, file), contents);
+    const lint = (status: number) => {
+      const result = spawnSync(
+        process.execPath,
+        [
+          path.resolve("scripts/run-oxlint.mts"),
+          "--openclaw-focused-config",
+          "--threads=1",
+          "--format",
+          "json",
+          "fixture.ts",
+        ],
         {
-          files: ["*.ts"],
-          rules: {
-            "max-lines": ["error", { max: 1 }],
-            "max-lines-per-function": ["error", { max: 1 }],
-            "max-params": ["error", 1],
-            "no-var": "error",
+          cwd: root,
+          encoding: "utf8",
+          timeout: 30_000,
+          env: {
+            ...process.env,
+            GITHUB_ACTIONS: "false",
+            OPENCLAW_RELEASE_CONTEXT_REF: "release/2026.11.4",
           },
         },
-      ],
-    });
-    linkDependencies(root);
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(status);
+      return JSON.parse(result.stdout) as { diagnostics: Array<{ code: string }> };
+    };
     write(
       "fixture.ts",
       "export function f(a: number, b: number) {\n  var c = a;\n  return c + b;\n}\n",
     );
-    const env = { GITHUB_ACTIONS: "false", OPENCLAW_RELEASE_CONTEXT_REF: "release/2026.11.4" };
-    const report = parseReport(checked(runFocused(root, ["fixture.ts"], env), 1));
+    const report = lint(1);
     expect(report.diagnostics.map(({ code }) => code).toSorted()).toEqual([
       "eslint(max-params)",
       "eslint(no-var)",
     ]);
     write("fixture.ts", "export function f(a: number) {\n  const c = a;\n  return c;\n}\n");
-    expect(parseReport(checked(runFocused(root, ["fixture.ts"], env), 0)).diagnostics).toEqual([]);
+    expect(lint(0).diagnostics).toEqual([]);
   });
 
   it("keeps native cap scopes and correctness while warning on untouched local line debt", () => {

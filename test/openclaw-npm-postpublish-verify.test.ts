@@ -335,7 +335,7 @@ describe("npm registry provenance verification", () => {
         async () => {
           attempts += 1;
           if (attempts === 1) {
-            throw new Error();
+            throw new Error("npm registry request failed (503)");
           }
           if (attempts === 2) {
             throw new Error(

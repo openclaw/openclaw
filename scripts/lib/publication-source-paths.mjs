@@ -10,7 +10,6 @@ export const publicationSourceToolingPaths = new Set([
   "packages/normalization-core/src/string-coerce.ts",
   "packages/plugin-package-contract/src/categories.ts",
   "packages/plugin-package-contract/src/index.ts",
-  "packages/plugin-package-contract/src/recommended-prompts.ts",
   "scripts/lib/bounded-response.mjs",
   "scripts/lib/canonical-json.mjs",
   "scripts/lib/clawhub-package-family.mjs",

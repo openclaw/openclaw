@@ -23,6 +23,7 @@ type Workflow = {
   jobs: Record<
     string,
     {
+      env?: Record<string, string>;
       if?: string;
       needs?: string[];
       steps: Array<Record<string, unknown>>;

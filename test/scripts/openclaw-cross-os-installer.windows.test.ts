@@ -11,7 +11,6 @@ import {
   runInstallerSmoke,
   verifyFreshShellCommand,
 } from "../../scripts/lib/cross-os-release-checks/installed.ts";
-import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -314,7 +313,12 @@ it.runIf(process.platform !== "win32")(
     });
 
     try {
-      const baseUrl = await listenLoopback(server);
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("installer fixture did not bind a TCP port");
+      }
+      const baseUrl = `http://127.0.0.1:${address.port}`;
       await runInstallerSmoke({
         lane,
         env,
@@ -336,7 +340,9 @@ it.runIf(process.platform !== "win32")(
       expect(freshShell.versionOutput).toContain("OpenClaw proof-target");
       expect(readFileSync(startupMarker, "utf8")).toBe("login\nbashrc\n");
     } finally {
-      await closeHttpServer(server);
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
     }
   },
   15_000,

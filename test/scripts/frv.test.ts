@@ -2425,16 +2425,14 @@ describe("FRV child rerun", () => {
   });
 
   it.each([
-    ["a failed consumer", ["installer_smoke_update", "installer_smoke"], "producer"],
+    ["a failed consumer", ["installer_smoke_update", "installer_smoke"]],
     [
       "a failed upstream image whose rerun re-executes a consumer",
       ["installer_smoke_update_image", "root_dockerfile_image", "installer_smoke"],
-      "all-jobs",
     ],
     [
       "a failed root image whose rerun reaches only the status aggregate",
       ["root_dockerfile_image", "root_dockerfile_image_ready", "installer_smoke"],
-      "failed-jobs",
     ],
     ["a failed Bun consumer that verifies the producer attempt", ["bun_global_install_smoke"]],
   ])("refuses a duplicate-prone multi-job install-smoke rerun for %s", (_case, failed) => {
