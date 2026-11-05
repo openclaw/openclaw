@@ -53,7 +53,8 @@ finds the current answer.
   active record. A chain that reaches a missing, withdrawn, ineligible, or
   filtered-out record returns nothing.
 - `kind`, `type`, `tag`, and date filters apply to the returned current record,
-  not to the earlier record that matched.
+  not to the earlier record that matched. Earlier records rank only among those
+  whose current record passes the filters.
 - Replacements come after every direct match, ranked by the earlier record's
   BM25 score, then ID. A record that is already a direct match, or reached from
   a better-ranked earlier record, appears once.
@@ -91,8 +92,9 @@ or snippets.
 Markdown is authoritative. Each search first runs the scoped scan and
 validation, then reconciles per-scope FTS5 projections in the store's
 `state.sqlite`: one for the searched records and one for superseded records
-that name a replacement. Only records whose content hash changed are
-re-indexed. These tables are not shared with `memory-core` or other plugins.
+whose replacement chain reaches a current record. Only records whose content
+hash changed are re-indexed. These tables are not shared with `memory-core` or
+other plugins.
 
 - A publication receipt's `indexed: false` means indexing is pending until the
   next search, not a failed save.

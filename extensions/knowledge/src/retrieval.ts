@@ -252,10 +252,34 @@ export function keywordExpression(input: SearchInput): string {
 
 const FTS_COLUMNS = "id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2'";
 
-/** Superseded records naming their replacement: the corpus that lets a current-only
- * search reach a current record through an earlier version's wording. */
-const replaced = (records: LoadedRecord[]) =>
-  records.filter((r) => r.lifecycle === "superseded" && r.metadata.superseded_by);
+/** The scope's keyword corpora: eligible current records, and the eligible
+ * superseded records whose `superseded_by` chain reaches one of them, each mapped to
+ * that current record. Chains step only through eligible superseded records; one
+ * that ends in a missing, withdrawn, ineligible or expired record has no target, so
+ * its wording can never surface a result or shape ranking. */
+function keywordCorpora(data: Snapshot, withdrawn: Set<string>) {
+  const active = eligible(data, withdrawn, false),
+    historical = eligible(data, withdrawn, true);
+  const byId = new Map(historical.map((r) => [r.id, r])),
+    now = new Map(active.map((r) => [r.id, r])),
+    targets = new Map<string, LoadedRecord>();
+  for (const r of historical) {
+    // Chains are short; the visited set only stops a cycle.
+    const visited = new Set<string>();
+    let next = r.lifecycle === "superseded" ? r.metadata.superseded_by : undefined;
+    while (next !== undefined && !visited.has(next)) {
+      visited.add(next);
+      const target = now.get(next);
+      if (target) {
+        targets.set(r.id, target);
+        break;
+      }
+      const step = byId.get(next);
+      next = step?.lifecycle === "superseded" ? step.metadata.superseded_by : undefined;
+    }
+  }
+  return { active, historical, targets, history: historical.filter((r) => targets.has(r.id)) };
+}
 
 /** Bring one tracked FTS table to exactly `records`. Rows are tracked by record ID
  * and content hash, so a change re-indexes only the records that changed. */
@@ -284,19 +308,18 @@ function syncFts(db: DatabaseSync, table: string, rows: string, records: LoadedR
 }
 
 /** Bring the scope's FTS tables to exactly the eligible `records` and the
- * `replaced` subset of eligible `historical` records. One snapshot covers both
- * tables, so an edit to a superseded record changes the token that pagination
- * compares even when the current-record corpus is unchanged. */
+ * `history` corpus (see keywordCorpora). One snapshot covers both tables, so an
+ * edit to a superseded record changes the token that pagination compares even when
+ * the current-record corpus is unchanged. */
 function reconcileKeywordIndex(
   db: DatabaseSync,
   data: Snapshot,
   records: LoadedRecord[],
-  historical: LoadedRecord[],
+  history: LoadedRecord[],
   binding: string,
   generation: string,
 ) {
-  const suffix = digest(binding),
-    history = replaced(historical);
+  const suffix = digest(binding);
   const tables = [
     { table: `keyword_fts_v1_${suffix}`, rows: `keyword_rows_v1_${suffix}`, records },
     {
@@ -348,53 +371,31 @@ function reconcileKeywordIndex(
   return { table: tables[0].table, historyTable: tables[1].table, snapshot, indexedAt };
 }
 
-/** Superseded records whose wording matches `expression`, each resolved through
- * its `superseded_by` chain to a record in `current` (the filtered current-record
- * corpus). Chains step only through eligible superseded records; one that ends in
- * a missing, withdrawn, ineligible or filtered-out record yields nothing. Results
- * keep the history table's BM25 order (then ID); each target appears once, after
- * every ID in `direct`, credited to its best-ranked earlier record. */
+/** Current records reached through superseded wording that matches `expression`,
+ * in `corpus`'s BM25 order (then ID). Each target appears once, after every ID in
+ * `direct`, credited to its best-ranked earlier record. */
 function followReplacements(
   db: DatabaseSync,
-  historyTable: string,
+  corpus: string,
   expression: string,
-  historical: LoadedRecord[],
-  current: LoadedRecord[],
+  history: Map<string, LoadedRecord>,
+  targets: Map<string, LoadedRecord>,
   direct: () => Set<string>,
 ) {
   const matched = db
-    .prepare(
-      `SELECT id FROM ${historyTable} WHERE ${historyTable} MATCH ? ORDER BY bm25(${historyTable},0,8,6,1),id`,
-    )
+    .prepare(`SELECT id FROM ${corpus} WHERE ${corpus} MATCH ? ORDER BY bm25(${corpus},0,8,6,1),id`)
     .all(expression)
     .map((row) => String(row.id));
   if (!matched.length) {
     return [];
   }
-  const byId = new Map(historical.map((r) => [r.id, r])),
-    now = new Map(current.map((r) => [r.id, r]));
-  // Chains are short; the visited set only stops a cycle.
-  const resolve = (from: string) => {
-    const visited = new Set<string>();
-    for (let next: string | undefined = from; next !== undefined && !visited.has(next);) {
-      visited.add(next);
-      const target = now.get(next);
-      if (target) {
-        return target;
-      }
-      const r = byId.get(next);
-      next = r?.lifecycle === "superseded" ? r.metadata.superseded_by : undefined;
-    }
-    return undefined;
-  };
   const seen = direct(),
     out: { record: LoadedRecord; via: LoadedRecord }[] = [];
   for (const id of matched) {
-    const via = byId.get(id)!,
-      record = resolve(via.metadata.superseded_by!);
-    if (record && !seen.has(record.id)) {
+    const record = targets.get(id)!;
+    if (!seen.has(record.id)) {
       seen.add(record.id);
-      out.push({ record, via });
+      out.push({ record, via: history.get(id)! });
     }
   }
   return out;
@@ -412,14 +413,8 @@ export function verifyKeywordIndex(
     return runSqliteImmediateTransactionSync(
       db,
       () => {
-        const { table } = reconcileKeywordIndex(
-          db,
-          data,
-          eligible(data, withdrawn, false),
-          eligible(data, withdrawn, true),
-          binding,
-          generation,
-        );
+        const { active, history } = keywordCorpora(data, withdrawn);
+        const { table } = reconcileKeywordIndex(db, data, active, history, binding, generation);
         return new Set(
           db
             .prepare(`SELECT id FROM ${table}`)
@@ -431,6 +426,16 @@ export function verifyKeywordIndex(
     );
   } catch {
     return null;
+  }
+}
+
+/** A query-local FTS corpus holding just `records`, so BM25 statistics come only from them. */
+function temporaryCorpus(db: DatabaseSync, name: string, records: LoadedRecord[]) {
+  db.exec(`DROP TABLE IF EXISTS temp.${name}`);
+  db.exec(`CREATE VIRTUAL TABLE temp.${name} USING fts5(${FTS_COLUMNS})`);
+  const insert = db.prepare(`INSERT INTO temp.${name}(id,title,aliases,body) VALUES (?,?,?,?)`);
+  for (const r of records) {
+    insert.run(r.id, r.title, (r.metadata.aliases ?? []).join("\n"), r.body);
   }
 }
 
@@ -454,9 +459,13 @@ export function keywordSearch(
     coverage: coverage(data),
   };
   const current = (input.lifecycle ?? "active") === "active",
-    historical = eligible(data, withdrawn, true),
-    records = current ? eligible(data, withdrawn, false) : historical,
+    { active, historical, targets, history } = keywordCorpora(data, withdrawn),
+    records = current ? active : historical,
     selected = filtered(data, records, input);
+  // Like the direct corpus, superseded wording ranks only among histories whose
+  // current record passes this query's filters.
+  const selectedIds = new Set(selected.map((r) => r.id)),
+    ranked = current ? history.filter((r) => selectedIds.has(targets.get(r.id)!.id)) : [];
   try {
     return runSqliteImmediateTransactionSync(
       db,
@@ -465,23 +474,23 @@ export function keywordSearch(
           db,
           data,
           records,
-          historical,
+          history,
           binding,
           generation,
         );
         // BM25 statistics must come only from the searched corpus. The scope table
         // holds exactly the eligible records, so an unfiltered search queries it
         // directly; a filtered search ranks within just its validated subset.
-        const corpus = selected.length === records.length ? table : "keyword_query_v1";
+        const corpus = selected.length === records.length ? table : "keyword_query_v1",
+          historyCorpus =
+            !current || ranked.length === history.length
+              ? historyTable
+              : "keyword_history_query_v1";
         if (corpus !== table) {
-          db.exec("DROP TABLE IF EXISTS temp.keyword_query_v1");
-          db.exec(`CREATE VIRTUAL TABLE temp.keyword_query_v1 USING fts5(${FTS_COLUMNS})`);
-          const insertQuery = db.prepare(
-            "INSERT INTO temp.keyword_query_v1(id,title,aliases,body) VALUES (?,?,?,?)",
-          );
-          for (const r of selected) {
-            insertQuery.run(r.id, r.title, (r.metadata.aliases ?? []).join("\n"), r.body);
-          }
+          temporaryCorpus(db, corpus, selected);
+        }
+        if (historyCorpus !== historyTable) {
+          temporaryCorpus(db, historyCorpus, ranked);
         }
         // Unpredictable delimiters checked against the corpus prevent authored marker injection.
         let marker: string;
@@ -539,11 +548,18 @@ export function keywordSearch(
         // A current-record search also reaches current records through the wording
         // of superseded versions it hides, listed after every direct match. The hit
         // cites the current record; `via` pins the earlier revision that matched.
-        const followed = current
-          ? followReplacements(db, historyTable, expression, historical, selected, () => {
-              const ids = db.prepare(`SELECT id FROM ${corpus} WHERE ${corpus} MATCH ?`);
-              return new Set(ids.all(expression).map((r) => String(r.id)));
-            })
+        const followed = ranked.length
+          ? followReplacements(
+              db,
+              historyCorpus,
+              expression,
+              new Map(ranked.map((r) => [r.id, r])),
+              targets,
+              () => {
+                const ids = db.prepare(`SELECT id FROM ${corpus} WHERE ${corpus} MATCH ?`);
+                return new Set(ids.all(expression).map((r) => String(r.id)));
+              },
+            )
           : [];
         const from = Math.max(0, offset - total);
         for (const { record, via } of followed.slice(from, from + limit - hits.length)) {
@@ -558,8 +574,10 @@ export function keywordSearch(
           };
           hits.push(result);
         }
-        if (corpus !== table) {
-          db.exec("DROP TABLE temp.keyword_query_v1");
+        for (const temporary of [corpus, historyCorpus]) {
+          if (temporary !== table && temporary !== historyTable) {
+            db.exec(`DROP TABLE temp.${temporary}`);
+          }
         }
         const combined = total + followed.length;
         return {

@@ -578,6 +578,22 @@ it("an active search follows superseded wording to the current replacement after
   expect(history.hits.some((hit) => hit.via)).toBe(false);
 });
 
+it("superseded wording ranks only among histories whose current records pass the filters", async () => {
+  const f = await fixture();
+  const superseded = (by: string) => ({ lifecycle: "superseded", superseded_by: by });
+  await f.put("alpha_old", "Earlier", "Earlier orchid.\n", superseded("alpha_now"));
+  await f.put("alpha_now", "Current A", "Current A.\n", { tags: ["kept"] });
+  await f.put("bravo_old", "Earlier", "Earlier tulip.\n", superseded("bravo_now"));
+  await f.put("bravo_now", "Current B", "Current B.\n", { tags: ["kept"] });
+  // Histories of records outside the tag filter must not change term statistics.
+  for (const n of [1, 2, 3]) {
+    await f.put(`other_old_${n}`, "Earlier", "Earlier orchid.\n", superseded(`other_now_${n}`));
+    await f.put(`other_now_${n}`, `Other ${n}`, "Other.\n");
+  }
+  const query = { query: "orchid tulip", mode: "any", tag: "kept" } as const;
+  expect(ids(await f.service.grep(query, f.owner))).toStrictEqual(["alpha_now", "bravo_now"]);
+});
+
 it("superseded-record edits update the persistent history index and the search snapshot", async () => {
   const f = await fixture();
   await f.put("plan_one", "Plan", "Original quillword wording.\n", {
