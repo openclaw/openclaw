@@ -26,14 +26,15 @@ export const OLLAMA_CLOUD_DEFAULT_MODELS = [
   {
     id: "minimax-m2.7",
     contextWindow: 196_608,
-    // https://platform.minimax.io/docs/api-reference/text-chat
-    maxTokens: 204_800,
+    // Ollama Cloud rejects larger requests: "exceeds model's maximum output tokens (131072)".
+    maxTokens: 131_072,
     capabilities: ["completion", "thinking", "tools"],
   },
   {
     id: "minimax-m3",
     contextWindow: 524_288,
-    maxTokens: 524_288,
+    // Ollama Cloud caps output at 131,072 tokens and rejects a larger request.
+    maxTokens: 131_072,
     capabilities: ["completion", "thinking", "tools", "vision"],
   },
   {
