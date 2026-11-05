@@ -397,6 +397,9 @@ function buildRoutedModel(
   // Service catalog facts win over inherited native defaults.
   const compat = {
     ...nativeFacts?.compat,
+    // OpenAI Responses normalizes omitted strictness into required tool fields.
+    // Advertise support so the compatible-route policy emits explicit strict=false.
+    ...(provider.id === "openai" && api === "openai-responses" ? { supportsStrictMode: true } : {}),
     ...(provider.id === "mistral" && api === "openai-completions"
       ? { ...MISTRAL_MODEL_TRANSPORT_PATCH, supportsReasoningEffort: false }
       : {}),

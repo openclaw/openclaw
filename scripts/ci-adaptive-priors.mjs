@@ -12,6 +12,7 @@ import { isObservationPath } from "./lib/ci-test-observations.mjs";
 
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const MAX_MEMBER_BYTES = 8 * 1024 * 1024;
+const MAX_TREE_BYTES = 32 * 1024 * 1024;
 const SHA = /^[a-f0-9]{40}$/u;
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const MEMBER = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}\/(?:observations|launch)\.json$/u;
@@ -26,7 +27,14 @@ function requirePrior(condition, reason) {
   }
 }
 
-async function readJson(fetchImpl, token, repository, endpoint, deadline) {
+async function readJson(
+  fetchImpl,
+  token,
+  repository,
+  endpoint,
+  deadline,
+  maxBytes = 2 * 1024 * 1024,
+) {
   const remaining = deadline - Date.now();
   requirePrior(remaining > 0, "deadline-exceeded");
   const response = await fetchImpl(`https://api.github.com/repos/${repository}/${endpoint}`, {
@@ -46,10 +54,61 @@ async function readJson(fetchImpl, token, repository, endpoint, deadline) {
   let size = 0;
   for await (const chunk of response.body) {
     size += chunk.length;
-    requirePrior(size <= 2 * 1024 * 1024, "metadata-too-large");
+    requirePrior(size <= maxBytes, "metadata-too-large");
     chunks.push(chunk);
   }
   return JSON.parse(new TextDecoder("utf8", { fatal: true }).decode(Buffer.concat(chunks)));
+}
+
+async function compareTrees(readTree, baseTree, headTree, root, deadline) {
+  const result = await readTree(baseTree);
+  requirePrior(
+    result.sha === baseTree && result.truncated === false && Array.isArray(result.tree),
+    "prior-tree-unavailable",
+  );
+  const prior = new Map();
+  const paths = new Set();
+  for (const entry of result.tree) {
+    requirePrior(
+      isObservationPath(entry.path) &&
+        !paths.has(entry.path) &&
+        SHA.test(entry.sha) &&
+        ((entry.type === "tree" && entry.mode === "040000") ||
+          (entry.type === "blob" && ["100644", "100755", "120000"].includes(entry.mode)) ||
+          (entry.type === "commit" && entry.mode === "160000")),
+      "invalid-prior-tree-entry",
+    );
+    paths.add(entry.path);
+    if (entry.type !== "tree") {
+      prior.set(entry.path, `${entry.mode} ${entry.type} ${entry.sha}`);
+    }
+  }
+  const remaining = deadline - Date.now();
+  requirePrior(remaining > 0, "deadline-exceeded");
+  const bytes = execFileSync("git", ["ls-tree", "-r", "-z", "--full-tree", headTree], {
+    cwd: root,
+    timeout: Math.min(1000, remaining),
+    maxBuffer: MAX_TREE_BYTES,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const changed = new Set();
+  for (const row of new TextDecoder("utf8", { fatal: true }).decode(bytes).split("\0")) {
+    if (!row) {
+      continue;
+    }
+    const separator = row.indexOf("\t");
+    const path = row.slice(separator + 1);
+    requirePrior(separator > 0 && isObservationPath(path), "invalid-head-tree-entry");
+    if (prior.get(path) !== row.slice(0, separator)) {
+      changed.add(path);
+    }
+    prior.delete(path);
+  }
+  for (const path of prior.keys()) {
+    changed.add(path);
+  }
+  requirePrior(Date.now() < deadline && changed.size < 600, "prior-tree-diff-unavailable");
+  return changed;
 }
 
 // Preflight owns network access. Consumers receive inert, immutable JSON only.
@@ -214,12 +273,30 @@ export async function restoreCiAdaptivePriors(options = {}) {
                 result.merge_base_commit?.sha === run.head_sha &&
                 ["ahead", "identical"].includes(result.status) &&
                 result.behind_by === 0 &&
-                Array.isArray(result.files) &&
-                result.files.length < 300,
+                Array.isArray(result.files),
               "prior-comparison-unavailable",
             );
-            const changedFiles = new Set();
-            for (const file of result.files) {
+            // Compare caps file lists at 300. A single bounded base-tree download
+            // plus the checked-out head avoids both that cap and per-directory API calls.
+            const changedFiles =
+              result.files.length >= 300
+                ? await compareTrees(
+                    (sha) =>
+                      readJson(
+                        fetchImpl,
+                        token,
+                        repository,
+                        `git/trees/${sha}?recursive=1`,
+                        deadline,
+                        MAX_TREE_BYTES,
+                      ),
+                    result.base_commit.commit.tree.sha,
+                    tree,
+                    root,
+                    deadline,
+                  )
+                : new Set();
+            for (const file of result.files.length >= 300 ? [] : result.files) {
               requirePrior(isObservationPath(file.filename), "invalid-comparison-path");
               changedFiles.add(file.filename);
               if (file.status === "renamed" || file.previous_filename !== undefined) {
@@ -255,7 +332,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
             const context = observations.observations?.context;
             requirePrior(
               observations.version === 1 &&
-                observations.observations?.version === 1 &&
+                [1, 2].includes(observations.observations?.version) &&
                 String(observations.source?.runId) === String(run.id) &&
                 String(observations.source?.runAttempt) === String(run.run_attempt) &&
                 observations.source?.event === "schedule" &&

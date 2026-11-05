@@ -82,6 +82,8 @@ export const SessionCatalogSessionSchema = closedObject({
   canContinue: Type.Boolean(),
   /** Provider-owned next step when this source is temporarily view-only. */
   continuationUnavailableReason: Type.Optional(Type.String({ minLength: 1, maxLength: 384 })),
+  /** Known gates use client-owned copy so provider explanations can be localized. */
+  continuationUnavailableReasonCode: Type.Optional(stringLiteralUnion(["source-handoff-required"])),
   canArchive: Type.Boolean(),
   canOpenTerminal: Type.Optional(Type.Boolean()),
 });

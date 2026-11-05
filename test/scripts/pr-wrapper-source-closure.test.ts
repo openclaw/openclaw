@@ -56,9 +56,8 @@ it("retains Darwin inputs inside excluded namespaces", () => {
         `import {
           preservedModuleBuildAssets, preservedModuleBuildSources, vitestWorkerBuildEntries,
         } from "./scripts/lib/vitest-worker-build-entries.mts";
-        import {
-          vitestWorkerDeclarationEntries, vitestWorkerRuntimeAssets,
-        } from "./scripts/lib/vitest-worker-declarations.mts";
+        import { vitestWorkerDeclarationEntries } from "./scripts/lib/vitest-worker-declarations.mts";
+        import { vitestWorkerRuntimeAssets } from "./scripts/lib/package-root-modules.mts";
         console.log(JSON.stringify([
           ...Object.values(vitestWorkerBuildEntries),
           ...Object.values(vitestWorkerDeclarationEntries),

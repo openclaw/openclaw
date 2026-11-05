@@ -10,6 +10,7 @@ import {
   observeUpdateParentDatabaseWrites,
   recordUpdateDatabaseWrites,
 } from "../cli/update-cli/update-command-database-receipts.js";
+import * as serviceMaintenance from "../cli/update-cli/update-command-service-maintenance.js";
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
 import { resolveDoctorUpdateAdmission } from "../commands/doctor-maintenance-admission.js";
 import { repairAuthProfileMigration } from "../commands/doctor/auth-profile-repair.js";
@@ -36,6 +37,7 @@ import {
   migrateLegacyExecApprovals,
 } from "./state-migrations.exec-approvals.js";
 import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
+import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import {
   runUpdateStateInspectionWorker,
   parseUpdateStateInspectionWorker,
@@ -402,13 +404,16 @@ async function withCapture(
   operation: () => Promise<void>,
   assertDatabaseAccess?: (requested: string) => void,
   assertOwnerCurrent: () => void = () => {},
+  existingCapture?: ReturnType<typeof createUpdateDoctorDatabaseWriteCapture>,
 ) {
   const warnings: string[] = [];
-  const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
-    env,
-    signal: new AbortController().signal,
-    warn: (message) => warnings.push(message),
-  })!;
+  const capture =
+    existingCapture ??
+    createUpdateDoctorDatabaseWriteCapture(generations, {
+      env,
+      signal: new AbortController().signal,
+      warn: (message) => warnings.push(message),
+    })!;
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
     assertOwnerCurrent,
@@ -801,3 +806,92 @@ it("migrates legacy exec approvals after Doctor detection retained a shared-stat
     });
   });
 });
+
+it.runIf(process.platform !== "win32").each(["none", "before", "after"])(
+  "retains the original capture through a predecessor stop receipt (outside write: %s)",
+  async (interference) => {
+    await withOpenClawTestState({ scenario: "minimal", applyEnv: true }, async ({ env }) => {
+      const pathname = openOpenClawStateDatabase({ env }).path;
+      const { runId } = createUpdateRun({ trigger: "cli" }, { env });
+      await closeOpenClawStateDatabaseAsync();
+      const generations = readUpdateDatabaseGenerations([pathname]);
+      const unrelatedWrite = () => {
+        using database = new DatabaseSync(pathname);
+        database.exec("CREATE TABLE unrelated_write(value);");
+      };
+      vi.spyOn(serviceMaintenance, "maybeStopManagedServiceBeforeMutableUpdate").mockImplementation(
+        async (options) => {
+          options.assertCurrent?.();
+          if (interference === "before") {
+            unrelatedWrite();
+          }
+          const stopped = {
+            stopped: true,
+            inspected: true,
+            runtimeInspected: true,
+            running: false,
+            servicePid: 631,
+            serviceManagerUid: 1000,
+            stoppedAtMs: 7,
+            serviceUpdateVerdict: {
+              kind: "owned" as const,
+              root: process.cwd(),
+              fingerprint: "sealed",
+              refreshDefinition: false,
+            },
+          };
+          options.onStopped?.(stopped);
+          return stopped;
+        },
+      );
+      const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
+        env,
+        signal: new AbortController().signal,
+        warn: vi.fn(),
+      })!;
+      await capture.admit();
+      const preparing = stopSupervisedPredecessorGateway(
+        { runId, repair: true },
+        { root: process.cwd(), assertCurrent() {}, warn: vi.fn(), databaseWriteCapture: capture },
+      );
+      if (interference === "before") {
+        await expect(preparing).rejects.toThrow("source changed after update capture");
+      } else {
+        expect(await preparing).toBe(true);
+        await closeOpenClawStateDatabaseAsync();
+        if (interference === "after") {
+          unrelatedWrite();
+        }
+        const { receipt } = await withCapture(
+          env,
+          generations,
+          async () => {
+            using database = new DatabaseSync(pathname);
+            const migrateCaptured = () =>
+              runUpdateSqliteMigration(database, pathname, () =>
+                database.exec("CREATE TABLE predecessor_repaired(value);"),
+              );
+            if (interference === "after") {
+              expect(migrateCaptured).toThrow("source changed after update capture");
+            } else {
+              migrateCaptured();
+            }
+          },
+          undefined,
+          undefined,
+          capture,
+        );
+        expect(receipt).toMatchObject({
+          unchanged: interference === "none",
+          fromGenerations: generations,
+        });
+      }
+      expect(getUpdateRun(runId, { env })?.steps).toContainEqual(
+        expect.objectContaining({
+          step: "finalize:predecessor-stop:7:1000:631:sealed",
+          status: "completed",
+        }),
+      );
+    });
+  },
+);

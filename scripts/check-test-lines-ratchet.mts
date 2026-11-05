@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { releaseBranchForChecks } from "./lib/check-limits.mts";
 import {
   loadRatchetReference,
   loadRatchetSnapshot,
@@ -166,6 +167,10 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     const args = parseRatchetArgs(argv);
     if (args.staged && args.prune) {
       throw new Error("--prune cannot be combined with --staged");
+    }
+    if (!args.prune && releaseBranchForChecks(root)) {
+      console.log("Test-line budget skipped for release branch.");
+      return 0;
     }
     const parse = (source: string) => parseCount(source, BASELINE);
     const baseline = loadRatchetSnapshot(root, BASELINE, args.staged, parse);

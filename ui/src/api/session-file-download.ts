@@ -5,7 +5,7 @@ import type {
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
-import { isHttpArtifactDownloadUrl } from "./artifact-download.ts";
+import { isHttpArtifactDownloadUrl } from "./artifact-download-url.ts";
 import type { GatewayBrowserClient } from "./gateway.ts";
 
 export type SessionFileDownload = Pick<SessionsFilesDownloadResult, "url" | "filename">;

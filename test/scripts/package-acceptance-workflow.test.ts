@@ -9860,8 +9860,12 @@ describe("package artifact reuse", () => {
       'cache=(--cache-from "$BARE_IMAGE_REF")',
     ]);
     expect(workflow).not.toContain('docker push "$CACHE_IMAGE_REF"');
-    expect(workflow).toContain("uses: useblacksmith/setup-docker-builder@");
-    expect(workflow).toContain("uses: useblacksmith/build-push-action@");
+    expect(workflow).toContain(
+      "uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
+    );
+    expect(workflow).toContain(
+      "uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc",
+    );
     expect(workflow).not.toContain("cache-from: type=gha,scope=docker-e2e");
     expect(workflow).not.toContain("cache-to: type=gha,mode=max,scope=docker-e2e");
   });
@@ -10757,9 +10761,26 @@ describe("package artifact reuse", () => {
     }
     expect(imageDockerfile).toContain("rm -rf /var/lib/apt/lists/*");
     expect(imageWorkflow).toContain(`- "${LIVE_MEDIA_RUNNER_DOCKERFILE}"`);
+    expect(workflowStep(buildJob, "Set up Docker Buildx")).toEqual({
+      name: "Set up Docker Buildx",
+      uses: "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
+      with: { version: "v0.23.0" },
+    });
+    expect(buildStep).toMatchObject({
+      uses: "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc",
+      with: {
+        platforms: "linux/amd64",
+        sbom: true,
+        provenance: "mode=max",
+        push: true,
+      },
+    });
     expect(buildStep.with?.context).toBe(".github/images/live-media-runner");
     expect(buildStep.with?.file).toBe(LIVE_MEDIA_RUNNER_DOCKERFILE);
     expect(buildStep.with?.tags).toContain(LIVE_MEDIA_RUNNER_IMAGE);
+    expect(buildStep.with?.tags).toContain(
+      "ghcr.io/openclaw/openclaw-live-media-runner:${{ github.sha }}",
+    );
     expect(workflow).toContain("suite_id: native-live-extensions-media-audio");
     expect(workflow).toContain("suite_id: native-live-extensions-media-music-google");
     expect(workflow).toContain("suite_id: native-live-extensions-media-music-minimax");
@@ -11388,6 +11409,25 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(workflow).toContain("provider_mode:");
     expect(workflow).toContain("provider_mode must be mock-openai or live-frontier");
     expect(workflow).toContain("run_package_telegram_e2e:");
+    const telegramJob = workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e");
+    expect(workflowStep(telegramJob, "Set up Docker Buildx")).toEqual({
+      name: "Set up Docker Buildx",
+      uses: "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
+      with: { version: "v0.23.0" },
+    });
+    expect(workflowStep(telegramJob, "Build Docker E2E image")).toMatchObject({
+      uses: "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc",
+      with: {
+        context: ".",
+        file: "./scripts/e2e/Dockerfile",
+        target: "build",
+        platforms: "linux/amd64",
+        tags: "openclaw-docker-e2e:local",
+        load: true,
+        push: false,
+        provenance: false,
+      },
+    });
   });
 
   it("forwards optional RTT scenario selection from manual and reusable Telegram inputs", () => {
@@ -12319,6 +12359,14 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "plugin-update",
       "plugin-binding-command-escape",
     ]);
+    const focused = runReleaseChecksInputValidation("full", "false", "qualified-package");
+    expect(focused.result.status, focused.result.stderr).toBe(0);
+    const focusedOutput = readFileSync(focused.outputPath, "utf8");
+    expect(focusedOutput).toContain("package_acceptance_scheduled=true\n");
+    expect(focusedOutput).toContain("package_required=true\n");
+    expect(focusedOutput).toContain(
+      "package_acceptance_lanes=npm-onboard-channel-agent published-upgrade-survivor plugins-offline plugin-update\n",
+    );
     expect(packageAcceptanceJob.with?.published_upgrade_survivor_baselines).toBe(
       "${{ needs.prepare_release_package.outputs.upgrade_survivor_baselines }}",
     );
