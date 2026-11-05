@@ -15,24 +15,23 @@ const components = [
   ...readFileSync("scripts/pr-lib/wrapper-components.txt", "utf8").trim().split("\n"),
 ];
 
-it.each([
-  "src/infra/gateway-state-owner.ts",
-  "src/plugins/discovery.ts",
-  "src/infra/sqlite-readonly-location.worker.ts",
-])(
-  "retains %s and its relative ESM runtime dependencies in the wrapper inventory",
-  (entrypoint) => {
-    const closure = collectRuntimeImportClosure(process.cwd(), [entrypoint], {
-      includeDynamicImports: true,
-    });
-    expect(
-      closure.filter(
-        (file) =>
-          !components.some((component) => file === component || file.startsWith(`${component}/`)),
-      ),
-    ).toEqual([]);
-  },
-);
+it("retains wrapper entrypoints and their relative ESM runtime dependencies in the inventory", () => {
+  const closure = collectRuntimeImportClosure(
+    process.cwd(),
+    [
+      "src/infra/gateway-state-owner.ts",
+      "src/plugins/discovery.ts",
+      "src/infra/sqlite-readonly-location.worker.ts",
+    ],
+    { includeDynamicImports: true },
+  );
+  expect(
+    closure.filter(
+      (file) =>
+        !components.some((component) => file === component || file.startsWith(`${component}/`)),
+    ),
+  ).toEqual([]);
+});
 
 // Native preparation compiles the full worker inventory, including string-named
 // entries. Guard excluded namespaces and shared helpers against routing gaps;
