@@ -14,6 +14,7 @@ on:
       # CI planners are Linux-owned; retain inputs used by native worker preparation.
       - "!scripts/lib/ci-*.mts"
       - "!scripts/lib/ci-*.mjs"
+      - "scripts/lib/ci-adaptive-markdown.mjs"
       - "scripts/lib/ci-test-timings.mts"
       - "scripts/lib/ci-test-timings-schema.mts"
       - "scripts/lib/ci-test-timings-refit.mts"
@@ -37,6 +38,7 @@ on:
       - "test/helpers/**"
       - "!test/helpers/**/*.test.ts"
       - "test/vitest/**"
+      - "config/ci-adaptive-markdown.json"
       - "test/setup*.ts"
       - "test/test-home-policy.mts"
       - "src/test-utils/**"
