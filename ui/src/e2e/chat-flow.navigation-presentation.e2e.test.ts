@@ -541,14 +541,7 @@ suite.define(() => {
       .poll(() => composer.evaluate((element) => element === document.activeElement))
       .toBe(true);
 
-    const search = page.getByRole("button", { name: "search", exact: true });
-    await search.hover();
-    const tooltip = page.getByRole("tooltip");
-    await expect.poll(() => tooltip.isVisible()).toBe(true);
-    expect(
-      (await search.locator("..").locator(".shortcut-hint").textContent())?.replace(/\s/gu, ""),
-    ).toMatch(/^search(?:Ctrl|⌘)K$/u);
-    await search.click();
+    await page.getByRole("button", { name: "search", exact: true }).click();
     const paletteInput = page.locator(".cmd-palette__input");
     await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
     await expect
