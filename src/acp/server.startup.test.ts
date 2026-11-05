@@ -439,6 +439,10 @@ function expectUpdateBefore(sessionId: string, id: JsonRpcId) {
 async function withWire(body: () => Promise<void>) {
   await run(async () => {
     await ready();
+    // SDK 2.1 requires initialization before session requests reach the translator.
+    await exchange(initialize(-1));
+    // Keep ordering assertions scoped to the session traffic under test.
+    state.output.length = 0;
     await body();
   });
 }
