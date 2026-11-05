@@ -144,7 +144,7 @@ describe("continue_delegate tool", () => {
     const { description } = createContinueDelegateTool({ agentSessionKey: "test-session" });
 
     expect(description).toContain(
-      "it can elect further continue_work turns or branch with continue_delegate within chain limits",
+      "the delegate is queued for dispatch after this response completes, after delaySeconds, or when this session compacts, and it can elect further continue_work turns or branch with continue_delegate within chain limits.",
     );
     expect(description).toContain(
       "For an immediate worker you supervise and collect yourself, use sessions_spawn; to wait for a delegate you already started, use sessions_yield.",

@@ -151,8 +151,8 @@ describe("continue_delegate cross-session targeting gate", () => {
   });
 
   it("disabled refuses an explicit target naming a tree member, while fanoutMode=tree passes", async () => {
-    // The gate reads the targeting form, not tree membership: the dispatcher's
-    // own requester is an ancestor, yet only fanoutMode=tree reaches it.
+    // The gate reads the targeting form, not tree membership: naming the
+    // dispatcher's requester (an ancestor) is refused; fanoutMode=tree is admitted.
     setRuntimeConfigSnapshot(continuationConfig("disabled"));
     seedSubagentRunForReadTest({
       runId: "tree-member-run",

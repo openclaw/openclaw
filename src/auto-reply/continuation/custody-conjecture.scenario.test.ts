@@ -1004,7 +1004,7 @@ describe("RFC §2.2/§2.6 tool and token forms converge on one custody record (�
 });
 
 describe("continue_delegate receipts mean accepted, not completed", () => {
-  it("a scheduled receipt has spawned nothing; the delegate spawns once its turn ends", async () => {
+  it("returns the scheduled receipt before any child spawns; the turn's end spawns it", async () => {
     await withGateway(async (gateway) => {
       const receipt = await gateway
         .delegateTool("accepted-run")
