@@ -499,12 +499,10 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           'Offset for action="list" or action="runs"; use nextOffset to load the next page',
       }),
       job: managementOnly ? Type.Optional(Type.Omit(job, ["declarationKey", "owner"])) : job,
-      toolsAllowMode: Type.Optional(
-        Type.Literal("exact", {
-          description:
-            'Add/update: use "exact" to keep the requested toolsAllow without configured default tools. Omitted adds cron.defaultTools before policy checks. An explicit [] always stays tool-less.',
-        }),
-      ),
+      toolsAllowMode: optionalStringEnum(["exact", "defaults"], {
+        description:
+          'Add/update: "exact" persistently opts out of cron.defaultTools; "defaults" explicitly resets that choice. Omitted preserves the saved mode and copied selections on schedule/name edits. New or changed nonempty selections add configured defaults before policy checks. [] always stays tool-less.',
+      }),
       jobId: Type.Optional(Type.String()),
       id: Type.Optional(Type.String()),
       content: Type.Optional(Type.Union([Type.String({ maxLength: 262144 }), Type.Null()])),

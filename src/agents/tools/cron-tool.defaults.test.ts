@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   callGatewayMock,
@@ -32,9 +32,15 @@ it.each(["add", "update"] as const)(
     setRuntimeConfigSnapshot({ cron: { defaultTools: ["read", "read"] } });
     const input = { action, id: "routine", job: job() };
     const original = structuredClone(input);
+    if (action === "update") {
+      callGatewayMock.mockResolvedValueOnce({
+        ...job(),
+        payload: { ...job().payload, message: "Previous instructions" },
+      });
+    }
     await executeCron(input, creator);
     expect(input).toEqual(original);
-    const request = readGatewayCall();
+    const request = readGatewayCall(action === "update" ? 1 : 0);
     expect(request.method).toBe(`cron.${action}`);
     const shape = action === "add" ? request.params : request.params?.patch;
     expect(shape).toMatchObject({ payload: { toolsAllow: ["execute_code", "read"] } });
@@ -53,6 +59,9 @@ it.each([
   await executeCron({ action, id: "routine", toolsAllowMode: mode, job: job(toolsAllow) }, creator);
   const shape = action === "add" ? readGatewayCall().params : readGatewayCall().params?.patch;
   expect(shape).toMatchObject({ payload: { toolsAllow } });
+  if (mode === "exact") {
+    expect(shape).toHaveProperty("payload.toolsAllowMode", "exact");
+  }
   expect(readGatewayCall().params).not.toHaveProperty("toolsAllowMode");
 });
 
@@ -91,8 +100,72 @@ it("rejects an invalid opt-out mode before publishing a selection", async () => 
   setRuntimeConfigSnapshot({ cron: { defaultTools: ["read"] } });
   await expect(
     executeCron({ action: "add", toolsAllowMode: "restricted", job: job() }, creator),
-  ).rejects.toThrow('toolsAllowMode must be "exact" or omitted');
+  ).rejects.toThrow('toolsAllowMode must be "exact", "defaults", or omitted');
   expect(callGatewayMock).not.toHaveBeenCalled();
+});
+
+it.each([
+  { storedMode: undefined, requestedMode: undefined, changed: false, expected: ["execute_code"] },
+  { storedMode: "exact", requestedMode: undefined, changed: true, expected: ["execute_code"] },
+  {
+    storedMode: "exact",
+    requestedMode: "defaults",
+    changed: false,
+    expected: ["execute_code", "read"],
+  },
+] as const)(
+  "preserves copied selections and explicitly resets exact: %j",
+  async ({ storedMode, requestedMode, changed, expected }) => {
+    setRuntimeConfigSnapshot({ cron: { defaultTools: ["read"] } });
+    const stored = {
+      ...job(),
+      payload: { ...job().payload, ...(storedMode ? { toolsAllowMode: storedMode } : {}) },
+    };
+    callGatewayMock.mockImplementation(async ({ method }) =>
+      method === "cron.get" ? stored : { ok: true },
+    );
+    const patch = {
+      ...job(),
+      name: "Renamed",
+      payload: { ...job().payload, message: changed ? "New instructions" : job().payload.message },
+    };
+    await executeCron(
+      { action: "update", id: "routine", toolsAllowMode: requestedMode, job: patch },
+      creator,
+    );
+    const request = callGatewayMock.mock.calls
+      .map(([value]) => value)
+      .find(({ method }) => method === "cron.update");
+    assert(request, "cron.update must publish the prepared selection");
+    expect(request.params.patch.payload).toMatchObject({ toolsAllow: expected });
+    expect(request.params.patch.payload.toolsAllowMode).toBe(requestedMode ?? storedMode);
+    expect(stored.payload.toolsAllow).toEqual(["execute_code"]);
+  },
+);
+
+it("prepares a defaults reset against the current saved selection when the payload is omitted", async () => {
+  setRuntimeConfigSnapshot({ cron: { defaultTools: ["read"] } });
+  callGatewayMock.mockResolvedValueOnce({
+    ...job(),
+    payload: { ...job().payload, toolsAllowMode: "exact" },
+  });
+  await executeCron(
+    { action: "update", id: "routine", toolsAllowMode: "defaults", job: {} },
+    creator,
+  );
+  expect(readGatewayCall(1)).toMatchObject({
+    method: "cron.update",
+    params: {
+      expectedConfigRevision: "sha256:test",
+      patch: {
+        payload: {
+          kind: "agentTurn",
+          toolsAllow: ["execute_code", "read"],
+          toolsAllowMode: "defaults",
+        },
+      },
+    },
+  });
 });
 
 it("does not add tools to a revision that leaves the saved tool selection alone", async () => {

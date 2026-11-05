@@ -246,13 +246,20 @@ export function reconcileCronChannelRequesterAuthority(params: {
 
 export function consumeRuntimeAuthorityMutationOptions(
   opts: CronAddOptions | CronUpdateOptions | undefined,
-): Pick<Parameters<typeof reconcileRuntimeAuthority>[0], "captured" | "runtimeAuthority"> {
+): Pick<
+  Parameters<typeof reconcileRuntimeAuthority>[0],
+  "captured" | "runtimeAuthority" | "approvedToolSelection"
+> {
   // Validation-only guards must not look like an empty fresh capture: that
   // would erase an existing runtime ceiling during an otherwise routine edit.
   opts?.commitGuard?.();
+  if (opts?.approvedToolSelection && opts.captureRuntimeAuthority) {
+    throw new TypeError("An approved tool selection cannot also capture current runtime authority");
+  }
   return {
     captured: opts?.captureRuntimeAuthority !== undefined,
     runtimeAuthority: opts?.captureRuntimeAuthority?.(),
+    approvedToolSelection: opts?.approvedToolSelection,
   };
 }
 
@@ -390,8 +397,36 @@ export function reconcileRuntimeAuthority(params: {
   job: CronStoredJob;
   captured: boolean;
   runtimeAuthority?: CronRuntimeAuthority;
+  approvedToolSelection?: import("../approved-tool-selection.js").CronApprovedToolSelection;
   explicitlyMutatesToolsAllow: boolean;
 }): void {
+  const approved = params.approvedToolSelection;
+  if (approved) {
+    const tools = params.job.payload.toolsAllow;
+    if (
+      params.captured ||
+      !params.explicitlyMutatesToolsAllow ||
+      !cronJobUsesToolRuntime(params.job) ||
+      !Array.isArray(tools) ||
+      params.job.payload.toolsAllowMode !== approved.toolsAllowMode ||
+      tools.length !== approved.toolsAllow.length ||
+      tools.some((name, index) => name !== approved.toolsAllow[index])
+    ) {
+      throw new TypeError(
+        "Approved tool selection must match the explicit automation tool list and mode",
+      );
+    }
+    reconcileToolsAllowProvenance({
+      job: params.job,
+      explicitlyMutatesToolsAllow: true,
+      toolsAllowProvenance: approved.toolsAllowProvenance,
+    });
+    reconcileToolsAllowExecTarget({
+      job: params.job,
+      explicitlyMutatesToolsAllow: true,
+      toolsAllowExecTarget: approved.toolsAllowExecTarget,
+    });
+  }
   if (!cronJobUsesToolRuntime(params.job)) {
     // Runtime authority cannot survive a payload transition into a path that
     // does not execute the captured tool surface and later reappear on reuse.
@@ -399,12 +434,17 @@ export function reconcileRuntimeAuthority(params: {
     delete params.job.runtimeAuthorityRecoveryRequired;
     return;
   }
-  if (params.captured) {
+  if (params.captured || approved) {
     delete params.job.runtimeAuthorityRecoveryRequired;
-    const runtimeAuthority = params.runtimeAuthority
-      ? cloneCronRuntimeAuthority(params.runtimeAuthority)
+    const sourceAuthority = approved
+      ? approved.toolsAllow.length
+        ? approved.runtimeAuthority
+        : undefined
+      : params.runtimeAuthority;
+    const runtimeAuthority = sourceAuthority
+      ? cloneCronRuntimeAuthority(sourceAuthority)
       : undefined;
-    if (params.runtimeAuthority && !runtimeAuthority) {
+    if (sourceAuthority && !runtimeAuthority) {
       throw new TypeError("captured cron runtime authority is invalid");
     }
     if (runtimeAuthority) {

@@ -4,7 +4,9 @@ import {
   cronUpdateRequiresStreamExecAuthority,
 } from "../../cron/stream-exec-authority.js";
 import { resolveCronToolDefaults } from "../../cron/tool-defaults.js";
+import type { OpenClawPluginCronToolSelection } from "../../plugins/tool-types.js";
 import { isRecord } from "../../utils.js";
+import { isAgentToolExecutionAvailable } from "../agent-tool-availability.js";
 import { readCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { createToolPolicyMatcher } from "../tool-policy-match.js";
 import {
@@ -98,6 +100,9 @@ export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: s
   // the same capability. The alias name is kept for explicit-cap matching only.
   const captured = new Map<string, NormalizedCronCreatorTool>();
   for (const tool of tools) {
+    if (!isAgentToolExecutionAvailable(tool)) {
+      continue;
+    }
     const projection = readCronScheduledToolProjection(tool);
     const name = normalizeToolPolicyName(projection ? projection.targetTool : tool.name);
     if (!name) {
@@ -286,17 +291,28 @@ export function applyCronToolDefaults(
   defaultTools: readonly string[] | undefined,
   mode: unknown,
 ): void {
-  if (mode !== undefined && mode !== "exact") {
-    throw new Error('toolsAllowMode must be "exact" or omitted');
+  if (isRecord(value) && value.payload === undefined && mode !== undefined) {
+    value.payload = {};
   }
   const payload = isRecord(value) && isRecord(value.payload) ? value.payload : undefined;
+  const payloadMode = payload?.toolsAllowMode;
+  const resolvedMode = mode !== undefined ? mode : payloadMode;
+  if (resolvedMode !== undefined && resolvedMode !== "exact" && resolvedMode !== "defaults") {
+    throw new Error('toolsAllowMode must be "exact", "defaults", or omitted');
+  }
+  if (mode !== undefined && payloadMode !== undefined && mode !== payloadMode) {
+    throw new Error("Conflicting toolsAllowMode values");
+  }
+  if (payload && resolvedMode !== undefined) {
+    payload.toolsAllowMode = resolvedMode;
+  }
   const toolsAllow = payload?.toolsAllow;
   if (
     payload &&
     Array.isArray(toolsAllow) &&
     toolsAllow.every((entry) => typeof entry === "string")
   ) {
-    payload.toolsAllow = resolveCronToolDefaults({ toolsAllow, defaultTools, mode });
+    payload.toolsAllow = resolveCronToolDefaults({ toolsAllow, defaultTools, mode: resolvedMode });
   }
 }
 
@@ -367,6 +383,14 @@ function capCronJobToolsAllow(params: {
     }
     return;
   }
+  params.payload.toolsAllow = selectCronCreatorTools(requestedToolsAllow, creatorToolsAllow);
+  delete params.payload.toolsAllowIsDefault;
+}
+
+function selectCronCreatorTools(
+  requestedToolsAllow: readonly string[],
+  creatorToolsAllow: NormalizedCronCreatorTool[],
+): string[] {
   const pluginGroups = buildPluginToolGroups({
     tools: creatorToolsAllow,
     toolMeta: (tool) => (tool.pluginId ? { pluginId: tool.pluginId } : undefined),
@@ -379,7 +403,7 @@ function capCronJobToolsAllow(params: {
       const tools = creatorToolsAllow.filter(
         (tool) => matches(tool.name) || (tool.aliasName !== undefined && matches(tool.aliasName)),
       );
-      if (tools.length === 0) {
+      if (tools.length === 0 && entry !== "*") {
         throw new Error(
           `Requested automation tool ${JSON.stringify(entry)} cannot be carried from this creator turn. No automation changes were saved. Use a supported tool name and creator runtime, or explicitly remove it from toolsAllow.`,
         );
@@ -389,10 +413,46 @@ function capCronJobToolsAllow(params: {
   );
   // A creator tool matches under its canonical name or the runtime alias the
   // creating surface presented; the persisted cap always holds canonical names.
-  params.payload.toolsAllow = creatorToolsAllow
-    .filter((tool) => selected.has(tool))
-    .map((tool) => tool.name);
-  delete params.payload.toolsAllowIsDefault;
+  return creatorToolsAllow.filter((tool) => selected.has(tool)).map((tool) => tool.name);
+}
+
+/** Shares native cap matching without minting the write/runtime authority of a cron job. */
+export function prepareCronToolSelection(
+  selection: Parameters<OpenClawPluginCronToolSelection>[0],
+  creatorTools: readonly CronCreatorToolAllowlistEntry[],
+  defaultTools: readonly string[] | undefined,
+): Awaited<ReturnType<OpenClawPluginCronToolSelection>> {
+  if (
+    !isRecord(selection) ||
+    (selection.mode !== undefined && selection.mode !== "exact" && selection.mode !== "defaults") ||
+    (selection.toolsAllow != null &&
+      (!Array.isArray(selection.toolsAllow) ||
+        !selection.toolsAllow.every((name) => typeof name === "string" && name.trim())))
+  ) {
+    return { status: "denied" };
+  }
+  const requested = resolveCronToolDefaults({ ...selection, defaultTools });
+  if (!requested?.length) {
+    return { status: "prepared", toolsAllow: requested };
+  }
+  let toolsAllow: string[];
+  try {
+    // Unlike a native agentTurn wildcard, an approval proposal captures a concrete list.
+    toolsAllow = selectCronCreatorTools(
+      normalizeToolList([...requested]),
+      normalizeCronCreatorToolsAllow(creatorTools),
+    );
+  } catch {
+    return { status: "denied" };
+  }
+  const execTarget = toolsAllow.includes("exec")
+    ? resolveCronCreatorExecToolTarget(creatorTools)
+    : undefined;
+  return {
+    status: "prepared",
+    toolsAllow,
+    ...(execTarget ? { toolsAllowExecTarget: { version: 1, ...execTarget } } : {}),
+  };
 }
 
 export function capCronJobToolsAllowOnCreate(

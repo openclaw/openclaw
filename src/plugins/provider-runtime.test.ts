@@ -10,7 +10,10 @@ import {
 } from "./plugin-metadata.test-support.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import {
+  createDemoProvider,
+  createProviderHookRuntimeMock,
   createProviderRuntimeLogger,
+  DEMO_PROVIDER_ID,
   DEMO_SANITIZED_MESSAGE,
   DEMO_TOOL,
   PROVIDER_RUNTIME_TEST_MODEL as MODEL,
@@ -68,13 +71,8 @@ let createEmptyPluginRegistry: typeof import("./registry-empty.js").createEmptyP
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 
-const DEMO_PROVIDER_ID = "demo";
 const EMPTY_MODEL_REGISTRY = { find: () => null } as never;
 const DEMO_REPLAY_MESSAGES: AgentMessage[] = [{ role: "user", content: "hello", timestamp: 1 }];
-
-function createDemoProvider(overrides: Partial<ProviderPlugin> = {}): ProviderPlugin {
-  return { id: DEMO_PROVIDER_ID, label: "Demo", auth: [], ...overrides };
-}
 
 function mockProvider(overrides: Partial<ProviderPlugin>) {
   resolvePluginProvidersMock.mockReturnValue([createDemoProvider(overrides)]);
@@ -233,15 +231,11 @@ describe("provider-runtime", () => {
           isPluginProvidersLoadInFlightMock(params),
       };
     });
-    vi.doMock("./provider-hook-runtime.js", async (importOriginal) => {
-      const { createProviderHookRuntime } = await import("./provider-hook-runtime-core.js");
-      const { nativePluginBindings } = await import("./loader-runtime-load.js");
-      const providers = await import("./providers.runtime.js");
-      return {
-        ...(await importOriginal<typeof import("./provider-hook-runtime.js")>()),
-        ...createProviderHookRuntime({ ...nativePluginBindings.providerRegistry, ...providers }),
-      };
-    });
+    vi.doMock("./provider-hook-runtime.js", (importOriginal) =>
+      createProviderHookRuntimeMock(() =>
+        importOriginal<typeof import("./provider-hook-runtime.js")>(),
+      ),
+    );
     vi.doMock("./provider-external-auth.js", async () => {
       const { createProviderExternalAuthResolver } =
         await import("./provider-external-auth-core.js");

@@ -507,6 +507,7 @@ export function applyDeclarativeJobSpec(
   const explicitlyDeclaresToolsAllow = input.payload.toolsAllow !== undefined;
   const previousToolsAllow = job.payload.toolsAllow;
   const previousToolsAllowIsDefault = job.payload.toolsAllowIsDefault;
+  const previousToolsAllowMode = job.payload.toolsAllowMode;
   // Name, session routing, owner, and retention remain outside declaration
   // convergence; changing those uses cron.update and cannot retarget an identity.
   const displayName = normalizeDeclarativeLabel(input.displayName, "displayName");
@@ -558,6 +559,13 @@ export function applyDeclarativeJobSpec(
       // A declaration that newly becomes tool-bearing adopts current explicit semantics.
       applyDefaultCronToolsAllow(job);
     }
+  }
+  if (
+    cronJobUsesToolRuntime(job) &&
+    job.payload.toolsAllowMode === undefined &&
+    previousToolsAllowMode !== undefined
+  ) {
+    job.payload.toolsAllowMode = previousToolsAllowMode;
   }
   reconcileToolsAllowAuthority({
     job,

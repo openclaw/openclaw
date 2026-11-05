@@ -6,6 +6,7 @@ import {
 } from "./cron-automation-result.js";
 import {
   CronDateTimestampMsSchema,
+  CronToolsAllowModeSchema,
   MAX_DATE_TIMESTAMP_MS,
   cronAgentTurnPayloadSchema,
   cronCommandPayloadSchema,
@@ -212,6 +213,7 @@ const CronSystemEventPayloadSchema = closedObject({
   text: NonEmptyString,
   toolsAllow: Type.Optional(Type.Array(Type.String())),
   toolsAllowIsDefault: Type.Optional(Type.Boolean()),
+  toolsAllowMode: Type.Optional(CronToolsAllowModeSchema),
 });
 const CronAgentTurnPayloadSchema = cronAgentTurnPayloadSchema({
   message: NonEmptyString,
@@ -247,6 +249,7 @@ const CronPayloadPatchSchema = Type.Union([
     text: Type.Optional(NonEmptyString),
     toolsAllow: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
     toolsAllowIsDefault: Type.Optional(Type.Boolean()),
+    toolsAllowMode: Type.Optional(CronToolsAllowModeSchema),
   }),
   cronAgentTurnPayloadSchema({
     message: Type.Optional(NonEmptyString),

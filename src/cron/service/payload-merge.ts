@@ -1,14 +1,23 @@
 // Cron payload merge rules applied when cron.update patches an existing job.
 import type { CronPayload, CronPayloadPatch } from "../types.js";
 
-type CronPayloadToolAllow = Pick<CronPayload, "toolsAllow" | "toolsAllowIsDefault">;
-type CronPayloadToolAllowPatch = Pick<CronPayloadPatch, "toolsAllow" | "toolsAllowIsDefault">;
+type CronPayloadToolAllow = Pick<
+  CronPayload,
+  "toolsAllow" | "toolsAllowIsDefault" | "toolsAllowMode"
+>;
+type CronPayloadToolAllowPatch = Pick<
+  CronPayloadPatch,
+  "toolsAllow" | "toolsAllowIsDefault" | "toolsAllowMode"
+>;
 
 function applyToolsAllowPatch(
   payload: CronPayloadToolAllow,
   patch: CronPayloadToolAllowPatch,
   existing?: CronPayloadToolAllow,
 ): void {
+  if (patch.toolsAllowMode !== undefined) {
+    payload.toolsAllowMode = patch.toolsAllowMode;
+  }
   if (Array.isArray(patch.toolsAllow)) {
     const toolsAllow = patch.toolsAllow;
     payload.toolsAllow = toolsAllow;
@@ -35,6 +44,7 @@ function applyToolsAllowPatch(
   } else if (patch.toolsAllow === null) {
     delete payload.toolsAllow;
     delete payload.toolsAllowIsDefault;
+    delete payload.toolsAllowMode;
   }
 }
 
@@ -48,6 +58,13 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
       if (existing.toolsAllowIsDefault === true) {
         next.toolsAllowIsDefault = true;
       }
+    }
+    if (
+      patch.toolsAllow !== null &&
+      patch.toolsAllowMode === undefined &&
+      existing.toolsAllowMode !== undefined
+    ) {
+      next.toolsAllowMode = existing.toolsAllowMode;
     }
     return next;
   }

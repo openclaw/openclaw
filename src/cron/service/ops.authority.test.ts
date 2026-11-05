@@ -31,6 +31,60 @@ function requireDeclarativeAddResult(result: CronAddResult) {
 }
 
 describe("scheduled tool policy provenance", () => {
+  it("persists an approved exact-to-defaults reset only with its prepared tool list", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
+    const job = await add(state, {
+      ...jobInput,
+      payload: { ...jobInput.payload, toolsAllow: ["cron"], toolsAllowMode: "exact" },
+    });
+    const approvedToolSelection = {
+      toolsAllow: ["cron", "read"],
+      toolsAllowMode: "defaults",
+      toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
+    } as const;
+    // The tool preparer must materialize mode-only resets before approval.
+    await expect(
+      update(
+        state,
+        job.id,
+        {
+          payload: { kind: "agentTurn", toolsAllowMode: "defaults" },
+        },
+        { approvedToolSelection },
+      ),
+    ).rejects.toThrow("must match");
+    await expect(
+      update(
+        state,
+        job.id,
+        {
+          payload: { kind: "agentTurn", toolsAllow: ["cron", "read"], toolsAllowMode: "exact" },
+        },
+        { approvedToolSelection },
+      ),
+    ).rejects.toThrow("tool list and mode");
+    expect(
+      (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)?.payload,
+    ).toMatchObject({
+      toolsAllow: ["cron"],
+      toolsAllowMode: "exact",
+    });
+    await update(
+      state,
+      job.id,
+      {
+        payload: { kind: "agentTurn", toolsAllow: ["cron", "read"], toolsAllowMode: "defaults" },
+      },
+      { approvedToolSelection },
+    );
+    expect(
+      (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)?.payload,
+    ).toMatchObject({
+      toolsAllow: ["cron", "read"],
+      toolsAllowMode: "defaults",
+    });
+  });
   it("retains a continuation source privately until an executable edit retires it", async () => {
     const { storePath } = await makeStorePath();
     const state = createOkIsolatedCronState({ storePath, now: Date.now() });
@@ -270,14 +324,29 @@ describe("scheduled tool policy provenance", () => {
       const input = {
         ...jobInput,
         ...(mode === "declarative" ? { declarationKey: "plugin:test:runtime-authority" } : {}),
+        owner: { agentId: "main", sessionKey: "agent:main:approval-owner", accountId: "work" },
         payload: { ...jobInput.payload, toolsAllow: ["*"] },
       };
-      const result = await add(state, input, { captureRuntimeAuthority: () => baseAuthority });
+      const result = await add(state, input, {
+        captureRuntimeAuthority: () => baseAuthority,
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: input.owner.sessionKey,
+          ownerAccountId: input.owner.accountId,
+        },
+      });
       const job = mode === "declarative" ? requireDeclarativeAddResult(result).job : result;
       const mutate = async (
         description: string,
         toolsAllow?: string[],
-        options?: Pick<CronAddOptions, "commitGuard" | "captureRuntimeAuthority">,
+        options?: Pick<
+          CronAddOptions,
+          | "commitGuard"
+          | "captureRuntimeAuthority"
+          | "approvedToolSelection"
+          | "toolsAllowProvenance"
+        >,
       ) => {
         if (mode === "update") {
           return await update(
@@ -332,6 +401,81 @@ describe("scheduled tool policy provenance", () => {
       });
       expect(replaced.runtimeAuthority).toEqual(replacement);
       expect(replaced.runtimeAuthorityRecoveryRequired).toBeUndefined();
+      const approvedToolSelection = {
+        toolsAllow: ["read"],
+        toolsAllowProvenance: {
+          version: 1 as const,
+          source: "final-executable-surface" as const,
+          callerOrigin: { kind: "external" as const, channel: "discord" },
+          channelRequester: {
+            version: 1 as const,
+            channel: "discord",
+            accountId: "work",
+            senderId: "original-creator",
+          },
+        },
+        runtimeAuthority: baseAuthority,
+      };
+      const approved = await mutate("approved original snapshot", ["read"], {
+        approvedToolSelection,
+        toolsAllowProvenance: {
+          ...approvedToolSelection.toolsAllowProvenance,
+          callerOrigin: { kind: "local" },
+          channelRequester: {
+            ...approvedToolSelection.toolsAllowProvenance.channelRequester,
+            senderId: "later-caller",
+          },
+        },
+      });
+      expect(approved.runtimeAuthority).toEqual(baseAuthority);
+      expect(approved.toolsAllowProvenance).toEqual(approvedToolSelection.toolsAllowProvenance);
+      expect(
+        (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)
+          ?.runtimeAuthority,
+      ).toEqual(baseAuthority);
+      expect(
+        (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)
+          ?.toolsAllowProvenance,
+      ).toEqual(approvedToolSelection.toolsAllowProvenance);
+      const sameExecutionApproval = {
+        ...approvedToolSelection,
+        toolsAllowProvenance: {
+          ...approvedToolSelection.toolsAllowProvenance,
+          callerOrigin: { kind: "local" as const },
+          channelRequester: {
+            ...approvedToolSelection.toolsAllowProvenance.channelRequester,
+            senderId: "reauthorized-creator",
+          },
+        },
+      };
+      const resaved = await mutate("same executable approved source", ["read"], {
+        approvedToolSelection: sameExecutionApproval,
+      });
+      expect(resaved.runtimeAuthority).toEqual(baseAuthority);
+      expect(resaved.toolsAllowProvenance).toEqual(sameExecutionApproval.toolsAllowProvenance);
+      expect(
+        (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)
+          ?.toolsAllowProvenance,
+      ).toEqual(sameExecutionApproval.toolsAllowProvenance);
+      const currentCapture = vi.fn(() => replacement);
+      await expect(
+        mutate("conflicting current source", ["read"], {
+          approvedToolSelection,
+          captureRuntimeAuthority: currentCapture,
+        }),
+      ).rejects.toThrow("cannot also capture");
+      expect(currentCapture).not.toHaveBeenCalled();
+      await expect(
+        mutate("mismatched approval", ["exec"], { approvedToolSelection }),
+      ).rejects.toThrow("must match");
+      const toolLess = await mutate("approved empty", [], {
+        approvedToolSelection: { ...approvedToolSelection, toolsAllow: [] },
+      });
+      expect(toolLess.runtimeAuthority).toBeUndefined();
+      expect(toolLess.runtimeAuthorityRecoveryRequired).toBeUndefined();
+      await mutate("restore fresh capture", ["read"], {
+        captureRuntimeAuthority: () => replacement,
+      });
       if (mode === "update") {
         const persisted = (await loadCronStore(storePath)).jobs.find(
           (entry) => entry.id === job.id,

@@ -44,6 +44,21 @@ const addAndUpdate = (fields: Record<string, unknown>) =>
     [isUpdate, update(fields)],
   ] as const;
 describe("cron protocol validators", () => {
+  it.each(["exact", "defaults", "invalid", null] as const)(
+    "validates durable tool mode %s in create and update",
+    (mode) => {
+      const payload = {
+        kind: "agentTurn",
+        message: "Read reference",
+        toolsAllow: ["read"],
+        toolsAllowMode: mode,
+      };
+      expect(isAdd(add({ sessionTarget: "isolated", payload }))).toBe(
+        mode === "exact" || mode === "defaults",
+      );
+      expect(isUpdate(update({ payload }))).toBe(mode === "exact" || mode === "defaults");
+    },
+  );
   it.each([
     ["schedule", "at", "at", "2030-01-01T00:00:00Z", undefined, "'at'"],
     ["schedule", "every", "everyMs", 1000, "soon", "integer"],

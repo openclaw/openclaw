@@ -3,6 +3,8 @@ import type { ToolFsPolicy } from "../agents/tool-fs-policy.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CronToolsAllowExecTarget } from "../cron/scheduled-tool-policy.js";
+import type { CronToolDefaultsMode } from "../cron/tool-defaults.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -49,6 +51,32 @@ export type OpenClawPluginToolModelExecution = {
     signal?: AbortSignal,
   ) => Promise<T>;
 };
+
+/** Preparation for approval, never a grant to create or execute an automation. */
+export type OpenClawPluginCronToolSelection = (selection: {
+  toolsAllow: readonly string[] | null | undefined;
+  mode?: CronToolDefaultsMode;
+}) => Promise<
+  | {
+      status: "prepared";
+      toolsAllow: readonly string[] | null | undefined;
+      toolsAllowExecTarget?: CronToolsAllowExecTarget;
+    }
+  | { status: "unavailable" }
+  | { status: "denied" }
+>;
+
+/** Host-owned approval submission; the result contains no creator authority. */
+export type OpenClawPluginCronApprovalSubmission = (
+  request: {
+    proposal: Readonly<Record<string, unknown>>;
+    /** Omitted/null toolsAllow leaves selection unprepared; [] is an explicit selection. */
+    toolSelection?: Parameters<OpenClawPluginCronToolSelection>[0];
+  },
+  options?: { signal?: AbortSignal },
+) => Promise<
+  { status: "submitted"; result: unknown } | { status: "unavailable" } | { status: "denied" }
+>;
 
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 type OpenClawPluginToolContextBase = {
@@ -143,6 +171,10 @@ type OpenClawPluginToolContextBase = {
   sandbox?: OpenClawPluginToolSandbox;
   /** Model authorization scope; does not execute inference or grant tool permissions. */
   modelExecution?: OpenClawPluginToolModelExecution;
+  /** Uses the captured final tool surface; retained copies fail after the owning turn closes. */
+  prepareCronToolSelection?: OpenClawPluginCronToolSelection;
+  /** Optional host broker, bound to this original run and plugin instance. */
+  submitCronApproval?: OpenClawPluginCronApprovalSubmission;
   /**
    * True for explicit one-shot local CLI runs that must release plugin-owned
    * process resources before the command exits.

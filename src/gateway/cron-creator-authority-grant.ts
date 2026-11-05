@@ -15,6 +15,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../infra/exec-approvals-core.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type {
   CronAuthenticatedChannelRequester,
   CronCreatorAuthorityGrant,
@@ -58,6 +59,8 @@ export type CronCreatorAuthorityRunScope = {
   readonly callerOrigin: CronScheduledToolCallerOrigin;
   readonly signal: AbortSignal;
   readonly grantTokens: Set<string>;
+  /** Present on hosts that support run-owned approval submissions. */
+  readonly approvalSubmissions?: AsyncWorkScope;
   readonly managementEntitlement?: CronManagementEntitlement;
   /** Separately admitted channel-owner identity, not implied by automation management rights. */
   readonly requesterOwner?: Readonly<{
@@ -118,6 +121,7 @@ export function createCronCreatorAuthorityRunScope(
     callerOrigin: normalizeCronScheduledToolCallerOrigin(callerOrigin),
     signal: abortController.signal,
     grantTokens: new Set(),
+    approvalSubmissions: new AsyncWorkScope(),
     ...(managementEntitlement ? { managementEntitlement } : {}),
     ...(requesterOwner ? { requesterOwner } : {}),
     ...(callerScopedCreation ? { callerScopedCreation } : {}),
@@ -136,6 +140,15 @@ export function createCronCreatorAuthorityRunScope(
     channelRequestersByScope.set(scope, Object.freeze(requester));
   }
   return scope;
+}
+
+/** Snapshot authenticated facts from this exact source, never an ambient later caller. */
+export function readCronCreatorAuthorityRunScopeProvenance(scope: CronCreatorAuthorityRunScope) {
+  const channelRequester = channelRequestersByScope.get(scope);
+  return {
+    callerOrigin: { ...scope.callerOrigin },
+    ...(channelRequester ? { channelRequester: { ...channelRequester } } : {}),
+  };
 }
 
 /** Keeps native identity out of the capability transported through harness contracts. */
@@ -256,13 +269,13 @@ export function resolveCronCreatorAuthorityGrantProvenance(
   ) {
     return undefined;
   }
-  const channelRequester = channelRequestersByScope.get(scope);
+  const { callerOrigin, channelRequester } = readCronCreatorAuthorityRunScopeProvenance(scope);
   return {
     capturesRuntimeAuthority: entry.capturesRuntimeAuthority,
     ...(scope.callerScopedCreation ? { callerScopedCreation: true as const } : {}),
     ...(entry.creatorProfileId ? { creatorProfileId: entry.creatorProfileId } : {}),
-    ...(scope.callerOrigin.kind === "local" ? { callerOrigin: { kind: "local" as const } } : {}),
-    ...(channelRequester ? { channelRequester: { ...channelRequester } } : {}),
+    ...(callerOrigin.kind === "local" ? { callerOrigin: { kind: "local" as const } } : {}),
+    ...(channelRequester ? { channelRequester } : {}),
   };
 }
 

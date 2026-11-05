@@ -574,7 +574,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 throw new Error("displayName must be a non-empty string or null");
               }
               const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
-              applyCronToolDefaults(patch, runtimeConfig.cron?.defaultTools, params.toolsAllowMode);
+              applyCronToolDefaults(patch, undefined, params.toolsAllowMode);
               if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
                 throw new Error("job required");
               }
@@ -601,6 +601,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                     id,
                     expectedConfigRevision,
                     patch,
+                    defaultTools: runtimeConfig.cron?.defaultTools,
                     adminManagement: Boolean(managementAuthority) && allowCommandJobs,
                     creatorToolAllowlist: creatorOptions?.creatorToolAllowlist,
                     creatorToolAllowlistCaptureRef: creatorOptions?.creatorToolAllowlistCaptureRef,

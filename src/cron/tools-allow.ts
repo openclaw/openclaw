@@ -1,4 +1,5 @@
 import { resolveCronScheduledToolPolicy } from "./scheduled-tool-policy.js";
+import { resolveCronToolDefaults } from "./tool-defaults.js";
 import type { CronJob, CronStoredJob } from "./types.js";
 
 type CronToolRuntimeSpec = Pick<CronJob, "payload" | "trigger">;
@@ -39,8 +40,11 @@ export function resolveCronRunToolsAllow(
     | "runtimeAuthority"
     | "runtimeAuthorityRecoveryRequired"
   >,
+  defaultTools?: readonly string[],
 ): string[] | undefined {
-  return job.payload.kind === "agentTurn" &&
+  const toolsAllow =
+    job.payload.kind === "agentTurn" &&
+    job.payload.toolsAllowMode !== "exact" &&
     job.payload.toolsAllowIsDefault === true &&
     !job.trigger?.script.trim() &&
     !job.runtimeAuthority &&
@@ -50,6 +54,25 @@ export function resolveCronRunToolsAllow(
       scheduledToolPolicy: job.scheduledToolPolicy,
       owner: job.owner,
     })
-    ? ["*"]
-    : job.payload.toolsAllow;
+      ? ["*"]
+      : job.payload.toolsAllow;
+  if (job.payload.kind !== "agentTurn") {
+    return toolsAllow;
+  }
+  const resolved = resolveCronToolDefaults({
+    toolsAllow,
+    defaultTools,
+    mode: job.payload.toolsAllowMode,
+  });
+  return resolved ? [...resolved] : undefined;
+}
+
+/** Projects runtime tools without changing the saved agent-turn payload. */
+export function resolveCronRunAgentPayload(
+  job: Parameters<typeof resolveCronRunToolsAllow>[0],
+  defaultTools?: readonly string[],
+) {
+  return job.payload.kind === "agentTurn"
+    ? { ...job.payload, toolsAllow: resolveCronRunToolsAllow(job, defaultTools) }
+    : null;
 }

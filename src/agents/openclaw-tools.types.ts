@@ -183,6 +183,8 @@ export type OpenClawToolsOptions = {
   /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
   cronCreatorToolAllowlist?: CronToolOptions["creatorToolAllowlist"];
   cronCreatorToolAllowlistCaptureRef?: CronToolOptions["creatorToolAllowlistCaptureRef"];
+  /** Trusted host port; never copied into plugin-visible metadata. */
+  cronApprovalSubmissionBroker?: import("./cron-approval-submission.types.js").CronApprovalSubmissionBroker;
   resolveCronCreatorToolAuthority?: CronToolOptions["resolveCreatorToolAuthority"];
   /** Trusted normalized conversation kind for the active inbound turn. */
   currentChatType?: ChatType;

@@ -6,6 +6,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/help
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.entry.js";
 import { SessionWorkStartInvalidatedError } from "../../../config/sessions/work-start-error.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { OpenClawPluginToolContext } from "../../../plugins/tool-types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -17,8 +18,15 @@ import {
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
 import { markCodeModePermissionChangeResult } from "../../code-mode-permission-change.js";
+import type { CronApprovalSubmissionBroker } from "../../cron-approval-submission.types.js";
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "../../cron-creator-authority-context.js";
+import { preparePluginToolExecutionCapabilities } from "../../plugin-tool-execution.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool-creator-cap.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { getHoisted, resetEmbeddedAttemptHarness } from "./attempt-spawn-workspace.test-support.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
@@ -162,6 +170,135 @@ it("prepares tools without enumerating unrelated attempt state", async () => {
   expect(codingTools).toHaveBeenCalledTimes(1);
   expect(enumerate).not.toHaveBeenCalled();
 });
+
+it("withholds a new generation's automation preparer until its own final capture", async () => {
+  const callbacks: NonNullable<OpenClawPluginToolContext["prepareCronToolSelection"]>[] = [];
+  const earlyResults: Promise<unknown>[] = [];
+  codingTools.mockImplementation((options) => {
+    assert(options?.assertInvocationCurrent);
+    const capabilities = preparePluginToolExecutionCapabilities({
+      signal: options.abortSignal,
+      config: options.config,
+      cronCreatorToolAllowlist: options.cronCreatorToolAllowlistRef,
+      cronCreatorToolAllowlistCaptureRef: options.cronCreatorToolAllowlistCaptureRef,
+    })(options.assertInvocationCurrent);
+    assert(capabilities.prepareCronToolSelection);
+    callbacks.push(capabilities.prepareCronToolSelection);
+    earlyResults.push(
+      capabilities.prepareCronToolSelection({ toolsAllow: ["write"], mode: "exact" }),
+    );
+    return [];
+  });
+  await using fixture = await createFixture();
+  const { result } = fixture;
+  const capture = (name: string) =>
+    captureFinalEffectiveCronCreatorToolAllowlist(
+      result.cronCreatorToolAllowlist,
+      result.cronCreatorToolAllowlistCaptureRef,
+      [{ name }],
+    );
+  capture("write");
+  expect((await callbacks[0]!({ toolsAllow: ["write"], mode: "exact" })).status).toBe("prepared");
+  await result.refreshPermissionMode(null, () => {});
+  expect(await callbacks[0]!({ toolsAllow: ["write"], mode: "exact" })).toEqual({
+    status: "unavailable",
+  });
+  expect(await callbacks[1]!({ toolsAllow: ["write"], mode: "exact" })).toEqual({
+    status: "unavailable",
+  });
+  expect(await Promise.all(earlyResults)).toEqual([
+    { status: "unavailable" },
+    { status: "unavailable" },
+  ]);
+  capture("read");
+  expect(await callbacks[1]!({ toolsAllow: ["write"], mode: "exact" })).toEqual({
+    status: "denied",
+  });
+  expect(await callbacks[1]!({ toolsAllow: ["read"], mode: "exact" })).toEqual({
+    status: "prepared",
+    toolsAllow: ["read"],
+  });
+});
+
+it.each([
+  {
+    mode: undefined,
+    allowed: ["execute_code", "read"],
+    selected: ["execute_code"],
+    expected: ["execute_code", "read"],
+  },
+  {
+    mode: "exact" as const,
+    allowed: ["execute_code", "read"],
+    selected: ["execute_code"],
+    expected: ["execute_code"],
+  },
+  { mode: undefined, allowed: ["execute_code", "read"], selected: [], expected: [] },
+  { mode: undefined, allowed: ["execute_code"], selected: ["execute_code"], expected: undefined },
+])(
+  "submits the embedded factory's approved selection with $mode and $allowed",
+  async ({ mode, allowed, selected, expected }) => {
+    const callbacks: NonNullable<OpenClawPluginToolContext["submitCronApproval"]>[] = [];
+    const broker = vi.fn<CronApprovalSubmissionBroker>(async (submission) => {
+      submission.assertCurrent();
+      submission.consume();
+      return { status: "candidate_ready" };
+    });
+    codingTools.mockImplementation((options) => {
+      assert(options?.assertInvocationCurrent);
+      const capabilities = preparePluginToolExecutionCapabilities({
+        runId: options.runId,
+        signal: options.abortSignal,
+        config: options.config,
+        cronCreatorToolAllowlist: options.cronCreatorToolAllowlistRef,
+        cronCreatorToolAllowlistCaptureRef: options.cronCreatorToolAllowlistCaptureRef,
+        cronApprovalSubmissionBroker: broker,
+      })(options.assertInvocationCurrent);
+      assert(capabilities.submitCronApproval);
+      callbacks.push(capabilities.submitCronApproval);
+      return [createStubTool("execute_code"), createStubTool("read")];
+    });
+    const capability = createCronCreatorAuthorityCapability("attribution", { kind: "local" });
+    assert(capability);
+    await runWithCronCreatorAuthorityCapability(capability, async () => {
+      await using fixture = await createFixture({
+        config: {
+          tools: { codeMode: false, toolSearch: { enabled: false } },
+          cron: { defaultTools: ["read"] },
+        },
+        cronCreatorAuthorityCapability: capability,
+        toolsAllow: allowed,
+      });
+      const { result } = fixture;
+      const request = {
+        proposal: { proposalId: "embedded" },
+        toolSelection: { toolsAllow: selected, mode },
+      };
+      await expect(callbacks[0]!(request)).rejects.toThrow("creator tool surface is not ready");
+      expect(broker).not.toHaveBeenCalled();
+      captureFinalEffectiveCronCreatorToolAllowlist(
+        result.cronCreatorToolAllowlist,
+        result.cronCreatorToolAllowlistCaptureRef,
+        result.toolsRaw,
+      );
+      const submitted = await callbacks[0]!(request);
+      if (expected) {
+        expect(submitted).toEqual({ status: "submitted", result: { status: "candidate_ready" } });
+        expect(broker.mock.calls[0]?.[0].selection).toMatchObject({
+          toolsAllow: expected,
+          toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
+        });
+      } else {
+        expect(submitted).toEqual({ status: "denied" });
+        expect(broker).not.toHaveBeenCalled();
+      }
+      const submissions = broker.mock.calls.length;
+      await result.refreshPermissionMode(null, () => {});
+      await expect(callbacks[0]!(request)).rejects.toThrow();
+      expect(broker).toHaveBeenCalledTimes(submissions);
+    });
+  },
+);
 
 it.each(
   (["built-in", "catalog"] as const).flatMap((surface) =>

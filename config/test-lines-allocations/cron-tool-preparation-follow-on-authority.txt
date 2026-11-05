@@ -1,0 +1,4 @@
+# Follow-on creator authority/lifecycle, MCP completeness, embedded tool capture,
+# and durable defaults/opt-out regressions: 665 lines beyond the original grant.
+# Scheduled-child effective tool denial and orphan cleanup add 9 net lines.
+674

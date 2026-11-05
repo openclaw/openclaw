@@ -71,6 +71,29 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
   });
   afterEach(clearActiveRuntimeWebToolsMetadata);
 
+  it.each([
+    { mode: undefined, tools: ["cron"], defaults: ["read"], expected: ["cron", "read"] },
+    { mode: "defaults", tools: ["cron"], defaults: ["read"], expected: ["cron", "read"] },
+    { mode: "exact", tools: ["cron"], defaults: ["read"], expected: ["cron"] },
+    { mode: undefined, tools: [], defaults: ["read"], expected: [] },
+    { mode: undefined, tools: ["cron"], defaults: [], expected: ["cron"] },
+  ] as const)(
+    "projects configured defaults only into the current run: %j",
+    options,
+    async ({ mode, tools, defaults, expected }) => {
+      const payload = {
+        kind: "agentTurn",
+        message: "check allowed tools",
+        toolsAllow: [...tools],
+        ...(mode ? { toolsAllowMode: mode } : {}),
+      } satisfies CronStoredJob["payload"];
+      const before = structuredClone(payload);
+      await runTurn([...tools], {}, { payload }, { cron: { defaultTools: [...defaults] } });
+      expect(runEmbeddedAgentMock.mock.calls[0]?.[0]?.toolsAllow).toEqual(expected);
+      expect(payload).toEqual(before);
+    },
+  );
+
   it("keeps accountless legacy jobs on the sender-policy path", options, async () => {
     await runTurn(["cron"], {}, { owner: { agentId: "main", sessionKey: policy.ownerSessionKey } });
     const call = runEmbeddedAgentMock.mock.calls[0]?.[0];

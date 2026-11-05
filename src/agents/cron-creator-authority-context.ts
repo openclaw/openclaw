@@ -5,9 +5,11 @@ import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-polic
 import {
   CRON_MANAGEMENT_METHODS,
   createCronCreatorAuthorityRunScope,
+  consumeCronCreatorAuthorityGrant,
   hasCronChannelRequester,
   isCronModelManagementAllowed,
   mintCronCreatorAuthorityGrant,
+  readCronCreatorAuthorityRunScopeProvenance,
   revokeCronCreatorAuthorityRunScope,
   type CronCreatorAuthorityRunScope,
   type CronManagementEntitlement,
@@ -368,7 +370,17 @@ export function runWithCronCreatorAuthorityCapability<T>(
   run: () => T,
   signal?: AbortSignal,
 ): T {
-  const revoke = () => revokeCronCreatorAuthorityRunScope(scope);
+  const revoke = () => {
+    revokeCronCreatorAuthorityRunScope(scope);
+    scope.approvalSubmissions?.beginClose();
+  };
+  const settle = () => {
+    signal?.removeEventListener("abort", revoke);
+    revoke();
+    return scope.approvalSubmissions?.hasPendingWork
+      ? scope.approvalSubmissions.drain()
+      : undefined;
+  };
   signal?.addEventListener("abort", revoke, { once: true });
   if (signal?.aborted) {
     revoke();
@@ -376,17 +388,26 @@ export function runWithCronCreatorAuthorityCapability<T>(
   try {
     const result = activeCronCreatorAuthority.run(scope, run);
     if (isPromiseLike(result)) {
-      return Promise.resolve(result).finally(() => {
-        signal?.removeEventListener("abort", revoke);
-        revoke();
+      return Promise.resolve(result).then(
+        async (value) => {
+          await settle();
+          return value;
+        },
+        async (error: unknown) => {
+          await settle();
+          throw error;
+        },
+      ) as T;
+    }
+    const pending = settle();
+    return pending ? (pending.then(() => result) as T) : result;
+  } catch (error) {
+    const pending = settle();
+    if (pending) {
+      return pending.then(() => {
+        throw error;
       }) as T;
     }
-    signal?.removeEventListener("abort", revoke);
-    revoke();
-    return result;
-  } catch (error) {
-    signal?.removeEventListener("abort", revoke);
-    revoke();
     throw error;
   }
 }
@@ -423,10 +444,8 @@ export function runWithCronCreatorAuthorityResolver<T>(params: {
   );
 }
 
-/** Binds the resolver to the exact active run and revokes retained callbacks at settlement. */
-export function bindActiveCronCreatorAuthorityResolver(
-  runId: string | undefined,
-): CronCreatorAuthorityResolver | undefined {
+/** Shares exact-run materialization and lifetime checks without minting a write grant. */
+function bindCronCreatorAuthoritySource(runId: string | undefined) {
   const authority = activeCronCreatorAuthority.getStore();
   const resolver = activeCronCreatorAuthorityResolver.getStore();
   const normalizedRunId = runId?.trim();
@@ -440,33 +459,116 @@ export function bindActiveCronCreatorAuthorityResolver(
     return undefined;
   }
   const resolve = resolver.resolve;
-  const creatorProfileId = requesterCreatorProfileId(
-    getGatewayToolCallerIdentity()?.requesterOrigin,
-  );
-  return async (options) => {
-    // Tool callbacks can run after construction; retain the exact scope object
-    // and let its owner revoke it when the admitted run settles.
-    const operationSignal = options?.signal;
+  const assertCurrent = (operationSignal?: AbortSignal) => {
     authority.signal.throwIfAborted();
     operationSignal?.throwIfAborted();
-    if (authority.isCurrent?.() === false) {
+    if (
+      !authority.active ||
+      authority.isCurrent?.() === false ||
+      (authority.managementEntitlement?.source === "channel-owner" &&
+        !authority.managementEntitlement.isCurrent())
+    ) {
       throw new Error("Automation caller authority is no longer active.");
     }
+  };
+  const materialize: CronCreatorAuthorityMaterializer = async (options) => {
+    const operationSignal = options?.signal;
+    assertCurrent(operationSignal);
     const signal = operationSignal
       ? AbortSignal.any([authority.signal, operationSignal])
       : authority.signal;
     const snapshot = await resolve({ signal });
-    authority.signal.throwIfAborted();
-    operationSignal?.throwIfAborted();
-    if (!authority.active) {
-      authority.signal.throwIfAborted();
-    }
+    assertCurrent(operationSignal);
+    return snapshot;
+  };
+  return { authority, materialize, assertCurrent };
+}
+
+/** Prepare names from the native owner's complete surface without exposing runtime authority. */
+export function bindActiveCronCreatorToolSelection(runId: string | undefined) {
+  const source = bindCronCreatorAuthoritySource(runId);
+  return source
+    ? {
+        assertCurrent: source.assertCurrent,
+        async materialize(options?: { signal?: AbortSignal }) {
+          const snapshot = await source.materialize(options);
+          return { tools: snapshot.tools, provenance: snapshot.provenance };
+        },
+      }
+    : undefined;
+}
+
+/** Retains the original source and all broker effects until its owning run settles. */
+export function bindActiveCronApprovalSource(runId: string | undefined) {
+  const source = bindCronCreatorAuthoritySource(runId);
+  const submissions = source?.authority.approvalSubmissions;
+  if (!source || !submissions) {
+    return undefined;
+  }
+  const creatorProfileId = requesterCreatorProfileId(
+    getGatewayToolCallerIdentity()?.requesterOrigin,
+  );
+  return {
+    signal: source.authority.signal,
+    assertCurrent: source.assertCurrent,
+    track<T>(run: () => Promise<T>): Promise<T> {
+      source.assertCurrent();
+      return submissions.track(run);
+    },
+    async capture(options: { signal: AbortSignal; assertCurrent: () => void }) {
+      const snapshot = await source.materialize(options);
+      options.assertCurrent();
+      let consumed = false;
+      return {
+        snapshot: {
+          ...snapshot,
+          provenance: {
+            ...snapshot.provenance,
+            ...readCronCreatorAuthorityRunScopeProvenance(source.authority),
+          },
+        },
+        consume() {
+          options.assertCurrent();
+          source.assertCurrent(options.signal);
+          if (consumed) {
+            throw new Error("Automation approval source was already consumed.");
+          }
+          consumed = true;
+          const grant = mintCronCreatorAuthorityGrant(
+            source.authority,
+            options.signal,
+            snapshot.runtimeAuthority,
+            undefined,
+            "runtime",
+            undefined,
+            creatorProfileId,
+          );
+          consumeCronCreatorAuthorityGrant(grant).assertCurrent();
+        },
+      };
+    },
+  };
+}
+
+/** Binds the resolver to the exact active run and revokes retained callbacks at settlement. */
+export function bindActiveCronCreatorAuthorityResolver(
+  runId: string | undefined,
+): CronCreatorAuthorityResolver | undefined {
+  const source = bindCronCreatorAuthoritySource(runId);
+  if (!source) {
+    return undefined;
+  }
+  const creatorProfileId = requesterCreatorProfileId(
+    getGatewayToolCallerIdentity()?.requesterOrigin,
+  );
+  return async (options) => {
+    const snapshot = await source.materialize(options);
     return Object.freeze({
       tools: snapshot.tools,
       provenance: snapshot.provenance,
       grant: mintCronCreatorAuthorityGrant(
-        authority,
-        operationSignal,
+        source.authority,
+        options?.signal,
         snapshot.runtimeAuthority,
         undefined,
         "runtime",

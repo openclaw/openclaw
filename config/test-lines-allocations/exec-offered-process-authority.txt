@@ -1,0 +1,2 @@
+# Stable exec schema across process denial, with real durable-execution refusal.
+27

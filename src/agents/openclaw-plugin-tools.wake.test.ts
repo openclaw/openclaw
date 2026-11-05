@@ -10,6 +10,7 @@ import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import type { OpenClawPluginToolContext } from "../plugins/tool-types.js";
 import { resolveGatewayOwnerOnlyToolDenylist } from "../security/dangerous-tools.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createOpenClawCodingToolsInternal } from "./agent-tools.js";
@@ -18,6 +19,11 @@ import { prepareConversationCapabilityProfile } from "./conversation-capability-
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { captureFinalEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool-creator-cap.js";
+import type {
+  CronCreatorToolAllowlistEntry,
+  CronToolsAllowCaptureRef,
+} from "./tools/cron-tool.types.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-wake-resolution-");
 
@@ -26,6 +32,7 @@ it.each([false, true])(
   async (subagent) => {
     const store = path.join(sessionDirs.make(), "sessions.json");
     const config: OpenClawConfig = {
+      cron: { defaultTools: ["memory_get"] },
       agents: { entries: { main: {} } },
       plugins: { enabled: true, entries: { "wake-probe": { enabled: true } } },
       tools: { codeMode: false, toolSearch: false },
@@ -80,10 +87,12 @@ it.each([false, true])(
     });
     api.registerTool(() => tool("memory_get"), { name: "memory_get", workspaceAccess: "execute" });
     let intentExecutions = 0;
+    let prepareCronTools: OpenClawPluginToolContext["prepareCronToolSelection"];
     api.registerTool(
       {
         contextVersion: 2,
         create: (context) => {
+          prepareCronTools = context.prepareCronToolSelection;
           return {
             ...tool("intent"),
             async execute() {
@@ -105,12 +114,16 @@ it.each([false, true])(
       sessionId: "wake-probe-session",
       agentChannel: "webchat",
     };
+    const creatorTools: CronCreatorToolAllowlistEntry[] = [];
+    const creatorCapture: CronToolsAllowCaptureRef = {};
     try {
       const resolve = (operator: boolean) =>
         withPluginRuntimeRegistryScope(builder.registry, () =>
           resolveOpenClawPluginToolsForOptions({
             options: {
               ...options,
+              cronCreatorToolAllowlist: creatorTools,
+              cronCreatorToolAllowlistCaptureRef: creatorCapture,
               runId: operator ? "operator-run" : "wake-run",
               senderIsOwner: operator ? true : undefined,
               requesterSenderId: operator ? "operator" : undefined,
@@ -127,7 +140,19 @@ it.each([false, true])(
           }),
         );
       const operator = resolve(true);
+      const operatorPrepare = prepareCronTools;
+      expect(await operatorPrepare?.({ toolsAllow: ["memory_search"] })).toEqual({
+        status: "unavailable",
+      });
+      captureFinalEffectiveCronCreatorToolAllowlist(creatorTools, creatorCapture, operator);
+      expect(await operatorPrepare?.({ toolsAllow: ["memory_search"] })).toEqual({
+        status: "prepared",
+        toolsAllow: ["memory_search", "memory_get"],
+      });
       const wake = resolve(false);
+      expect(await prepareCronTools?.({ toolsAllow: ["memory_search"] })).toEqual({
+        status: "unavailable",
+      });
       expect(operator.map((entry) => entry.name)).toEqual([
         "memory_search",
         "memory_get",

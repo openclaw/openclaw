@@ -7,12 +7,13 @@ import type { RunCronAgentTurnResult } from "./run.types.js";
 /** Rejects deterministic command prompts whose stored cap cannot execute them. */
 export function resolveCronCommandPromptPreflight(
   job: CronStoredJob,
+  defaultTools?: readonly string[],
 ): RunCronAgentTurnResult | undefined {
   if (
     job.payload.kind !== "agentTurn" ||
     classifyCronAgentTurnShellPrompt({
       ...job.payload,
-      toolsAllow: resolveCronRunToolsAllow(job),
+      toolsAllow: resolveCronRunToolsAllow(job, defaultTools),
     }) !== "commandPromptWithoutShellAccess"
   ) {
     return undefined;

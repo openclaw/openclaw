@@ -3,9 +3,28 @@ import { expect, vi, type Mock } from "vitest";
 import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
-import type { AnyAgentTool } from "./types.js";
+import type { AnyAgentTool, ProviderPlugin } from "./types.js";
 
 type ProviderRuntime = typeof import("./provider-runtime.js");
+
+export const DEMO_PROVIDER_ID = "demo";
+
+export function createDemoProvider(overrides: Partial<ProviderPlugin> = {}): ProviderPlugin {
+  return { id: DEMO_PROVIDER_ID, label: "Demo", auth: [], ...overrides };
+}
+
+export async function createProviderHookRuntimeMock(
+  loadActual: () => Promise<typeof import("./provider-hook-runtime.js")>,
+) {
+  const { createProviderHookRuntime } = await import("./provider-hook-runtime-core.js");
+  const { nativePluginBindings } = await import("./loader-runtime-load.js");
+  const providers = await import("./providers.runtime.js");
+  return {
+    ...(await loadActual()),
+    ...createProviderHookRuntime({ ...nativePluginBindings.providerRegistry, ...providers }),
+  };
+}
+
 export const PROVIDER_RUNTIME_TEST_MODEL: ProviderRuntimeModel & {
   headers?: Record<string, string>;
 } = {

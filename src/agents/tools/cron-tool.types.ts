@@ -35,11 +35,17 @@ export type CronCreatorToolAuthorityMaterialization = {
   provenance: CronToolsAllowCaptureProvenance;
   /** Opaque runtime-owned authority captured with the same exact executable surface. */
   runtimeAuthority?: CronRuntimeAuthority;
+  /**
+   * Runtime-owned restriction of this captured authority to canonical selected tools.
+   * Return undefined when no selected tool needs runtime-private authority. Never
+   * resolve a later surface or add capabilities absent from this materialization.
+   */
+  projectRuntimeAuthority?: (toolsAllow: readonly string[]) => CronRuntimeAuthority | undefined;
 };
 
 export type CronCreatorToolAuthoritySnapshot = Omit<
   CronCreatorToolAuthorityMaterialization,
-  "runtimeAuthority"
+  "runtimeAuthority" | "projectRuntimeAuthority"
 > & {
   /** Gateway-process one-shot proof consumed only at the matching cron write. */
   grant: CronCreatorAuthorityGrant;

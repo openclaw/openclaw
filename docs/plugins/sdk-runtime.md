@@ -455,6 +455,40 @@ plugin mutations cannot alter caller arguments or an approved request. These
 snapshots reject shared memory in the cloned graph; properties omitted by
 structured cloning do not cross this boundary.
 
+Tool factories can use the optional `ctx.submitCronApproval(request, { signal })`
+capability when the host supplies an approval broker. `request.proposal` is the
+broker's proposal record; the broker validates its contents. Optional
+`request.toolSelection` accepts `toolsAllow` and `mode: "exact"`, using the same
+selection rules as `ctx.prepareCronToolSelection`. Omitted or null `toolsAllow`
+leaves the selection unprepared. An explicit empty array stays tool-less,
+including runtime-private app authority.
+
+The host snapshots the request before asynchronous preparation and binds the
+callback to the original creator run and plugin instance. It privately captures
+the original effective tool surface and runtime authority. Neither a retained
+callback nor a later turn can replace that source. Submission returns
+`{ status: "submitted", result }` with the broker's public result, or
+`{ status: "unavailable" }` / `{ status: "denied" }` when preparation cannot
+proceed. Cancellation, expired invocation authority, and broker failures reject
+the promise. A submitted result describes the broker outcome; it does not itself
+grant approval or create a cron job.
+
+An authority-bearing runtime must provide its own projection from canonical
+selected tool names to its captured private authority. Core never interprets
+opaque app grants or attaches the entire private surface to a finite selection.
+Without that projection, nonempty approval selections are unavailable on such
+a runtime. A projection for a dynamic-only selection can return no private
+authority. Empty selections require none.
+
+The host chooses the broker and destination. The broker owns durable binding,
+expiry, result projection, and reconciliation after uncertain writes. It consumes
+the original source once and checks current authority at its binding effect.
+On run closure, the host revokes that source and waits for pending broker effects
+to settle. A broker must settle its promise only after its effects are terminal;
+transport cancellation alone is insufficient. Trusted cron mutation callers can
+install the resulting approved tool selection as a unit, separately from a fresh
+current-turn capture. Public cron input cannot supply that authority.
+
 `before_prompt_build` and `agent_turn_prepare` receive fresh message arrays and
 envelopes with shared, frozen transcript payload leaves. Treat nested history as
 read-only and return contribution fields instead of mutating message content.

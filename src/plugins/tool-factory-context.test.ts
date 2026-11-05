@@ -1,12 +1,29 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, expectTypeOf, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import { wrapToolWithAbortSignal } from "../agents/agent-tools.abort.js";
+import { resolveTurnToolSurface } from "../agents/agent-tools.turn-authority.js";
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapabilityResolver,
+} from "../agents/cron-creator-authority-context.js";
+import { createCronScheduledToolProjection } from "../agents/exec-tool-target-pinning.js";
+import { preparePluginToolExecutionCapabilities } from "../agents/plugin-tool-execution.js";
+import { filterRuntimeCompatibleTools } from "../agents/tool-schema-projection.js";
+import { captureFinalEffectiveCronCreatorToolAllowlist } from "../agents/tools/cron-tool-creator-cap.js";
+import type {
+  CronCreatorToolAllowlistEntry,
+  CronToolsAllowCaptureRef,
+} from "../agents/tools/cron-tool.types.js";
 import {
   captureGatewayToolCallerAssertion,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as cronGrants from "../gateway/cron-creator-authority-grant.js";
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { InvocationFrame } from "./plugin-instance-invocation.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
@@ -86,6 +103,239 @@ const continuation = (isCurrent: () => boolean) => ({
   channel: "discord",
   accountId: "original-account",
 });
+
+it.each([1, 2] as const)(
+  "prepares automation selections before plugin approval (context V%s)",
+  async (version) => {
+    const tools: CronCreatorToolAllowlistEntry[] = [];
+    const capture: CronToolsAllowCaptureRef = {};
+    let config: OpenClawConfig = { cron: { defaultTools: ["read"] } };
+    const factory = () => probe(() => {});
+    const registration = register(
+      version === 2 ? { contextVersion: 2, create: factory } : factory,
+      {
+        assertInvocationCurrent: () => {},
+        bindExecutionCapabilities: preparePluginToolExecutionCapabilities({
+          cronCreatorToolAllowlist: tools,
+          cronCreatorToolAllowlistCaptureRef: capture,
+          getRuntimeConfig: () => config,
+        }),
+      },
+    );
+    const prepare = registration.context.prepareCronToolSelection;
+    expect(registration.context.submitCronApproval).toBeUndefined();
+    expect(prepare, "host must supply the preapproval capability").toBeTypeOf("function");
+    expect(await prepare!({ toolsAllow: ["execute_code"] })).toEqual({ status: "unavailable" });
+    const tool = (name: string) => ({ ...probe(() => {}), name });
+    const exec = createCronScheduledToolProjection(tool("exec"), () => {}, "exec", {
+      kind: "exec",
+      name: "gateway_exec",
+      description: "Pinned shell",
+      followupText: "",
+      ask: "always",
+    });
+    const offeredOnly = tool("offered_only");
+    const sourceTools = [tool("execute_code"), tool("read"), exec, offeredOnly];
+    const completionTools = resolveTurnToolSurface({
+      turnTools: sourceTools.filter((entry) => entry !== offeredOnly),
+      sessionTools: sourceTools,
+      ownerOnlyDenied: new Set<string>(),
+    }).tools.map((entry) =>
+      entry.name === "offered_only"
+        ? wrapToolWithAbortSignal(entry, new AbortController().signal)
+        : entry,
+    );
+    const final = filterRuntimeCompatibleTools([
+      ...completionTools,
+      { ...tool("quarantined"), parameters: { type: "object", $dynamicRef: "#unsupported" } },
+    ]);
+    captureFinalEffectiveCronCreatorToolAllowlist(tools, capture, final.tools, (entry) =>
+      entry.name === "execute_code" ? { pluginId: "code-tools" } : undefined,
+    );
+    const prepared = await prepare!({ toolsAllow: ["execute_code"] });
+    expect(prepared).toEqual({ status: "prepared", toolsAllow: ["execute_code", "read"] });
+    expect(await prepare!({ toolsAllow: ["code-tools", "gateway_exec"], mode: "exact" })).toEqual({
+      status: "prepared",
+      toolsAllow: ["execute_code", "exec"],
+      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+    });
+    expect(await prepare!({ toolsAllow: ["*"], mode: "exact" })).toEqual({
+      status: "prepared",
+      toolsAllow: ["execute_code", "read", "exec"],
+      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+    });
+    expect(await prepare!({ toolsAllow: ["quarantined"], mode: "exact" })).toEqual({
+      status: "denied",
+    });
+    expect(final.tools.map((entry) => entry.name)).toContain("offered_only");
+    expect(await prepare!({ toolsAllow: ["offered_only"], mode: "exact" })).toEqual({
+      status: "denied",
+    });
+    config = { cron: { defaultTools: ["not_available"] } };
+    expect(await prepare!({ toolsAllow: ["execute_code"] })).toEqual({ status: "denied" });
+    expect(prepared).toEqual({ status: "prepared", toolsAllow: ["execute_code", "read"] });
+    expect(await prepare!({ toolsAllow: ["execute_code"], mode: "exact" })).toEqual({
+      status: "prepared",
+      toolsAllow: ["execute_code"],
+    });
+    for (const toolsAllow of [[], null, undefined]) {
+      expect(await prepare!({ toolsAllow })).toEqual({ status: "prepared", toolsAllow });
+    }
+    config = {};
+    const ordinary = resolveTurnToolSurface({
+      turnTools: sourceTools,
+      ownerOnlyDenied: new Set<string>(),
+    });
+    captureFinalEffectiveCronCreatorToolAllowlist(
+      tools,
+      capture,
+      filterRuntimeCompatibleTools(ordinary.tools).tools,
+    );
+    expect(await prepare!({ toolsAllow: ["offered_only"] })).toEqual({
+      status: "prepared",
+      toolsAllow: ["offered_only"],
+    });
+    captureFinalEffectiveCronCreatorToolAllowlist(tools, capture, []);
+    expect(await prepare!({ toolsAllow: ["*"], mode: "exact" })).toEqual({
+      status: "prepared",
+      toolsAllow: [],
+    });
+  },
+);
+
+it("revokes retained automation preparers with their generation, invocation and plugin", async () => {
+  const tools: CronCreatorToolAllowlistEntry[] = [];
+  const capture: CronToolsAllowCaptureRef = {};
+  const generation = new AbortController();
+  let active = true;
+  const bind = (signal?: AbortSignal, admitted = true) =>
+    register(
+      {
+        contextVersion: 2,
+        create: () => probe(() => {}),
+      },
+      {
+        assertInvocationCurrent: admitted ? () => assert(active, "run closed") : undefined,
+        bindExecutionCapabilities: preparePluginToolExecutionCapabilities({
+          signal,
+          cronCreatorToolAllowlist: tools,
+          cronCreatorToolAllowlistCaptureRef: capture,
+          getRuntimeConfig: () => ({ cron: { defaultTools: ["read"] } }),
+        }),
+      },
+    );
+  const first = bind(generation.signal);
+  captureFinalEffectiveCronCreatorToolAllowlist(tools, capture, [{ name: "read" }]);
+  expect((await first.context.prepareCronToolSelection!({ toolsAllow: ["read"] })).status).toBe(
+    "prepared",
+  );
+  generation.abort();
+  const second = bind();
+  captureFinalEffectiveCronCreatorToolAllowlist(tools, capture, [{ name: "write" }]);
+  expect(
+    await first.context.prepareCronToolSelection!({ toolsAllow: ["write"], mode: "exact" }),
+  ).toEqual({ status: "unavailable" });
+  expect(
+    (await second.context.prepareCronToolSelection!({ toolsAllow: ["write"], mode: "exact" }))
+      .status,
+  ).toBe("prepared");
+  expect(
+    await bind(undefined, false).context.prepareCronToolSelection!({ toolsAllow: [] }),
+  ).toEqual({
+    status: "unavailable",
+  });
+  active = false;
+  expect(await second.context.prepareCronToolSelection!({ toolsAllow: [] })).toEqual({
+    status: "unavailable",
+  });
+  active = true;
+  markPluginRegistryRetired(second.registry);
+  expect(await second.context.prepareCronToolSelection!({ toolsAllow: [] })).toEqual({
+    status: "unavailable",
+  });
+});
+
+it.each(["current", "source closed", "invocation closed", "discovery failed"])(
+  "prepares the native creator surface without a grant (%s)",
+  async (outcome) => {
+    const mint = vi.spyOn(cronGrants, "mintCronCreatorAuthorityGrant");
+    const entered = createDeferred();
+    const release = createDeferred();
+    let ready = false;
+    let sourceCurrent = true;
+    let invocationCurrent = true;
+    const capability = createCronCreatorAuthorityCapability(
+      "native-preparation",
+      { kind: "local" },
+      undefined,
+      () => sourceCurrent,
+    )!;
+    const materialize = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+      if (outcome === "discovery failed") {
+        throw new Error("native discovery failed");
+      }
+      return {
+        tools: ["read", "mcp_calendar"],
+        provenance: { version: 1 as const, source: "final-executable-surface" as const },
+      };
+    });
+    try {
+      await runWithCronCreatorAuthorityCapability(capability, async () => {
+        const tools: CronCreatorToolAllowlistEntry[] = [];
+        const capture: CronToolsAllowCaptureRef = {};
+        const registration = runWithCronCreatorAuthorityCapabilityResolver({
+          capability,
+          runId: capability.runId,
+          resolve: () => {
+            if (!ready) {
+              throw new Error("creator startup incomplete");
+            }
+            return materialize();
+          },
+          run: () =>
+            register(() => probe(() => {}), {
+              assertInvocationCurrent: () => assert(invocationCurrent, "invocation closed"),
+              bindExecutionCapabilities: preparePluginToolExecutionCapabilities({
+                runId: capability.runId,
+                config: { cron: { defaultTools: ["read"] } },
+                cronCreatorToolAllowlist: tools,
+                cronCreatorToolAllowlistCaptureRef: capture,
+              }),
+            }),
+        });
+        const prepare = registration.context.prepareCronToolSelection!;
+        expect(await prepare({ toolsAllow: ["*"] })).toEqual({ status: "unavailable" });
+        expect(materialize).not.toHaveBeenCalled();
+        captureFinalEffectiveCronCreatorToolAllowlist(tools, capture, [{ name: "read" }]);
+        // Native apps intentionally withhold dynamic completeness; the owner certifies it.
+        delete capture.value;
+        ready = true;
+        const pending = prepare({ toolsAllow: ["*"] });
+        await awaitGateBeforeSettlement(entered.promise, pending, "native discovery was skipped");
+        sourceCurrent = outcome !== "source closed";
+        invocationCurrent = outcome !== "invocation closed";
+        release.resolve();
+        expect(await pending).toEqual(
+          outcome === "current"
+            ? { status: "prepared", toolsAllow: ["read", "mcp_calendar"] }
+            : { status: "unavailable" },
+        );
+        if (outcome === "current") {
+          expect(await prepare({ toolsAllow: ["mcp_calendar"] })).toEqual({
+            status: "prepared",
+            toolsAllow: ["read", "mcp_calendar"],
+          });
+        }
+        expect(mint).not.toHaveBeenCalled();
+      });
+    } finally {
+      release.resolve();
+      mint.mockRestore();
+    }
+  },
+);
 
 it("enters the registered owner's scopes and retains the execution cancellation scope", async () => {
   const observed: string[] = [];
@@ -334,3 +584,236 @@ it.each(["allowed", "owner-close", "run-close", "plugin-close"] as const)(
     expect(effect).toHaveBeenCalledTimes(mode === "allowed" ? 1 : 0);
   },
 );
+it.each([1, 2] as const)(
+  "submits original approval snapshots through context V%s",
+  async (version) => {
+    const requester = {
+      version: 1 as const,
+      channel: "discord",
+      accountId: "work",
+      senderId: "original-creator",
+    };
+    const capability = createCronCreatorAuthorityCapability(
+      "approval-original",
+      { kind: "external", channel: "discord" },
+      undefined,
+      undefined,
+      requester,
+    )!;
+    const privateAuthority = {
+      version: 1 as const,
+      runtimeId: "fixture",
+      namespace: "fixture.apps",
+      payload: { apps: ["original-calendar"] },
+    };
+    let projectAuthority = true;
+    const entered = createDeferred();
+    const release = createDeferred();
+    const seen: Array<
+      Parameters<
+        import("../agents/cron-approval-submission.types.js").CronApprovalSubmissionBroker
+      >[0]
+    > = [];
+    const broker: import("../agents/cron-approval-submission.types.js").CronApprovalSubmissionBroker =
+      async (submission) => {
+        submission.consume();
+        expect(() => submission.consume()).toThrow("already consumed");
+        seen.push(submission);
+        return { proposalId: "host-receipt" };
+      };
+    await runWithCronCreatorAuthorityCapability(capability, async () => {
+      const factory = () => probe(() => {});
+      const registration = runWithCronCreatorAuthorityCapabilityResolver({
+        capability,
+        runId: capability.runId,
+        resolve: async () => {
+          entered.resolve();
+          await release.promise;
+          return {
+            tools: ["read", "mcp_calendar"],
+            provenance: { version: 1, source: "final-executable-surface" },
+            runtimeAuthority: privateAuthority,
+            ...(projectAuthority
+              ? {
+                  projectRuntimeAuthority: (selected: readonly string[]) =>
+                    selected.includes("mcp_calendar") ? privateAuthority : undefined,
+                }
+              : {}),
+          };
+        },
+        run: () =>
+          register(version === 2 ? { contextVersion: 2, create: factory } : factory, {
+            assertInvocationCurrent: () => {},
+            bindExecutionCapabilities: preparePluginToolExecutionCapabilities({
+              runId: capability.runId,
+              config: { cron: { defaultTools: ["read"] } },
+              cronApprovalSubmissionBroker: broker,
+            }),
+          }),
+      });
+      const submit = registration.context.submitCronApproval!;
+      const request = {
+        proposal: { title: "original" },
+        toolSelection: { toolsAllow: ["mcp_calendar"] },
+      };
+      const pending = submit(request);
+      await entered.promise;
+      request.proposal.title = "changed";
+      request.toolSelection.toolsAllow.push("exec");
+      release.resolve();
+      expect(await pending).toEqual({
+        status: "submitted",
+        result: { proposalId: "host-receipt" },
+      });
+      expect(seen[0]?.proposal).toEqual({ title: "original" });
+      expect(seen[0]?.selection).toEqual({
+        toolsAllow: ["read", "mcp_calendar"],
+        toolsAllowProvenance: {
+          version: 1,
+          source: "final-executable-surface",
+          callerOrigin: { kind: "external", channel: "discord" },
+          channelRequester: requester,
+        },
+        runtimeAuthority: privateAuthority,
+      });
+      for (const mode of ["exact", "defaults"] as const) {
+        await submit({
+          proposal: { mode: "opaque" },
+          toolSelection: { toolsAllow: ["mcp_calendar"], mode },
+        });
+        expect(seen.at(-1)?.proposal).toEqual({ mode: "opaque" });
+        expect(seen.at(-1)?.selection).toMatchObject({
+          toolsAllow: mode === "exact" ? ["mcp_calendar"] : ["read", "mcp_calendar"],
+          toolsAllowMode: mode,
+        });
+      }
+      for (const toolsAllow of [["read"], [], null, undefined]) {
+        await submit({ proposal: {}, toolSelection: { toolsAllow } });
+        const selection = seen.at(-1)?.selection;
+        if (toolsAllow) {
+          expect(selection?.toolsAllow).toEqual(toolsAllow);
+          expect(selection?.runtimeAuthority).toBeUndefined();
+        } else {
+          expect(selection).toBeUndefined();
+        }
+      }
+      await expect(submit({ proposal: { shared: new SharedArrayBuffer(4) } })).rejects.toThrow(
+        "shared memory",
+      );
+      expect(seen).toHaveLength(7);
+      projectAuthority = false;
+      expect(await submit({ proposal: {}, toolSelection: { toolsAllow: ["read"] } })).toEqual({
+        status: "unavailable",
+      });
+      expect(seen).toHaveLength(7);
+    });
+  },
+);
+
+it.each(["run", "plugin"] as const)(
+  "drains approval broker effects after %s closure and rejects retained sources",
+  async (closure) => {
+    const capability = createCronCreatorAuthorityCapability("approval-drain", { kind: "local" })!;
+    const entered = createDeferred();
+    const release = createDeferred();
+    const finishRun = createDeferred();
+    let submit: NonNullable<OpenClawPluginToolContext["submitCronApproval"]>;
+    let submission: Promise<unknown>;
+    let settled = false;
+    let brokerInput: Parameters<
+      import("../agents/cron-approval-submission.types.js").CronApprovalSubmissionBroker
+    >[0];
+    let retire: () => void;
+    const owner = runWithCronCreatorAuthorityCapability(capability, async () => {
+      const registration = runWithCronCreatorAuthorityCapabilityResolver({
+        capability,
+        runId: capability.runId,
+        resolve: async () => ({
+          tools: ["read"],
+          provenance: { version: 1, source: "final-executable-surface" },
+        }),
+        run: () =>
+          register(
+            { contextVersion: 2, create: () => probe(() => {}) },
+            {
+              assertInvocationCurrent: () => {},
+              bindExecutionCapabilities: preparePluginToolExecutionCapabilities({
+                runId: capability.runId,
+                config: {},
+                cronApprovalSubmissionBroker: async (input) => {
+                  brokerInput = input;
+                  entered.resolve();
+                  await release.promise;
+                  expect(() => input.consume()).toThrow();
+                  return { state: "revoked" };
+                },
+              }),
+            },
+          ),
+      });
+      submit = registration.context.submitCronApproval!;
+      retire = () => markPluginRegistryRetired(registration.registry);
+      submission = submit({ proposal: {}, toolSelection: { toolsAllow: ["read"] } });
+      await finishRun.promise;
+    }).then(() => {
+      settled = true;
+    });
+    await entered.promise;
+    if (closure === "plugin") {
+      retire!();
+    }
+    finishRun.resolve();
+    // The owning source is revoked before the host's pending write has settled.
+    await new Promise<void>((resolve) => {
+      capability.signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    expect(brokerInput!.signal.aborted).toBe(true);
+    expect(settled).toBe(false);
+    const later = createCronCreatorAuthorityCapability("approval-later", { kind: "local" })!;
+    await runWithCronCreatorAuthorityCapability(later, async () => {
+      await expect(submit!({ proposal: {} })).rejects.toThrow();
+    });
+    release.resolve();
+    expect(await submission!).toEqual({ status: "submitted", result: { state: "revoked" } });
+    await owner;
+    expect(settled).toBe(true);
+  },
+);
+it("refuses approval submission when plugin closes during source materialization", async () => {
+  const capability = createCronCreatorAuthorityCapability("approval-await", { kind: "local" })!;
+  const entered = createDeferred();
+  const release = createDeferred();
+  const broker = vi.fn(async () => ({ state: "bound" }));
+  await runWithCronCreatorAuthorityCapability(capability, async () => {
+    const registration = runWithCronCreatorAuthorityCapabilityResolver({
+      capability,
+      runId: capability.runId,
+      resolve: async () => {
+        entered.resolve();
+        await release.promise;
+        return { tools: ["read"], provenance: { version: 1, source: "final-executable-surface" } };
+      },
+      run: () =>
+        register(
+          { contextVersion: 2, create: () => probe(() => {}) },
+          {
+            assertInvocationCurrent: () => {},
+            bindExecutionCapabilities: preparePluginToolExecutionCapabilities({
+              runId: capability.runId,
+              config: {},
+              cronApprovalSubmissionBroker: broker,
+            }),
+          },
+        ),
+    });
+    const pending = registration.context.submitCronApproval!({
+      proposal: {},
+      toolSelection: { toolsAllow: ["read"] },
+    });
+    await entered.promise;
+    markPluginRegistryRetired(registration.registry);
+    release.resolve();
+    await expect(pending).rejects.toThrow();
+    expect(broker).not.toHaveBeenCalled();
+  });
+});

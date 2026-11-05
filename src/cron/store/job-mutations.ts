@@ -245,6 +245,7 @@ export function planCronJobMutation(
       job: nextJob,
       captured: options.captured,
       runtimeAuthority: options.runtimeAuthority,
+      approvedToolSelection: options.approvedToolSelection,
       explicitlyMutatesToolsAllow,
     });
     // Neither an ordinary edit nor an app-only recovery flag proves fresh inference consent.
@@ -267,9 +268,12 @@ export function planCronJobMutation(
         previousJob && options.bindSourceConversation
           ? { ...previousJob, sourceConversation: nextJob.sourceConversation }
           : previousJob,
-      toolsAllowProvenance: options.toolsAllowProvenance,
+      toolsAllowProvenance:
+        options.approvedToolSelection?.toolsAllowProvenance ?? options.toolsAllowProvenance,
       reauthorize: mutation.kind === "add" || explicitlyMutatesToolsAllow,
-      reauthorizeCallerOrigin: mutation.kind === "update" && explicitlyMutatesToolsAllow,
+      reauthorizeCallerOrigin:
+        options.approvedToolSelection !== undefined ||
+        (mutation.kind === "update" && explicitlyMutatesToolsAllow),
     });
     resolveCronJobEffectiveAgentId(nextJob, defaultAgentId);
     reconcileCronOperatorSource({

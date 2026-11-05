@@ -99,19 +99,24 @@ function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = fa
 
 export function cloneHookIsolationValue<T>(hookName: PluginHookName, value: T): T {
   try {
-    // Bun omits Error.cause, so only it needs a source scan in addition to the snapshot.
-    if (process.versions.bun && containsSharedMemory(value, new Set<object>(), true)) {
-      throw new TypeError("shared memory cannot be isolated");
-    }
-    const cloned = structuredClone(value);
-    // Inspect exactly what crosses the boundary, including values produced by getters.
-    if (containsSharedMemory(cloned, new Set<object>())) {
-      throw new TypeError("shared memory cannot be isolated");
-    }
-    return cloned;
+    return cloneIsolatedValue(value);
   } catch (cause) {
     throw new HookIsolationError(`[hooks] ${hookName} mutable input isolation failed`, { cause });
   }
+}
+
+/** Detach approval inputs, rejecting shared memory even when cloning retains it. */
+export function cloneIsolatedValue<T>(value: T): T {
+  // Bun omits Error.cause, so only it needs a source scan in addition to the snapshot.
+  if (process.versions.bun && containsSharedMemory(value, new Set<object>(), true)) {
+    throw new TypeError("shared memory cannot be isolated");
+  }
+  const cloned = structuredClone(value);
+  // Inspect exactly what crosses the boundary, including values produced by getters.
+  if (containsSharedMemory(cloned, new Set<object>())) {
+    throw new TypeError("shared memory cannot be isolated");
+  }
+  return cloned;
 }
 
 /** Copy dispatch envelopes while retaining only payloads sealed by the transcript owner. */

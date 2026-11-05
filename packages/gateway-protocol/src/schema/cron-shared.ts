@@ -1,5 +1,8 @@
 import { Type, type TSchema } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
+
+export const CronToolsAllowModeSchema = stringLiteralUnion(["exact", "defaults"]);
 
 // ECMAScript Date's inclusive timestamp limit. Keep public schedule numbers
 // inside the range the scheduler can represent and serialize.
@@ -40,6 +43,7 @@ export function cronAgentTurnPayloadSchema<
     // Server-managed marker for auto-stamped defaults; persisted so CLI cron
     // runs can drop only the cap that was never user-explicit.
     toolsAllowIsDefault: Type.Optional(Type.Boolean()),
+    toolsAllowMode: Type.Optional(CronToolsAllowModeSchema),
   });
 }
 
@@ -60,6 +64,7 @@ export function cronCommandPayloadSchema<
     outputMaxBytes: Type.Optional(Type.Integer({ minimum: 1 })),
     toolsAllow: Type.Optional(params.toolsAllow),
     toolsAllowIsDefault: Type.Optional(Type.Boolean()),
+    toolsAllowMode: Type.Optional(CronToolsAllowModeSchema),
   });
 }
 
@@ -75,5 +80,6 @@ export function cronScriptPayloadSchema<
     toolBudget: Type.Optional(Type.Integer({ minimum: 1 })),
     toolsAllow: Type.Optional(params.toolsAllow),
     toolsAllowIsDefault: Type.Optional(Type.Boolean()),
+    toolsAllowMode: Type.Optional(CronToolsAllowModeSchema),
   });
 }

@@ -46,4 +46,6 @@ export type CronAddOptions = {
   sessionEntryCurrent?: SessionEntryCurrentCheck;
   /** One-use fresh capture; callback presence means fresh even when it returns undefined. */
   captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
+  /** Already approved original snapshot, distinct from a fresh current-turn capture. */
+  approvedToolSelection?: import("../approved-tool-selection.js").CronApprovedToolSelection;
 };
