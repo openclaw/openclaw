@@ -160,10 +160,14 @@ by `tools.profile`.
 > `profile`. It checks `tools` (including `byProvider`, `toolsBySender`,
 > `subagents.tools`, and `sandbox.tools`), the same fields on each agent, and
 > channel group, room, and direct `tools` / `toolsBySender` policies. The
-> sub-agent `alsoAllow` merge is the one case that stays quiet. For sandbox
-> tool policy, removing `allow: []` restores the sandbox default allowlist.
-> Elsewhere, removing the empty list leaves allow-all. Config validation does
-> not warn, and runtime behavior is unchanged.
+> sub-agent `alsoAllow` merge is the one case that stays quiet. Removing a
+> sandbox `allow: []` restores the inherited global sandbox allow list, or the
+> built-in default when none is configured. A global
+> `tools.sandbox.tools.allow: []` is a configured list, so removing only the
+> agent value still inherits that empty list and stays allow-all. An explicit
+> `[]` is allow-all at that layer, not the built-in default. Elsewhere,
+> removing the empty list leaves allow-all. Config validation does not warn,
+> and runtime behavior is unchanged.
 
 For example, `tools.profile: "coding"` includes
 `web_search`/`web_fetch` but not the `browser` tool. To let

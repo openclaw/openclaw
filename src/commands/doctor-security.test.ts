@@ -274,10 +274,34 @@ describe("noteSecurityWarnings gateway exposure", () => {
       'tools.byProvider["openai/gpt"].allow is []',
       'tools.toolsBySender["e164:+390000000000"].allow is []',
       "tools.sandbox.tools.allow is []",
-      "restores the sandbox default allowlist",
+      "Removing tools.sandbox.tools.allow restores the built-in sandbox default allowlist",
       'agents.entries.chat.tools.toolsBySender["id:guest"].allow is []',
       "channels.whatsapp.groups.family.tools.allow is []",
       'channels.whatsapp.groups.family.toolsBySender["id:owner"].allow is []',
+    );
+  });
+
+  it("says removing an agent sandbox allow: [] inherits the global list", async () => {
+    note.mockClear();
+    await noteSecurityWarnings({
+      tools: { sandbox: { tools: { allow: [] } } },
+      agents: {
+        entries: {
+          chat: { tools: { sandbox: { tools: { allow: [] } } } },
+        },
+      },
+    });
+
+    const message = lastMessage();
+    const agentLine = message
+      .split("\n")
+      .find((line) => line.includes("Removing agents.entries.chat.tools.sandbox.tools.allow"));
+    expect(agentLine).toContain(
+      "restores the inherited global sandbox allow list, or the built-in default when none is configured",
+    );
+    expect(agentLine).not.toContain("sandbox default allowlist");
+    expect(message).toContain(
+      "Removing tools.sandbox.tools.allow restores the built-in sandbox default allowlist",
     );
   });
 

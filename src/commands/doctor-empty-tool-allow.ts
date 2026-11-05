@@ -143,18 +143,22 @@ function detailFor(path: string, policy: Record<string, unknown>): string {
 
 function remediationFor(path: string): string {
   const denyAll = `If you meant "no tools", set ${path}.deny to ["*"].`;
-  // Sandbox treats explicit `allow: []` as allow-all and an omitted allow as
-  // the default sandbox allowlist. Other layers treat both as allow-all.
-  if (path.endsWith(".sandbox.tools")) {
+  if (!path.endsWith(".sandbox.tools")) {
     return [
       denyAll,
-      `Removing ${path}.allow restores the sandbox default allowlist. An explicit [] is allow-all at this layer, not that default.`,
+      "If allow-all is intended, remove the empty allow list; behavior is the same.",
     ].join("\n");
   }
-  return [
-    denyAll,
-    "If allow-all is intended, remove the empty allow list; behavior is the same.",
-  ].join("\n");
+  // pickConfiguredList keeps an explicit [] and only then falls through.
+  // Dropping an agent sandbox allow inherits tools.sandbox.tools, including
+  // another [], instead of the built-in default.
+  const removal =
+    path === "tools.sandbox.tools"
+      ? `Removing ${path}.allow restores the built-in sandbox default allowlist.`
+      : `Removing ${path}.allow restores the inherited global sandbox allow list, or the built-in default when none is configured.`;
+  return [denyAll, `${removal} An explicit [] is allow-all at this layer, not that default.`].join(
+    "\n",
+  );
 }
 
 /**
