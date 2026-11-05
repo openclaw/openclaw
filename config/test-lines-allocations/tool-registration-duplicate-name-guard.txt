@@ -1,0 +1,4 @@
+# Regression tests for the duplicate tool-name registration guard in registry-registrars.ts.
+# Adds two focused cases (same-plugin and cross-plugin collision) that were previously
+# silently shadowed by first-match resolution; covered by the duplicate tool-name guard change.
+31
