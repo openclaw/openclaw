@@ -1,10 +1,42 @@
-/** Visible sidebar facts only: avatar presentation, hidden actions and connection status are excluded. */
+/** Visible sidebar presentation, excluding transient action hover and reconnect status. */
 export function sidebarPresentationProbe() {
-  type Row = { key: string; glyphs: string[]; unread: number; badges: string[] };
+  type Row = {
+    key: string;
+    glyphs: string[];
+    avatars: string[];
+    images: string[];
+    ownerAvatars: number;
+    presenceAvatars: number;
+    unread: number;
+    badges: string[];
+  };
+  type Box = { x: number; y: number; width: number; height: number };
+  const box = (element: Element): Box => {
+    const { x, y, width, height } = element.getBoundingClientRect();
+    return { x, y, width, height };
+  };
   type Frame = {
     at: number;
     cached: boolean;
+    scrollTop: number;
+    sidebar: Box;
+    reconnectMasks: Array<Box & { name: string; reason: string }>;
+    chrome: Array<{
+      name: string;
+      opacity: string;
+      disabled: boolean;
+      images: Array<{
+        src: string;
+        currentSrc: string;
+        complete: boolean;
+        width: number;
+        height: number;
+      }>;
+    }>;
     rows: Row[];
+    mountedRows: Array<Pick<Row, "key" | "avatars" | "images">>;
+    links: { href: string | null; class: string }[];
+    mountedKeys: (string | null)[];
     issues: { present: boolean; count: string | null };
   };
   const artwork = (icon: Element) => {
@@ -35,6 +67,12 @@ export function sidebarPresentationProbe() {
       }
     }
   });
+  const imageChanged = (event: Event) => {
+    if (event.target instanceof HTMLImageElement && event.target.closest("aside.sidebar"))
+      dirty = true;
+  };
+  document.addEventListener("load", imageChanged, true);
+  document.addEventListener("error", imageChanged, true);
   observer.observe(document, {
     subtree: true,
     childList: true,
@@ -60,8 +98,67 @@ export function sidebarPresentationProbe() {
         );
       });
       const presentation = {
+        sidebar: box(sidebar),
+        reconnectMasks: [
+          ...sidebar.querySelectorAll(".sidebar-identity-card__status, .sidebar-connection-flag"),
+        ]
+          .filter(
+            (element) =>
+              element.checkVisibility({ checkOpacity: true }) &&
+              element.getBoundingClientRect().width > 0 &&
+              element.getBoundingClientRect().height > 0,
+          )
+          .map((element, index) => ({
+            ...box(element),
+            name: `reconnect-${index}`,
+            reason: "Permitted reconnect indicator",
+          })),
+        chrome: [
+          ["brand", ".sidebar-agent-card__avatar"],
+          ["ownerPicker", ".sidebar-session-owner-filter .picker-select__trigger"],
+          ["home", ".sidebar-footer-bar__home"],
+          ["inbox", ".sidebar-issues-button"],
+          ["footer", ".sidebar-identity-card__avatar"],
+        ].flatMap(([name, selector]) => {
+          const element = sidebar.querySelector(selector!);
+          return element
+            ? [
+                {
+                  name: name!,
+                  opacity: getComputedStyle(element).opacity,
+                  disabled: element.matches(":disabled"),
+                  images: [...element.querySelectorAll("img")].map((image) => ({
+                    src: image.src,
+                    currentSrc: image.currentSrc,
+                    complete: image.complete,
+                    width: image.naturalWidth,
+                    height: image.naturalHeight,
+                  })),
+                },
+              ]
+            : [];
+        }),
+        scrollTop: sidebar.querySelector(".sidebar-shell__body")?.scrollTop ?? 0,
+        links: [...sidebar.querySelectorAll("a[href]")].map((link) => ({
+          href: link.getAttribute("href"),
+          class: link.className,
+        })),
+        mountedKeys: [...sidebar.querySelectorAll("[data-session-key]")].map((row) =>
+          row.getAttribute("data-session-key"),
+        ),
+        mountedRows: [...sidebar.querySelectorAll(".sidebar-recent-session")].map((row) => ({
+          key: row.getAttribute("data-session-key") ?? "",
+          avatars: [...row.querySelectorAll('[class*="avatar"]')].map((avatar) => avatar.className),
+          images: [...row.querySelectorAll("img")].map((image) => image.getAttribute("src") ?? ""),
+        })),
         rows: rows.map((row) => ({
           key: row.getAttribute("data-session-key") ?? "",
+          avatars: [...row.querySelectorAll('[class*="avatar"]')].map((avatar) => avatar.className),
+          images: [...row.querySelectorAll("img")].map((image) => image.getAttribute("src") ?? ""),
+          ownerAvatars: row.querySelectorAll('.sidebar-session-indicator [class*="avatar"]').length,
+          presenceAvatars: row.querySelectorAll(
+            '.sidebar-recent-session__details-endcap [class*="avatar"]',
+          ).length,
           glyphs: [
             ...[...row.querySelectorAll(".session-glyph")].flatMap((glyph) => {
               const content = [
@@ -128,6 +225,8 @@ export function sidebarPresentationProbe() {
     read() {
       stopped = true;
       observer.disconnect();
+      document.removeEventListener("load", imageChanged, true);
+      document.removeEventListener("error", imageChanged, true);
       const first = frames.findIndex((frame) => frame.cached && frame.rows.length > 0);
       const visible = first < 0 ? [] : frames.slice(first);
       const handoff = visible.findIndex((frame) => !frame.cached);
@@ -152,7 +251,46 @@ export function sidebarPresentationProbe() {
           }
         }
       }
-      return { frames, waves: Math.max(0, visible.length - 2), handoffChanges };
+      const initial = frames.find((frame) => frame.cached);
+      const final = frames.at(-1);
+      const initialKeys = new Set(initial?.mountedKeys);
+      const finalKeys = new Set(final?.mountedKeys);
+      const parity =
+        initial && final && !final.cached
+          ? {
+              initialRows: initial.mountedKeys.length,
+              finalRows: final.mountedKeys.length,
+              added: [...finalKeys].filter((key) => !initialKeys.has(key)).length,
+              removed: [...initialKeys].filter((key) => !finalKeys.has(key)).length,
+              avatars: initial.mountedRows.filter((row) => {
+                const live = final.mountedRows.find((value) => value.key === row.key);
+                return (
+                  !live ||
+                  JSON.stringify([row.avatars, row.images]) !==
+                    JSON.stringify([live.avatars, live.images])
+                );
+              }).length,
+            }
+          : null;
+      const sidebar = (
+        frames.find((frame) => frame.cached && frame.rows.length > 0) ?? frames.at(-1)
+      )?.sidebar;
+      const reconnectMasks = [
+        ...new Map(
+          frames
+            .flatMap((frame) => frame.reconnectMasks)
+            .map((mask) => [JSON.stringify(mask), mask]),
+        ).values(),
+      ];
+      return {
+        timeOrigin: performance.timeOrigin,
+        sidebar,
+        reconnectMasks,
+        frames,
+        waves: Math.max(0, visible.length - 2),
+        handoffChanges,
+        parity,
+      };
     },
   });
 }

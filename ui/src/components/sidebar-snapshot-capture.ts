@@ -1,10 +1,15 @@
+import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import { parseSidebarEntry } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { isHomePanelAvailable } from "../app/panel-availability.ts";
 import { loadSettings } from "../app/settings.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { presenceViewerLastActivity, profilePresenceViewer } from "../lib/presence-users.ts";
+import { profileDirectory } from "../lib/profile-directory.ts";
+import type { SessionCreatedActor } from "../lib/session-owner.ts";
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -121,13 +126,31 @@ export function captureSidebarSnapshotModel(
   for (const { key, pluginId, value } of host.pluginNavigation()) {
     plugins.push({ key, pluginId, id: value.page.id, label: value.label, icon: value.icon });
   }
+  const displayPerson = <T extends SessionCreatedActor | SessionParticipant>(person: T): T => {
+    const identity = person.identity;
+    const avatarUrl =
+      identity?.type === "agent"
+        ? (resolveAgentAvatarUrl(
+            agents.agents.find((agent) => agent.id === identity.id) ?? {},
+            context.agentIdentity.get(identity.id),
+          ) ?? undefined)
+        : profileDirectory(context.gateway).avatarIdentity({
+            identity,
+            profileAvatarUrl: person.avatarUrl,
+          }).profileAvatarUrl;
+    return { ...person, avatarUrl };
+  };
   const presentation = (row: SidebarRecentSession) => ({
+    owner: row.owner && { ...row.owner, actor: displayPerson(row.owner.actor) },
+    archivedBy: row.archivedBy && displayPerson(row.archivedBy),
+    participants: row.participants?.map(displayPerson),
     childrenDisplayMode: host.sessionProjection.children.capture(row.key),
     snapshotSubtitle: row.snapshot
       ? row.snapshotSubtitle
       : resolveSidebarSessionRowSubtitle(host, row),
     state: sidebarSessionBadgeFacts(host.sessionPullRequests, row),
   });
+  const home = host.visibleHomeSession(host.expandedAgentId());
   return parseSidebarSnapshot({
     routingDefaults: {
       mainKey: agents.mainKey,
@@ -170,7 +193,9 @@ export function captureSidebarSnapshotModel(
       const lastActivityAt = presenceViewerLastActivity(user);
       return {
         ...displayUser(user),
-        watchedSessions: [],
+        watchedSessions: user.watchedSessions.filter(
+          (key) => zone.sessionRows.has(key) && !isIncognitoSessionKey(key),
+        ),
         entries: [{ ts: 0, lastActivityAt }],
       };
     }),
@@ -183,6 +208,14 @@ export function captureSidebarSnapshotModel(
       .map(profilePresenceViewer),
     ownerId: host.sessionOwnerFilterId,
     involvingMe: host.sessionInvolvingMeFilterActive,
+    home: snapshotSessions(home ? [home] : [], presentation)[0] ?? null,
+    homeAllowed: isHomePanelAvailable(context.gateway),
+    ownershipAvatars: host.sessionOwnershipVisibility.avatars,
+    newSessionAllowed: host.readNewSessionAccess().allowed,
+    windowKeys: [...host.mountedPresence().sessionKeys].filter(
+      (key) => !isIncognitoSessionKey(key),
+    ),
+    scrollTop: host.scroll?.position() ?? 0,
     footer: displayUser(context.gateway.snapshot.selfUser),
     brand: readSidebarBrandPresentation(host),
   });

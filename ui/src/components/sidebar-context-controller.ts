@@ -1,6 +1,6 @@
-import { createContext, createSignal } from "solid-js";
+import { createContext, createSignal, onSettled } from "solid-js";
 import { elementRef } from "../lib/reactive/element-ref.ts";
-import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import type { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import type { SidebarSessionsScrollState } from "./app-sidebar-session-types.ts";
 import { observeScrollState } from "./scroll-state-observer.ts";
 
@@ -15,8 +15,8 @@ export const SidebarScrollContext = createContext<{
 /** Preserve the shared sidebar's scroll position for each destination. */
 export function createSidebarScroll(
   host: Pick<
-    AppSidebarSessionNavigationElement,
-    "isConnected" | "navigationView" | "contextualSidebar"
+    AppSidebarOwner,
+    "isConnected" | "navigationView" | "contextualSidebar" | "sidebarSnapshot" | "snapshot"
   >,
 ) {
   const positions = new Map<string, number>();
@@ -33,6 +33,7 @@ export function createSidebarScroll(
       : host.navigationView;
   return {
     state,
+    position: () => scroller?.scrollTop ?? 0,
     element: () => scroller,
     content: () => content,
     createContentRef() {
@@ -57,6 +58,12 @@ export function createSidebarScroll(
       // The frame can disappear while its containing sidebar retains destination offsets.
       return elementRef((element: HTMLElement) => {
         scroller = element;
+        // Refs precede adoption; the cached rows must exist before restoring the offset.
+        onSettled(() => {
+          if (scroller === element) {
+            element.scrollTop = host.sidebarSnapshot?.scrollTop ?? positions.get(presentedKey) ?? 0;
+          }
+        });
         const bound = observeScrollState(element, (next) =>
           setState(
             !next.scrollable ? "none" : next.atStart ? "top" : next.atEnd ? "bottom" : "middle",
@@ -97,6 +104,7 @@ export function createSidebarScroll(
         for (const listener of scrollListeners) {
           listener();
         }
+        host.snapshot.capture();
       }
     },
   };

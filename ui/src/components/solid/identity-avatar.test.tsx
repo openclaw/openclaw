@@ -43,7 +43,11 @@ it("presents a resolved portrait without a decode-state transition", async () =>
       "blob:resolved-portrait",
     );
     fetchAvatar.mockClear();
-    const view = mountSolid(() => <Avatar agent={{ id: "forge", avatar: "/avatar/forge?v=1" }} />);
+    const [agent, publish] = createSignal<AgentIdentity>({
+      id: "forge",
+      avatar: "/avatar/forge?v=1",
+    });
+    const view = mountSolid(() => <Avatar agent={agent()} />);
     const frame = view.container.querySelector(".identity-avatar--agent")!;
     const image = frame.querySelector("img")!;
     expect(image.getAttribute("src")).toBe("blob:resolved-portrait");
@@ -52,6 +56,12 @@ it("presents a resolved portrait without a decode-state transition", async () =>
     image.dispatchEvent(new Event("load"));
     flush();
     expect(mutations()).toHaveLength(0);
+    const fallback = frame.querySelector(".identity-avatar__text");
+    expect(fallback).not.toBeNull();
+    publish({ ...agent(), textAvatar: "🔨" });
+    flush();
+    expect(frame.querySelector(".identity-avatar__text")).toBe(fallback);
+    expect(frame.querySelector("img")).toBe(image);
     expect(fetchAvatar).not.toHaveBeenCalled();
   } finally {
     setAvatarGatewayOrigin(null);

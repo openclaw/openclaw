@@ -25,6 +25,7 @@
 // --layout-matrix covers routes, themes, viewports and cold/warm reloads; --runs is per bundle/cell.
 // Repeat --layout-cell mobile:light:chat:cold to isolate cells with their matrix setup intact.
 // --sidebar-presentation adds badges/avatars; --sidebar-presentation-probe records visible waves.
+// --sidebar-pixel-probe captures native PNG parity; --warm-reload-perf-probe alone avoids capture.
 // --late-row-facts covers titled links, native/ticketed thumbnails, archive notice and avatars.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
@@ -65,7 +66,10 @@ import { navigationDrawerToggle } from "../ui/src/test-helpers/control-ui-naviga
 import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import { sidebarPresentationProbe } from "../ui/src/test-helpers/control-ui-sidebar-presentation-probe.test-support.ts";
-import { installTeamScaleSidebarPresentation } from "../ui/src/test-helpers/control-ui-sidebar-presentation.test-support.ts";
+import {
+  installTeamScaleSidebarPresentation,
+  installSidebarCachedParitySettings,
+} from "../ui/src/test-helpers/control-ui-sidebar-presentation.test-support.ts";
 import { revealSidebarTarget } from "../ui/src/test-helpers/control-ui-sidebar-window.ts";
 import { createControlUiTeamScaleFixture } from "../ui/src/test-helpers/control-ui-team-scale-fixture.ts";
 import { LONG_SESSION_SCENARIOS } from "../ui/src/test-helpers/control-ui-team-scale-history-fixture.ts";
@@ -125,7 +129,208 @@ import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,
   readGatewayHeapProfile,
 } from "./lib/gateway-bench-profile.ts";
-import { summarizeDetailsGeometry } from "./perf/warm-reload-browser-probe.ts";
+import {
+  installWarmReloadBrowserProbe,
+  summarizeDetailsGeometry,
+} from "./perf/warm-reload-browser-probe.ts";
+import {
+  startWarmReloadScreencast,
+  writeWarmReloadRegionStrip,
+} from "./perf/warm-reload-browser.ts";
+import {
+  analyzeReloadFrames,
+  type ReloadMask,
+  type ReloadRegion,
+} from "./perf/warm-reload-frames.ts";
+
+type SidebarPresentationSnapshot = {
+  timeOrigin: number;
+  sidebar?: Omit<ReloadRegion, "name">;
+  reconnectMasks: ReloadMask[];
+  frames: Array<{
+    at: number;
+    cached: boolean;
+    sidebar: Omit<ReloadRegion, "name">;
+    scrollTop: number;
+    mountedKeys: Array<string | null>;
+    mountedRows: Array<{ key: string; avatars: string[]; images: string[] }>;
+    rows: Array<{
+      key: string;
+      avatars: string[];
+      images: string[];
+      ownerAvatars: number;
+      presenceAvatars: number;
+    }>;
+  }>;
+};
+
+async function readSidebarPixelProof(
+  page: Page,
+  cdp: CDPSession,
+  capture: Awaited<ReturnType<typeof startWarmReloadScreencast>>,
+  presentation: SidebarPresentationSnapshot,
+  outputDir: string,
+  requestedScrollTop: number,
+  browserErrors: readonly string[],
+) {
+  const initial = presentation.frames.find((frame) => frame.cached);
+  const populated = presentation.frames.find((frame) => frame.cached && frame.rows.length > 0);
+  const live =
+    populated && presentation.frames.find((frame) => !frame.cached && frame.at >= populated.at);
+  const final = presentation.frames.at(-1);
+  const settledFile = path.join(outputDir, "settled.png");
+  const captureStartedMs = await page.evaluate(() => performance.now());
+  const screenshot = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+  const captureFinishedMs = await page.evaluate(() => performance.now());
+  await writeFile(settledFile, Buffer.from(screenshot.data, "base64"));
+  const surfaces = await capture.stop();
+  const frames = surfaces.map((frame) => ({
+    ...frame,
+    atMs: frame.epochMs - presentation.timeOrigin,
+  }));
+  const first =
+    populated &&
+    live &&
+    frames.find(
+      (frame) =>
+        frame.clockSource === "surface" && frame.atMs >= populated.at && frame.atMs < live.at,
+    );
+  await writeFile(
+    path.join(outputDir, "frames.json"),
+    JSON.stringify(
+      {
+        navigationTimeOrigin: presentation.timeOrigin,
+        frames,
+        cachedInterval: populated && live ? { fromMs: populated.at, untilMs: live.at } : null,
+        settled: { file: settledFile, captureStartedMs, captureFinishedMs },
+      },
+      null,
+      2,
+    ),
+  );
+  if (
+    !initial ||
+    !populated ||
+    !live ||
+    !final ||
+    final.cached ||
+    !first ||
+    surfaces.some((frame) => frame.clockSource !== "surface")
+  ) {
+    throw new Error(
+      `No qualified cached/live sidebar compositor capture; inspect ${outputDir}/frames.json`,
+    );
+  }
+  if (presentation.reconnectMasks.some((mask) => mask.reason !== "Permitted reconnect indicator")) {
+    throw new Error("Sidebar pixel proof permits only reconnect-indicator masks");
+  }
+  const x = Math.min(populated.sidebar.x, final.sidebar.x);
+  const y = Math.min(populated.sidebar.y, final.sidebar.y);
+  const region = {
+    name: "sidebar",
+    x,
+    y,
+    width:
+      Math.max(
+        populated.sidebar.x + populated.sidebar.width,
+        final.sidebar.x + final.sidebar.width,
+      ) - x,
+    height:
+      Math.max(
+        populated.sidebar.y + populated.sidebar.height,
+        final.sidebar.y + final.sidebar.height,
+      ) - y,
+  };
+  const visual = await analyzeReloadFrames({
+    frames: [
+      { file: first.file, atMs: first.atMs },
+      { file: settledFile, atMs: captureStartedMs },
+    ],
+    regions: [region],
+    masks: presentation.reconnectMasks,
+    outputDir,
+    channelThreshold: 0,
+    minChangedPixels: 1,
+    minChangedRatio: 0,
+  });
+  const initialKeys = new Set(populated.mountedKeys);
+  const finalKeys = new Set(final.mountedKeys);
+  const rowChanges =
+    [...initialKeys].filter((key) => !finalKeys.has(key)).length +
+    [...finalKeys].filter((key) => !initialKeys.has(key)).length;
+  const avatarChanges = populated.mountedRows.filter((row) => {
+    const liveRow = final.mountedRows.find((value) => value.key === row.key);
+    return (
+      !liveRow ||
+      JSON.stringify([row.avatars, row.images]) !==
+        JSON.stringify([liveRow.avatars, liveRow.images])
+    );
+  }).length;
+  const avatarCounts = (frame: SidebarPresentationSnapshot["frames"][number]) => ({
+    ownerParticipants: frame.rows.reduce((sum, row) => sum + row.ownerAvatars, 0),
+    presence: frame.rows.reduce((sum, row) => sum + row.presenceAvatars, 0),
+    total: frame.rows.reduce((sum, row) => sum + row.avatars.length, 0),
+    images: frame.rows.reduce((sum, row) => sum + row.images.length, 0),
+  });
+  const noZeroRowCachedFrame = !presentation.frames.some(
+    (frame) => frame.cached && frame.mountedKeys.length === 0,
+  );
+  const scrollPreserved =
+    initial.scrollTop === requestedScrollTop &&
+    populated.scrollTop === requestedScrollTop &&
+    final.scrollTop === requestedScrollTop;
+  const changedPixels = visual.regions.sidebar!.timeline.at(-1)!.changedPixels;
+  const strips = {
+    cached: await writeWarmReloadRegionStrip(
+      first.file,
+      region,
+      path.join(outputDir, "cached-sidebar.png"),
+    ),
+    settled: await writeWarmReloadRegionStrip(
+      settledFile,
+      region,
+      path.join(outputDir, "settled-sidebar.png"),
+    ),
+  };
+  const report = {
+    valid: browserErrors.length === 0,
+    captureValid: true,
+    browserErrors: [...browserErrors],
+    measurement:
+      "Capture-perturbed correctness only; native compositor PNGs, exact RGBA differences, only reconnect indicator masked",
+    firstCachedFrameMs: initial.at,
+    firstPopulatedCachedFrameMs: populated.at,
+    cachedSurface: first,
+    firstLiveFrameMs: live.at,
+    settled: { file: settledFile, captureStartedMs, captureFinishedMs },
+    initialRows: initial.mountedKeys.length,
+    populatedRows: populated.mountedKeys.length,
+    finalRows: final.mountedKeys.length,
+    noZeroRowCachedFrame,
+    requestedScrollTop,
+    scrollTop: {
+      initial: initial.scrollTop,
+      populated: populated.scrollTop,
+      final: final.scrollTop,
+    },
+    scrollPreserved,
+    rowChanges,
+    avatarChanges,
+    avatars: { cached: avatarCounts(populated), settled: avatarCounts(final) },
+    changedPixels,
+    strictParity:
+      browserErrors.length === 0 &&
+      changedPixels === 0 &&
+      rowChanges === 0 &&
+      avatarChanges === 0 &&
+      noZeroRowCachedFrame &&
+      scrollPreserved,
+    strips,
+    visual,
+  };
+  await writeFile(path.join(outputDir, "sidebar-pixels.json"), JSON.stringify(report, null, 2));
+  return report;
+}
 
 function readRigProbeSnapshot() {
   const perf = Reflect.get(window, "__perf");
@@ -333,7 +538,11 @@ const { values } = parseArgs({
     "sidebar-avatars": { type: "boolean", default: false },
     "transcript-avatars": { type: "boolean", default: false },
     "sidebar-presentation": { type: "boolean", default: false },
+    "sidebar-cached-parity": { type: "boolean", default: false },
+    "sidebar-scroll-top": { type: "string", default: "0" },
     "sidebar-presentation-probe": { type: "boolean", default: false },
+    "sidebar-pixel-probe": { type: "boolean", default: false },
+    "warm-reload-perf-probe": { type: "boolean", default: false },
     "sidebar-expanded": { type: "boolean", default: false },
     "sidebar-persistent-children": { type: "boolean", default: false },
     "omit-hello-self-presence": { type: "boolean", default: false },
@@ -399,6 +608,25 @@ if (values["details-processes"]) {
 }
 if (values["pane-chrome-probe"] && !values["warm-reload"]) {
   throw new Error("pane-chrome-probe requires warm-reload for the first transcript paint boundary");
+}
+if (values["sidebar-pixel-probe"]) {
+  if (
+    !values["warm-reload"] ||
+    !values["gateway-http"] ||
+    values["cold-http-cache"] ||
+    !values["sidebar-presentation-probe"] ||
+    !values.untraced ||
+    values["filmstrip-only"] ||
+    values["cpu-profile"]
+  ) {
+    throw new Error(
+      "sidebar-pixel-probe requires cache-enabled gateway-http, warm-reload, sidebar-presentation-probe and untraced without filmstrip-only or cpu-profile",
+    );
+  }
+  values["warm-reload-perf-probe"] = true;
+}
+if (values["warm-reload-perf-probe"] && !values["warm-reload"]) {
+  throw new Error("warm-reload-perf-probe requires warm-reload");
 }
 if (values["selector-stats"] && (values.untraced || values["filmstrip-only"])) {
   throw new Error("selector-stats requires tracing; exclude untraced and filmstrip-only");
@@ -902,6 +1130,7 @@ const fixture = createControlUiTeamScaleFixture({
   sidebarAvatars: values["sidebar-avatars"],
   transcriptAvatars: values["transcript-avatars"],
   sidebarPresentation: values["sidebar-presentation"],
+  sidebarCachedParity: values["sidebar-cached-parity"],
   sidebarPersistentChildren: values["sidebar-persistent-children"],
   sessionEventChurn: values["session-event-churn"],
   sessionEventDurationMs,
@@ -1051,6 +1280,7 @@ const chromiumArgs = [
 let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
+let sidebarCapture: Awaited<ReturnType<typeof startWarmReloadScreencast>> | undefined;
 const results = [];
 const waterfallArtifacts: Array<{
   file: string;
@@ -1491,6 +1721,11 @@ try {
       return asset
         ? {
             ...asset,
+            headers:
+              url.searchParams.has("v") &&
+              (pathname.startsWith("/avatar/") || /^\/api\/users\/[^/]+\/avatar$/u.test(pathname))
+                ? { "Cache-Control": "private, max-age=31536000, immutable" }
+                : undefined,
             delayMs:
               (fixture.assets.get(pathname)?.delayMs ?? 0) +
               (values["dashboard-widget"] && pathname.startsWith("/__openclaw__/board/")
@@ -1620,13 +1855,17 @@ try {
           : "chip",
     },
   );
-  const paneChromeScript = values["pane-chrome-probe"]
-    ? `const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome);`
-    : "";
+  const paneChromeScript =
+    values["pane-chrome-probe"] || values["warm-reload-perf-probe"]
+      ? `const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome);`
+      : "";
   const warmProbes =
     values["warm-reload"] || firstLoad
       ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"], lateRowFacts: values["late-row-facts"], witnesses: transcriptWitness?.witnesses })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
       : "";
+  const warmPerformanceProbe = values["warm-reload-perf-probe"]
+    ? `\nReflect.set(window, "__warmReloadProof", (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(face)}));`
+    : "";
   // The last history case is the fixture's full-window fallback. Witness mode
   // measures a changed transcript, so it must not replay the unchanged-cursor delta.
   const historyCases = asNullableRecord(fixture.scenario.methodResponses?.["chat.history"])?.cases;
@@ -1660,11 +1899,14 @@ try {
   const presentationProbes = fixture.sidebarPresentation
     ? `\n(${installTeamScaleSidebarPresentation.toString()})(${JSON.stringify(fixture.sidebarPresentation)});${values["sidebar-presentation-probe"] ? `\n(${sidebarPresentationProbe.toString()})();` : ""}`
     : "";
+  const paritySettings = values["sidebar-cached-parity"]
+    ? `\n(${installSidebarCachedParitySettings.toString()})(${JSON.stringify(fixture.scenario.sessionGroups)});`
+    : "";
   const boardTickets = values["dashboard-widget"]
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(gatewayScenario)}\n${witnessInit}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] || values["long-session"] || latencyProfile === "live-capped" ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes}${presentationProbes} })();`,
+    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(gatewayScenario)}\n${witnessInit}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] || values["long-session"] || latencyProfile === "live-capped" ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes}${warmPerformanceProbe}${presentationProbes}${paritySettings} })();`,
   });
   if (values["critical-path"]) {
     await page.addInitScript({
@@ -2173,6 +2415,12 @@ try {
           await page.locator(".shell--nav-drawer-open").waitFor();
         }
         await expandSidebar();
+        await page.locator(".sidebar-shell__body").evaluate((element, top) => {
+          element.scrollTop = top;
+          element.dispatchEvent(new Event("scroll"));
+          window.dispatchEvent(new Event("pagehide"));
+        }, Number(values["sidebar-scroll-top"]));
+        await page.evaluate(() => new Promise(requestAnimationFrame));
         await qualifyLateRowFacts();
         await qualifyDetailsProcess();
         const { storage: captured, ...saved } = await page.evaluate(
@@ -2475,6 +2723,12 @@ try {
       : undefined;
     if (values.coverage) {
       await page.coverage.startJSCoverage({ resetOnNavigation: true });
+    }
+    if (values["sidebar-pixel-probe"]) {
+      sidebarCapture = await startWarmReloadScreencast(cdp, {
+        outputDir: path.join(artifactDir, `run-${run + 1}.sidebar-pixels`),
+        viewport: page.viewportSize()!,
+      });
     }
     if (values["hold-boot-assets"]) {
       await page.goto(url, { waitUntil: "commit" });
@@ -2861,13 +3115,73 @@ try {
           ),
         }
       : undefined;
-    const sidebarPresentation = values["sidebar-presentation-probe"]
-      ? await page.evaluate(() => Reflect.get(window, "__sidebarPresentation").read())
+    const warmReloadPerformance = values["warm-reload-perf-probe"]
+      ? await page.evaluate(() => {
+          const probe: NonNullable<ReturnType<typeof installWarmReloadBrowserProbe>> = Reflect.get(
+            window,
+            "__warmReloadProof",
+          );
+          probe.stopped = true;
+          return {
+            timeOrigin: performance.timeOrigin,
+            capturedUntilMs: performance.now(),
+            helloPublishedMs: probe.helloPublishedMs,
+            helloHandledMs: probe.helloHandledMs,
+            fcpMs: probe.fcpMs,
+            firstPaintedRowsMs: probe.firstPaintedRowsMs,
+            finalRowsDomMs: probe.finalRowsDomMs,
+            loafBlockingMs: probe.loafBlockingMs,
+            cls: probe.cls,
+          };
+        })
       : undefined;
     const detailsGeometry =
       values["details-processes"] && paneChrome
         ? summarizeDetailsGeometry(paneChrome.detailsFrames)
         : undefined;
+    const sidebarPresentation = values["sidebar-presentation-probe"]
+      ? await page.evaluate(() => {
+          const probe: { read(): SidebarPresentationSnapshot } = Reflect.get(
+            window,
+            "__sidebarPresentation",
+          );
+          return probe.read();
+        })
+      : undefined;
+    if (sidebarPresentation) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.sidebar-presentation.json`),
+        JSON.stringify(sidebarPresentation, null, 2),
+      );
+    }
+    if (warmReloadPerformance) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.warm-perf.json`),
+        JSON.stringify(
+          {
+            ...warmReloadPerformance,
+            measurement: values["sidebar-pixel-probe"]
+              ? "Capture-perturbed correctness run; do not use for timing comparison"
+              : "Unprofiled timing requires untraced without cpu-profile or coverage; existing warm-reload probe metric definitions",
+          },
+          null,
+          2,
+        ),
+      );
+    }
+    const sidebarPixels =
+      sidebarCapture && sidebarPresentation
+        ? await readSidebarPixelProof(
+            page,
+            cdp,
+            sidebarCapture,
+            sidebarPresentation,
+            path.join(artifactDir, `run-${run + 1}.sidebar-pixels`),
+            Number(values["sidebar-scroll-top"]),
+            errors,
+          )
+        : undefined;
+    sidebarCapture = undefined;
     if (cpuProfile) {
       await writeFile(
         path.join(artifactDir, `run-${run + 1}.cpu-clock.json`),
@@ -2882,6 +3196,8 @@ try {
         variant: ["base", "candidate", "candidate-2"][bundleIndex],
         hostLoadAverage,
         threadCpu,
+        warmReloadPerformance,
+        sidebarPixels,
         threadCpuSamples: threadCpuBefore
           ? { before: threadCpuBefore, after: threadCpuAfter }
           : undefined,
@@ -3940,6 +4256,8 @@ try {
       paneChrome,
       detailsGeometry,
       sidebarPresentation,
+      warmReloadPerformance,
+      sidebarPixels,
       historyValidatorRequests: historyValidatorRequests - validatorRequestsBeforeReload,
       snapshotSave: snapshotSaves[bundleIndex],
       overlays,
@@ -4003,6 +4321,7 @@ try {
   }
   await context.close();
 } finally {
+  await sidebarCapture?.stop().catch(() => {});
   await browser?.close();
   await selectComparisonBundle(0);
   await server?.close();
@@ -4068,6 +4387,13 @@ try {
         sidebarAvatars: values["sidebar-avatars"],
         sidebarPresentation: values["sidebar-presentation"],
         sidebarPresentationProbe: values["sidebar-presentation-probe"],
+        sidebarPixelProbe: values["sidebar-pixel-probe"],
+        warmReloadPerfProbe: values["warm-reload-perf-probe"],
+        performanceProbeScope: values["warm-reload-perf-probe"]
+          ? "Existing warm-reload-browser-probe metric definitions in the final document; PNG-enabled runs are capture-perturbed correctness evidence, not performance comparisons."
+          : undefined,
+        sidebarCachedParity: values["sidebar-cached-parity"],
+        sidebarScrollTop: Number(values["sidebar-scroll-top"]),
         sidebarExpanded: values["sidebar-expanded"],
         sidebarPersistentChildren: fixture.sidebarPersistentChildren,
         omitHelloSelfPresence: values["omit-hello-self-presence"],

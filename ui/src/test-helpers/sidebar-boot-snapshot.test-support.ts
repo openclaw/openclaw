@@ -25,6 +25,12 @@ export function sidebarBootSnapshot(roster: BootRoster | null): SidebarSnapshotM
     offlineUsers: [],
     ownerId: null,
     involvingMe: false,
+    home: null,
+    homeAllowed: false,
+    ownershipAvatars: false,
+    newSessionAllowed: false,
+    windowKeys: [],
+    scrollTop: 0,
     footer: null,
     brand: { name: "Synthetic workspace", avatar: null, icon: "mark", environment: null },
   };

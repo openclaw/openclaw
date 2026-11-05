@@ -39,6 +39,7 @@ import {
 import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
+  readonly scroll?: { position(): number };
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   readonly people: import("./sidebar-people.ts").SidebarPeoplePreferences;
   readonly peopleView?: ReturnType<typeof import("./sidebar-people.ts").createSidebarPeople>;
@@ -421,7 +422,12 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
             type="button"
             class="sidebar-brand__icon sidebar-footer-bar__home"
             aria-label={t("assistantPanel.toggle")}
-            disabled={!isHomePanelAvailable(host.sessionDataContext?.gateway)}
+            disabled={
+              !(
+                host.sidebarSnapshot?.homeAllowed ??
+                isHomePanelAvailable(host.sessionDataContext?.gateway)
+              )
+            }
             onClick={(event) => {
               window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
               if (
