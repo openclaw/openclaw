@@ -4,6 +4,7 @@ import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
+import { registryFor } from "../../components/overlay-registry.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
@@ -226,7 +227,12 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
           return;
         }
         const host = props.mobileHost;
-        if (host && event.composedPath().includes(shell)) {
+        // Document-bubble overlays (including a menu focused on its trigger) own Escape first.
+        if (
+          host &&
+          event.composedPath().includes(shell) &&
+          !registryFor(shell.ownerDocument).stack.length
+        ) {
           event.preventDefault();
           host.close();
         }
