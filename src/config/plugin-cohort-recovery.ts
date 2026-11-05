@@ -382,7 +382,11 @@ async function restoreConfigPublication(
           // Only the exact owned postimage qualifies for old-schema byte compensation.
           // A merge keeps normal future-writer protection and the later writer's stamp.
           if (!prepared.snapshot.valid) {
-            conflict(file);
+            // Invalid config is not a later edit to keep; recovery stays pending.
+            throw new ConfigMutationConflictError(
+              `Configuration is invalid after update publication: ${file.filePath}. Plugin cohort recovery preserved it.`,
+              { retryable: false },
+            );
           }
           const future = resolveFutureConfigActionBlock({
             action: "restore plugin cohort configuration",
@@ -400,7 +404,10 @@ async function restoreConfigPublication(
           let candidateRaw = mergedRaw;
           if (file.include) {
             if (!prepared.snapshot.authoredConfig) {
-              conflict(file);
+              throw new ConfigMutationConflictError(
+                `Configuration is invalid after update publication: ${file.filePath}. Plugin cohort recovery preserved it.`,
+                { retryable: false },
+              );
             }
             const candidate = structuredClone(prepared.snapshot.authoredConfig);
             setConfigValueAtPath(candidate, file.include.boundaryPath, mergedValue);

@@ -350,6 +350,16 @@ it("completes a rollback that keeps a later config edit", async () => {
   expect(f.warnings()).toEqual([expect.stringContaining("config file")]);
 });
 
+it("keeps rollback pending when the edited config is invalid", async () => {
+  const f = await interruptedCohort({ root: installedRoot(candidate), config: true });
+  // A later writer left config that no longer validates; that is not an edit to keep.
+  const invalid = f.afterConfig.replace('"port": 1', '"port": "not-a-port"');
+  fs.writeFileSync(f.configPath, invalid);
+  await expect(f.settle()).rejects.toThrow("Configuration is invalid after update publication");
+  expect(f.cohort()).toMatchObject({ disposition: "rollback", settledPublications: 0 });
+  expect(fs.readFileSync(f.configPath, "utf8")).toBe(invalid);
+});
+
 it("still reports a kept config edit after a later settlement step fails", async () => {
   const f = await interruptedCohort({ root: installedRoot(candidate), config: true });
   const edited = f.afterConfig.replace('"port": 1', '"port": 2');
