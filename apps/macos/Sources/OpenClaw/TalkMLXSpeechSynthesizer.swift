@@ -27,7 +27,11 @@ actor TalkMLXSpeechSynthesizer {
         case timedOut
     }
 
-    static let shared = TalkMLXSpeechSynthesizer()
+    static let shared = TalkMLXSpeechSynthesizer(
+        transportFactory: {
+            try await ProcessMLXTTSTransport.launch(invocation: TalkMLXSpeechSynthesizer.helperInvocation())
+        },
+        observesMemoryPressure: true)
     static let defaultModelRepo = "mlx-community/Soprano-80M-bf16"
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.mlx")
@@ -42,15 +46,6 @@ actor TalkMLXSpeechSynthesizer {
     private var cancelEscalationTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
     private var memoryPressureMonitor: MLXMemoryPressureMonitor?
-
-    private init() {
-        self.transportFactory = {
-            try await ProcessMLXTTSTransport.launch(invocation: TalkMLXSpeechSynthesizer.helperInvocation())
-        }
-        self.idleDuration = .seconds(300)
-        self.cancelGraceDuration = .seconds(1)
-        self.observesMemoryPressure = true
-    }
 
     init(
         transportFactory: @escaping MLXTTSTransportFactory,
@@ -87,8 +82,7 @@ actor TalkMLXSpeechSynthesizer {
         }
 
         self.ensureMemoryPressureMonitor()
-        self.idleTask?.cancel()
-        self.idleTask = nil
+        SimpleTaskSupport.stop(task: &self.idleTask)
 
         let id = UUID().uuidString
         self.activeID = id
@@ -161,20 +155,12 @@ actor TalkMLXSpeechSynthesizer {
 
     func cancelCurrent() async {
         guard let activeID else { return }
-        self.cancelRequestedID = activeID
-        do {
-            try await self.transport?.send(.cancel(id: activeID))
-        } catch {
-            await self.discardTransport(forRequest: activeID)
-        }
-        self.scheduleCancelEscalation(id: activeID)
+        await self.cancelStreamRequest(id: activeID, transport: self.transport)
     }
 
     func shutdown() async {
-        self.cancelEscalationTask?.cancel()
-        self.cancelEscalationTask = nil
-        self.idleTask?.cancel()
-        self.idleTask = nil
+        SimpleTaskSupport.stop(task: &self.cancelEscalationTask)
+        SimpleTaskSupport.stop(task: &self.idleTask)
         // Revoke ownership before sends suspend; retire only the captured helper.
         let transport = self.transport
         let activeID = self.activeID
@@ -278,14 +264,13 @@ actor TalkMLXSpeechSynthesizer {
         }
     }
 
-    private func cancelStreamRequest(id: String, transport: any MLXTTSTransport) async {
+    private func cancelStreamRequest(id: String, transport: (any MLXTTSTransport)?) async {
         guard self.activeID == id else { return }
         self.cancelRequestedID = id
         do {
-            try await transport.send(.cancel(id: id))
+            try await transport?.send(.cancel(id: id))
         } catch {
             await self.discardTransport(forRequest: id)
-            return
         }
         self.scheduleCancelEscalation(id: id)
     }
@@ -363,8 +348,7 @@ actor TalkMLXSpeechSynthesizer {
         guard self.activeID == id else { return }
         self.activeID = nil
         self.cancelRequestedID = nil
-        self.cancelEscalationTask?.cancel()
-        self.cancelEscalationTask = nil
+        SimpleTaskSupport.stop(task: &self.cancelEscalationTask)
         self.scheduleIdleShutdown()
     }
 
@@ -428,10 +412,6 @@ actor TalkMLXSpeechSynthesizer {
     private func discardTransport(forRequest id: String) async {
         // A stale request may finish after shutdown admitted a replacement.
         guard self.activeID == id else { return }
-        await self.discardTransport()
-    }
-
-    private func discardTransport() async {
         let transport = self.transport
         self.transport = nil
         await transport?.close()

@@ -1,5 +1,5 @@
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { GatewayScheduledJob, GatewayScheduler } from "../../infra/gateway-scheduler.js";
+import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayBroadcastFn } from "../server-broadcast-types.js";
@@ -14,12 +14,13 @@ export function createPresencePublisher(params: {
   getHealthVersion: () => number;
   prepare: () => Promise<void> | undefined;
 }) {
-  let pending: GatewayScheduledJob | undefined;
+  const scheduler = params.scheduler.scope();
+  let pending = false;
   let version = 0;
-  let stopped = false;
   const schedule = () => {
-    if (!stopped && !pending) {
-      pending = params.scheduler.schedule({ id: "presence/publication", delayMs: 200, run: flush });
+    if (!scheduler.signal.aborted && !pending) {
+      pending = true;
+      scheduler.schedule({ id: "presence/publication", delayMs: 200, run: flush });
     }
   };
   const flush = async () => {
@@ -27,7 +28,7 @@ export function createPresencePublisher(params: {
     try {
       for (let preparation = params.prepare(); preparation; preparation = params.prepare()) {
         await preparation;
-        if (stopped) {
+        if (scheduler.signal.aborted) {
           return;
         }
       }
@@ -43,7 +44,7 @@ export function createPresencePublisher(params: {
     } catch (error) {
       log.warn(`Presence publication failed: ${formatErrorMessage(error)}`);
     } finally {
-      pending = undefined;
+      pending = false;
       if (version !== publishedVersion) {
         schedule();
       }
@@ -51,15 +52,11 @@ export function createPresencePublisher(params: {
   };
   return {
     publish: () => {
-      if (!stopped) {
+      if (!scheduler.signal.aborted) {
         version = params.incrementPresenceVersion();
         schedule();
       }
     },
-    stop: () => {
-      stopped = true;
-      pending?.cancel();
-      pending = undefined;
-    },
+    stop: scheduler.beginClose,
   };
 }

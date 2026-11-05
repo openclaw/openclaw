@@ -97,16 +97,12 @@ internal class ChatMediaPlaybackClaims<T>(
     return true
   }
 
-  fun pauseIf(predicate: (T) -> Boolean): Boolean {
-    val current = active?.takeIf(predicate) ?: return false
-    pause(current)
-    return true
+  fun pauseIf(predicate: (T) -> Boolean) {
+    active?.takeIf(predicate)?.let(pause)
   }
 
   fun releaseActive() {
-    val previous = active ?: return
-    active = null
-    release(previous)
+    releaseIf { true }
   }
 }
 
@@ -128,10 +124,8 @@ internal class ChatMediaSessionLifecycle<T : Any, S : Any>(
     }
   }
 
-  fun release(owner: T): Boolean {
-    if (activeOwner !== owner) return false
-    releaseActive()
-    return true
+  fun release(owner: T) {
+    if (activeOwner === owner) releaseActive()
   }
 
   private fun releaseActive() {
@@ -262,7 +256,7 @@ private object ChatMediaPlaybackArbiter {
   }
 
   @Synchronized
-  fun pause(player: ExoPlayer): Boolean = claims.pauseIf { it.player === player }
+  fun pause(player: ExoPlayer) = claims.pauseIf { it.player === player }
 
   @Synchronized
   fun release(player: ExoPlayer): Boolean = claims.releaseIf { it.player === player }
@@ -335,10 +329,6 @@ internal fun ChatMediaPlayerCard(
       intentGeneration = intentGeneration,
       onReleased = { clearPlayerState(requested, requestedFile) },
     )
-
-  fun pause() {
-    player?.let(ChatMediaPlaybackArbiter::pause)
-  }
 
   fun play() {
     if (playbackBlocked) return
@@ -481,28 +471,21 @@ internal fun ChatMediaPlayerCard(
     }
   }
 
-  if (kind == GatewayMediaKind.Video) {
-    VideoPlayerSurface(
+  val presentation =
+    MediaPlaybackPresentation(
       content = content,
-      player = player,
       loading = loading,
-      preparingPlayback = loading && content.playback == "transcode",
       isPlaying = isPlaying,
       playbackBlocked = playbackBlocked,
       error = error,
-      onToggle = { if (isPlaying) pause() else play() },
+      onToggle = { if (isPlaying) player?.let(ChatMediaPlaybackArbiter::pause) else play() },
     )
+  if (kind == GatewayMediaKind.Video) {
+    presentation.VideoPlayerSurface(player)
   } else {
-    AudioPlayerSurface(
-      content = content,
-      loading = loading,
-      preparingPlayback = loading && content.playback == "transcode",
-      isPlaying = isPlaying,
-      playbackBlocked = playbackBlocked,
-      error = error,
+    presentation.AudioPlayerSurface(
       positionMs = positionMs,
       durationMs = durationMs,
-      onToggle = { if (isPlaying) pause() else play() },
       onSeek = { value ->
         val target = value.toLong().coerceIn(0L, durationMs.coerceAtLeast(0L))
         positionMs = target
@@ -513,17 +496,19 @@ internal fun ChatMediaPlayerCard(
   }
 }
 
+private data class MediaPlaybackPresentation(
+  val content: ChatMessageContent,
+  val loading: Boolean,
+  val isPlaying: Boolean,
+  val playbackBlocked: Boolean,
+  val error: String?,
+  val onToggle: () -> Unit,
+)
+
 @Composable
-private fun AudioPlayerSurface(
-  content: ChatMessageContent,
-  loading: Boolean,
-  preparingPlayback: Boolean,
-  isPlaying: Boolean,
-  playbackBlocked: Boolean,
-  error: String?,
+private fun MediaPlaybackPresentation.AudioPlayerSurface(
   positionMs: Long,
   durationMs: Long,
-  onToggle: () -> Unit,
   onSeek: (Float) -> Unit,
   seekEnabled: Boolean,
 ) {
@@ -562,11 +547,11 @@ private fun AudioPlayerSurface(
         Icon(Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(16.dp), tint = ClawTheme.colors.textMuted)
         Column(modifier = Modifier.weight(1f)) {
           Text(
-            text = content.fileName?.takeIf(String::isNotBlank) ?: nativeString("Voice note"),
+            text = content.fileName?.takeIf { it.isNotBlank() && !isGeneratedVoiceNoteName(it) } ?: nativeString("Voice note"),
             style = ClawTheme.type.body,
             color = ClawTheme.colors.text,
           )
-          MediaPlaybackStatus(error, preparingPlayback, playbackBlocked)
+          MediaPlaybackStatus()
         }
       }
       Slider(
@@ -585,16 +570,7 @@ private fun AudioPlayerSurface(
 
 @OptIn(UnstableApi::class)
 @Composable
-private fun VideoPlayerSurface(
-  content: ChatMessageContent,
-  player: ExoPlayer?,
-  loading: Boolean,
-  preparingPlayback: Boolean,
-  isPlaying: Boolean,
-  playbackBlocked: Boolean,
-  error: String?,
-  onToggle: () -> Unit,
-) {
+private fun MediaPlaybackPresentation.VideoPlayerSurface(player: ExoPlayer?) {
   val ratio =
     remember(content.width, content.height) {
       val width = content.width?.takeIf { it > 0 }
@@ -643,20 +619,16 @@ private fun VideoPlayerSurface(
       style = ClawTheme.type.caption,
       color = ClawTheme.colors.textMuted,
     )
-    MediaPlaybackStatus(error, preparingPlayback, playbackBlocked)
+    MediaPlaybackStatus()
   }
 }
 
 @Composable
-private fun MediaPlaybackStatus(
-  error: String?,
-  preparingPlayback: Boolean,
-  playbackBlocked: Boolean,
-) {
+private fun MediaPlaybackPresentation.MediaPlaybackStatus() {
   val status =
     when {
       error != null -> error
-      preparingPlayback -> nativeString("Preparing playback…")
+      loading && content.playback == "transcode" -> nativeString("Preparing playback…")
       playbackBlocked -> nativeString("Paused for voice playback")
       else -> null
     }
@@ -706,11 +678,9 @@ private suspend fun writeBufferedMediaFile(
         file.writeBytes(bytes)
       }
     }
-  } catch (error: CancellationException) {
+  } catch (error: Throwable) {
     withContext(NonCancellable + Dispatchers.IO) { created?.delete() }
-    throw error
-  } catch (_: Throwable) {
-    withContext(NonCancellable + Dispatchers.IO) { created?.delete() }
+    if (error is CancellationException) throw error
     null
   }
 }
@@ -783,7 +753,7 @@ internal fun ChatMediaAttachmentLabel(content: ChatMessageContent) {
     )
     Text(
       text =
-        content.fileName?.takeIf(String::isNotBlank)
+        content.fileName?.takeIf { it.isNotBlank() && !(isAudio && isGeneratedVoiceNoteName(it)) }
           ?: if (isAudio) nativeString("Voice note") else nativeString("Video"),
       style = ClawTheme.type.body,
       color = ClawTheme.colors.text,
@@ -800,3 +770,10 @@ internal fun ChatMediaAttachmentLabel(content: ChatMessageContent) {
     }
   }
 }
+
+/** Recorder-generated names (`voice-note-<uuid>.m4a`) carry no meaning; show "Voice note" instead. */
+internal fun isGeneratedVoiceNoteName(fileName: String): Boolean = GENERATED_VOICE_NOTE_NAME.matches(fileName.trim())
+
+/** Matches only VoiceNoteRecorderController's `voice-note-<uuid>.m4a`, never a user-named file. */
+private val GENERATED_VOICE_NOTE_NAME =
+  Regex("^voice-note-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.m4a$", RegexOption.IGNORE_CASE)

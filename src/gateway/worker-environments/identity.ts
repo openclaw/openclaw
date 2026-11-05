@@ -7,27 +7,23 @@ type GenericWorkerSshIdentityResolver = (
 ) => Promise<WorkerSshIdentity>;
 
 function requireIdentity(value: unknown): WorkerSshIdentity {
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "kind" in value &&
-    value.kind === "path" &&
-    "path" in value &&
-    typeof value.path === "string" &&
-    value.path.trim()
-  ) {
-    return { kind: "path", path: value.path };
-  }
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "kind" in value &&
-    value.kind === "material" &&
-    "contents" in value &&
-    typeof value.contents === "string" &&
-    value.contents.trim()
-  ) {
-    return { kind: "material", contents: value.contents };
+  if (typeof value === "object" && value !== null && "kind" in value) {
+    if (
+      value.kind === "path" &&
+      "path" in value &&
+      typeof value.path === "string" &&
+      value.path.trim()
+    ) {
+      return { kind: "path", path: value.path };
+    }
+    if (
+      value.kind === "material" &&
+      "contents" in value &&
+      typeof value.contents === "string" &&
+      value.contents.trim()
+    ) {
+      return { kind: "material", contents: value.contents };
+    }
   }
   throw new Error("Worker SSH identity resolver returned an invalid identity");
 }

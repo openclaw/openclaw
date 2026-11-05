@@ -23,16 +23,14 @@ export async function runCancelableCommand(run: (signal: AbortSignal) => Promise
     process.on(signal, handler);
   }
   try {
-    try {
-      const status = await run(controller.signal);
-      return received ? signalExitCode(received) : status;
-    } catch (error) {
-      // Unverified extinction must reach artifact ownership, never become an exit code.
-      if (!received || !isCommandCancellation(error)) {
-        throw error;
-      }
-      return signalExitCode(received);
+    const status = await run(controller.signal);
+    return received ? signalExitCode(received) : status;
+  } catch (error) {
+    // Unverified extinction must reach artifact ownership, never become an exit code.
+    if (!received || !isCommandCancellation(error)) {
+      throw error;
     }
+    return signalExitCode(received);
   } finally {
     for (const [signal, handler] of handlers) {
       process.off(signal, handler);

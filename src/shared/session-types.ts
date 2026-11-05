@@ -47,11 +47,12 @@ export type GatewayAgentRow = Pick<
 export type SessionActivityPulse = {
   since: number;
   until: number;
-  /** One bucket per elapsed hour of the civil day, 23–25 on DST days. */
-  hours: number[];
+  /** Counts between consecutive caller-supplied boundaries. */
+  buckets: number[];
   sessions: number;
-  started: number;
-  /** Sessions with an active run anywhere in the filtered set, not only since `since`. */
+  /** Sessions created within `activeMinutes`; omitted for an unbounded time filter. */
+  started?: number;
+  /** Sessions with an active run anywhere in the filtered set. */
   running: number;
   people?: number;
 };
@@ -73,11 +74,21 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   people?: SessionPerson[];
   peopleIncomplete?: boolean;
   peopleSessionCount?: number;
-  /** Civil-day activity from `activityPulseSince` to `activityPulseUntil`, before pagination. */
+  /** Earliest activeMinutes boundary among visible candidates, before person filters/pagination. */
+  activityExpiresAt?: number;
+  /** Window-wide statistics and caller-defined activity buckets, before pagination. */
   activityPulse?: SessionActivityPulse;
   /** Canonical profile selected by the person-association filter. */
   involvingProfileId?: string;
   defaults: TDefaults;
+  /** Response-local display facts referenced by rows that opted into sharing. */
+  sharedFacts?: Partial<TRow>[];
+  /** Opaque identity of the authorized row vector, independent of list facets. */
+  rowsRevision?: string;
+  /** Only the rows are omitted; counts, defaults and facets remain current. */
+  rowsUnchanged?: true;
+  /** Complete window indexes into the base rows followed by this response's changed rows. */
+  rowsDelta?: { baseRevision: string; order: number[] };
   sessions: TRow[];
 };
 

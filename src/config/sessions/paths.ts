@@ -9,9 +9,15 @@ import {
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  resolveExplicitIncognitoAgentSqliteTarget,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import { resolveStateDir } from "../state-dir.js";
 import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
+import { MULTI_STORE_PATH_SENTINEL } from "./session-sqlite-target-paths.js";
+
+export { resolveConcreteSessionStorePath } from "./session-sqlite-target-paths.js";
 
 export type SessionStorePathScope = {
   agentId?: string;
@@ -24,6 +30,15 @@ export type SessionStorePathScope = {
 export function resolveExplicitSessionStorePathForScope(
   scope: SessionStorePathScope,
 ): string | undefined {
+  const explicit = resolveExplicitIncognitoAgentSqliteTarget(scope.storePath, {
+    agentId: isIncognitoSessionKey(scope.sessionKey)
+      ? resolveAgentIdFromSessionKey(scope.sessionKey)
+      : scope.agentId,
+    env: scope.env,
+  });
+  if (explicit) {
+    return explicit.path;
+  }
   if (isIncognitoSessionKey(scope.sessionKey)) {
     return resolveIncognitoOpenClawAgentSqlitePath({
       agentId: resolveAgentIdFromSessionKey(scope.sessionKey),
@@ -31,14 +46,6 @@ export function resolveExplicitSessionStorePathForScope(
     });
   }
   return scope.storePath || undefined;
-}
-
-export function resolveConcreteSessionStorePath(storePath: string | undefined): string | undefined {
-  const trimmed = storePath?.trim();
-  if (!trimmed || trimmed === MULTI_STORE_PATH_SENTINEL || trimmed.includes("{agentId}")) {
-    return undefined;
-  }
-  return trimmed;
 }
 
 export function resolveSessionTranscriptsDirForAgent(
@@ -71,7 +78,6 @@ type SessionFilePathOptions = {
   sessionsDir?: string;
 };
 
-const MULTI_STORE_PATH_SENTINEL = "(multiple)";
 const SQLITE_TRANSCRIPT_TARGET_PREFIX = "sqlite:";
 
 export function resolveSessionFilePathOptions(params: {
@@ -110,10 +116,7 @@ function resolveSessionsDir(opts?: SessionFilePathOptions): string {
   if (sessionsDir) {
     return path.resolve(sessionsDir);
   }
-  if (!opts?.agentId?.trim()) {
-    throw new Error("Session storage path requires an explicit agent id.");
-  }
-  return resolveSessionTranscriptsDirForAgent(opts.agentId);
+  return resolveSessionTranscriptsDirForAgent(opts?.agentId ?? "");
 }
 
 function resolvePathFromAgentSessionsDir(
@@ -122,9 +125,8 @@ function resolvePathFromAgentSessionsDir(
 ): string | undefined {
   const agentBase =
     safeRealpathSync(path.resolve(agentSessionsDir)) ?? path.resolve(agentSessionsDir);
-  const realCandidate = safeRealpathSync(candidateAbsPath) ?? candidateAbsPath;
-  const relative = path.relative(agentBase, realCandidate);
-  // Realpath both sides when possible so symlinked session dirs still enforce containment.
+  const relative = path.relative(agentBase, candidateAbsPath);
+  // The caller already resolved the candidate; resolve this fallback root for containment.
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     return resolveRerootedSessionPath(agentBase, candidateAbsPath);
   }
@@ -163,17 +165,10 @@ function resolveSiblingAgentSessionsDir(
 ): string | undefined {
   // Multi-agent stores share a common .../agents/<id>/sessions shape; sibling resolution keeps
   // persisted absolute files portable across active agent stores.
-  const resolvedBase = path.resolve(baseSessionsDir);
-  if (path.basename(resolvedBase) !== "sessions") {
-    return undefined;
-  }
-  const baseAgentDir = path.dirname(resolvedBase);
-  const baseAgentsDir = path.dirname(baseAgentDir);
-  if (path.basename(baseAgentsDir) !== "agents") {
-    return undefined;
-  }
-  const rootDir = path.dirname(baseAgentsDir);
-  return path.join(rootDir, "agents", normalizeAgentId(agentId), "sessions");
+  const agentsDir = resolveAgentsDirFromSessionStorePath(
+    path.join(baseSessionsDir, "sessions.json"),
+  );
+  return agentsDir ? path.join(agentsDir, normalizeAgentId(agentId), "sessions") : undefined;
 }
 
 function resolveAgentSessionsPathParts(
@@ -362,15 +357,6 @@ export function resolveSessionStorePathCore(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) {
-  return resolveSessionStorePathWithContext(store, opts, { cwd: process.cwd() });
-}
-
-/** Internal async readers capture their relative-path base before yielding. */
-export function resolveSessionStorePathWithContext(
-  store: string | undefined,
-  opts: { agentId?: string; env?: NodeJS.ProcessEnv } | undefined,
-  context: { cwd: string },
-) {
   const env = opts?.env ?? process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   if (!store) {
@@ -389,16 +375,16 @@ export function resolveSessionStorePathWithContext(
     expandedStore = expandedStore.replaceAll("{agentId}", agentId);
   }
   if (expandedStore.startsWith("~")) {
-    return path.resolve(
-      context.cwd,
-      expandHomePrefix(expandedStore, {
-        home: resolveRequiredHomeDir(env, homedir),
-        env,
-        homedir,
-      }),
-    );
+    expandedStore = expandHomePrefix(expandedStore, {
+      home: resolveRequiredHomeDir(env, homedir),
+      env,
+      homedir,
+    });
   }
-  return path.resolve(context.cwd, expandedStore);
+  // Service working directories vary; configuration must select the same store after a restart.
+  return path.isAbsolute(expandedStore)
+    ? path.resolve(expandedStore)
+    : path.resolve(resolveStateDir(env, homedir), expandedStore);
 }
 
 export function resolveAgentsDirFromSessionStorePath(storePath: string): string | undefined {

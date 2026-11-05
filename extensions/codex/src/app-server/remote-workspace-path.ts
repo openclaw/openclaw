@@ -22,13 +22,14 @@ export function mapCodexAppServerRemoteWorkspacePath(
   if (normalizedValue === localRoot) {
     return remoteRoot;
   }
-  const prefix = `${localRoot}/`;
+  const prefix = localRoot.endsWith("/") ? localRoot : `${localRoot}/`;
   if (!normalizedValue.startsWith(prefix)) {
     throw new Error(
       `Codex remoteWorkspaceRoot is configured but cwd ${params.value} is outside OpenClaw workspace root ${params.localWorkspaceRoot}; refusing to send a gateway-local cwd to the remote Codex app-server.`,
     );
   }
-  return joinRemoteWorkspacePath(remoteRoot, normalizedValue.slice(prefix.length));
+  const suffix = normalizedValue.slice(prefix.length);
+  return `${remoteRoot}${remoteRoot.endsWith("/") ? "" : "/"}${suffix}`;
 }
 
 /** Maps a remote workspace artifact back into the corresponding gateway workspace. */
@@ -62,7 +63,7 @@ export function mapCodexAppServerLocalWorkspacePath(
   }
   const suffix = isRemoteWorkspacePath ? normalizedValue.slice(prefix.length) : normalizedValue;
   const suffixSegments = suffix.split("/");
-  if (suffixSegments.some((segment) => segment === "..")) {
+  if (suffixSegments.includes("..")) {
     throw new Error(
       `Codex remote workspace artifact ${params.value} must stay inside ${params.remoteWorkspaceRoot}.`,
     );
@@ -87,9 +88,5 @@ export function isCodexPassThroughMediaSource(value: string): boolean {
 }
 
 function isAbsoluteWorkspacePath(value: string): boolean {
-  return value.startsWith("/") || /^[a-z]:\//iu.test(value) || /^[a-z][a-z0-9+.-]*:/iu.test(value);
-}
-
-function joinRemoteWorkspacePath(remoteRoot: string, suffix: string): string {
-  return remoteRoot.endsWith("/") ? `${remoteRoot}${suffix}` : `${remoteRoot}/${suffix}`;
+  return value.startsWith("/") || /^[a-z][a-z0-9+.-]*:/iu.test(value);
 }

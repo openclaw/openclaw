@@ -1,4 +1,3 @@
-// Ios Node E2E script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -37,7 +36,6 @@ const getArg = (flag: string) => {
   const index = argv.indexOf(flag);
   return index === -1 ? undefined : argv[index + 1];
 };
-const hasFlag = (flag: string) => argv.includes(flag);
 const BOOLEAN_FLAGS = new Set(["--dangerous", "--help", "-h", "--json"]);
 const VALUE_FLAGS = new Set(["--node", "--token", "--url", "--wait-seconds"]);
 
@@ -69,7 +67,7 @@ function validateArgs(): void {
 }
 
 validateArgs();
-if (hasFlag("--help") || hasFlag("-h")) {
+if (argv.includes("--help") || argv.includes("-h")) {
   writeStdoutLine(usage());
   process.exit(0);
 }
@@ -92,8 +90,8 @@ type NodeListNode = NonNullable<NodeListPayload["nodes"]>[number];
 const urlRaw = getArg("--url") ?? process.env.OPENCLAW_GATEWAY_URL;
 const token = getArg("--token") ?? process.env.OPENCLAW_GATEWAY_TOKEN;
 const nodeHint = getArg("--node");
-const dangerous = hasFlag("--dangerous") || process.env.OPENCLAW_RUN_DANGEROUS === "1";
-const jsonOut = hasFlag("--json");
+const dangerous = argv.includes("--dangerous") || process.env.OPENCLAW_RUN_DANGEROUS === "1";
+const jsonOut = argv.includes("--json");
 
 if (!urlRaw || !token) {
   writeStderrLine(usage());
@@ -135,13 +133,11 @@ function parseWaitSeconds(raw: string | undefined): number {
   const value = raw ?? "25";
   const text = value.trim();
   if (!/^[1-9]\d*$/u.test(text)) {
-    writeStderrLine(`--wait-seconds must be a positive integer; got: ${value}`);
-    process.exit(1);
+    failCli(`--wait-seconds must be a positive integer; got: ${value}`);
   }
   const parsed = Number(text);
   if (!Number.isSafeInteger(parsed)) {
-    writeStderrLine(`--wait-seconds must be a safe positive integer; got: ${value}`);
-    process.exit(1);
+    failCli(`--wait-seconds must be a safe positive integer; got: ${value}`);
   }
   return parsed;
 }
@@ -211,7 +207,17 @@ async function main() {
   const { request, waitOpen, close } = createGatewayWsClient({ url: url.toString() });
   await waitOpen();
 
-  const connectRes = await request("connect", {
+  const requestRequired = async (method: string, exitCode: number, params?: unknown) => {
+    const response = await request(method, params);
+    if (!response.ok) {
+      writeStderrLine(`${method} failed: ${String(response.error)}`);
+      close();
+      process.exit(exitCode);
+    }
+    return response;
+  };
+
+  await requestRequired("connect", 2, {
     minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
     maxProtocol: PROTOCOL_VERSION,
     client: {
@@ -230,30 +236,12 @@ async function main() {
     auth: { token },
   });
 
-  if (!connectRes.ok) {
-    writeStderrLine(`connect failed: ${String(connectRes.error)}`);
-    close();
-    process.exit(2);
-  }
-
-  const healthRes = await request("health");
-  if (!healthRes.ok) {
-    writeStderrLine(`health failed: ${String(healthRes.error)}`);
-    close();
-    process.exit(3);
-  }
-
-  const nodesRes = await request("node.list");
-  if (!nodesRes.ok) {
-    writeStderrLine(`node.list failed: ${String(nodesRes.error)}`);
-    close();
-    process.exit(4);
-  }
-
+  await requestRequired("health", 3);
+  const nodesRes = await requestRequired("node.list", 4);
   const listPayload = (nodesRes.payload ?? {}) as NodeListPayload;
   let node = pickIosNode(listPayload, nodeHint);
   if (!node) {
-    const deadline = Date.now() + Math.max(1, waitSeconds) * 1000;
+    const deadline = Date.now() + waitSeconds * 1000;
     while (!node && Date.now() < deadline) {
       await new Promise((r) => {
         setTimeout(r, 1000);
@@ -382,10 +370,9 @@ async function main() {
     }
   }
 
-  const failed = results.filter((r) => !r.ok);
   close();
 
-  if (failed.length > 0) {
+  if (results.some((r) => !r.ok)) {
     process.exit(10);
   }
 }

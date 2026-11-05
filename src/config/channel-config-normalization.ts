@@ -1,10 +1,21 @@
 import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  CompatMutationResult,
-  NormalizeChannelConfigEntryParams,
-  NormalizeLegacyChannelAccountParams,
-} from "./channel-compat-normalization.js";
+import type { CompatMutationResult } from "../channels/plugins/dm-access.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
+
+/** Account-level channel config passed to channel-specific doctor migrations. */
+export type NormalizeLegacyChannelAccountParams = {
+  account: Record<string, unknown>;
+  accountId: string;
+  pathPrefix: string;
+  changes: string[];
+};
+
+export type NormalizeChannelConfigEntryParams = {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+  accountId?: string;
+};
 
 /** Applies one channel-specific doctor migration to every object-shaped account. */
 export function normalizeChannelAccounts(params: {

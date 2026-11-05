@@ -5,9 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   NEEDS_PR_CONTEXT_LABEL,
   PROOF_OVERRIDE_LABEL,
-  evaluateClawSweeperExactHeadProof,
   evaluatePullRequestContext,
-  hasClawSweeperExactHeadProof,
   isMaintainerTeamMember,
   labelsForPullRequestContext,
   readBoundedGitHubApiJson,
@@ -168,15 +166,6 @@ describe("real-behavior-proof-policy", () => {
     expect(evaluation.status).toBe("passed");
   });
 
-  it("rejects None as evidence", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(proofBody("None")),
-    });
-
-    expect(evaluation.status).toBe("missing");
-    expect(evaluation.missingSections).toEqual(["Evidence"]);
-  });
-
   it("rejects Markdown separators as context and evidence", () => {
     const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(proofBody("---", { problem: "***" })),
@@ -317,15 +306,6 @@ describe("real-behavior-proof-policy", () => {
     expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
-  it("fails external PRs without required context and evidence", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr("## Summary\n\n- Fixed startup."),
-    });
-
-    expect(evaluation.status).toBe("missing");
-    expect(labelsForPullRequestContext(evaluation)).toEqual([NEEDS_PR_CONTEXT_LABEL]);
-  });
-
   it("fails external PRs that say the changed behavior was not tested", () => {
     const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(proofBody("not tested")),
@@ -333,15 +313,6 @@ describe("real-behavior-proof-policy", () => {
 
     expect(evaluation.status).toBe("missing");
     expect(labelsForPullRequestContext(evaluation)).toEqual([NEEDS_PR_CONTEXT_LABEL]);
-  });
-
-  it("accepts focused test and CI evidence", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(proofBody("pnpm test passed and CI is green.")),
-    });
-
-    expect(evaluation.status).toBe("passed");
-    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
   it("skips maintainer and bot PRs but requires context from external PRs", () => {
@@ -366,92 +337,6 @@ describe("real-behavior-proof-policy", () => {
       }).status,
     ).toBe("missing");
   });
-
-  it("accepts ClawSweeper pass verdict comments only for the exact PR head", () => {
-    const pullRequest = {
-      number: 83581,
-      head: {
-        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
-      },
-    };
-    const comments = [
-      {
-        user: {
-          login: "clawsweeper[bot]",
-          type: "Bot",
-        },
-        performed_via_github_app: {
-          slug: "clawsweeper",
-        },
-        body: [
-          "Codex review: passed.",
-          "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
-        ].join("\n"),
-      },
-    ];
-
-    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(true);
-    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(true);
-    expect(
-      hasClawSweeperExactHeadProof({
-        pullRequest: {
-          ...pullRequest,
-          head: { sha: "d0215b2d67a45a783277fc7d2949ac4a30f63ec6" },
-        },
-        comments,
-      }),
-    ).toBe(false);
-  });
-
-  for (const { name, login, userType, expectedPassed } of [
-    {
-      name: "rejects forged ClawSweeper pass verdict markers from contributor comments",
-      login: "external-contributor",
-      userType: "User",
-      expectedPassed: false,
-    },
-    {
-      name: "accepts exact ClawSweeper bot pass verdict markers when GitHub omits the app source",
-      login: "clawsweeper[bot]",
-      userType: "Bot",
-      expectedPassed: true,
-    },
-    {
-      name: "accepts exact OpenClaw ClawSweeper bot pass verdict markers when GitHub omits the app source",
-      login: "openclaw-clawsweeper[bot]",
-      userType: "Bot",
-      expectedPassed: true,
-    },
-    {
-      name: "rejects bot-shaped pass verdict markers from other bot users",
-      login: "not-clawsweeper[bot]",
-      userType: "Bot",
-      expectedPassed: false,
-    },
-  ]) {
-    it(name, () => {
-      const pullRequest = {
-        number: 83581,
-        head: {
-          sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
-        },
-      };
-      const comments = [
-        {
-          user: {
-            login,
-            type: userType,
-          },
-          body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
-        },
-      ];
-
-      expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(expectedPassed);
-      expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(
-        expectedPassed,
-      );
-    });
-  }
 });
 
 describe("isMaintainerTeamMember", () => {

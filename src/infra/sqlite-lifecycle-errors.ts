@@ -1,6 +1,8 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
+export class SqliteSnapshotCleanupError extends Error {}
+
 export class OpenClawStateOwnershipError extends Error {}
 
 export class OpenClawStateOwnershipMetadataError extends OpenClawStateOwnershipError {
@@ -76,15 +78,9 @@ export function runWithSqliteCleanup<T>(
       throw new SqliteCoordinatorError(`${operationLabel} must remain synchronous`);
     }
   } catch (operationError) {
-    let releaseFailed = false;
-    let releaseError: unknown;
     try {
       resource.release();
-    } catch (error) {
-      releaseFailed = true;
-      releaseError = error;
-    }
-    if (releaseFailed) {
+    } catch (releaseError) {
       throw createSqliteLifecycleAggregateError(
         [operationError, releaseError],
         `${operationLabel} and resource release both failed`,

@@ -42,12 +42,10 @@ export async function createPtyAdapter(
   if (spawnEnv) {
     setPtyTerminalName({ env: spawnEnv, name: terminalName, platform: process.platform });
   }
-  params.assertCurrent?.();
-  if (params.abortSignal?.aborted) {
-    throw new Error("PTY construction aborted");
-  }
   const pty = await spawnTerminalPty(
     {
+      executionIntent: params.executionIntent,
+      executionScopeKey: params.executionScopeKey,
       file: preparedSpawn.command,
       args: preparedSpawn.args,
       cwd: params.cwd,
@@ -58,6 +56,7 @@ export async function createPtyAdapter(
     },
     {
       abortSignal: params.abortSignal,
+      initiateSpawn: params.initiateSpawn,
       assertCurrent: () => {
         params.assertCurrent?.();
         params.beforeSpawn?.();
@@ -150,13 +149,9 @@ export async function createPtyAdapter(
       }
     },
     end: () => {
-      try {
-        stdinEnded = true;
-        const eof = process.platform === "win32" ? "\x1a" : "\x04";
-        pty.write(eof);
-      } catch {
-        // ignore EOF errors
-      }
+      stdinEnded = true;
+      const eof = process.platform === "win32" ? "\x1a" : "\x04";
+      pty.write(eof);
     },
     destroy: () => {
       stdinDestroyed = true;
@@ -164,43 +159,37 @@ export async function createPtyAdapter(
     },
   };
 
-  const onStdout = (listener: (chunk: string) => void) => {
-    dataListener = pty.onData(listener) ?? null;
-  };
-
-  const kill = (signal: NodeJS.Signals = "SIGKILL") => {
-    signalTerminalPtyTree(pty.pid, signal, (directSignal) => pty.kill(directSignal));
-
-    if (signal === "SIGKILL") {
-      scheduleForceKillWaitFallback(signal);
-    }
-  };
-
-  const dispose = () => {
-    stdinDestroyed = true;
-    stdinEnded = true;
-    for (const listener of [dataListener, exitListener]) {
-      try {
-        listener?.dispose();
-      } catch {
-        // Both subscriptions must be released even if one disposal fails.
-      }
-    }
-    clearForceKillWaitFallback();
-    dataListener = null;
-    exitListener = null;
-    settleWait({ code: null, signal: null });
-  };
-
   return {
     pid: pty.pid || undefined,
     stdin,
     oomScoreWrapperSelected: preparedSpawn.wrapped,
     supportsRawOutput: false,
-    onStdout,
+    onStdout: (listener) => {
+      dataListener = pty.onData(listener) ?? null;
+    },
     onStderr: () => {}, // PTY output is unified.
-    wait: async () => await completion.promise,
-    kill,
-    dispose,
+    wait: () => completion.promise,
+    kill: (signal = "SIGKILL") => {
+      signalTerminalPtyTree(pty.pid, signal, (directSignal) => pty.kill(directSignal));
+
+      if (signal === "SIGKILL") {
+        scheduleForceKillWaitFallback(signal);
+      }
+    },
+    dispose: () => {
+      stdinDestroyed = true;
+      stdinEnded = true;
+      for (const listener of [dataListener, exitListener]) {
+        try {
+          listener?.dispose();
+        } catch {
+          // Both subscriptions must be released even if one disposal fails.
+        }
+      }
+      clearForceKillWaitFallback();
+      dataListener = null;
+      exitListener = null;
+      settleWait({ code: null, signal: null });
+    },
   };
 }

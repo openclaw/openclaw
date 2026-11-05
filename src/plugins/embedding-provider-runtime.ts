@@ -1,5 +1,3 @@
-/** Runtime resolver for plugin-contributed embedding providers. */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolvePluginCapabilityProvider,
@@ -12,7 +10,6 @@ import {
   type EmbeddingProviderAdapter,
 } from "./embedding-providers.js";
 
-/** Lists embedding providers from registered adapters and plugin capabilities. */
 export function listEmbeddingProviders(cfg?: OpenClawConfig): EmbeddingProviderAdapter[] {
   const merged = new Map(
     listRegisteredEmbeddingProviders().map(({ adapter }) => [adapter.id, adapter]),
@@ -29,14 +26,13 @@ export function listEmbeddingProviders(cfg?: OpenClawConfig): EmbeddingProviderA
   return [...merged.values()];
 }
 
-/** Resolves one embedding provider adapter by id, including configured API aliases. */
 export function getEmbeddingProvider(
   id: string,
   cfg?: OpenClawConfig,
 ): EmbeddingProviderAdapter | undefined {
   const lookupIds = [id];
   const configuredProviderId = resolveConfiguredGenericEmbeddingProviderId(id, cfg);
-  if (configuredProviderId && normalizeProviderId(id) !== configuredProviderId) {
+  if (configuredProviderId) {
     lookupIds.push(configuredProviderId);
   }
   // Resolve each exact id before trying the next configured alias. Otherwise a

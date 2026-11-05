@@ -4,8 +4,7 @@ import { generateStoredDeviceIdentity } from "../../src/infra/device-identity-st
 import { approveDevicePairing } from "../../src/infra/device-pairing-approval.ts";
 import { requestDevicePairing } from "../../src/infra/device-pairing.ts";
 import { publicKeyRawBase64UrlFromEd25519Pem } from "../../src/infra/ed25519-signature.ts";
-import { closeOpenClawStateDatabaseByPath } from "../../src/state/openclaw-state-db-cache.ts";
-import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.ts";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../src/state/openclaw-state-db-cache.ts";
 
 export const telegramQaObserverScopes = ["operator.read", "operator.write"];
 
@@ -43,19 +42,14 @@ export async function prepareTelegramQaDevice(scratch: string) {
     ) {
       throw new Error("Synthetic QA observer pairing was not approved exactly");
     }
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: seed },
-    });
-    if (!database.walMaintenance.close({ checkpointMode: "TRUNCATE" })) {
-      throw new Error("Synthetic QA pairing checkpoint did not complete");
-    }
-    closeOpenClawStateDatabaseByPath(databasePath);
+    // Join worker retirement and its final checkpoint before copying the standalone file.
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
     // Includes synthetic server tokens, never the observer's private key.
     // This file is private scratch, not a retained evidence artifact.
     await copyFile(databasePath, path.join(scratch, "candidate-pairing.sqlite"));
     return identity;
   } finally {
-    closeOpenClawStateDatabaseByPath(databasePath);
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
     await rm(seed, { recursive: true, force: true });
   }
 }

@@ -1,14 +1,8 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexAppPolicyContextEntry } from "./plugin-thread-config.js";
+import type { CodexAppRuntimeTool } from "./app-runtime-tools.js";
+import type { CodexAppPolicyContextEntry } from "./session-binding-record-codec.js";
 
 export type CodexAppToolApprovalMode = "auto" | "prompt" | "writes" | "approve";
-export type CodexScheduledAppTool = {
-  title?: string;
-  linkId?: string;
-  requiresExplicitLinkId?: boolean;
-  destructiveHint?: boolean;
-  openWorldHint?: boolean;
-};
 
 export function normalizeAppToolApprovalMode(value: unknown): CodexAppToolApprovalMode | undefined {
   return value === "auto" || value === "prompt" || value === "writes" || value === "approve"
@@ -20,7 +14,7 @@ export function readCurrentToolPolicy(
   config: Record<string, unknown>,
   appId: string,
   toolName: string,
-  metadata: CodexScheduledAppTool | undefined,
+  metadata: CodexAppRuntimeTool | undefined,
   fallbackApprovalMode: CodexAppToolApprovalMode = "auto",
 ): { enabled: boolean; approvalMode: CodexAppToolApprovalMode } {
   const apps = asOptionalRecord(config.apps);
@@ -76,7 +70,7 @@ export function readCurrentToolPolicy(
 }
 
 export function appToolHintsAllowed(
-  tool: CodexScheduledAppTool | undefined,
+  tool: CodexAppRuntimeTool | undefined,
   policy: Pick<CodexAppPolicyContextEntry, "allowDestructiveActions" | "allowOpenWorld">,
 ): boolean {
   // Codex treats missing annotations as destructive/open-world. Explicit tool
@@ -91,17 +85,11 @@ export function intersectToolApprovalMode(
   captured: CodexAppToolApprovalMode,
   current: CodexAppToolApprovalMode,
 ): CodexAppToolApprovalMode {
-  if (captured === current) {
+  if (captured === current || current === "approve") {
     return captured;
-  }
-  if (captured === "prompt" || current === "prompt") {
-    return "prompt";
   }
   if (captured === "approve") {
     return current;
-  }
-  if (current === "approve") {
-    return captured;
   }
   // `auto` and `writes` are annotation-dependent and not totally ordered.
   return "prompt";

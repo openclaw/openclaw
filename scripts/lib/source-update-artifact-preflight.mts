@@ -35,6 +35,20 @@ export async function loadSourceRuntimePreparation(root: string) {
   throw new Error(`Installed runtime staging is unavailable: ${stagingFile}`);
 }
 
+/** Inspect without publishing while the caller retains checkout artifact ownership. */
+export async function inspectOwnedSourceUpdateArtifacts(
+  root: string,
+  assertCurrent: () => void = () => {},
+): Promise<boolean> {
+  assertCurrent();
+  const prepare = await loadSourceRuntimePreparation(root);
+  assertCurrent();
+  const prepared = prepare?.({ repoRoot: root });
+  await prepared?.cleanup();
+  assertCurrent();
+  return !prepared?.changed;
+}
+
 export async function inspectSourceUpdateArtifacts(rootDir: string): Promise<{
   sourceRuntimePrepared: boolean;
   lock: FileLockHandle | undefined;
@@ -45,10 +59,7 @@ export async function inspectSourceUpdateArtifacts(rootDir: string): Promise<{
   const root = fs.realpathSync(rootDir);
   const lock = await acquireDistArtifactOwnership(root);
   try {
-    const prepare = await loadSourceRuntimePreparation(root);
-    const prepared = prepare?.({ repoRoot: root });
-    await prepared?.cleanup();
-    return { sourceRuntimePrepared: !prepared?.changed, lock };
+    return { sourceRuntimePrepared: await inspectOwnedSourceUpdateArtifacts(root), lock };
   } catch (error) {
     await lock.release();
     throw error;

@@ -1,12 +1,9 @@
 import AppKit
 import Foundation
 
-enum SoundEffectCatalog {
-    static func url(for name: String) -> URL? {
-        self.discoveredSoundMap[name]
-    }
-
-    // MARK: - Internals
+@MainActor
+enum SoundEffectPlayer {
+    private static var lastSound: NSSound?
 
     private static let allowedExtensions: Set<String> = [
         "aif", "aiff", "caf", "wav", "m4a", "mp3",
@@ -38,20 +35,11 @@ enum SoundEffectCatalog {
         }
         return map
     }()
-}
-
-@MainActor
-enum SoundEffectPlayer {
-    private static var lastSound: NSSound?
 
     static func sound(named name: String) -> NSSound? {
-        if let named = NSSound(named: NSSound.Name(name)) {
-            return named
+        NSSound(named: NSSound.Name(name)) ?? self.discoveredSoundMap[name].flatMap {
+            NSSound(contentsOf: $0, byReference: false)
         }
-        if let url = SoundEffectCatalog.url(for: name) {
-            return NSSound(contentsOf: url, byReference: false)
-        }
-        return nil
     }
 
     static func sound(from bookmark: Data) -> NSSound? {

@@ -6,19 +6,13 @@ import {
 } from "openclaw/plugin-sdk/sandbox";
 import type { ResolvedOpenShellPluginConfig } from "./config.js";
 
-export {
-  buildRemoteCommand,
-  buildRemoteWorkdirValidationCommand,
-  buildValidatedExecRemoteCommand,
-} from "openclaw/plugin-sdk/sandbox";
-
 export type OpenShellExecContext = {
   config: ResolvedOpenShellPluginConfig;
   sandboxName: string;
   timeoutMs?: number;
 };
 
-function buildOpenShellBaseArgv(config: ResolvedOpenShellPluginConfig): string[] {
+export function buildOpenShellBaseArgv(config: ResolvedOpenShellPluginConfig): string[] {
   const argv = [config.command];
   if (config.gateway) {
     argv.push("--gateway", config.gateway);

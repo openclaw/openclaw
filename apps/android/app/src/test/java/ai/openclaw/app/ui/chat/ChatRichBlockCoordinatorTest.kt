@@ -25,20 +25,18 @@ class ChatRichBlockCoordinatorTest {
   }
 
   @Test
-  fun cacheBucketsWidthAndIncludesDarkMode() {
+  fun cacheBucketsWidth() {
     val harness = RenderHarness()
-    val lightA = request("x", widthPx = 321, darkMode = false)
-    val lightB = request("x", widthPx = 350, darkMode = false)
-    val dark = request("x", widthPx = 321, darkMode = true)
+    val first = request("x", widthPx = 321)
+    val sameBucket = request("x", widthPx = 350)
 
-    harness.coordinator.render(lightA) {}
-    harness.backend.complete(ChatRichBlockResult.Success("light"))
+    harness.coordinator.render(first) {}
+    harness.backend.complete(ChatRichBlockResult.Success("rendered"))
     var cached: ChatRichBlockResult<String>? = null
-    harness.coordinator.render(lightB) { cached = it }
-    harness.coordinator.render(dark) {}
+    harness.coordinator.render(sameBucket) { cached = it }
 
-    assertEquals(ChatRichBlockResult.Success("light"), cached)
-    assertEquals(listOf(lightA, dark), harness.backend.requests)
+    assertEquals(ChatRichBlockResult.Success("rendered"), cached)
+    assertEquals(listOf(first), harness.backend.requests)
   }
 
   @Test
@@ -306,12 +304,10 @@ class ChatRichBlockCoordinatorTest {
   private fun request(
     latex: String,
     widthPx: Int = 321,
-    darkMode: Boolean = false,
   ): ChatMathRenderRequest =
     ChatMathRenderRequest.create(
       latex = latex,
       widthPx = widthPx,
-      darkMode = darkMode,
       textColor = 0xff000000.toInt(),
       fontSizePx = 16f,
       density = 1f,

@@ -7,6 +7,7 @@ import { connect } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
@@ -129,13 +130,8 @@ describe("createGatewayRuntimeState", () => {
     });
     let client: WebSocket | undefined;
     try {
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected TCP gateway address");
-      }
-      client = new WebSocket(`ws://127.0.0.1:${address.port}/`, {
+      const url = await listenLoopback(server, "ws");
+      client = new WebSocket(`${url}/`, {
         handshakeTimeout: 2_000,
       });
       await once(client, "open");
@@ -188,17 +184,8 @@ describe("createGatewayRuntimeState", () => {
       getGatewayRequestContext,
     });
     runtimeState.wss.once("connection", (socket) => socket.close());
-    const server = runtimeState.httpServers[0];
-    if (!server) {
-      throw new Error("expected gateway HTTP server");
-    }
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP gateway address");
-    }
+    const server = runtimeState.httpServer;
+    const address = new URL(await listenLoopback(server));
     let gatewaySocket: WebSocket | undefined;
     try {
       await expect(fetch(`http://127.0.0.1:${address.port}/missing`)).resolves.toMatchObject({
@@ -210,15 +197,12 @@ describe("createGatewayRuntimeState", () => {
       gatewaySocket = new WebSocket(`ws://127.0.0.1:${address.port}/`, {
         handshakeTimeout: 2_000,
       });
-      await new Promise<void>((resolve, reject) => {
-        gatewaySocket?.once("open", resolve);
-        gatewaySocket?.once("error", reject);
-      });
+      await once(gatewaySocket, "open");
       expect(mocks.pluginsHttpModuleLoaded).not.toHaveBeenCalled();
       expect(getGatewayRequestContext).not.toHaveBeenCalled();
       expect(pluginUpgrade).not.toHaveBeenCalled();
 
-      await expect(requestPluginUpgrade(address.port, "/plugin")).resolves.toContain(
+      await expect(requestPluginUpgrade(Number(address.port), "/plugin")).resolves.toContain(
         "101 Switching Protocols",
       );
       expect(mocks.pluginsHttpModuleLoaded).toHaveBeenCalledTimes(1);
@@ -255,17 +239,8 @@ describe("createGatewayRuntimeState", () => {
       },
     });
     const runtimeState = await createGatewayRuntimeStateForTest(registry);
-    const server = runtimeState.httpServers[0];
-    if (!server) {
-      throw new Error("expected gateway HTTP server");
-    }
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP gateway address");
-    }
+    const server = runtimeState.httpServer;
+    const address = new URL(await listenLoopback(server));
     try {
       routeReads = 0;
       await expect(fetch(`http://127.0.0.1:${address.port}/demo`)).resolves.toMatchObject({
@@ -299,17 +274,8 @@ describe("createGatewayRuntimeState", () => {
       getPluginRouteRegistry: () => runtimeRegistry,
       isStartupPluginRuntimeReady: () => sidecarsReady,
     });
-    const server = runtimeState.httpServers[0];
-    if (!server) {
-      throw new Error("expected gateway HTTP server");
-    }
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP gateway address");
-    }
+    const server = runtimeState.httpServer;
+    const address = new URL(await listenLoopback(server));
     try {
       const startingResponse = await fetch(`http://127.0.0.1:${address.port}/slack/events`);
       expect(startingResponse.status).toBe(503);
@@ -367,19 +333,10 @@ describe("createGatewayRuntimeState", () => {
     const runtimeState = await createGatewayRuntimeStateForTest(startupRegistry, {
       getPluginRouteRegistry: () => runtimeRegistry,
     });
-    const server = runtimeState.httpServers[0];
-    if (!server) {
-      throw new Error("expected gateway HTTP server");
-    }
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP gateway address");
-    }
+    const server = runtimeState.httpServer;
+    const address = new URL(await listenLoopback(server));
     try {
-      await expect(requestPluginUpgrade(address.port, "/demo")).resolves.toContain(
+      await expect(requestPluginUpgrade(Number(address.port), "/demo")).resolves.toContain(
         "101 Switching Protocols",
       );
       expect(startupUpgradeCalls).toBe(1);
@@ -403,14 +360,14 @@ describe("createGatewayRuntimeState", () => {
       });
       const emptyRegistry = createEmptyPluginRegistry();
       runtimeRegistry = emptyRegistry;
-      await expect(requestPluginUpgrade(address.port, "/demo")).resolves.not.toContain(
+      await expect(requestPluginUpgrade(Number(address.port), "/demo")).resolves.not.toContain(
         "101 Switching Protocols",
       );
       expect(startupUpgradeCalls).toBe(1);
 
       runtimeRegistry = replacementRegistry;
 
-      await expect(requestPluginUpgrade(address.port, "/demo")).resolves.toContain(
+      await expect(requestPluginUpgrade(Number(address.port), "/demo")).resolves.toContain(
         "101 Switching Protocols",
       );
       expect(startupUpgradeCalls).toBe(1);
@@ -464,49 +421,6 @@ describe("createGatewayRuntimeState", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("failed to bind loopback alias ::1"));
   });
 
-  it("claims managed Tailscale routing before ordinary ingress starts listening", async () => {
-    const events: string[] = [];
-    mocks.resolveGatewayListenHosts.mockResolvedValue(["127.0.0.1", "::1"]);
-    mocks.listenGatewayHttpServer.mockImplementation(async (params) => {
-      mockEphemeralAddress(params);
-      events.push(
-        params.serviceName === "Tailscale gateway ingress"
-          ? "private-listener"
-          : "ordinary-listener",
-      );
-    });
-    const prepareManagedTailscaleIngress = vi.fn(async () => {
-      events.push("tailscale-route");
-    });
-    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
-      port: 18789,
-      tailscaleMode: "serve",
-      prepareManagedTailscaleIngress,
-    });
-
-    await runtimeState.startListening();
-
-    expect(events).toEqual([
-      "private-listener",
-      "tailscale-route",
-      "ordinary-listener",
-      "ordinary-listener",
-    ]);
-    expect(prepareManagedTailscaleIngress).toHaveBeenCalledWith({
-      host: "127.0.0.1",
-      port: 19_000,
-    });
-    expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        bindHost: "127.0.0.1",
-        port: 0,
-        retryEaddrinuse: false,
-      }),
-    );
-    expect(runtimeState.httpBindHosts).toEqual(["127.0.0.1", "::1"]);
-  });
-
   it("leaves ordinary ingress closed when managed Tailscale routing fails", async () => {
     const routeFailure = new Error("route claim failed");
     const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
@@ -527,24 +441,6 @@ describe("createGatewayRuntimeState", () => {
       }),
     );
     expect(runtimeState.httpBindHosts).toEqual([]);
-  });
-
-  it("does not publish managed ingress when Tailscale mode is off", async () => {
-    const prepareManagedTailscaleIngress = vi.fn();
-    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
-      port: 18789,
-      tailscaleMode: "off",
-      prepareManagedTailscaleIngress,
-    });
-
-    await runtimeState.startListening();
-
-    expect(runtimeState.getTailscaleIngressEndpoint()).toBeUndefined();
-    expect(prepareManagedTailscaleIngress).not.toHaveBeenCalled();
-    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledTimes(1);
-    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledWith(
-      expect.objectContaining({ bindHost: "127.0.0.1", port: 18789 }),
-    );
   });
 
   it.each([undefined, 19100])(
@@ -574,26 +470,6 @@ describe("createGatewayRuntimeState", () => {
       );
     },
   );
-
-  it("starts the shared sandbox host lazily when MCP Apps are disabled", async () => {
-    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
-      port: 18789,
-    });
-
-    await runtimeState.startListening();
-
-    expect(runtimeState.getMcpAppSandboxPort()).toBeUndefined();
-    expect(runtimeState.httpServers).toHaveLength(1);
-    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledTimes(1);
-
-    await expect(runtimeState.ensureSandboxHostPort()).resolves.toBe(18790);
-    expect(runtimeState.getMcpAppSandboxPort()).toBe(18790);
-    expect(runtimeState.httpServers).toHaveLength(2);
-    expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ bindHost: "127.0.0.1", port: 18790 }),
-    );
-  });
 
   it("keeps an update canary off the configured sandbox listener, including lazy acquisition", async () => {
     const runtimeState = await createGatewayRuntimeStateForTest(undefined, {

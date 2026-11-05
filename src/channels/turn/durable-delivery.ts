@@ -1,4 +1,4 @@
-// Durable final-reply delivery for inbound channel turns.
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { getGroupThreadDispatchContext } from "../../auto-reply/group-thread-context.js";
@@ -8,18 +8,29 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isProvenDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
 import { normalizeDeliverableOutboundChannel } from "../../infra/outbound/channel-resolution.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
-  type DeliverOutboundPayloadsParams,
   type DurableFinalDeliveryRequirement,
-  type DurableFinalDeliveryRequirements,
-  type OutboundDeliveryIntent,
   resolveOutboundDurableFinalDeliverySupport,
 } from "../../infra/outbound/deliver.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import {
+  getPluginRegistryGatewayChannelRegistration,
+  getPluginRegistryGatewayOwner,
+  isPluginRegistryGatewayViewOf,
+} from "../../plugins/registry-lifecycle.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeLoadContext } from "../../plugins/runtime/load-context.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
 import {
+  durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
   sendStructuredDurableMessageBatchCore,
 } from "../message/send.js";
@@ -27,22 +38,14 @@ import {
   createChannelDeliveryResultFromReceipt,
   createChannelPartialDeliveryError,
 } from "./delivery-result.js";
-import { withDurableDeliveryRuntime } from "./durable-delivery-runtime.js";
-import type { ChannelDeliveryInfo, ChannelDeliveryResult } from "./types.js";
+import type {
+  ChannelDeliveryInfo,
+  ChannelDeliveryResult,
+  ChannelTurnDurableDeliveryOptions,
+} from "./types.js";
 
-/** Options controlling durable final delivery for inbound channel replies. */
-export type DurableInboundReplyDeliveryOptions = Pick<
-  DeliverOutboundPayloadsParams,
-  "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
-> & {
-  to?: string | null;
-  replyToId?: string | null;
-  requiredCapabilities?: DurableFinalDeliveryRequirements;
-  /** Validate the admitted sender and pin its resolved credential before a registry handoff. */
-  prepareRuntimeHandoff?: (cfg: OpenClawConfig) => OpenClawConfig;
-};
+export type DurableInboundReplyDeliveryOptions = ChannelTurnDurableDeliveryOptions;
 
-/** Full context required to deliver one inbound final reply through durable message sending. */
 export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptions & {
   cfg: OpenClawConfig;
   channel: string;
@@ -60,7 +63,6 @@ export type StructuredDurableInboundReplyDeliveryParams = Omit<
   "payload"
 > & { plan: OutboundPayloadPlan };
 
-/** Outcome of attempting durable final delivery for an inbound reply payload. */
 type DurableInboundReplyDeliveryResult =
   | { status: "not_applicable"; reason: "non_final" }
   | {
@@ -74,15 +76,12 @@ type DurableInboundReplyDeliveryResult =
     }
   | { status: "handled_visible"; delivery: ChannelDeliveryResult }
   | { status: "handled_no_send"; reason: "no_visible_result"; delivery: ChannelDeliveryResult }
-  | { status: "failed"; error: unknown; sentBeforeError?: true };
-
-function resolveDeliveryTarget(params: DurableInboundReplyDeliveryParams): string | undefined {
-  return (
-    normalizeOptionalString(params.to) ??
-    normalizeOptionalString(params.ctxPayload.OriginatingTo) ??
-    normalizeOptionalString(params.ctxPayload.To)
-  );
-}
+  | {
+      status: "failed";
+      error: unknown;
+      /** False requires affirmative no-dispatch proof; omission preserves ambiguity. */
+      sentBeforeError?: boolean;
+    };
 
 function resolveDurableInboundReplyToId(
   params: Pick<DurableInboundReplyDeliveryParams, "ctxPayload" | "payload" | "replyToId">,
@@ -102,27 +101,6 @@ function resolveDurableInboundReplyToId(
   );
 }
 
-function resolveDurableInboundReplyThreadId(
-  params: DurableInboundReplyDeliveryParams,
-): string | number | null | undefined {
-  if ("threadId" in params) {
-    return params.threadId;
-  }
-  return params.ctxPayload.MessageThreadId;
-}
-
-function stringifyThreadId(value: string | number | null | undefined): string | undefined {
-  return value == null ? undefined : String(value);
-}
-
-function toDeliveryIntent(intent: OutboundDeliveryIntent): ChannelDeliveryResult["deliveryIntent"] {
-  return {
-    id: intent.id,
-    kind: "outbound_queue",
-    queuePolicy: intent.queuePolicy,
-  };
-}
-
 function resolveDurableSuppression(
   send: Extract<Awaited<ReturnType<typeof sendDurableMessageBatchCore>>, { status: "suppressed" }>,
 ): NonNullable<ChannelDeliveryResult["suppression"]> {
@@ -136,7 +114,6 @@ function resolveDurableSuppression(
   };
 }
 
-/** Narrows durable delivery results that handled the payload without caller fallback. */
 export function isDurableInboundReplyDeliveryHandled(
   result: DurableInboundReplyDeliveryResult,
 ): result is Extract<
@@ -146,7 +123,6 @@ export function isDurableInboundReplyDeliveryHandled(
   return result.status === "handled_visible" || result.status === "handled_no_send";
 }
 
-/** Throws failed durable delivery results, preserving visible-send metadata when applicable. */
 export function throwIfDurableInboundReplyDeliveryFailed(
   result: DurableInboundReplyDeliveryResult,
 ): void {
@@ -155,17 +131,6 @@ export function throwIfDurableInboundReplyDeliveryFailed(
   }
 }
 
-function resolveAcceptedVisibleContent(
-  results: readonly { meta?: Record<string, unknown> }[],
-): string | undefined {
-  const content = results
-    .map((result) => result.meta?.visibleText)
-    .filter((value): value is string => typeof value === "string")
-    .join("");
-  return content || undefined;
-}
-
-/** Delivers final inbound replies through the durable message-send context when supported. */
 export async function deliverInboundReplyWithMessageSendContextCore(
   params: DurableInboundReplyDeliveryParams,
 ): Promise<DurableInboundReplyDeliveryResult> {
@@ -193,8 +158,68 @@ async function deliverInboundReplyWithMessageSendContext(
   }
 
   try {
-    return await withDurableDeliveryRuntime(input, (cfg, assertCurrent) =>
-      deliverAdmittedInboundReply({ ...input, cfg }, sendBatch, assertCurrent),
+    // Final delivery is a new operation of the admitting Gateway, not of the completed model turn.
+    const deliver = (cfg: OpenClawConfig, assertCurrent?: () => void) =>
+      deliverAdmittedInboundReply({ ...input, cfg }, sendBatch, assertCurrent);
+    const registry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+    const owner = registry && getPluginRegistryGatewayOwner(registry);
+    if (!registry || !owner) {
+      return await deliver(input.cfg);
+    }
+    const current = owner.current();
+    const reject = (message: string): never => {
+      throw new PlatformMessageNotDispatchedError(message, {
+        cause: new Error(message),
+        retryable: false,
+      });
+    };
+    if (!current) {
+      return reject("The Gateway that admitted this reply is closing.");
+    }
+    const assertCurrent = () => {
+      if (owner.current() !== current) {
+        reject("The reply delivery runtime changed before sending.");
+      }
+    };
+    if (current === registry || isPluginRegistryGatewayViewOf(registry, current)) {
+      // A filtered agent registry is still this publication, not a reload handoff.
+      // The completed model turn must not select or own the final transport.
+      return await runOutsidePluginRuntimeGenerationScope(() =>
+        withPluginRuntimeRegistryScope(current, () => deliver(input.cfg, assertCurrent)),
+      );
+    }
+    const cfg = getPluginRuntimeLoadContext(current)?.rawConfig;
+    const channel = current.channels.find((entry) => entry.plugin.id === input.channel);
+    const prepareRuntimeHandoff = input.prepareRuntimeHandoff;
+    const admittedChannel = getPluginRegistryGatewayChannelRegistration(registry, input.channel);
+    const admittedConfig = admittedChannel?.config;
+    const retainedChannel =
+      channel &&
+      admittedChannel?.pluginId === channel.pluginId &&
+      admittedChannel.plugin === channel.plugin;
+    if (
+      !cfg ||
+      !admittedConfig ||
+      !isDeepStrictEqual(cfg.channels?.[input.channel], admittedConfig.channels?.[input.channel]) ||
+      !isDeepStrictEqual(cfg.channels?.defaults, admittedConfig.channels?.defaults) ||
+      !channel ||
+      !retainedChannel ||
+      !isDeepStrictEqual(
+        cfg.plugins?.entries?.[channel.pluginId],
+        admittedConfig.plugins?.entries?.[channel.pluginId],
+      )
+    ) {
+      return reject("The reply channel changed; delivery was not started.");
+    }
+    // Drop both inherited generation selectors, but retain the exact authenticated caller.
+    // The retained registration and unchanged settings keep the admitted sender. Channels whose
+    // credential can change outside config (env, files, SecretRefs) pin it through the callback.
+    return await runOutsidePluginRuntimeGenerationScope(() =>
+      withPluginRuntimeRegistryScope(current, () => {
+        const preparedCfg = prepareRuntimeHandoff ? prepareRuntimeHandoff(cfg) : cfg;
+        assertCurrent();
+        return deliver(preparedCfg, assertCurrent);
+      }),
     );
   } catch (error) {
     return { status: "failed", error };
@@ -217,7 +242,10 @@ async function deliverAdmittedInboundReply(
       }
     : input;
   const channel = normalizeDeliverableOutboundChannel(params.channel);
-  const to = resolveDeliveryTarget(params);
+  const to =
+    normalizeOptionalString(params.to) ??
+    normalizeOptionalString(params.ctxPayload.OriginatingTo) ??
+    normalizeOptionalString(params.ctxPayload.To);
   if (!channel) {
     return { status: "unsupported", reason: "missing_channel" };
   }
@@ -226,7 +254,7 @@ async function deliverAdmittedInboundReply(
   }
 
   const replyToId = resolveDurableInboundReplyToId(params);
-  const threadId = resolveDurableInboundReplyThreadId(params);
+  const threadId = "threadId" in params ? params.threadId : params.ctxPayload.MessageThreadId;
   const requiredCapabilities =
     params.requiredCapabilities ??
     deriveDurableFinalDeliveryRequirements({
@@ -238,17 +266,12 @@ async function deliverAdmittedInboundReply(
   const durability =
     requiredCapabilities.reconcileUnknownSend === true ? "required" : "best_effort";
 
-  let support: Awaited<ReturnType<typeof resolveOutboundDurableFinalDeliverySupport>>;
-  try {
-    support = await resolveOutboundDurableFinalDeliverySupport({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      channel,
-      requirements: requiredCapabilities,
-    });
-  } catch (err: unknown) {
-    return { status: "failed", error: err };
-  }
+  const support = await resolveOutboundDurableFinalDeliverySupport({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel,
+    requirements: requiredCapabilities,
+  });
   if (!support.ok) {
     return {
       status: "unsupported",
@@ -277,6 +300,7 @@ async function deliverAdmittedInboundReply(
     to,
     accountId: params.accountId,
     payloads: [params.payload],
+    retryAmbiguousFinalText: params.retryAmbiguousFinalText,
     ...((params.runId ?? params.executionIdentityToken?.runId)
       ? { runId: params.runId ?? params.executionIdentityToken?.runId }
       : {}),
@@ -301,17 +325,37 @@ async function deliverAdmittedInboundReply(
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
   });
   if (send.status === "failed") {
-    return { status: "failed" as const, error: send.error };
+    return {
+      status: "failed" as const,
+      error: send.error,
+      ...(!durableMessageBatchMayHaveReachedRecipient(send) &&
+      isProvenDeliveryNotSentError(send.error)
+        ? { sentBeforeError: false }
+        : {}),
+    };
   }
   const content =
-    send.status === "partial_failed" ? resolveAcceptedVisibleContent(send.results) : undefined;
+    send.status === "partial_failed"
+      ? send.results
+          .map((result) => result.meta?.visibleText)
+          .filter((value): value is string => typeof value === "string")
+          .join("")
+      : undefined;
   const receiptDelivery = createChannelDeliveryResultFromReceipt({
     receipt: send.receipt,
-    threadId: stringifyThreadId(threadId),
+    threadId: threadId == null ? undefined : String(threadId),
     ...(replyToId ? { replyToId } : {}),
     visibleReplySent: send.status !== "suppressed",
     ...(content ? { content } : {}),
-    ...(send.deliveryIntent ? { deliveryIntent: toDeliveryIntent(send.deliveryIntent) } : {}),
+    ...(send.deliveryIntent
+      ? {
+          deliveryIntent: {
+            id: send.deliveryIntent.id,
+            kind: "outbound_queue",
+            queuePolicy: send.deliveryIntent.queuePolicy,
+          },
+        }
+      : {}),
   });
   if (send.status === "partial_failed") {
     return {
@@ -324,14 +368,12 @@ async function deliverAdmittedInboundReply(
     };
   }
 
-  const delivery: ChannelDeliveryResult =
-    send.status === "suppressed"
-      ? { ...receiptDelivery, suppression: resolveDurableSuppression(send) }
-      : receiptDelivery;
   if (send.status === "suppressed") {
-    return delivery.visibleReplySent === true
-      ? { status: "handled_visible", delivery }
-      : { status: "handled_no_send", reason: "no_visible_result", delivery };
+    return {
+      status: "handled_no_send",
+      reason: "no_visible_result",
+      delivery: { ...receiptDelivery, suppression: resolveDurableSuppression(send) },
+    };
   }
-  return { status: "handled_visible", delivery };
+  return { status: "handled_visible", delivery: receiptDelivery };
 }

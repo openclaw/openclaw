@@ -27,13 +27,9 @@ enum JSONObjectExtractionSupport {
     }
 
     static func mergeHints(message: String?, hints: [String]) -> String? {
-        let trimmed = message?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nonEmpty = trimmed?.isEmpty == false ? trimmed : nil
+        let nonEmpty = message?.nonEmpty
         guard !hints.isEmpty else { return nonEmpty }
         let hintText = hints.prefix(2).joined(separator: " · ")
-        if let nonEmpty {
-            return "\(nonEmpty) (\(hintText))"
-        }
-        return hintText
+        return nonEmpty.map { "\($0) (\(hintText))" } ?? hintText
     }
 }

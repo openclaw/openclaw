@@ -1,4 +1,3 @@
-// Gateway Smoke script supports OpenClaw repository automation.
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -19,11 +18,7 @@ function writeStderrLine(message: string): void {
   process.stderr.write(`${message}\n`);
 }
 
-type GatewaySmokeCliOptions = {
-  help: boolean;
-  token?: string;
-  urlRaw?: string;
-};
+type GatewaySmokeCliOptions = ReturnType<typeof parseGatewaySmokeCli>;
 
 type GatewaySmokeDeps = {
   createClient?: typeof createGatewayWsClient;
@@ -52,33 +47,23 @@ function validateArgs(argv: readonly string[]): void {
   const seen = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
-    if (BOOLEAN_FLAGS.has(arg)) {
-      if (seen.has(arg)) {
-        throw new GatewaySmokeArgError(`${arg} was provided more than once`);
-      }
-      seen.add(arg);
-      continue;
-    }
     if (VALUE_FLAGS.has(arg)) {
       const value = argv[index + 1];
       if (!value || value.startsWith("-")) {
         throw new GatewaySmokeArgError(`${arg} requires a value`);
       }
-      if (seen.has(arg)) {
-        throw new GatewaySmokeArgError(`${arg} was provided more than once`);
-      }
-      seen.add(arg);
       index += 1;
-      continue;
+    } else if (!BOOLEAN_FLAGS.has(arg)) {
+      throw new GatewaySmokeArgError(`Unknown argument: ${arg}`);
     }
-    throw new GatewaySmokeArgError(`Unknown argument: ${arg}`);
+    if (seen.has(arg)) {
+      throw new GatewaySmokeArgError(`${arg} was provided more than once`);
+    }
+    seen.add(arg);
   }
 }
 
-function parseGatewaySmokeCli(
-  argv = process.argv.slice(2),
-  env: NodeJS.ProcessEnv = process.env,
-): GatewaySmokeCliOptions {
+function parseGatewaySmokeCli(argv = process.argv.slice(2), env: NodeJS.ProcessEnv = process.env) {
   validateArgs(argv);
   const { get: getArg, has } = createArgReader([...argv]);
   return {

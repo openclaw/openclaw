@@ -52,7 +52,7 @@ class ChatContextMeterTest {
       )
 
     assertEquals(ChatContextUsage(totalTokens = 1_250L, totalTokensFresh = true, contextTokens = 5_000L), usage)
-    assertEquals(0.25f, contextMeterWidth(usage))
+    assertEquals(0.25f, chatContextSummary(usage)?.fraction)
   }
 
   @Test
@@ -83,21 +83,21 @@ class ChatContextMeterTest {
   fun contextMeterDoesNotInventPercentWhenBudgetIsMissing() {
     val usage = ChatContextUsage(totalTokens = 8_200L, totalTokensFresh = true, contextTokens = null)
 
-    assertNull(contextMeterWidth(usage))
+    assertNull(chatContextSummary(usage))
   }
 
   @Test
   fun contextMeterClampsOverfullSessions() {
     val usage = ChatContextUsage(totalTokens = 150_000L, totalTokensFresh = true, contextTokens = 100_000L)
 
-    assertEquals(1.0f, contextMeterWidth(usage))
+    assertEquals(1.0f, chatContextSummary(usage)?.fraction)
   }
 
   @Test
   fun contextMeterKeepsApproximateWidthForStaleTokenUsage() {
     val usage = ChatContextUsage(totalTokens = 82_000L, totalTokensFresh = false, contextTokens = 100_000L)
 
-    assertEquals(0.82f, contextMeterWidth(usage))
+    assertEquals(0.82f, chatContextSummary(usage)?.fraction)
   }
 
   @Test

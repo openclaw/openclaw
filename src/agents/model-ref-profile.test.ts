@@ -26,6 +26,11 @@ describe("splitTrailingAuthProfile", () => {
       "custom/vertex-ai_claude-haiku-4-5@20251001@work",
       { model: "custom/vertex-ai_claude-haiku-4-5@20251001", profile: "work" },
     ],
+    [
+      "lmstudio/model@20251001@q8_0@work",
+      { model: "lmstudio/model@20251001@q8_0", profile: "work" },
+    ],
+    ["lmstudio/model@q8_0@20251001", { model: "lmstudio/model@q8_0", profile: "20251001" }],
     ["lmstudio-mb-pro/gemma-4-31b-it@q8_0", { model: "lmstudio-mb-pro/gemma-4-31b-it@q8_0" }],
     [
       "lmstudio/qwen3.6-27b@iq3_xxs@work",

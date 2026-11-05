@@ -1,5 +1,3 @@
-// Windows process environment helpers for the MXC ProcessContainer backend.
-//
 // MXC's BaseContainerRunner treats a non-empty `process.env` as a replacement
 // environment block for CreateProcessInSandbox: when present it replaces the
 // entire default OS environment, so any required OS var (SystemRoot, COMSPEC, …)
@@ -7,42 +5,6 @@
 // These helpers build a minimal-but-complete Windows env block from required OS
 // defaults plus caller overrides, and a separate launcher env for the spawn
 // process itself.
-
-// Env vars required by cmd.exe / CreateProcess inside the AppContainer. Caller
-// overrides are layered on top; nothing else from the host environment leaks in.
-const WINDOWS_PROCESS_ENV_DEFAULT_KEYS = [
-  "SystemRoot",
-  "SystemDrive",
-  "ComSpec",
-  "WINDIR",
-  "PATH",
-  "PATHEXT",
-  "TEMP",
-  "TMP",
-  "USERPROFILE",
-  "APPDATA",
-  "LOCALAPPDATA",
-  "ProgramData",
-  "ALLUSERSPROFILE",
-  "ProgramFiles",
-  "ProgramFiles(x86)",
-  "ProgramW6432",
-  "CommonProgramFiles",
-  "CommonProgramFiles(x86)",
-  "CommonProgramW6432",
-  "PUBLIC",
-  "HOMEDRIVE",
-  "HOMEPATH",
-  "USERNAME",
-  "USERDOMAIN",
-  "COMPUTERNAME",
-  "OS",
-  "PROCESSOR_ARCHITECTURE",
-  "PROCESSOR_IDENTIFIER",
-  "PROCESSOR_LEVEL",
-  "PROCESSOR_REVISION",
-  "NUMBER_OF_PROCESSORS",
-] as const;
 
 // Env vars forwarded to the plugin-side Node launcher process (not the sandboxed
 // child). The launcher only needs enough OS context to locate Node, temp dirs,
@@ -62,6 +24,29 @@ const LAUNCHER_ENV_KEYS = [
   "ProgramFiles",
   "ProgramFiles(x86)",
   "ProgramW6432",
+] as const;
+
+// Env vars required by cmd.exe / CreateProcess inside the AppContainer. Caller
+// overrides are layered on top; nothing else from the host environment leaks in.
+const WINDOWS_PROCESS_ENV_DEFAULT_KEYS = [
+  ...LAUNCHER_ENV_KEYS,
+  "ProgramData",
+  "ALLUSERSPROFILE",
+  "CommonProgramFiles",
+  "CommonProgramFiles(x86)",
+  "CommonProgramW6432",
+  "PUBLIC",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "USERNAME",
+  "USERDOMAIN",
+  "COMPUTERNAME",
+  "OS",
+  "PROCESSOR_ARCHITECTURE",
+  "PROCESSOR_IDENTIFIER",
+  "PROCESSOR_LEVEL",
+  "PROCESSOR_REVISION",
+  "NUMBER_OF_PROCESSORS",
 ] as const;
 
 function getEnvValueCaseInsensitive(env: NodeJS.ProcessEnv, key: string): string | undefined {

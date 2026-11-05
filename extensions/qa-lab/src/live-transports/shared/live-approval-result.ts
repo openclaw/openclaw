@@ -8,7 +8,7 @@ export function formatApprovalResultValue(value: unknown) {
   return JSON.stringify(value) ?? "<unserializable>";
 }
 
-function readAcceptedApprovalRequest(result: unknown) {
+export function readAcceptedApprovalRequest(result: unknown) {
   const accepted =
     typeof result === "object" && result !== null
       ? (result as { id?: unknown; status?: unknown })
@@ -31,11 +31,21 @@ export function readAcceptedApprovalRequestId(result: unknown) {
   return id;
 }
 
-export function assertApprovalDecisionResult(params: { decision: string; result: unknown }) {
-  const resultDecision =
+export function assertApprovalDecisionResult(params: {
+  approvalId?: string;
+  decision: string;
+  result: unknown;
+}) {
+  const result =
     typeof params.result === "object" && params.result !== null
-      ? (params.result as { decision?: unknown }).decision
+      ? (params.result as { decision?: unknown; id?: unknown })
       : undefined;
+  if (params.approvalId !== undefined && result?.id !== params.approvalId) {
+    throw new Error(
+      `approval decision result id was ${formatApprovalResultValue(result?.id)} instead of ${params.approvalId}`,
+    );
+  }
+  const resultDecision = result?.decision;
   if (resultDecision !== params.decision) {
     throw new Error(
       `approval decision was ${formatApprovalResultValue(resultDecision)} instead of ${params.decision}`,

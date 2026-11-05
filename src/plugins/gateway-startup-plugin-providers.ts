@@ -34,6 +34,14 @@ export function collectConfiguredWebSearchProviderIds(config: OpenClawConfig): R
   return providerId ? new Set([providerId]) : new Set();
 }
 
+/** True when web search is enabled without a pinned provider, so auto-detection picks one per call. */
+export function isWebSearchProviderAutoSelected(config: OpenClawConfig): boolean {
+  return (
+    config.tools?.web?.search?.enabled !== false &&
+    collectConfiguredWebSearchProviderIds(config).size === 0
+  );
+}
+
 function collectModelProviderIds(value: unknown): ReadonlySet<string> {
   return new Set(
     listModelRefsFromConfigValue(value)
@@ -130,17 +138,17 @@ export function collectConfiguredAgentModelProviderIds(
   );
 
   return new Set(
-    [...modelIdsByProvider.entries()]
-      .filter(([providerId, modelIds]) => {
-        return [...modelIds].some((modelId) =>
+    [...modelIdsByProvider]
+      .filter(([providerId, modelIds]) =>
+        [...modelIds].some((modelId) =>
           configuredModelProviderNeedsRuntimePlugin({
             config,
             manifestModelProviders,
             providerId,
             modelId,
           }),
-        );
-      })
+        ),
+      )
       .map(([providerId]) => providerId),
   );
 }
@@ -177,9 +185,7 @@ export function manifestOwnsConfiguredModelProvider(params: {
     return false;
   }
   return [...(params.manifest?.providers ?? []), ...(params.manifest?.cliBackends ?? [])].some(
-    (providerId) => {
-      return params.configuredModelProviderIds.has(normalizeProviderId(providerId));
-    },
+    (providerId) => params.configuredModelProviderIds.has(normalizeProviderId(providerId)),
   );
 }
 
@@ -291,10 +297,7 @@ function resolveEffectiveMemoryEmbeddingProviderEntries(
     configuredId: string;
     source: MemoryEmbeddingStartupProviderSource;
   }> = [];
-  const provider =
-    rawProvider && !MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS.has(rawProvider)
-      ? rawProvider
-      : undefined;
+  const provider = normalizeExplicitMemoryEmbeddingProviderId(rawProvider);
   if (provider) {
     entries.push({ configuredId: provider, source: "provider" });
   }
@@ -348,9 +351,6 @@ export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
   };
   const agentEntries = listAgentEntries(config);
   addEffectiveProviders(undefined, agentEntries.length === 0 ? listAgentIds(config)[0] : undefined);
-  if (agentEntries.length === 0) {
-    return [...byConfiguredIdAndSource.values()];
-  }
   for (const agent of agentEntries) {
     const memory = isRecord(agent.memory) ? agent.memory : undefined;
     addEffectiveProviders(
@@ -409,8 +409,9 @@ export function collectUnregisteredConfiguredMemoryEmbeddingProviders(params: {
 export function collectRegisteredEmbeddingProviderIds(
   registry: Partial<Pick<PluginRegistry, "embeddingProviders">>,
 ): Set<string> {
-  return new Set([
-    ...(registry.embeddingProviders ?? []).map((entry) => entry.provider.id),
-    ...listRegisteredEmbeddingProviders().map((entry) => entry.adapter.id),
-  ]);
+  const providers = [
+    ...(registry.embeddingProviders ?? []).map((entry) => entry.provider),
+    ...listRegisteredEmbeddingProviders().map((entry) => entry.adapter),
+  ];
+  return new Set(providers.flatMap(({ id, aliases }) => [id].concat(aliases ?? [])));
 }

@@ -1,4 +1,3 @@
-// Builds grouped Vitest duration reports or compares two grouped reports.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -237,9 +236,6 @@ export function parseTestGroupReportArgs(argv: string[]) {
   if (!["area", "folder", "top"].includes(args.groupBy)) {
     throw new Error(`Unsupported --group-by value: ${args.groupBy}`);
   }
-  if (args.compare && (!args.compare.before || !args.compare.after)) {
-    throw new Error("--compare requires before and after report paths");
-  }
   if (
     args.compare &&
     (args.configs.length > 0 ||
@@ -429,9 +425,8 @@ export function spawnText(command: string, args: readonly string[], options: Spa
       if (tailBytes < 1) {
         return;
       }
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
       const currentTail = target === "stderr" ? stderrTail : outputTail;
-      let nextTail = buffer.byteLength >= tailBytes ? buffer : Buffer.concat([currentTail, buffer]);
+      let nextTail = chunk.byteLength >= tailBytes ? chunk : Buffer.concat([currentTail, chunk]);
       if (nextTail.byteLength > tailBytes) {
         nextTail = nextTail.subarray(nextTail.byteLength - tailBytes);
       }
@@ -480,11 +475,10 @@ export function spawnText(command: string, args: readonly string[], options: Spa
         return;
       }
 
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
-      outputBytes += buffer.byteLength;
-      appendTail(buffer);
+      outputBytes += chunk.byteLength;
+      appendTail(chunk);
       if (streamName === "stderr") {
-        appendTail(buffer, "stderr");
+        appendTail(chunk, "stderr");
       }
       if (outputBytes > maxBuffer) {
         outputExceeded = true;
@@ -608,7 +602,7 @@ function readReportInputs(entries: ReportInputEntry[]) {
   return { invalid, missing, reports };
 }
 
-function readGroupedReport(reportPath: fs.PathOrFileDescriptor) {
+function readGroupedReport(reportPath: string) {
   const report = JSON.parse(fs.readFileSync(reportPath, "utf8")) as unknown;
   validateGroupedReport(report, reportPath);
   return report;
@@ -618,119 +612,87 @@ function isFiniteNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function displayReportPath(reportPath: fs.PathOrFileDescriptor) {
-  return typeof reportPath === "string" || typeof reportPath === "number"
-    ? String(reportPath)
-    : reportPath.toString();
+function invalidGroupedReport(reportPath: string, reason: string): never {
+  throw new Error(`[test-group-report] invalid grouped report ${reportPath}: ${reason}`);
 }
 
 function validateCounter(
   counter: unknown,
-  reportPath: fs.PathOrFileDescriptor,
+  reportPath: string,
   fieldName: string,
   index: number | null = null,
-) {
+): asserts counter is Record<string, unknown> {
   const label = index === null ? fieldName : `${fieldName}[${index}]`;
-  const displayPath = displayReportPath(reportPath);
   if (!isRecord(counter)) {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: ${label} must be an object`,
-    );
+    invalidGroupedReport(reportPath, `${label} must be an object`);
   }
   for (const key of ["durationMs", "fileCount", "testCount"]) {
     if (!isFiniteNumber(counter[key])) {
-      throw new Error(
-        `[test-group-report] invalid grouped report ${displayPath}: ${label}.${key} must be a finite number`,
-      );
+      invalidGroupedReport(reportPath, `${label}.${key} must be a finite number`);
     }
   }
 }
 
 function validateCounterRows(
   report: Record<string, unknown>,
-  reportPath: fs.PathOrFileDescriptor,
+  reportPath: string,
   fieldName: string,
 ) {
-  const displayPath = displayReportPath(reportPath);
   const rows = report[fieldName];
   if (!Array.isArray(rows)) {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: ${fieldName} must be an array`,
-    );
+    invalidGroupedReport(reportPath, `${fieldName} must be an array`);
   }
   rows.forEach((row, index) => {
     validateCounter(row, reportPath, fieldName, index);
-    if (!isRecord(row) || typeof row.key !== "string" || !row.key) {
-      throw new Error(
-        `[test-group-report] invalid grouped report ${displayPath}: ${fieldName}[${index}].key must be a non-empty string`,
-      );
+    if (typeof row.key !== "string" || !row.key) {
+      invalidGroupedReport(reportPath, `${fieldName}[${index}].key must be a non-empty string`);
     }
   });
   return rows;
 }
 
-function validateTopFileRows(report: Record<string, unknown>, reportPath: fs.PathOrFileDescriptor) {
-  const displayPath = displayReportPath(reportPath);
+function validateTopFileRows(report: Record<string, unknown>, reportPath: string) {
   if (!Array.isArray(report.topFiles)) {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: topFiles must be an array`,
-    );
+    invalidGroupedReport(reportPath, "topFiles must be an array");
   }
   report.topFiles.forEach((row, index) => {
     if (!isRecord(row)) {
-      throw new Error(
-        `[test-group-report] invalid grouped report ${displayPath}: topFiles[${index}] must be an object`,
-      );
+      invalidGroupedReport(reportPath, `topFiles[${index}] must be an object`);
     }
     for (const key of ["config", "file", "group"]) {
       if (typeof row[key] !== "string" || !row[key]) {
-        throw new Error(
-          `[test-group-report] invalid grouped report ${displayPath}: topFiles[${index}].${key} must be a non-empty string`,
-        );
+        invalidGroupedReport(reportPath, `topFiles[${index}].${key} must be a non-empty string`);
       }
     }
     for (const key of ["durationMs", "testCount"]) {
       if (!isFiniteNumber(row[key])) {
-        throw new Error(
-          `[test-group-report] invalid grouped report ${displayPath}: topFiles[${index}].${key} must be a finite number`,
-        );
+        invalidGroupedReport(reportPath, `topFiles[${index}].${key} must be a finite number`);
       }
     }
   });
   return report.topFiles;
 }
 
-function validateRunRows(report: Record<string, unknown>, reportPath: fs.PathOrFileDescriptor) {
-  const displayPath = displayReportPath(reportPath);
+function validateRunRows(report: Record<string, unknown>, reportPath: string) {
   if (!Array.isArray(report.runs)) {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: runs must be an array`,
-    );
+    invalidGroupedReport(reportPath, "runs must be an array");
   }
   report.runs.forEach((row, index) => {
     if (!isRecord(row)) {
-      throw new Error(
-        `[test-group-report] invalid grouped report ${displayPath}: runs[${index}] must be an object`,
-      );
+      invalidGroupedReport(reportPath, `runs[${index}] must be an object`);
     }
     if (typeof row.config !== "string" && typeof row.label !== "string") {
-      throw new Error(
-        `[test-group-report] invalid grouped report ${displayPath}: runs[${index}] must include config or label`,
-      );
+      invalidGroupedReport(reportPath, `runs[${index}] must include config or label`);
     }
     if (!isFiniteNumber(row.elapsedMs) || !isFiniteNumber(row.status)) {
-      throw new Error(
-        `[test-group-report] invalid grouped report ${displayPath}: runs[${index}] must include finite elapsedMs and status`,
-      );
+      invalidGroupedReport(reportPath, `runs[${index}] must include finite elapsedMs and status`);
     }
     if (
       row.maxRssBytes !== null &&
       row.maxRssBytes !== undefined &&
       !isFiniteNumber(row.maxRssBytes)
     ) {
-      throw new Error(
-        `[test-group-report] invalid grouped report ${displayPath}: runs[${index}].maxRssBytes must be finite when present`,
-      );
+      invalidGroupedReport(reportPath, `runs[${index}].maxRssBytes must be finite when present`);
     }
   });
   return report.runs;
@@ -738,36 +700,27 @@ function validateRunRows(report: Record<string, unknown>, reportPath: fs.PathOrF
 
 function validateGroupedReport(
   report: unknown,
-  reportPath: fs.PathOrFileDescriptor,
+  reportPath: string,
 ): asserts report is Record<string, unknown> & GroupedComparisonInput {
-  const displayPath = displayReportPath(reportPath);
   if (!isRecord(report)) {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: report must be an object`,
-    );
+    invalidGroupedReport(reportPath, "report must be an object");
   }
   if (report.command !== "test-group-report") {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: command must be test-group-report`,
-    );
+    invalidGroupedReport(reportPath, "command must be test-group-report");
   }
   if (typeof report.groupBy !== "string" || !["area", "folder", "top"].includes(report.groupBy)) {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: groupBy must be area, folder, or top`,
-    );
+    invalidGroupedReport(reportPath, "groupBy must be area, folder, or top");
   }
   validateCounter(report.totals, reportPath, "totals");
   const groups = validateCounterRows(report, reportPath, "groups");
   const configs = validateCounterRows(report, reportPath, "configs");
   const topFiles = validateTopFileRows(report, reportPath);
   if (!Array.isArray(report.slowTests)) {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: slowTests must be an array`,
-    );
+    invalidGroupedReport(reportPath, "slowTests must be an array");
   }
   const runs = validateRunRows(report, reportPath);
   if (groups.length === 0 && configs.length === 0 && topFiles.length === 0 && runs.length === 0) {
-    throw new Error(`[test-group-report] invalid grouped report ${displayPath}: no evidence rows`);
+    invalidGroupedReport(reportPath, "no evidence rows");
   }
 }
 
@@ -913,12 +866,6 @@ export function resolveReportRunSpecs(
   });
 }
 
-function printRunLine(run: TestGroupRun) {
-  console.log(
-    `[test-group-report] ${run.label} status=${run.status} wall=${formatMs(run.elapsedMs)} rss=${formatBytesAsMb(run.maxRssBytes)} report=${run.reportPath}`,
-  );
-}
-
 function printSlowTestsForRun(entry: ReportInputEntry, maxTestMs: number | null) {
   if (maxTestMs === null || !fs.existsSync(entry.reportPath)) {
     return;
@@ -960,18 +907,16 @@ export async function runReportPlans(params: {
       }
       const slug = sanitizePathSegment(plan.label);
       const run = await runVitest({
-        config: plan.config,
-        forwardedArgs: plan.forwardedArgs,
-        env: plan.env,
-        label: plan.label,
+        ...plan,
         logPath: path.join(params.logDir, `${slug}.log`),
         reportPath: path.join(params.reportDir, `${slug}.json`),
         rss: params.args.rss,
         timeoutMs: params.args.timeoutMs,
         killGraceMs: params.args.killGraceMs,
-        vitestArgs: plan.vitestArgs,
       });
-      printRunLine(run);
+      console.log(
+        `[test-group-report] ${run.label} status=${run.status} wall=${formatMs(run.elapsedMs)} rss=${formatBytesAsMb(run.maxRssBytes)} report=${run.reportPath}`,
+      );
       let includeEntry = true;
       if (run.status !== 0) {
         failed = true;

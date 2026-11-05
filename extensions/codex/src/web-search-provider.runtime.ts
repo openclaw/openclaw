@@ -1,4 +1,5 @@
 import {
+  externalContentStamp,
   readStringParam,
   resolveSearchTimeoutSeconds,
   type SearchConfigRecord,
@@ -7,14 +8,10 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import {
-  normalizeOptionalString,
-  normalizeTrimmedStringList,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
   runBoundedCodexAppServerTurn,
   type CodexBoundedTurnOptions,
 } from "./app-server/bounded-turn.js";
-import { isJsonObject, type CodexThreadItem } from "./app-server/protocol.js";
+import { projectCodexWebSearchItem } from "./app-server/web-search-item.js";
 import { buildCodexNativeWebSearchThreadConfig } from "./app-server/web-search.js";
 
 type WebSearchProviderContext = Parameters<WebSearchProviderPlugin["createTool"]>[0];
@@ -46,7 +43,7 @@ export async function executeCodexWebSearchProviderTool(
   });
   const searches = result.items
     .filter((item) => item.type === "webSearch")
-    .map(summarizeCodexWebSearchItem);
+    .map(projectCodexWebSearchItem);
   if (searches.length === 0) {
     throw new Error("Codex hosted search completed without invoking web search.");
   }
@@ -55,32 +52,8 @@ export async function executeCodexWebSearchProviderTool(
     provider: "codex",
     model: result.model,
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "codex",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("codex"),
     content: wrapWebContent(result.text, "web_search"),
     searches,
-  };
-}
-
-function summarizeCodexWebSearchItem(item: CodexThreadItem): Record<string, unknown> {
-  const action = isJsonObject(item.action) ? item.action : undefined;
-  const actionType = normalizeOptionalString(action?.type);
-  const queries = actionType === "search" ? normalizeTrimmedStringList(action?.queries) : [];
-  const query =
-    normalizeOptionalString(item.query) ??
-    (actionType === "search" ? normalizeOptionalString(action?.query) : undefined) ??
-    queries[0];
-  const url = normalizeOptionalString(action?.url);
-  const pattern = normalizeOptionalString(action?.pattern);
-  return {
-    ...(query ? { query } : {}),
-    ...(queries.length > 0 ? { queries } : {}),
-    ...(actionType && actionType !== "search" ? { action: actionType } : {}),
-    ...(url ? { url } : {}),
-    ...(pattern ? { pattern } : {}),
   };
 }

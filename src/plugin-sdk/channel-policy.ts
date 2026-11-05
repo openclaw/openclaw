@@ -1,4 +1,3 @@
-// Channel policy helpers evaluate plugin channel runtime policy and operator-facing warnings.
 import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeStringEntries,
@@ -232,19 +231,15 @@ export function collectStandardAllowlistLists(
 
 function stripMutableAllowEntryPrefixes(value: string, prefixes: readonly string[]): string {
   let current = value;
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const prefix of prefixes) {
-      if (current.slice(0, prefix.length).toLowerCase() !== prefix.toLowerCase()) {
-        continue;
-      }
-      current = current.slice(prefix.length).trim();
-      changed = true;
-      break;
+  for (;;) {
+    const prefix = prefixes.find(
+      (candidate) => current.slice(0, candidate.length).toLowerCase() === candidate.toLowerCase(),
+    );
+    if (prefix === undefined) {
+      return current;
     }
+    current = current.slice(prefix.length).trim();
   }
-  return current;
 }
 
 /** Build a mutable-name detector by stripping channel prefixes and recognizing stable IDs. */

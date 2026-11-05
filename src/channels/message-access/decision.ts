@@ -1,8 +1,3 @@
-/**
- * Channel ingress decision graph builder.
- *
- * Evaluates route, sender, command, and mention gates into one admission decision.
- */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveCommandAuthorizedFromAuthorizers } from "../command-gating.js";
 import {
@@ -27,21 +22,6 @@ import type {
   NormalizedIngressState,
   RedactedIngressMatch,
 } from "./types.js";
-
-function decisiveDecision(params: {
-  admission: ChannelIngressDecision["admission"];
-  decision: ChannelIngressDecision["decision"];
-  gate: AccessGraphGate;
-  gates: AccessGraphGate[];
-}): ChannelIngressDecision {
-  return {
-    admission: params.admission,
-    decision: params.decision,
-    decisiveGateId: params.gate.id,
-    reasonCode: params.gate.reasonCode,
-    graph: { gates: params.gates },
-  };
-}
 
 function routeGates(state: NormalizedIngressState): AccessGraphGate[] {
   // Route gates run first because a matched route can block dispatch before sender,
@@ -176,14 +156,6 @@ function eventGate(params: {
   if (authMode === "none" || authMode === "route-only") {
     return eventResult(true, "event_authorized");
   }
-  if (authMode === "command") {
-    // Command-auth events, such as button or slash command callbacks, inherit the command gate
-    // result instead of re-checking the sender allowlist.
-    return eventResult(
-      params.commandGate.allowed,
-      params.commandGate.allowed ? "event_authorized" : "event_unauthorized",
-    );
-  }
   if (authMode === "origin-subject") {
     // Origin-subject mode is used for callbacks tied to a prior message/user identity.
     if (!params.state.event.hasOriginSubject) {
@@ -206,56 +178,10 @@ function eventGate(params: {
       },
     };
   }
-  return eventResult(
-    params.senderGate.allowed,
-    params.senderGate.allowed ? "event_authorized" : "event_unauthorized",
-  );
-}
-
-function activationMetadata(params: {
-  activation?: ChannelIngressPolicyInput["activation"];
-  mentionFacts: NormalizedIngressState["mentionFacts"];
-  shouldSkip: boolean;
-  effectiveWasMentioned?: boolean;
-  shouldBypassMention?: boolean;
-}) {
-  const mentionFacts = params.mentionFacts;
-  const allowedImplicitMentionKinds = resolveAllowedImplicitMentionKinds(params.activation);
-  return {
-    hasMentionFacts: mentionFacts != null,
-    requireMention: params.activation?.requireMention ?? false,
-    allowTextCommands: params.activation?.allowTextCommands ?? false,
-    ...(allowedImplicitMentionKinds !== undefined ? { allowedImplicitMentionKinds } : {}),
-    ...(params.activation?.order ? { order: params.activation.order } : {}),
-    shouldSkip: params.shouldSkip,
-    ...(mentionFacts?.canDetectMention !== undefined
-      ? { canDetectMention: mentionFacts.canDetectMention }
-      : {}),
-    ...(mentionFacts?.wasMentioned !== undefined
-      ? { wasMentioned: mentionFacts.wasMentioned }
-      : {}),
-    ...(mentionFacts?.hasAnyMention !== undefined
-      ? { hasAnyMention: mentionFacts.hasAnyMention }
-      : {}),
-    ...(mentionFacts?.implicitMentionKinds !== undefined
-      ? { implicitMentionKinds: mentionFacts.implicitMentionKinds }
-      : {}),
-    ...(params.effectiveWasMentioned !== undefined
-      ? { effectiveWasMentioned: params.effectiveWasMentioned }
-      : {}),
-    ...(params.shouldBypassMention !== undefined
-      ? { shouldBypassMention: params.shouldBypassMention }
-      : {}),
-  };
-}
-
-function resolveAllowedImplicitMentionKinds(activation: ChannelIngressPolicyInput["activation"]) {
-  return (
-    activation?.allowedImplicitMentionKinds ??
-    (activation?.implicitMentions
-      ? allowedImplicitMentionKindsFromConfig(activation.implicitMentions)
-      : undefined)
-  );
+  // Command-auth events, such as button or slash command callbacks, inherit the command gate
+  // result instead of re-checking the sender allowlist.
+  const gate = authMode === "command" ? params.commandGate : params.senderGate;
+  return eventResult(gate.allowed, gate.allowed ? "event_authorized" : "event_unauthorized");
 }
 
 function activationGate(params: {
@@ -265,7 +191,11 @@ function activationGate(params: {
 }): AccessGraphGate {
   const activation = params.policy.activation;
   const mentionFacts = params.state.mentionFacts;
-  const allowedImplicitMentionKinds = resolveAllowedImplicitMentionKinds(activation);
+  const allowedImplicitMentionKinds =
+    activation?.allowedImplicitMentionKinds ??
+    (activation?.implicitMentions
+      ? allowedImplicitMentionKindsFromConfig(activation.implicitMentions)
+      : undefined);
   const activationResult = (input: {
     shouldSkip: boolean;
     effectiveWasMentioned?: boolean;
@@ -277,13 +207,32 @@ function activationGate(params: {
     effect: input.shouldSkip ? "skip" : "allow",
     allowed: !input.shouldSkip,
     reasonCode: input.shouldSkip ? "activation_skipped" : "activation_allowed",
-    activation: activationMetadata({
-      activation,
-      mentionFacts,
+    activation: {
+      hasMentionFacts: mentionFacts != null,
+      requireMention: activation?.requireMention ?? false,
+      allowTextCommands: activation?.allowTextCommands ?? false,
+      ...(allowedImplicitMentionKinds !== undefined ? { allowedImplicitMentionKinds } : {}),
+      ...(activation?.order ? { order: activation.order } : {}),
       shouldSkip: input.shouldSkip,
-      effectiveWasMentioned: input.effectiveWasMentioned,
-      shouldBypassMention: input.shouldBypassMention,
-    }),
+      ...(mentionFacts?.canDetectMention !== undefined
+        ? { canDetectMention: mentionFacts.canDetectMention }
+        : {}),
+      ...(mentionFacts?.wasMentioned !== undefined
+        ? { wasMentioned: mentionFacts.wasMentioned }
+        : {}),
+      ...(mentionFacts?.hasAnyMention !== undefined
+        ? { hasAnyMention: mentionFacts.hasAnyMention }
+        : {}),
+      ...(mentionFacts?.implicitMentionKinds !== undefined
+        ? { implicitMentionKinds: mentionFacts.implicitMentionKinds }
+        : {}),
+      ...(input.effectiveWasMentioned !== undefined
+        ? { effectiveWasMentioned: input.effectiveWasMentioned }
+        : {}),
+      ...(input.shouldBypassMention !== undefined
+        ? { shouldBypassMention: input.shouldBypassMention }
+        : {}),
+    },
   });
   if (!activation || !mentionFacts) {
     // Without activation policy or mention facts, sender/event authorization is enough.
@@ -317,13 +266,24 @@ export function decideChannelIngress(
   policy: ChannelIngressPolicyInput,
 ): ChannelIngressDecision {
   const gates: AccessGraphGate[] = routeGates(state);
+  const decide = (
+    gate: AccessGraphGate,
+    admission: ChannelIngressDecision["admission"],
+    decision: ChannelIngressDecision["decision"],
+  ): ChannelIngressDecision => ({
+    admission,
+    decision,
+    decisiveGateId: gate.id,
+    reasonCode: gate.reasonCode,
+    graph: { gates },
+  });
   const emptyRouteSenderGate = routeSenderEmptyGate(state);
   if (emptyRouteSenderGate) {
     gates.push(emptyRouteSenderGate);
   }
   const routeBlock = gates.find((entry) => entry.effect === "block-dispatch");
   if (routeBlock) {
-    return decisiveDecision({ admission: "drop", decision: "block", gate: routeBlock, gates });
+    return decide(routeBlock, "drop", "block");
   }
 
   // Some channels want mention gating before sender checks so unmentioned room chatter can
@@ -339,12 +299,7 @@ export function decideChannelIngress(
   if (activationBeforeSender) {
     gates.push(activationBeforeSender);
     if (activationBeforeSender.effect === "skip") {
-      return decisiveDecision({
-        admission: "skip",
-        decision: "allow",
-        gate: activationBeforeSender,
-        gates,
-      });
+      return decide(activationBeforeSender, "skip", "allow");
     }
   }
 
@@ -360,19 +315,19 @@ export function decideChannelIngress(
       eventModeSender.reasonCode === "dm_policy_pairing_required" ? "pairing-required" : "drop";
     const decision =
       eventModeSender.reasonCode === "dm_policy_pairing_required" ? "pairing" : "block";
-    return decisiveDecision({ admission, decision, gate: eventModeSender, gates });
+    return decide(eventModeSender, admission, decision);
   }
 
   const command = commandGate({ state, policy });
   gates.push(command);
   if (command.effect === "block-command") {
-    return decisiveDecision({ admission: "drop", decision: "block", gate: command, gates });
+    return decide(command, "drop", "block");
   }
 
   const event = eventGate({ state, policy, senderGate: eventModeSender, commandGate: command });
   gates.push(event);
   if (!event.allowed) {
-    return decisiveDecision({ admission: "drop", decision: "block", gate: event, gates });
+    return decide(event, "drop", "block");
   }
 
   const activation =
@@ -381,7 +336,7 @@ export function decideChannelIngress(
     gates.push(activation);
   }
   if (activation.effect === "skip") {
-    return decisiveDecision({ admission: "skip", decision: "allow", gate: activation, gates });
+    return decide(activation, "skip", "allow");
   }
-  return decisiveDecision({ admission: "dispatch", decision: "allow", gate: activation, gates });
+  return decide(activation, "dispatch", "allow");
 }

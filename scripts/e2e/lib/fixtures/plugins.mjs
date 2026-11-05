@@ -236,8 +236,6 @@ export const pluginCommands = {
   "plugin-cli": writePluginWithCli,
   "plugin-cli-registry-dep": writePluginWithCliRegistryDependency,
   "fake-is-number-package": ([dir]) => writeFakeIsNumberPackage(requireArg(dir, "dir")),
-  "plugin-manifest": ([file, id]) =>
-    writePluginManifest(requireArg(file, "file"), requireArg(id, "id")),
   "claude-bundle": writeClaudeBundle,
   marketplace: writePluginMarketplace,
 };

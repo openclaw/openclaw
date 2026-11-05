@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
@@ -54,13 +53,9 @@ export async function createRemoteShellSandboxBackend(
     ? resolvePreprovisionedRuntimePaths(options.preprovisionedWorkdir)
     : resolveRemoteShellRuntimePaths(params.cfg.ssh.workspaceRoot, params.scopeKey);
   return new RemoteShellSandboxBackendImpl({
+    ...options,
     createParams: params,
-    preprovisionedWorkdir: options.preprovisionedWorkdir,
     backendId: options.backendId ?? params.cfg.backend,
-    runtimeId: options.runtimeId,
-    configLabel: options.configLabel,
-    configLabelKind: options.configLabelKind,
-    createSession: options.createSession,
     runtimePaths,
   }).asHandle();
 }
@@ -71,14 +66,9 @@ class RemoteShellSandboxBackendImpl {
   private readonly pendingExecs = new WeakMap<object, PendingExec>();
 
   constructor(
-    private readonly params: {
+    private readonly params: RemoteShellSandboxBackendOptions & {
       createParams: CreateSandboxBackendParams;
-      preprovisionedWorkdir?: PreprovisionedRemoteWorkdir;
-      createSession: () => Promise<RemoteShellSandboxSession>;
       backendId: string;
-      runtimeId?: string;
-      configLabel?: string;
-      configLabelKind?: string;
       runtimePaths: ResolvedRemoteRuntimePaths;
     },
   ) {}
@@ -322,12 +312,9 @@ class RemoteShellSandboxBackendImpl {
   }
 
   private consumeRefreshedSkillsForNextExec(workdir: string): boolean {
-    if (this.refreshedSkillsForNextExecWorkdir !== workdir) {
-      this.refreshedSkillsForNextExecWorkdir = null;
-      return false;
-    }
+    const refreshed = this.refreshedSkillsForNextExecWorkdir === workdir;
     this.refreshedSkillsForNextExecWorkdir = null;
-    return true;
+    return refreshed;
   }
 
   private resolveWorkdirValidationRoot(workdir: string): string {
@@ -498,7 +485,8 @@ function buildRemoteShellRuntimeId(scopeKey: string): string {
   }
   // Keep the path human-readable while hashing the original scope to avoid
   // collisions after normalization and truncation.
-  const safe = normalizeLowercaseStringOrEmpty(trimmed)
+  const safe = trimmed
+    .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 32);

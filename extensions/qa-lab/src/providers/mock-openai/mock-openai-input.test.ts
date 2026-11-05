@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { resolveMockSubagentTurn } from "./mock-openai-input.js";
 
 const kickoff = { role: "user", content: "Subagent terminal reply QA check: fallback." };
-const settled = "[Subagent Context] Every subagent spawned from this session has now settled";
+const settled =
+  "[Subagent Context] Every subagent in this batch has now settled, including its descendants.";
 
 describe("terminal requester input", () => {
   it("recognizes the timestamped all-settled wake", () => {

@@ -40,9 +40,6 @@ export function createGatewayControlUiReloadOptions(
 }
 
 export function isSameOriginGateway(gatewayUrl: string): boolean {
-  try {
-    return new URL(gatewayUrl.replace(/^ws/u, "http")).origin === globalThis.location?.origin;
-  } catch {
-    return false;
-  }
+  const url = URL.parse(gatewayUrl.replace(/^ws/u, "http"));
+  return url !== null && url.origin === globalThis.location?.origin;
 }

@@ -14,7 +14,7 @@ struct MacNodeLocationServiceTests {
     }
 
     @Test(arguments: Delivery.allCases)
-    func `delegate result completes concurrent and legacy waiters and drains both stores`(
+    func `delegate result completes concurrent waiters and drains the store`(
         delivery: Delivery) async throws
     {
         let service = MacNodeLocationService()
@@ -29,18 +29,14 @@ struct MacNodeLocationServiceTests {
         let completed = XCTestExpectation(description: "all waiters completed")
         completed.expectedFulfillmentCount = 3
         completed.assertForOverFulfill = true
-        let waiters = [Waiter(requestID: UUID()), Waiter(requestID: UUID()), Waiter(requestID: nil)]
+        let waiters = [Waiter(), Waiter(), Waiter()]
         let tasks = waiters.map { waiter in
             Task { @MainActor in
                 guard !Task.isCancelled else { return }
                 do {
                     let location = try await withCheckedThrowingContinuation {
                         (continuation: CheckedContinuation<CLLocation, any Error>) in
-                        if let requestID = waiter.requestID {
-                            service.locationRequestContinuations[requestID] = continuation
-                        } else {
-                            service.locationRequestContinuation = continuation
-                        }
+                        service.locationRequestContinuations[waiter.requestID] = continuation
                         registered.fulfill()
                     }
                     waiter.result = .success(location)
@@ -48,7 +44,6 @@ struct MacNodeLocationServiceTests {
                     waiter.result = .failure(error)
                 }
                 #expect(service.locationRequestContinuations.isEmpty)
-                #expect(service.locationRequestContinuation == nil)
                 completed.fulfill()
             }
         }
@@ -58,14 +53,8 @@ struct MacNodeLocationServiceTests {
             }
             // A missing delegate completion must fail promptly without leaking its suspended waiter.
             for waiter in waiters where waiter.result == nil {
-                let continuation: CheckedContinuation<CLLocation, any Error>?
-                if let requestID = waiter.requestID {
-                    continuation = service.locationRequestContinuations.removeValue(forKey: requestID)
-                } else {
-                    continuation = service.locationRequestContinuation
-                    service.locationRequestContinuation = nil
-                }
-                continuation?.resume(throwing: CancellationError())
+                service.locationRequestContinuations.removeValue(forKey: waiter.requestID)?
+                    .resume(throwing: CancellationError())
             }
         }
         let ready = await XCTWaiter.fulfillment(of: [registered], timeout: 5)
@@ -107,16 +96,11 @@ struct MacNodeLocationServiceTests {
             }
         }
         #expect(service.locationRequestContinuations.isEmpty)
-        #expect(service.locationRequestContinuation == nil)
     }
 }
 
 @MainActor
 private final class Waiter {
-    let requestID: UUID?
+    let requestID = UUID()
     var result: Result<CLLocation, any Error>?
-
-    init(requestID: UUID?) {
-        self.requestID = requestID
-    }
 }

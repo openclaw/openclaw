@@ -1,4 +1,7 @@
-// Xai provider module implements model/runtime integration.
+import {
+  isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
+} from "openclaw/plugin-sdk/provider-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import type {
   SpeechProviderPlugin,
@@ -16,7 +19,7 @@ import {
   XAI_TTS_FALLBACK_VOICES,
   normalizeXaiTtsBaseUrl,
   type XaiSpeechResponseFormat,
-} from "./speech-provider-metadata.js";
+} from "./speech-provider-metadata-factory.js";
 import { listXaiTtsVoices, xaiTTS, xaiTTSStream } from "./tts.js";
 
 async function resolveXaiSpeechSynthesisRequest(
@@ -46,7 +49,10 @@ async function resolveXaiSpeechSynthesisRequest(
 
 export function buildXaiSpeechProvider() {
   return {
-    ...createXaiSpeechProviderMetadata(),
+    ...createXaiSpeechProviderMetadata({
+      isProviderAuthProfileConfigured,
+      isProviderAuthProfileConfiguredAsync,
+    }),
     listVoices: async (req) => {
       const config = readXaiSpeechProviderConfig(req.providerConfig ?? {});
       const directApiKey = normalizeOptionalString(req.apiKey) ?? config.apiKey;

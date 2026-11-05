@@ -21,7 +21,6 @@ scenario:
   codeRefs:
     - src/infra/ssh-tunnel.ts
     - src/commands/gateway-status.ts
-    - src/commands/gateway-status/probe-run.ts
     - test/e2e/qa-lab/runtime/gateway-ssh-tunnels.ts
   execution:
     allowBlockedEvidence: true

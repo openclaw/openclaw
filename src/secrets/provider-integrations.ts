@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ManualExecSecretProviderConfig,
@@ -9,6 +10,7 @@ import type {
 } from "../config/types.secrets.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
@@ -17,7 +19,7 @@ import type { PluginManifestSecretProviderIntegration } from "../plugins/manifes
 import { isValidSecretProviderAlias } from "./ref-contract.js";
 
 /** Secret provider preset exposed by an active trusted plugin integration. */
-export type SecretProviderIntegrationPreset = {
+type SecretProviderIntegrationPreset = {
   id: string;
   pluginId: string;
   providerAlias: string;
@@ -26,7 +28,6 @@ export type SecretProviderIntegrationPreset = {
   providerConfig: PluginIntegrationSecretProviderConfig;
 };
 
-/** Result of materializing a plugin integration into a manual exec provider config. */
 type SecretProviderIntegrationResolution =
   | {
       ok: true;
@@ -52,19 +53,13 @@ function resolveArg(arg: string, pluginRoot: string): string | undefined {
   return resolvePluginRelativePath(arg, pluginRoot);
 }
 
-function withNodeCommandTrustedDir(command: string, pluginRoot: string): string[] {
-  // The ${node} placeholder executes the current Node binary with a plugin-owned entrypoint.
-  // Trust both the Node binary dir and plugin root so resolver path checks accept that shape.
-  return command === NODE_COMMAND_PLACEHOLDER
-    ? [...new Set([path.dirname(process.execPath), pluginRoot])]
-    : [pluginRoot];
-}
-
 function isSecurePosixPathStat(stat: fs.Stats): boolean {
   if (process.platform === "win32") {
     return true;
   }
-  if ((stat.mode & 0o022) !== 0) {
+  // Match plugin discovery, which already loads this plugin's code at the same modes:
+  // group write is the default under user-private-group umasks (002), world write is not.
+  if ((stat.mode & 0o002) !== 0) {
     return false;
   }
   if (typeof process.getuid !== "function" || typeof stat.uid !== "number") {
@@ -75,17 +70,20 @@ function isSecurePosixPathStat(stat: fs.Stats): boolean {
 }
 
 function resolveNodeEntrypointArg(params: {
-  integration: PluginManifestSecretProviderIntegration;
+  args: readonly string[];
   pluginRoot: string;
   rejectHardlinks: boolean;
 }): string | undefined {
-  const entrypoint = params.integration.args?.[0];
+  const entrypoint = params.args[0];
   if (!entrypoint?.startsWith("./")) {
     return undefined;
   }
   const resolved = resolvePluginRelativePath(entrypoint, params.pluginRoot);
   if (!resolved) {
     return undefined;
+  }
+  if (isEmbeddedStandaloneModule(resolved)) {
+    return resolved;
   }
   try {
     const opened = openRootFileSync({
@@ -129,7 +127,7 @@ function materializeExecProviderConfig(
   env: NodeJS.ProcessEnv,
 ): ManualExecSecretProviderConfig | undefined {
   const pluginRoot = record.rootDir;
-  if (integration.command !== NODE_COMMAND_PLACEHOLDER) {
+  if (integration.command !== NODE_COMMAND_PLACEHOLDER || !integration.args) {
     return undefined;
   }
   const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
@@ -138,26 +136,24 @@ function materializeExecProviderConfig(
     env,
   });
   const nodeEntrypoint = resolveNodeEntrypointArg({
-    integration,
+    args: integration.args,
     pluginRoot,
     rejectHardlinks,
   });
   if (!nodeEntrypoint) {
     return undefined;
   }
-  const args = integration.args
-    ?.map((arg, index) =>
-      nodeEntrypoint && index === 0 ? nodeEntrypoint : resolveArg(arg, pluginRoot),
-    )
+  const tailArgs = integration.args
+    .slice(1)
+    .map((arg) => resolveArg(arg, pluginRoot))
     .filter((arg): arg is string => arg !== undefined);
-  if (integration.args && args?.length !== integration.args.length) {
+  if (tailArgs.length !== integration.args.length - 1) {
     return undefined;
   }
-  const trustedDirs = withNodeCommandTrustedDir(integration.command, pluginRoot);
   return {
     source: "exec",
     command: process.execPath,
-    ...(args ? { args } : {}),
+    args: [...resolveRuntimeArgs(), nodeEntrypoint, ...tailArgs],
     ...(integration.timeoutMs !== undefined ? { timeoutMs: integration.timeoutMs } : {}),
     ...(integration.noOutputTimeoutMs !== undefined
       ? { noOutputTimeoutMs: integration.noOutputTimeoutMs }
@@ -168,7 +164,8 @@ function materializeExecProviderConfig(
     ...(integration.jsonOnly === false ? { jsonOnly: false } : {}),
     ...(integration.env ? { env: integration.env } : {}),
     ...(integration.passEnv ? { passEnv: integration.passEnv } : {}),
-    trustedDirs,
+    // The Node placeholder needs both the executable and plugin entrypoint roots.
+    trustedDirs: [...new Set([path.dirname(process.execPath), pluginRoot])],
   };
 }
 
@@ -199,24 +196,10 @@ function integrationDisplayName(
   );
 }
 
-function createPluginIntegrationProviderConfig(params: {
-  pluginId: string;
-  integrationId: string;
-}): PluginIntegrationSecretProviderConfig {
-  return {
-    source: "exec",
-    pluginIntegration: {
-      pluginId: params.pluginId,
-      integrationId: params.integrationId,
-    },
-  };
-}
-
 function isValidPluginIntegrationProviderId(value: string): boolean {
   return value.length > 0 && value.length <= PLUGIN_INTEGRATION_PROVIDER_ID_MAX_LENGTH;
 }
 
-/** Narrows a secret provider config to the plugin-integration exec shape. */
 export function isPluginIntegrationSecretProviderConfig(
   value: unknown,
 ): value is PluginIntegrationSecretProviderConfig {
@@ -238,7 +221,6 @@ export function isPluginIntegrationSecretProviderConfig(
 }
 
 /** Materializes an active trusted plugin secret-provider integration into an exec provider. */
-/** Resolves a trusted plugin secret-provider integration into executable provider config. */
 export function resolveSecretProviderIntegrationConfig(params: {
   manifestRegistry: Pick<PluginManifestRegistry, "plugins">;
   providerAlias: string;
@@ -324,10 +306,10 @@ export function listSecretProviderIntegrationPresets(params: {
         providerAlias,
         displayName: integrationDisplayName(record, integrationId, integration),
         ...(integration.description ? { description: integration.description } : {}),
-        providerConfig: createPluginIntegrationProviderConfig({
-          pluginId: record.id,
-          integrationId,
-        }),
+        providerConfig: {
+          source: "exec",
+          pluginIntegration: { pluginId: record.id, integrationId },
+        },
       });
     }
   }

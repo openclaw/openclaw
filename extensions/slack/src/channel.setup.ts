@@ -38,7 +38,7 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
   reload: {
-    configPrefixes: ["channels.slack"],
+    configPrefixes: ["channels.slack", "approvals.plugin.slack"],
     noopPrefixes: [
       "messages.inbound",
       "messages.ackReactionScope",

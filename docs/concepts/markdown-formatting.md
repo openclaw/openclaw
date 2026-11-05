@@ -33,6 +33,11 @@ HTML-aware renderers interpret those tags; other renderers keep them literal or
 escape them. HTML block parsing stays disabled so Markdown inside containers
 still works, and bare URLs in their bodies retain normal linkification.
 
+Generated inline code uses CommonMark padding to preserve meaningful edge spaces,
+including values containing tabs or non-breaking spaces. All-space values stay
+unpadded. Workspace filenames continue escaping carriage returns and line feeds
+instead of creating Markdown block boundaries.
+
 Examples of shared IR renderers:
 
 | Channel  | Renderer                                                                             | Notes                                                                                    |
@@ -42,6 +47,11 @@ Examples of shared IR renderers:
 | Slack    | mrkdwn tokens (`*bold*`, `_italic_`, `` `code` ``, code fences)                      | Links become `<url\|label>`; autolink disabled during parse to avoid double-linking      |
 | Telegram | HTML tags (`<b>`, `<i>`, `<s>`, `<code>`, `<pre><code>`, `<a href>`, `<tg-spoiler>`) | Also supports rich-message tables and headings (`<h1>`-`<h6>`) when `richMessages` is on |
 | WhatsApp | WhatsApp style markers                                                               | Uses shared IR; styled chunks are measured after rendering                               |
+
+Slack and WhatsApp emit `>` followed by a space on each nonempty blockquote line, including lines
+continued into later message chunks. Prefixes are added while rendering, so they
+count toward each channel's message limit without changing IR span offsets.
+Fenced code contents keep their literal lines rather than receiving quote markers.
 
 ## IR example
 
@@ -145,6 +155,13 @@ content is hidden or lost.
    outbound send path.
 5. **Test** with format tests plus an outbound delivery test if the channel
    chunks.
+
+For disjoint text replacements and insertions, `openclaw/plugin-sdk/text-chunking`
+exports `applyMarkdownTextEdits(text, edits)`. Edits use UTF-16 source coordinates;
+the result contains the edited `text` and `mapOffset` for boundaries outside
+replaced interiors. Each edit shifts offsets at and after its end. Insertions at
+the same position retain caller order and precede a replacement starting there.
+Renderers decide which styles include replacement text.
 
 ## Common gotchas
 

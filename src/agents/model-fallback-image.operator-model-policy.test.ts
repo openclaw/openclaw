@@ -47,19 +47,34 @@ describe("operator model policy on image fallback", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("keeps permitted configured fallbacks in order", async () => {
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("try the next candidate"))
-      .mockResolvedValueOnce("answer");
-    await expect(
-      runWithImageModelFallback({ cfg, manifestPlugins: [], operatorAuthority: operator(), run }),
-    ).resolves.toMatchObject({ result: "answer", model: "backup" });
-    expect(run.mock.calls).toEqual([
-      ["test-provider", "allowed"],
-      ["test-provider", "backup"],
-    ]);
-  });
+  it.each([true, false])(
+    "keeps configured candidates in order (restricted: %s)",
+    async (restricted) => {
+      const run = vi.fn();
+      if (restricted) {
+        run.mockRejectedValueOnce(new Error("try the next candidate"));
+      }
+      run.mockResolvedValueOnce("answer");
+      const authority = restricted
+        ? operator()
+        : createAdmittedRunOperatorAuthority({
+            profileId: "staff-reader",
+            scopes: ["operator.write"],
+            assertCurrent: () => {},
+          });
+      await expect(
+        runWithImageModelFallback({ cfg, manifestPlugins: [], operatorAuthority: authority, run }),
+      ).resolves.toMatchObject({ result: "answer", model: restricted ? "backup" : "blocked" });
+      expect(run.mock.calls).toEqual(
+        restricted
+          ? [
+              ["test-provider", "allowed"],
+              ["test-provider", "backup"],
+            ]
+          : [["test-provider", "blocked"]],
+      );
+    },
+  );
 
   it("stops the chain when the original requester retires", async () => {
     let active = true;
@@ -76,18 +91,5 @@ describe("operator model policy on image fallback", () => {
       runWithImageModelFallback({ cfg, manifestPlugins: [], operatorAuthority: authority, run }),
     ).rejects.toThrow(/retired|no longer active/);
     expect(run).toHaveBeenCalledOnce();
-  });
-
-  it("preserves the configured default for an unrestricted operator", async () => {
-    const run = vi.fn(async () => "answer");
-    const authority = createAdmittedRunOperatorAuthority({
-      profileId: "staff-reader",
-      scopes: ["operator.write"],
-      assertCurrent: () => {},
-    });
-    await expect(
-      runWithImageModelFallback({ cfg, manifestPlugins: [], operatorAuthority: authority, run }),
-    ).resolves.toMatchObject({ result: "answer", model: "blocked" });
-    expect(run).toHaveBeenCalledExactlyOnceWith("test-provider", "blocked");
   });
 });

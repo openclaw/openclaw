@@ -164,7 +164,10 @@ struct ChatInputHistory: Equatable, Sendable {
     }
 
     private mutating func restoreRecall(_ marker: RecallMarker) {
-        self.cursor = Self.index(ofOccurrence: marker.occurrence, value: marker.value, in: self.entries)
+        let entries = self.entries
+        self.cursor = entries.indices.reversed().lazy
+            .filter { entries[$0] == marker.value }
+            .dropFirst(marker.occurrence - 1).first
         if self.cursor == nil {
             self.resetNavigation()
         }
@@ -213,15 +216,6 @@ struct ChatInputHistory: Equatable, Sendable {
             where haystack[start..<(start + needle.count)].elementsEqual(needle)
         {
             return start..<(start + needle.count)
-        }
-        return nil
-    }
-
-    private static func index(ofOccurrence occurrence: Int, value: String, in entries: [String]) -> Int? {
-        var seen = 0
-        for (index, entry) in entries.enumerated().reversed() where entry == value {
-            seen += 1
-            if seen == occurrence { return index }
         }
         return nil
     }

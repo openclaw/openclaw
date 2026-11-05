@@ -9,7 +9,7 @@ the active release identity from the repository and App Store Connect.
 - keep the associated gateway version recognizable
 - support multiple public iOS releases per gateway version
 - support multiple candidate builds per App Store version
-- make every release identity deterministic and inspectable before upload
+- calculate every release identity from the current release state and make it inspectable before upload
 - keep Apple bundle fields valid for App Store Connect
 - generate version-specific App Store release notes from changes since the last public build
 
@@ -44,14 +44,28 @@ exact versions again; all future uploads use the appended single-digit format.
 
 ## Release commands
 
-Run **iOS Store Release** in GitHub Actions from `main`, or use the same release entry
-point from a clean local `main` checkout that matches `origin/main`:
+Run **iOS Store Release** in GitHub Actions from `main` with the default **release**
+operation. With the GitHub CLI:
+
+```bash
+gh workflow run ios-store-release.yml --ref main
+```
+
+The same store release runs automatically every **Monday at 11:00 AM Pacific**,
+using `America/Los_Angeles` for daylight saving time. Weekly releases require
+native qualification and use `ios-store-release`; they are independent of the
+daily TestFlight enable switch. Only weekly store runs send Discord results.
+See [weekly mobile releases](https://docs.openclaw.ai/ci/scheduled-workflows#weekly-mobile-store-releases)
+for notification setup and scheduling behavior.
+
+Or use the same release entry point from a clean local `main` checkout that matches
+`origin/main`:
 
 ```bash
 pnpm ios:release:upload
 ```
 
-GitHub releases freeze the `main` commit selected when the workflow is dispatched,
+GitHub releases freeze the `main` commit selected when the workflow is triggered,
 even if `main` advances while the run is queued. Local releases freeze current
 `main`. The entry point freezes the live plan, generates and reviews release
 notes from Git history, and saves them in an immutable JSON
@@ -76,6 +90,65 @@ overrides, never alternate release identities. No release arguments are required
 pnpm ios:release:archive -- --version 2026.7.2 --revision 1 --build-number 3
 ```
 
+## TestFlight distribution
+
+Run **iOS Store Release** with operation **testflight** from `main`:
+
+```bash
+gh workflow run ios-store-release.yml --ref main -f operation=testflight
+```
+
+The same local entry point accepts the destination explicitly:
+
+```bash
+OPENCLAW_TESTFLIGHT_GROUP_ID="<EXTERNAL_GROUP_ID>" pnpm ios:release:upload -- --destination testflight
+```
+
+The TestFlight schedule runs daily at **7:00 AM America/Los_Angeles**, including
+daylight saving time. GitHub may delay scheduled jobs. Both release destinations
+share the `ios-release` concurrency lock. Manual and scheduled TestFlight runs
+skip native release qualification; App Store releases require it to pass.
+TestFlight uses the main-only `ios-testflight` environment without per-run
+approval; App Store staging retains `ios-store-release` and its approval rules.
+See [environment setup](fastlane/SETUP.md#github-actions) for activation and
+credentials.
+
+TestFlight uses the existing **External Testing** group, pinned by
+`OPENCLAW_TESTFLIGHT_GROUP_ID`, and the beta metadata configured in App Store
+Connect. The preflight validates group ownership and external-testing status,
+and required beta contact and review information before archiving. It does not capture store screenshots, stage listing metadata, select
+an App Store build, or submit a public App Store version for App Review.
+
+The planner allocates builds within the current gateway's TestFlight train using
+Apple's upload history, independently of whether an App Store draft is editable.
+It preserves pending beta reviews and defers a new same-train upload while one
+is pending. An unchanged source SHA is skipped only when its build is awaiting
+review or available to testers and the group, notes, and automatic notification
+settings are verified. Each skip or deferral records its reason in
+`testflight-result.json`.
+
+If the same source already has a build selected by the App Store draft, is ready
+for beta submission, and has no beta notes, TestFlight reuses it. The attempt saves
+a TestFlight plan and new beta notes, then stages that exact build without another
+archive or upload. Builds with existing beta notes require their saved recovery
+artifacts so a partial distribution cannot silently regenerate its notes.
+
+After processing, the pipeline saves the immutable source ref, writes the saved
+What to Test notes, assigns the external group, and submits for TestFlight review
+when the build is eligible. Automatic tester notification distributes the build
+after Apple approves it. Distribution readback checks the external group,
+automatic notification, and exact saved notes up to 12 times, with 10 seconds
+between mismatches. Only reads repeat; distribution is not resubmitted. If the
+checks still disagree, the error names the mismatched fields for saved-artifact
+staging recovery. The result distinguishes pending review from a build
+available to testers; the runner does not wait for human review. Apple determines
+whether each build requires review, so the schedule is a daily distribution
+attempt rather than a guarantee of daily availability.
+
+If distribution fails after upload, use [staging recovery](#staging-recovery)
+with the saved artifacts. Recovery reads the destination from `ios-plan.json`
+and resumes the same build without another upload or regenerated notes.
+
 ## Screenshot-only validation
 
 Run **iOS Store Release** with operation **screenshots** and select the candidate
@@ -90,13 +163,63 @@ pnpm ios:screenshots
 The command builds the simulator app, captures four screenshots each on iPhone
 and 13-inch iPad, and captures the Apple Watch screenshot. It does not generate
 release notes, archive an IPA, or access signing assets or App Store credentials.
-The existing release operation remains restricted to `main`.
+Both upload operations remain restricted to `main`.
 
 Capture creates a fresh simulator for each selected device type and runtime,
 then shuts down and deletes that exact simulator before starting the next one.
 An already running simulator stops the command before capture; shut it down
 when it is no longer in use and rerun. This changes only the screenshot
 environment, not the app's rendered states.
+
+Each iPhone or iPad runs its four screenshot tests in one XCTest session. Every
+test launches and terminates the app independently, using its explicit destination
+and screenshot fixtures. The lane requires all four tests to pass exactly once
+and all four fresh PNGs to exist; failures stop capture without retrying. One
+result bundle and one attempt record are retained per device.
+
+Immediately before Watch capture, the shared lane resolves the runtime and creates
+its simulator. CI can repair a missing or unavailable Watch runtime once, including
+when it disappears during the phone or tablet captures. The repair replaces only
+the selected Watch runtime's registered image, or installs it if absent, and logs
+runtime availability, image state, and mounted-path existence without filesystem
+paths. Local runs leave runtime installation to the operator. Boot and capture
+failures still stop the lane without retrying screenshots. Before creating the
+Watch simulator, CI waits up to two minutes for pending Watch runtime cleanup:
+the selected Watch runtime must have one `Ready` registration, an actual mount,
+and an existing runtime bundle. When a mounted, ready replacement exists, CI
+retires only its unmounted `Unusable` registrations and keeps their shared asset.
+`Deleting` registrations remain owned by CoreSimulator. The lane does not boot a
+simulator on a volume it is still removing.
+
+A patchable Watch cryptex mounted through the plain disk-image fallback can be
+re-imported by CoreSimulator's periodic scan, shutting down an active Watch. CI
+stabilizes that fallback before simulator creation: clone its same-version runtime
+DMG into a temporary directory, retire the original image and MobileAsset through
+`simctl runtime delete`, then stage the clone with `simctl runtime add`. Import
+requires the old asset to be gone; the replacement must be `Ready` and `Verified`
+with an existing runtime bundle. The temporary clone is removed on success or
+failure. This also applies when the one-time missing-runtime download produces
+the same fallback. Healthy cryptex mounts and already staged disk images skip this
+repair. Local runs leave installation to the operator.
+
+An unavailable runtime can still have its downloaded fallback DMG. Repair checks
+for that package before deleting the registration and uses the same clone-and-stage
+path. This avoids downloading the asset again and creating shared registrations
+whose cleanup can remove the replacement runtime. Missing cached packages keep
+the existing delete-and-download repair. If Apple removes only the
+registration, repair waits up to two minutes for the retained asset to re-register
+before the existing targeted deletion retry; a temporarily empty inventory does
+not establish that cleanup finished.
+
+Registrations already marked `Deleting` are left to CoreSimulator and excluded
+from repair candidates. More than one remaining registration still stops the
+repair before it deletes anything.
+
+If Apple removes the Watch runtime registration but cannot reclaim its MobileAsset,
+CI follows Apple's recovery instruction once: scan and mount orphaned runtimes,
+resolve the selected Watch image again, and retry its deletion before downloading.
+Other errors or a second deletion failure stop the repair. The replacement must
+report `Ready` with an existing mounted runtime directory before simulator creation.
 
 The screenshot-only job enables `OPENCLAW_SNAPSHOT_DIAGNOSTICS=1`. To collect the
 same diagnostics locally:
@@ -105,9 +228,13 @@ same diagnostics locally:
 OPENCLAW_SNAPSHOT_DIAGNOSTICS=1 pnpm ios:screenshots
 ```
 
-Sanitized startup, resource, and crash facts are recorded in
-`apps/ios/build/screenshot-diagnostics.json`. The separate
-`capture-attempts.json` ledger keeps its existing schema for release evidence.
+Phase timings, simulator counts, and sanitized startup and crash facts are recorded in
+`apps/ios/build/screenshot-diagnostics.json`. Resource observations come from the
+separate [background timeline](fastlane/SETUP.md#temporary-resource-investigation),
+without blocking screenshot phases on native resource probes. The separate
+`capture-attempts.json` ledger records device invocations in schema version 2.
+The release evidence manifest uses the same version and includes the exact four
+passing test identities for each iPhone and iPad bundle.
 GitHub retains both files and fixture PNGs in
 `ios-screenshots-<run-id>-<run-attempt>`. Raw Xcode logs and XCTest result bundles
 are excluded from the uploaded diagnostics.
@@ -137,7 +264,7 @@ therefore the appended App Store version.
   numbers; every Apple-visible upload reservation or attempt does.
 - App Review submission remains manual.
 
-Before screenshot or archive work, the upload lane checks App Store Connect:
+Before screenshot or archive work, the App Store destination checks App Store Connect:
 
 - an absent version may be created during metadata staging
 - the one editable version for the current gateway is reused
@@ -145,7 +272,7 @@ Before screenshot or archive work, the upload lane checks App Store Connect:
 - an unreleased revision present only in build-upload history is retried
 - a distributed version requires the next revision
 - multiple active versions, a different active gateway, and unknown upload
-  states fail closed for human resolution
+  states block the upload until a person resolves them
 
 Only one iOS release uploader may run at a time. The pipeline rechecks the
 exact plan after local archive and Transporter validation, immediately before
@@ -173,9 +300,11 @@ commit subjects. Focused endpoint diffs support the notes; current source and
 build configuration check feature availability. Localization catalogs contribute
 structural summaries instead of raw translation diffs. A separate factual review
 can request one correction. Each stage reports progress, with at most five model
-requests per audience and a five-minute generation budget. Exhausted budgets or
-unapproved notes stop preparation before upload. Retrying a saved, valid artifact
-reuses its exact text without another model call.
+stages per audience. Each stage permits one SDK retry for a transient connection,
+timeout, or retryable API failure, including backoff within the unchanged
+five-minute generation budget. Exhausted budgets or unapproved notes stop
+preparation before upload. Retrying a saved, valid artifact reuses its exact text
+without another model call.
 
 After Apple processes the IPA, the pipeline records its source ref, writes
 What's New, selects that exact build, and reads both back. For the sole first
@@ -204,12 +333,13 @@ Generated or derived files:
 - `apps/ios/build/AppStoreRelease.xcconfig`
 - `apps/ios/SwiftSources.input.xcfilelist`
 - `ios-plan.json` and `release-notes.json` in the printed recovery directory
+- `testflight-result.json` for TestFlight outcomes, including skips and pending review
 - temporary Fastlane metadata for screenshots and the App Review attachment
 
-The canonical implementation is split across:
+The implementation is split across:
 
 - `scripts/lib/ios-version.ts`: version validation, encoding, and historical changelog rendering
-- `scripts/lib/ios-release-plan.ts`: deterministic revision/build selection and
+- `scripts/lib/ios-release-plan.ts`: repeatable revision/build selection and
   changelog cutting
 - `scripts/ios-version.ts`: JSON, shell, and single-field queries
 - `scripts/ios-release-plan.ts`: pure planner CLI used by the Fastlane adapter
@@ -237,8 +367,15 @@ refs/openclaw/mobile-releases/ios/2026.7.21-3
 
 The ref is checked before archive/upload work and created only after App Store
 Connect finishes processing the upload, before notes and build selection are
-staged. Existing refs are immutable; their presence proves the uploaded source,
-not successful completion of later staging.
+staged or TestFlight distribution begins. Existing refs are immutable; their
+presence proves the uploaded source, not successful completion of later staging.
+
+Source-ref reads and writes tolerate recognized transient Git failures, including
+GitHub's workflow-check timeout, with up to four attempts and waits of 5, 10, and
+20 seconds. Every push is reconciled against the remote ref before another
+attempt; an unreadable remote never authorizes another push. Authentication
+failures and conflicting source SHAs stop the release. These retries do not
+repeat the build or upload.
 
 ## Normal workflow
 
@@ -253,23 +390,29 @@ not successful completion of later staging.
 
 ## Staging recovery
 
-If upload and processing succeeded but saving notes or selecting the build
-failed, retain the printed recovery directory or download its workflow artifact.
-Retry staging from a clean checkout using that original saved state:
+If upload and processing succeeded but saving notes, selecting the App Store
+build, or completing TestFlight distribution failed, retain the printed recovery
+directory or download its workflow artifact.
+Retry staging from a clean checkout containing any staging fixes, using that
+original saved state:
 
 ```bash
 node scripts/mobile-release.mjs stage --platform ios --recovery-dir /path/to/recovery
 ```
 
-This verifies the immutable upload ref, restores the original source if needed,
-and uses the saved notes and build identity. It does not generate new notes,
-replan a release, build, or upload another IPA. App Store Connect credentials
-are required. A locked version, invalid or expired build, newer selected build,
-or mismatched source stops recovery for human resolution. Partial staging can
-be retried with the same command after the cause is fixed.
+This runs the current checkout's staging tooling, verifies the immutable upload
+ref, and restores the original source if needed to validate the saved notes and
+build identity. The staging fixes do not change the uploaded source. Recovery
+does not generate new notes, replan a release, build, or upload another IPA.
+App Store Connect credentials
+are required. Invalid or expired builds and mismatched source stop recovery for
+human resolution. App Store recovery also refuses a locked version or newer
+selected build. TestFlight recovery uses the saved group identity and existing
+review submission, and records the current distribution state. Partial staging
+can be retried with the same command after the cause is fixed.
 
-The recovery directory contains the saved plan and notes, any exported signed
-binaries under `artifacts/`, and screenshot fixture PNGs and the capture-attempt
+The recovery directory contains the saved plan and notes, the TestFlight result
+when applicable, any exported signed binaries under `artifacts/`, and screenshot fixture PNGs and the capture-attempt
 ledger under `screenshot-diagnostics/`. Raw Xcode logs and XCTest results are
 excluded because they can contain credentials. Failed local attempts also keep
 their source worktree; staging recovery can restore source from the immutable

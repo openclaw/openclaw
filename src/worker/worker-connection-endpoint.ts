@@ -35,10 +35,7 @@ export const WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES = Math.max(
 );
 
 export class WorkerConnectionEndpointError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "WorkerConnectionEndpointError";
-  }
+  override name = "WorkerConnectionEndpointError";
 }
 
 const AccessCredential = z
@@ -91,8 +88,7 @@ export type WorkerConnectionEndpoint = z.infer<typeof EndpointSchema>;
 export function parseWorkerConnectionEndpoint(
   value: unknown,
 ): WorkerConnectionEndpoint | undefined {
-  const parsed = EndpointSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  return EndpointSchema.safeParse(value).data;
 }
 
 type WorkerConnectionTarget = {

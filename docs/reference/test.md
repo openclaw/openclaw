@@ -8,17 +8,33 @@ title: "Tests"
 - Full testing kit (suites, live, Docker): [Testing](/help/testing)
 - Update and plugin package validation: [Testing updates and plugins](/help/testing-updates-plugins)
 
+For proof selection, follow the canonical
+[proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy).
+
 This page is an index. The testing reference is documented on six pages, one
 per reader job. Open the page that matches your task.
 
 | Page                                                           | Read it when                                                                       |
 | -------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| [Run tests locally](/reference/test/local)                     | The routine local order, the core command table, and the local PR gate.            |
+| [Run tests locally](/reference/test/local)                     | Focused local proof, the core command table, and optional full local runs.         |
 | [Control UI, TUI, and E2E lanes](/reference/test/lanes)        | Control UI, TUI, extension, Gateway, and live lane commands and fixture rules.     |
 | [Docker test suites](/reference/test/docker)                   | The weighted Docker scheduler, its knobs, and the notable Docker lanes.            |
 | [Test performance and benchmarks](/reference/test/performance) | Import profiling, CPU and heap profiles, shard timings, and the benchmark scripts. |
 | [Test runner internals](/reference/test/runner-internals)      | Shared build locks, isolated test state and homes, and JSON report merging.        |
 | [Remote test proof](/reference/test/remote-proof)              | When agents use Crabbox or Testbox, and the wrapper, lease, and trust rules.       |
+
+## Local command guidance
+
+For ordinary local tests, start at `docs/reference/test.md#routine-local-order`
+([routine local order](/reference/test/local#routine-local-order)) and
+`#core-commands`; read [CI](/ci) when scope or runner behavior matters.
+Follow the touched subtree's `AGENTS.md`.
+
+`pnpm verify` runs the full `check` and then `test` when that scope is justified.
+For worker-sensitive failures, `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path>`
+provides a focused serial probe; do not make a forced environment the repair.
+Inspect changed checks with `node scripts/check-changed.mjs --dry-run -- <paths...>`
+before running the selected plan.
 
 ## Where each section moved
 

@@ -3,25 +3,12 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 import {
   applyAnthropicEphemeralCacheControlMarkers,
   projectCopilotRequestFacts,
+  wrapProviderPayloadHook,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeCopilotReplayResponsePayload } from "./connection-bound-ids.js";
 import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
 import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
-
-function patchOnPayloadResult(
-  result: unknown,
-  patchPayload: (payload: unknown) => unknown,
-  fallbackPayload?: unknown,
-): unknown {
-  if (result && typeof result === "object" && "then" in result) {
-    return Promise.resolve(result).then((next) => {
-      patchPayload(next === undefined ? fallbackPayload : next);
-      return next;
-    });
-  }
-  patchPayload(result === undefined ? fallbackPayload : result);
-  return result;
-}
 
 type CopilotAnthropicToolBlock = {
   record: Record<string, unknown>;
@@ -32,18 +19,15 @@ type CopilotAnthropicToolBlock = {
 function normalizeCopilotAnthropicToolIds(messages: unknown[]): void {
   const blocks: CopilotAnthropicToolBlock[] = [];
   for (const message of messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    const content = (message as { content?: unknown }).content;
+    const content = asOptionalObjectRecord(message)?.content;
     if (!Array.isArray(content)) {
       continue;
     }
     for (const block of content) {
-      if (!block || typeof block !== "object") {
+      const record = asOptionalObjectRecord(block);
+      if (!record) {
         continue;
       }
-      const record = block as Record<string, unknown>;
       const idKey =
         record.type === "tool_use" ? "id" : record.type === "tool_result" ? "tool_use_id" : null;
       const rawId = idKey ? record[idKey] : undefined;
@@ -115,16 +99,34 @@ function normalizeCopilotAnthropicToolIds(messages: unknown[]): void {
 }
 
 function patchCopilotAnthropicPayload(payload: unknown): void {
-  if (!payload || typeof payload !== "object") {
+  const record = asOptionalObjectRecord(payload);
+  if (!record) {
     return;
   }
-  const record = payload as Record<string, unknown>;
   if (Array.isArray(record.messages)) {
     const messages = stripCopilotAssistantThinkingMessages(record.messages);
     record.messages = messages;
     normalizeCopilotAnthropicToolIds(messages);
   }
   applyAnthropicEphemeralCacheControlMarkers(record);
+}
+
+/** Direct completions skip the agent wrapper but still need Copilot's request identity. */
+export function wrapCopilotSimpleCompletionStream(
+  ctx: ProviderWrapStreamFnContext,
+): StreamFn | undefined {
+  const stream = ctx.streamFn;
+  if (!stream) {
+    return undefined;
+  }
+  return (model, context, options) =>
+    stream(model, context, {
+      ...options,
+      headers: buildCopilotRuntimeHeaders({
+        config: ctx.config,
+        headers: { ...model.headers, ...options?.headers },
+      }),
+    });
 }
 
 export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
@@ -160,14 +162,15 @@ export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): Str
       }),
       ...(patchPayload
         ? {
-            onPayload: (payload: unknown, payloadModel: Parameters<StreamFn>[0]) => {
-              patchPayload(payload);
-              return patchOnPayloadResult(
+            onPayload: wrapProviderPayloadHook(
+              (payload, payloadModel) =>
                 originalOnPayload?.(payload, anthropic ? model : payloadModel),
-                patchPayload,
-                payload,
-              );
-            },
+              (payload, result) => {
+                patchPayload(result === undefined ? payload : result);
+                return result;
+              },
+              (payload) => patchPayload(payload),
+            ),
           }
         : {}),
     });

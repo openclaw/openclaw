@@ -1,4 +1,3 @@
-// Builds documentation baselines from config schema metadata.
 import fsSync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +6,7 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { resolveRepoBundledPluginEnv } from "./repo-bundled-plugin-env.js";
 import type { ConfigSchemaResponse } from "./schema.js";
 import {
@@ -52,12 +51,6 @@ type ConfigDocBaseline = {
   pluginEntries: ConfigDocBaselineEntry[];
 };
 
-type ConfigDocBaselineKindBaseline = {
-  generatedBy: "scripts/generate-config-doc-baseline.ts";
-  kind: ConfigDocBaselineKind;
-  entries: ConfigDocBaselineEntry[];
-};
-
 type ConfigDocBaselineArtifacts = {
   combined: string;
   core: string;
@@ -92,8 +85,6 @@ const DEFAULT_CHANNEL_OUTPUT = "docs/.generated/config-baseline.channel.json";
 const DEFAULT_PLUGIN_OUTPUT = "docs/.generated/config-baseline.plugin.json";
 const DEFAULT_HASH_OUTPUT = "docs/.generated/config-baseline.sha256";
 const DEFAULT_COUNTS_OUTPUT = "docs/.generated/config-baseline.counts.json";
-// A successful schema snapshot is process-stable; failures clear below so tooling can retry.
-let cachedConfigDocBaselinePromise: Promise<ConfigDocBaseline> | null = null;
 const uiHintIndexCache = new WeakMap<
   ConfigSchemaResponse["uiHints"],
   Map<number, Array<{ parts: string[]; hint: ConfigSchemaResponse["uiHints"][string] }>>
@@ -114,8 +105,6 @@ function resolveRepoRoot(): string {
   }
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 }
-
-const loadDocBaselineRuntime = createLazyRuntimeModule(() => import("./doc-baseline.runtime.js"));
 
 function normalizeBaselinePath(rawPath: string): string {
   return rawPath
@@ -241,13 +230,6 @@ function normalizeTypeValue(value: string | string[] | undefined): string | stri
   return value;
 }
 
-function mergeTypeValues(
-  left: string | string[] | undefined,
-  right: string | string[] | undefined,
-): string | string[] | undefined {
-  return normalizeTypeValue([left, right].flatMap((value) => value || []));
-}
-
 function mergeJsonValueArrays(
   left: JsonValue[] | undefined,
   right: JsonValue[] | undefined,
@@ -280,7 +262,7 @@ function mergeConfigDocBaselineEntry(
   return {
     path: current.path,
     kind: current.kind,
-    type: mergeTypeValues(current.type, next.type),
+    type: normalizeTypeValue([current.type, next.type].flatMap((value) => value || [])),
     required: current.required && next.required,
     enumValues: mergeJsonValueArrays(current.enumValues, next.enumValues),
     defaultValue,
@@ -305,7 +287,7 @@ function resolveEntryKind(configPath: string): ConfigDocBaselineKind {
 
 async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> {
   const repoRoot = resolveRepoRoot();
-  const runtime = await loadDocBaselineRuntime();
+  const runtime = await import("./doc-baseline.runtime.js");
   const env = resolveRepoBundledPluginEnv(path.join(repoRoot, "extensions"));
 
   const manifestRegistry = runtime.loadPluginManifestRegistry({
@@ -426,65 +408,32 @@ function dedupeConfigDocBaselineEntries(
   );
 }
 
-function splitConfigDocBaselineEntries(entries: ConfigDocBaselineEntry[]): {
-  coreEntries: ConfigDocBaselineEntry[];
-  channelEntries: ConfigDocBaselineEntry[];
-  pluginEntries: ConfigDocBaselineEntry[];
-} {
-  const byKind: Record<ConfigDocBaselineKind, ConfigDocBaselineEntry[]> = {
-    core: [],
-    channel: [],
-    plugin: [],
+const buildConfigDocBaseline = createLazyPromise(async (): Promise<ConfigDocBaseline> => {
+  const response = await loadBundledConfigSchemaResponse();
+  const schemaRoot = asSchemaObject(response.schema);
+  if (!schemaRoot) {
+    throw new Error("config schema root is not an object");
+  }
+  const entries = dedupeConfigDocBaselineEntries(
+    collectConfigDocBaselineEntries(schemaRoot, response.uiHints),
+  );
+  const baseline: ConfigDocBaseline = {
+    generatedBy: GENERATED_BY,
+    coreEntries: [],
+    channelEntries: [],
+    pluginEntries: [],
   };
   for (const entry of entries) {
-    byKind[entry.kind].push(entry);
+    baseline[`${entry.kind}Entries`].push(entry);
   }
-  return {
-    coreEntries: byKind.core,
-    channelEntries: byKind.channel,
-    pluginEntries: byKind.plugin,
-  };
-}
-
-async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
-  if (cachedConfigDocBaselinePromise) {
-    return await cachedConfigDocBaselinePromise;
-  }
-  cachedConfigDocBaselinePromise = (async () => {
-    const response = await loadBundledConfigSchemaResponse();
-    const schemaRoot = asSchemaObject(response.schema);
-    if (!schemaRoot) {
-      throw new Error("config schema root is not an object");
-    }
-    const entries = dedupeConfigDocBaselineEntries(
-      collectConfigDocBaselineEntries(schemaRoot, response.uiHints),
-    );
-    const { coreEntries, channelEntries, pluginEntries } = splitConfigDocBaselineEntries(entries);
-    return {
-      generatedBy: GENERATED_BY,
-      coreEntries,
-      channelEntries,
-      pluginEntries,
-    };
-  })();
-  try {
-    return await cachedConfigDocBaselinePromise;
-  } catch (error) {
-    cachedConfigDocBaselinePromise = null;
-    throw error;
-  }
-}
+  return baseline;
+});
 
 function renderKindBaseline(
   kind: ConfigDocBaselineKind,
   entries: ConfigDocBaselineEntry[],
 ): string {
-  const baseline: ConfigDocBaselineKindBaseline = {
-    generatedBy: GENERATED_BY,
-    kind,
-    entries,
-  };
-  return `${JSON.stringify(baseline, null, 2)}\n`;
+  return `${JSON.stringify({ generatedBy: GENERATED_BY, kind, entries }, null, 2)}\n`;
 }
 
 export async function renderConfigDocBaselineArtifacts(
@@ -520,7 +469,6 @@ function writeFileAtomic(filePath: string, content: string): void {
   });
 }
 
-/** Build the sha256 hash file content for all config baseline artifacts. */
 function computeConfigBaselineHashFileContent(json: ConfigDocBaselineArtifacts): string {
   const lines = [
     `${sha256Hex(json.combined)}  config-baseline.json`,
@@ -529,14 +477,6 @@ function computeConfigBaselineHashFileContent(json: ConfigDocBaselineArtifacts):
     `${sha256Hex(json.plugin)}  config-baseline.plugin.json`,
   ];
   return `${lines.join("\n")}\n`;
-}
-
-function computeConfigBaselineCounts(baseline: ConfigDocBaseline): ConfigDocBaselineCounts {
-  return {
-    core: baseline.coreEntries.length,
-    channel: baseline.channelEntries.length,
-    plugin: baseline.pluginEntries.length,
-  };
 }
 
 function parseConfigBaselineCounts(content: string | null): ConfigDocBaselineCounts {
@@ -582,18 +522,6 @@ function collectConfigBaselineCountViolations(
   return violations;
 }
 
-function resolveBaselineArtifactPaths(
-  repoRoot: string,
-  params?: ConfigDocBaselinePathOptions,
-): ConfigDocBaselineArtifacts {
-  return {
-    combined: path.resolve(repoRoot, params?.combinedPath ?? DEFAULT_COMBINED_OUTPUT),
-    core: path.resolve(repoRoot, params?.corePath ?? DEFAULT_CORE_OUTPUT),
-    channel: path.resolve(repoRoot, params?.channelPath ?? DEFAULT_CHANNEL_OUTPUT),
-    plugin: path.resolve(repoRoot, params?.pluginPath ?? DEFAULT_PLUGIN_OUTPUT),
-  };
-}
-
 export async function writeConfigDocBaselineArtifacts(
   params?: ConfigDocBaselinePathOptions & {
     repoRoot?: string;
@@ -604,7 +532,12 @@ export async function writeConfigDocBaselineArtifacts(
   },
 ): Promise<ConfigDocBaselineArtifactsWriteResult> {
   const repoRoot = params?.repoRoot ?? resolveRepoRoot();
-  const jsonPaths = resolveBaselineArtifactPaths(repoRoot, params);
+  const jsonPaths = {
+    combined: path.resolve(repoRoot, params?.combinedPath ?? DEFAULT_COMBINED_OUTPUT),
+    core: path.resolve(repoRoot, params?.corePath ?? DEFAULT_CORE_OUTPUT),
+    channel: path.resolve(repoRoot, params?.channelPath ?? DEFAULT_CHANNEL_OUTPUT),
+    plugin: path.resolve(repoRoot, params?.pluginPath ?? DEFAULT_PLUGIN_OUTPUT),
+  };
   const hashPath = path.resolve(repoRoot, params?.hashPath ?? DEFAULT_HASH_OUTPUT);
   const countsPath = path.resolve(repoRoot, params?.countsPath ?? DEFAULT_COUNTS_OUTPUT);
   const rendered = params?.rendered
@@ -612,7 +545,11 @@ export async function writeConfigDocBaselineArtifacts(
     : await renderConfigDocBaselineArtifacts();
 
   const nextHashContent = computeConfigBaselineHashFileContent(rendered.json);
-  const counts = computeConfigBaselineCounts(rendered.baseline);
+  const counts: ConfigDocBaselineCounts = {
+    core: rendered.baseline.coreEntries.length,
+    channel: rendered.baseline.channelEntries.length,
+    plugin: rendered.baseline.pluginEntries.length,
+  };
   const nextCountsContent = `${JSON.stringify(counts, null, 2)}\n`;
   const currentHashContent = readFileIfExists(hashPath);
   const hashChanged = currentHashContent !== nextHashContent;
@@ -628,35 +565,22 @@ export async function writeConfigDocBaselineArtifacts(
   }
   const changed = hashChanged || countBudgetError !== undefined || countViolations.length > 0;
 
-  if (params?.check) {
-    return {
-      changed,
-      hashChanged,
-      wrote: false,
-      jsonPaths,
-      hashPath,
-      countsPath,
-      countViolations,
-      ...(countBudgetError ? { countBudgetError } : {}),
-    };
-  }
-
-  // Write tracked drift-detection artifacts.
-  writeFileAtomic(hashPath, nextHashContent);
-  writeFileAtomic(countsPath, nextCountsContent);
-
-  // Write full JSON artifacts locally (gitignored, useful for inspection)
-  for (const key of Object.keys(jsonPaths) as Array<keyof ConfigDocBaselineArtifacts>) {
-    writeFileAtomic(jsonPaths[key], rendered.json[key]);
+  if (!params?.check) {
+    writeFileAtomic(hashPath, nextHashContent);
+    writeFileAtomic(countsPath, nextCountsContent);
+    for (const key of Object.keys(jsonPaths) as Array<keyof ConfigDocBaselineArtifacts>) {
+      writeFileAtomic(jsonPaths[key], rendered.json[key]);
+    }
   }
 
   return {
     changed,
     hashChanged,
-    wrote: true,
+    wrote: !params?.check,
     jsonPaths,
     hashPath,
     countsPath,
-    countViolations: [],
+    countViolations: params?.check ? countViolations : [],
+    ...(params?.check && countBudgetError ? { countBudgetError } : {}),
   };
 }

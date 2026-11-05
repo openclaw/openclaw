@@ -1,4 +1,3 @@
-// Parses strict TCP port inputs for config and CLI surfaces.
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 
 // TCP port parsing is strict because config and CLI inputs both use this helper.

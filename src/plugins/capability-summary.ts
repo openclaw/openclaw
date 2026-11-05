@@ -190,7 +190,7 @@ export function buildPluginCapabilitySummary(params: {
       hooks: {
         allowPromptInjection: buildHookGrant(
           resolvePromptInjectionAllowed(hooks),
-          hooks?.allowPromptInjection,
+          hooks?.allowPromptModification,
         ),
         allowConversationAccess: buildHookGrant(
           resolveConversationAccessAllowed(params.origin, hooks),
@@ -237,6 +237,7 @@ export type PluginCapabilityConsentReview = Omit<
   "ok" | "plugin" | "components" | "catalog"
 > & {
   pluginId: string;
+  reviewToken: string;
   name: string;
   version?: string;
   widened?: Partial<PluginAcceptedDeclaredSurface>;

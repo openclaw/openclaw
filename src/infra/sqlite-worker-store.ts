@@ -16,6 +16,7 @@ import {
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionFactory,
+  type SqliteWorkerAdmissionRequest,
 } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
@@ -72,7 +73,15 @@ function resolveSqliteWorkerBroker() {
   return resolveGlobalSingleton(
     Symbol.for("openclaw.sqliteWorkerBroker"),
     () => new SqliteWorkerBroker(),
-    (broker) => withCallerErrors(broker.close()),
+    (broker) =>
+      withCallerErrors(
+        broker.close(async () => {
+          const { closeOpenClawStateDatabaseAsync } =
+            await import("../state/openclaw-state-db-cache.js");
+          await closeOpenClawStateDatabaseAsync();
+        }),
+      ),
+    "shared-state",
   );
 }
 
@@ -88,7 +97,7 @@ export function reserveSqliteWorkerInputPreparation(
 
 /**
  * Retain an admitted writer through native settlement. Backends request authority
- * after BEGIN and again immediately before COMMIT; the host never joins a native
+ * before BEGIN and again immediately before COMMIT; the host never joins a native
  * writer lock. A successful commit grant linearizes against subsequent revocation.
  */
 export function runSqliteWorkerStoreWrite<Operations extends SqliteWorkerOperations, T>(
@@ -107,8 +116,9 @@ export function runSqliteWorkerStoreWrite<Operations extends SqliteWorkerOperati
 }
 
 export function createSqliteWorkerWriteAdmission(
-  assertCurrent: () => void,
+  assertCurrent: (request: SqliteWorkerAdmissionRequest) => void,
   nativeLocations: readonly string[],
+  attachment?: unknown,
 ): SqliteWorkerAdmissionFactory {
   return () => {
     let phase: "waiting" | "transaction" | "commit" = "waiting";
@@ -117,18 +127,20 @@ export function createSqliteWorkerWriteAdmission(
       admission: createSqliteWorkerOperationAdmission((request, grant) => {
         if (
           !(
-            (phase === "waiting" && request.stage === "transaction") ||
+            ((phase === "waiting" || phase === "transaction") && request.stage === "transaction") ||
             (phase === "transaction" && request.stage === "commit")
           )
         ) {
           throw new Error("SQLite worker write authority requested out of order");
         }
-        assertCurrent();
+        assertCurrent(request);
         if (!grant()) {
           throw new Error("SQLite worker write authority expired");
         }
-        phase = phase === "waiting" ? "transaction" : "commit";
-      }),
+        // A rolled-back attempt can reacquire its initial grant. A successful
+        // commit grant remains terminal for this command's admission owner.
+        phase = request.stage === "transaction" ? "transaction" : "commit";
+      }, attachment),
     };
   };
 }
@@ -186,8 +198,10 @@ export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>
 export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   options: SqliteWorkerStoreOptions,
   custody: {
+    startupPreparation?: boolean;
     stateContext?: SqliteWorkerStateContext;
     stateDatabasePath?: string;
+    onNativeLost?: SqliteWorkerOpenCustody["onNativeLost"];
     onNativeStopped?: SqliteWorkerOpenCustody["onNativeStopped"];
     signal?: AbortSignal;
     assertCurrent(): void;
@@ -206,8 +220,10 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
       custody.stateContext,
       () => custody.assertCurrent(),
       {
+        carrierClass: custody.startupPreparation ? "agent" : undefined,
         createAdmission: custody.createAdmission,
         stateDatabasePath: custody.stateDatabasePath,
+        onNativeLost: custody.onNativeLost,
         onNativeStopped: custody.onNativeStopped,
         signal: custody.signal,
       },
@@ -232,7 +248,7 @@ export function openSharedStateSqliteWorkerStore<Operations extends SqliteWorker
       { ...options, input: undefined },
       stateContext,
       assertCurrent,
-      lifecycle,
+      { ...lifecycle, carrierClass: "shared-state" },
     ),
   ).then((store) => {
     if (store) {

@@ -24,7 +24,7 @@ When this mode runs, Codex owns the native thread id, resume behavior,
 compaction, and app-server execution. OpenClaw still owns the chat channel,
 visible transcript mirror, tool policy, approvals, media delivery, and session
 selection. Use provider/model `agentRuntime.id: "codex"` to require a registered
-Codex harness. Unsupported routes/auth fail closed unless the harness declares
+Codex harness. Unsupported routes/auth are rejected unless the harness declares
 an exact-request fallback before execution. Codex runtime failures are not
 retried through another runtime.
 
@@ -61,6 +61,38 @@ workspace or skill directories. Existing hosted sessions continue with omitted o
 `openai_hosted` configuration. This selection does not expand the MVP's existing
 tool or media capabilities.
 
+## Agents API HTTP MCP servers
+
+The Agents API harness reads enabled HTTP servers from `mcp.servers` and plugin MCP
+bundles. Set `transport: "streamable-http"`, a `url`, and optional `headers` on each
+server. HTTP connections run from the session's execution environment, including
+the self-hosted executor for private-network services. Native MCP owns discovery
+and execution; OpenClaw does not create another Gateway transport for these tools.
+
+Exact `toolFilter.include` names are forwarded as the native allowlist. Exclusions
+and session tool denials require an explicit include list and are subtracted from
+it. Wildcards, Gateway-managed OAuth, legacy SSE and custom TLS settings are not
+supported. Unsupported servers and servers whose headers cannot be resolved are
+omitted with an error log, while supported servers remain available. This includes
+requester-scoped connections and URL-only definitions, which retain the legacy SSE
+default. Changes to effective MCP configuration or credentials require a session
+reset.
+
+Stdio MCP forwarding remains a deferred implementation gap. The executor's native
+MCP lifecycle will own those processes when support is added.
+
+Harness authors can reuse `loadAgentHarnessMcpConfig` from
+`openclaw/plugin-sdk/agent-harness-runtime` to merge enabled bundle and operator
+definitions with session server overrides. It returns static connection config,
+diagnostics, and the names of omitted requester-scoped servers, without opening
+connections. The same SDK exports `decodeHeaderEnvPlaceholder` for recognizing
+`${NAME}` and `Bearer ${NAME}` header references; the harness resolves the value
+for its own transport.
+Read the returned server's `transport` field. Doctor normalizes operator config,
+and bundle loading translates external `type` fields before this boundary.
+Transport support and the default for servers without `transport` remain the
+harness's responsibility.
+
 ## Runtime strictness
 
 By default, OpenClaw uses `auto` provider/model runtime policy: registered
@@ -94,7 +126,7 @@ To request Codex for embedded runs:
 }
 ```
 
-If you want a CLI backend for one canonical model, put the runtime on that
+If you want a CLI backend for one standard model ID, put the runtime on that
 model entry:
 
 ```json
@@ -121,7 +153,6 @@ Per-agent overrides use the same model-scoped shape:
   "agents": {
     "entries": {
       "codex-only": {
-        "default": true,
         "model": "openai/gpt-6-astra",
         "models": {
           "openai/gpt-6-astra": {

@@ -19,17 +19,7 @@ describe("telegram api root", () => {
     );
   });
 
-  it("strips a full bot endpoint from apiRoot", () => {
-    const root = "https://api.telegram.org/bot123456:ABC_def-ghi/";
-
-    expect(hasTelegramBotEndpointApiRoot(root)).toBe(true);
-    expect(normalizeTelegramApiRoot(root)).toBe("https://api.telegram.org");
-  });
-
-  it("strips only terminal bot-token endpoint segments", () => {
-    expect(normalizeTelegramApiRoot("https://proxy.example.com/custom/bot123456:ABC_def")).toBe(
-      "https://proxy.example.com/custom",
-    );
+  it("keeps bot-prefixed route names without a token", () => {
     expect(normalizeTelegramApiRoot("https://proxy.example.com/bot123456")).toBe(
       "https://proxy.example.com/bot123456",
     );

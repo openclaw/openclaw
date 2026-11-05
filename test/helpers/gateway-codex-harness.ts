@@ -1,12 +1,32 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expect } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import type { GatewayClient } from "../../src/gateway/client.js";
 import { buildCodexHarnessAppServerArgs } from "../../src/gateway/gateway-codex-harness.live-helpers.js";
 import type { AgentEventPayload } from "../../src/infra/agent-events.js";
+import { redactSensitiveText } from "../../src/logging/redact.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../../src/secrets/provider-env-vars.js";
 import { extractFirstTextBlock } from "../../src/shared/chat-message-content.js";
 // Native live fixture setup and capture shared with its offline boundary regressions.
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
+
+export async function readCodexHarnessSessionId(params: {
+  client: GatewayClient;
+  sessionKey: string;
+}): Promise<string> {
+  // The live reset proof must distinguish logical generation rollover from
+  // physical session-id rotation, so read the persisted row through Gateway.
+  const result: {
+    sessions?: Array<{ key?: string; sessionId?: string }>;
+  } = await params.client.request("sessions.list", {
+    includeGlobal: true,
+    limit: 200,
+  });
+  const sessionId = result.sessions?.find((entry) => entry.key === params.sessionKey)?.sessionId;
+  expect(sessionId, `expected sessionId for ${params.sessionKey}`).toBeTypeOf("string");
+  return sessionId as string;
+}
 
 export function createCodexHarnessLiveInstance(
   token: string,
@@ -45,6 +65,54 @@ export const CODEX_HARNESS_CONTEXT_EVENT_PREFIXES = [
   "usage",
 ] as const;
 
+export type CodexHarnessAttemptUsage = Partial<
+  Record<"cacheRead" | "cacheWrite" | "input" | "output" | "total", number>
+>;
+
+export type CodexHarnessAgentResult = {
+  runId: string;
+  compactionCount: number;
+  elapsedMs: number;
+  events: CapturedAgentEvent[];
+  capture: Pick<ReturnType<typeof createCodexHarnessEventCapture>, "failureEvidence">;
+  firstAssistantMs?: number;
+  stopReason?: string;
+  text: string;
+  usage?: CodexHarnessAttemptUsage;
+};
+
+export function logCodexHarnessTurnMeasurement(
+  label: string,
+  result: CodexHarnessAgentResult,
+  log: (step: string, details?: Record<string, unknown>) => void,
+): void {
+  const nativeUsage = readCodexNativeUsageSnapshots(result.events).at(-1);
+  const compaction = readCompletedCodexCompactionStats(result.events);
+  const turnStarting = result.events.find(
+    (event) =>
+      event.stream === "codex_app_server.lifecycle" && event.data?.phase === "turn_starting",
+  );
+  log("turn-measurement", {
+    label,
+    elapsedMs: result.elapsedMs,
+    ...(result.firstAssistantMs !== undefined
+      ? { timeToFirstAssistantMs: result.firstAssistantMs }
+      : {}),
+    inputTokens: result.usage?.input,
+    outputTokens: result.usage?.output,
+    cacheReadTokens: result.usage?.cacheRead,
+    cacheWriteTokens: result.usage?.cacheWrite,
+    totalTokens: result.usage?.total,
+    activeContextTokens: nativeUsage?.activeContextTokens,
+    promptTokens: nativeUsage?.promptTokens,
+    modelContextWindow: nativeUsage?.modelContextWindow,
+    compactionCount: compaction.count,
+    compactionDurationMs: compaction.durationMs,
+    serviceTier:
+      typeof turnStarting?.data?.serviceTier === "string" ? turnStarting.data.serviceTier : null,
+  });
+}
+
 export function createCodexHarnessEventCapture(params: {
   eventPrefix?: string;
   eventPrefixes?: readonly string[];
@@ -52,13 +120,27 @@ export function createCodexHarnessEventCapture(params: {
   sessionKey: string;
 }) {
   const events: CapturedAgentEvent[] = [];
+  const diagnosticEvents: Array<Record<string, unknown> & { runId: string }> = [];
+  let diagnosticEventCount = 0;
   const eventPrefixes = params.eventPrefixes ?? [params.eventPrefix ?? "codex_app_server.guardian"];
   let requestStartedAt = 0;
+  let requestRunId: string | undefined;
+  let identity: Record<string, string> = {};
   let firstAssistantMs: number | undefined;
   return {
     events,
-    start(startedAt: number) {
+    failureEvidence(runId: string) {
+      return {
+        runId,
+        ...(requestRunId === runId ? { identity } : {}),
+        droppedEvents: Math.max(0, diagnosticEventCount - diagnosticEvents.length),
+        events: diagnosticEvents.filter((event) => event.runId === runId),
+      };
+    },
+    start(startedAt: number, runId?: string) {
       requestStartedAt = startedAt;
+      requestRunId = runId;
+      identity = {};
     },
     get firstAssistantMs() {
       return firstAssistantMs;
@@ -71,10 +153,94 @@ export function createCodexHarnessEventCapture(params: {
       ) {
         return;
       }
+      // Separate from assertion capture: retain ordinary streams even when the
+      // caller selects only native events. Never retain payload content here.
+      const data = event.data;
+      const summary: Record<string, unknown> & { runId: string } = {
+        runId: event.runId,
+        sequence: ++diagnosticEventCount,
+        ts: event.ts,
+        stream: event.stream,
+      };
+      for (const key of [
+        "phase",
+        "status",
+        "threadId",
+        "turnId",
+        "itemId",
+        "clientId",
+        "action",
+        "name",
+        "errorCode",
+        "method",
+        "itemType",
+        "itemPhase",
+        "delivery",
+        "nativeStatus",
+        "classification",
+        "terminalKind",
+        "terminalSource",
+        "lastToolName",
+        "lastToolErrorCode",
+      ]) {
+        const value = data[key];
+        if (typeof value === "string") {
+          summary[key] = value.slice(0, 160);
+        }
+      }
+      for (const key of [
+        "isError",
+        "timedOut",
+        "executionStarted",
+        "mutatingAction",
+        "middlewareError",
+        "finalSourceReplyDelivered",
+      ]) {
+        if (typeof data[key] === "boolean") {
+          summary[key] = data[key];
+        }
+      }
+      for (const key of [
+        "textLength",
+        "deltaLength",
+        "toolCount",
+        "startedCount",
+        "completedCount",
+        "activeCount",
+        "nativeItemCount",
+        "droppedNativeItems",
+      ]) {
+        if (typeof data[key] === "number" && Number.isFinite(data[key])) {
+          summary[key] = data[key];
+        }
+      }
+      if (typeof data.sequence === "number") {
+        summary.nativeSequence = data.sequence;
+      }
+      for (const key of ["text", "delta"]) {
+        if (typeof data[key] === "string") {
+          summary[key + "Length"] = data[key].length;
+        }
+      }
+      if (event.runId === requestRunId && event.stream === "codex_app_server.lifecycle") {
+        for (const key of ["threadId", "turnId", "clientId", "action"]) {
+          if (typeof summary[key] === "string") {
+            identity[key] = summary[key];
+          }
+        }
+      }
+      diagnosticEvents.push(summary);
+      if (diagnosticEvents.length > 128) {
+        diagnosticEvents.shift();
+      }
       if (event.stream === "assistant" && requestStartedAt > 0 && firstAssistantMs === undefined) {
         firstAssistantMs = Math.max(0, event.ts - requestStartedAt);
       }
-      if (!eventPrefixes.some((prefix) => event.stream.startsWith(prefix))) {
+      // Diagnostic events belong only to the bounded evidence tail, not assertion capture.
+      if (
+        event.stream === "codex_app_server.diagnostic" ||
+        !eventPrefixes.some((prefix) => event.stream.startsWith(prefix))
+      ) {
         return;
       }
       events.push({
@@ -86,6 +252,25 @@ export function createCodexHarnessEventCapture(params: {
       });
     },
   };
+}
+
+export function assertCodexHarnessReply(
+  params: {
+    runId: string;
+    capture: Pick<ReturnType<typeof createCodexHarnessEventCapture>, "failureEvidence">;
+    report?: (line: string) => void;
+  },
+  assertion: () => void,
+): void {
+  try {
+    assertion();
+  } catch (error) {
+    // Each probe keeps its own exact, substring, or structured reply contract.
+    (params.report ?? console.error)(
+      redactSensitiveText(JSON.stringify(params.capture.failureEvidence(params.runId))),
+    );
+    throw error;
+  }
 }
 
 export type CapturedAgentEvent = {

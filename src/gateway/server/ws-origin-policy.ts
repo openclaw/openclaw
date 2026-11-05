@@ -1,13 +1,15 @@
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
-import { resolveControlUiAllowedOrigins } from "../../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
   isWebchatClient,
 } from "../../utils/message-channel.js";
-import { resolveGatewayAuthPolicyGeneration } from "../auth-policy.js";
-import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "../origin-check.js";
+import { isGatewayAuthGrantCurrent, isGatewayAuthPolicyCurrent } from "../auth-policy.js";
+import { resolveOperatorRolePolicyForProfile } from "../operator-role-policy.js";
+import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../origin-check.js";
+import { resolveProfileActivityViewerId } from "../session-profile-activity-policy.js";
 import { invalidateGatewayPolicyClient } from "./ws-policy-close.js";
 import type { GatewayWsBrowserOrigin, GatewayWsClient } from "./ws-types.js";
 
@@ -33,16 +35,8 @@ export function resolveGatewayWsBrowserOrigin(
     requestHost: params.requestHost,
     origin: params.origin,
     isLocalClient: params.isLocalClient,
+    remoteControlUiIngress: params.remoteControlUiIngress,
   };
-}
-
-export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg: OpenClawConfig) {
-  return checkBrowserOrigin({
-    ...origin,
-    allowedOrigins: resolveControlUiAllowedOrigins(cfg),
-    allowHostHeaderOriginFallback:
-      cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
-  });
 }
 
 /** Revocation follows committed publication; unrelated authenticated connections remain live. */
@@ -53,28 +47,77 @@ export function disconnectDisallowedGatewayPolicyClients(
       | "browserOrigin"
       | "invalidated"
       | "invalidatedReason"
-      | "authPolicyGeneration"
-      | "authenticatedUserId"
+      | "authPolicy"
+      | "authenticatedUserProfile"
+      | "internal"
+      | "profileActivity"
     > & {
+      connect?: GatewayWsClient["connect"];
       socket: Pick<GatewayWsClient["socket"], "close">;
     }
   >,
   cfg: OpenClawConfig,
 ): void {
   for (const client of clients) {
-    const generation = resolveGatewayAuthPolicyGeneration(cfg, client.authenticatedUserId);
-    if (client.authPolicyGeneration !== undefined && client.authPolicyGeneration !== generation) {
-      invalidateGatewayPolicyClient(client, {
-        reason: "gateway-policy-changed",
-        code: 4001,
-        message: "gateway policy changed",
-      });
-    } else if (client.browserOrigin && !checkGatewayWsBrowserOrigin(client.browserOrigin, cfg).ok) {
+    if (client.browserOrigin && !checkGatewayWsBrowserOrigin(client.browserOrigin, cfg).ok) {
       invalidateGatewayPolicyClient(client, {
         reason: "origin-policy-changed",
         code: 1008,
         message: "origin not allowed",
       });
+      continue;
+    }
+    let roleAuthorityRevoked = false;
+    let currentRole: ReturnType<typeof resolveOperatorRolePolicyForProfile> = undefined;
+    if (client.connect?.role === "operator") {
+      try {
+        currentRole = resolveOperatorRolePolicyForProfile(
+          client.authenticatedUserProfile?.profileId,
+          cfg,
+        );
+        roleAuthorityRevoked =
+          currentRole !== undefined &&
+          (!roleScopesAllow({
+            role: "operator",
+            requestedScopes: client.connect.scopes ?? [],
+            allowedScopes: currentRole.scopes,
+          }) ||
+            currentRole.accessPolicyPlugin !==
+              client.internal?.operatorAccessAuthority?.requiredPolicyPlugin);
+      } catch {
+        // A retired profile cannot retain its connection's grants.
+        roleAuthorityRevoked = true;
+      }
+    }
+    if (roleAuthorityRevoked || !isGatewayAuthPolicyCurrent(client.authPolicy, cfg)) {
+      invalidateGatewayPolicyClient(client, {
+        reason: "gateway-policy-changed",
+        code: 4001,
+        message: "gateway policy changed",
+        revokeSource: roleAuthorityRevoked || !isGatewayAuthGrantCurrent(client.authPolicy, cfg),
+      });
+      continue;
+    }
+    // A presentation refresh fences new requests without revoking accepted work.
+    // Stronger revocation above still runs for retained, already-fenced sources.
+    if (!client.invalidated && client.profileActivity && client.connect) {
+      const viewerId = resolveProfileActivityViewerId(
+        {
+          connect: client.connect,
+          internal: client.internal,
+          authenticatedUserProfile: client.authenticatedUserProfile,
+        },
+        currentRole?.scopes,
+        client.authenticatedUserProfile?.profileId,
+      );
+      if (viewerId !== client.profileActivity.viewerId) {
+        invalidateGatewayPolicyClient(client, {
+          reason: "profile-activity-policy-changed",
+          code: 4001,
+          message: "gateway policy changed",
+          revokeSource: false,
+        });
+      }
     }
   }
 }

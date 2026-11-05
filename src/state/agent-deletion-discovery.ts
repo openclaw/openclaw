@@ -18,7 +18,19 @@ import {
   isPersistentOpenClawAgentDatabasePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+
+/** Read completed retained identities through the shared-state worker. */
+export async function listRetainedDeletedAgentIdsForCleanup(
+  env: NodeJS.ProcessEnv,
+): Promise<ReadonlySet<string>> {
+  const reply = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "agentDeletionJournal.retainedIds" },
+  );
+  return new Set(reply?.agentIds ?? []);
+}
 
 type Target = { agentId: string; path: string };
 type RetainedAgentDatabaseNamespace =

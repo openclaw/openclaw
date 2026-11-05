@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { agentCommandFromIngress } from "../../commands/agent.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
@@ -7,52 +8,12 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentDeliveryPlanWithSessionRoute } from "../../infra/outbound/agent-delivery.js";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime, withoutRuntimeOutput } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
-import { performGatewaySessionReset } from "../session-reset-service.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
-import type { TrustedSessionCreation } from "./session-creation-provenance.js";
-import type { GatewayOperatorRoleActor } from "./shared-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-export async function runSessionResetFromAgent(params: {
-  key: string;
-  agentId?: string;
-  reason: "new" | "reset";
-  creation: TrustedSessionCreation;
-  requestingOperatorProfileId?: string;
-  operatorRoleActor?: GatewayOperatorRoleActor;
-  assertCurrent?: () => void;
-  onCommitted?: (commit: { key: string; sessionId: string }) => void;
-}) {
-  const result = await performGatewaySessionReset({
-    key: params.key,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    reason: params.reason,
-    commandSource: "gateway:agent",
-    creation: params.creation,
-    ...(params.requestingOperatorProfileId
-      ? { requestingOperatorProfileId: params.requestingOperatorProfileId }
-      : {}),
-    ...(params.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
-    armSessionDiffBaselineCapture: true,
-    assertCurrent: params.assertCurrent,
-    onCommitted: params.onCommitted,
-  });
-  if (!result.ok) {
-    return result;
-  }
-  if ("incognitoDeleted" in result) {
-    return { ok: true as const, key: result.key };
-  }
-  return {
-    ok: true as const,
-    key: result.key,
-    sessionId: result.entry.sessionId,
-  };
-}
 
 export function sessionResetAckText(reason: "new" | "reset"): string {
   return reason === "new" ? "✅ New session started." : "✅ Session reset.";
@@ -120,11 +81,7 @@ export async function resolveBareSessionResetResult(params: {
 }) {
   params.assertCurrent?.();
   if (params.request.deliver !== true) {
-    return buildBareSessionResetResult({
-      reason: params.reason,
-      sessionId: params.sessionId,
-      ackText: params.ackText,
-    });
+    return buildBareSessionResetResult(params);
   }
   const sendPolicy = resolveSendPolicy({
     cfg: params.cfg,
@@ -178,15 +135,11 @@ export async function resolveBareSessionResetResult(params: {
   const originMessageChannel = params.originMessageChannel ?? deliveryPlan.resolvedChannel;
   const { deliverAgentCommandResult } = await import("../../agents/command/delivery.runtime.js");
   params.assertCurrent?.();
-  const result = buildBareSessionResetResult({
-    reason: params.reason,
-    sessionId: params.sessionId,
-    ackText: params.ackText,
-  });
+  const result = buildBareSessionResetResult(params);
   return await deliverAgentCommandResult({
     cfg: params.cfg,
     deps: params.context.deps,
-    runtime: defaultRuntime,
+    runtime: withoutRuntimeOutput(defaultRuntime),
     opts: {
       message: params.ackText ?? sessionResetAckText(params.reason),
       ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -220,23 +173,23 @@ export async function resolveBareSessionResetResult(params: {
   });
 }
 
-export function loadBareSessionResetDeliverySession(params: {
-  cfg: OpenClawConfig;
+export async function loadBareSessionResetDeliverySession(params: {
   sessionKey: string;
   agentId?: string;
-}): {
+}): Promise<{
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   agentId: string;
-} {
-  const loaded = loadSessionEntry(params.sessionKey, {
-    clone: false,
+}> {
+  const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: getRuntimeConfig(),
+    key: params.sessionKey,
+    excludeInternalEffects: true,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  const loadedCfg = loaded?.cfg ?? params.cfg;
   return {
-    cfg: loadedCfg,
-    entry: loaded?.entry,
+    cfg: loaded.cfg,
+    entry: loaded.entry,
     agentId: resolveAgentIdFromSessionKey(params.sessionKey, params.agentId),
   };
 }

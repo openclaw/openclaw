@@ -17,9 +17,9 @@ export function findMessageDisclosureLine(
   const ordered = rects
     .filter((rect) => rect.width > 0 && rect.bottom > rect.top)
     .toSorted((a, b) => a.top - b.top);
-  let line: MessageTextRect | undefined;
   const lines: MessageTextRect[] = [];
   for (const rect of ordered) {
+    const line = lines.at(-1);
     // Tight line heights can make glyph boxes overlap consecutive text rows.
     if (
       !line ||
@@ -28,8 +28,7 @@ export function findMessageDisclosureLine(
       if (lines.length > lineNumber) {
         break;
       }
-      line = { ...rect };
-      lines.push(line);
+      lines.push({ ...rect });
     } else {
       line.bottom = Math.max(line.bottom, rect.bottom);
       line.glyphTop = Math.min(line.glyphTop, rect.glyphTop);

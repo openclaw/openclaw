@@ -8,6 +8,8 @@ export type ProtectionScanState = {
   fenceLength: number;
   /** Unmodeled paragraph syntax; cleared by a blank line. */
   paragraphAmbiguous: boolean;
+  /** Paragraph syntax that may own block code; inline backticks alone do not. */
+  blockAmbiguous: boolean;
   /** An unclassified delimiter makes fence parity permanently unknown. */
   structuralUnknown: boolean;
   /** Trailing partial line; block structure is only decidable on whole lines. */
@@ -19,13 +21,10 @@ export function createProtectionScanState(): ProtectionScanState {
     fenceChar: undefined,
     fenceLength: 0,
     paragraphAmbiguous: false,
+    blockAmbiguous: false,
     structuralUnknown: false,
     partialLine: "",
   };
-}
-
-export function cloneProtectionScanState(state: ProtectionScanState): ProtectionScanState {
-  return { ...state };
 }
 
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
@@ -55,6 +54,7 @@ function applyLine(state: ProtectionScanState, line: string): void {
   }
   if (BLANK_LINE.test(line)) {
     state.paragraphAmbiguous = false;
+    state.blockAmbiguous = false;
     return;
   }
   const open = FENCE_OPEN.exec(line);
@@ -78,7 +78,11 @@ function applyLine(state: ProtectionScanState, line: string): void {
     state.structuralUnknown = true;
     return;
   }
-  if (line.includes("`") || UNMODELED_BLOCK_START.test(line)) {
+  if (UNMODELED_BLOCK_START.test(line)) {
+    state.paragraphAmbiguous = true;
+    state.blockAmbiguous ||= / {4}|\t/.test(line);
+  }
+  if (line.includes("`") || state.blockAmbiguous) {
     state.paragraphAmbiguous = true;
   }
 }
@@ -122,7 +126,7 @@ export function resolveProtectionFastPath(
   if (BARE_CARRIAGE_RETURN.test(incoming)) {
     return undefined;
   }
-  const state = cloneProtectionScanState(carried);
+  const state = { ...carried };
   const lineStarts: Array<[start: number, isProtected: boolean]> = [];
   let index = 0;
   for (;;) {
@@ -146,20 +150,12 @@ export function resolveProtectionFastPath(
       // An unfinished line can still acquire code ownership.
       return undefined;
     } else {
-      const probe = cloneProtectionScanState(state);
+      const probe = { ...state };
       applyLine(probe, line);
       if (probe.paragraphAmbiguous || probe.structuralUnknown) {
         return undefined;
       }
-      const opened = probe.fenceChar ? FENCE_OPEN.exec(line) : null;
-      if (opened?.[1]) {
-        // The region starts at the delimiter run, so an indented fence leaves its own
-        // leading whitespace outside the region.
-        lineStarts.push([lineStartAbsolute, false]);
-        lineStarts.push([lineStartAbsolute + (opened[0].length - opened[1].length), true]);
-      } else {
-        lineStarts.push([lineStartAbsolute, false]);
-      }
+      lineStarts.push([lineStartAbsolute, Boolean(probe.fenceChar)]);
     }
     if (!complete) {
       break;

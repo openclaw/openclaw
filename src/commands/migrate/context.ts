@@ -1,9 +1,8 @@
-/** Migration provider context and report-directory helpers. */
 import path from "node:path";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MigrationProviderContext } from "../../plugins/types.js";
@@ -24,7 +23,6 @@ export function createMigrationLogger(runtime: RuntimeEnv, opts: { json?: boolea
   };
 }
 
-/** Builds the timestamped directory where a provider writes migration reports. */
 export function buildMigrationReportDir(
   providerId: string,
   stateDir: string,
@@ -35,7 +33,7 @@ export function buildMigrationReportDir(
 }
 
 /** Resolves an explicit migration owner without allowing typo-created agent stores. */
-export function resolveMigrationTargetAgentId(
+function resolveMigrationTargetAgentId(
   config: OpenClawConfig,
   rawAgentId: string | undefined,
 ): string | undefined {
@@ -53,7 +51,6 @@ export function resolveMigrationTargetAgentId(
   return resolveConfiguredAgentId(config, agentId);
 }
 
-/** Builds the provider-facing migration context from CLI options and runtime state. */
 export function buildMigrationContext(params: {
   source?: string;
   targetAgentId?: string;
@@ -67,7 +64,7 @@ export function buildMigrationContext(params: {
   reportDir?: string;
   json?: boolean;
 }): MigrationProviderContext {
-  const config = params.configOverride ?? getRuntimeConfig();
+  const config = params.configOverride ?? loadConfig();
   const stateDir = resolveStateDir();
   return {
     config,

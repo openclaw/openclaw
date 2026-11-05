@@ -1,4 +1,7 @@
-import type { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
+import type {
+  MeetingPlatformAdapter,
+  MeetingRealtimeAudioEngineHealth,
+} from "openclaw/plugin-sdk/meeting-runtime";
 import type {
   GoogleMeetConfig,
   GoogleMeetMode,
@@ -38,41 +41,8 @@ type GoogleMeetPluginTypes = ReturnType<
     GoogleMeetModeInput,
     GoogleMeetManualActionReason,
     GoogleMeetSpeechBlockedReason,
-    {
+    Partial<MeetingRealtimeAudioEngineHealth> & {
       leaveReason?: string;
-      realtimeTranscriptLines?: number;
-      lastRealtimeTranscriptAt?: string;
-      lastRealtimeTranscriptRole?: "user" | "assistant";
-      lastRealtimeTranscriptText?: string;
-      recentRealtimeTranscript?: Array<{
-        at: string;
-        role: "user" | "assistant";
-        text: string;
-      }>;
-      lastRealtimeEventAt?: string;
-      lastRealtimeEventType?: string;
-      lastRealtimeEventDetail?: string;
-      recentRealtimeEvents?: Array<{
-        at: string;
-        direction: "client" | "server";
-        type: string;
-        detail?: string;
-      }>;
-      recentTalkEvents?: Array<{
-        id: string;
-        type: string;
-        sessionId: string;
-        turnId?: string;
-        seq: number;
-        timestamp: string;
-        final?: boolean;
-      }>;
-      lastSuppressedInputAt?: string;
-      lastClearAt?: string;
-      suppressedInputBytes?: number;
-      consecutiveInputErrors?: number;
-      lastInputError?: string;
-      clearCount?: number;
       queuedInputChunks?: number;
     }
   >
@@ -113,8 +83,4 @@ export type GoogleMeetSession = Omit<GoogleMeetPluginSession, "chrome" | "mode">
     dtmfSent?: boolean;
     introSent?: boolean;
   };
-};
-
-export type GoogleMeetJoinResult = Omit<GoogleMeetPluginTypes["JoinResult"], "session"> & {
-  session: GoogleMeetSession;
 };

@@ -4,10 +4,11 @@ public enum OpenClawGatewayClientCapability {
     public static let agentKind = "agent-kind"
     public static let inlineWidgets = "inline-widgets"
     public static let modelSelectionPolicy = "model-selection-policy"
+    public static let ultrafast = "ultrafast"
     public static let usageRefreshing = "usage-refreshing"
 }
 
-public struct GatewayConnectOptions: Sendable {
+public struct GatewayConnectOptions: Sendable, Equatable {
     public var role: String
     public var scopes: [String]
     public var scopesAreExplicit: Bool
@@ -25,7 +26,7 @@ public struct GatewayConnectOptions: Sendable {
     /// role/scoped sessions such as operator UI clients.
     public var includeDeviceIdentity: Bool
     /// Set false for an endpoint handoff whose explicit credentials (including none) must be
-    /// tried without loading a previously stored device token.
+    /// tried without using a previously stored device token as authentication.
     public var allowStoredDeviceAuth: Bool
     /// Stable Gateway owner for device tokens. Nil preserves legacy unscoped storage only when
     /// `allowStoredDeviceAuth` is true; false plus nil disables both lookup and persistence.
@@ -80,6 +81,12 @@ public struct GatewayNodeSessionCredentials: Sendable, Equatable {
         self.bootstrapToken = bootstrapToken
         self.password = password
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.token.map { Array($0.utf8) } == rhs.token.map { Array($0.utf8) } &&
+            lhs.bootstrapToken.map { Array($0.utf8) } == rhs.bootstrapToken.map { Array($0.utf8) } &&
+            lhs.password.map { Array($0.utf8) } == rhs.password.map { Array($0.utf8) }
+    }
 }
 
 public enum GatewayAuthSource: String, Sendable {
@@ -95,6 +102,8 @@ public enum GatewayAuthSource: String, Sendable {
 public struct GatewayAuthBinding: Equatable, Sendable {
     public let source: GatewayAuthSource
     public let credentialFingerprint: String?
+    /// Identity signed by this socket's connect, not whichever identity is stored later.
+    public let deviceId: String?
 }
 
 extension GatewayConnectOptions {

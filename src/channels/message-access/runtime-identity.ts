@@ -4,19 +4,17 @@ import {
   meetsIdentifierAuthentication,
   type IdentifierAuthentication,
 } from "./identifier-authentication.js";
-/**
- * Channel ingress identity adapter helpers.
- *
- * Builds stable sender identity descriptors and normalizes matchable allowlist material.
- */
 import type {
-  ChannelIngressAdapter,
   ChannelIngressIdentityDescriptor,
   ChannelIngressIdentityField,
   ChannelIngressIdentitySubjectInput,
   StableChannelIngressIdentityParams,
 } from "./runtime-types.js";
-import type { NormalizedIngressEntry, NormalizedIngressSubject } from "./types.js";
+import type {
+  InternalChannelIngressAdapter,
+  NormalizedIngressEntry,
+  NormalizedIngressSubject,
+} from "./types.js";
 
 type ResolvedIdentityField = Required<Pick<ChannelIngressIdentityField, "key" | "kind">> &
   Omit<ChannelIngressIdentityField, "key" | "kind">;
@@ -124,7 +122,6 @@ function adapterEntry(params: {
   entry: string;
   entryIndex: number;
   value: string;
-  fallbackSuffix?: string;
   wildcard?: boolean;
 }): NormalizedIngressEntry {
   const dangerous = fieldDangerous(params.field, params.entry);
@@ -135,7 +132,7 @@ function adapterEntry(params: {
         entryIndex: params.entryIndex,
         fieldKey: params.field.key,
         fieldIndex: params.fieldIndex,
-      }) ?? `entry-${params.entryIndex + 1}:${params.fallbackSuffix ?? params.field.key}`,
+      }) ?? `entry-${params.entryIndex + 1}:${params.wildcard ? "wildcard" : params.field.key}`,
     kind: params.field.kind,
     value: params.value,
     identityFieldKey: params.field.key,
@@ -148,7 +145,7 @@ function adapterEntry(params: {
 
 export function createIdentityAdapter(
   identity: ChannelIngressIdentityDescriptor,
-): ChannelIngressAdapter {
+): InternalChannelIngressAdapter {
   const fields = identityFields(identity);
   const isWildcardEntry = identity.isWildcardEntry ?? ((value: string) => value === "*");
   return {
@@ -163,7 +160,6 @@ export function createIdentityAdapter(
               entry,
               entryIndex,
               value: "*",
-              fallbackSuffix: "wildcard",
               wildcard: true,
             }),
           ];

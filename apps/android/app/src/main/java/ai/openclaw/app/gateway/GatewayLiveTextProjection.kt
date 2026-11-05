@@ -1,7 +1,7 @@
 package ai.openclaw.app.gateway
 
+import ai.openclaw.app.asJsonStringOrNull
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -27,16 +27,16 @@ internal class GatewayLiveTextProjection {
     event: String,
     payload: JsonObject,
   ): JsonObject? {
-    val runId = payload["runId"].stringValue() ?: return payload
-    val key = RunKey(runId, payload["sessionKey"].stringValue(), payload["agentId"].stringValue())
+    val runId = payload["runId"].asJsonStringOrNull() ?: return payload
+    val key = RunKey(runId, payload["sessionKey"].asJsonStringOrNull(), payload["agentId"].asJsonStringOrNull())
     when (event) {
       "chat" -> {
-        when (payload["state"].stringValue()) {
+        when (payload["state"].asJsonStringOrNull()) {
           "delta" -> {
             val snapshot = payload["message"] as? JsonObject
             val message =
               snapshot ?: run {
-                val delta = payload["deltaText"].stringValue() ?: return payload
+                val delta = payload["deltaText"].asJsonStringOrNull() ?: return payload
                 val previous = chatMessages[key]
                 val replace = (payload["replace"] as? JsonPrimitive)?.booleanOrNull == true
                 if (previous == null && !replace) return null
@@ -55,12 +55,12 @@ internal class GatewayLiveTextProjection {
 
       "agent" -> {
         val data = payload["data"] as? JsonObject ?: return payload
-        when (payload["stream"].stringValue()) {
+        when (payload["stream"].asJsonStringOrNull()) {
           "assistant" -> {
-            val itemId = data["itemId"].stringValue()
+            val itemId = data["itemId"].asJsonStringOrNull()
             val text =
-              data["text"].stringValue() ?: run {
-                val delta = data["delta"].stringValue() ?: return payload
+              data["text"].asJsonStringOrNull() ?: run {
+                val delta = data["delta"].asJsonStringOrNull() ?: return payload
                 if ((data["replace"] as? JsonPrimitive)?.booleanOrNull == true) {
                   delta
                 } else {
@@ -73,7 +73,7 @@ internal class GatewayLiveTextProjection {
           }
 
           "lifecycle" -> {
-            if (data["phase"].stringValue() in listOf("end", "error")) {
+            if (data["phase"].asJsonStringOrNull() in listOf("end", "error")) {
               assistantTexts.keys.removeAll { it.runId == runId }
             }
           }
@@ -94,20 +94,18 @@ internal class GatewayLiveTextProjection {
       return JsonObject(message + ("content" to JsonPrimitive(if (replace) delta else content.content + delta)))
     }
     val blocks = (content as? JsonArray)?.toMutableList() ?: mutableListOf()
-    val textIndex = blocks.indexOfLast { (it as? JsonObject)?.get("type").stringValue() == "text" }
+    val textIndex = blocks.indexOfLast { (it as? JsonObject)?.get("type").asJsonStringOrNull() == "text" }
     if (replace) {
-      blocks.removeAll { (it as? JsonObject)?.get("type").stringValue() == "text" }
-      blocks.add(0, textBlock(delta))
-    } else if (textIndex < 0) {
+      blocks.removeAll { (it as? JsonObject)?.get("type").asJsonStringOrNull() == "text" }
+    }
+    if (replace || textIndex < 0) {
       blocks.add(0, textBlock(delta))
     } else {
       val block = blocks[textIndex] as JsonObject
-      blocks[textIndex] = JsonObject(block + ("text" to JsonPrimitive(block["text"].stringValue().orEmpty() + delta)))
+      blocks[textIndex] = JsonObject(block + ("text" to JsonPrimitive(block["text"].asJsonStringOrNull().orEmpty() + delta)))
     }
     return JsonObject(message + ("content" to JsonArray(blocks)))
   }
 
   private fun textBlock(text: String): JsonObject = JsonObject(mapOf("type" to JsonPrimitive("text"), "text" to JsonPrimitive(text)))
 }
-
-private fun JsonElement?.stringValue(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content

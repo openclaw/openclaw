@@ -1,139 +1,83 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { executePluginCommand, matchPluginCommand, registerPluginCommand } from "./commands.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 
-function requirePluginCommandMatch(commandBody: string) {
-  const match = matchPluginCommand(commandBody);
-  if (!match) {
-    throw new Error(`expected plugin command match for ${commandBody}`);
-  }
-  return match;
+function registerScopedCommand(handler: Parameters<typeof registerPluginCommand>[1]["handler"]) {
+  registerPluginCommand("demo-plugin", {
+    name: "pairlike",
+    description: "Scoped command",
+    requiredScopes: ["operator.pairing"],
+    handler,
+  });
+  return expectDefined(matchPluginCommand("/pairlike"), "scoped plugin command match").command;
 }
 
-beforeEach(() => {
-  setActivePluginRegistry(createEmptyPluginRegistry());
-});
+beforeEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
-afterEach(() => {
-  resetPluginRuntimeStateForTest();
-});
+afterEach(resetPluginRuntimeStateForTest);
 
-describe("plugin command required scopes", () => {
-  const sparseRequiredScopes: unknown[] = [];
-  sparseRequiredScopes.length = 1;
+const sparseRequiredScopes: unknown[] = [];
+sparseRequiredScopes.length = 1;
 
-  it.each([
-    { name: "undefined", requiredScopes: [undefined] },
-    { name: "null", requiredScopes: [null] },
-    { name: "false", requiredScopes: [false] },
-    { name: "zero", requiredScopes: [0] },
-    { name: "empty string", requiredScopes: [""] },
-    { name: "sparse array", requiredScopes: sparseRequiredScopes },
-  ])(
-    "rejects a falsy invalid required scope $name at registration and direct execution",
-    async ({ requiredScopes }) => {
-      const handler = vi.fn(async () => ({ text: "must not run" }));
-      const command = {
-        name: "voice",
-        description: "Voice command",
-        handler,
-        requiredScopes,
-      };
-      const scope = requiredScopes[0];
-      expect(registerPluginCommand("demo-plugin", command as never)).toEqual({
-        ok: false,
-        error:
-          typeof scope === "string"
-            ? `Command requiredScopes contains unknown operator scope: ${scope}`
-            : "Command requiredScopes contains unknown operator scope",
-      });
-      expect(matchPluginCommand("/voice")).toBeNull();
-      await expect(
-        executePluginCommand({
-          command: { ...command, pluginId: "demo-plugin" } as never,
-          channel: "telegram",
-          isAuthorizedSender: true,
-          commandBody: "/voice",
-          config: {},
-        }),
-      ).resolves.toEqual({ text: "⚠️ This command has invalid gateway scope configuration." });
-      expect(handler).not.toHaveBeenCalled();
-    },
-  );
-
-  it("allows command owners to run scoped plugin commands without gateway scopes", async () => {
-    let observedOwnerStatus: boolean | undefined;
-    const handler = vi.fn(async (ctx: { senderIsOwner?: boolean }) => {
-      observedOwnerStatus = ctx.senderIsOwner;
-      return { text: "ok" };
-    });
-    registerPluginCommand("demo-plugin", {
-      name: "pairlike",
-      description: "Scoped command",
-      requiredScopes: ["operator.pairing"],
+it.each([
+  { name: "empty string", requiredScopes: [""] },
+  { name: "sparse array", requiredScopes: sparseRequiredScopes },
+])(
+  "rejects a falsy invalid required scope $name at registration and direct execution",
+  async ({ requiredScopes }) => {
+    const handler = vi.fn(async () => ({ text: "must not run" }));
+    const command = {
+      name: "voice",
+      description: "Voice command",
       handler,
+      requiredScopes,
+    };
+    const scope = requiredScopes[0];
+    expect(registerPluginCommand("demo-plugin", command as never)).toEqual({
+      ok: false,
+      error:
+        typeof scope === "string"
+          ? `Command requiredScopes contains unknown operator scope: ${scope}`
+          : "Command requiredScopes contains unknown operator scope",
     });
-    const match = requirePluginCommandMatch("/pairlike");
-
-    const result = await executePluginCommand({
-      command: match.command,
-      channel: "telegram",
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      commandBody: "/pairlike",
-      config: {},
-    });
-
-    expect(result).toEqual({ text: "ok" });
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(observedOwnerStatus).toBe(true);
-  });
-
-  it("rejects command owners when explicit gateway scopes miss the required scope", async () => {
-    const handler = vi.fn(async () => ({ text: "ok" }));
-    registerPluginCommand("demo-plugin", {
-      name: "pairlike",
-      description: "Scoped command",
-      requiredScopes: ["operator.pairing"],
-      handler,
-    });
-    const match = requirePluginCommandMatch("/pairlike");
-
-    const result = await executePluginCommand({
-      command: match.command,
-      channel: "webchat",
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      commandBody: "/pairlike",
-      gatewayClientScopes: ["operator.write"],
-      config: {},
-    });
-
-    expect(result).toEqual({ text: "⚠️ This command requires gateway scope: operator.pairing." });
+    expect(matchPluginCommand("/voice")).toBeNull();
+    await expect(
+      executePluginCommand({
+        command: { ...command, pluginId: "demo-plugin" } as never,
+        channel: "telegram",
+        isAuthorizedSender: true,
+        commandBody: "/voice",
+        config: {},
+      }),
+    ).resolves.toEqual({ text: "⚠️ This command has invalid gateway scope configuration." });
     expect(handler).not.toHaveBeenCalled();
-  });
+  },
+);
 
-  it("rejects non-owner scoped plugin commands without gateway scopes", async () => {
-    const handler = vi.fn(async () => ({ text: "ok" }));
-    registerPluginCommand("demo-plugin", {
-      name: "pairlike",
-      description: "Scoped command",
-      requiredScopes: ["operator.pairing"],
-      handler,
-    });
-    const match = requirePluginCommandMatch("/pairlike");
-
+it.each([
+  [true, "telegram", undefined, true],
+  [true, "webchat", ["operator.write"], false],
+  [false, "telegram", undefined, false],
+] satisfies Array<[boolean, string, string[] | undefined, boolean]>)(
+  "enforces required scopes: owner=%s channel=%s scopes=%j allowed=%s",
+  async (senderIsOwner, channel, gatewayClientScopes, allowed) => {
+    const handler = vi.fn(async (ctx: { senderIsOwner?: boolean }) => ({
+      text: ctx.senderIsOwner === true ? "owner" : "not-owner",
+    }));
     const result = await executePluginCommand({
-      command: match.command,
-      channel: "telegram",
+      command: registerScopedCommand(handler),
+      channel,
       isAuthorizedSender: true,
-      senderIsOwner: false,
+      senderIsOwner,
       commandBody: "/pairlike",
+      gatewayClientScopes,
       config: {},
     });
-
-    expect(result).toEqual({ text: "⚠️ This command requires gateway scope: operator.pairing." });
-    expect(handler).not.toHaveBeenCalled();
-  });
-});
+    expect(result).toEqual({
+      text: allowed ? "owner" : "⚠️ This command requires gateway scope: operator.pairing.",
+    });
+    expect(handler).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  },
+);

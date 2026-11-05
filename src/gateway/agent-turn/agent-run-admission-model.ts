@@ -1,15 +1,9 @@
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
-import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
+import { resolveSessionModelRef } from "../session-utils.js";
 import type { PrepareAgentRunDispatchParams } from "./agent-run-admission-types.js";
 
 export function resolveAgentRunAdmissionModel(params: PrepareAgentRunDispatchParams) {
-  const timeoutMs = resolveAgentTimeoutMs({
-    cfg: params.cfgForAgent ?? params.cfg,
-    overrideSeconds:
-      typeof params.request.timeout === "number" ? params.request.timeout : undefined,
-  });
   const effectiveProviderOverride =
     params.restoredCronContinuation?.provider ?? params.providerOverride;
   const effectiveModelOverride = params.restoredCronContinuation?.model ?? params.modelOverride;
@@ -46,22 +40,12 @@ export function resolveAgentRunAdmissionModel(params: PrepareAgentRunDispatchPar
     provider: activeModel.provider,
     model: activeModel.model,
   };
-  const lifecycleStorePath = params.resolvedSessionKey
-    ? loadSessionEntry(params.resolvedSessionKey, {
-        ...(params.activeSessionAgentId ? { agentId: params.activeSessionAgentId } : {}),
-        clone: false,
-        projection: "list",
-      }).storePath
-    : `agent:${params.activeSessionAgentId}`;
   return {
-    timeoutMs,
     effectiveProviderOverride,
     effectiveModelOverride,
     effectiveThinking,
     effectiveAllowModelOverride,
-    activeModel,
     resolvedRuntime,
-    activeModelProvider: activeModel.provider,
-    lifecycleStorePath,
+    lifecycleStorePath: params.lifecycleStorePath,
   };
 }

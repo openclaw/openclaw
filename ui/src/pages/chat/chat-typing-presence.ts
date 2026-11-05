@@ -9,6 +9,7 @@ export type ChatTypingActorState = {
   retireAt: number;
   paused?: boolean;
   preview?: string;
+  cursor?: number;
   exitDurationMs?: number;
 };
 
@@ -20,6 +21,25 @@ export type ChatTypingOverflow = {
   // More than five active overflow collaborators share the bounded avatar sample.
   several: true;
 };
+
+// Keep the caret inside the bounded preview, without trimming whitespace or
+// splitting a Unicode code point. The wire offset uses textarea UTF-16 units.
+export function typingDraftPreview(text: string, cursor = text.length) {
+  if (!text.trim()) {
+    return undefined;
+  }
+  const points = Array.from(text);
+  let caretPoint = 0;
+  let offset = 0;
+  while (caretPoint < points.length && offset + points[caretPoint]!.length <= cursor) {
+    offset += points[caretPoint++]!.length;
+  }
+  const start = Math.max(0, Math.min(caretPoint - 150, points.length - 300));
+  return {
+    preview: points.slice(start, start + 300).join(""),
+    cursor: points.slice(start, caretPoint).join("").length,
+  };
+}
 
 export function typingActorIdForSessionMessage(
   payload: unknown,
@@ -36,6 +56,5 @@ export function typingActorIdForSessionMessage(
   const identity = readTranscriptSenderIdentity(
     recordOrNull(message?.["__openclaw"])?.senderIdentity,
   );
-  const actorId = identity?.type === "profile" ? identity.id : undefined;
-  return actorId;
+  return identity?.type === "profile" ? identity.id : undefined;
 }

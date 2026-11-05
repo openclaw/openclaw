@@ -136,7 +136,7 @@ extension OpenClawChatViewModel {
         self.questionCards.compactMap { card in
             guard card.status() == .pending || card.status() == .submitting else { return nil }
             let record = card.record
-            let preview = record.questions.first?.question.trimmingCharacters(in: .whitespacesAndNewlines)
+            let preview = ChatPayloadDecoding.trimmedNonEmptyString(record.questions.first?.question)
             return OpenClawChatAttentionRequest(
                 id: record.id,
                 kind: .question,
@@ -144,7 +144,7 @@ extension OpenClawChatViewModel {
                 agentID: record.agentid,
                 createdAtMs: Double(record.createdatms),
                 expiresAtMs: Double(record.expiresatms),
-                preview: preview.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "Question needs an answer"),
+                preview: preview ?? String(localized: "Question needs an answer"),
                 count: record.questions.count,
                 ownerID: self.questionAttentionOwnerID.uuidString)
         }
@@ -165,15 +165,18 @@ public struct OpenClawChatAttentionBadge: View {
     public let summary: OpenClawChatAttentionSummary
     private let targetID: String
     @Binding private var presentation: OpenClawChatAttentionPresentation?
+    private let showsCount: Bool
 
     public init(
         summary: OpenClawChatAttentionSummary,
         targetID: String,
-        presentation: Binding<OpenClawChatAttentionPresentation?>)
+        presentation: Binding<OpenClawChatAttentionPresentation?>,
+        showsCount: Bool = false)
     {
         self.summary = summary
         self.targetID = targetID
         self._presentation = presentation
+        self.showsCount = showsCount
     }
 
     private var selection: OpenClawChatAttentionPresentation {
@@ -203,8 +206,18 @@ public struct OpenClawChatAttentionBadge: View {
                 #if os(iOS)
                 .frame(width: 44, height: 44)
                 #else
-                .frame(width: 22, height: 22)
+                .frame(width: self.showsCount ? 32 : 22, height: self.showsCount ? 32 : 22)
                 #endif
+                .overlay(alignment: .topTrailing) {
+                    if self.showsCount {
+                        Text(self.summary.count, format: .number)
+                            .font(OpenClawChatTypography.body(size: 9, weight: .bold, relativeTo: .caption))
+                            .monospacedDigit()
+                            .padding(.horizontal, 3)
+                            .frame(minWidth: 14, minHeight: 14)
+                            .background(OpenClawChatTheme.warning.opacity(0.2), in: Capsule())
+                    }
+                }
                 .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)

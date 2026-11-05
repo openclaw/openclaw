@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/types.js";
 import {
   canRunBufferBackedImageToVideoLiveLane,
   canRunBufferBackedVideoToVideoLiveLane,
-  parseVideoProviderFilter,
-  parseProviderModelMap,
-  resolveConfiguredLiveVideoModels,
   resolveLiveVideoResolution,
 } from "./live-test-helpers.js";
 
@@ -20,47 +16,6 @@ describe("video-generation live-test helpers", () => {
     ["google", "google/veo-3.1-fast-generate-preview", "480P"],
   ] as const)("uses a supported %s live resolution", (providerId, modelRef, expected) => {
     expect(resolveLiveVideoResolution({ providerId, modelRef })).toBe(expected);
-  });
-
-  it("parses provider filters and treats empty/all as unfiltered", () => {
-    expect(parseVideoProviderFilter()).toBeNull();
-    expect(parseVideoProviderFilter("all")).toBeNull();
-    expect(parseVideoProviderFilter(" google , xai ")).toEqual(new Set(["google", "xai"]));
-  });
-
-  it("parses provider model overrides by provider id", () => {
-    expect(
-      parseProviderModelMap(
-        "google/veo-3.1-fast-generate-preview, xai/grok-imagine-video, invalid",
-      ),
-    ).toEqual(
-      new Map([
-        ["google", "google/veo-3.1-fast-generate-preview"],
-        ["xai", "xai/grok-imagine-video"],
-      ]),
-    );
-  });
-
-  it("collects configured models from primary and fallbacks", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          mediaModels: {
-            video: {
-              primary: "google/veo-3.1-fast-generate-preview",
-              fallbacks: ["xai/grok-imagine-video", "invalid"],
-            },
-          },
-        },
-      },
-    };
-
-    expect(resolveConfiguredLiveVideoModels(cfg)).toEqual(
-      new Map([
-        ["google", "google/veo-3.1-fast-generate-preview"],
-        ["xai", "xai/grok-imagine-video"],
-      ]),
-    );
   });
 
   it("runs buffer-backed video-to-video only for supported providers/models", () => {
@@ -88,8 +43,8 @@ describe("video-generation live-test helpers", () => {
       ["alibaba", "alibaba/wan2.6-r2v", false],
       ["qwen", "qwen/wan2.6-r2v-flash", false],
       ["vydra", "vydra/veo3", false],
-      ["together", "together/Wan-AI/Wan2.2-T2V-A14B", false],
-      ["together", "together/Wan-AI/Wan2.2-I2V-A14B", true],
+      ["together", "together/Wan-AI/wan2.7-t2v", false],
+      ["together", "together/Wan-AI/wan2.7-i2v", true],
     ] as const) {
       expect(canRunBufferBackedImageToVideoLiveLane({ providerId, modelRef }), modelRef).toBe(
         expected,

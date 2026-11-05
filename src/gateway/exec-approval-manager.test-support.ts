@@ -129,17 +129,14 @@ export function createTestApprovalFixture<TPayload = ExecApprovalRequestPayload>
         void request.catch(() => {});
         return request;
       },
-      run: <T>(callback: () => Promise<T>) => {
-        const work = fixture.run(async () => {
+      run: <T>(callback: () => Promise<T>) =>
+        (body = fixture.run(async () => {
           try {
             return await callback();
           } finally {
             await drainRequests();
           }
-        });
-        body = work;
-        return work;
-      },
+        })),
     };
   } catch (error) {
     // A failed open can include failed closure of an unpublished handle.

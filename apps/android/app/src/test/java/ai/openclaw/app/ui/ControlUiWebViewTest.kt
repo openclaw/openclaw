@@ -27,7 +27,6 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
-import java.security.MessageDigest
 
 @RunWith(RobolectricTestRunner::class)
 class ControlUiWebViewTest {
@@ -41,7 +40,7 @@ class ControlUiWebViewTest {
     controller.get().setContent {
       OpenClawTheme(themeMode = AppearanceThemeMode.System) {
         ControlUiWebView(
-          page = NodeRuntime.GatewayControlPage("https://gateway.example.test", null, null, null),
+          page = NodeRuntime.GatewayControlPage(baseUrl = "https://gateway.example.test", tlsFingerprintSha256 = null),
           url = url,
           interactive = interactive,
           onExternalLink = external::add,
@@ -103,97 +102,56 @@ class ControlUiWebViewTest {
   fun appearanceChangeRecreatesWebViewWithUpdatedTheme() {
     val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
     var mode by mutableStateOf(AppearanceThemeMode.Dark)
-    controller.get().setContent {
-      OpenClawTheme(themeMode = mode) {
-        TestControlUiWebView()
+    try {
+      controller.get().setContent {
+        OpenClawTheme(themeMode = mode) {
+          TestControlUiWebView()
+        }
       }
+      idleMainLooper()
+      val darkWebView = requireNotNull(findWebView(controller.get().window.decorView))
+      assertWebViewAppearance(darkWebView, dark = true)
+
+      mode = AppearanceThemeMode.Light
+      idleMainLooper()
+      val lightWebView = requireNotNull(findWebView(controller.get().window.decorView))
+      assertNotSame(darkWebView, lightWebView)
+      assertWebViewAppearance(lightWebView, dark = false)
+    } finally {
+      controller.pause().stop().destroy()
+      idleMainLooper()
     }
-    idleMainLooper()
-    val darkWebView = requireNotNull(findWebView(controller.get().window.decorView))
-    assertWebViewAppearance(darkWebView, dark = true)
-
-    mode = AppearanceThemeMode.Light
-    idleMainLooper()
-    val lightWebView = requireNotNull(findWebView(controller.get().window.decorView))
-    assertNotSame(darkWebView, lightWebView)
-    assertWebViewAppearance(lightWebView, dark = false)
-
-    controller.pause().stop().destroy()
-    idleMainLooper()
   }
 
   @Test
   @Config(sdk = [31])
   fun rendererLossDetachesDeadWebViewAndCreatesReplacement() {
     val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
-    controller.get().setContent {
-      OpenClawTheme(themeMode = AppearanceThemeMode.System) {
-        TestControlUiWebView()
+    try {
+      controller.get().setContent {
+        OpenClawTheme(themeMode = AppearanceThemeMode.System) {
+          TestControlUiWebView()
+        }
       }
+      idleMainLooper()
+      val deadWebView = requireNotNull(findWebView(controller.get().window.decorView))
+
+      assertTrue(
+        deadWebView.webViewClient.onRenderProcessGone(
+          deadWebView,
+          CrashedRenderProcessDetail,
+        ),
+      )
+      assertNull(deadWebView.parent)
+      idleMainLooper()
+
+      val replacement = requireNotNull(findWebView(controller.get().window.decorView))
+      assertNotSame(deadWebView, replacement)
+    } finally {
+      controller.pause().stop().destroy()
+      idleMainLooper()
     }
-    idleMainLooper()
-    val deadWebView = requireNotNull(findWebView(controller.get().window.decorView))
-
-    assertTrue(
-      deadWebView.webViewClient.onRenderProcessGone(
-        deadWebView,
-        CrashedRenderProcessDetail,
-      ),
-    )
-    assertNull(deadWebView.parent)
-    idleMainLooper()
-
-    val replacement = requireNotNull(findWebView(controller.get().window.decorView))
-    assertNotSame(deadWebView, replacement)
-
-    controller.pause().stop().destroy()
-    idleMainLooper()
   }
-
-  @Test
-  fun pinnedSslError_proceedsOnlyForExactCertificateAtGatewayOrigin() {
-    val certificate = "accepted gateway certificate".toByteArray()
-    val fingerprint = sha256Hex(certificate)
-
-    assertTrue(
-      shouldProceedForPinnedControlUiSslError(
-        pageBaseUrl = "https://gateway.example.com:8443/openclaw/",
-        expectedFingerprint = fingerprint,
-        errorUrl = "https://gateway.example.com:8443/openclaw/assets/app.js",
-        encodedCertificate = certificate,
-      ),
-    )
-    assertFalse(
-      shouldProceedForPinnedControlUiSslError(
-        pageBaseUrl = "https://gateway.example.com:8443/openclaw/",
-        expectedFingerprint = "00".repeat(32),
-        errorUrl = "https://gateway.example.com:8443/openclaw/assets/app.js",
-        encodedCertificate = certificate,
-      ),
-    )
-    assertFalse(
-      shouldProceedForPinnedControlUiSslError(
-        pageBaseUrl = "https://gateway.example.com:8443/openclaw/",
-        expectedFingerprint = fingerprint,
-        errorUrl = "https://attacker.example.com:8443/openclaw/assets/app.js",
-        encodedCertificate = certificate,
-      ),
-    )
-    assertFalse(
-      shouldProceedForPinnedControlUiSslError(
-        pageBaseUrl = "https://gateway.example.com:8443/openclaw/",
-        expectedFingerprint = null,
-        errorUrl = "https://gateway.example.com:8443/openclaw/assets/app.js",
-        encodedCertificate = certificate,
-      ),
-    )
-  }
-
-  private fun sha256Hex(bytes: ByteArray): String =
-    MessageDigest
-      .getInstance("SHA-256")
-      .digest(bytes)
-      .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
   private fun mountControlUiWebView(themeMode: AppearanceThemeMode): MountedControlUiWebView {
     val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
@@ -290,8 +248,6 @@ private fun TestControlUiWebView() {
     page =
       NodeRuntime.GatewayControlPage(
         baseUrl = "http://127.0.0.1",
-        token = null,
-        password = null,
         tlsFingerprintSha256 = null,
       ),
     url = "about:blank",

@@ -80,7 +80,7 @@ export async function listWorkspaceStateDirs(params: {
   const { resolveSandboxRuntimeStatusesForPersistedSessions } =
     await import("./sandbox/runtime-status.js");
   // Empty requests retain agent/shared workspace order without reading their stores.
-  const runtimeGroups = resolveSandboxRuntimeStatusesForPersistedSessions(
+  const runtimeGroups = await resolveSandboxRuntimeStatusesForPersistedSessions(
     agentWorkspaces.map(({ agentId, sessionKeys }) => ({
       cfg: params.cfg,
       env: params.env,
@@ -118,6 +118,7 @@ export async function assertConfiguredWorkspaceStateReady(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   operation?: "doctor";
+  blockedByStepId?: string;
 }): Promise<void> {
   const env = params.env ?? process.env;
   const homedir = os.homedir;

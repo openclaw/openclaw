@@ -96,22 +96,18 @@ export function applyToolChoice(
   };
 }
 
-export function isToolChoiceConstraintSatisfied(params: {
-  constraint: ToolChoiceConstraint | undefined;
-  pendingToolCalls: ReadonlyArray<{ name: string }> | undefined;
-}): boolean {
-  const { constraint, pendingToolCalls } = params;
-  if (!constraint) {
-    return true;
+export function resolveToolChoiceConstraintError(
+  constraint: ToolChoiceConstraint | undefined,
+  pendingToolCalls: ReadonlyArray<{ name: string }> | undefined,
+): string | undefined {
+  if (
+    !constraint ||
+    (pendingToolCalls?.length &&
+      (constraint.type === "required" ||
+        pendingToolCalls.some((call) => call.name === constraint.name)))
+  ) {
+    return undefined;
   }
-  return Boolean(
-    pendingToolCalls?.length &&
-    (constraint.type === "required" ||
-      pendingToolCalls.some((call) => call.name === constraint.name)),
-  );
-}
-
-export function resolveUnsatisfiedToolChoiceMessage(constraint: ToolChoiceConstraint): string {
   return constraint.type === "function"
     ? `tool_choice required a ${constraint.name} tool call, but the agent did not produce one`
     : "tool_choice=required was not satisfied by the agent response";

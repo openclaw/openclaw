@@ -13,7 +13,7 @@ type SourceUpdateBuildResult = { exitCode: number; admissionRefused?: true };
 
 const log = (message: string) => console.error(`[update-gateway] ${message}`);
 
-function preserveNativeCleanupFailure(error: unknown): unknown {
+export function preserveNativeCleanupFailure(error: unknown): unknown {
   return hasCommandProcessCleanupError(error)
     ? Object.assign(new Error("Native source-update cleanup is unverified.", { cause: error }), {
         processTreeState: "indeterminate",
@@ -233,6 +233,16 @@ export async function runLegacySourceUpdateBuild(
   });
 }
 
+function assertOutputRoots(root: string, roots: readonly string[]): void {
+  for (const output of roots) {
+    let current = root;
+    for (const component of output.split("/")) {
+      current = path.join(current, component);
+      assertRealOutputRoot(current);
+    }
+  }
+}
+
 export async function runSourceUpdateBuild({
   root,
   build,
@@ -254,13 +264,7 @@ export async function runSourceUpdateBuild({
         const roots = listTsdownOutputRoots();
         // Validate parents as well as final components before any service effects.
         // This is the same no-symlink contract as the build cleanup owner.
-        for (const output of roots) {
-          let current = root;
-          for (const component of output.split("/")) {
-            current = path.join(current, component);
-            assertRealOutputRoot(current);
-          }
-        }
+        assertOutputRoots(root, roots);
         log("stopping gateway before replacing hashed build chunks");
         const stopped = await lifecycle.stop();
         if (stopped !== 0) {
@@ -332,14 +336,8 @@ export async function runSourceUpdateBuild({
               log("restoring previous build output");
               try {
                 // Validate the whole replacement set before restoring any root.
-                for (const output of roots) {
-                  // Build children have joined; do not follow a replaced root/parent.
-                  let current = root;
-                  for (const component of output.split("/")) {
-                    current = path.join(current, component);
-                    assertRealOutputRoot(current);
-                  }
-                }
+                // Build children have joined; do not follow a replaced root/parent.
+                assertOutputRoots(root, roots);
                 for (const output of roots) {
                   const destination = path.join(root, output);
                   fs.rmSync(destination, { recursive: true, force: true });

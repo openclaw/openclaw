@@ -3,7 +3,7 @@ import remend, { type RemendOptions } from "remend";
 import {
   findMarkdownCodeSpans,
   findMarkdownCodeRegions,
-} from "../../../packages/markdown-core/src/reasoning-tags.js";
+} from "../../../packages/markdown-core/src/markdown-code-regions.js";
 import {
   consumeMarkdownRawHtmlLine,
   findMarkdownRawHtmlRanges,
@@ -13,20 +13,24 @@ import {
 } from "./markdown-details.ts";
 import { findUnescapedMathDelimiter, MAX_MATH_SCAN } from "./markdown-math.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
+import {
+  streamingMarkdownState,
+  type FenceMarker,
+  type StreamingMarkdownCursor,
+  type StreamingMarkdownSplit,
+} from "./markdown-streaming-state.ts";
 
 const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
 const LIST_ITEM_OPEN_RE = /^[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/u;
 const LINK_REFERENCE_CANDIDATE_RE = /^[ \t]*\[/u;
 const DISCLOSURE_LINE_CANDIDATE_RE = /^[ \t]*<\/?(?:details|summary)(?=[\s>])/iu;
-const STREAMING_CACHE_LIMIT = 8;
 const STREAMING_CONTAINER_TYPES = new Set([
   "bullet_list_open",
   "ordered_list_open",
   "blockquote_open",
 ]);
 
-type FenceMarker = { length: number; marker: "`" | "~"; container: boolean };
 type StrippedMarkdownLine = { content: string; offset: number };
 
 function stripMarkdownContainerPrefixes(line: string): StrippedMarkdownLine {
@@ -86,53 +90,23 @@ function updateDetailsStack(
   return tags ? walkMarkdownDisclosureTags(tags, stack, { allowPendingSummary }) : false;
 }
 
-type StreamingMarkdownSplit = {
-  /** End of the stable prefix, outside unfinished block containers. */
-  boundary: number;
-  /** Absolute offset where remend may start, or null while a fence remains open. */
-  tailRepairStart: number | null;
-};
-
-type StreamingMarkdownCursor = {
-  boundary: number;
-  containerOffset: number | null;
-  hasLinkReferenceDefinition: boolean;
-  index: number;
-  lastLiteralOffset: number;
-  lineMode: "fence" | "plain" | null;
-  openFence: FenceMarker | null;
-  openMath: "$$" | "\\[" | null;
-  mathScanEnd: number;
-};
-
-type StreamingMarkdownCacheEntry = {
-  cursor: StreamingMarkdownCursor;
-  markdown: string;
-  rawTail: boolean;
-  result: StreamingMarkdownSplit;
-};
-
-type StreamingMarkdownState = {
-  input?: { source: string; normalized: string };
-  split?: StreamingMarkdownCacheEntry;
-  rendered?: { options: string; markdown: string; html: string };
-};
-const streamingCache = new Map<string, StreamingMarkdownState>();
-
-export function streamingMarkdownState(streamKey?: string): StreamingMarkdownState | undefined {
-  if (!streamKey) {
-    return undefined;
+export function hasStreamingMarkdownHtml(markdown: string): boolean {
+  let index = markdown.indexOf("<");
+  if (index === -1) {
+    return false;
   }
-  const state = streamingCache.get(streamKey) ?? {};
-  streamingCache.delete(streamKey);
-  streamingCache.set(streamKey, state);
-  if (streamingCache.size > STREAMING_CACHE_LIMIT) {
-    const oldest = streamingCache.keys().next().value;
-    if (oldest !== undefined) {
-      streamingCache.delete(oldest);
+  for (const [start, end] of findMarkdownCodeSpans(markdown)) {
+    if (index < start) {
+      return true;
+    }
+    if (index < end) {
+      index = markdown.indexOf("<", end);
+    }
+    if (index === -1) {
+      return false;
     }
   }
-  return state;
+  return true;
 }
 
 function findStreamingCodeSpans(markdown: string, start: number): Array<[number, number]> {
@@ -426,12 +400,8 @@ function scanStableStreamingMarkdown(
 function canResumeStreamingLine(line: string, fence: FenceMarker | null): boolean {
   const content = stripMarkdownContainerPrefixes(line).content;
   const first = content.charAt(0);
-  // A partial opener or closer can change ownership of this line on append.
-  // Keep math-bearing lines at their start until the newline is available.
-  if (!fence && /[$\\]/u.test(content)) {
-    return false;
-  }
-  if (!first) {
+  // A lone prefix can become a display-math opener on the next delta.
+  if (!first || (!fence && (content === "$" || content === "\\"))) {
     return false;
   }
   return fence ? first !== fence.marker : !/[\s`~<[\]*+\-\d>]/u.test(first);
@@ -467,7 +437,8 @@ export function splitStableStreamingMarkdown(
     : scanStableStreamingMarkdown(markdownLocal, scanned.cursor).result;
 }
 
-// The parser owns math delimiters; remend must not invent closers in prose.
+// Streaming-tail repair config: math is not rendered by this pipeline, so
+// completing `$$` would inject visible characters into ordinary prose.
 const streamingRemendOptions = { katex: false, linkMode: "text-only" } satisfies RemendOptions;
 
 // repairStart is the splitter-owned literal boundary relative to this tail.

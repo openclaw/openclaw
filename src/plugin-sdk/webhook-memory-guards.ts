@@ -229,7 +229,7 @@ export function createWebhookAnomalyTracker(options?: {
 
   return {
     record: ({ key, statusCode, message, log, nowMs }) => {
-      if (!trackedStatusCodes.has(statusCode)) {
+      if (!key || !trackedStatusCodes.has(statusCode)) {
         return 0;
       }
       const next = counter.increment(key, nowMs);

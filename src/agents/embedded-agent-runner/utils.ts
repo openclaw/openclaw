@@ -1,6 +1,3 @@
-/**
- * Small shared normalization helpers for embedded-agent runner settings.
- */
 import {
   resolveProviderThinkingLevel,
   type ThinkLevel,
@@ -10,12 +7,6 @@ import type { Model } from "../../llm/types.js";
 import type { ThinkingLevel } from "../runtime/index.js";
 
 export type ProviderThinkLevel = Exclude<ThinkLevel, "ultra">;
-
-export function normalizeContextTokenBudget(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
-}
 
 /** Converts logical product modes into provider-facing effort values. */
 export function mapThinkingLevelForProvider(
@@ -32,15 +23,9 @@ export function mapThinkingLevelForProvider(
 }
 
 export function mapThinkingLevel(providerLevel?: ProviderThinkLevel): ThinkingLevel {
-  if (!providerLevel) {
-    return "off";
-  }
   // Runtime streams do not expose a distinct adaptive level. Preserve the
   // provider-owned adaptive default by using Claude's documented high effort.
-  if (providerLevel === "adaptive") {
-    return "high";
-  }
-  return providerLevel;
+  return providerLevel === "adaptive" ? "high" : providerLevel || "off";
 }
 
 export type { ThinkLevel };

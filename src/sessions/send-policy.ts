@@ -3,14 +3,15 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../channels/chat-type.js";
+import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
 import type { SessionChatType, SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sessionDeliveryChannel } from "../utils/delivery-context.read.js";
 import {
+  deriveSessionChatTypeFromKey,
   hasAmbiguousCanonicalSessionPeerShape,
   parseCanonicalSessionPeerShape,
 } from "./session-chat-type-shared.js";
-import { deriveSessionChatType } from "./session-chat-type.js";
 
 /** Session send-policy decision after config and per-session overrides are evaluated. */
 export type SessionSendPolicyDecision = "allow" | "deny";
@@ -18,13 +19,7 @@ export type SessionSendPolicyDecision = "allow" | "deny";
 /** Normalizes raw send-policy text into a decision. */
 export function normalizeSendPolicy(raw?: string | null): SessionSendPolicyDecision | undefined {
   const value = normalizeOptionalLowercaseString(raw);
-  if (value === "allow") {
-    return "allow";
-  }
-  if (value === "deny") {
-    return "deny";
-  }
-  return undefined;
+  return value === "allow" || value === "deny" ? value : undefined;
 }
 
 function stripAgentSessionKeyPrefix(key?: string): string | undefined {
@@ -42,29 +37,33 @@ function stripAgentSessionKeyPrefix(key?: string): string | undefined {
   return key;
 }
 
-function deriveChannelFromKey(key?: string) {
-  const normalizedKey = stripAgentSessionKeyPrefix(key);
-  if (!normalizedKey) {
-    return undefined;
-  }
-  return normalizeOptionalLowercaseString(parseCanonicalSessionPeerShape(normalizedKey)?.channel);
-}
-
-function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
-  const normalizedKey = normalizeOptionalLowercaseString(stripAgentSessionKeyPrefix(key));
+function deriveChatTypeFromKey(normalizedKey: string): SessionChatType | undefined {
   if (!normalizedKey || normalizedKey.startsWith("agent:")) {
     return undefined;
   }
-  const derived = deriveSessionChatType(normalizedKey);
-  if (derived !== "unknown") {
-    return derived;
-  }
-  return undefined;
-}
-
-function hasAmbiguousPeerShape(key?: string): boolean {
-  const normalizedKey = normalizeOptionalLowercaseString(stripAgentSessionKeyPrefix(key));
-  return normalizedKey ? hasAmbiguousCanonicalSessionPeerShape(normalizedKey) : false;
+  const derivedChatType = deriveSessionChatTypeFromKey(normalizedKey, [
+    (scopedSessionKey) => {
+      const ids = new Set<string>();
+      const firstToken = scopedSessionKey.split(":").find(Boolean);
+      if (firstToken) {
+        ids.add(firstToken);
+      }
+      // Historical WhatsApp group keys can be bare JIDs without a channel prefix.
+      if (scopedSessionKey.includes("@g.us")) {
+        ids.add("whatsapp");
+      }
+      for (const pluginId of ids) {
+        const deriveLegacySessionChatType =
+          getBootstrapChannelPlugin(pluginId)?.messaging?.deriveLegacySessionChatType;
+        const derived = deriveLegacySessionChatType?.(scopedSessionKey);
+        if (derived) {
+          return derived;
+        }
+      }
+      return undefined;
+    },
+  ]);
+  return derivedChatType !== "unknown" ? derivedChatType : undefined;
 }
 
 /** Resolves whether a session send is allowed by entry override and config rules. */
@@ -84,29 +83,28 @@ export function resolveSendPolicy(params: {
   if (!policy) {
     return "allow";
   }
-  // The legacy key grammar cannot distinguish a peer-kind-shaped account id
-  // from a channel peer. Never let that ambiguity satisfy an allow policy.
-  if (hasAmbiguousPeerShape(params.sessionKey)) {
-    return "deny";
-  }
-
   const rawSessionKey = params.sessionKey ?? "";
   const strippedSessionKey = stripAgentSessionKeyPrefix(rawSessionKey) ?? "";
   const rawSessionKeyNorm = normalizeLowercaseStringOrEmpty(rawSessionKey);
   const strippedSessionKeyNorm = normalizeLowercaseStringOrEmpty(strippedSessionKey);
+  // The legacy key grammar cannot distinguish a peer-kind-shaped account id
+  // from a channel peer. Never let that ambiguity satisfy an allow policy.
+  if (strippedSessionKeyNorm && hasAmbiguousCanonicalSessionPeerShape(strippedSessionKeyNorm)) {
+    return "deny";
+  }
   let channel: string | undefined;
   let chatType: SessionChatType | undefined;
   const getChannel = () => {
     channel ??=
       normalizeOptionalLowercaseString(params.channel) ??
       normalizeOptionalLowercaseString(sessionDeliveryChannel(params.entry)) ??
-      deriveChannelFromKey(params.sessionKey);
+      normalizeOptionalLowercaseString(parseCanonicalSessionPeerShape(strippedSessionKey)?.channel);
     return channel;
   };
   const getChatType = () => {
     chatType ??=
       normalizeChatType(params.chatType ?? params.entry?.chatType) ??
-      normalizeChatType(deriveChatTypeFromKey(params.sessionKey));
+      normalizeChatType(deriveChatTypeFromKey(strippedSessionKeyNorm));
     return chatType;
   };
 

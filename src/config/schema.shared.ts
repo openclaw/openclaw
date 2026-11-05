@@ -1,10 +1,8 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigSchemaResponse as ProtocolConfigSchemaResponse } from "../../packages/gateway-protocol/src/schema/config.js";
-import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 
-export type ConfigSchemaResponse = Omit<ProtocolConfigSchemaResponse, "schema" | "uiHints"> & {
+export type ConfigSchemaResponse = Omit<ProtocolConfigSchemaResponse, "schema"> & {
   schema: Record<string, unknown>;
-  uiHints: ConfigUiHints;
 };
 
 export type ConfigJsonSchemaObject = Record<string, unknown> & {
@@ -12,6 +10,7 @@ export type ConfigJsonSchemaObject = Record<string, unknown> & {
   title?: string;
   description?: string;
   properties?: Record<string, ConfigJsonSchemaObject>;
+  patternProperties?: Record<string, ConfigJsonSchemaObject>;
   required?: string[];
   enum?: unknown[];
   default?: unknown;
@@ -23,11 +22,6 @@ export type ConfigJsonSchemaObject = Record<string, unknown> & {
   allOf?: ConfigJsonSchemaObject[];
   oneOf?: ConfigJsonSchemaObject[];
 };
-
-/** Deep-clone schema payloads before callers mutate plugin or base schema fragments. */
-export function cloneSchema<T>(value: T): T {
-  return structuredClone(value);
-}
 
 /** Narrow unknown JSON-schema fragments to non-array objects. */
 export function asSchemaObject(value: unknown): ConfigJsonSchemaObject | null {

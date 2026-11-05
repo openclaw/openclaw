@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { collectBundledPluginPackageDependencyErrors } from "./lib/plugin-package-dependencies.mts";
 import {
   extractCurrentPackageChangelog,
   readCurrentPackageChangelog,
@@ -119,7 +120,7 @@ function readGitFile(ref, file, { optional = false } = {}) {
 
 export function validatePackageSourceRef(ref, options = {}) {
   const rootManifestContent = readGitFile(ref, ROOT_MANIFEST_PATH);
-  return validatePackageSource({
+  const version = validatePackageSource({
     aiManifestContent: readGitFile(ref, AI_MANIFEST_PATH, { optional: true }),
     allowUnreleasedChangelog: options.allowUnreleasedChangelog,
     changelogContent: readCurrentPackageChangelog(
@@ -129,6 +130,15 @@ export function validatePackageSourceRef(ref, options = {}) {
     ),
     rootManifestContent,
   });
+  validatePluginDependencies(path.resolve("extensions"), { ref });
+  return version;
+}
+
+function validatePluginDependencies(directory, options = {}) {
+  const errors = collectBundledPluginPackageDependencyErrors(directory, options);
+  if (errors.length > 0) {
+    throw new Error(errors.join("\n"));
+  }
 }
 
 function readSourceFile(sourceDir, file, { optional = false } = {}) {
@@ -145,7 +155,7 @@ function readSourceFile(sourceDir, file, { optional = false } = {}) {
 export function validatePackageSourceDir(sourceDir, options = {}) {
   const resolvedSourceDir = path.resolve(sourceDir);
   const rootManifestContent = readSourceFile(resolvedSourceDir, ROOT_MANIFEST_PATH);
-  return validatePackageSource({
+  const version = validatePackageSource({
     aiManifestContent: readSourceFile(resolvedSourceDir, AI_MANIFEST_PATH, { optional: true }),
     allowUnreleasedChangelog: options.allowUnreleasedChangelog,
     changelogContent: readCurrentPackageChangelog(
@@ -155,6 +165,8 @@ export function validatePackageSourceDir(sourceDir, options = {}) {
     ),
     rootManifestContent,
   });
+  validatePluginDependencies(path.join(resolvedSourceDir, "extensions"));
+  return version;
 }
 
 function main(argv = process.argv.slice(2)) {
