@@ -88,7 +88,10 @@ export function createOversizedJsonResponse(): {
   return { response, cancel };
 }
 
-export function createCapturingStreamFn(result = "stream") {
+export function createCapturingStreamFn(
+  result = "stream",
+  initialPayload: Record<string, unknown> = {},
+) {
   let capturedPayload: Record<string, unknown> | undefined;
   const streamFn = vi.fn(
     (
@@ -96,7 +99,7 @@ export function createCapturingStreamFn(result = "stream") {
       _context: Parameters<StreamFn>[1],
       options: Parameters<StreamFn>[2],
     ) => {
-      const payload: Record<string, unknown> = {};
+      const payload: Record<string, unknown> = { ...initialPayload };
       void options?.onPayload?.(payload, model);
       capturedPayload = payload;
       return result as never;
@@ -145,6 +148,7 @@ export function streamOptions(streamFn: { mock: { calls: unknown[][] } }, callIn
 
 export function preparePromptCacheStream(params: {
   apiKey?: string;
+  extraParams?: Record<string, unknown>;
   fetchMock?: typeof fetch;
   model?: ReturnType<typeof makeGoogleModel>;
   now: number;
@@ -159,7 +163,7 @@ export function preparePromptCacheStream(params: {
   }
   return prepareGooglePromptCacheStreamFn({
     apiKey: params.apiKey ?? "gemini-api-key",
-    extraParams: { cacheRetention: "long" },
+    extraParams: { cacheRetention: "long", ...params.extraParams },
     model,
     modelId: model.id,
     provider: "google",

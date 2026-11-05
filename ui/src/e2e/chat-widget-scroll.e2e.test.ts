@@ -32,10 +32,8 @@ async function swipe(
         time: performance.timeOrigin + performance.now(),
         offset: element.scrollTop,
       });
-    let finish!: () => void;
-    const done = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
+    const { promise: done, resolve } = Promise.withResolvers<void>();
+    const finish: () => void = resolve;
     element.addEventListener("scroll", record, { passive: true });
     element.addEventListener("scrollend", finish, { once: true });
     return {
@@ -88,6 +86,21 @@ async function swipe(
       touchPoints: [],
       timestamp: timestamp + moveCount * moveSeconds + 0.002,
     });
+    // The CDP response does not guarantee delivery to the document's listener.
+    await expect
+      .poll(
+        async () =>
+          (
+            await Promise.all(
+              releases.map((release) => release.evaluate(({ state }) => state.time)),
+            )
+          ).some((time) => time !== null),
+        {
+          timeout: 10_000,
+          message: "Native touch gesture did not release in the page or its frames",
+        },
+      )
+      .toBe(true);
     const releaseTimes = await Promise.all(
       releases.map((release) => release.evaluate(({ state }) => state.time)),
     );
@@ -102,45 +115,7 @@ async function swipe(
       return { moves: beforeRelease, released: beforeRelease.at(-1) ?? offsets[0]!.offset };
     }, releasedAt);
     const dragDistance = direction * (before - released);
-    let dragFailureDetails: string | undefined;
-    if (!(dragDistance > 120)) {
-      // Preserve the failed sample while recording whether native scrolling continued.
-      const [recordedOffsets, current, frameClocks] = await Promise.allSettled([
-        scroll.evaluate(({ offsets }) => offsets),
-        thread.evaluate((element, coordinates) => {
-          const hit = document.elementFromPoint(coordinates.x, coordinates.y);
-          return {
-            scrollTop: element.scrollTop,
-            scrollHeight: element.scrollHeight,
-            clientHeight: element.clientHeight,
-            timeOrigin: performance.timeOrigin,
-            now: performance.timeOrigin + performance.now(),
-            hit: hit ? { tag: hit.tagName, classes: hit.getAttribute("class") } : null,
-          };
-        }, point),
-        Promise.all(
-          releases.map((release) =>
-            release.evaluate(({ state }) => ({
-              releaseTime: state.time,
-              timeOrigin: performance.timeOrigin,
-            })),
-          ),
-        ),
-      ]);
-      dragFailureDetails = JSON.stringify({
-        point,
-        direction,
-        before,
-        released,
-        releasedAt,
-        releaseTimes,
-        moves,
-        offsets: recordedOffsets,
-        current,
-        frameClocks,
-      });
-    }
-    expect(dragDistance, dragFailureDetails).toBeGreaterThan(120);
+    expect(dragDistance).toBeGreaterThan(120);
     // A quiet timer window can occur during native inertia; wait for its actual end.
     const completed = await page.waitForFunction(
       async ({ done }) => {
@@ -227,7 +202,6 @@ suite.define(() => {
           .getByRole("heading", { name: "Synthetic visualization" })
           .waitFor({ state: "attached" });
         const cdp = await context.newCDPSession(page);
-        const samples = [];
         await scrollChatThreadToTop(page);
         await waitForChatScrollIdle(page);
         for (const target of ["text", "widget"]) {
@@ -257,8 +231,6 @@ suite.define(() => {
             },
             -1,
           );
-          samples.push({ target, ...sample });
-          console.info("Mobile widget native scroll proof", JSON.stringify(samples));
           // A finger moving in one direction must never drive the transcript backward.
           let previous = sample.before;
           for (const offset of sample.moves) {

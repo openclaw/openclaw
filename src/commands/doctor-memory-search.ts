@@ -20,6 +20,7 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getMemoryEmbeddingCommandSecretTargetIds } from "../cli/command-secret-targets.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import type { HealthCheckContext, HealthFinding } from "../flows/health-checks.js";
@@ -40,7 +41,7 @@ import {
 import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import {
   listProviderPolicyOwners,
-  loadProviderPolicyArtifacts,
+  loadProviderPolicyArtifactsAsync,
 } from "../plugins/provider-public-artifacts.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
@@ -220,10 +221,11 @@ export async function collectMemorySearchHealthFindings(
 }
 
 async function inspectMemorySearchHealth(
-  cfg: OpenClawConfig,
+  sourceConfig: OpenClawConfig,
   opts: MemorySearchHealthOptions,
   emit: (diagnostic: { text: string; finding: HealthFinding | null }) => void,
 ): Promise<void> {
+  const cfg = captureRuntimeConfig(sourceConfig);
   const scopes = resolveMemoryDoctorAgentScopes(cfg);
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const labelAgents = scopes.length > 1;
@@ -432,7 +434,7 @@ async function inspectMemorySearchHealthForAgent(
       .filter(({ policyBlock }) => !policyBlock)
       .map(({ owner }) => owner);
     const policyArtifacts =
-      eligibleOwners.length > 0 ? loadProviderPolicyArtifacts(eligibleOwners) : null;
+      eligibleOwners.length > 0 ? await loadProviderPolicyArtifactsAsync(eligibleOwners) : null;
     const selectedPolicy = policyArtifacts
       ? { owner: policyArtifacts.owner, policyBlock: null }
       : ownerPolicies.find(({ policyBlock }) => policyBlock);

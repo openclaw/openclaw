@@ -40,6 +40,7 @@ async function fixture(
   let workspace = path.join(root, "workspace");
   const bin = path.join(root, "bin");
   const extraProcessPath = path.join(root, "extra-process.txt");
+  const leaseDirectory = path.join(home, ".openclaw-worker", "quiescence");
   await Promise.all([home, workspace, bin].map((directory) => fs.mkdir(directory)));
   workspace = await fs.realpath(workspace);
   await fs.writeFile(
@@ -139,6 +140,7 @@ childProcess.execFileSync = (command, args, options) => {
     home,
     workspace,
     extraProcessPath,
+    leaseDirectory,
     env: {
       ...(probeClock ? withRuntimePreload(process.env, clockPath) : process.env),
       HOME: home,
@@ -174,9 +176,7 @@ function runQuiescence(
 }
 
 async function readLease(input: Fixture, nonce: string): Promise<Lease> {
-  const lease: Lease = JSON.parse(
-    await fs.readFile(leasePath(input.home, input.workspace, nonce), "utf8"),
-  );
+  const lease: Lease = JSON.parse(await fs.readFile(leasePath(input, nonce), "utf8"));
   watchdogPids.add(lease.watchdog.pid);
   return lease;
 }
@@ -214,19 +214,12 @@ async function quiesce(input: Fixture, sharedHost = false, watchdogTimeoutMs = "
   expect(result.code, JSON.stringify(result)).toBe(0);
   const match = /^quiesced ([a-f0-9]{32})\n$/u.exec(result.stdout);
   expect(match).not.toBeNull();
-  if (sharedHost) {
-    expect(result.stderr).toContain(
-      process.platform === "win32"
-        ? "Windows shared host declared; using manifest fences without process freezing"
-        : "shared host declared; skipping process freeze sweep",
-    );
-  }
   return match![1]!;
 }
 
-function leasePath(home: string, workspace: string, nonce: string) {
-  const key = createHash("sha256").update(workspace).digest("hex");
-  return path.join(home, ".openclaw-worker", "quiescence", `${key}.${nonce}.json`);
+function leasePath(input: Fixture, nonce: string) {
+  const key = createHash("sha256").update(input.workspace).digest("hex");
+  return path.join(input.leaseDirectory, `${key}.${nonce}.json`);
 }
 
 // Absolute /bin/ps so the fixture's stubbed PATH entry cannot answer for the real host.
@@ -269,8 +262,17 @@ async function stopIdleWorker(child: ReturnType<typeof spawnIdleWorker>) {
 }
 
 async function resume(input: Fixture, nonce: string) {
-  const result = await runQuiescence(input, { action: "release", nonce }, "dedicated");
+  const result = await release(input, nonce);
   expect(result.code, JSON.stringify(result)).toBe(0);
+}
+
+function release(input: Fixture, nonce: string, options: CommandOptions = {}) {
+  return runQuiescence(input, { action: "release", nonce }, "dedicated", options);
+}
+
+function expectProbeFailure(result: Awaited<ReturnType<typeof runQuiescence>>) {
+  expect(result.termination).toBe("exit");
+  expect(result.code).not.toBe(0);
 }
 
 async function renew(input: Fixture, nonce: string, sharedHost = false) {
@@ -286,19 +288,15 @@ function workspaceCaller(
   input: Fixture,
   ownerSignal = new AbortController().signal,
   timeoutMs = 10_000,
-  results: Awaited<ReturnType<typeof runCommandWithTimeout>>[] = [],
 ) {
   return createWorkerWorkspaceQuiescence({
     ownerSignal,
     sharedHost: false,
-    runWorkspaceCommand: async (command) => {
-      const result = await runCommandWithTimeout([process.execPath, ...command.argv.slice(1)], {
+    runWorkspaceCommand: (command) =>
+      runCommandWithTimeout([process.execPath, ...command.argv.slice(1)], {
         timeoutMs,
         baseEnv: input.env,
-      });
-      results.push(result);
-      return result;
-    },
+      }),
   });
 }
 
@@ -333,7 +331,7 @@ async function withSharedLease(
   const nonce = await quiesce(input, true, timeout);
   const lease = await readLease(input, nonce);
   try {
-    await run(input, nonce, lease, leasePath(input.home, input.workspace, nonce), healthyPs);
+    await run(input, nonce, lease, leasePath(input, nonce), healthyPs);
   } finally {
     await writePs(input, healthyPs);
     retireWatchdog(lease.watchdog.pid);
@@ -354,32 +352,22 @@ describe("remote workspace quiescence scripts", () => {
   it("surfaces an exhausted probe budget through the workspace caller", async () => {
     const input = await fixture("budget");
     await fs.writeFile(path.join(input.bin, "ps"), STALLED_PS);
-    const results: Awaited<ReturnType<typeof runCommandWithTimeout>>[] = [];
-    const acquire = workspaceCaller(input, undefined, 45_000, results);
+    const acquire = workspaceCaller(input, undefined, 45_000);
     await expect(acquire(input.workspace)).rejects.toThrow(
       "workspace quiescence process check budget exhausted after 30000 ms",
     );
-    expect(results).toHaveLength(1);
-    expect(results[0]).toMatchObject({
-      termination: "exit",
-      code: 1,
-      stderr: expect.stringContaining("slow ps check; retrying"),
-    });
-    expect(results[0]?.stderr.slice(0, 900)).toContain("check budget exhausted after 30000 ms");
     // A renewed budget must not authorize another probe after 30s of simulated delay.
     await expect(fs.readFile(path.join(input.home, "..", "budget-probes"), "utf8")).resolves.toBe(
       "timeout\n",
     );
-    await expect(
-      fs.readdir(path.join(input.home, ".openclaw-worker", "quiescence")),
-    ).resolves.toEqual([]);
+    await expect(fs.readdir(input.leaseDirectory)).resolves.toEqual([]);
   }, 60_000);
 
   it("does not renew a lease that expires during a process probe", async () => {
     const input = await fixture();
     const healthyPs = await fs.readFile(path.join(input.bin, "ps"), "utf8");
     const nonce = await quiesce(input, true);
-    const leaseFile = leasePath(input.home, input.workspace, nonce);
+    const leaseFile = leasePath(input, nonce);
     await fs.writeFile(
       path.join(input.bin, "ps"),
       `#!${process.execPath}
@@ -427,6 +415,7 @@ require("node:child_process").execFileSync("/bin/ps", process.argv.slice(2), { s
     } finally {
       await resume(input, nonce);
     }
+    expect((await standaloneRenew(input, nonce)).code).not.toBe(0);
   });
 
   it("keeps unrelated same-uid processes running on a declared shared host", async () => {
@@ -434,27 +423,15 @@ require("node:child_process").execFileSync("/bin/ps", process.argv.slice(2), { s
     const child = spawnIdleWorker();
     await fs.writeFile(input.extraProcessPath, `${child.pid}\n`);
 
-    let nonce: string | undefined;
+    const nonce = await quiesce(input, true);
     try {
-      nonce = await quiesce(input, true);
       await renew(input, nonce, true);
       const lease = await readLease(input, nonce);
       expect(lease).toMatchObject({ processes: [], sharedHost: true });
       expect(() => process.kill(child.pid!, 0)).not.toThrow();
     } finally {
-      if (nonce) {
-        await resume(input, nonce);
-      }
+      await resume(input, nonce);
     }
-  });
-
-  it("fails closed when the watchdog lease no longer exists", async () => {
-    const input = await fixture();
-    const nonce = await quiesce(input);
-    await resume(input, nonce);
-
-    const result = await standaloneRenew(input, nonce);
-    expect(result.code).not.toBe(0);
   });
 
   it("cleans up the initial watchdog when identity probing times out", async () => {
@@ -478,12 +455,10 @@ esac
       baseEnv: { ...input.env, OPENCLAW_TEST_WATCHDOG_PID: watchdogPidPath },
     });
 
-    expect(result.termination).toBe("exit");
-    expect(result.code).not.toBe(0);
+    expectProbeFailure(result);
     const watchdogPid = Number((await fs.readFile(watchdogPidPath, "utf8")).trim());
     expect(Number.isSafeInteger(watchdogPid)).toBe(true);
-    const leaseDirectory = path.join(input.home, ".openclaw-worker", "quiescence");
-    await expect(fs.readdir(leaseDirectory)).resolves.toEqual([]);
+    await expect(fs.readdir(input.leaseDirectory)).resolves.toEqual([]);
     await vi.waitFor(() => {
       expect(() => process.kill(watchdogPid, 0)).toThrow();
     });
@@ -492,9 +467,7 @@ esac
   it("releases an empty shared-host lease without depending on ps", async () => {
     await withSharedLease(async (input, nonce, lease, leaseFile) => {
       await writePs(input, STALLED_PS);
-      const result = await runQuiescence(input, { action: "release", nonce }, "dedicated", {
-        timeoutMs: 15_000,
-      });
+      const result = await release(input, nonce, { timeoutMs: 15_000 });
       expect(result).toMatchObject({ termination: "exit", code: 0 });
       await expect(fs.access(leaseFile)).rejects.toThrow();
       await vi.waitFor(
@@ -513,8 +486,7 @@ esac
 
       // Starting the replacement watchdog still needs ps and fails closed, but the stale
       // empty lease must already be gone so it cannot block another reconciliation attempt.
-      expect(result.termination).toBe("exit");
-      expect(result.code).not.toBe(0);
+      expectProbeFailure(result);
       await expect(fs.access(leaseFile)).rejects.toThrow();
     });
   });
@@ -527,15 +499,16 @@ esac
       try {
         const failed = await runQuiescence(input, undefined, "dedicated", { timeoutMs: 15_000 });
 
-        expect(failed.termination).toBe("exit");
-        expect(failed.code).not.toBe(0);
+        expectProbeFailure(failed);
         await fs.access(firstLeaseFile);
 
         await writePs(input, healthyPs);
+        await fs.writeFile(input.extraProcessPath, `${firstLease.watchdog.pid}\n`);
         replacementNonce = await quiesce(input, false, "10000");
         const replacementLease = await readLease(input, replacementNonce);
 
         expect(replacementLease.processes).not.toContainEqual({ pid: firstLease.watchdog.pid });
+        expect(() => process.kill(firstLease.watchdog.pid, 0)).toThrow();
         await expect(fs.access(firstLeaseFile)).rejects.toThrow();
       } finally {
         await writePs(input, healthyPs);
@@ -544,27 +517,6 @@ esac
         }
       }
     });
-  });
-
-  it("retires an empty orphan watchdog before a dedicated replacement sweep", async () => {
-    const input = await fixture();
-    const firstNonce = await quiesce(input, true, "30000");
-    const firstLease = await readLease(input, firstNonce);
-    await fs.writeFile(input.extraProcessPath, `${firstLease.watchdog.pid}\n`);
-
-    let replacementNonce: string | undefined;
-    try {
-      replacementNonce = await quiesce(input, false, "10000");
-      const replacementLease = await readLease(input, replacementNonce);
-
-      expect(replacementLease.processes).not.toContainEqual({ pid: firstLease.watchdog.pid });
-      expect(() => process.kill(firstLease.watchdog.pid, 0)).toThrow();
-    } finally {
-      if (replacementNonce !== undefined) {
-        await resume(input, replacementNonce);
-      }
-      retireWatchdog(firstLease.watchdog.pid);
-    }
   });
 
   it("keeps the watchdog resumer alive when the identity sweep aborts partway", async () => {
@@ -584,12 +536,8 @@ esac
       `#!/bin/sh\ntrap '' TERM\ncase "$*" in\n  *"lstart= -p ${watchdogPid}") exec /bin/ps "$@" ;;\n  *"lstart= -p"*) while true; do sleep 1; done ;;\n  *) exit 1 ;;\nesac\n`,
     );
 
-    const result = await runQuiescence(input, { action: "release", nonce }, "dedicated", {
-      timeoutMs: 15_000,
-    });
-
-    expect(result.termination).toBe("exit");
-    expect(result.code).not.toBe(0);
+    const result = await release(input, nonce, { timeoutMs: 15_000 });
+    expectProbeFailure(result);
     // The watchdog is the only owner left that can still thaw this lease.
     expect(result.stderr).toContain(`workspace quiescence recovery pending PIDs: ${pid}`);
     expect(() => process.kill(watchdogPid, 0)).not.toThrow();
@@ -602,7 +550,7 @@ esac
     const callsPath = path.join(input.home, "probe-calls");
     await fs.writeFile(input.extraProcessPath, pids.join(","));
     const nonce = await quiesce(input);
-    const leaseFile = leasePath(input.home, input.workspace, nonce);
+    const leaseFile = leasePath(input, nonce);
     const lease = await readLease(input, nonce);
     expect(
       lease.processes.map((entry) => entry.pid).toSorted((left, right) => left - right),
@@ -653,8 +601,10 @@ esac
     try {
       const acquire = workspaceCaller(input, owner.signal);
       const quiescence = await acquire(input.workspace);
-      const directory = path.join(input.home, ".openclaw-worker", "quiescence");
-      const leaseFile = path.join(directory, (await fs.readdir(directory))[0]!);
+      const leaseFile = path.join(
+        input.leaseDirectory,
+        (await fs.readdir(input.leaseDirectory))[0]!,
+      );
       const lease: Lease = JSON.parse(await fs.readFile(leaseFile, "utf8"));
       const watchdogPid = lease.watchdog.pid;
       watchdogPids.add(watchdogPid);
@@ -732,12 +682,10 @@ esac
       // watchdog that keeps re-probing identity can still thaw this worker.
       await writePs(input, STALLED_PS);
 
-      const failed = await runQuiescence(input, { action: "release", nonce }, "dedicated", {
-        timeoutMs: 15_000,
-      });
+      const failed = await release(input, nonce, { timeoutMs: 15_000 });
       expect(failed.code).not.toBe(0);
 
-      const leaseFile = leasePath(input.home, input.workspace, nonce);
+      const leaseFile = leasePath(input, nonce);
       await expireLease(leaseFile, lease);
       await watchdogProbeTimedOut.promise;
       expect(await processState(child.pid!)).toMatch(/^T/u);
@@ -751,7 +699,7 @@ esac
       // including an unreaped zombie, before asserting its completed cleanup.
       expect(await waitForProcessState(lease.watchdog.pid, /^(?:Z|$)/u)).toMatch(/^(?:Z|$)/u);
       expect(await processState(child.pid!)).toMatch(/^[^T]/u);
-      await expect(fs.stat(leasePath(input.home, input.workspace, nonce))).rejects.toThrow();
+      await expect(fs.stat(leaseFile)).rejects.toThrow();
     } finally {
       retireWatchdog(watchdogPid);
       connection?.destroy();

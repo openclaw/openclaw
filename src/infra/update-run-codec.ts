@@ -43,9 +43,15 @@ const RETAINED_STEP_NAMES = [
   "diagnostic:openclaw doctor",
   "diagnostic:pre-plugin doctor",
   "diagnostic:post-plugin doctor",
+  // A later warning flood must not hide that post-update repair never ran.
+  "warning:post-plugin doctor",
   "managed-service-executor-check",
   "managed-service-install",
   "managed-service-restart",
+  "managed-service update handoff",
+  "service-stop",
+  "service-start",
+  "service-running",
   "update-driver-handoff",
   "diagnostic:update-driver-handoff",
   "notice:ack",
@@ -64,9 +70,15 @@ const RETAINED_STEP_NAMES = [
   "reconcile:superseded",
   "reconcile:acknowledged",
   "reconcile:settle",
+  "warning:reconcile:driver-lost-after-verification",
+  "recovery-artifact-cleanup",
+  "warning:recovery-artifact-cleanup",
+  "diagnostic:recovery-artifact-cleanup",
 ];
 export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
   busyTimeoutMs?: number;
+  /** One-shot bookkeeping under the candidate Doctor capture, before native migration. */
+  attributeUpdateWrite?: true;
   redactPaths?: readonly string[];
 };
 
@@ -161,6 +173,8 @@ function boundedJson(
           item.step !== "diagnostic:database snapshot" &&
           item.step !== "diagnostic:database migration writes" &&
           item.step !== "warning:database migration writes" &&
+          item.step !== "warning:post-plugin doctor" &&
+          item.step !== "warning:reconcile:driver-lost-after-verification" &&
           item.step !== "diagnostic:database rollback" &&
           item.step !== "finalize:data-at-risk" &&
           !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
@@ -223,6 +237,8 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     driver,
     previousDrivers,
     updateRecoveryCapture,
+    managedHandoff,
+    packageStage,
     windowsUserSid,
     requester,
     sessionKey,
@@ -236,6 +252,8 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     driver,
     previousDrivers,
     updateRecoveryCapture,
+    managedHandoff,
+    packageStage,
     windowsUserSid,
   });
   if (Buffer.byteLength(retained) > JSON_BYTES) {
@@ -245,7 +263,15 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
   const hasAdmission = origin.admission !== undefined || origin.candidateAdmission !== undefined;
   // Admission diagnostics cannot shorten routing; both yield to recovery receipts.
   const identities = hasAdmission
-    ? JSON.stringify({ driver, previousDrivers, updateRecoveryCapture, windowsUserSid, ...routing })
+    ? JSON.stringify({
+        driver,
+        previousDrivers,
+        updateRecoveryCapture,
+        managedHandoff,
+        packageStage,
+        windowsUserSid,
+        ...routing,
+      })
     : retained;
   const diagnostics = hasAdmission ? admissionDiagnostics : { ...admissionDiagnostics, ...routing };
   // Merging removes the diagnostic braces and needs a comma only when identities exist.
@@ -313,8 +339,15 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
       : [];
   });
   // Process identities and recovery receipts are operational facts, not diagnostics.
-  const { driver, previousDrivers, updateRecoveryCapture, windowsUserSid, ...originDiagnostics } =
-    input.origin;
+  const {
+    driver,
+    previousDrivers,
+    updateRecoveryCapture,
+    managedHandoff,
+    packageStage,
+    windowsUserSid,
+    ...originDiagnostics
+  } = input.origin;
   const record = UpdateRunRecordSchema.parse(
     mapJsonText(
       {
@@ -341,6 +374,8 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     driver,
     previousDrivers,
     updateRecoveryCapture,
+    managedHandoff,
+    packageStage,
     windowsUserSid,
   });
   // Shipped readers parse recovery strictly. Its named risk lives in a retained step fact.

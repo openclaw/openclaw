@@ -22,6 +22,7 @@ import {
   captureSessionTarget,
 } from "../../sessions/session-controller.lifecycle.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
+import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
   normalizeCronScheduledToolPolicy,
@@ -74,7 +75,9 @@ function clearCronContextOwnerState(entry: SessionEntry) {
 }
 
 /** Resolved cron session plus its mutable backing store and active entry. */
-export type MutableCronSession = ReturnType<typeof resolveCronSession>;
+export type MutableCronSession = ReturnType<typeof resolveCronSession> & {
+  contextTotalsAccounted?: true;
+};
 
 /** Commits a closed cron operation and returns its acknowledged entry. */
 export type CronSessionRowWriter = (params: {
@@ -100,18 +103,6 @@ export type CronRunContinuationSession = {
   ) => Promise<void>;
   seal: (options?: { basePersisted?: boolean }) => Promise<void>;
 };
-
-export class CronSessionLifecycleClaimError extends Error {
-  readonly admissionDisposition = "session-conflict" as const;
-
-  constructor(
-    sessionKey: string,
-    message = `Session "${sessionKey}" changed while starting work. Retry.`,
-  ) {
-    super(message);
-    this.name = "CronSessionLifecycleClaimError";
-  }
-}
 
 function resolveCronLifecycleRevisionIdentity(lifecycleRevision: string): string {
   return `cron-lifecycle-revision:${lifecycleRevision}`;
@@ -252,6 +243,7 @@ export function createPersistCronSessionEntry(params: {
           sessionKey: params.agentSessionKey,
           initial: params.cronSession.initialSessionEntry,
           next: persistedEntry,
+          contextTotalsAccounted: params.cronSession.contextTotalsAccounted,
           creation: buildSessionCreationStamp({
             via: "cron",
             actor: params.createdActor ?? { type: "system" },
@@ -279,6 +271,7 @@ export function createPersistCronSessionEntry(params: {
       throw new CronSessionLifecycleClaimError(params.agentSessionKey);
     }
     params.cronSession.resetBoundaryPending = undefined;
+    params.cronSession.contextTotalsAccounted = undefined;
     // The storage projection may intentionally omit resume identity until its
     // transcript exists. Keep that projection out of the active run object.
     params.cronSession.sessionEntry = mergeSessionSnapshotChanges({
@@ -365,7 +358,7 @@ export function createCronRunContinuationSession(params: {
     delete source.previousSessionId;
     delete source.forkSource;
     delete source.usageFamilySessionIds;
-    const snapshot = { source, continuation: structuredClone(continuation) };
+    const snapshot = { source, continuation: { ...continuation } };
     if (phase === "running" && isDeepStrictEqual(snapshot, persistedSnapshot)) {
       return;
     }

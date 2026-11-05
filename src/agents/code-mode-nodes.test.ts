@@ -35,13 +35,7 @@ let applyCodeModeCatalog: typeof import("./code-mode.js").applyCodeModeCatalog;
 let createCodeModeTools: typeof import("./code-mode.js").createCodeModeTools;
 let createToolSearchCatalogRef: typeof import("./tool-search.js").createToolSearchCatalogRef;
 let createNodesTool: typeof import("./tools/nodes-tool.js").createNodesTool;
-let resetCodeModeTestState: typeof import("./code-mode.test-support.js").resetCodeModeTestState;
-
-function resultDetails(result: { details?: unknown }): Record<string, unknown> {
-  expect(result.details).toBeDefined();
-  expect(typeof result.details).toBe("object");
-  return result.details as Record<string, unknown>;
-}
+let support: typeof import("./code-mode.test-support.js");
 
 function createHarness() {
   const catalogRef = createToolSearchCatalogRef();
@@ -74,13 +68,8 @@ function createHarness() {
 }
 
 async function runUntilCompleted(code: string, params = createHarness()) {
-  let details = resultDetails(await params.execTool.execute("code-nodes-call", { code }));
-  for (let index = 0; index < 8 && details.status === "waiting"; index += 1) {
-    details = resultDetails(
-      await params.waitTool.execute(`code-nodes-wait-${index}`, { runId: details.runId }),
-    );
-  }
-  return details;
+  const details = support.resultDetails(await params.execTool.execute("code-nodes-call", { code }));
+  return support.waitUntilCompleted({ details, waitTool: params.waitTool });
 }
 
 function runCaught(code: string) {
@@ -100,7 +89,7 @@ describe("Code Mode nodes", () => {
     ({ applyCodeModeCatalog, createCodeModeTools } = await import("./code-mode.js"));
     ({ createToolSearchCatalogRef } = await import("./tool-search.js"));
     ({ createNodesTool } = await import("./tools/nodes-tool.js"));
-    ({ resetCodeModeTestState } = await import("./code-mode.test-support.js"));
+    support = await import("./code-mode.test-support.js");
   });
 
   beforeEach(() => {
@@ -127,7 +116,7 @@ describe("Code Mode nodes", () => {
     });
   });
 
-  afterEach(() => resetCodeModeTestState());
+  afterEach(() => support.resetCodeModeTestState());
 
   it("lists nodes and invokes typed handles", async () => {
     const harness = createHarness();

@@ -36,7 +36,6 @@ import {
 } from "./inference-route.js";
 import {
   type BoundVerifySetupInferenceResult,
-  type CompleteSetupInferenceResult,
   describeSetupInferenceError,
   invalidSetupConfigError,
   parseInferenceRef,
@@ -59,6 +58,7 @@ import {
   type SetupTurnSuccess,
 } from "./setup-inference-probe-work.js";
 import { resolveSetupInferenceProfileError } from "./setup-inference-profile.js";
+import { createSystemAgentUserTurnRecorder } from "./user-turn-transcript.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
   createSystemAgentVerifiedInferenceBinding,
@@ -78,6 +78,7 @@ export async function runSetupInferenceTurn(params: {
   prompt?: string;
   timeoutMs?: number;
   requireExecutionOwner: boolean;
+  assertSourceCurrent?: () => void;
   signal?: AbortSignal;
   runtime?: RuntimeEnv;
 }): Promise<SetupTurnSuccess | SetupTurnFailure> {
@@ -115,8 +116,10 @@ export async function runSetupInferenceTurn(params: {
     runId,
     route.agentId,
     "system-agent.setup-inference",
+    params.assertSourceCurrent,
   );
   let successfulAuth: AgentExecutionAuthBinding | undefined;
+  const prompt = params.prompt ?? SETUP_INFERENCE_TEST_PROMPT;
   const shared = {
     preparedRunAdmission,
     sessionId: runId,
@@ -128,7 +131,8 @@ export async function runSetupInferenceTurn(params: {
     workspaceDir,
     agentDir: route.agentDir,
     config: route.runConfig,
-    prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
+    prompt,
+    userTurnTranscriptRecorder: createSystemAgentUserTurnRecorder(prompt),
     provider: route.provider,
     model: route.model,
     timeoutMs,
@@ -395,9 +399,9 @@ export async function revalidateStableSetupInferenceOwner(params: {
   return binding;
 }
 
-type SetupInferenceRequestParams = {
+export type SetupInferenceRequestParams = {
   agentId?: string;
-  modelTarget?: "utility";
+  modelTarget?: "primary" | "utility";
   runtime: RuntimeEnv;
   timeoutMs?: number;
 };
@@ -549,6 +553,8 @@ export async function verifySetupInferenceConfig(
     agentDir?: string;
     onVerifiedExecution?: (binding: SystemAgentVerifiedInferenceBinding) => void;
     requireExecutionOwner?: boolean;
+    assertSourceCurrent?: () => void;
+    signal?: AbortSignal;
   },
 ): Promise<VerifySetupInferenceResult> {
   const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(
@@ -563,7 +569,10 @@ export async function verifySetupInferenceConfig(
     return {
       ok: false,
       status: "unavailable",
-      error: "No agent model is configured. Run `openclaw onboard` first.",
+      error:
+        params.modelTarget === "primary"
+          ? "No primary model is configured for this agent. Choose one in Model Setup, then retry."
+          : "No agent model is configured. Run `openclaw onboard` first.",
     };
   }
   const route = params.agentDir
@@ -594,6 +603,8 @@ export async function verifySetupInferenceConfig(
     timeoutMs: params.timeoutMs,
     requireExecutionOwner,
     runtime: params.runtime,
+    assertSourceCurrent: params.assertSourceCurrent,
+    signal: params.signal,
   });
   if (!turn.ok) {
     return { ...turn, error: await redactSetupInferenceError(turn.error) };
@@ -646,53 +657,4 @@ export async function verifySetupInferenceConfig(
     latencyMs: turn.latencyMs,
     ...(route.modelTarget ? { modelTarget: route.modelTarget } : {}),
   };
-}
-
-/** Run one tool-free completion through the configured setup inference route. */
-export async function completeSetupInference(
-  params: SetupInferenceRequestParams & { prompt: string },
-): Promise<CompleteSetupInferenceResult> {
-  const readSnapshot = (await import("../config/config.js")).readConfigFileSnapshot;
-  const snapshot = await readSnapshot();
-  if (!snapshot.exists) {
-    return { ok: false, status: "unavailable", error: "No OpenClaw config exists." };
-  }
-  if (!snapshot.valid) {
-    return { ok: false, status: "format", error: invalidSetupConfigError(snapshot) };
-  }
-  return await completeSetupInferenceConfig({
-    ...params,
-    config: snapshot.runtimeConfig ?? snapshot.config,
-    configSnapshot: snapshot,
-  });
-}
-
-/** Config-injected variant used by setup clients and live provider tests. */
-export async function completeSetupInferenceConfig(
-  params: SetupInferenceRequestParams & {
-    config: OpenClawConfig;
-    configSnapshot?: SystemAgentConfigSnapshot;
-    prompt: string;
-  },
-): Promise<CompleteSetupInferenceResult> {
-  const route = await resolveSystemAgentConfiguredRouteFromConfig(
-    params.config,
-    params.agentId,
-    {},
-    params.configSnapshot,
-  );
-  if (!route) {
-    return { ok: false, status: "unavailable", error: "No agent model is configured." };
-  }
-  const turn = await runSetupInferenceTurn({
-    route,
-    prompt: params.prompt,
-    timeoutMs: params.timeoutMs,
-    requireExecutionOwner: false,
-    runtime: params.runtime,
-  });
-  if (!turn.ok) {
-    return { ...turn, error: await redactSetupInferenceError(turn.error) };
-  }
-  return { ok: true, modelRef: route.modelLabel, latencyMs: turn.latencyMs, text: turn.text };
 }

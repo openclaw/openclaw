@@ -3,7 +3,7 @@ import type {
   SessionsPatchParams,
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import type { ChannelsAddOptions } from "../commands/channels/add.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import {
   agentSessionKeysMatchByRequestKey,
   buildAgentMainSessionKey,
@@ -54,19 +54,6 @@ export type SystemAgentTuiOptions = Pick<
   setupWorkspace?: string;
   /** Selected first-agent name for the proposed onboarding setup. */
   setupAgentName?: string;
-  runChannelsAdd?: (
-    opts: ChannelsAddOptions,
-    runtime: RuntimeEnv,
-    params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
-  ) => Promise<unknown>;
-  runSearchSetupHandoff?: (
-    runtime: RuntimeEnv,
-    beforePersistentEffect: () => Promise<void>,
-  ) => Promise<void>;
-  runGatewaySetupHandoff?: (
-    runtime: RuntimeEnv,
-    beforePersistentEffect: () => Promise<void>,
-  ) => Promise<void>;
 };
 
 type SystemAgentHistoryMessage = ReturnType<typeof message>;
@@ -342,6 +329,7 @@ class SystemAgentTuiBackend implements TuiBackend {
         // Match the Gateway session boundary: the failed conversation is dead.
         // Clear handoffs and dispose before exit so no queued exact command can
         // bypass the inference-first gate through this backend instance.
+        materializeErrorStack(error);
         this.inferenceFailure = error;
         this.handoff = null;
         try {
@@ -385,26 +373,19 @@ async function runSetupHandoff(
     );
   };
   if (handoff.target === "gateway" || handoff.target === "search") {
-    const run =
-      handoff.target === "gateway" ? opts.runGatewaySetupHandoff : opts.runSearchSetupHandoff;
-    if (run) {
-      await run(runtime, beforePersistentEffect);
-    } else {
-      const { createClackPrompter, hostedSetup } = await loadHostedSetupForTui();
-      const runHosted =
-        handoff.target === "gateway"
-          ? hostedSetup.runHostedGatewaySetup
-          : hostedSetup.runHostedSearchSetup;
-      await runHosted(createClackPrompter(), beforePersistentEffect, runtime);
-    }
+    const { createClackPrompter, hostedSetup } = await loadHostedSetupForTui();
+    const runHosted =
+      handoff.target === "gateway"
+        ? hostedSetup.runHostedGatewaySetup
+        : hostedSetup.runHostedSearchSetup;
+    await runHosted(createClackPrompter(), beforePersistentEffect, runtime);
     if (handoff.target === "gateway") {
       runtime.log("Done — gateway settings saved. Run `openclaw gateway restart` to apply them.");
     }
     return;
   }
-  const runChannelsAdd =
-    opts.runChannelsAdd ?? (await import("../commands/channels/add.js")).channelsAddCommand;
-  await runChannelsAdd(handoff.channel ? { channel: handoff.channel } : {}, runtime, {
+  const { channelsAddCommand } = await import("../commands/channels/add.js");
+  await channelsAddCommand(handoff.channel ? { channel: handoff.channel } : {}, runtime, {
     hasFlags: false,
     beforePersistentEffect,
   });

@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import {
   ensureMemoryChunkProvenance,
   MEMORY_INDEX_CHUNK_PROVENANCE_SCHEMA_SQL,
@@ -25,113 +25,77 @@ function fixture(
       ('missing-1', 'notes.md', 'memory', 11),
       ('missing-2', 'notes.md', 'memory', 12);
   `);
-  return db;
+  const expectRows = (sql: string, expected: unknown[]) =>
+    expect(db.prepare(sql).all()).toEqual(expected);
+  return { db, expectRows };
 }
 
-describe("memory chunk provenance backfill", () => {
-  it.each([
-    ["WITHOUT ROWID sources", "path TEXT, source TEXT, hash TEXT, PRIMARY KEY(path, source)", true],
-    ["shadowed rowid", "rowid INTEGER DEFAULT 7, path TEXT, source TEXT, hash TEXT", false],
-  ] as const)(
-    "preserves source matching and existing provenance with %s",
-    (_name, columns, withoutRowid) => {
-      const db = fixture(columns, { withoutRowid });
-      db.exec(MEMORY_INDEX_CHUNK_PROVENANCE_SCHEMA_SQL);
-      db.exec(`CREATE TRIGGER memory_index_chunk_provenance_after_insert
-        AFTER INSERT ON memory_index_chunks BEGIN SELECT 1; END`);
-      db.exec(`INSERT INTO memory_index_chunk_provenance VALUES
+it.each([
+  ["WITHOUT ROWID sources", "path TEXT, source TEXT, hash TEXT, PRIMARY KEY(path, source)", true],
+  ["shadowed rowid", "rowid INTEGER DEFAULT 7, path TEXT, source TEXT, hash TEXT", false],
+] as const)(
+  "preserves source matching and existing provenance with %s",
+  (_name, columns, withoutRowid) => {
+    const { db, expectRows } = fixture(columns, { withoutRowid });
+    db.exec(MEMORY_INDEX_CHUNK_PROVENANCE_SCHEMA_SQL);
+    db.exec(`INSERT INTO memory_index_chunk_provenance VALUES
       ('owned', 'owner', 'interactive', 3, 'prior')`);
-      ensureMemoryChunkProvenance(db);
-      expect(
-        db
-          .prepare(
-            "SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
-          )
-          .get(),
-      ).toBeUndefined();
-      expect(
-        db.prepare("SELECT source, hash FROM memory_index_sources ORDER BY source").all(),
-      ).toEqual([
-        { source: "memory", hash: "" },
-        { source: "sessions", hash: "untouched" },
-      ]);
-      expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 1 });
-      expect(
-        db.prepare("SELECT * FROM memory_index_chunk_provenance ORDER BY chunk_id").all(),
-      ).toEqual([
-        {
-          chunk_id: "missing-1",
-          origin_class: "untrusted",
-          session_kind: "unknown",
-          observed_at: 11,
-          supersedes_key: null,
-        },
-        {
-          chunk_id: "missing-2",
-          origin_class: "untrusted",
-          session_kind: "unknown",
-          observed_at: 12,
-          supersedes_key: null,
-        },
-        {
-          chunk_id: "owned",
-          origin_class: "owner",
-          session_kind: "interactive",
-          observed_at: 3,
-          supersedes_key: "prior",
-        },
-      ]);
-      ensureMemoryChunkProvenance(db);
-      expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 1 });
-      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    },
-  );
+    ensureMemoryChunkProvenance(db);
+    expectRows("SELECT source, hash FROM memory_index_sources ORDER BY source", [
+      { source: "memory", hash: "" },
+      { source: "sessions", hash: "untouched" },
+    ]);
+    expectRows("SELECT revision FROM memory_index_state", [{ revision: 1 }]);
+    expect(
+      db
+        .prepare(`SELECT chunk_id, origin_class, session_kind, observed_at, supersedes_key
+        FROM memory_index_chunk_provenance ORDER BY chunk_id`)
+        .all()
+        .map(Object.values),
+    ).toEqual([
+      ["missing-1", "untrusted", "unknown", 11, null],
+      ["missing-2", "untrusted", "unknown", 12, null],
+      ["owned", "owner", "interactive", 3, "prior"],
+    ]);
+    ensureMemoryChunkProvenance(db);
+    expectRows("SELECT revision FROM memory_index_state", [{ revision: 1 }]);
+  },
+);
 
-  it("keeps NULL source matching and chunk-side path collation", () => {
-    const db = fixture("path TEXT COLLATE BINARY, source TEXT, hash TEXT", {
-      chunkCollation: "NOCASE",
-    });
-    db.exec(`
+it("keeps NULL source matching and chunk-side path collation", () => {
+  const { db, expectRows } = fixture("path TEXT COLLATE BINARY, source TEXT, hash TEXT", {
+    chunkCollation: "NOCASE",
+  });
+  db.exec(`
       INSERT INTO memory_index_sources VALUES ('UPPER.md', NULL, 'null-source');
       INSERT INTO memory_index_chunks VALUES ('nullable', 'upper.md', NULL, 20);
     `);
-    ensureMemoryChunkProvenance(db);
-    expect(db.prepare("SELECT hash FROM memory_index_sources WHERE source IS NULL").get()).toEqual({
-      hash: "",
-    });
-    expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 1 });
-    expect(
-      db
-        .prepare(
-          "SELECT observed_at FROM memory_index_chunk_provenance WHERE chunk_id = 'nullable'",
-        )
-        .get(),
-    ).toEqual({ observed_at: 20 });
-  });
-
-  it.each([false, true])(
-    "rolls back source invalidation and provenance when revision publication fails (caller transaction %s)",
-    (outer) => {
-      const db = fixture("path TEXT, source TEXT, hash TEXT");
-      db.exec(`CREATE TRIGGER refuse_revision BEFORE UPDATE ON memory_index_state
-      BEGIN SELECT RAISE(ABORT, 'revision refused'); END`);
-      if (outer) {
-        db.exec("BEGIN IMMEDIATE");
-      }
-      expect(() => ensureMemoryChunkProvenance(db)).toThrow("revision refused");
-      expect(db.isTransaction).toBe(outer);
-      if (outer) {
-        db.exec("ROLLBACK");
-      }
-      expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 0 });
-      expect(
-        db.prepare("SELECT hash FROM memory_index_sources WHERE source = 'memory'").get(),
-      ).toEqual({ hash: "stale" });
-      expect(
-        db
-          .prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_index_chunk_provenance'")
-          .get(),
-      ).toBeUndefined();
-    },
-  );
+  ensureMemoryChunkProvenance(db);
+  expectRows("SELECT hash FROM memory_index_sources WHERE source IS NULL", [{ hash: "" }]);
+  expectRows("SELECT revision FROM memory_index_state", [{ revision: 1 }]);
+  expectRows("SELECT observed_at FROM memory_index_chunk_provenance WHERE chunk_id = 'nullable'", [
+    { observed_at: 20 },
+  ]);
 });
+
+it.each([false, true])(
+  "rolls back source invalidation and provenance when revision publication fails (caller transaction %s)",
+  (outer) => {
+    const { db, expectRows } = fixture("path TEXT, source TEXT, hash TEXT");
+    db.exec(`CREATE TRIGGER refuse_revision BEFORE UPDATE ON memory_index_state
+      BEGIN SELECT RAISE(ABORT, 'revision refused'); END`);
+    if (outer) {
+      db.exec("BEGIN IMMEDIATE");
+    }
+    expect(() => ensureMemoryChunkProvenance(db)).toThrow("revision refused");
+    expect(db.isTransaction).toBe(outer);
+    if (outer) {
+      db.exec("ROLLBACK");
+    }
+    expectRows("SELECT revision FROM memory_index_state", [{ revision: 0 }]);
+    expectRows("SELECT hash FROM memory_index_sources WHERE source = 'memory'", [
+      { hash: "stale" },
+    ]);
+    expectRows("SELECT name FROM sqlite_schema WHERE name = 'memory_index_chunk_provenance'", []);
+  },
+);

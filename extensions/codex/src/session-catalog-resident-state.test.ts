@@ -429,20 +429,14 @@ it("drains title, status, and archive changes to SQLite before closing", async (
   const first = f.createIndex();
   await first.initialize();
   const harness = await observe(startOptions);
-  for (const [method, params] of [
-    ["thread/name/updated", { threadId: "visible", threadName: null }],
-    ["thread/status/changed", { threadId: "visible", status: { type: "idle" } }],
-    ["thread/archived", { threadId: "archived" }],
-    [
-      "thread/settings/updated",
-      {
-        threadId: "visible",
-        threadSettings: { cwd: "/workspace/live", modelProvider: "live-provider" },
-      },
-    ],
-  ] as const) {
-    harness.send({ method, params });
-  }
+  const send = (method: string, params: Record<string, unknown>, threadId = "visible") =>
+    harness.send({ method, params: { threadId, ...params } });
+  send("thread/name/updated", { threadName: null });
+  send("thread/status/changed", { status: { type: "idle" } });
+  send("thread/archived", {}, "archived");
+  send("thread/settings/updated", {
+    threadSettings: { cwd: "/workspace/live", modelProvider: "live-provider" },
+  });
   const page = await first.list({});
   expect(page.sessions).toMatchObject([
     {

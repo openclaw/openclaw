@@ -1,11 +1,11 @@
-import { syncBuiltinESMExports } from "node:module";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
-import { commandResult, createProviderFixtures } from "./crabbox-worker-provider.test-support.js";
+import {
+  commandResult,
+  createProviderTestHarness,
+  nodeEnrollmentFixture,
+} from "./crabbox-worker-provider.test-support.js";
 
 vi.mock("./crabbox-managed-binary.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./crabbox-managed-binary.js")>()),
@@ -13,26 +13,12 @@ vi.mock("./crabbox-managed-binary.js", async (importOriginal) => ({
 }));
 const LEASE_ID = "cbx_6071fc2062a6";
 const PROFILE = { provider: "aws", ttl: "4h", idleTimeout: "60m", warmImage: false };
-const { providers, createProvider } = createProviderFixtures();
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await Promise.all([...providers].map((provider) => provider.dispose()));
-    providers.clear();
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    vi.unstubAllEnvs();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    syncBuiltinESMExports();
-    cleanup();
-  }),
-);
+const { createProvider } = createProviderTestHarness({}, "openclaw-crabbox-heartbeat-");
 beforeEach(() => {
   vi.mocked(ensureManagedCrabboxBinary).mockImplementation(async () => ({
     binary: "/fixture/crabbox",
     version: "999.0.0",
   }));
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-heartbeat-"));
 });
 function inspectJson(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({ id: LEASE_ID, state: "active", ready: true, ...overrides });
@@ -106,4 +92,61 @@ it("re-arms a pending heartbeat when inspection shortens the idle window", async
   await vi.advanceTimersByTimeAsync(3000);
   expect(heartbeat).toHaveBeenCalledTimes(2);
   await provider.destroy(lifecycleLease());
+});
+
+it("refreshes Sandbox activity without requesting an idle policy replacement", async () => {
+  const { provider, heartbeat, warnings } = heartbeatFixture(
+    async (argv) =>
+      argv.includes("--idle-timeout")
+        ? commandResult({
+            code: 2,
+            stderr:
+              "provider=azure-sandbox does not support replacing the lease idle timeout while heartbeating",
+          })
+        : commandResult({
+            stdout: JSON.stringify({ id: LEASE_ID, provider: "azure-sandbox", state: "Running" }),
+          }),
+    () =>
+      inspectJson({
+        provider: "azure-sandbox",
+        serverId: "fixture-sandbox",
+        slug: "fixture-slug",
+        labels: {
+          crabbox_lease: LEASE_ID,
+          crabbox_attempt: "fixture-attempt",
+          crabbox_fingerprint: "fixture-fingerprint",
+        },
+      }),
+  );
+  const profile = { ...PROFILE, provider: "azure-sandbox", class: "small" };
+  try {
+    await provider.provision(profile, `provision:v2:${"0".repeat(64)}`, {
+      assertCurrent: () => {},
+      beginNodeEnrollment: async () => nodeEnrollmentFixture("fixture-setup-code", "Sandbox test"),
+      recordResourceReceipt: async () => {},
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(heartbeat).toHaveBeenCalledTimes(2);
+    expect(warnings).toEqual([]);
+    heartbeat.mockImplementationOnce(async () => commandResult({ code: 1, stderr: "unavailable" }));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(warnings).toEqual([
+      "Crabbox heartbeat failed with exit code 1: unavailable; Sandbox idle activity is not being refreshed; OpenClaw will retry automatically; save your work if failures persist",
+    ]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(heartbeat).toHaveBeenCalledTimes(4);
+    expect(warnings).toHaveLength(1);
+    heartbeat.mockImplementationOnce(async () =>
+      commandResult({ code: 2, stderr: "provider=azure-sandbox does not support lease heartbeat" }),
+    );
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(heartbeat).toHaveBeenCalledTimes(5);
+    expect(warnings.at(-1)).toBe(
+      `Crabbox provider azure-sandbox does not support heartbeat for worker lease ${LEASE_ID}; Sandbox idle activity is not being refreshed; save your work if failures persist`,
+    );
+  } finally {
+    await provider.destroy({ leaseId: LEASE_ID, profile });
+    vi.useRealTimers();
+  }
 });

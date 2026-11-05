@@ -3,7 +3,8 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { formatCompactTokenCount, formatCost, formatTimeAgo } from "../../../lib/format.ts";
+import { formatCompactTokenCount, formatTimeAgo } from "../../../lib/format.ts";
+import { formatCost, formatDateMs, formatDateTimeMs } from "../../../lib/reactive/format.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
@@ -21,7 +22,7 @@ function prepareTimestamp(timestamp: number) {
   const date = new Date(timestamp);
   const valid = Number.isFinite(date.getTime());
   const label = valid
-    ? date.toLocaleString([], {
+    ? formatDateTimeMs(date.getTime(), {
         month: "short",
         day: "numeric",
         year: "numeric",
@@ -30,19 +31,7 @@ function prepareTimestamp(timestamp: number) {
         timeZoneName: "short",
       })
     : t("chat.messages.unknownDate");
-  const title = valid
-    ? date.toLocaleString([], {
-        weekday: "long",
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        second: "2-digit",
-        timeZoneName: "short",
-      })
-    : label;
-  return { dateTime: valid ? date.toISOString() : "", label, title };
+  return { dateTime: valid ? date.toISOString() : "", label };
 }
 
 function relativeTimestampLabel(timestamp: number, label: string) {
@@ -55,7 +44,7 @@ function relativeTimestampLabel(timestamp: number, label: string) {
     ? label
     : ageMs >= -CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS && ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS
       ? capitalizeStandaloneLabel(formatTimeAgo(Math.max(0, ageMs)))
-      : date.toLocaleDateString([], {
+      : formatDateMs(date.getTime(), {
           month: "short",
           day: "numeric",
           ...(date.getFullYear() === new Date(nowMs).getFullYear() ? {} : { year: "numeric" }),
@@ -80,7 +69,25 @@ export function ChatTimestamp(props: { timestamp: number; metadata?: JSX.Element
     // Parent clock refreshes still advance relative copy without reformatting calendar labels.
     relativeLabel: relativeTimestampLabel(props.timestamp, calendar().label),
   }));
-  const contextLabel = createMemo(() => t("chat.messages.contextFor", { timestamp: view().title }));
+  const contextLabel = createMemo(
+    () => {
+      const date = new Date(timestamp());
+      const title = Number.isFinite(date.getTime())
+        ? formatDateTimeMs(date.getTime(), {
+            weekday: "long",
+            month: "long",
+            day: "numeric",
+            year: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            second: "2-digit",
+            timeZoneName: "short",
+          })
+        : calendar().label;
+      return t("chat.messages.contextFor", { timestamp: title });
+    },
+    { lazy: true },
+  );
   const hasMetadata = () => Boolean(props.metadata?.length);
   return (
     <openclaw-tooltip

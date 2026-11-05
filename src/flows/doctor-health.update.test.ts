@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
 import { transformConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,11 +11,13 @@ import { formatDeferredPluginMigration } from "../infra/deferred-plugin-migratio
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
+import { DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING } from "../infra/update-deferred-model-retirement.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
 } from "../infra/update-doctor-result.js";
+import { createUpdateRunRecordFixture } from "../infra/update-run-record.test-support.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { ExitError } from "../runtime.js";
 import {
@@ -24,29 +27,66 @@ import {
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
-const mocks = vi.hoisted(() => ({
-  offerUpdate: vi.fn<typeof import("../commands/doctor-update.js").maybeOfferUpdateBeforeDoctor>(),
-  updateCommand: vi.fn<typeof import("../cli/update-cli/update-command.js").updateCommand>(),
-  triageCommand: vi.fn(async () => undefined),
-  outro: vi.fn(),
-  confirmCustody: vi.fn<() => Promise<boolean>>(),
-  config: vi.fn<() => OpenClawConfig>(),
-  disposeConfig: vi.fn<() => Promise<void>>(async () => undefined),
-  runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
-  packageRoot: vi.fn<() => string | undefined>(),
-  pendingPluginMigrations:
-    vi.fn<
-      typeof import("../infra/deferred-plugin-migrations.js").readDeferredPluginMigrationsAsync
-    >(),
-  stateMigrationReceipts: [] as LegacyStateMigrationStepReceipt[],
-}));
-
-vi.mock("@clack/prompts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@clack/prompts")>()),
-  intro: vi.fn(),
-  note: vi.fn(),
-  outro: mocks.outro,
-}));
+const mocks = vi.hoisted(() => {
+  const handles = {
+    offerUpdate:
+      vi.fn<typeof import("../commands/doctor-update.js").maybeOfferUpdateBeforeDoctor>(),
+    updateCommand: vi.fn<typeof import("../cli/update-cli/update-command.js").updateCommand>(),
+    triageCommand: vi.fn(async () => undefined),
+    outro: vi.fn(),
+    confirmCustody: vi.fn<() => Promise<boolean>>(),
+    config: vi.fn<() => OpenClawConfig>(),
+    disposeConfig: vi.fn<() => Promise<void>>(async () => undefined),
+    runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
+    packageRoot: vi.fn<() => string | undefined>(),
+    pendingPluginMigrations:
+      vi.fn<
+        typeof import("../infra/deferred-plugin-migrations.js").readDeferredPluginMigrationsAsync
+      >(),
+    doctorUpdateRun:
+      vi.fn<typeof import("../infra/update-deferred-model-retirement.js").resolveDoctorUpdateRun>(),
+    stateMigrationReceipts: [] as LegacyStateMigrationStepReceipt[],
+  };
+  const partials = {
+    "@clack/prompts": { intro: vi.fn(), note: vi.fn(), outro: handles.outro },
+    "../infra/openclaw-root.js": { resolveOpenClawPackageRoot: async () => handles.packageRoot() },
+    // This worker-thread lane lacks the shared-state ledger's host broker.
+    "../infra/deferred-plugin-migrations.js": {
+      readDeferredPluginMigrationsAsync: handles.pendingPluginMigrations,
+    },
+    "../infra/update-deferred-model-retirement.js": {
+      resolveDoctorUpdateRun: handles.doctorUpdateRun,
+    },
+    "../config/config.js": { CONFIG_PATH: "/tmp/openclaw.json" },
+  };
+  for (const [module, overrides] of Object.entries(partials)) {
+    vi.doMock(module, async (original) => ({ ...(await original<object>()), ...overrides }));
+  }
+  const replacements = {
+    // mock-isolation: dispatch must not execute the updater or external triage agents.
+    "../cli/update-cli/update-command.js": { updateCommand: handles.updateCommand },
+    "../commands/doctor-update.js": { maybeOfferUpdateBeforeDoctor: handles.offerUpdate },
+    "../commands/triage.js": { triageCommand: handles.triageCommand },
+    "../commands/doctor/shared/plugin-runtime-symlinks.js": {
+      noteStalePluginRuntimeSymlinks: async () => undefined,
+    },
+    "../commands/doctor-platform-notes.js": { noteStartupOptimizationHints: () => undefined },
+    // mock-isolation: outcomes do not need config preparation or plugin resources.
+    "../commands/doctor-config-flow.js": {
+      loadAndMaybeMigrateDoctorConfig: async () => ({
+        [Symbol.asyncDispose]: handles.disposeConfig,
+        cfg: handles.config(),
+        shouldWriteConfig: true,
+        stateMigrationStepReceipts: handles.stateMigrationReceipts,
+      }),
+    },
+    "./doctor-health-contributions.js": { runDoctorHealthContributions: handles.runContributions },
+  };
+  for (const [module, replacement] of Object.entries(replacements)) {
+    vi.doMock(module, () => replacement);
+  }
+  return handles;
+});
 
 vi.mock("../commands/doctor-prompter.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../commands/doctor-prompter.js")>();
@@ -59,52 +99,6 @@ vi.mock("../commands/doctor-prompter.js", async (importOriginal) => {
     }),
   };
 });
-
-vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
-  resolveOpenClawPackageRoot: async () => mocks.packageRoot(),
-}));
-
-// The shared-state ledger needs the host broker, which this worker-thread lane lacks.
-vi.mock("../infra/deferred-plugin-migrations.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/deferred-plugin-migrations.js")>()),
-  readDeferredPluginMigrationsAsync: mocks.pendingPluginMigrations,
-}));
-
-// mock-isolation: Doctor dispatch must not execute the real installation updater.
-vi.mock("../cli/update-cli/update-command.js", () => ({ updateCommand: mocks.updateCommand }));
-vi.mock("../commands/doctor-update.js", () => ({
-  maybeOfferUpdateBeforeDoctor: mocks.offerUpdate,
-}));
-// mock-isolation: Recovery dispatch is observed without launching external triage agents.
-vi.mock("../commands/triage.js", () => ({ triageCommand: mocks.triageCommand }));
-
-vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
-  noteStalePluginRuntimeSymlinks: async () => undefined,
-}));
-
-vi.mock("../commands/doctor-platform-notes.js", () => ({
-  noteStartupOptimizationHints: () => undefined,
-}));
-
-// mock-isolation: Exercise Doctor flow outcomes without config preparation or plugin resources.
-vi.mock("../commands/doctor-config-flow.js", () => ({
-  loadAndMaybeMigrateDoctorConfig: async () => ({
-    [Symbol.asyncDispose]: mocks.disposeConfig,
-    cfg: mocks.config(),
-    shouldWriteConfig: true,
-    stateMigrationStepReceipts: mocks.stateMigrationReceipts,
-  }),
-}));
-
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
-  CONFIG_PATH: "/tmp/openclaw.json",
-}));
-
-vi.mock("./doctor-health-contributions.js", () => ({
-  runDoctorHealthContributions: mocks.runContributions,
-}));
 
 async function withResult(run: (state: OpenClawTestState, resultPath: string) => Promise<void>) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -158,7 +152,7 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", undefined);
   vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", undefined);
   vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
-  mocks.offerUpdate.mockReset().mockResolvedValue({ updated: false });
+  mocks.offerUpdate.mockReset().mockResolvedValue(false);
   mocks.confirmCustody.mockReset().mockResolvedValue(true);
   mocks.updateCommand.mockReset();
   mocks.triageCommand.mockReset().mockResolvedValue(undefined);
@@ -168,8 +162,35 @@ beforeEach(async () => {
   mocks.outro.mockClear();
   mocks.runContributions.mockReset().mockResolvedValue(undefined);
   mocks.pendingPluginMigrations.mockReset().mockResolvedValue([]);
+  mocks.doctorUpdateRun.mockReset();
   mocks.stateMigrationReceipts = [];
 });
+
+it.each(["completed", "skipped"] as const)(
+  "publishes warnings against the Doctor run's retirement receipt (%s)",
+  async (status) => {
+    await withResult(async (_state, resultPath) => {
+      const env = { ...process.env, OPENCLAW_UPDATE_RUN_ID: "selected-update" };
+      const warnings = [DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING, "Unrelated advisory"];
+      mocks.doctorUpdateRun.mockReturnValue(
+        createUpdateRunRecordFixture("selected-update", {
+          status: "running",
+          steps: [{ step: "finalize:doctor:model-retirement", status }],
+        }),
+      );
+      mocks.runContributions.mockImplementation(async (ctx) => {
+        ctx.env = env;
+        ctx.updateWarnings = warnings;
+      });
+
+      await runDoctor();
+
+      const result = await consumeUpdatePostInstallDoctorResult(resultPath);
+      expect(result?.warnings).toEqual(status === "completed" ? warnings.slice(1) : warnings);
+      expect(mocks.doctorUpdateRun).toHaveBeenCalledWith(env);
+    });
+  },
+);
 
 it("publishes include input and final write hashes", async () => {
   await withResult(async (state, resultPath) => {
@@ -336,8 +357,8 @@ it.each(["ok", "pending"] as const)("preserves update handoff (%s)", async (outc
   const beginMaintenance = vi
     .spyOn(maintenance, "beginDoctorMaintenance")
     .mockResolvedValue(undefined);
-  const stdinIsTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-  Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+  const ttyMock = createCliTtyMock([process.stdin]);
+  ttyMock.set(true);
   try {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg: OpenClawConfig = { gateway: { mode: "local" } };
@@ -384,10 +405,6 @@ it.each(["ok", "pending"] as const)("preserves update handoff (%s)", async (outc
       }
     });
   } finally {
-    if (stdinIsTty) {
-      Object.defineProperty(process.stdin, "isTTY", stdinIsTty);
-    } else {
-      delete (process.stdin as Partial<typeof process.stdin>).isTTY;
-    }
+    ttyMock.restore();
   }
 });

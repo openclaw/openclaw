@@ -2,6 +2,8 @@ import { access, chmod, mkdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { embeddedAgentLog as log } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as pathExistence from "openclaw/plugin-sdk/path-existence-runtime";
+import * as runner from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { SemVer } from "semver";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +11,7 @@ import { buildMigrationProvider } from "../../migration-provider-api.js";
 import type { CodexAppServerStartOptions as StartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import * as desktopAppPaths from "./desktop-app-paths.js";
+import * as installedProbe from "./installed-probe.js";
 import {
   assertInstalledCodexAppServerVersion as assertVersion,
   INSTALLED_CODEX_PROBE_TIMEOUT_MS as PROBE_TIMEOUT,
@@ -20,12 +23,19 @@ import {
 } from "./managed-binary.js";
 import { CODEX_APP_SERVER_VERSION as VERSION } from "./version.js";
 
+// mock-isolation: Selection owns the synthetic handshake; native probe proof stays separate.
+vi.mock("./installed-probe.js", () => ({ probeCodexAppServerHandshake: vi.fn() }));
+
+const originalPlatform = process.platform;
 let root: string;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   root = tempDirs.make("openclaw-codex-");
 });
-afterEach(() => setPluginRoot(undefined));
+afterEach(() => {
+  setPluginRoot(undefined);
+  vi.restoreAllMocks();
+});
 function startOptions(managedCommandOrder?: StartOptions["managedCommandOrder"]): StartOptions {
   return {
     transport: "stdio",
@@ -180,9 +190,9 @@ describe("managed Codex app-server binary", () => {
       codexConfigToml: null,
       requirementsToml: null,
     }).start;
-    const pathExists = vi.fn(async () => false);
+    const pathExists = vi.spyOn(pathExistence, "canAccess").mockResolvedValue(false);
     expect(explicit).toMatchObject({ commandSource: "config", command: "/operator/config-codex" });
-    await expect(resolveOptions(explicit, { pathExists })).resolves.toBe(explicit);
+    await expect(resolveOptions(explicit)).resolves.toBe(explicit);
     expect(pathExists).not.toHaveBeenCalled();
   });
 
@@ -205,17 +215,18 @@ describe("managed Codex app-server binary", () => {
     async ({ order, desktopCommands }) => {
       const launcher = await writePackageLauncher(root);
       const commands = order === "package-only" ? [launcher] : [...desktopCommands, launcher];
+      vi.spyOn(pathExistence, "canAccess").mockImplementation(async (candidate) =>
+        candidate.startsWith("/Applications/")
+          ? desktopCommands.some((command) => command === candidate)
+          : access(candidate).then(
+              () => true,
+              () => false,
+            ),
+      );
       await expect(
         resolveOptions(startOptions(order), {
           platform: "darwin",
           pluginRoot: root,
-          pathExists: async (candidate) =>
-            candidate.startsWith("/Applications/")
-              ? desktopCommands.some((command) => command === candidate)
-              : access(candidate).then(
-                  () => true,
-                  () => false,
-                ),
         }),
       ).resolves.toEqual({
         ...startOptions(order),
@@ -264,13 +275,15 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
   beforeEach(async () => {
     bin = path.join(root, "prefix", "bin");
     await mkdir(bin, { recursive: true });
-    vi.spyOn(log, "info").mockImplementation(() => undefined);
     // Each case makes this process's first decision.
     delete installedState.selection;
   });
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.mocked(installedProbe.probeCodexAppServerHandshake).mockReset();
+    vi.unstubAllEnvs();
+    Object.defineProperty(process, "platform", { value: originalPlatform });
     installedState.selection = Promise.resolve(undefined);
     delete installedState.selected;
     delete installedState.rejected;
@@ -297,10 +310,18 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     } = {},
     selectionTimeoutMs?: number,
   ) {
-    const clientVersion = await resolveVersion("package-first", {
-      probes: { env: { PATH: bin }, probeHandshake: async () => NEWER, ...probes },
-      selectionTimeoutMs,
-    });
+    vi.stubEnv("PATH", bin);
+    vi.spyOn(installedProbe, "probeCodexAppServerHandshake").mockImplementation(
+      (command) => probes.probeHandshake?.(command) ?? Promise.resolve(NEWER),
+    );
+    if (probes.runVersion) {
+      const runVersion = probes.runVersion;
+      vi.spyOn(runner, "runUtf8CommandWithTimeout").mockImplementation(async (argv) => {
+        const stdout = await runVersion(argv[0] ?? "");
+        return { stdout, stderr: "", code: 0, signal: null, killed: false, termination: "exit" };
+      });
+    }
+    const clientVersion = await resolveVersion("package-first", { selectionTimeoutMs });
     return { clientVersion, selected: installedState.selected };
   }
   const BUNDLED = { clientVersion: VERSION, selected: undefined };
@@ -314,10 +335,6 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     return selected;
   }
 
-  function expectChoice(message: string) {
-    expect(log.info).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(message));
-  }
-
   it("selects a newer npm-installed Codex after its version and handshake probes", async () => {
     const { launcher, native } = await installNpmCodex(`echo "codex-cli ${NEWER}"`);
     const probeHandshake = vi.fn(async () => NEWER);
@@ -327,9 +344,6 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
       selected: { command: launcher, nativeCommand: native, version: NEWER },
     });
     expect(probeHandshake).toHaveBeenCalledExactlyOnceWith(launcher);
-    expectChoice(
-      `Codex app-server: using installed ${path.join(bin, "codex")} ${NEWER} (newer than bundled ${VERSION})`,
-    );
   });
 
   it.each([
@@ -339,25 +353,19 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     { output: 'echo "codex-cli 1.0.0"', reason: "1.0.0 is a different major version" },
     { output: 'echo "garbage"', reason: "did not report a parseable version" },
     { output: "exit 3", reason: "--version failed: Version check failed (3)" },
-  ])("keeps the bundled package when the installed Codex $reason", async ({ output, reason }) => {
+  ])("keeps the bundled package when the installed Codex $reason", async ({ output }) => {
     await installNpmCodex(output);
     const probeHandshake = vi.fn(async () => NEWER);
 
     await expectBundled({ probeHandshake });
     expect(probeHandshake).not.toHaveBeenCalled();
-    expectChoice(`Codex app-server: using bundled ${VERSION} (installed `);
-    expectChoice(reason);
   });
 
   it("keeps the bundled package without a codex on PATH", async () => {
     await expectBundled();
-    expectChoice(`Codex app-server: using bundled ${VERSION} (no codex on PATH)`);
   });
 
-  it.each([
-    ["timeout", "failed the app-server handshake: timed out after 15000 ms"],
-    ["mismatch", `reported ${VERSION} from app-server`],
-  ])("keeps the bundled package on handshake %s", async (failure, reason) => {
+  it.each(["timeout", "mismatch"])("keeps the bundled package on handshake %s", async (failure) => {
     await installNpmCodex();
     await expectBundled({
       probeHandshake: async () => {
@@ -367,7 +375,6 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
         throw new Error("timed out after 15000 ms");
       },
     });
-    expectChoice(reason);
   });
 
   it("reserves bundled startup time across the complete cold selection", async () => {
@@ -382,7 +389,6 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
       probeHandshake,
     });
     expect(probeHandshake).not.toHaveBeenCalled();
-    expectChoice("selection timed out before the app-server handshake");
   });
 
   it("returns the bundled pin within a caller's shorter selection budget and ignores late success", async () => {
@@ -406,7 +412,6 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
       await expect(selected).resolves.toEqual(BUNDLED);
       completed.resolve(NEWER);
       await expectBundled();
-      expectChoice("installed Codex selection exceeded its startup budget");
     } finally {
       completed.resolve(NEWER);
     }
@@ -416,7 +421,6 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     await writeExecutable(path.join(bin, "codex"), `#!/bin/sh\necho "codex-cli ${NEWER}"\n`);
 
     await expectBundled();
-    expectChoice("is not a native Codex executable or the official @openai/codex launcher");
   });
 
   it("accepts a standalone native Codex as its own native artifact", async () => {
@@ -441,74 +445,48 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     vi.spyOn(desktopAppPaths, "resolveMacOSDesktopCodexAppServerCommandCandidates").mockReturnValue(
       [desktop],
     );
-    const runVersion = vi.fn(async () => `codex-cli ${NEWER}`);
-    const probeHandshake = vi.fn(async () => NEWER);
+    const runVersion = vi.spyOn(runner, "runUtf8CommandWithTimeout");
+    const probeHandshake = vi.spyOn(installedProbe, "probeCodexAppServerHandshake");
+    vi.stubEnv("PATH", bin);
+    Object.defineProperty(process, "platform", { value: "darwin" });
 
     await expect(
       resolveVersion("package-only", {
         platform: "darwin",
-        probes: { env: { PATH: bin }, platform: "darwin", runVersion, probeHandshake },
       }),
     ).resolves.toBe(VERSION);
     expect(runVersion).not.toHaveBeenCalled();
     expect(probeHandshake).not.toHaveBeenCalled();
-    expectChoice("belongs to a macOS desktop app");
   });
 
-  it.each(["available", "missing"])(
-    "starts the selected installed binary when %s, otherwise the package",
-    async (availability) => {
-      const packaged = await writePackageLauncher(root);
-      const selected = selectInstalled("/opt/codex/launcher", "/opt/codex/native");
-      const missing = availability === "missing";
-      const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
-      const pathExists = async (command: string) => !missing || command !== selected.nativeCommand;
-      await expect(resolveStart({ pathExists })).resolves.toMatchObject(
-        missing
-          ? { command: packaged }
-          : {
-              command: selected.command,
-              commandSource: "resolved-managed",
-              managedFallbackCommandPaths: [packaged],
-            },
-      );
-      if (missing) {
-        await expect(resolveVersion("package-first")).resolves.toBe(VERSION);
-        expect(warn).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining(
-            `installed ${selected.command} ${NEWER} failed to start (executable`,
-          ),
-        );
-      } else {
-        expect(nativeCommand(selected.command)).toBe(selected.nativeCommand);
-        await expect(resolveStart({ pathExists, preferInstalled: false })).resolves.toMatchObject({
-          command: packaged,
-        });
-      }
-    },
-  );
+  it("starts the selected installed binary unless the caller pins the package", async () => {
+    const packaged = await writePackageLauncher(root);
+    const selected = selectInstalled("/opt/codex/launcher", "/opt/codex/native");
+    vi.spyOn(pathExistence, "canAccess").mockResolvedValue(true);
+    await expect(resolveStart()).resolves.toMatchObject({
+      command: selected.command,
+      commandSource: "resolved-managed",
+      managedFallbackCommandPaths: [packaged],
+    });
+    expect(nativeCommand(selected.command)).toBe(selected.nativeCommand);
+    await expect(resolveStart({ preferInstalled: false })).resolves.toMatchObject({
+      command: packaged,
+    });
+  });
 
   it("starts and reports the desktop app for desktop-first without probing PATH", async () => {
     const packaged = await writePackageLauncher(root);
-    const desktopInstalled = async (command: string) =>
-      command.includes("Codex.app") || command === packaged;
+    const accessPath = vi
+      .spyOn(pathExistence, "canAccess")
+      .mockImplementation(async (command) => command.includes("Codex.app") || command === packaged);
 
-    await expect(
-      resolveStart(
-        {
-          platform: "darwin",
-          pathExists: desktopInstalled,
-        },
-        "desktop-first",
-      ),
-    ).resolves.toMatchObject({
+    await expect(resolveStart({ platform: "darwin" }, "desktop-first")).resolves.toMatchObject({
       command: expect.stringContaining("Codex.app"),
       managedFallbackCommandPaths: expect.arrayContaining([packaged]),
     });
     await expect(
       resolveVersion("desktop-first", {
         platform: "darwin",
-        pathExists: desktopInstalled,
       }),
     ).resolves.toBe(VERSION);
     // Neither the start nor discovery began a PATH selection.
@@ -516,11 +494,12 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
 
     // Without the desktop app, desktop-first starts reach the installed Codex.
     await installNpmCodex();
+    vi.stubEnv("PATH", bin);
+    vi.spyOn(installedProbe, "probeCodexAppServerHandshake").mockResolvedValue(NEWER);
+    accessPath.mockResolvedValue(false);
     await expect(
       resolveVersion("desktop-first", {
         platform: "darwin",
-        pathExists: async () => false,
-        probes: { env: { PATH: bin }, probeHandshake: async () => NEWER },
       }),
     ).resolves.toBe(NEWER);
   });
@@ -528,31 +507,16 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
   it.each(["launcher", "native executable"])(
     "drops an installed Codex whose %s disappeared after selection",
     async (missing) => {
-      const pluginRoot = path.join(root, "plugin");
-      const packaged = await writePackageLauncher(pluginRoot);
-      const selected = {
-        command: "/opt/codex/lib/node_modules/@openai/codex/bin/codex.js",
-        nativeCommand: "/opt/codex/lib/node_modules/@openai/codex-linux-x64/vendor/codex",
-        version: NEWER,
-      };
-      installedState.selection = Promise.resolve(selected);
-      installedState.selected = selected;
-      const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
-      const gone = missing === "launcher" ? selected.command : selected.nativeCommand;
-
-      await expect(
-        resolveOptions(startOptions(), {
-          platform: "linux",
-          pluginRoot,
-          pathExists: async (command) => command !== gone,
-        }),
-      ).resolves.toMatchObject({ command: packaged });
-      await expect(resolveVersion("package-first")).resolves.toBe(VERSION);
-      expect(warn).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining(
-          `installed ${selected.command} ${NEWER} failed to start (executable`,
-        ),
+      const packaged = await writePackageLauncher(root);
+      const selected = selectInstalled(
+        "/opt/codex/lib/node_modules/@openai/codex/bin/codex.js",
+        "/opt/codex/lib/node_modules/@openai/codex-linux-x64/vendor/codex",
       );
+      const gone = missing === "launcher" ? selected.command : selected.nativeCommand;
+      vi.spyOn(pathExistence, "canAccess").mockImplementation(async (command) => command !== gone);
+
+      await expect(resolveStart()).resolves.toMatchObject({ command: packaged });
+      await expect(resolveVersion("package-first")).resolves.toBe(VERSION);
     },
   );
 

@@ -85,3 +85,7 @@ Each entry points at the page that now holds the content.
 - [Gateway doctor](/gateway/doctor)
 - [`openclaw policy`](/cli/policy) — the policy rules `doctor --lint` reports on
 - [`openclaw status`](/cli/status) — channel and session diagnostics, checks, and usage snapshots
+
+Read-only Doctor also reports local recovery-copy logical bytes and counts by
+kind and eligibility. A bounded scan can be labeled incomplete; this is advisory,
+not a repair failure. See [recovery-copy disk usage](/cli/status#recovery-copy-disk-usage).

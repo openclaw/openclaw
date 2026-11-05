@@ -1,28 +1,22 @@
 /* @vitest-environment jsdom */
 import { createComponent } from "solid-js";
 import { expect, it } from "vitest";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   beginPanelRefresh,
   completePanelRefresh,
   createPanelRefreshStatus,
   failPanelRefresh,
-} from "./panel-refresh-status.ts";
+} from "./panel-refresh-status-state.ts";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 
-const connected: ApplicationGatewaySnapshot = {
+const connected: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
   phase: "connected",
-  client: null,
-  offlineStable: false,
-  hello: null,
-  canvasPluginSurfaceUrl: null,
-  assistantAgentId: null,
   sessionKey: "agent:main:main",
-  lastError: null,
-  lastErrorCode: null,
-};
+});
 function renderStatus(
   status: Parameters<typeof PanelRefreshStatus>[0]["status"],
   errorMessage?: string,
@@ -75,7 +69,7 @@ it.each([
     );
     const container = renderStatus(status);
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(message);
-    expect(container.textContent).toContain("Showing stale data");
+    expect(container.textContent).toContain("Showing last known data");
     expect(container.querySelector("button")).toBeNull();
     expect(status.awaitingGateway).toBe(false);
   },
@@ -89,6 +83,8 @@ it("does not classify lifecycle words in ordinary error messages", () => {
 
 it("shows a stale-only warning without an alert or button", () => {
   const container = renderStatus({ ...completePanelRefresh(), stale: true });
-  expect(container.querySelector('[role="status"]')?.textContent).toContain("Showing stale data");
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "Showing last known data",
+  );
   expect(container.querySelector('[role="alert"], button')).toBeNull();
 });

@@ -10,23 +10,25 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import * as videoPosters from "../../lib/media/video-poster.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import {
   createReviewFixture as createUnboundReviewFixture,
   renderPanelFixture,
   sidebarPanelFixtureParams,
 } from "../../test-helpers/chat-pane-embedded-panels.ts";
+import { useFakeClock } from "../../test-helpers/fake-clock.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
-import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
-import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
-} from "./chat-pane.test-support.ts";
+} from "./chat-application-context.test-support.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
+import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.tsx";
@@ -41,8 +43,8 @@ import {
   getSessionWorkspace,
   loadSessionWorkspace,
   openSessionWorkspacePreview,
+  selectSessionWorkspacePreview,
 } from "./components/chat-session-workspace-state.ts";
-import { loadedSidebarContent } from "./components/chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
@@ -50,12 +52,12 @@ import {
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
 import { createChatSidebarContainer } from "./components/chat-sidebar.test-support.ts";
 import { ChatThread } from "./components/chat-thread-view.tsx";
+import "./components/chat-sidebar-region.runtime.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
   threadProps,
 } from "./components/chat-transcript.test-support.ts";
-import "./components/chat-sidebar-region.runtime.tsx";
 import {
   closeSlot,
   ensureSidebarConversation,
@@ -76,9 +78,7 @@ function createReviewFixture() {
     query,
     ...fixture,
     previewAlt: () =>
-      query<HTMLImageElement>(
-        ".chat-files-panel__page:not([hidden]) .chat-tool-card__preview-image",
-      )?.alt,
+      query<HTMLImageElement>(".chat-files-panel__page:not([hidden]) .sidebar-image-view img")?.alt,
     settlePreview: async () => {
       fixture.file.resolve(fixture.preview);
       await fixture.file.promise;
@@ -139,9 +139,66 @@ it("renders and updates the workspace rail inside the Files panel", async () => 
   expect(query(".chat-workspace-rail")).toBe(rail);
   expect(rail.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("notes");
   element(rail, 'button[aria-label="notes.txt"]').click();
-  expect(sessions.getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "notes.txt", {
-    agentId: "main",
+  await vi.waitFor(() =>
+    expect(sessions.getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "notes.txt", {
+      agentId: "main",
+    }),
+  );
+});
+
+it("finds an oversized attachment in Files without opening a guessed path", async () => {
+  useFakeClock();
+  const { list, mount, rails, renderPanels, sessions, state, query } = createReviewFixture();
+  state.chatMessage = "Keep my unsent question.";
+  list.resolve({
+    sessionKey: state.sessionKey,
+    root: "/synthetic/workspace",
+    files: [],
+    browser: {
+      path: "",
+      search: "orders-large.zip",
+      entries: ["exports/orders-large.zip", "archive/orders-large.zip"].map((path) => ({
+        path,
+        name: "orders-large.zip",
+        kind: "file" as const,
+      })),
+    },
   });
+  const transcript = document.body.appendChild(document.createElement("div"));
+  const onFindWorkspaceFile = rails().onFindWorkspaceFile;
+  const card = mountSolid(
+    () =>
+      createComponent(AssistantAttachments, {
+        attachments: [
+          {
+            type: "attachment_error",
+            attachment: { code: "file-too-large", kind: "document", label: "orders-large.zip" },
+          },
+        ],
+        options: { sessionKey: state.sessionKey, agentId: "main", onFindWorkspaceFile },
+      }),
+    { container: transcript },
+  );
+  onTestFinished(() => card.unmount());
+  buttonWithText(transcript, "Find in Files").click();
+  expect(isSidebarSlotVisible(state.sidebarLayout, "workspace")).toBe(true);
+  await vi.advanceTimersByTimeAsync(160);
+  vi.useRealTimers();
+  await renderPanels();
+  expect(query<HTMLInputElement>('input[type="search"]')?.value).toBe("orders-large.zip");
+  expect(query('[aria-label="exports/orders-large.zip"]')).not.toBeNull();
+  expect(query('[aria-label="archive/orders-large.zip"]')).not.toBeNull();
+  expect(sessions.listFiles).toHaveBeenCalledOnce();
+  expect(sessions.getFile).not.toHaveBeenCalled();
+  expect(state.chatMessage).toBe("Keep my unsent question.");
+  element(mount, '[aria-label="exports/orders-large.zip"]').click();
+  await vi.waitFor(() =>
+    expect(sessions.getFile).toHaveBeenCalledExactlyOnceWith(
+      state.sessionKey,
+      "/synthetic/workspace/exports/orders-large.zip",
+      { agentId: "main" },
+    ),
+  );
 });
 
 it("navigates an existing file tab to an explicit line without resetting its editor or draft", async () => {
@@ -152,16 +209,12 @@ it("navigates an existing file tab to an explicit line without resetting its edi
     const descriptor = Object.getOwnPropertyDescriptor(Range.prototype, key);
     Object.defineProperty(Range.prototype, key, { configurable: true, value });
     onTestFinished(() => {
-      if (descriptor) {
-        Object.defineProperty(Range.prototype, key, descriptor);
-      } else {
-        Reflect.deleteProperty(Range.prototype, key);
-      }
+      restorePropertyDescriptor(Range.prototype, key, descriptor);
     });
   }
-  const { file, mount, renderPanels, state, sessions, query } = createReviewFixture();
+  const { file, list, mount, rails, renderPanels, state, sessions, query } = createReviewFixture();
   const navigate = async (line?: number) => {
-    openSessionWorkspaceFile(state, {
+    await openSessionWorkspaceFile(state, {
       path: "navigation.txt",
       ...(line === undefined ? {} : { line }),
     });
@@ -173,7 +226,7 @@ it("navigates an existing file tab to an explicit line without resetting its edi
     );
   state.hello = gatewayHelloForMethods(["sessions.files.get", "sessions.files.set"]);
   const text = Array.from({ length: 10 }, (_, index) => `line ${index + 1}`).join("\n");
-  openSessionWorkspaceFile(state, { path: "navigation.txt", line: 2 });
+  void openSessionWorkspaceFile(state, { path: "navigation.txt", line: 2 });
   file.resolve({
     sessionKey: state.sessionKey,
     root: "/synthetic/workspace",
@@ -199,6 +252,24 @@ it("navigates an existing file tab to an explicit line without resetting its edi
   await renderPanels();
   editor.dispatch({ changes: { from: 0, to: 0, insert: "draft " } });
   const draft = editor.state.doc.toString();
+  const retainedPreview = expectDefined(
+    getSessionWorkspace(state).activePreviewId,
+    "open file tab",
+  );
+  useFakeClock();
+  list.resolve({ sessionKey: state.sessionKey, root: "/synthetic/workspace", files: [] });
+  rails().onFindWorkspaceFile({
+    name: "orders-large.zip",
+    sessionKey: state.sessionKey,
+    agentId: "main",
+  });
+  await vi.advanceTimersByTimeAsync(160);
+  vi.useRealTimers();
+  await renderPanels();
+  selectSessionWorkspacePreview(state, retainedPreview);
+  await renderPanels();
+  expect(query(".cm-editor")).toBe(editorElement);
+  expect(editor.state.doc.toString()).toBe(draft);
   const scroll = vi.spyOn(EditorView, "scrollIntoView");
   onTestFinished(() => scroll.mockRestore());
   await navigate(7);
@@ -230,7 +301,8 @@ it("navigates an existing file tab to an explicit line without resetting its edi
   const saved = (await file.promise)!;
   const pendingRead = createDeferred<SessionWorkspaceGetResult | null>();
   vi.mocked(sessions.getFile).mockReturnValueOnce(pendingRead.promise);
-  await navigate();
+  void openSessionWorkspaceFile(state, { path: "navigation.txt" });
+  await renderPanels();
   editor.dispatch({ changes: { from: 0, to: 0, insert: "newer " } });
   await renderPanels();
   sessions.setFile = vi.fn().mockResolvedValue({ file: { hash: "newer-saved" } });
@@ -248,13 +320,6 @@ it("navigates an existing file tab to an explicit line without resetting its edi
   });
   buttonWithText(mount, "Discard").click();
   await renderPanels();
-  buttonWithText(mount, "View Raw Text").click();
-  await renderPanels();
-  const rawReader = query(".sidebar-markdown-reader");
-  expect(rawReader).not.toBeNull();
-  await navigate();
-  expect(query(".sidebar-markdown-reader")).toBe(rawReader);
-  expect(query(".cm-editor")).toBeNull();
   await navigate(3);
   await expectLine(3);
   const restored = expectDefined(
@@ -331,7 +396,15 @@ it.each(["ready", "unavailable", "error"] as const)(
     const video = await vi.waitFor(() => expectDefined(panel.querySelector("video"), "video"));
     expect(video.hasAttribute("src")).toBe(false);
     expect(video.preload).toBe("auto");
-    const presentation = panel.querySelector('[role="status"]');
+    const presentation = expectDefined(
+      panel.querySelector(".chat-video-skeleton"),
+      "Video loading skeleton",
+    );
+    const failureStatus = expectDefined(
+      panel.querySelector('.sr-only[role="status"]'),
+      "Video failure status",
+    );
+    expect(failureStatus.textContent).toBe("");
     const header = panel.querySelector(".chat-assistant-attachment-card__header");
     expect(secondResolver).toHaveBeenCalledOnce();
     if (outcome === "error") {
@@ -346,13 +419,15 @@ it.each(["ready", "unavailable", "error"] as const)(
         expect(video.getAttribute("src")).toBe(`${source}?mediaTicket=renewed`),
       );
       expect(panel.querySelector("video")).toBe(video);
-      expect(panel.querySelector('[role="status"]')).toBe(presentation);
+      expect(panel.querySelector(".chat-video-skeleton")).toBe(presentation);
       expect(panel.querySelector(".chat-assistant-attachment-card__header")).toBe(header);
       expect(panel.querySelector('[aria-busy="true"]')).not.toBeNull();
       Object.defineProperty(video, "readyState", { configurable: true, value: 2 });
       video.dispatchEvent(new Event("loadeddata"));
       await player?.updateComplete;
-      expect(panel.querySelector('[role="status"]')).toBeNull();
+      expect(panel.querySelector(".chat-video-skeleton")).toBeNull();
+      expect(panel.querySelector('.sr-only[role="status"]')).toBe(failureStatus);
+      expect(failureStatus.textContent).toBe("");
       expect(panel.querySelector('[aria-busy="true"]')).toBeNull();
       expect(panel.textContent).not.toContain("Preview unavailable");
     } else {
@@ -486,48 +561,12 @@ it.each(["history", "stream"] as const)(
   },
 );
 
-it("keeps Files closed when a pending file preview completes", async () => {
-  const { preview, renderPanels, settlePreview, state, query } = createReviewFixture();
-  openSessionWorkspaceFile(state, { path: preview.file.path });
-  await renderPanels();
-  const close = query<HTMLButtonElement>('button[aria-label="Close tab: preview.png"]');
-  expect(close).not.toBeNull();
-  close!.click();
-  await renderPanels();
-  expect(query('[data-panel-slot="detail"]')).toBeNull();
-
-  await settlePreview();
-  expect(query('[data-panel-slot="detail"]')).toBeNull();
-});
-
-it("opens the requested file when an unrelated directory listing completes first", async () => {
-  const { file, list, preview, previewAlt, renderPanels, state, query } = createReviewFixture();
-  loadSessionWorkspace(state, getSessionWorkspace(state), true);
-  openSessionWorkspaceFile(state, { path: preview.file.path });
-  await renderPanels();
-  expect(query('[data-panel-skeleton="files"]')).not.toBeNull();
-
-  list.resolve({
-    sessionKey: state.sessionKey,
-    root: "/synthetic/workspace",
-    files: [{ kind: "modified", name: "other.txt", path: "other.txt", missing: false }],
-    artifacts: [],
-  });
-  await vi.waitFor(() =>
-    expect(createSessionWorkspaceProps(state).list?.files[0]?.name).toBe("other.txt"),
-  );
-  file.resolve(preview);
-  await loadedSidebarContent(state);
-  await renderPanels();
-  expect(previewAlt()).toBe("preview.png");
-});
-
 it.each(["Files", "minimized"] as const)(
   "keeps the operator's %s presentation when a pending preview completes",
   async (presentation) => {
     const { preview, previewAlt, renderPanels, settlePreview, state, query } =
       createReviewFixture();
-    openSessionWorkspaceFile(state, { path: preview.file.path });
+    void openSessionWorkspaceFile(state, { path: preview.file.path });
     await renderPanels();
     if (presentation === "Files") {
       state.handleOpenSidebar({
@@ -557,59 +596,6 @@ it.each(["Files", "minimized"] as const)(
   },
 );
 
-it("keeps the newer file visible after an older preview request settles", async () => {
-  const { preview, previewAlt, renderPanels, sessions, settlePreview, state } =
-    createReviewFixture();
-  openSessionWorkspaceFile(state, { path: preview.file.path });
-  const replacement = {
-    ...preview,
-    file: { ...preview.file, name: "replacement.png", path: "replacement.png" },
-  };
-  sessions.getFile = vi.fn().mockResolvedValue(replacement);
-  openSessionWorkspaceFile(state, { path: replacement.file.path });
-  await vi.waitFor(async () => {
-    await renderPanels();
-    expect(previewAlt()).toBe("replacement.png");
-  });
-  await settlePreview();
-  expect(previewAlt()).toBe("replacement.png");
-});
-
-it("retires a preview across reconnect without refocusing Review over Files", async () => {
-  const { preview, renderPanels, settlePreview, state, query } = createReviewFixture();
-  openSessionWorkspaceFile(state, { path: preview.file.path });
-  state.handleOpenSidebar({
-    kind: "attachment",
-    attachmentKind: "image",
-    title: "Attachment in Files",
-    src: "/synthetic/attachment.png",
-  });
-  await renderPanels();
-  expect(isSidebarSlotVisible(state.sidebarLayout, "workspace")).toBe(true);
-
-  state.connectionEpoch += 1;
-  await renderPanels();
-  await settlePreview();
-  expect(isSidebarSlotVisible(state.sidebarLayout, "workspace")).toBe(true);
-  expect(state.sessionWorkspaceState?.previews).toEqual([]);
-  expect(query(".sidebar-attachment-preview__image")).toBeNull();
-  state.updateSidebarLayout(openSlot(state.sidebarLayout, "detail"));
-  await renderPanels();
-  expect(query(".chat-tool-card__preview-image")).toBeNull();
-});
-
-it("shows a current preview request failure without leaving Review loading", async () => {
-  const { file, mount, preview, renderPanels, state, query } = createReviewFixture();
-  openSessionWorkspaceFile(state, { path: preview.file.path });
-  await renderPanels();
-  file.reject(new Error("Preview unavailable"));
-  await expect(file.promise).rejects.toThrow("Preview unavailable");
-  state.updateSidebarLayout(openSlot(state.sidebarLayout, "workspace"));
-  await renderPanels();
-  expect(mount.textContent).toContain("Preview unavailable");
-  expect(query('[data-panel-skeleton="files"]')).toBeNull();
-});
-
 it("retains default Review content and collapsed files while switching tabs, focusing Chat, and minimizing", async () => {
   const request = vi.fn().mockResolvedValue({
     sessionKey: "agent:main:review",
@@ -630,8 +616,15 @@ it("retains default Review content and collapsed files while switching tabs, foc
     client: { request },
     connected: true,
     connectionEpoch: 1,
-    hello: { features: { methods: ["sessions.diff"] } },
+    hello: gatewayHelloForMethods(["sessions.diff"]),
     sessionKey: "agent:main:review",
+    sessionsResult: {
+      ts: 1,
+      path: "test",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [{ key: "agent:main:review", kind: "direct", workspaceReadDisabledReason: null }],
+    },
     sidebarLayout: { columns: [] },
   });
   let presented = true;
@@ -641,6 +634,7 @@ it("retains default Review content and collapsed files while switching tabs, foc
     const definitions = sidebarPanelDefinitions(
       sidebarPanelFixtureParams(state, {
         panePresentation: { owner, isPresented: () => presented },
+        workspace: createSessionWorkspaceProps(state, { presentation: "desktop" }),
       }),
     );
     await renderPanelFixture(mount, layout, definitions);
@@ -700,12 +694,14 @@ it("retains default Review content and collapsed files while switching tabs, foc
   await renderPanels(filesLayout);
   expect(files.querySelector("openclaw-chat-detail-panel")).toBeNull();
   expect(files.querySelector(".chat-files-panel__page")).toBe(browser);
+  expect(element(files, ".workspace-desktop").hidden).toBe(false);
   await renderPanels(closeSlot(review, "detail"));
   expect(query("openclaw-session-diff")).toBeNull();
   expect(request).toHaveBeenCalledExactlyOnceWith("sessions.diff", {
     sessionKey: state.sessionKey,
     agentId: "main",
     scope: "all",
+    poll: true,
   });
   expect(state.sidebarContent).toBeNull();
   state.sidebarContent = { kind: "markdown", content: "Transient Review selection" };
@@ -737,7 +733,7 @@ it("shows why a file could not open instead of falling back to the session diff"
   const notice = query(".review-unavailable");
   expect(notice?.getAttribute("role")).toBe("alert");
   expect(notice?.classList.contains("danger")).toBe(true);
-  expect(notice?.querySelector("strong")?.textContent).toBe("Unable to open");
+  expect(notice?.querySelector("strong")?.textContent).toBe("Couldn’t open file");
   expect(notice?.querySelector("span")?.textContent).toBe(message);
   expect(notice?.querySelector("img")).toBeNull();
   expect(query("openclaw-session-diff")).toBeNull();

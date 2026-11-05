@@ -515,11 +515,11 @@
     }
     return `<img src="data:${mimeType};base64,${imgBase64}" class="${className}" />`;
   }
-  function truncate(s, maxLen = 100) {
-    if (s.length <= maxLen) {
+  function truncate(s) {
+    if (s.length <= 100) {
       return s;
     }
-    return truncateUtf16Safe(s, maxLen) + "...";
+    return truncateUtf16Safe(s, 100) + "...";
   }
 
   function getTreeNodeDisplayHtml(entry, label) {

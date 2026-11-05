@@ -40,6 +40,7 @@ import {
 } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import { createReplyParams } from "./test-helpers.js";
 import { createTypingController } from "./typing.js";
 
 vi.mock("./agent-runner-execution.js", () => ({ executeAgentTurn: vi.fn() }));
@@ -180,28 +181,18 @@ describe("followup queue durable input consumption", () => {
         const run =
           entrypoint === "queued followup"
             ? createFollowupRunner(defaults)(queued)
-            : runReplyAgent({
-                ...defaults,
-                commandBody: text,
-                transcriptCommandBody: text,
-                followupRun: queued,
-                queueKey: sessionKey,
-                resolvedQueue: { mode: "interrupt" },
-                shouldSteer: false,
-                shouldFollowup: false,
-                isActive: false,
-                opts: { turnAdoptionLifecycle: queued.turnAdoptionLifecycle },
-                sessionCtx: {
-                  Provider: "telegram",
-                  MessageSid: "channel-maintenance",
-                  SessionKey: sessionKey,
-                },
-                resolvedVerboseLevel: "off",
-                isNewSession: false,
-                blockStreamingEnabled: false,
-                resolvedBlockStreamingBreak: "message_end",
-                shouldInjectGroupIntro: false,
-              });
+            : runReplyAgent(
+                createReplyParams(queued, {
+                  ...defaults,
+                  transcriptCommandBody: text,
+                  opts: { turnAdoptionLifecycle: queued.turnAdoptionLifecycle },
+                  sessionCtx: {
+                    Provider: "telegram",
+                    MessageSid: "channel-maintenance",
+                    SessionKey: sessionKey,
+                  },
+                }),
+              );
         if (entrypoint === "queued followup") {
           await expect(run).resolves.toBeUndefined();
           const result = observed.operation?.result;
@@ -227,7 +218,7 @@ describe("followup queue durable input consumption", () => {
           "ownership ended",
         );
         const retained = await listSessionPendingInputs(scope());
-        expect(retained).toMatchObject({ total: 1, items: [{ state: "interrupted" }] });
+        expect(retained).toMatchObject({ total: 1, items: [{ state: "cancelled" }] });
         rotateAgentEventLifecycleGeneration();
         await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
@@ -454,6 +445,8 @@ describe("followup queue durable input consumption", () => {
     expect(calls[0]?.prompt).toBe(
       "[Queue overflow] Dropped 2 messages due to cap.\nSummary:\n- second approved",
     );
+    // Context pairs with the shown line; the elided line's source adds no unmatched context.
+    expect(calls[0]?.currentInboundContext).toEqual({ text: "second runtime context" });
     expect(pendingRunIds).toEqual([["third"], []]);
     expect(await loadMessages()).toMatchObject([
       { message: { content: calls[0]?.prompt } },

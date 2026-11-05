@@ -23,6 +23,7 @@ export function createTerminalController(dispose: () => void = vi.fn()) {
       attachCustomKeyEventHandler: vi.fn(),
       reset: vi.fn(),
       paste: vi.fn(),
+      input: vi.fn(),
     },
     write: vi.fn(),
     fit: vi.fn(),

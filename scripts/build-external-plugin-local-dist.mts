@@ -25,6 +25,7 @@ type ExternalPluginLocalDistParams = {
   repoRoot?: string;
   env?: NodeJS.ProcessEnv;
   logLevel?: "silent" | "warn";
+  controlUiAssetsPrepared?: boolean;
 };
 
 /** Lists external first-party packages that need source-checkout dist output. */
@@ -170,6 +171,7 @@ export async function buildExternalPluginLocalDist(
     const result = await buildPluginNpmRuntime({
       repoRoot,
       packageDir,
+      controlUiAssetsPrepared: earlyAssets && params.controlUiAssetsPrepared,
       // Standalone package validation owns its existing bundler warnings; this
       // root build still surfaces errors and validates every emitted host import.
       logLevel: params.logLevel ?? "error",
@@ -208,7 +210,9 @@ export async function buildExternalPluginLocalDist(
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    const result = await buildExternalPluginLocalDist();
+    const result = await buildExternalPluginLocalDist({
+      controlUiAssetsPrepared: process.argv.includes("--control-ui-assets-prepared"),
+    });
     console.log(
       `[external-plugin-local-dist] built ${result.pluginDirs.length} plugins in ${Math.round(result.durationMs)}ms`,
     );

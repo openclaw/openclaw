@@ -136,9 +136,13 @@ export function registerGatewayCronMutationAuthorityTests(harness: CronMutationH
         );
         state.cron.stop();
         restarted = harness.createCronService(cfg);
-        expect((await restarted.cron.readJob(job.id))?.scheduledToolPolicy).toEqual(
-          scheduledToolPolicy,
-        );
+        const persisted = await restarted.cron.readJob(job.id);
+        expect(persisted?.scheduledToolPolicy).toEqual(scheduledToolPolicy);
+        expect(persisted?.payload).toMatchObject({
+          kind: "agentTurn",
+          message: "updated",
+          toolsAllow: ["write"],
+        });
       } finally {
         state.cron.stop();
         restarted?.cron.stop();

@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
+import { audioFixture, prepareRealtimeTalkTestInput } from "./input.test-support.ts";
 import {
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
   type RealtimeTalkCallbacks,
@@ -73,24 +73,6 @@ export function toolOutput(callId: string, result: unknown) {
 
 export function userMessage(content: unknown[]) {
   return { type: "conversation.item.create", item: { type: "message", role: "user", content } };
-}
-
-export function audioFixture() {
-  const track = Object.assign(new EventTarget(), { stop: vi.fn() });
-  const stream = {
-    getAudioTracks: () => [track],
-    getTracks: () => [track],
-  } as unknown as MediaStream;
-  return { track, stream };
-}
-
-export function stubMedia(...streams: MediaStream[]) {
-  const getUserMedia = vi.fn();
-  for (const stream of streams) {
-    getUserMedia.mockResolvedValueOnce(stream);
-  }
-  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
-  return getUserMedia;
 }
 
 export function stubMicrophone() {

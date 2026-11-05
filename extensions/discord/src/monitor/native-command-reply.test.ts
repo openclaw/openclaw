@@ -42,14 +42,10 @@ const componentRoute = {
 };
 
 function deliver(
-  params: Omit<
-    Parameters<typeof deliverDiscordInteractionReply>[0],
-    "textLimit" | "preferFollowUp" | "chunkMode"
-  > & { preferFollowUp?: boolean },
+  params: Omit<Parameters<typeof deliverDiscordInteractionReply>[0], "textLimit" | "chunkMode">,
 ) {
   return deliverDiscordInteractionReply({
     textLimit: 2000,
-    preferFollowUp: false,
     chunkMode: "length",
     ...params,
   });
@@ -88,12 +84,12 @@ it.each([
   [true, false],
   [false, true],
 ])(
-  "registers buttons after native acceptance (follow-up=%s, expired=%s)",
-  async (preferFollowUp, expires) => {
+  "registers buttons after native acceptance (message ID=%s, expired=%s)",
+  async (hasMessageId, expires) => {
     const interaction = createInteraction();
     const started = createDeferred<void>();
     const accepted = createDeferred<unknown>();
-    const sender = preferFollowUp ? interaction.followUp : interaction.reply;
+    const sender = interaction.followUp;
     sender.mockImplementation(() => {
       started.resolve();
       return accepted.promise;
@@ -110,7 +106,6 @@ it.each([
         presentation: presentation(choices, "Credentials saved. Choose model access."),
       },
       componentRoute,
-      preferFollowUp,
       responseEphemeral: true,
     });
     const outcome = delivery.then(
@@ -132,7 +127,7 @@ it.each([
         (part): part is APIButtonComponentWithCustomId =>
           part.type === ComponentType.Button && "custom_id" in part,
       );
-    expect(buttons.map((button) => button.label)).toEqual(["All models", "Keep restrictions"]);
+    expect(buttons.map((button) => button.label)).toEqual(choices.map(([label]) => label));
     const ids = buttons.map((button) => {
       const parsed = parseDiscordComponentCustomId(button.custom_id);
       assert(parsed);
@@ -142,7 +137,7 @@ it.each([
     if (expires) {
       accepted.reject({ discordCode: 10062 });
     } else {
-      accepted.resolve(preferFollowUp ? { id: "native-message" } : undefined);
+      accepted.resolve(hasMessageId ? { id: "native-message" } : undefined);
     }
     const result = await outcome;
     if (expires) {
@@ -154,16 +149,13 @@ it.each([
     const entries = await Promise.all(
       ids.map((id) => resolveDiscordComponentEntryWithPersistence({ id, consume: false })),
     );
-    expect(entries.map((entry) => [entry?.label, entry?.callbackData])).toEqual([
-      ["All models", "/login choice token 0"],
-      ["Keep restrictions", "/login choice token 1"],
-    ]);
+    expect(entries.map((entry) => [entry?.label, entry?.callbackData])).toEqual(choices);
     for (const entry of entries) {
       expect(entry).toMatchObject({
         ...componentRoute,
         callbackDataKind: "command",
+        messageId: hasMessageId ? "native-message" : undefined,
       });
-      expect(entry?.messageId).toBe(preferFollowUp ? "native-message" : undefined);
     }
   },
 );
@@ -195,7 +187,7 @@ it.each([false, true])(
     try {
       await started.promise;
       await setImmediate();
-      expect(interaction.reply).toHaveBeenCalledOnce();
+      expect(interaction.followUp).toHaveBeenCalledOnce();
       expect(completed).toBe(false);
       if (fail) {
         registered.reject(new Error("synthetic persistence unavailable"));
@@ -233,12 +225,12 @@ it("preserves native attachments and embeds with shared presentation", async () 
     onDelivered,
   });
 
-  expect(interaction.reply).toHaveBeenCalledWith({
+  expect(interaction.followUp).toHaveBeenNthCalledWith(1, {
     content: "x".repeat(2_000),
     embeds,
     files: [{ name: "status.png", data: Buffer.from("image"), contentType: "image/png" }],
   });
-  expect(interaction.followUp).toHaveBeenCalledWith({ content: "x".repeat(100) });
+  expect(interaction.followUp).toHaveBeenNthCalledWith(2, { content: "x".repeat(100) });
   expect(onDelivered).toHaveBeenCalledExactlyOnceWith(
     ["x".repeat(2_000), "Status", "x".repeat(100)].join("\n"),
   );
@@ -270,8 +262,8 @@ it("omits legacy content and embeds from native Components V2 replies", async ()
     onDelivered,
   });
 
-  expect(interaction.reply).toHaveBeenCalledWith({ components });
-  expect(interaction.followUp).not.toHaveBeenCalled();
+  expect(interaction.followUp).toHaveBeenCalledWith({ components });
+  expect(interaction.reply).not.toHaveBeenCalled();
   expect(onDelivered).toHaveBeenCalledExactlyOnceWith("Choose\nActions\nRead");
 });
 
@@ -284,10 +276,10 @@ it("sends singular WebP media after blank plural URLs across a real multipart re
     kind: "image",
   });
   const interaction = {
-    reply: vi.fn(async (data: unknown) =>
-      loopback.rest.post("/interactions/123/token/callback", { body: { type: 4, data } }),
+    reply: vi.fn(),
+    followUp: vi.fn(async (data: unknown) =>
+      loopback.rest.post("/webhooks/123/token", { body: data }),
     ),
-    followUp: vi.fn(),
   };
 
   try {
@@ -301,7 +293,7 @@ it("sends singular WebP media after blank plural URLs across a real multipart re
     });
     const upload = loopback.requests.find((request) => request.method === "POST");
     expect(upload).toMatchObject({
-      path: expect.stringContaining("/interactions/123/token/callback"),
+      path: expect.stringContaining("/webhooks/123/token"),
       contentType: expect.stringMatching(/^multipart\/form-data; boundary=/),
     });
     expect(upload?.body).toContain('name="files[0]"; filename="sticker.webp"');

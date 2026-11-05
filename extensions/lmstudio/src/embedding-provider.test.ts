@@ -7,6 +7,7 @@ import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runti
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 import { createLmstudioEmbeddingProvider } from "./embedding-provider.js";
+import { LmstudioModelLoadError } from "./models.fetch.js";
 
 const prepareLmstudioModelForInferenceMock = vi.hoisted(() =>
   vi.fn(async (_params?: { requestedContextLength?: number }) => ({
@@ -149,10 +150,7 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       .fn()
       .mockResolvedValueOnce({ release: firstRelease })
       .mockResolvedValueOnce({ release: secondRelease });
-    let resolveSecond: (value: number[]) => void = () => {};
-    const secondResult = new Promise<number[]>((resolve) => {
-      resolveSecond = resolve;
-    });
+    const { promise: secondResult, resolve: resolveSecond } = Promise.withResolvers<number[]>();
     const remoteEmbed = vi
       .fn()
       .mockRejectedValueOnce(new Error("first query failed"))
@@ -257,7 +255,7 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
   it("retains the discovered canonical model when its preload subsequently fails", async () => {
     const requestedVariant = `${EMBEDDING_MODEL}@q4_k_m`;
     prepareLmstudioModelForInferenceMock.mockRejectedValueOnce(
-      Object.assign(new Error("fixture preload rejected"), { resolvedModelKey: EMBEDDING_MODEL }),
+      new LmstudioModelLoadError(EMBEDDING_MODEL, undefined, new Error("fixture preload rejected")),
     );
 
     const result = await requireEmbeddingAdapter().create({

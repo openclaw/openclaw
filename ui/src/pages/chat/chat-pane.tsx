@@ -21,18 +21,17 @@ type PaneMethods = Pick<
   | "captureNavigationFace"
   | "focusComposerInput"
 >;
-type PaneFacts = Pick<
-  ChatPaneRuntime,
-  | "transcriptLoading"
-  | "transcriptReady"
-  | "historyRecovering"
-  | "conversationPresented"
-  | "hasQueuedMessageEdit"
-  | "runActivity"
-  | "composerReady"
->;
 export type ChatPaneElement = SolidBridgeElement<ChatPaneProps, PaneMethods> &
-  PaneFacts & {
+  Pick<
+    ChatPaneRuntime,
+    | "transcriptLoading"
+    | "transcriptReady"
+    | "historyRecovering"
+    | "conversationPresented"
+    | "hasQueuedMessageEdit"
+    | "runActivity"
+    | "composerReady"
+  > & {
     readonly composerElement: HTMLTextAreaElement | null;
     readonly headerElement: HTMLElement | null;
   };
@@ -47,6 +46,7 @@ function synchronizeInputs(runtime: ChatPaneRuntime, host: ChatPaneProps) {
     inputRegion: !Object.is(runtime.inputRegion, host.inputRegion),
     draft: !Object.is(runtime.draft, host.draft),
     focusComposer: !Object.is(runtime.focusComposer, host.focusComposer),
+    routeResolutionPending: !Object.is(runtime.routeResolutionPending, host.routeResolutionPending),
   };
   Object.assign(runtime, Object.fromEntries(chatPanePropertyKeys.map((key) => [key, host[key]])));
   if (runtime.isConnected) {

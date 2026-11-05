@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createGatedToolFactory } from "./code-mode-concurrency.test-support.js";
 import type { CodeModeNamespaceDescriptor } from "./code-mode-namespaces.js";
@@ -22,18 +22,12 @@ function fakeTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool 
 }
 
 function expectCompleted(result: CodeModeHeadlessResult) {
-  expect(result.status).toBe("completed");
-  if (result.status !== "completed") {
-    throw new Error(result.error);
-  }
+  assert(result.status === "completed", JSON.stringify(result));
   return result;
 }
 
 function expectFailed(result: CodeModeHeadlessResult) {
-  expect(result.status).toBe("failed");
-  if (result.status !== "failed") {
-    throw new Error("expected headless code mode failure");
-  }
+  assert(result.status === "failed", JSON.stringify(result));
   return result;
 }
 
@@ -93,19 +87,21 @@ function expectDrained(
   fixture: ReturnType<typeof drainFixture>,
   events: string[],
 ) {
-  expect(result.value).toEqual({ winner: "fast" });
-  expect(result.toolCallCount).toBe(3);
+  expect([result.value, result.toolCallCount]).toEqual([{ winner: "fast" }, 3]);
   expectToolCalls(1, ...fixture.tools);
   expect(fixture.events).toEqual(events);
   expect(fixture.gate.state).toEqual({ completed: true, aborted: false });
 }
 
-function deadlineFixture(delay: number, wallClockMs: number, abortable = false) {
+function deadlineFixture(delay: number | null, wallClockMs: number, abortable = false) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   const started = createDeferred();
   const slow = fakeTool("slow_leg", async (_toolCallId, _input, signal) => {
     started.resolve();
     await new Promise<void>((resolve, reject) => {
+      if (delay === null) {
+        return;
+      }
       const timer = setTimeout(resolve, delay);
       if (abortable) {
         signal?.addEventListener(
@@ -154,8 +150,7 @@ describe("headless Code Mode", () => {
       { wallClockMs: 120_000 },
     );
 
-    expect(result.value).toEqual({ input: { value: 2 } });
-    expect(result.toolCallCount).toBe(2);
+    expect([result.value, result.toolCallCount]).toEqual([{ input: { value: 2 } }, 2]);
     expectToolCalls(1, first, second);
   });
 
@@ -235,8 +230,7 @@ describe("headless Code Mode", () => {
       { wallClockMs: 5_000 },
     );
 
-    expect(result.value).toEqual({ winner: "fast" });
-    expect(result.toolCallCount).toBe(4);
+    expect([result.value, result.toolCallCount]).toEqual([{ winner: "fast" }, 4]);
     expectToolCalls(1, winner, loser, audit, release);
     expect(events).toEqual([
       "loser:start",
@@ -295,8 +289,7 @@ describe("headless Code Mode", () => {
       { wallClockMs: 5_000 },
     );
 
-    expect(result.value).toBe("fast failure");
-    expect(result.toolCallCount).toBe(3);
+    expect(result).toMatchObject({ value: "fast failure", toolCallCount: 3 });
     expectToolCalls(1, failed, slow, release);
     expect(events).toEqual([
       "failed:wait",
@@ -322,36 +315,61 @@ describe("headless Code Mode", () => {
     expect(result.error).toContain("module access is disabled");
   });
 
-  it("injects deeply frozen trigger state and emits replacement state through json", async () => {
-    const result = await complete(
-      [],
-      `
+  it.each(["node", "quickjs"] as const)(
+    "%s injects detached, normalized, deeply frozen trigger state",
+    async (executor) => {
+      const state = {
+        "": 7,
+        count: 4,
+        nested: { stable: true, list: [null, { keep: 3 }] },
+        nonfinite: Number.NaN,
+      };
+      const ctx = createHeadlessCodeModeHarness([], { codeMode: { executor } });
+      for (let iteration = 0; iteration < 2; iteration++) {
+        const result = expectCompleted(
+          await runCodeModeScriptHeadless({
+            ctx,
+            code: `
           json({
             fire: true,
             frozen: Object.isFrozen(trigger) &&
               Object.isFrozen(trigger.state) &&
-              Object.isFrozen(trigger.state.nested),
+              Object.isFrozen(trigger.state.nested) &&
+              Object.isFrozen(trigger.state.nested.list) &&
+              Object.isFrozen(trigger.state.nested.list[1]),
             emptyKey: trigger.state[""],
+            values: [trigger.state.nonfinite, trigger.state.nested.list[0], trigger.state.nested.list[1].keep],
             state: { count: trigger.state.count + 1 },
           });
+          try { trigger.state.nested.list[1].keep = 99; } catch {}
           return "done";
         `,
-      {
-        extraNamespaces: [
-          triggerNamespace([
-            ["state", { kind: "value", value: { "": 7, count: 4, nested: { stable: true } } }],
-          ]),
-        ],
-      },
-    );
+            extraNamespaces: [triggerNamespace([["state", { kind: "value", value: state }]])],
+          }),
+        );
 
-    expect(result.output).toEqual([
-      {
-        type: "json",
-        value: { fire: true, frozen: true, emptyKey: 7, state: { count: 5 } },
-      },
-    ]);
-  });
+        expect(result.output).toEqual([
+          {
+            type: "json",
+            value: {
+              fire: true,
+              frozen: true,
+              emptyKey: 7,
+              values: [null, null, 3],
+              state: { count: 5 },
+            },
+          },
+        ]);
+        expect(state).toEqual({
+          "": 7,
+          count: 4,
+          nested: { stable: true, list: [null, { keep: 3 }] },
+          nonfinite: Number.NaN,
+        });
+        expect(Object.isFrozen(state.nested.list[1])).toBe(false);
+      }
+    },
+  );
 
   it("keeps an injected namespace while calling a colliding tool by its advertised global", async () => {
     const tool = fakeTool("trigger", async () => jsonResult({ owner: "tool" }));
@@ -430,8 +448,8 @@ describe("headless Code Mode", () => {
     expect(tool.execute).toHaveBeenCalledTimes(129);
   });
 
-  it("enforces one wall-clock deadline across worker and tool legs", async () => {
-    const fixture = deadlineFixture(30_000, 15_000, true);
+  it.each([false, true])("enforces the wall deadline with abortable tool=%s", async (abortable) => {
+    const fixture = deadlineFixture(abortable ? 30_000 : null, 15_000, abortable);
 
     // Advance the shared deadline only after the real worker reaches the tool leg.
     await fixture.started.promise;

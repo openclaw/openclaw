@@ -1,6 +1,14 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { takePreparedCatalogTerminal } from "../../lib/sessions/catalog-terminal-start.ts";
+import {
+  TerminalOpenTimeoutError,
+  TerminalOpenUnusableSessionError,
+} from "./terminal-connection.ts";
 import type {
   TerminalConnection,
   TerminalGatewayClient,
@@ -11,8 +19,15 @@ import {
   replaceTerminalController,
 } from "./terminal-controller-lifecycle.ts";
 import { updateTerminalFont } from "./terminal-fonts.ts";
+import { terminalOpenErrorText } from "./terminal-panel-chrome.ts";
 import {
   TERMINAL_OUTPUT_ENCODER,
+  resolveTerminalPanelOwnerSessionKey,
+  type TerminalOperation,
+  type TerminalPanelError,
+  type TerminalPanelOpenAction,
+  type TerminalRestoreBatch,
+  type TerminalStagedInput,
   shellBasename,
   type TerminalPanelSessionHost,
   type TerminalPanelSessionState,
@@ -22,6 +37,8 @@ import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 import { createTerminalStartupInput } from "./terminal-startup-input.ts";
 import type { createTerminalTabReadiness } from "./terminal-tab-readiness.ts";
 import { terminalDynamicColors, terminalTheme } from "./terminal-theme.ts";
+
+registerTerminalEnglish();
 
 type TerminalSink = Parameters<TerminalConnection["open"]>[1];
 
@@ -94,11 +111,11 @@ export function observeTerminalRestoreInput(document: Document, signal: AbortSig
   function stop() {
     stopPointer();
     stopKeyboard();
-    signal.removeEventListener("abort", stop);
+    stopAbort();
   }
   const stopPointer = listen(document, "pointerdown", onInteraction, true);
   const stopKeyboard = listen(document, "keydown", onInteraction, true);
-  signal.addEventListener("abort", stop, { once: true });
+  const stopAbort = listen(signal, "abort", stop, { once: true });
   return input;
 }
 
@@ -253,4 +270,191 @@ export async function bootTerminalPanelSession(params: {
     rows: controller.terminal.rows || 24,
     sink,
   };
+}
+
+type TerminalSessionBootContext = {
+  host: TerminalPanelSessionHost;
+  state: TerminalPanelSessionState;
+  captureTerminalOperation: (cancelIntent?: () => void) => TerminalOperation | null;
+  isTerminalOperationCurrent: (
+    operation: TerminalOperation,
+    restore?: TerminalRestoreBatch,
+    tab?: TerminalPanelSessionTab,
+  ) => boolean;
+  updateState: (next: Partial<TerminalPanelSessionState>) => void;
+  bootTab: (
+    operation: TerminalOperation,
+    options?: {
+      awaitFirstOutput?: boolean;
+      restore?: { batch: TerminalRestoreBatch; sessionId: string };
+    },
+  ) => ReturnType<typeof bootTerminalPanelSession>;
+  adoptSession: (
+    tab: TerminalPanelSessionTab,
+    result: TerminalOpenResult,
+    agentOwned?: boolean,
+  ) => void;
+  discardCancelledTab: (tab: TerminalPanelSessionTab) => void;
+  removeTab: (tab: TerminalPanelSessionTab) => void;
+  setError: (text: string | null, retryAction?: TerminalPanelError["retryAction"]) => void;
+  replaceConnection: (connection: TerminalConnection) => void;
+  markExited: (tab: TerminalPanelSessionTab, sessionId: string) => void;
+};
+
+/** Complete open/attach operations use the session controller's live identity and state. */
+export function createTerminalSessionBootOperations(context: TerminalSessionBootContext) {
+  const {
+    host,
+    state,
+    captureTerminalOperation,
+    isTerminalOperationCurrent,
+    updateState,
+    bootTab,
+    adoptSession,
+    discardCancelledTab,
+    removeTab,
+    setError,
+    replaceConnection,
+    markExited,
+  } = context;
+  async function openSessionNow(
+    catalog: CatalogSessionKey | undefined,
+    agentId: string | null,
+    cancelIntent: () => void,
+  ): Promise<boolean> {
+    const operation = captureTerminalOperation(cancelIntent);
+    if (!operation) {
+      return false;
+    }
+    updateState({ booting: true, error: null });
+    const action: TerminalPanelOpenAction = catalog
+      ? { kind: "catalog", agentId, catalog }
+      : { kind: "open", agentId };
+    // Freeze the selection for this tab; later agent changes affect only new tabs.
+    const ownerSessionKey = resolveTerminalPanelOwnerSessionKey(host.inputs.sessionKey, catalog);
+    // Tracked outside the try so the catch can dispose a tab whose open failed.
+    let createdTab: TerminalPanelSessionTab | undefined;
+    try {
+      const boot = await bootTab(operation, { awaitFirstOutput: Boolean(catalog) });
+      createdTab = boot.tab;
+      boot.tab.pendingOpen = action;
+      const result = await boot.connection.open(
+        {
+          agentId: agentId ?? undefined,
+          ...(ownerSessionKey ? { sessionKey: ownerSessionKey } : {}),
+          cols: boot.cols,
+          rows: boot.rows,
+          ...(catalog ? { catalog } : {}),
+        },
+        boot.sink,
+      );
+      if (!isTerminalOperationCurrent(operation) || boot.tab.cancelled) {
+        const cancelledByUser = boot.tab.cancelled === "close";
+        // The tab's close button was clicked while the open RPC was in flight.
+        // The server session is live and its sink registered; close it now or
+        // it survives invisibly (eating the session cap) until disconnect.
+        void boot.connection.close(result.sessionId);
+        discardCancelledTab(boot.tab);
+        return cancelledByUser;
+      }
+      adoptSession(boot.tab, result, ownerSessionKey !== undefined);
+      boot.tab.controller.terminal.focus();
+      return true;
+    } catch (error) {
+      // A failed open (e.g. terminal disabled or a sandboxed agent is refused)
+      // must not leave a phantom "live" tab with no server session. Drop it but
+      // keep the panel open so the error stays visible.
+      if (createdTab && !createdTab.gatewaySessionId && state.tabs.includes(createdTab)) {
+        removeTab(createdTab);
+      }
+      if (!isTerminalOperationCurrent(operation)) {
+        return false;
+      }
+      if (createdTab?.cancelled !== "close") {
+        setError(
+          terminalOpenErrorText(error),
+          error instanceof TerminalOpenTimeoutError ||
+            error instanceof TerminalOpenUnusableSessionError
+            ? action
+            : undefined,
+        );
+      }
+      return true;
+    } finally {
+      if (isTerminalOperationCurrent(operation)) {
+        updateState({ booting: false });
+      }
+    }
+  }
+
+  async function attachSession(
+    sessionId: string,
+    operation: TerminalOperation,
+    agentOwned = false,
+    restore?: TerminalRestoreBatch,
+    stagedInput?: TerminalStagedInput,
+  ): Promise<boolean> {
+    let createdTab: TerminalPanelSessionTab | undefined;
+    let createdConnection: TerminalConnection | undefined;
+    const prepared = host.inputs.page
+      ? takePreparedCatalogTerminal(sessionId, operation.client)
+      : null;
+    try {
+      if (prepared) {
+        replaceConnection(prepared.connection);
+      }
+      const boot = await bootTab(operation, {
+        awaitFirstOutput: prepared !== null,
+        restore: restore && { batch: restore, sessionId },
+      });
+      createdTab = boot.tab;
+      // Handoff replaces the emulator, not the unsent composer data. This is
+      // deliberately separate from pendingInput, which adoption sends to the PTY.
+      boot.tab.stagedInput = stagedInput;
+      createdConnection = boot.connection;
+      if (prepared) {
+        prepared.bind(boot.sink);
+      }
+      const result = prepared?.result ?? (await boot.connection.attach(sessionId, boot.sink));
+      if (!isTerminalOperationCurrent(operation, restore) || boot.tab.cancelled) {
+        // A user close is deliberate; lifecycle cancellation leaves the existing
+        // server session available for the next reconnect to reattach.
+        if (boot.tab.cancelled === "close") {
+          void boot.connection.close(result.sessionId);
+        }
+        discardCancelledTab(boot.tab);
+        return false;
+      }
+      adoptSession(boot.tab, result, agentOwned);
+      return true;
+    } catch (error) {
+      // Claiming cancels the handoff expiry; failed boot or binding must close
+      // this newly started PTY even if the page lifecycle was also cancelled.
+      if (prepared) {
+        void prepared.connection.close(prepared.result.sessionId);
+      }
+      if (!isTerminalOperationCurrent(operation, restore, createdTab)) {
+        return false;
+      }
+      // Failed reads cannot turn transport or authorization errors into authoritative exits.
+      const sessions =
+        restore && createdConnection ? await createdConnection.list().catch(() => null) : null;
+      if (!isTerminalOperationCurrent(operation, restore, createdTab)) {
+        return false;
+      }
+      if (createdTab && !createdTab.gatewaySessionId && state.tabs.includes(createdTab)) {
+        if (sessions && !sessions.some((session) => session.sessionId === sessionId)) {
+          markExited(createdTab, sessionId);
+        } else {
+          removeTab(createdTab);
+        }
+      }
+      if (!restore) {
+        setError(`${t("terminal.attachFailed")}: ${formatUiError(error)}`);
+      }
+      return false;
+    }
+  }
+
+  return { openSessionNow, attachSession };
 }

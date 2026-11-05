@@ -1,13 +1,20 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
+import {
+  prepareForeignLiveSessionPendingInputEntries,
+  readSessionSubmittedInput,
+} from "../../../config/sessions/session-accessor.pending-inputs.js";
 import type { SessionTranscriptWriteScope } from "../../../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
 import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
 import { readSessionTranscriptAnchorsAsync } from "../../../config/sessions/session-transcript-anchor-read.js";
+import { SessionTranscriptReadFenceError } from "../../../config/sessions/session-transcript-read-fence-error.js";
 import { resolveSessionTranscriptReadFence } from "../../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../../config/sessions/session-transcript-read-source.js";
 import type { TranscriptEntryAnchor } from "../../../config/sessions/transcript-entry-anchor.js";
+import { messagesMatchForIdempotentReplay } from "../../../config/sessions/transcript-message-equality.js";
+import { sameSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptInitialWriter,
@@ -16,16 +23,25 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "../../../config/sessions/transcript-write-context.js";
+import {
+  isSessionWorkStartInvalidatedError,
+  SessionWorkStartChangedError,
+} from "../../../config/sessions/work-start-error.js";
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../../sessions/user-turn-transcript.types.js";
-import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
+import { MODEL_FALLBACK_NOTICE_KIND } from "../../../shared/model-fallback-notice.js";
+import {
+  isOpenClawDeliveryMirrorAssistantMessage,
+  PLUGIN_NOTICE_KIND,
+} from "../../../shared/transcript-only-openclaw-assistant.js";
 import {
   AGENT_RUN_RESTART_ABORT_ERROR,
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
 } from "../../run-termination.js";
+import type { AgentSession } from "../../sessions/index.js";
 import { sessionManagerReloadTranscriptCohort } from "../../sessions/session-manager-core.js";
 import {
   sessionManagerPrepareCurrentTurnReplay,
@@ -36,6 +52,7 @@ import { prepareSessionManagerHydration } from "../../sessions/session-manager-i
 import type { SessionEntry } from "../../sessions/session-manager-types.js";
 import type {
   PreparedSessionTranscriptReload,
+  SessionManagerPersistenceTarget,
   SessionManagerTranscriptCohort,
 } from "../../sessions/session-manager-view-types.js";
 import type { SessionManager } from "../../sessions/session-manager.js";
@@ -58,6 +75,13 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   if (message.role === "custom") {
     return readNestedToolActivity(message)?.details.runId === runId;
   }
+  const delivery = isOpenClawDeliveryMirrorAssistantMessage(message)
+    ? asOptionalRecord(Reflect.get(message, "openclawDeliveryMirror"))
+    : undefined;
+  // Operational notices do not complete the foreground user turn.
+  if (delivery?.kind === PLUGIN_NOTICE_KIND || delivery?.kind === MODEL_FALLBACK_NOTICE_KIND) {
+    return true;
+  }
   if (Reflect.get(message, "__openclaw")?.runId !== runId) {
     return false;
   }
@@ -65,7 +89,6 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
     return message.role === "toolResult";
   }
   if (isOpenClawDeliveryMirrorAssistantMessage(message)) {
-    const delivery = asOptionalRecord(Reflect.get(message, "openclawDeliveryMirror"));
     // Only explicit same-run progress can cross this boundary; final or unmarked
     // mirrors still close the turn, even if more tool activity followed them.
     return delivery?.kind === "message-tool-source-reply" && delivery.final === false;
@@ -201,9 +224,10 @@ export async function preparePersistedCurrentUserTurn(params: {
   message: PersistedUserTurnMessage | undefined;
   recorder: UserTurnTranscriptRecorder | undefined;
   runId: string;
+  fallbackReason?: string | null;
   signal?: AbortSignal;
   initial?: InitialPersistedUserTurn;
-}): Promise<InitialUserTurnReplayPreparation | undefined> {
+}): Promise<InitialUserTurnReplayPreparation | "already-delivered" | undefined> {
   const { sessionManager, message, recorder, runId } = params;
   const sessionTarget = sessionManager.getSessionTarget();
   if (!sessionTarget || !message?.idempotencyKey || !recorder) {
@@ -287,7 +311,9 @@ export async function preparePersistedCurrentUserTurn(params: {
           throw new SessionTranscriptWriterClaimReboundError();
         }
         if (prepared && !facts.contextValidated) {
-          throw new Error("Persisted user turn changed before replay admission");
+          throw new SessionWorkStartChangedError(
+            "Persisted user turn changed before replay admission. Retry the turn.",
+          );
         }
         // Consume under the reader's writer FIFO and native mutation witness.
         const anchor = facts.anchors[0];
@@ -297,7 +323,9 @@ export async function preparePersistedCurrentUserTurn(params: {
     );
     assertCurrent();
     if (!accepted) {
-      throw new Error("Persisted user turn changed before replay admission");
+      throw new SessionWorkStartChangedError(
+        "Persisted user turn changed before replay admission. Retry the turn.",
+      );
     }
   };
   const readCurrentTurn = (
@@ -376,7 +404,48 @@ export async function preparePersistedCurrentUserTurn(params: {
         })
       )?.anchor;
   if (!initial) {
-    return undefined;
+    const currentId = sessionManager.resolveCurrentTurnEntryId((entry) =>
+      isInterruptedTurnEntry(entry, runId),
+    );
+    const current = currentId ? sessionManager.getEntry(currentId) : undefined;
+    // A retry can retain the keyed current user with a newer prompt projection.
+    // The fallback owner may continue its timed-out or output-limited request, not a historical retry.
+    if (
+      current?.type === "message" &&
+      ((current.message.role === "user" &&
+        Reflect.get(current.message, "idempotencyKey") === message.idempotencyKey) ||
+        (current.message.role === "assistant" &&
+          Reflect.get(current.message, "__openclaw")?.runId === runId &&
+          (current.message.stopReason === "error" ||
+            (params.fallbackReason === "timeout" && current.message.stopReason === "aborted") ||
+            (params.fallbackReason === "format" && current.message.stopReason === "length"))))
+    ) {
+      return undefined;
+    }
+    // Fresh staged input has no prior commit to acknowledge.
+    if (
+      recorder.getPendingInputMessage?.() &&
+      !recorder.validateCommittedReplay &&
+      !recorder.hasPersisted()
+    ) {
+      return undefined;
+    }
+    await recorder.validateCommittedReplay?.();
+    const submitted = await withSource(params.signal, async (target, assertSource) => {
+      const result = await readSessionSubmittedInput(target, message.idempotencyKey!, {
+        includeSource: true,
+      });
+      assertSource();
+      assertCurrent();
+      return result;
+    });
+    params.signal?.throwIfAborted();
+    // Active-path sequence excludes reset/replaced branches. Matching all persisted
+    // input fields preserves content and requester identity, not merely the key.
+    return submitted?.messageSeq !== undefined &&
+      messagesMatchForIdempotentReplay(submitted.message, message)
+      ? "already-delivered"
+      : undefined;
   }
   // Hooks and compaction can intervene before the core consumes this turn once.
   let pending = true;
@@ -395,7 +464,9 @@ export async function preparePersistedCurrentUserTurn(params: {
         prepared.anchor.entryId !== initial.entryId ||
         prepared.anchor.generation !== initial.generation
       ) {
-        throw new Error("Persisted user turn changed before replay admission");
+        throw new SessionWorkStartChangedError(
+          "Persisted user turn changed before replay admission. Retry the turn.",
+        );
       }
       if (onAdmitted) {
         if (!pending) {
@@ -406,9 +477,23 @@ export async function preparePersistedCurrentUserTurn(params: {
       }
     };
     assertCurrent();
-    // Read once at core entry; prompt preparation does not reserve a database incarnation.
     return async (onAdmitted) => {
-      await readCurrentTurn(replaySignal, (prepared) => accept(prepared, onAdmitted));
+      const consume = () =>
+        readCurrentTurn(replaySignal, (prepared) => accept(prepared, onAdmitted));
+      try {
+        await consume();
+      } catch (error) {
+        if (
+          !pending ||
+          (!isSessionWorkStartInvalidatedError(error) &&
+            !(error instanceof SessionTranscriptReadFenceError))
+        ) {
+          throw error;
+        }
+        // An append may invalidate selection before admission. Refresh once;
+        // the original user anchor, generation, and live authority must still match.
+        await consume();
+      }
     };
   };
 }
@@ -453,4 +538,83 @@ export function reconcilePrePersistedCurrentUserTurn(params: {
     durableTurnMatches ||
     params.currentUserTurnMessage?.excludeFromContext === true
   );
+}
+
+type ForeignPendingUserTurns = {
+  ownsEntry: (entryId: string) => boolean;
+  omitInput: (messages: AgentMessage[]) => AgentMessage[];
+};
+
+type ForeignPendingUserTurnSession = {
+  agent: { state: { messages: AgentMessage[] } };
+  subscribe: AgentSession["subscribe"];
+};
+
+function readUserIdempotencyKey(message: AgentMessage): string | undefined {
+  return message.role === "user" &&
+    "idempotencyKey" in message &&
+    typeof message.idempotencyKey === "string"
+    ? message.idempotencyKey
+    : undefined;
+}
+
+/** Resolve physical ownership before append admission, then sample live custody at preparation. */
+export async function prepareForeignPendingUserTurns(
+  sessionManager: { getSessionTarget: () => SessionManagerPersistenceTarget | undefined },
+  signal?: AbortSignal,
+): Promise<
+  | ((
+      activeSession: ForeignPendingUserTurnSession,
+      currentUserIdempotencyKey: string | undefined,
+    ) => ForeignPendingUserTurns | undefined)
+  | undefined
+> {
+  const target = sessionManager.getSessionTarget();
+  if (!target) {
+    return undefined;
+  }
+  const assertOwned = captureOwnedTranscriptWriteAssertion(target);
+  const assertPrepared = () => {
+    signal?.throwIfAborted();
+    assertOwned();
+    if (!sameSessionTranscriptTargetBinding(target, sessionManager.getSessionTarget())) {
+      throw new Error("Session manager target changed during live input preparation");
+    }
+  };
+  assertPrepared();
+  const readEntries = await prepareForeignLiveSessionPendingInputEntries(target, signal);
+  assertPrepared();
+  const entries = new Map<string, string>();
+  const adopted = new Set<string>();
+  let observing = false;
+  return (activeSession, currentUserIdempotencyKey) => {
+    assertPrepared();
+    // Preserve the first sample through transcript reload even if a source finishes meanwhile.
+    for (const [id, key] of readEntries()) {
+      entries.set(id, key);
+    }
+    if (!entries.size) {
+      return undefined;
+    }
+    if (!observing) {
+      observing = true;
+      // Steering can accept a sampled input after preparation. Once this attempt
+      // commits it, the input is its own and later model calls must keep it.
+      activeSession.subscribe((event) => {
+        const key =
+          event.type === "message_end" ? readUserIdempotencyKey(event.message) : undefined;
+        if (key) {
+          adopted.add(key);
+        }
+      });
+    }
+    const keys = new Set([...entries.values()].filter((key) => key !== currentUserIdempotencyKey));
+    const omitInput = (messages: AgentMessage[]) =>
+      messages.filter((message) => {
+        const key = readUserIdempotencyKey(message);
+        return !key || !keys.has(key) || adopted.has(key);
+      });
+    activeSession.agent.state.messages = omitInput(activeSession.agent.state.messages);
+    return { ownsEntry: (entryId) => entries.has(entryId), omitInput };
+  };
 }

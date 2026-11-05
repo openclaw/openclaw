@@ -45,6 +45,7 @@ import {
   seedRecoveryKeyState,
 } from "./sdk/recovery-persistence.test-support.js";
 import type { MatrixRawEvent } from "./sdk/types.js";
+import { clearTestUndiciRuntimeDepsOverride, stubRuntimeFetch } from "./sdk/undici.test-support.js";
 
 const ROOM = "!room:example.org";
 const USER = "@bot:example.org";
@@ -108,21 +109,6 @@ function expectSomeMockCallOptions(
   expect(mock.mock.calls.map(([options]) => options)).toContainEqual(
     expect.objectContaining(fields),
   );
-}
-
-const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-
-function clearTestUndiciRuntimeDepsOverride(): void {
-  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
-}
-
-function stubRuntimeFetch(fetchImpl: typeof fetch): void {
-  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-    Agent: function MockAgent() {},
-    EnvHttpProxyAgent: function MockEnvHttpProxyAgent() {},
-    ProxyAgent: function MockProxyAgent() {},
-    fetch: fetchImpl,
-  };
 }
 
 async function consumeMatrixSecretStorageKey(keyId = "SSSSKEY"): Promise<boolean> {
@@ -487,7 +473,7 @@ function makeDecryptFixture(cryptoApi: unknown = {}) {
   const emitMessage = vi.fn();
   const emitFailedDecryption = vi.fn();
   const bridge = new MatrixDecryptBridge({
-    client: { getCrypto: () => cryptoApi },
+    client: { getCrypto: () => cryptoApi, decryptEventIfNeeded: vi.fn(async () => {}) },
     toRaw: (event) => ({ event_id: event.getId() ?? "" }),
     emitDecryptedEvent: vi.fn(),
     emitMessage,
@@ -528,6 +514,19 @@ function makeEncryptedFile(url: string, key = "key", iv = "iv", hash = "hash") {
     hashes: { sha256: hash },
     v: "v2",
   };
+}
+
+const secretText = { msgtype: "m.text" as const, body: "secret" };
+
+function pendingRoom(content: Record<string, unknown>, encrypted = false) {
+  matrixJsClient.getRoom.mockReturnValue({
+    hasEncryptionStateEvent: () => encrypted,
+    getEventForTxnId: () => ({
+      status: EventStatus.NOT_SENT,
+      getId: () => "~pending",
+      getContent: () => content,
+    }),
+  });
 }
 
 describe("MatrixClient request hardening", () => {
@@ -581,9 +580,7 @@ describe("MatrixClient request hardening", () => {
     );
     const client = createSdkClient({ encryption: true });
     await expect(client.getMessageWireEventType(ROOM)).resolves.toBe("m.room.encrypted");
-    await expect(client.sendMessage(ROOM, { msgtype: "m.text", body: "secret" })).resolves.toBe(
-      "$sent",
-    );
+    await expect(client.sendMessage(ROOM, secretText)).resolves.toBe("$sent");
     expect(matrixJsClient.getStateEvent).not.toHaveBeenCalled();
   });
 
@@ -595,9 +592,7 @@ describe("MatrixClient request hardening", () => {
     matrixJsClient.getStateEvent.mockRejectedValue(error);
     const client = createSdkClient();
     await expect(client.getMessageWireEventType(ROOM)).rejects.toBe(error);
-    await expect(client.sendMessage(ROOM, { msgtype: "m.text", body: "secret" })).rejects.toBe(
-      error,
-    );
+    await expect(client.sendMessage(ROOM, secretText)).rejects.toBe(error);
     expect(matrixJsClient.sendMessage).not.toHaveBeenCalled();
   });
 
@@ -615,9 +610,7 @@ describe("MatrixClient request hardening", () => {
       matrixJsClient.getStateEvent.mockResolvedValue({ algorithm: "m.megolm.v1.aes-sha2" });
     }
     const client = createEncryptedSdkClient();
-    await expect(client.sendMessage(ROOM, { msgtype: "m.text", body: "secret" })).rejects.toThrow(
-      /sync/i,
-    );
+    await expect(client.sendMessage(ROOM, secretText)).rejects.toThrow(/sync/i);
     expect(matrixJsClient.sendMessage).not.toHaveBeenCalled();
   });
 
@@ -706,49 +699,33 @@ describe("MatrixClient request hardening", () => {
     expect(matrixJsClient.sendMessage).not.toHaveBeenCalled();
   });
 
-  it("checks encrypted-room readiness before retrying an unsent durable event", async () => {
-    matrixJsClient.getRoom.mockReturnValue({
-      hasEncryptionStateEvent: () => false,
-      getEventForTxnId: () => ({
-        status: EventStatus.NOT_SENT,
-        getId: () => "~pending",
-        getContent: () => ({ msgtype: "m.text", body: "secret" }),
-      }),
-    });
-    matrixJsClient.getStateEvent.mockResolvedValue({ algorithm: "m.megolm.v1.aes-sha2" });
-    const client = createSdkClient();
-    await expect(
-      client.sendMessage(ROOM, { msgtype: "m.text", body: "secret" }, "oc_retry"),
-    ).rejects.toThrow(/enable encryption/i);
-    expect(matrixJsClient.resendEvent).not.toHaveBeenCalled();
-  });
-
-  it("rejects unencrypted attachment references before retrying an unsent encrypted event", async () => {
-    matrixJsClient.getRoom.mockReturnValue({
-      hasEncryptionStateEvent: () => true,
-      getEventForTxnId: () => ({
-        status: EventStatus.NOT_SENT,
-        getId: () => "~pending",
-        getContent: () => ({
-          msgtype: "m.image",
-          body: "photo.png",
-          url: "mxc://example/plain-primary",
-        }),
-      }),
-    });
-    matrixJsClient.getCrypto.mockReturnValue({
-      isEncryptionEnabledInRoom: vi.fn(async () => true),
-    });
-    const client = createSdkClient({ encryption: true });
-    await expect(
-      client.sendMessage(
-        ROOM,
-        { msgtype: "m.text", body: "caller content cannot replace the pending event" },
-        "oc_retry",
-      ),
-    ).rejects.toThrow(/unencrypted media.*retry/i);
-    expect(matrixJsClient.resendEvent).not.toHaveBeenCalled();
-  });
+  it.each([
+    { encrypted: false, content: secretText, error: /enable encryption/i },
+    {
+      encrypted: true,
+      content: { msgtype: "m.image", body: "photo.png", url: "mxc://example/plain-primary" },
+      error: /unencrypted media.*retry/i,
+    },
+  ])(
+    "checks pending event safety before retry (encrypted=$encrypted)",
+    async ({ encrypted, content, error }) => {
+      if (encrypted) {
+        mockEncryptedRoom();
+      } else {
+        matrixJsClient.getStateEvent.mockResolvedValue({ algorithm: "m.megolm.v1.aes-sha2" });
+      }
+      pendingRoom(content, encrypted);
+      const client = createSdkClient({ encryption: encrypted });
+      await expect(
+        client.sendMessage(
+          ROOM,
+          { msgtype: "m.text", body: "caller content cannot replace the pending event" },
+          "oc_retry",
+        ),
+      ).rejects.toThrow(error);
+      expect(matrixJsClient.resendEvent).not.toHaveBeenCalled();
+    },
+  );
 
   it("runs the durable plan guard after endpoint selection and before the Matrix PUT", async () => {
     const order: string[] = [];
@@ -1267,14 +1244,12 @@ describe("MatrixClient request hardening", () => {
       const { withResolvedRuntimeMatrixClient } = await import("./client-bootstrap.js");
       let replacementLease: Awaited<ReturnType<typeof acquireSharedMatrixClient>> | undefined;
       let replacementAcquisition: ReturnType<typeof acquireSharedMatrixClient> | undefined;
-      createSharedMatrixClientMock.mockReset();
-      createSharedMatrixClientMock
-        .mockResolvedValueOnce(firstClient)
-        .mockImplementationOnce(async () => {
-          matrixJsClient = createMatrixJsClientStub();
-          replacementClient = new MatrixClient(auth.homeserver, auth.accessToken);
-          return replacementClient;
-        });
+      createSharedMatrixClientMock.mockReset().mockResolvedValueOnce(firstClient);
+      createSharedMatrixClientMock.mockImplementationOnce(async () => {
+        matrixJsClient = createMatrixJsClientStub();
+        replacementClient = new MatrixClient(auth.homeserver, auth.accessToken);
+        return replacementClient;
+      });
       const keepalive = createDeferred<boolean>();
       const keepaliveOutcome = keepalive.promise.then(
         () => "resolved",
@@ -1283,6 +1258,7 @@ describe("MatrixClient request hardening", () => {
       const syncInternals = requireMatrixSyncApiTestInternals(firstSdkClient.syncApi);
       try {
         const monitor = await acquireSharedMatrixClient({ auth, role: "monitor" });
+        await monitor.start();
         monitor.registerMonitorRetirement({
           closeTaskAdmission: () => {},
           detachListeners: () => {},
@@ -1324,7 +1300,7 @@ describe("MatrixClient request hardening", () => {
           ok: false,
           error: { message: "Matrix client retirement did not settle within 5000ms" },
         });
-        replacementAcquisition = acquireSharedMatrixClient({ auth, startClient: false });
+        replacementAcquisition = acquireSharedMatrixClient({ auth });
         await vi.advanceTimersByTimeAsync(0);
         expect(createSharedMatrixClientMock).toHaveBeenCalledOnce();
         gate.resolve("late-result");
@@ -2084,25 +2060,43 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect((await readStoredRecoveryKey(recoveryKeyPath))?.encodedPrivateKey).toBe(encoded);
   });
 
-  it("fails recovery-key verification when the device lacks full cross-signing identity trust", async () => {
-    const encoded = encodeRecoveryKey(recoveryBytes(1));
-    await installSecretStorageKey(recoveryBytes(1));
-    mockCryptoApi(() => ({
-      bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey),
-      ...verificationApi({ crossSigningVerified: false }),
-    }));
-    const { client } = createRecoveryClient("matrix-sdk-verify-local-only-");
-    await client.start();
-    const result = await client.verifyWithRecoveryKey(encoded as string);
-    expect(result).toMatchObject({
-      success: false,
-      recoveryKeyAccepted: false,
-      backupUsable: false,
-      deviceOwnerVerified: false,
-      verified: false,
-    });
-    expect(result.error).toContain("full Matrix identity trust");
-  });
+  it.each([
+    { trustedDevice: false, error: "full Matrix identity trust" },
+    { trustedDevice: true, error: "backup signature chain is not trusted" },
+  ])(
+    "rejects incomplete recovery trust (device=$trustedDevice)",
+    async ({ trustedDevice, error }) => {
+      const encoded = encodeRecoveryKey(recoveryBytes(1));
+      await installSecretStorageKey(recoveryBytes(1));
+      mockCryptoApi(() => ({
+        bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey),
+        ...verificationApi({ crossSigningVerified: trustedDevice }),
+        ...(trustedDevice
+          ? {
+              checkKeyBackupAndEnable: vi.fn(async () => {}),
+              ...makeBackupApi("11", { trusted: false, matchesDecryptionKey: true }),
+            }
+          : {}),
+      }));
+      const { client, recoveryKeyPath } = createRecoveryClient("matrix-sdk-verify-trust-");
+      if (!trustedDevice) {
+        await client.start();
+      }
+      const result = await client.verifyWithRecoveryKey(encoded as string);
+      expect(result).toMatchObject({
+        success: false,
+        recoveryKeyAccepted: trustedDevice,
+        backupUsable: false,
+        deviceOwnerVerified: trustedDevice,
+        verified: trustedDevice,
+      });
+      expect(result.error).toContain(error);
+      if (trustedDevice) {
+        expect(result.recoveryKeyStored).toBe(false);
+        expect(fs.existsSync(recoveryKeyPath)).toBe(false);
+      }
+    },
+  );
 
   it.each([
     { name: "backup uses existing material", keySeed: 55, consumeKey: false },
@@ -2159,29 +2153,6 @@ describe("MatrixClient crypto bootstrapping", () => {
       deviceOwnerVerified: false,
     });
     expect(result.error).toContain("full Matrix identity trust");
-  });
-
-  it("fails recovery-key verification when backup remains untrusted after device verification", async () => {
-    const encoded = encodeRecoveryKey(recoveryBytes(1));
-    await installSecretStorageKey(recoveryBytes(1));
-    mockCryptoApi(() => ({
-      bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey),
-      ...verificationApi(),
-      checkKeyBackupAndEnable: vi.fn(async () => {}),
-      ...makeBackupApi("11", { trusted: false, matchesDecryptionKey: true }),
-    }));
-    const { client, recoveryKeyPath } = createRecoveryClient("matrix-sdk-verify-untrusted-");
-    const result = await client.verifyWithRecoveryKey(encoded as string);
-    expect(result).toMatchObject({
-      success: false,
-      recoveryKeyAccepted: true,
-      backupUsable: false,
-      deviceOwnerVerified: true,
-      verified: true,
-    });
-    expect(result.error).toContain("backup signature chain is not trusted");
-    expect(result.recoveryKeyStored).toBe(false);
-    expect(fs.existsSync(recoveryKeyPath)).toBe(false);
   });
 
   it("does not overwrite the stored recovery key when recovery-key verification fails", async () => {

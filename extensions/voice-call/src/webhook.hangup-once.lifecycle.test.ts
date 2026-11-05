@@ -54,7 +54,7 @@ async function withWebhook(
     manager: CallManager;
     provider: VoiceCallProvider;
     url: string;
-    send: (payload: unknown) => Promise<void>;
+    send: (event: unknown, delivery?: string) => Promise<void>;
     rows: () => ReturnType<typeof rawCallRows>;
   }) => Promise<void>,
   {
@@ -84,11 +84,11 @@ async function withWebhook(
       provider,
       url,
       rows: () => rawCallRows(storePath),
-      send: async (payload) => {
+      send: async (event, delivery) => {
         const response = await fetch(url, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({ event, ...(delivery ? { delivery } : {}) }),
         });
         await response.text();
         expect(response.status, "mock webhook HTTP status").toBe(200);
@@ -196,7 +196,7 @@ describe("Mock webhook caller facts over HTTP and SQLite", () => {
           ["call.active", "active"],
         ]) {
           const event = eventFacts(`http-${type}`, { type });
-          await send({ event });
+          await send(event);
           if (type === "call.answered") {
             expect(greeting).toHaveBeenCalledExactlyOnceWith(event.providerCallId);
             const result = greeting.mock.results[0];
@@ -221,8 +221,8 @@ describe("Mock webhook caller facts over HTTP and SQLite", () => {
           const rows = await rawCallRows(storePath);
           expect(rows[0]?.length).toBeGreaterThan(0);
           expect(rows[1]?.length).toBeGreaterThan(0);
-          await send({ event });
-          await send({ event, delivery: "same-event-new-request" });
+          await send(event);
+          await send(event, "same-event-new-request");
           expect(await rawCallRows(storePath)).toEqual(rows);
           expect(manager.getActiveCalls()).toHaveLength(retained.length);
         }
@@ -238,14 +238,12 @@ describe("Mock webhook caller facts over HTTP and SQLite", () => {
         for (const call of retained) {
           expect(manager.getCall(call.callId)).toMatchObject(call);
           await send({
-            event: {
-              id: `end-${call.providerCallId}`,
-              type: "call.ended",
-              callId: call.callId,
-              providerCallId: call.providerCallId,
-              timestamp: Date.now(),
-              reason: "completed",
-            },
+            id: `end-${call.providerCallId}`,
+            type: "call.ended",
+            callId: call.callId,
+            providerCallId: call.providerCallId,
+            timestamp: Date.now(),
+            reason: "completed",
           });
           expect(await manager.getCallFromMemoryOrStore(call.callId)).toMatchObject({
             ...call,
@@ -270,7 +268,7 @@ describe("Mock webhook caller facts over HTTP and SQLite", () => {
       async ({ manager, provider, send }) => {
         const hangup = vi.spyOn(provider, "hangupCall");
         const event = eventFacts("policy-call");
-        await send({ event });
+        await send(event);
         const rows = await rawCallRows(storePath);
         if (policy.admitted) {
           expect(manager.getCallByProviderCallId(event.providerCallId)).toMatchObject({
@@ -294,8 +292,8 @@ describe("Mock webhook caller facts over HTTP and SQLite", () => {
             reason: "hangup-bot",
           });
         }
-        await send({ event });
-        await send({ event, delivery: "retry" });
+        await send(event);
+        await send(event, "retry");
         expect(await rawCallRows(storePath)).toEqual(rows);
         expect(hangup).toHaveBeenCalledTimes(policy.admitted ? 0 : 1);
       },
@@ -323,7 +321,7 @@ describe("Mock webhook caller facts over HTTP and SQLite", () => {
         { direction: { unexpected: true } },
         { direction: undefined },
       ].entries()) {
-        await send({ event: eventFacts(`invalid-${index}`, overrides) });
+        await send(eventFacts(`invalid-${index}`, overrides));
         expect(await rows(), `raw writes for invalid case ${index}`).toEqual(empty);
         expect(manager.getActiveCalls()).toEqual([]);
         expect(await manager.getCallHistory()).toEqual([]);
@@ -340,7 +338,7 @@ describe("Mock webhook caller facts over HTTP and SQLite", () => {
         { from: "", to: "" },
       ].entries()) {
         const event = eventFacts(`fallback-${index}`, numbers);
-        await send({ event });
+        await send(event);
         const numbersFallback = { from: "unknown", to: "+15550000000" };
         expect(manager.getCallByProviderCallId(event.providerCallId)).toMatchObject({
           direction: "inbound",
@@ -350,21 +348,17 @@ describe("Mock webhook caller facts over HTTP and SQLite", () => {
           providerCallId: event.providerCallId,
           ...numbersFallback,
         });
-        await send({
-          event: { ...event, id: `end-${index}`, type: "call.ended", reason: "completed" },
-        });
+        await send({ ...event, id: `end-${index}`, type: "call.ended", reason: "completed" });
       }
       const started = await manager.initiateCall("+15554444444", "agent:main:voice:mock-proof");
       expect(started.success).toBe(true);
       const original = structuredClone(manager.getCall(started.callId));
       expect(original).toMatchObject({ direction: "outbound", to: "+15554444444" });
       await send({
-        event: {
-          id: "owned-outbound-update",
-          type: "call.active",
-          callId: started.callId,
-          timestamp: Date.now(),
-        },
+        id: "owned-outbound-update",
+        type: "call.active",
+        callId: started.callId,
+        timestamp: Date.now(),
       });
       const updated = {
         callId: started.callId,

@@ -10,7 +10,7 @@ import {
 import {
   captureOpenClawStateDatabaseReadAdmission,
   openClawStateDatabaseCache,
-  registerOpenClawStateDatabaseAsyncResource,
+  registerOpenClawStatePathAsyncResource,
   requireOpenClawStateDatabaseIdentity,
 } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
@@ -61,16 +61,8 @@ export function withMaintenanceOpenClawStateDatabaseReadOnly<T>(
       readers.delete(pathname);
       unregister();
     };
-    const unregister = registerOpenClawStateDatabaseAsyncResource({
-      async close(identity) {
-        if (
-          !identity ||
-          identity.key === admission.identity.key ||
-          identity.canonicalPath === admission.identity.canonicalPath
-        ) {
-          close();
-        }
-      },
+    const unregister = registerOpenClawStatePathAsyncResource(admission, async () => {
+      close();
     });
     scope.own(connection, "shared-handles", close);
     reader = {

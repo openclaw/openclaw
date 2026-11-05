@@ -71,28 +71,17 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
     const keyword = typeof err?.keyword === "string" ? err.keyword : "";
     const instancePath = typeof err?.instancePath === "string" ? err.instancePath : "";
 
-    if (keyword === "additionalProperties") {
-      const additionalProperties = stringParams(
-        err?.params?.additionalProperty,
-        err?.params?.additionalProperties,
+    if (keyword === "additionalProperties" || keyword === "required") {
+      const additional = keyword === "additionalProperties";
+      const properties = stringParams(
+        additional ? err?.params?.additionalProperty : err?.params?.missingProperty,
+        additional ? err?.params?.additionalProperties : err?.params?.requiredProperties,
       );
-      if (additionalProperties.length > 0) {
-        const where = instancePath ? `at ${instancePath}` : "at root";
-        for (const property of additionalProperties) {
-          parts.push(`${where}: unexpected property '${property}'`);
-        }
-        continue;
-      }
-    }
-    if (keyword === "required") {
-      const missingProperties = stringParams(
-        err?.params?.missingProperty,
-        err?.params?.requiredProperties,
-      );
-      if (missingProperties.length > 0) {
-        const where = instancePath ? `at ${instancePath}: ` : "";
-        for (const property of missingProperties) {
-          parts.push(`${where}must have required property '${property}'`);
+      if (properties.length > 0) {
+        const where = instancePath ? `at ${instancePath}: ` : additional ? "at root: " : "";
+        const message = additional ? "unexpected property" : "must have required property";
+        for (const property of properties) {
+          parts.push(`${where}${message} '${property}'`);
         }
         continue;
       }

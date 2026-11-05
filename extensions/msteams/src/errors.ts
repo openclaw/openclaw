@@ -1,11 +1,9 @@
-import { asFiniteNumberInRange, parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { asFiniteNumberInRange, asSafeIntegerInRange } from "openclaw/plugin-sdk/number-runtime";
 import {
   isTransientNetworkError,
   parseRetryAfterHeaderSeconds,
 } from "openclaw/plugin-sdk/retry-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-const MAX_SAFE_RETRY_AFTER_SECONDS = Number.MAX_SAFE_INTEGER / 1000;
 
 export function formatUnknownError(err: unknown): string {
   if (err instanceof Error) {
@@ -27,94 +25,24 @@ export function formatUnknownError(err: unknown): string {
   }
 }
 
-function extractStatusCode(err: unknown): number | null {
-  if (!isRecord(err)) {
-    return null;
-  }
-  const parseStatusCode = (value: unknown): number | null => {
-    if (typeof value === "number") {
-      return Number.isInteger(value) && value >= 100 && value <= 599 ? value : null;
-    }
-    if (typeof value === "string") {
-      const trimmed = value.trim();
-      if (!/^\d{3}$/.test(trimmed)) {
-        return null;
-      }
-      const parsed = Number(trimmed);
-      return parsed >= 100 && parsed <= 599 ? parsed : null;
-    }
-    return null;
-  };
-  const direct = err.statusCode ?? err.status;
-  const directStatus = parseStatusCode(direct);
-  if (directStatus !== null) {
+function extractStatusCode(err: Record<string, unknown>): number | null {
+  const range = { min: 100, max: 599 };
+  const directStatus = asSafeIntegerInRange(err.statusCode ?? err.status, range);
+  if (directStatus !== undefined) {
     return directStatus;
   }
 
   const response = err.response;
-  if (isRecord(response)) {
-    const responseStatus = parseStatusCode(response.status);
-    if (responseStatus !== null) {
-      return responseStatus;
-    }
-  }
-
-  return null;
+  return isRecord(response) ? (asSafeIntegerInRange(response.status, range) ?? null) : null;
 }
 
-function extractErrorCode(err: unknown): string | null {
-  if (!isRecord(err)) {
-    return null;
-  }
-
-  const direct = err.code;
-  if (typeof direct === "string" && direct.trim()) {
-    return direct;
-  }
-
-  const response = err.response;
-  if (!isRecord(response)) {
-    return null;
-  }
-
-  const body = response.body;
-  if (isRecord(body)) {
-    const error = body.error;
-    if (isRecord(error) && typeof error.code === "string" && error.code.trim()) {
-      return error.code;
-    }
-  }
-
-  return null;
-}
-
-function extractRetryAfterMs(err: unknown): number | null {
-  if (!isRecord(err)) {
-    return null;
-  }
-
-  const direct = err.retryAfterMs ?? err.retry_after_ms;
-  const directMs = asFiniteNumberInRange(direct, {
+function extractRetryAfterMs(err: Record<string, unknown>): number | null {
+  const directMs = asFiniteNumberInRange(err.retryAfterMs, {
     min: 0,
     max: Number.MAX_SAFE_INTEGER,
   });
   if (directMs !== undefined) {
     return directMs;
-  }
-
-  const retryAfter = err.retryAfter ?? err.retry_after;
-  const retryAfterSeconds = asFiniteNumberInRange(retryAfter, {
-    min: 0,
-    max: MAX_SAFE_RETRY_AFTER_SECONDS,
-  });
-  if (retryAfterSeconds !== undefined) {
-    return retryAfterSeconds * 1000;
-  }
-  if (typeof retryAfter === "string") {
-    const parsed = parseNonNegativeRetryAfterSeconds(retryAfter);
-    if (parsed !== undefined) {
-      return parsed * 1000;
-    }
   }
 
   const response = err.response;
@@ -155,17 +83,6 @@ function extractRetryAfterMs(err: unknown): number | null {
   return null;
 }
 
-function parseNonNegativeRetryAfterSeconds(raw: string): number | undefined {
-  const trimmed = raw.trim();
-  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) {
-    return undefined;
-  }
-  return asFiniteNumberInRange(parseStrictFiniteNumber(trimmed), {
-    min: 0,
-    max: MAX_SAFE_RETRY_AFTER_SECONDS,
-  });
-}
-
 type MSTeamsSendErrorMetadata = {
   statusCode?: number;
   errorCode?: string;
@@ -190,9 +107,10 @@ type MSTeamsSendErrorClassification =
  * Only Teams rate-limit rejection proves this unkeyed POST safe to replay.
  */
 export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassification {
-  const statusCode = extractStatusCode(err);
-  const retryAfterMs = extractRetryAfterMs(err);
-  const errorCode = extractErrorCode(err) ?? undefined;
+  const error = isRecord(err) ? err : {};
+  const statusCode = extractStatusCode(error);
+  const retryAfterMs = extractRetryAfterMs(error);
+  const errorCode = typeof error.code === "string" && error.code.trim() ? error.code : undefined;
 
   if (statusCode === 401) {
     return { kind: "auth", statusCode, errorCode };

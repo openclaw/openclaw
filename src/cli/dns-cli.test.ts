@@ -1,6 +1,3 @@
-// Regression: the dns setup brew-prefix probe must be bounded by a SIGKILL-backed
-// timeout so a hung binary cannot block `openclaw dns setup`, while long-running
-// setup steps (install/restart/sudo writes) stay unbounded.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const testState = vi.hoisted(() => ({ zonePath: "" }));
+const domain = "openclaw.internal";
 
 vi.mock("node:child_process", async () => {
   const { mockNodeChildProcessSpawnSync } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -16,32 +14,30 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-vi.mock("../infra/widearea-dns.js", async () => {
-  return {
-    getWideAreaZonePath: () => testState.zonePath,
-    normalizeWideAreaDomain: (d: string) => d,
-    replaceWideAreaZoneFile: vi.fn(),
-    resolveWideAreaDiscoveryDomain: () => "openclaw.internal.",
-  };
-});
+// mock-isolation: DNS setup uses only synthetic zone paths and never writes an operator zone.
+vi.mock("../infra/widearea-dns.js", () => ({
+  getWideAreaZonePath: () => testState.zonePath,
+  normalizeWideAreaDomain: (d: string) => d,
+  replaceWideAreaZoneFile: vi.fn(),
+  resolveWideAreaDiscoveryDomain: () => "openclaw.internal.",
+}));
 
-vi.mock("../infra/tailnet.js", async () => {
-  return {
-    pickPrimaryTailnetIPv4: () => "100.64.0.1",
-    pickPrimaryTailnetIPv6: () => undefined,
-  };
-});
+// mock-isolation: Fixed Tailnet addresses keep setup independent of host network state.
+vi.mock("../infra/tailnet.js", () => ({
+  pickPrimaryTailnetIPv4: () => "100.64.0.1",
+  pickPrimaryTailnetIPv6: () => undefined,
+}));
 
 // mock-isolation: DNS fixtures use empty config without loading operator state.
-vi.mock("../config/config.js", async () => {
-  return {
-    getRuntimeConfig: () => ({}),
-    loadConfig: () => ({}),
-    captureRuntimeConfigAsyncReader: () => async () => ({}),
-  };
-});
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => ({}),
+  loadConfig: () => ({}),
+  captureRuntimeConfigAsyncReader: () => async () => ({}),
+}));
 
 import { Command } from "commander";
+import { replaceWideAreaZoneFile } from "../infra/widearea-dns.js";
+import { defaultRuntime } from "../runtime.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { registerDnsCli } from "./dns-cli.js";
 
@@ -58,17 +54,13 @@ describe("dns-cli probe bounds", () => {
   let brewPrefix: string;
 
   beforeEach(() => {
-    // A real writable temp prefix lets the un-mocked fs writes (Corefile, conf.d,
-    // zone bootstrap) succeed on Linux CI without touching sudo paths.
+    // Real writes stay in a writable prefix, including on Linux CI.
     brewPrefix = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dns-cli-test-"));
     testState.zonePath = path.join(brewPrefix, "test.zone");
     spawnSyncMock.mockReset();
-    spawnSyncMock.mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === "brew" && args?.[0] === "--prefix") {
-        return spawnOk(`${brewPrefix}\n`);
-      }
-      return spawnOk();
-    });
+    spawnSyncMock.mockImplementation((cmd: string, args: string[]) =>
+      spawnOk(isBrewPrefixProbe([cmd, args]) ? `${brewPrefix}\n` : ""),
+    );
   });
 
   afterEach(() => {
@@ -82,34 +74,40 @@ describe("dns-cli probe bounds", () => {
     registerDnsCli(program);
     // The action gates on process.platform; os.platform() is not consulted.
     await withMockedPlatform("darwin", () =>
-      program.parseAsync([
-        "node",
-        "openclaw",
-        "dns",
-        "setup",
-        "--domain",
-        "openclaw.internal",
-        "--apply",
-      ]),
+      program.parseAsync(["node", "openclaw", "dns", "setup", "--domain", domain, "--apply"]),
     );
   }
 
-  it("bounds the brew prefix probe with a SIGKILL-backed timeout", async () => {
-    await runDnsSetupApply();
+  it("escapes the dry-run zone path without writing it or starting setup", async () => {
+    testState.zonePath = path.join(brewPrefix, "café\x1b[31m\nforged\tzone\r\x00\x85end.db");
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+    const program = new Command().exitOverride();
+    registerDnsCli(program);
+    await program.parseAsync(["node", "openclaw", "dns", "setup", "--domain", domain]);
 
-    const probeCall = spawnSyncMock.mock.calls.find(isBrewPrefixProbe);
-    expect(probeCall).toBeDefined();
-    expect(probeCall?.[2]).toMatchObject({ timeout: 15_000, killSignal: "SIGKILL" });
+    const report = String(log.mock.calls[1]?.[0]);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("DNS setup"));
+    expect(report).toContain("café\\nforged\\tzone\\rend.db");
+    expect(report).toContain("openclaw.internal.");
+    expect(report.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+    expect(json).toHaveBeenCalledWith({
+      gateway: { bind: "auto" },
+      discovery: { wideArea: { domain: "openclaw.internal." } },
+    });
+    expect(fs.readdirSync(brewPrefix)).toEqual([]);
+    expect(spawnSyncMock).not.toHaveBeenCalled();
   });
 
-  it("leaves long-running setup subprocesses unbounded", async () => {
-    await runDnsSetupApply();
-
-    const nonProbeCalls = spawnSyncMock.mock.calls.filter((call) => !isBrewPrefixProbe(call));
-    expect(nonProbeCalls.length).toBeGreaterThan(0);
-    for (const call of nonProbeCalls) {
-      expect(call[2]?.timeout).toBeUndefined();
-    }
+  it("does not restart CoreDNS when asynchronous zone publication fails", async () => {
+    const failure = new Error("zone publication failed");
+    vi.mocked(replaceWideAreaZoneFile).mockRejectedValueOnce(failure);
+    await expect(runDnsSetupApply()).rejects.toBe(failure);
+    expect(spawnSyncMock).not.toHaveBeenCalledWith(
+      "sudo",
+      ["brew", "services", "restart", "coredns"],
+      expect.anything(),
+    );
   });
 
   it.each([true, false])(
@@ -123,7 +121,13 @@ describe("dns-cli probe bounds", () => {
       fs.writeFileSync(corefilePath, original);
 
       await runDnsSetupApply();
-
+      const probeCall = spawnSyncMock.mock.calls.find(isBrewPrefixProbe);
+      expect(probeCall?.[2]).toMatchObject({ timeout: 15_000, killSignal: "SIGKILL" });
+      const nonProbeCalls = spawnSyncMock.mock.calls.filter((call) => !isBrewPrefixProbe(call));
+      expect(nonProbeCalls.length).toBeGreaterThan(0);
+      for (const call of nonProbeCalls) {
+        expect(call[2]?.timeout).toBeUndefined();
+      }
       expect(fs.readFileSync(corefilePath, "utf-8")).toBe(
         hasImport ? original : `.:53 {\n  errors\n}\n\nimport ${importGlob}\n`,
       );
@@ -140,35 +144,24 @@ describe("dns-cli probe bounds", () => {
     },
   );
 
-  it("names the deadline and signal when the brew prefix probe times out", async () => {
-    spawnSyncMock.mockImplementation((cmd: string, args: string[]) =>
-      cmd === "brew" && args[0] === "--prefix"
-        ? {
-            ...spawnOk(),
-            status: null,
-            signal: "SIGKILL",
-            error: Object.assign(new Error("spawnSync brew ETIMEDOUT"), { code: "ETIMEDOUT" }),
-          }
-        : spawnOk(),
-    );
-
-    await expect(runDnsSetupApply()).rejects.toThrow(
-      "brew --prefix failed: timed out after 15 seconds (signal SIGKILL)",
-    );
-  });
-
-  it("names the signal when a setup step is killed", async () => {
+  it.each(["SIGKILL", "SIGTERM"])("reports %s subprocess failures", (signal) => {
+    const timeout = signal === "SIGKILL";
+    const error = timeout
+      ? Object.assign(new Error("spawnSync brew ETIMEDOUT"), { code: "ETIMEDOUT" })
+      : undefined;
     spawnSyncMock.mockImplementation((cmd: string, args: string[]) => {
+      if (timeout ? isBrewPrefixProbe([cmd, args]) : cmd === "sudo" && args[0] === "brew") {
+        return { ...spawnOk(), status: null, signal, ...(error ? { error } : {}) };
+      }
       if (cmd === "brew" && args[0] === "--prefix") {
         return spawnOk(`${brewPrefix}\n`);
       }
-      return cmd === "sudo" && args[0] === "brew"
-        ? { ...spawnOk(), status: null, signal: "SIGTERM" }
-        : spawnOk();
+      return spawnOk();
     });
-
-    await expect(runDnsSetupApply()).rejects.toThrow(
-      "sudo brew services restart coredns failed: signal SIGTERM",
+    return expect(runDnsSetupApply()).rejects.toThrow(
+      timeout
+        ? "brew --prefix failed: timed out after 15 seconds (signal SIGKILL)"
+        : "sudo brew services restart coredns failed: signal SIGTERM",
     );
   });
 });

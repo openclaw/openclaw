@@ -1,4 +1,4 @@
-import type { CacheRetention, Model } from "@openclaw/llm-core";
+import type { CacheRetention } from "@openclaw/llm-core";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
@@ -6,7 +6,7 @@ import {
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getAiTransportHost } from "../host.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
-import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { measuredRequestPressure, type OpenAICompletionsOptions } from "../provider-options.js";
 import {
   PROVIDER_MODEL_INPUT,
   type ProviderContext,
@@ -33,7 +33,6 @@ import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-sc
 import { withPreparedToolSchemaNormalization } from "../providers/tool-schema-normalization-cache.js";
 import { normalizeToolSchema } from "../providers/tool-schema-normalization.js";
 import { shortHash } from "../utils/hash.js";
-import { resolveProviderEndpoint } from "./host-policy.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import {
@@ -42,10 +41,9 @@ import {
 } from "./openai-completions-cache-control.js";
 import {
   detectOpenAICompletionsCompat,
-  isNativeOpenAIEndpoint,
+  isKnownOpenAIEndpoint,
   type ResolvedOpenAICompletionsCompat,
 } from "./openai-completions-compat.js";
-import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
 import {
   applyCompletionsReplay,
   COMPLETIONS_REASONING_REPLAY_FIELDS,
@@ -65,22 +63,6 @@ import {
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
 import { supportsModelTools } from "./transport-utils.js";
-
-type OpenAIThinkingProvenanceOptions = OpenAICompletionsOptions & {
-  openclawThinkingExplicit?: boolean;
-};
-
-function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolean {
-  if (!model.baseUrl.trim() || isNativeOpenAIEndpoint(model)) {
-    return true;
-  }
-  const endpointClass = resolveProviderEndpoint(model).endpointClass;
-  if (endpointClass === "openai-public" || endpointClass === "azure-openai") {
-    return true;
-  }
-  const endpoint = URL.parse(model.baseUrl);
-  return endpoint !== null && isAzureOpenAICompatibleHost(endpoint.hostname.toLowerCase());
-}
 
 const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
 const OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE = 8_000;
@@ -173,6 +155,7 @@ function convertTools(
   compat: ResolvedOpenAICompletionsCompat,
   model: OpenAIModeModel,
   mode: "direct" | "managed",
+  mutableParameters: boolean,
 ) {
   const prepared = mode === "managed" ? prepareOpenAITools(tools) : undefined;
   const projection = prepared?.projection ?? projectOpenAITools(tools);
@@ -206,6 +189,7 @@ function convertTools(
             ? parameters
             : normalizeOpenAIStrictToolParameters(parameters, strict === true, model.compat),
           strict,
+          mutableParameters,
         ).completions;
       }),
     };
@@ -220,10 +204,6 @@ export function buildOpenAICompletionsParams(
 ) {
   return buildOpenAICompletionsRequest(model, context, options, { mode: "managed" });
 }
-
-type CompletionsRequestPolicy =
-  | { mode: "managed" }
-  | { mode: "direct"; compat: ResolvedOpenAICompletionsCompat; cacheRetention: CacheRetention };
 
 type CompletionsRequest = Record<string, unknown> & {
   model: string;
@@ -272,8 +252,10 @@ export function resolveCompletionsContextOutputBudget(
 export function buildOpenAICompletionsRequest(
   model: OpenAIModeModel,
   context: ProviderContext,
-  options: OpenAIThinkingProvenanceOptions | undefined,
-  policy: CompletionsRequestPolicy,
+  options: (OpenAICompletionsOptions & { openclawThinkingExplicit?: boolean }) | undefined,
+  policy:
+    | { mode: "managed" }
+    | { mode: "direct"; compat: ResolvedOpenAICompletionsCompat; cacheRetention: CacheRetention },
 ): CompletionsRequest {
   let contextOutputCap: number | undefined;
   const resolvedPolicy =
@@ -300,7 +282,7 @@ export function buildOpenAICompletionsRequest(
   const supportsTools = policy.mode === "direct" || supportsModelTools(model);
   const converted =
     supportsTools && context.tools
-      ? convertTools(context.tools, compat, model, policy.mode)
+      ? convertTools(context.tools, compat, model, policy.mode, Boolean(options?.onPayload))
       : undefined;
   // The converter needs intact boundaries for Runtime relocation or cache markers.
   const providerModel: ProviderModel = {
@@ -463,11 +445,7 @@ export function buildOpenAICompletionsRequest(
   const thinkingExplicit =
     options?.openclawThinkingExplicit ??
     (options?.reasoningEffort !== undefined || options?.reasoning !== undefined);
-  const { effort, thinkingEnabled } = resolveOpenAIRequestReasoning(
-    model,
-    requestedEffort,
-    compat.reasoningEffortForOff,
-  );
+  const { effort, thinkingEnabled } = resolveOpenAIRequestReasoning(model, requestedEffort);
   const direct = policy.mode === "direct";
   {
     let effectiveMaxTokens = options?.maxTokens;
@@ -492,7 +470,8 @@ export function buildOpenAICompletionsRequest(
       if (policy.mode === "managed") {
         emitModelTransportDebug(
           log,
-          `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
+          () =>
+            `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
             `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
             `modelMaxTokens=${modelMaxTokens}`,
         );
@@ -503,7 +482,13 @@ export function buildOpenAICompletionsRequest(
       clampedMaxTokens !== undefined &&
       effectiveContextTokens !== undefined
     ) {
-      const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
+      // The measured predecessor does not bind the response-format identity.
+      const measuredInputTokens =
+        params.response_format === undefined
+          ? measuredRequestPressure.get(model, context)
+          : undefined;
+      const estimatedInputTokens =
+        measuredInputTokens ?? estimateOpenAICompletionsInputTokens(params);
       const remainingBudget = Math.max(0, effectiveContextTokens - estimatedInputTokens - 1);
       if (clampedMaxTokens > remainingBudget) {
         // Tool arguments need useful headroom even when the provider accepts a smaller cap.
@@ -527,7 +512,8 @@ export function buildOpenAICompletionsRequest(
         contextOutputCap = remainingBudget;
         emitModelTransportDebug(
           log,
-          `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
+          () =>
+            `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
             `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
             `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
         );
@@ -550,12 +536,15 @@ export function buildOpenAICompletionsRequest(
   }
   const nativeEffort = compat.thinkingFormat === "openrouter" ? undefined : effort;
   const enabled = thinkingEnabled ?? false;
+  const useBinaryThinking =
+    direct ||
+    (thinkingEnabled === false && (nativeEffort === undefined || !compat.supportsReasoningEffort));
   if (
     model.reasoning &&
-    (!compat.thinkingOffControlUndeclared || thinkingEnabled !== undefined || !thinkingExplicit)
+    (!compat.thinkingOffControlUndeclared || thinkingEnabled === true || !thinkingExplicit)
   ) {
     let allowScalarEffort = true;
-    if (direct && compat.thinkingFormat === "zai") {
+    if (useBinaryThinking && compat.thinkingFormat === "zai") {
       params.thinking = enabled ? { type: "enabled", clear_thinking: false } : { type: "disabled" };
       allowScalarEffort = false;
     } else if (compat.thinkingFormat === "qwen") {
@@ -574,7 +563,7 @@ export function buildOpenAICompletionsRequest(
       allowScalarEffort = false;
     } else if (
       compat.thinkingFormat === "together" ||
-      (direct && compat.thinkingFormat === "deepseek")
+      (useBinaryThinking && compat.thinkingFormat === "deepseek")
     ) {
       if (compat.thinkingFormat === "deepseek") {
         params.thinking = { type: enabled ? "enabled" : "disabled" };
@@ -619,7 +608,7 @@ export function buildOpenAICompletionsRequest(
       compat.cacheControlSystemOnly,
     );
   }
-  if (params.tools?.length && isKnownOpenAICompletionsEndpoint(model)) {
+  if (params.tools?.length && isKnownOpenAIEndpoint(model)) {
     applyOpenAICompletionsToolReasoning(params, model);
   }
   if (contextOutputCap !== undefined) {

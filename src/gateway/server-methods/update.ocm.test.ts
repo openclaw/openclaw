@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
+import * as configEnv from "../../config/config-env-vars.js";
 import { prepareConfigRuntimeEnv } from "../../config/config-env-vars.js";
 import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
+import { resolveOcmUpdateManager } from "../../infra/ocm-update-client.js";
 import { createUpdateRun, finishUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
@@ -461,6 +463,13 @@ it.each(["home-only", "self-only", "env-exec", "incomplete"])(
         await expect(invokeUpdateRun({})).rejects.toThrow("OCM update binding is incomplete");
         expect(listUpdateRuns()).toEqual([]);
       } else {
+        const publication = vi.spyOn(configEnv, "getPublishedConfigRuntimeEnvState");
+        try {
+          expect(await resolveOcmUpdateManager()).toBeNull();
+          expect(publication).not.toHaveBeenCalled();
+        } finally {
+          publication.mockRestore();
+        }
         await invokeUpdateRun({}, respond);
         expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
           result: { reason: "external-supervisor-update-required" },

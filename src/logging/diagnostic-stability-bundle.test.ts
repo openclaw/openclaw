@@ -407,6 +407,8 @@ describe("diagnostic stability bundles", () => {
         externalBytes: 32,
         arrayBuffersBytes: 16,
         workerCount: 2,
+        postgresBridgeCount: 3,
+        postgresPoolSelfRootCount: 1,
         workerHeapSampledCount: 1,
         workerHeapTotalBytes: 2048,
         workerHeapUsedBytes: 1024,
@@ -471,6 +473,8 @@ describe("diagnostic stability bundles", () => {
       heapSizeLimitBytes: 4096,
       oldGenerationAfterGcBytes: 256,
       workerCount: 2,
+      postgresBridgeCount: 3,
+      postgresPoolSelfRootCount: 1,
       workerHeapSampledCount: 1,
       workerHeapUsedBytes: 1024,
       workerExternalBytes: 1024,
@@ -507,7 +511,7 @@ describe("diagnostic stability bundles", () => {
     expect(JSON.stringify(readback.bundle)).not.toContain("secret-worker");
   });
 
-  it("sanitizes imported bundles before returning them", () => {
+  it.each(["rss_threshold", "process_memory_threshold"] as const)("sanitizes %s", (reason) => {
     const file = path.join(tempDir, "imported.json");
     const bundle = createImportedBundle();
     const retainedRuntimeEvidence = {
@@ -539,7 +543,7 @@ describe("diagnostic stability bundles", () => {
             totalHeapSizeBytes: 1536.75,
           },
           level: "critical",
-          reason: "rss_threshold",
+          reason,
           thresholdBytes: 0,
           rssGrowthBytes: -1,
           windowMs: 0.5,
@@ -668,7 +672,10 @@ describe("diagnostic stability bundles", () => {
     expect(result.bundle.evidence?.memoryPressure?.topSessionFiles?.[0]?.relativePath).toBe(
       "agents/<agent>/sessions/<session>.jsonl",
     );
-    expect(result.bundle.evidence?.memoryPressure).toMatchObject(retainedRuntimeEvidence);
+    expect(result.bundle.evidence?.memoryPressure).toMatchObject({
+      ...retainedRuntimeEvidence,
+      reason,
+    });
     expect(result.bundle.evidence?.memoryPressure?.memory?.workerHeaps?.[0]?.retainedData).toEqual([
       {
         structure: "catalog-config",

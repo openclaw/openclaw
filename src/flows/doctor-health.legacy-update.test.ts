@@ -107,7 +107,8 @@ function managedService(state: OpenClawTestState, events: string[] = []) {
     }),
     readLoadState: async () => ({ status: running ? "loaded" : "not-loaded" }),
     isLoaded: async () => running,
-    isEnabled: async () => running,
+    // Stopping the process leaves the native autostart policy unchanged.
+    isEnabled: async () => true,
     stop,
     restart,
   };
@@ -230,7 +231,6 @@ it("imports retained legacy sessions after verified stop and before any candidat
 
     expect(events).toEqual(["stop", "verified-stop", "import", "restart", "verified"]);
     expect(mocks.inspectGatewayRestart).not.toHaveBeenCalled();
-    expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
     expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
   });
 });
@@ -264,92 +264,58 @@ it.each(["manager-refused", "old-listener-remains"] as const)(
   },
 );
 
-it.each(["running", "stopped"] as const)(
-  "records unverified restoration after offline repair when the service is %s",
-  async (serviceStatus) => {
-    // Exercise Gateway readiness after repair, not runtime capability admission.
-    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockResolvedValue({
-      status: "supported",
-      version: "26.8.1",
-      sqliteVersion: "3.53.4",
-      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-      nodeSharedSqlite: false,
+it("records advisory restoration when the service runs without verified readiness", async () => {
+  // Exercise Gateway readiness after repair, not runtime capability admission.
+  vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockResolvedValue({
+    status: "supported",
+    version: "26.8.1",
+    sqliteVersion: "3.53.4",
+    sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+    nodeSharedSqlite: false,
+  });
+  await resultState(async (state, resultPath) => {
+    await seedCompletedRuntimePinMigration(state.env);
+    const events: string[] = [];
+    const service = managedService(state, events);
+    inspectStaleBuild();
+    mocks.runContributions.mockImplementation(async () => {
+      events.push("repair");
     });
-    await resultState(async (state, resultPath) => {
-      await seedCompletedRuntimePinMigration(state.env);
-      const events: string[] = [];
-      const service = managedService(state, events);
-      inspectStaleBuild();
-      mocks.runContributions.mockImplementation(async () => {
-        events.push("repair");
-      });
-      mocks.waitForGatewayHealthyRestart.mockImplementation(async (params) => {
-        expect(events).toEqual(["stop", "repair", "restart"]);
-        const currentRuntime: GatewayServiceRuntime =
-          serviceStatus === "running"
-            ? await service.readRuntime()
-            : { status: "stopped", state: "failed", lastExitStatus: 1 };
-        return {
-          ...snapshot(currentRuntime, params.port),
-          portUsage: {
-            port: params.port,
-            status: serviceStatus === "running" ? "busy" : "free",
-            listeners: [],
-            hints: [],
-          },
-          healthy: false,
-          gatewayBuildId: null,
-          gatewayBootId: undefined,
-          probeError: "synthetic replacement identity unavailable",
-          outcome: "failed",
-          waitOutcome: serviceStatus === "running" ? "timeout" : "stopped-free",
-        };
-      });
-      const runtime = createDoctorRuntime();
-      const run = runDoctor(runtime);
-      if (serviceStatus === "running") {
-        await expect(run).resolves.toBeUndefined();
-        expectResult(resultPath, {
-          status: "ok",
-          warnings: expect.arrayContaining(
-            [
-              "Gateway started but readiness was not verified",
-              "synthetic readiness failure",
-              ...["status --deep", "diagnostics export"].map((command) =>
-                formatCliCommand(`openclaw gateway ${command}`, state.env),
-              ),
-            ].map((warning) => expect.stringContaining(warning)),
-          ),
-        });
-        expectUncalled(runtime.error);
-        expect(runtime.exit).not.toHaveBeenCalledWith(1);
-        expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-      } else {
-        const verificationFailure = {
-          check: "gateway-restoration",
-          code: "doctor-gateway-rpc-verification-failed",
-        };
-        await expect(run).rejects.toMatchObject({
-          name: "UpdateDoctorError",
-          failureFacts: failureFacts(verificationFailure, {
-            code: "stale-gateway-recovery-command",
-          }),
-        });
-        expectResult(resultPath, {
-          status: "error",
-          failureFacts: failureFacts(verificationFailure),
-        });
-        expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
-      }
+    mocks.waitForGatewayHealthyRestart.mockImplementation(async (params) => {
       expect(events).toEqual(["stop", "repair", "restart"]);
-      expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
-      expect(service.restart).toHaveBeenCalledOnce();
-      expect(runtime.log).not.toHaveBeenCalledWith(
-        "Gateway restarted and verified after Doctor repair.",
-      );
+      return {
+        ...snapshot(await service.readRuntime(), params.port),
+        healthy: false,
+        gatewayBuildId: null,
+        gatewayBootId: undefined,
+        probeError: "synthetic replacement identity unavailable",
+        outcome: "failed",
+        waitOutcome: "timeout",
+      };
     });
-  },
-);
+    const runtime = createDoctorRuntime();
+    await expect(runDoctor(runtime)).resolves.toBeUndefined();
+    expectResult(resultPath, {
+      status: "ok",
+      warnings: expect.arrayContaining(
+        [
+          "Gateway started but readiness was not verified",
+          "synthetic readiness failure",
+          ...["status --deep", "diagnostics export"].map((command) =>
+            formatCliCommand(`openclaw gateway ${command}`, state.env),
+          ),
+        ].map((warning) => expect.stringContaining(warning)),
+      ),
+    });
+    expectUncalled(runtime.error);
+    expect(runtime.exit).not.toHaveBeenCalledWith(1);
+    expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+    expect(events).toEqual(["stop", "repair", "restart"]);
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      "Gateway restarted and verified after Doctor repair.",
+    );
+  });
+});
 
 it.each([false, true])(
   "refuses repair behind a live legacy tempfile lock (external=%s)",

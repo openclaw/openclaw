@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { BoardWidgetDeclared } from "../../packages/gateway-protocol/src/schema/board.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatErrorMessage } from "./errors.js";
 
@@ -56,6 +57,8 @@ export type ExecAutoReviewTranscript = {
 export type ExecAutoReviewInput = {
   transcript?: ExecAutoReviewTranscript;
   command: string;
+  /** Exact prepared shell command when execution is on another host. */
+  executionCommand?: string;
   argv?: readonly string[];
   resolvedPath?: string | null;
   cwd?: string | null;
@@ -86,7 +89,7 @@ export type ExecAutoReviewInput = {
 export type BoardWidgetAutoReviewInput = {
   kind: "board-widget";
   name: string;
-  declared: { netOrigins?: string[]; tools?: string[] };
+  declared: BoardWidgetDeclared;
   agent?: { id?: string | null; sessionKey?: string | null };
 };
 

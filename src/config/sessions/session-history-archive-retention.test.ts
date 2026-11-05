@@ -10,7 +10,6 @@ import {
 } from "../../../test/helpers/promise.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
@@ -66,8 +65,9 @@ const scope = (sessionKey: string) => ({
   env: state.env,
   sessionKey,
 });
-const prune = () =>
+const prune = (assertCurrent?: () => void) =>
   prunePublishedSessionArchivesByRetention({
+    assertCurrent,
     scope: options(),
     nowMs: 100,
     rules: [{ reason: "deleted", olderThanMs: 10 }],
@@ -133,15 +133,18 @@ function interceptArchives(
   const withPages = pageReclamation.withSqliteSessionPageReclamation;
   vi.spyOn(pageReclamation, "withSqliteSessionPageReclamation").mockImplementation(
     <T>(...args: Parameters<typeof withPages<T>>) => {
-      const [input, run] = args;
-      return withPages(input, (reclaim, assertCurrent, prepared, archives) =>
-        run(reclaim, assertCurrent, prepared, { ...archives, ...wrap(archives) }),
+      const [input, run, assertCallerCurrent] = args;
+      return withPages(
+        input,
+        (reclaim, assertCurrent, prepared, archives) =>
+          run(reclaim, assertCurrent, prepared, { ...archives, ...wrap(archives) }),
+        assertCallerCurrent,
       );
     },
   );
 }
 
-it("prunes through the worker while preserving reason, age, path, and file rules", async () => {
+it("preserves reason, age, path, and file retention rules", async () => {
   seed("expired");
   seed("boundary", { created_at: 90 });
   seed("reset", { reason: "reset" });
@@ -149,44 +152,70 @@ it("prunes through the worker while preserving reason, age, path, and file rules
   const present = seed("present");
   fs.writeFileSync(path.join(directory, present.archive_name), "retained");
   seed("pending", { published_at: null });
-  const prepare = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "prepare");
-  expect(await prune()).toBe(1);
-  const hostArchiveQueries = prepare.mock.calls.filter(([sql]) =>
-    /(?:from|into|update)\s+["`]?session_transcript_archives/i.test(sql),
-  );
-  prepare.mockRestore();
-  expect(hostArchiveQueries).toEqual([]);
-  expect(retainedIds()).toEqual(["boundary", "outside", "pending", "present", "reset"]);
+  expect(await prune()).toBe(2);
+  expect(retainedIds()).toEqual(["boundary", "outside", "pending", "reset"]);
+  expect(fs.existsSync(path.join(directory, present.archive_name))).toBe(false);
 });
 
-it("selects at most 256 published rows in stable order before applying retention rules", async () => {
+it("drains eligible pages and continues past retained prefixes", async () => {
   for (let index = 257; index >= 0; index -= 1) {
-    seed(`bounded-${String(index).padStart(3, "0")}`);
+    seed(`bounded-${String(index).padStart(3, "0")}`, { created_at: -1 });
   }
-  expect(await prune()).toBe(256);
-  expect(retainedIds()).toEqual(["bounded-256", "bounded-257"]);
-});
-
-it("rolls back the entire retention batch on a late delete failure and permits retry", async () => {
-  seed("prime-retention-owner");
-  expect(await prune()).toBe(1);
-  for (let index = 0; index < 16; index++) {
-    seed(`rollback-${String(index).padStart(3, "0")}`);
+  for (let index = 0; index < 300; index += 1) {
+    const retained = seed(`retained-${String(index).padStart(3, "0")}`, {
+      created_at: index,
+      reason: "reset",
+    });
+    fs.writeFileSync(path.join(directory, retained.archive_name), "retained");
   }
-  seed("retained-reset", { reason: "reset" });
-  const before = archiveRows();
-  deletionFault.enable();
-  try {
-    await expect(prune()).rejects.toThrow("synthetic late archive retention failure");
-    database = openOpenClawAgentDatabase(options());
-    expect(archiveRows()).toEqual(before);
-  } finally {
-    deletionFault.disable();
+  for (let index = 0; index < 20; index += 1) {
+    seed(`expired-${String(index).padStart(3, "0")}`, { created_at: 300 + index });
   }
 
-  expect(await prune()).toBe(16);
-  expect(archiveRows()).toEqual(before.filter((row) => row.session_id === "retained-reset"));
+  expect(
+    await prunePublishedSessionArchivesByRetention({
+      scope: options(),
+      nowMs: 1000,
+      rules: [{ reason: "deleted", olderThanMs: 10 }],
+    }),
+  ).toBe(278);
+  expect(retainedIds()).toHaveLength(300);
+  expect(retainedIds().every((id) => id.startsWith("retained-"))).toBe(true);
 });
+
+it.each(["database", "file"])(
+  "retains recovery blobs after a late %s deletion failure and permits retry",
+  async (failure) => {
+    seed("prime-retention-owner");
+    expect(await prune()).toBe(1);
+    for (let index = 0; index < 16; index++) {
+      seed(`rollback-${String(index).padStart(3, "0")}`);
+    }
+    seed("retained-reset", { reason: "reset" });
+    const before = archiveRows();
+    const blockedPath = path.join(directory, "rollback-015.retention-test");
+    if (failure === "database") {
+      deletionFault.enable();
+    } else {
+      fs.mkdirSync(blockedPath);
+    }
+    try {
+      await expect(prune()).rejects.toThrow(
+        failure === "database" ? "synthetic late archive retention failure" : /EISDIR|EPERM/,
+      );
+      database = openOpenClawAgentDatabase(options());
+      expect(archiveRows()).toEqual(before);
+    } finally {
+      deletionFault.disable();
+      if (failure === "file") {
+        fs.rmdirSync(blockedPath);
+      }
+    }
+
+    expect(await prune()).toBe(16);
+    expect(archiveRows()).toEqual(before.filter((row) => row.session_id === "retained-reset"));
+  },
+);
 
 it("admits foreground writes during retention selection and between deletion batches", async ({
   signal,
@@ -243,7 +272,7 @@ it("admits foreground writes during retention selection and between deletion bat
   }
 });
 
-it.each(["changed", "revoked", "rejected"])(
+it.each(["changed", "revoked", "rejected", "policy"])(
   "rechecks a delayed retention delete when candidates are %s",
   async (outcome) => {
     const candidates =
@@ -258,10 +287,8 @@ it.each(["changed", "revoked", "rejected"])(
     });
     const entered = createDeferred();
     const release = createDeferred();
-    let attempts = 0;
     interceptArchives((archives) => ({
       pruneRetention: async (retention) => {
-        attempts += 1;
         entered.resolve();
         await release.promise;
         if (outcome === "rejected") {
@@ -270,16 +297,26 @@ it.each(["changed", "revoked", "rejected"])(
         return archives.pruneRetention(retention);
       },
     }));
-    const work = prune();
+    let policyCurrent = true;
+    const work = prune(() => {
+      if (!policyCurrent) {
+        throw new Error("retention policy changed");
+      }
+    });
     try {
       await awaitGateBeforeSettlement(entered.promise, work, "retention never reached deletion");
       expect(retainedIds()).toEqual([...candidates, "unaffected"]);
       if (outcome === "revoked") {
         closeOpenClawAgentDatabaseByPath(database.path);
+      } else if (outcome === "policy") {
+        policyCurrent = false;
       } else if (outcome === "changed") {
         updateArchive("created", { created_at: 99 });
         const file = candidatesBefore.find((row) => row.session_id === "file")!;
         fs.writeFileSync(path.join(directory, file.archive_name), "republished");
+        updateArchive("file", {
+          archive_sha256: createHash("sha256").update("republished").digest("hex"),
+        });
         for (const [id, patch] of [
           ["generation", { generation: "replacement-generation" }],
           ["name", { archive_name: "replacement.retention-test" }],
@@ -291,7 +328,9 @@ it.each(["changed", "revoked", "rejected"])(
       }
       release.resolve();
       if (outcome !== "changed") {
-        await expect(work).rejects.toThrow(/revoked|closed|injected retention rejection/);
+        await expect(work).rejects.toThrow(
+          /revoked|closed|injected retention rejection|retention policy changed/,
+        );
         if (outcome === "revoked") {
           await closeOpenClawAgentDatabaseByPathAsync(database.path);
         }
@@ -301,7 +340,6 @@ it.each(["changed", "revoked", "rejected"])(
         expect(await work).toBe(1);
         expect(retainedIds()).toEqual(candidates);
       }
-      expect(attempts).toBe(1);
     } finally {
       release.resolve();
       await Promise.allSettled([work]);

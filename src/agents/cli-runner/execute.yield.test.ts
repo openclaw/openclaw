@@ -3,6 +3,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as mcp from "../../gateway/mcp-http.loopback-runtime.js";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
+import { runWithModelFallback } from "../model-fallback-runner.js";
 import { buildCliRunResult } from "./cli-run-settlement.js";
 import {
   closePluginTestAdmissions,
@@ -18,11 +20,15 @@ function message(role: "assistant" | "user", content: Record<string, unknown>[])
   return { type: role, message: { role, content } };
 }
 
-it.each([true, false])("settles yield after receipt (interruptible=%s)", async (interruptible) => {
+it.each([
+  [true, "Late duplicate reply"],
+  [false, "Late duplicate reply"],
+  [false, "HEARTBEAT_OK"],
+] as const)("settles yield after receipt (%s, %s)", async (interruptible, lateReply) => {
   const order: string[] = [];
-  const interrupt = vi.fn(async () => {
-    order.push("interrupt");
-  });
+  const interrupt = async (reason: string) => {
+    order.push(reason);
+  };
   const { context } = await createExecution();
   context.mcpDeliveryCapture = true;
   context.preparedBackend.backend.command = process.execPath;
@@ -43,11 +49,8 @@ it.each([true, false])("settles yield after receipt (interruptible=%s)", async (
       { type: "tool_use", id: "yield-1", name: "mcp__openclaw__sessions_yield", input: {} },
     ]);
     const request = mcp.markMcpLoopbackRequestStarted(execution.env.OPENCLAW_MCP_CLI_CAPTURE_KEY);
-    const call = mcp.markMcpLoopbackToolCallStarted({
-      requestCaptureHandle: request,
-      toolName: "sessions_yield",
-      args: {},
-    });
+    const tool = { toolName: "sessions_yield", args: {} };
+    const call = mcp.markMcpLoopbackToolCallStarted({ requestCaptureHandle: request, ...tool });
     const yieldContext = mcp.resolveMcpLoopbackYieldContext(request);
     if (!call || !yieldContext) {
       throw new Error("Missing production MCP capture");
@@ -56,8 +59,7 @@ it.each([true, false])("settles yield after receipt (interruptible=%s)", async (
     const result = { content: [{ type: "text", text: '{"status":"yielded"}' }] };
     mcp.recordMcpLoopbackToolCallResult({
       captureHandle: call,
-      toolName: "sessions_yield",
-      args: {},
+      ...tool,
       outcome: "completed",
       result,
     });
@@ -67,8 +69,8 @@ it.each([true, false])("settles yield after receipt (interruptible=%s)", async (
     const receipt = message("user", [{ type: "tool_result", tool_use_id: "yield-1", ...result }]);
     yield receipt;
     yield receipt;
-    yield message("assistant", [{ type: "text", text: "Late duplicate reply" }]);
-    yield { ...SUCCESS_RESULT, result: "Late duplicate reply" };
+    yield message("assistant", [{ type: "text", text: lateReply }]);
+    yield { ...SUCCESS_RESULT, result: lateReply };
   };
   context.executionTarget = { kind: "plugin", execute };
   const assistantEvents: unknown[] = [];
@@ -88,13 +90,27 @@ it.each([true, false])("settles yield after receipt (interruptible=%s)", async (
     sessionBindingDisabled: false,
     preparedContextAgentMeta: {},
   });
-  expect(order).toEqual(interruptible ? ["answered", "interrupt"] : ["answered"]);
-  expect(interrupt.mock.calls).toEqual(interruptible ? [["yield"]] : []);
+  const attempts: string[] = [];
+  const outcome = await runWithModelFallback({
+    cfg: undefined,
+    provider: "external",
+    model: "primary",
+    fallbacksOverride: ["external/fallback"],
+    skipAuthProfileRuntime: true,
+    run: async (_provider, model) => {
+      attempts.push(model);
+      return result;
+    },
+    classifyResult: classifyEmbeddedAgentRunResultForModelFallback,
+  });
+  expect(order).toEqual(interruptible ? ["answered", "yield"] : ["answered"]);
+  expect(attempts).toEqual(["primary"]);
+  expect(outcome.attempts).toEqual([]);
   if (interruptible) {
     expect(assistantEvents).toEqual([]);
   }
   expect(context.params.onSuccessfulAuthBinding).toHaveBeenCalledOnce();
-  expect(result.payloads).toEqual(interruptible ? undefined : [{ text: "Late duplicate reply" }]);
+  expect(result.payloads).toEqual(interruptible ? undefined : [{ text: lateReply }]);
   expect(result.meta).toMatchObject({
     yielded: true,
     stopReason: "end_turn",

@@ -1,12 +1,12 @@
 import {
   jsonPathValue,
-  runEngineStoreReadSnapshot,
   runEngineWorkerWrite,
   withEngineStoreAdmission,
   type DatabaseEngineInput,
   type EngineConnection,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
+  assertTransactionUsable,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -115,6 +115,17 @@ class TeamReportsDatabase {
     );
   }
 
+  assertSettled(): void {
+    // Retire a lost native connection without clearing collection scratch between commands.
+    assertTransactionUsable(this.db);
+    if (!this.db.isOpen) {
+      throw new Error("Team Reports database is closed");
+    }
+    if (this.db.isTransaction) {
+      throw new Error("Team Reports database left an unsettled transaction");
+    }
+  }
+
   resetActivity(): void {
     executeSqliteQuerySync(this.db, this.query.deleteFrom("team_reports_activity"));
   }
@@ -211,13 +222,10 @@ class TeamReportsDatabase {
   }
 
   aggregatePeriod(input: TeamReportsOperations["aggregatePeriod"]["input"]): ReportDocument {
-    // Stream accepted daily reports from one snapshot without retaining their full payloads.
-    return runEngineStoreReadSnapshot(this.db, () =>
-      aggregateDays({
-        ...input,
-        days: this.dayReports(input.period.sinceMs, input.period.untilMs),
-      }),
-    );
+    return aggregateDays({
+      ...input,
+      days: this.dayReports(input.period.sinceMs, input.period.untilMs),
+    });
   }
 
   upsertPeriod(value: TeamReportsOperations["upsertPeriod"]["input"]): void {
@@ -396,10 +404,6 @@ class TeamReportsDatabase {
         }),
       ),
     };
-  }
-
-  getDayReports(sinceMs: number, untilMs: number): ReportDocument[] {
-    return [...this.dayReports(sinceMs, untilMs)];
   }
 
   private *dayReports(sinceMs: number, untilMs: number): Generator<ReportDocument> {
@@ -609,8 +613,6 @@ export function createSqliteWorkerBackend(
         return database.latestSourceWarnings();
       case "latestPeople":
         return database.latestPeople();
-      case "getDayReports":
-        return database.getDayReports(command.input.sinceMs, command.input.untilMs);
       case "listPersonDays":
         return database.listPersonDays(command.input.login, command.input.options);
       case "listPersonDaysSince":
@@ -635,6 +637,7 @@ export function createSqliteWorkerBackend(
           )
         : execute(command);
     },
+    assertSettled: () => database.assertSettled(),
     close: () => database.close(),
   };
 }

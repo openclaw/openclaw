@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
@@ -12,7 +13,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
-import type { CliHistoryWriterFacts } from "./cli-history-boundary.js";
+import { createCliHistoryOwnerProbe, type CliHistoryWriterFacts } from "./cli-history-boundary.js";
 import { advanceCliHistoryBoundaryRangeInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type {
   SessionTranscriptWriteScope,
@@ -78,11 +79,15 @@ export function bindSqliteWorkerBackend(
   if (!database || database.db !== context.database || database.path !== context.databasePath) {
     throw new Error("Transcript report lost its canonical database owner");
   }
+  // Coverage asks the host for its live owner check on the commit admission of the write.
+  const ownerProbe = target.cliWriter?.confirmOwner ? createCliHistoryOwnerProbe() : undefined;
   const admit = (stage: "transaction" | "commit") =>
     context.admit(stage, (request, dispatch) =>
       requestSessionEntryCurrentAdmission(
         target.sessionEntryCurrentSource,
-        request,
+        ownerProbe && stage === "commit" && isRecord(request.facts)
+          ? { ...request, facts: { ...request.facts, publication: ownerProbe.fact } }
+          : request,
         { database },
         dispatch,
       ),
@@ -214,6 +219,7 @@ export function bindSqliteWorkerBackend(
                   },
                   target.cliWriter,
                   authorizeCommit,
+                  ownerProbe?.holds,
                   onEntryUpdated,
                 )
               : false;

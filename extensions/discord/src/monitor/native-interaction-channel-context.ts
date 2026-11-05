@@ -19,7 +19,6 @@ export async function resolveDiscordNativeInteractionChannelContext(
   const channelType = channelContext.channelType;
 
   return {
-    channelType,
     isDirectMessage: channelType === ChannelType.DM,
     isGroupDm: channelType === ChannelType.GroupDM,
     isThreadChannel: channelContext.isThreadChannel,

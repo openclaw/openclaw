@@ -53,12 +53,6 @@ function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): 
   return text.slice(0, findGraphemeChunkEnd(text, 0, end, preferredEnd));
 }
 
-type IrcPrivmsgEvent = {
-  senderNick: string;
-  connectedNick: string;
-  rawLine: string;
-};
-
 export type IrcClientOptions = {
   host: string;
   port: number;
@@ -72,7 +66,11 @@ export type IrcClientOptions = {
   connectTimeoutMs?: number;
   messageChunkMaxChars?: number;
   abortSignal?: AbortSignal;
-  onPrivmsg?: (event: IrcPrivmsgEvent) => void | Promise<void>;
+  onPrivmsg?: (event: {
+    senderNick: string;
+    connectedNick: string;
+    rawLine: string;
+  }) => void | Promise<void>;
   onNotice?: (text: string, target?: string) => void;
   onError?: (error: Error) => void;
   onDisconnect?: () => void;
@@ -261,12 +259,12 @@ export async function connectIrcClient(options: IrcClientOptions) {
       });
   };
 
-  let lastReceivedAt = Date.now();
+  let lastReceivedAt = performance.now();
   const livenessTimer = setInterval(() => {
     if (!ready || closed) {
       return;
     }
-    const silentMs = Date.now() - lastReceivedAt;
+    const silentMs = performance.now() - lastReceivedAt;
     if (silentMs >= IRC_LIVENESS_TIMEOUT_MS) {
       fail(new Error(`IRC server sent nothing for ${Math.round(silentMs / 1000)}s; reconnecting`));
       // Let the close listener notify the monitor, which owns reconnect and backoff.
@@ -323,7 +321,7 @@ export async function connectIrcClient(options: IrcClientOptions) {
     if (receiveOverflowed) {
       return;
     }
-    lastReceivedAt = Date.now();
+    lastReceivedAt = performance.now();
     buffer += chunk;
     let idx = buffer.indexOf("\n");
     while (idx !== -1) {

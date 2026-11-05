@@ -4,7 +4,7 @@ import type { ControlUiComponentHandle } from "../../../src/plugin-sdk/control-u
 import type { ControlUiSettingsComponents } from "../../../src/plugin-sdk/control-ui-settings.js";
 import { LobsterSvg } from "../components/lobster-pet-artwork.tsx";
 import { lobsterPetSeed } from "../components/lobster-pet-contract.ts";
-import { createLobsterPetLook, lobsterLookStyle } from "../components/lobster-pet-look.ts";
+import { createLobsterPetLook, lobsterLookStyle } from "../components/lobster-pet-identity.ts";
 import {
   SettingsNavRow,
   SettingsRow,

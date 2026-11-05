@@ -2,6 +2,7 @@
 import { StringDecoder } from "node:string_decoder";
 import type { CommandOutputStream } from "../process/exec-output.js";
 import type { CommandOptions } from "../process/exec.js";
+import { parseDoctorProgressLine } from "./doctor-progress.js";
 import { isTruthyEnvValue } from "./env.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -35,6 +36,7 @@ export type UpdateDoctorSectionTiming = {
 /** Collects bounded diagnostics from the Doctor's existing startup trace. */
 export function createUpdateDoctorSectionTiming(
   parentEnv: NodeJS.ProcessEnv = process.env,
+  onPhase?: (line: string) => void,
 ): UpdateDoctorSectionTiming {
   const operatorTrace = isTruthyEnvValue(parentEnv[TRACE_ENV]);
   const phases = new Map<string, number>();
@@ -72,6 +74,15 @@ export function createUpdateDoctorSectionTiming(
     pending = lines.pop() ?? "";
     for (const line of lines) {
       observeLine(line);
+      const phase = onPhase && parseDoctorProgressLine(line);
+      if (phase) {
+        try {
+          onPhase?.(phase);
+        } catch {
+          // Advisory display failures must not become child-observer cancellation.
+          // The CLI's existing asynchronous broken-output exit policy still applies.
+        }
+      }
     }
     if (pending.length > MAX_PENDING_CHARS) {
       pending = "";

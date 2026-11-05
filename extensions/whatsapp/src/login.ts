@@ -5,7 +5,7 @@ import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-con
 import { danger, success, defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { restoreCredsFromBackupIfNeeded } from "./auth-store.js";
-import { closeWaSocketSoon, waitForWhatsAppLoginResult } from "./connection-controller.js";
+import { closeWaSocket, waitForWhatsAppLoginResult } from "./connection-controller.js";
 import { renderQrTerminal } from "./qr-terminal.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
 import { resolveWhatsAppSocketTiming } from "./socket-timing.js";
@@ -149,6 +149,6 @@ export async function loginWeb(
     throw new Error(result.message, { cause: result.error });
   } finally {
     // Let Baileys flush any final events before closing the socket.
-    closeWaSocketSoon(sock);
+    setTimeout(closeWaSocket, 500, sock);
   }
 }

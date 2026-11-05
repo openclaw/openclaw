@@ -65,8 +65,10 @@ export class TerminalOutputController {
     if (interactive) {
       this.flush();
     } else if (!this.coalesceTimer && this.chunks.length > 0) {
-      this.coalesceTimer = setTimeout(() => this.flush(), TERMINAL_OUTPUT_COALESCE_WINDOW_MS);
-      this.coalesceTimer.unref?.();
+      this.coalesceTimer = setTimeout(
+        () => this.flush(),
+        TERMINAL_OUTPUT_COALESCE_WINDOW_MS,
+      ).unref();
     }
   }
 
@@ -97,12 +99,8 @@ export class TerminalOutputController {
     }
   }
 
-  dispose(opts?: { flush?: boolean }): void {
-    if (opts?.flush) {
-      this.flush();
-    } else {
-      this.clear();
-    }
+  dispose(): void {
+    this.clear();
     if (this.reassertTimer) {
       clearInterval(this.reassertTimer);
       this.reassertTimer = null;
@@ -163,8 +161,7 @@ export class TerminalOutputController {
     this.reassertTimer = setInterval(
       () => this.reconcile(this.options.getConnIds(), true),
       TERMINAL_OUTPUT_REASSERT_MS,
-    );
-    this.reassertTimer.unref?.();
+    ).unref();
   }
 
   private maxBufferedAmount(connIds: readonly string[]): number | undefined {

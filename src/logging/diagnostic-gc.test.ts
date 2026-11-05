@@ -29,7 +29,11 @@ const native = vi.hoisted(() => {
   type Collection = {
     gcType: string;
     cost: number;
-    afterGC?: { heapSpaceStatistics: { spaceName: string; spaceUsedSize: number }[] };
+    beforeGC?: { heapStatistics: { usedHeapSize: number } };
+    afterGC?: {
+      heapStatistics?: { usedHeapSize: number };
+      heapSpaceStatistics: { spaceName: string; spaceUsedSize: number }[];
+    };
   };
   const active = new Set<Profiler>();
   class Profiler {
@@ -42,8 +46,13 @@ const native = vi.hoisted(() => {
       active.delete(this);
       return {
         statistics: this.collections.map((entry) => ({
-          afterGC: { heapSpaceStatistics: [] },
           ...entry,
+          beforeGC: entry.beforeGC ?? { heapStatistics: { usedHeapSize: 0 } },
+          afterGC: {
+            heapStatistics: { usedHeapSize: 0 },
+            heapSpaceStatistics: [],
+            ...entry.afterGC,
+          },
         })),
       };
     }
@@ -70,6 +79,65 @@ beforeEach(() => {
   // The native profiler fixture exercises Node behavior even when Vitest runs on Bun.
   Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+});
+
+it("drains final short-task GC on retirement without sampling each task or counting a batch twice", async () => {
+  const parent = new MessageChannel();
+  const attached = once(parent.port1, "message");
+  const memory = serveWorkerMemorySamples(parent.port2);
+  const [{ port }] = (await attached) as [{ port: MessagePort }];
+  await once(port, "message");
+  const samples: unknown[] = [];
+  port.on("message", (sample) => samples.push(sample));
+  const flush = () =>
+    new Promise<void>((resolve) => {
+      const receive = (sample: { flushed?: boolean }) => {
+        if (sample.flushed) {
+          port.off("message", receive);
+          resolve();
+        }
+      };
+      port.on("message", receive);
+      port.postMessage({ flush: true });
+    });
+  try {
+    memory.setTaskMetrics(true);
+    native.collect([
+      {
+        gcType: "Scavenge",
+        cost: 2_000,
+        beforeGC: { heapStatistics: { usedHeapSize: 2048 } },
+        afterGC: { heapStatistics: { usedHeapSize: 512 }, heapSpaceStatistics: [] },
+      },
+    ]);
+    expect(memory.collectTask()).toBe(true);
+    await vi.advanceTimersByTimeAsync(900);
+    expect(samples).toEqual([]);
+    await flush();
+    expect(samples).toContainEqual({
+      gc: [
+        {
+          kind: "scavenge",
+          reason: "other",
+          durationMs: 2,
+          heapUsedBeforeBytes: 2048,
+          reclaimedBytes: 1536,
+        },
+      ],
+    });
+    samples.length = 0;
+    await flush();
+    expect(samples).toHaveLength(1);
+    expect(samples[0]).toMatchObject({ flushed: true });
+    expect(samples[0]).not.toHaveProperty("gc");
+    memory.setTaskMetrics(false);
+    expect(memory.collectTask()).toBeUndefined();
+  } finally {
+    memory.close();
+    port.close();
+    parent.port1.close();
+    parent.port2.close();
+  }
 });
 
 afterEach(() => {
@@ -176,10 +244,14 @@ it.each([
   trackNativeWorkerForCpu(worker, new URL(`../infra/${file}`, import.meta.url));
   const parent = new MessageChannel();
   const events: unknown[] = [];
+  const heaps: unknown[] = [];
   const unsubscribe = onInternalDiagnosticEvent(
     (event) => {
       if (event.type === "diagnostic.gc" && event.thread !== "main") {
         events.push([event.kind, event.thread, event.durationMs, event.workerSlot]);
+        if (event.kind === "mark_sweep_compact") {
+          heaps.push([event.heapUsedAfterMajorGcBytes, event.heapUsedAfterMajorGcTimestampSeconds]);
+        }
       }
     },
     { include: ["diagnostic.gc"] },
@@ -187,7 +259,7 @@ it.each([
   setDiagnosticsEnabledForProcess(true);
   reconcileDiagnosticGcObserver();
   const attached = once(parent.port1, "message");
-  const close = serveWorkerMemorySamples(parent.port2);
+  const { close } = serveWorkerMemorySamples(parent.port2);
   let telemetry: MessagePort | undefined;
   try {
     const [message] = await attached;
@@ -219,6 +291,7 @@ it.each([
       ["scavenge", `${script}.js`, 2, slot],
       ["mark_sweep_compact", `${script}.js`, 8, slot],
     ]);
+    expect(heaps).toEqual([[0, expect.any(Number)]]);
     events.length = 0;
     messages.length = 0;
     const flushed = once(telemetry!, "message");
@@ -237,6 +310,8 @@ it.each([
           kind: "scavenge",
           reason: "other",
           durationMs: 1,
+          heapUsedBeforeBytes: 0,
+          reclaimedBytes: 0,
         })),
       },
     ]);
@@ -313,12 +388,16 @@ it("bounds SDK GC attribution once before delivering it to metric consumers", as
   ]);
 });
 
-it("reports unavailable native GC reasons as other", async () => {
-  const reasons: unknown[] = [];
+it("reports native major-GC heap bytes and observation time without sampling scavenges", async () => {
+  const samples: unknown[] = [];
   const unsubscribe = onInternalDiagnosticEvent(
     (event) => {
       if (event.type === "diagnostic.gc") {
-        reasons.push(event.reason);
+        samples.push([
+          event.reason,
+          event.heapUsedAfterMajorGcBytes,
+          event.heapUsedAfterMajorGcTimestampSeconds,
+        ]);
       }
     },
     { include: ["diagnostic.gc"] },
@@ -326,10 +405,21 @@ it("reports unavailable native GC reasons as other", async () => {
   setDiagnosticsEnabledForProcess(true);
   reconcileDiagnosticGcObserver();
   try {
-    native.collect([{ gcType: "MarkSweepCompact", cost: 1_000 }]);
+    vi.spyOn(Date, "now").mockReturnValue(1700000000123);
+    native.collect([
+      {
+        gcType: "MarkSweepCompact",
+        cost: 1_000,
+        afterGC: { heapStatistics: { usedHeapSize: 512 }, heapSpaceStatistics: [] },
+      },
+      { gcType: "Scavenge", cost: 1_000 },
+    ]);
     await vi.advanceTimersByTimeAsync(1_000);
     await waitForDiagnosticEventsDrained();
-    expect(reasons).toEqual(["other"]);
+    expect(samples).toEqual([
+      ["other", 512, 1700000000.123],
+      ["other", undefined, undefined],
+    ]);
   } finally {
     stopDiagnosticGcObserver();
     unsubscribe();
@@ -348,7 +438,7 @@ it("retains the native post-major-GC baseline across allocations and clears it o
   reconcileDiagnosticGcObserver();
   const parent = new MessageChannel();
   const attached = once(parent.port1, "message");
-  const close = serveWorkerMemorySamples(parent.port2);
+  const { close } = serveWorkerMemorySamples(parent.port2);
   const [{ port }] = (await attached) as [{ port: MessagePort }];
   try {
     await once(port, "message");

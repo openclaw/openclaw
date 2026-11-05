@@ -32,6 +32,12 @@ export function readCodexThreadContextSnapshot(params: JsonObject) {
   };
 }
 
+export function codexCompactionContextUsage(tokensAfter?: number) {
+  return tokensAfter === undefined
+    ? { state: "unavailable" as const }
+    : { state: "available" as const, promptTokens: tokensAfter, totalTokens: tokensAfter };
+}
+
 type CodexResponseUsage = Pick<
   NonNullable<ReturnType<typeof normalizeUsage>>,
   "input" | "output" | "cacheRead" | "cacheWrite" | "reasoningTokens" | "total"
@@ -103,10 +109,11 @@ export class CodexUsageProjection {
   private responseUsage: ReturnType<typeof normalizeUsage>;
   private threadUsage: ReturnType<typeof normalizeUsage>;
   private contextUsage: NonNullable<ReturnType<typeof normalizeUsage>>["contextUsage"];
+  private compactionContext?: { tokensAfter?: number; completed: boolean };
 
   get usage(): ReturnType<typeof normalizeUsage> {
     const usage = this.responseUsage ?? this.threadUsage;
-    return usage ? { ...usage, contextUsage: this.contextUsage } : undefined;
+    return usage || this.contextUsage ? { ...usage, contextUsage: this.contextUsage } : undefined;
   }
 
   get modelIterations(): number {
@@ -117,7 +124,27 @@ export class CodexUsageProjection {
     this.contextUsage = { state: "unavailable" };
   }
 
+  beginCompaction(): void {
+    this.compactionContext = { completed: false };
+  }
+
+  completeCompaction(): number | undefined {
+    const tokensAfter = this.compactionContext?.tokensAfter;
+    this.compactionContext = { tokensAfter, completed: true };
+    this.contextUsage = codexCompactionContextUsage(tokensAfter);
+    return tokensAfter;
+  }
+
   recordThread(params: JsonObject): ReturnType<typeof readCodexThreadContextSnapshot> {
+    const snapshot = readCodexThreadContextSnapshot(params);
+    if (this.compactionContext) {
+      // Codex recomputes history with zero input/output and an estimated total.
+      // Repeats after completion must not replace billing before the next response.
+      if (!this.compactionContext.completed) {
+        this.compactionContext.tokensAfter = snapshot.activeContextTokens;
+      }
+      return snapshot;
+    }
     const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
     const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
     const usage = last ? normalizeCodexResponseTokenUsage(last)?.usage : undefined;
@@ -125,7 +152,7 @@ export class CodexUsageProjection {
     if (!this.responseUsage && usage) {
       this.contextUsage = usage.contextUsage;
     }
-    return readCodexThreadContextSnapshot(params);
+    return snapshot;
   }
 
   record(
@@ -137,6 +164,9 @@ export class CodexUsageProjection {
       return undefined;
     }
     this.responseIds.add(responseId);
+    if (this.compactionContext?.completed) {
+      this.compactionContext = undefined;
+    }
     const normalized = isJsonObject(params.usage)
       ? normalizeCodexResponseTokenUsage(params.usage)
       : undefined;

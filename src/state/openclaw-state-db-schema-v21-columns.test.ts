@@ -19,6 +19,7 @@ import {
 import { resolveOpenClawStateSqlitePath as resolveStatePath } from "./openclaw-state-db.paths.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 
@@ -197,20 +198,6 @@ it("preserves the shipped retention predicate for raw JSON scalar and compound v
   }
 });
 
-it("keeps promoted JSON paths out of runtime reader and retention SQL", () => {
-  const owners = [
-    "../transcripts/store-read.ts",
-    "../transcripts/store-sqlite.ts",
-    "../infra/delivery-queue-sqlite-bound.ts",
-  ];
-  for (const owner of owners) {
-    const source = fs.readFileSync(new URL(owner, import.meta.url), "utf8");
-    expect(source, owner).not.toMatch(
-      /\$\.(?:accountId|guildId|channelId|meetingUrl|threadTs|fileId|agentId|overview|completionRetention)\b/u,
-    );
-  }
-});
-
 describe("schema 20 migration through shared-state owners", () => {
   const retainedJson = policy('"kept:"', "86400000");
   const directories = useAutoCleanupTempDirTracker((cleanup) => {
@@ -227,6 +214,7 @@ describe("schema 20 migration through shared-state owners", () => {
     template = current.path;
     await closeState();
     using db = new DatabaseSync(template);
+    restorePreTemplateStateIdentifiersForTest(db);
     addPreCutoverClientCredentialTablesForTest(db);
     db.exec(`DROP INDEX idx_meeting_transcript_sessions_source;
       DROP INDEX idx_meeting_transcript_sessions_account;

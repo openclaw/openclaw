@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { mkdir, open, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -17,6 +17,10 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  installedRecoveryLaneNames,
+  retirementCuts,
+} from "./e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
 import {
   DEFAULT_E2E_BARE_IMAGE,
   DEFAULT_E2E_FUNCTIONAL_IMAGE,
@@ -81,6 +85,7 @@ const REGISTRY_ENV_KEYS =
   );
 
 type SchedulerLimits = ReturnType<typeof parseSchedulerOptions>;
+type PreparedDockerLane = DockerE2eLane & { bundledPluginSweepIds?: string };
 type DockerCandidatePlan = ReturnType<typeof resolveDockerE2ePlan>["plan"];
 
 type SchedulerActiveState = {
@@ -144,7 +149,16 @@ type LanePoolOptions = SchedulerLimits & {
   startStaggerMs: number;
   statusIntervalMs: number;
   timeoutMs: number;
+  packageSha256?: string;
 };
+
+class LanePublicationError extends Error {
+  readonly result: LaneResult;
+  constructor(result: LaneResult, cause: unknown) {
+    super("Docker lane diagnostics publication failed", { cause });
+    this.result = result;
+  }
+}
 
 type ForegroundEntry = {
   command: string;
@@ -153,7 +167,7 @@ type ForegroundEntry = {
   phaseDetails: Record<string, unknown>;
 };
 
-type ShutdownSignal = "SIGINT" | "SIGKILL" | "SIGTERM";
+type ShutdownSignal = "SIGHUP" | "SIGINT" | "SIGKILL" | "SIGTERM";
 
 const IS_MAIN = (() => {
   const entrypoint = process.argv[1];
@@ -170,9 +184,10 @@ const IS_MAIN = (() => {
 
 function dockerAllUsage() {
   return [
-    "Usage: node scripts/test-docker-all.mjs [--plan-json | --prepare-only=<manifest> | --prepare-plugin-registry]",
+    "Usage: node scripts/test-docker-all.mjs [--lanes=<names>] [--plan-json | --prepare-only=<manifest> | --prepare-plugin-registry]",
     "",
     "Options:",
+    "  --lanes=<names>          Select comma-separated lanes instead of the lane-selection env vars.",
     "  --plan-json              Print the resolved Docker E2E plan as JSON and exit.",
     "  --prepare-only=<manifest> Prepare one immutable candidate manifest and exit.",
     "  --prepare-plugin-registry Prepare only the selected lanes' plugin registry.",
@@ -185,6 +200,7 @@ function dockerAllUsage() {
 export function parseDockerAllCliArgs(argv: readonly string[]) {
   const options: {
     help: boolean;
+    lanes?: string;
     planJson: boolean;
     prepareOnly?: string;
     preparePluginRegistry: boolean;
@@ -194,7 +210,12 @@ export function parseDockerAllCliArgs(argv: readonly string[]) {
     preparePluginRegistry: false,
   };
   for (const arg of argv) {
-    if (arg === "--plan-json") {
+    if (arg.startsWith("--lanes=")) {
+      options.lanes = arg.slice("--lanes=".length);
+      if (parseLaneSelection(options.lanes).length === 0) {
+        throw new Error(`--lanes requires at least one lane name\n\n${dockerAllUsage()}`);
+      }
+    } else if (arg === "--plan-json") {
       options.planJson = true;
     } else if (arg.startsWith("--prepare-only=")) {
       options.prepareOnly = arg.slice("--prepare-only=".length);
@@ -827,7 +848,14 @@ export function dockerPreflightSmokeCommand(arch: NodeJS.Architecture = process.
   return `docker run --rm --platform ${shellQuote(platform)} alpine:3.24 true`;
 }
 
-export function runShellCommand({
+export function runShellCommand(options: ShellCommandOptions) {
+  if (activeChildrenShutdownPromise) {
+    return activeChildrenShutdownPromise.then(() => shellCommandSkippedForShutdown());
+  }
+  return runOwnedShellCommand(options);
+}
+
+function runOwnedShellCommand({
   command,
   env,
   label,
@@ -837,9 +865,6 @@ export function runShellCommand({
   noOutputTimeoutMs,
   timeoutKillGraceMs = SHELL_TIMEOUT_KILL_GRACE_MS,
 }: ShellCommandOptions) {
-  if (activeChildrenShutdownPromise) {
-    return activeChildrenShutdownPromise.then(() => shellCommandSkippedForShutdown());
-  }
   return new Promise<ShellCommandResult>((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
     const resolvedNoOutputTimeoutMs = resolveOptionalTimerTimeoutMs(noOutputTimeoutMs);
@@ -874,6 +899,11 @@ export function runShellCommand({
       });
     }
     activeChildren.set(child, resolvedTimeoutKillGraceMs);
+    // Only fixed diagnostic finalization may arrive after admission closes.
+    // A later signal must still escalate this newly owned cleanup process.
+    if (activeChildrenShutdownPromise) {
+      shutdownChildren.push(child);
+    }
     let timedOut = false;
     let noOutputTimedOut = false;
     let cancelled: boolean | undefined;
@@ -1007,7 +1037,9 @@ export function runShellCommand({
                 cause: errors[0],
               });
         }
-        if (exitCode !== 0 && env.GITHUB_ACTIONS === "true") {
+        // Publication can succeed while reporting a failed lane. Its private
+        // receipt carries that outcome independently of the publisher's exit.
+        if (env.GITHUB_ACTIONS === "true") {
           printUpgradeFailureMetadata(failureMetadata);
         }
         resolve({
@@ -1295,31 +1327,37 @@ async function runDockerPreflight(
 
 async function prepareOpenClawPackage(baseEnv: NodeJS.ProcessEnv, logDir: string) {
   const existing = baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ;
+  let packageTgz: string;
   if (existing) {
-    const packageTgz = path.resolve(existing);
-    baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ = packageTgz;
-    baseEnv.OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD = "0";
-    baseEnv.OPENCLAW_NPM_ONBOARD_HOST_BUILD = "0";
-    console.log(`==> OpenClaw package: ${packageTgz}`);
-    return;
+    packageTgz = path.resolve(existing);
+  } else {
+    const packDir = path.join(logDir, "openclaw-package");
+    await mkdir(packDir, { recursive: true });
+    packageTgz = path.join(packDir, "openclaw-current.tgz");
+    await runForeground(
+      "Prepare OpenClaw package once",
+      `node ${shellQuote(path.join(HARNESS_ROOT_DIR, "scripts/package-openclaw-for-docker.mjs"))} --source-dir ${shellQuote(ROOT_DIR)} --allow-unreleased-changelog --output-dir ${shellQuote(packDir)} --output-name openclaw-current.tgz`,
+      baseEnv,
+    );
+    await fs.promises.access(packageTgz);
+    // Preserve current-tree package intent in generated GitHub reruns; otherwise a local QA
+    // failure would retry through the strict release path and fail before reaching its lane.
+    baseEnv.OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG = "true";
   }
-
-  const packDir = path.join(logDir, "openclaw-package");
-  await mkdir(packDir, { recursive: true });
-  const packageTgz = path.join(packDir, "openclaw-current.tgz");
-  await runForeground(
-    "Prepare OpenClaw package once",
-    `node ${shellQuote(path.join(HARNESS_ROOT_DIR, "scripts/package-openclaw-for-docker.mjs"))} --source-dir ${shellQuote(ROOT_DIR)} --allow-unreleased-changelog --output-dir ${shellQuote(packDir)} --output-name openclaw-current.tgz`,
-    baseEnv,
-  );
-  await fs.promises.access(packageTgz);
-  // Preserve current-tree package intent in generated GitHub reruns; otherwise a local QA
-  // failure would retry through the strict release path and fail before reaching its lane.
-  baseEnv.OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG = "true";
   baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ = packageTgz;
   baseEnv.OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD = "0";
   baseEnv.OPENCLAW_NPM_ONBOARD_HOST_BUILD = "0";
   console.log(`==> OpenClaw package: ${baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ}`);
+  // Strict tuples were verified before preparation. Local packages need the same
+  // owner-recorded digest once, without turning their environment into a partial tuple.
+  if (baseEnv.OPENCLAW_CURRENT_PACKAGE_SHA256) {
+    return baseEnv.OPENCLAW_CURRENT_PACKAGE_SHA256;
+  }
+  const digest = createHash("sha256");
+  for await (const chunk of fs.createReadStream(packageTgz)) {
+    digest.update(chunk);
+  }
+  return digest.digest("hex");
 }
 
 export function preparePrepublishPluginRegistry(
@@ -1401,8 +1439,53 @@ type DockerLaneEnv = {
   OPENCLAW_DOCKER_CLI_TOOLS_DIR: string;
 };
 
+async function prepareBundledPluginSweepInventory(
+  lanes: PreparedDockerLane[],
+  baseEnv: NodeJS.ProcessEnv,
+) {
+  const configured = baseEnv.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS?.trim();
+  delete baseEnv.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS;
+  const sweepLanes = lanes.filter(({ name }) =>
+    name.startsWith("bundled-plugin-install-uninstall-"),
+  );
+  if (sweepLanes.length === 0) {
+    return;
+  }
+  let sweepIds =
+    configured
+      ?.split(/[,\s]+/u)
+      .filter(Boolean)
+      .join(",") || undefined;
+  if (sweepIds === undefined) {
+    // Use the trusted inventory owner with frozen-target data, not target code or
+    // the installed package: missing packaged plugins must remain observable.
+    const { listBundledPluginPackArtifacts } =
+      await import("./lib/bundled-plugin-build-entries.mjs");
+    const artifacts = listBundledPluginPackArtifacts({
+      cwd: ROOT_DIR,
+      env: {
+        ...baseEnv,
+        OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: undefined,
+        OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: undefined,
+      },
+    });
+    const expectedIds = artifacts.flatMap((artifact) => {
+      const match = /^dist\/extensions\/([^/]+)\/openclaw\.plugin\.json$/u.exec(artifact);
+      return match?.[1] ? [match[1]] : [];
+    });
+    if (expectedIds.length === 0) {
+      throw new Error("frozen target has no packaged bundled plugin manifests to verify");
+    }
+    sweepIds = expectedIds.join(",");
+  }
+  // Every shard receives the same ordered inventory; the probe owns partitioning.
+  for (const lane of sweepLanes) {
+    lane.bundledPluginSweepIds = sweepIds;
+  }
+}
+
 function laneEnv(
-  poolLane: DockerE2eLane,
+  poolLane: PreparedDockerLane,
   baseEnv: NodeJS.ProcessEnv,
   logDir: string,
 ): DockerLaneEnv {
@@ -1418,6 +1501,9 @@ function laneEnv(
     ),
   };
   env.OPENCLAW_DOCKER_ALL_LANE_NAME = name;
+  if (poolLane.bundledPluginSweepIds !== undefined) {
+    env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS = poolLane.bundledPluginSweepIds;
+  }
   const image = e2eImageForLane(poolLane, baseEnv);
   if (image) {
     env.OPENCLAW_DOCKER_E2E_IMAGE = image;
@@ -1433,12 +1519,38 @@ async function runLane(
   baseEnv: NodeJS.ProcessEnv,
   logDir: string,
   fallbackTimeoutMs: number,
+  packageSha256?: string,
 ) {
   const { name } = lane;
   const timeoutMs = lane.timeoutMs ?? fallbackTimeoutMs;
   const noOutputTimeoutMs = lane.noOutputTimeoutMs;
   const logFile = path.join(logDir, `${name}.log`);
   const env = laneEnv(lane, baseEnv, logDir);
+  delete env.DOCKER_E2E_CONTAINER_CIDFILE;
+  const recoveryIndex = installedRecoveryLaneNames.indexOf(name);
+  if (recoveryIndex !== -1) {
+    // Candidate-writable evidence stays outside uploads, unique to this attempt.
+    const privateRoot = path.join(ROOT_DIR, ".artifacts/upgrade-survivor");
+    await mkdir(privateRoot, { recursive: true });
+    const uploadRoot = fs.realpathSync(logDir);
+    const privateReal = fs.realpathSync(privateRoot);
+    assert(
+      privateReal !== uploadRoot && !privateReal.startsWith(`${uploadRoot}${path.sep}`),
+      "Private recovery evidence must stay outside uploads",
+    );
+    const attempt = await fs.promises.mkdtemp(path.join(privateRoot, `${name}-`));
+    await fs.promises.chmod(attempt, 0o700);
+    // Keep Docker's identity outside the candidate mount so host finalization
+    // can settle the producer even when the lane's cleanup is killed.
+    env.DOCKER_E2E_CONTAINER_CIDFILE = path.join(attempt, "producer.cid");
+    const evidence = path.join(attempt, "evidence");
+    const gid = process.getgid?.();
+    assert(gid !== undefined, "Installed recovery requires a POSIX evidence owner");
+    await mkdir(evidence);
+    await fs.promises.chown(evidence, -1, gid);
+    await fs.promises.chmod(evidence, 0o2770);
+    env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR = evidence;
+  }
   const command = prepareHarnessCommand(lane.command, env);
   await mkdir(env.OPENCLAW_DOCKER_CLI_TOOLS_DIR, { recursive: true });
   await mkdir(env.OPENCLAW_DOCKER_CACHE_HOME_DIR, { recursive: true });
@@ -1472,16 +1584,60 @@ async function runLane(
     noOutputTimeoutMs,
   });
   const attempts = [laneAttempt(1, startedAt, result)];
+  let publicationStatus: number | null = 0;
+  let publicationError: { cause: unknown } | undefined;
+  if (recoveryIndex !== -1) {
+    // The killed lane cannot publish its own interruption. This independent
+    // bounded host command joins the daemon producer after the host group/log,
+    // before the publisher can read candidate-writable evidence.
+    try {
+      // Normal admission stays closed. Finalization follows successful execution
+      // cleanup and retains the same process/log custody and later-signal handling.
+      const destination = await fs.promises.mkdtemp(path.join(logDir, `${name}-diagnostics-`));
+      await activeChildrenShutdownPromise;
+      const publication = await runOwnedShellCommand({
+        command: `source ${shellQuote(path.join(HARNESS_ROOT_DIR, "scripts/lib/docker-e2e-container.sh"))} && docker_e2e_settle_container_cidfile ${shellQuote(env.DOCKER_E2E_CONTAINER_CIDFILE!)} && exec ${[
+          process.execPath,
+          "--import",
+          path.join(HARNESS_ROOT_DIR, "scripts/tsx.mjs"),
+          path.join(HARNESS_ROOT_DIR, "scripts/upgrade-survivor-diagnostics.mjs"),
+          "installed-recovery",
+          env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR!,
+          destination,
+          String(result.status),
+          retirementCuts[recoveryIndex]!,
+          String(result.timedOut),
+          packageSha256 ?? "",
+        ]
+          .map(shellQuote)
+          .join(" ")}`,
+        env,
+        label: `${name}-diagnostics`,
+        logFile,
+        captureUpgradeFailure: env.GITHUB_ACTIONS === "true",
+        timeoutMs: 30_000,
+        timeoutKillGraceMs: 1_000,
+      });
+      publicationStatus = publication.status;
+    } catch (cause) {
+      publicationStatus = null;
+      publicationError = { cause };
+    }
+    if (publicationStatus !== 0) {
+      requiredPublicationFailed = true;
+    }
+  }
+  const status = result.status || (publicationStatus ?? 1);
   const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
-  if (result.status === 0) {
+  if (status === 0) {
     console.log(`==> [${name}] pass ${elapsedSeconds}s`);
   } else {
     const timeoutLabel = result.timedOut ? " timeout" : "";
     console.error(
-      `==> [${name}] fail${timeoutLabel} status=${result.status} ${elapsedSeconds}s log=${logFile}`,
+      `==> [${name}] fail${timeoutLabel} status=${status} ${elapsedSeconds}s log=${logFile}`,
     );
   }
-  return {
+  const completed = {
     command,
     attempts,
     ...(result.cancelled ? { cancelled: true as const } : {}),
@@ -1493,10 +1649,17 @@ async function runLane(
     elapsedSeconds,
     rerunCommand: buildLaneRerunCommand(name, baseEnv),
     startedAt: startedAtIso,
-    status: result.status,
+    status,
+    ...(recoveryIndex === -1 ? {} : { publicationStatus }),
     noOutputTimedOut: result.noOutputTimedOut,
     timedOut: result.timedOut,
   };
+  // Keep the observed lane outcome even if publication cannot start or join.
+  // Rethrow through the pool's existing fatal/drain path; null is not an exit code.
+  if (publicationError) {
+    throw new LanePublicationError(completed, publicationError.cause);
+  }
+  return completed;
 }
 
 async function runLanePool(
@@ -1589,19 +1752,28 @@ async function runLanePool(
     reserve(poolLane);
     activeLanes.set(poolLane.name, Date.now());
     const id = Symbol(poolLane.name);
-    const promise = runLane(poolLane, baseEnv, logDir, options.timeoutMs)
-      .then((result) => {
-        // Main retains every completed row, even when a sibling rejects before
-        // Promise.race consumes it or the pool is draining after that rejection.
-        results.push(result);
-        if (result.status !== 0) {
-          failures.push(result);
-          schedulerFailed ||= !result.cancelled;
-          if (options.failFast) {
-            cancelLaneStartWait?.();
-          }
+    const recordResult = (result: LaneResult) => {
+      // Main retains every completed row, even when a sibling rejects before
+      // Promise.race consumes it or the pool is draining after that rejection.
+      results.push(result);
+      if (result.status !== 0) {
+        failures.push(result);
+        schedulerFailed ||= !result.cancelled;
+        if (options.failFast) {
+          cancelLaneStartWait?.();
         }
+      }
+    };
+    const promise = runLane(poolLane, baseEnv, logDir, options.timeoutMs, options.packageSha256)
+      .then((result) => {
+        recordResult(result);
         return id;
+      })
+      .catch((error: unknown) => {
+        if (error instanceof LanePublicationError) {
+          recordResult(error.result);
+        }
+        throw error;
       })
       .finally(() => {
         activeLanes.delete(poolLane.name);
@@ -1951,6 +2123,9 @@ process.on("SIGINT", () => {
 process.on("SIGTERM", () => {
   handleShutdownSignal("SIGTERM", 143);
 });
+process.on("SIGHUP", () => {
+  handleShutdownSignal("SIGHUP", 129);
+});
 
 async function main() {
   const runStartedAt = new Date().toISOString();
@@ -2014,8 +2189,11 @@ async function main() {
     process.env.OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI ?? process.env.INCLUDE_OPENWEBUI,
     true,
   );
+  // Package aliases enter this lifecycle owner directly. An env-setting parent
+  // with its own kill deadline can exit before the scheduler joins its lanes.
   const selectedLaneNamesRaw =
-    process.env.OPENCLAW_DOCKER_ALL_LANES || process.env.DOCKER_E2E_LANES || "";
+    cliOptions.lanes ??
+    (process.env.OPENCLAW_DOCKER_ALL_LANES || process.env.DOCKER_E2E_LANES || "");
   const selectedLaneNames = parseLaneSelection(selectedLaneNamesRaw);
   if (selectedLaneNamesRaw && selectedLaneNames.length === 0) {
     throw new Error("OPENCLAW_DOCKER_ALL_LANES must include at least one lane name");
@@ -2224,6 +2402,8 @@ async function main() {
     return;
   }
 
+  await prepareBundledPluginSweepInventory(scheduledLanes, baseEnv);
+
   await runPhase(
     phases,
     "docker-preflight",
@@ -2236,9 +2416,10 @@ async function main() {
       });
     },
   );
+  let packageSha256: string | undefined;
   if (lanesNeedOpenClawPackage(scheduledLanes)) {
     await runPhase(phases, "prepare-openclaw-package", {}, async () => {
-      await prepareOpenClawPackage(baseEnv, logDir);
+      packageSha256 = await prepareOpenClawPackage(baseEnv, logDir);
     });
   } else {
     console.log("==> OpenClaw package: not needed for selected lanes");
@@ -2288,6 +2469,7 @@ async function main() {
 
   const options = {
     ...schedulerOptions,
+    packageSha256,
     failFast,
     poolLabel: "main",
     startStaggerMs: laneStartStaggerMs,

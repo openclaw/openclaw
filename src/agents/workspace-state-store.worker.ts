@@ -25,9 +25,7 @@ import {
   hasRecentWorkspaceSetupState,
   recentWorkspaceAttestation,
   replaceWorkspaceAttestationInDatabase,
-  WORKSPACE_SETUP_STATE_VERSION,
   type WorkspaceAttestationInput,
-  type WorkspaceSetupState,
   type WorkspaceStateDatabase,
   type WorkspaceStateDatabaseHandle,
 } from "./workspace-state-store.kernel.js";
@@ -37,6 +35,10 @@ import type {
   WorkspaceStateGuard,
   WorkspaceStateWorkerOperations,
 } from "./workspace-state-store.worker-contract.js";
+import {
+  WORKSPACE_SETUP_STATE_VERSION,
+  type WorkspaceSetupState,
+} from "./workspace-state-types.js";
 
 function deleteWorkspace(
   database: WorkspaceStateDatabaseHandle,
@@ -72,7 +74,7 @@ function deleteWorkspace(
         .deleteFrom("workspace_path_aliases")
         .where("alias_key", "=", lexicalAlias.workspaceKey),
     );
-    workspaceStatePublication.stagePostimages(database.db, [true]);
+    workspaceStatePublication.stageDeletions(database.db, ["aliases"]);
     storedIdentity = undefined;
   }
   const identity =
@@ -125,13 +127,15 @@ export function mergeWorkspaceSetupStateInDatabase(
       .values({ workspace_key: identity.workspaceKey, ...values })
       .onConflict((conflict) => conflict.column("workspace_key").doUpdateSet(values)),
   );
-  workspaceStatePublication.stagePostimages(database.db, [true]);
   registerWorkspaceStateAliasIdentitiesInTransaction({
     database,
     identity,
     aliases: resolution.aliases,
     updatedAtMs: nowMs,
   });
+  workspaceStatePublication.stagePostimages(database.db, [
+    { ...snapshot, setupExists: true, setupUpdatedAtMs: nowMs, setup: merged },
+  ]);
   return merged;
 }
 

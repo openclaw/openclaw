@@ -33,11 +33,25 @@ it("redraws the reply connector from the current avatar after its presentation c
   vi.stubGlobal(
     "ResizeObserver",
     class {
-      constructor(callback: () => void) {
-        resizes.push(callback);
+      private readonly targets = new Set<Element>();
+      constructor(callback: ResizeObserverCallback) {
+        resizes.push(() => {
+          // SAFETY: The connector callback reads geometry from its own refs.
+          callback(
+            [...this.targets].map((target) => ({ target }) as ResizeObserverEntry),
+            this as unknown as ResizeObserver,
+          );
+        });
       }
-      observe() {}
-      disconnect() {}
+      observe(target: Element) {
+        this.targets.add(target);
+      }
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
     },
   );
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
@@ -209,7 +223,9 @@ it("renders one recipient per group and navigates from the name by persisted ID"
   ]);
   expect(container.querySelectorAll(".chat-reply-attribution--reply")).toHaveLength(1);
   expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
-  expect(row.textContent).not.toContain("Original question");
+  expect(row.querySelector(".chat-reply-attribution__excerpt")?.textContent).toBe(
+    "Original question",
+  );
   const target = row.querySelector<HTMLButtonElement>("button")!;
   expect(target.getAttribute("aria-label")).toBe("Replying to Alice");
   expect(target.querySelector(".chat-author-avatar")).not.toBeNull();
@@ -400,6 +416,7 @@ it.each([
       });
       expect(row.classList.contains("chat-reply-attribution--pending")).toBe(false);
       expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Jordan");
+      expect(row.querySelector(".chat-reply-attribution__excerpt")).toBeNull();
       if (lookup === "missing") {
         expect(row.querySelector(".chat-reply-attribution__unavailable")?.textContent).toBe(
           "Original message unavailable",
