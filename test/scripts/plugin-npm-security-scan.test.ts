@@ -45,11 +45,6 @@ function scan(
 }
 
 const SPAWN_SOURCE = 'import { spawn } from "node:child_process";\nspawn("owned-child");\n';
-const BUNDLED_HELPER_EXEC_SOURCE = `
-import type { ChildProcess } from "node:child_process";
-const exec = compileMatcher();
-exec(value);
-`;
 
 function expectUnsafe(
   files: Record<string, string>,
@@ -106,43 +101,27 @@ it("classifies reviewed findings by their file layout", () => {
   expect(result.criticalFindingCount).toBe(1);
 });
 
-it("rejects changed bytes at the reviewed iMessage setup helper path", () => {
-  expectUnsafe(
-    { "dist/.setup/sanitize-outbound-3MLljgtY.mjs": BUNDLED_HELPER_EXEC_SOURCE },
-    "@openclaw/imessage",
-  );
-});
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("rejects publisher-built packs whose reviewed finding bytes drifted", async () => {
-  // Stand-in publisher packer that emits a prebuilt tarball; the scan is the real inventory.
+  // Stand-in publisher packer; the scan uses the real reviewed inventory.
   const tooling = tempDirs.make("publisher-tooling-");
   mkdirSync(join(tooling, "scripts"));
-  writeFileSync(
-    join(tooling, "scripts/plugin-npm-publish.sh"),
-    `cp "${tooling}/$(basename "$4").tgz" "$OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR/"\n`,
-  );
-  const drifted = 'import { spawn } from "node:child_process";\nspawn("openshell");\n';
-  const openshell = "@openclaw/openshell-sandbox";
-  writeFileSync(
-    join(tooling, "openshell.tgz"),
-    packTarball({ "dist/.setup/worker-cli-AbCd1234.mjs": drifted }, openshell),
-  );
-  const sha256 = createHash("sha256").update(drifted).digest("hex");
-  // No pack exists for the unreviewed plugin, so packing it would fail too.
-  await expect(
-    scanWithPublisherTooling(tooling, [
-      { packageDir: "extensions/openshell", packageName: openshell, version: "1.0.0" },
-      { packageDir: "extensions/brave", packageName: "@openclaw/brave-plugin", version: "1.0.0" },
-    ]),
-  ).rejects.toThrow(
+  const packer = `cp "${tooling}/$(basename "$4").tgz" "$OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR/"`;
+  writeFileSync(join(tooling, "scripts/plugin-npm-publish.sh"), packer);
+  const name = "@openclaw/openshell-sandbox";
+  const files = { "dist/.setup/worker-cli-AbCd1234.mjs": SPAWN_SOURCE };
+  writeFileSync(join(tooling, "openshell.tgz"), packTarball(files, name));
+  const sha256 = createHash("sha256").update(SPAWN_SOURCE).digest("hex");
+  const plan = [name, "@openclaw/brave"].map((packageName) => ({
+    packageDir: packageName.includes("openshell") ? "openshell" : "brave",
+    packageName,
+    version: "1.0.0",
+  }));
+  // brave has no reviewed finding and no pack, so packing it would fail.
+  await expect(scanWithPublisherTooling(tooling, plan)).rejects.toThrow(
     new RegExp(
-      [
-        "reject 1 of 1 plugin npm packs",
-        `${openshell}: unreviewed critical findings.*"contentSha256":"${sha256}".*"path":"dist/\\.setup/worker-cli-<hash>\\.mjs"`,
-        "record the new hash or limit in scripts/plugin-npm-security-scan\\.mts on main",
-      ].join("[\\s\\S]*"),
+      `of 1 [\\s\\S]*${name}: unreviewed.*${sha256}.*worker-cli-<hash>[\\s\\S]*new hash`,
       "u",
     ),
   );

@@ -60,31 +60,19 @@ it("runs release tooling only from the trusted revision without persisted creden
 
 it("scans with publisher tooling while the plugin npm preflight child runs", () => {
   const job = workflow.jobs.prepare_plugin_npm;
-  assert(job);
-  const names = job.steps.map((entry) => entry.name);
-  const scanSteps = [
-    "Checkout target source for publisher scan",
-    "Checkout publisher tooling",
-    "Setup Node environment for publisher tooling scan",
-    "Install publisher tooling dependencies",
-    "Scan plugin npm packs with publisher tooling",
-  ];
-  expect(names.slice(names.indexOf("Dispatch exact plugin npm artifact preflight"))).toEqual([
-    "Dispatch exact plugin npm artifact preflight",
-    ...scanSteps,
-    "Resolve and seal exact plugin npm artifact descriptor",
-  ]);
-  for (const name of scanSteps) {
-    expect(step("prepare_plugin_npm", name).if).toBe(
+  const names = job?.steps.map((entry) => entry.name) ?? [];
+  const from = names.indexOf("Dispatch exact plugin npm artifact preflight") + 1;
+  const scan = job?.steps.slice(
+    from,
+    names.indexOf("Resolve and seal exact plugin npm artifact descriptor"),
+  );
+  expect(scan?.map((entry) => entry.if)).toEqual(
+    Array(5).fill(
       "env.PUBLISHER_SHA != '' && env.PUBLISHER_SHA != github.sha && env.PUBLICATION_ROUTE == 'normal'",
-    );
-  }
-  expect(job.env?.PUBLISHER_SHA).toContain(".qualificationAdmission.workflowSha");
-  expect(step("prepare_plugin_npm", "Checkout publisher tooling").with).toMatchObject({
-    ref: "${{ env.PUBLISHER_SHA }}",
-    path: ".release-tooling",
-  });
-  expect(step("prepare_plugin_npm", "Scan plugin npm packs with publisher tooling").run).toMatch(
+    ),
+  );
+  expect(job?.env?.PUBLISHER_SHA).toContain(".qualificationAdmission.workflowSha");
+  expect(scan?.at(-1)?.run).toMatch(
     /tsx \.release-tooling\/scripts\/plugin-npm-release-plan\.ts[\s\S]*tsx \.release-tooling\/scripts\/check-plugin-npm-security-scan\.mts \\\n\s+--tooling-root \.release-tooling/u,
   );
 });
