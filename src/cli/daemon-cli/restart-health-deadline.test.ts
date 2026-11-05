@@ -11,6 +11,7 @@ import {
   inspectPortUsage,
   makeGatewayService,
   monotonicClock,
+  portUsage,
   readActiveGatewayLockIdentity,
   readBestEffortConfig,
   readGatewayOwnerLease,
@@ -69,12 +70,9 @@ describe("shared restart observation deadline", () => {
     };
     const stalled =
       <T>(value: T) =>
-      async () => {
-        await stall();
-        return value;
-      };
+      () =>
+        stall().then(() => value);
     const service = makeGatewayService({ status: "running", pid: 8000 });
-    const portBusy = { port: 18789, status: "busy", listeners: [{ pid: 8000 }], hints: [] };
     switch (phase) {
       case "probe-context":
         readBestEffortConfig.mockImplementation(stalled({ gateway: { auth: { mode: "none" } } }));
@@ -91,7 +89,7 @@ describe("shared restart observation deadline", () => {
         );
         break;
       case "port-inspection":
-        inspectPortUsage.mockImplementation(stalled(portBusy));
+        inspectPortUsage.mockImplementation(stalled(portUsage([{ pid: 8000 }])));
         break;
       case "startup-health":
         requestStartupProbe.mockImplementation(stalled(null));
@@ -104,7 +102,7 @@ describe("shared restart observation deadline", () => {
         break;
       case "legacy-owner":
         vi.mocked(service.readRuntime).mockResolvedValue({ status: "stopped", missingUnit: true });
-        inspectPortUsage.mockResolvedValue({ ...portBusy, status: "free", listeners: [] });
+        inspectPortUsage.mockResolvedValue(portUsage());
         readActiveGatewayLockIdentity.mockImplementation(stalled(undefined));
         break;
     }
