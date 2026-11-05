@@ -792,14 +792,15 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.createdParentKeys() == [nil])
     }
 
-    @Test func `slash new retains parent for gateway settings inheritance`() async {
+    @Test(arguments: ["agent:worker:ordinary", "agent:worker:main"])
+    func `slash new retains parent for gateway settings inheritance`(key: String) async {
         let transport = SessionActionTransport()
-        let viewModel = OpenClawChatViewModel(sessionKey: "agent:worker:ordinary", transport: transport)
+        let viewModel = OpenClawChatViewModel(sessionKey: key, transport: transport)
         viewModel.input = "/new"
         await viewModel.send()?.value
         // The parent is the request-level contract for Gateway model, auth,
         // effort, fast-mode, tool, and communication settings inheritance.
-        #expect(await transport.createdParentKeys() == ["agent:worker:ordinary"])
+        #expect(await transport.createdParentKeys() == [key])
     }
 
     @Test func `ambiguous agent ownership omits the parent session`() async throws {
