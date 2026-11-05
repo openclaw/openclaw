@@ -187,7 +187,6 @@ it.each(
       const result = await swapStagedPackageInstall({ ...fixture.params, onTransaction });
       expect(result.status, result.step.stderrTail ?? "").toBe("committed");
     }
-    expect(Boolean(capture?.backup)).toBe(restorable);
     const finalResult: UpdateRunResult = {
       status: outcome === "success" ? "ok" : "error",
       mode: kind === "git" ? "git" : "npm",

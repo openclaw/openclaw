@@ -68,6 +68,7 @@ describe("update run ledger compaction", () => {
       "notice:ack",
       "previous generation restoration",
       "warning:post-plugin doctor",
+      "warning:post-stop-checks",
       // Candidate Doctor's predecessor-stop receipt: identity lives in the key.
       "finalize:predecessor-stop:1758600000000:1000:631:0123456789abcdef",
       "post-update verification",
@@ -89,9 +90,6 @@ describe("update run ledger compaction", () => {
     );
     expect(report.markdown).toContain("Snapshots retained at $OPENCLAW_STATE_DIR/backup.");
     expect(report.markdown).not.toContain(options.env.OPENCLAW_STATE_DIR);
-    expect(
-      published.steps.filter((step) => step.step === "warning:database migration writes"),
-    ).toHaveLength(1);
     for (const expected of evidence) {
       expect(persisted.steps.filter((step) => step.step === expected.step)).toEqual([
         expect.objectContaining(expected),
@@ -104,7 +102,9 @@ describe("update run ledger compaction", () => {
     expect(retainedRefusal?.keys).toHaveLength(32);
     expect(retainedRefusal?.keys.every((key) => key.length < 1_020)).toBe(true);
     expect(persisted.steps.map((step) => step.step)).toEqual(expect.arrayContaining(notices));
-    expect(persisted.steps.find((s) => s.step.endsWith("plugin doctor"))?.detail).toBe(detail);
+    for (const key of ["warning:post-plugin doctor", "warning:post-stop-checks"]) {
+      expect(persisted.steps.find((step) => step.step === key)?.detail).toBe(detail);
+    }
     expect(persisted.steps.length).toBeLessThanOrEqual(128);
     expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
   });

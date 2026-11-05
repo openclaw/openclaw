@@ -1681,56 +1681,71 @@ describe("followup queue collect routing", () => {
     expect(end).toHaveBeenCalledExactlyOnceWith({ visibleReplySent: true, failed: false });
   });
 
-  it.for(["collect", "followup"] as const)(
-    "retries distinct %s admission owners independently",
-    async (mode, { signal }) => {
+  it.for([
+    ["collect", "preparation"],
+    ["followup", "preparation"],
+    ["collect", "adoption"],
+    ["followup", "adoption"],
+  ] as const)(
+    "retries distinct %s admission owners after %s failure",
+    async ([mode, failureAt], { signal }) => {
       const q = createQueueCase({ mode, cap: mode === "followup" ? 1 : 50 }, 1);
       const events: string[] = [];
-      const first = createRun({ prompt: "first" });
-      first.turnAdoptionLifecycle = {
-        admission: "exclusive",
-        onAdopted: async () => {
-          events.push("first-admitted");
-        },
-      };
-      const second = createRun({ prompt: "second" });
-      second.turnAdoptionLifecycle = {
-        admission: "exclusive",
-        onAdopted: vi.fn(async () => {
-          events.push("second-admitted");
-        }),
-      };
-      let secondAttempts = 0;
-      q.add(first);
-      q.add(second);
+      const failure = new Error(`second ${failureAt} failed`);
+      let rejected = false;
+      const sources = ["first", "second"].map((prompt) => {
+        const source = createRun({ prompt });
+        source.turnAdoptionLifecycle = {
+          admission: "exclusive",
+          onAdopted: vi.fn(async () => {
+            if (prompt === "second" && failureAt === "adoption" && !rejected) {
+              rejected = true;
+              events.push("second-rejected");
+              throw failure;
+            }
+            events.push(`${prompt}-admitted`);
+          }),
+          ...(failureAt === "adoption" ? { onAbandoned: () => {} } : {}),
+        };
+        q.add(source);
+        return source;
+      });
       if (mode === "followup") {
         q.add(createRun({ prompt: "live followup" }));
       }
       try {
-        q.start(async (run) => {
-          if (run.prompt === "live followup") {
-            events.push("live-followup");
-            q.done.resolve();
-            return;
-          }
-          const label = run.prompt.includes("first") ? "first" : "second";
-          events.push(`run:${label}`);
-          try {
-            if (label === "second" && secondAttempts++ === 0) {
-              events.push("second-rejected");
-              rejectQueuePreparation(run, new Error("second preparation failed"));
+        await withinTest(
+          drainSettledQueue(q.key, async (run) => {
+            if (run.prompt === "live followup") {
+              events.push("live-followup");
+              return;
             }
-            await admitFollowupRunLifecycle(run);
-          } catch (error) {
-            events.push(`error:${label}`);
-            throw error;
-          }
-          events.push(`model:${label}`);
-          if (label === "second" && mode === "collect") {
-            q.done.resolve();
-          }
-        });
-        await withinTest(q.done.promise, signal);
+            const label = run.prompt.includes("first") ? "first" : "second";
+            events.push(`run:${label}`);
+            try {
+              if (label === "second" && failureAt === "preparation" && !rejected) {
+                rejected = true;
+                events.push("second-rejected");
+                rejectQueuePreparation(run, failure);
+              }
+              await admitFollowupRunLifecycle(run);
+            } catch (error) {
+              events.push(`error:${label}`);
+              if (failureAt === "adoption") {
+                rejectQueuePreparation(
+                  run,
+                  error instanceof Error ? error : new Error(String(error)),
+                );
+              }
+              throw error;
+            }
+            events.push(`model:${label}`);
+            if (failureAt === "preparation") {
+              completeFollowupRunLifecycle(run);
+            }
+          }),
+          signal,
+        );
         expect(events).toEqual([
           "run:first",
           "first-admitted",
@@ -1743,7 +1758,10 @@ describe("followup queue collect routing", () => {
           "model:second",
           ...(mode === "followup" ? ["live-followup"] : []),
         ]);
-        expect(second.turnAdoptionLifecycle.onAdopted).toHaveBeenCalledOnce();
+        expect(sources[0]?.turnAdoptionLifecycle?.onAdopted).toHaveBeenCalledOnce();
+        expect(sources[1]?.turnAdoptionLifecycle?.onAdopted).toHaveBeenCalledTimes(
+          failureAt === "adoption" ? 2 : 1,
+        );
       } finally {
         clearFollowupQueue(q.key);
       }
@@ -2191,88 +2209,6 @@ describe("followup queue collect routing", () => {
     expect(q.calls[1]?.currentInboundEventKind).toBe("room_event");
     await vi.waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
   });
-
-  it.each(["collected", "overflow"] as const)(
-    "runs distinct %s admission lifecycles independently when one retries",
-    async (mode) => {
-      const key = `test-${mode}-admission-isolation-${Date.now()}`;
-      const events: string[] = [];
-      const secondAdmissionError = new Error("second admission failed");
-      const settings: QueueSettings =
-        mode === "overflow"
-          ? createQueueSettings({ mode: "followup", cap: 1 })
-          : { mode: "collect", debounceMs: 0 };
-      const first = createRun({ prompt: mode === "overflow" ? "first dropped" : "first" });
-      first.turnAdoptionLifecycle = {
-        onAdopted: async () => {
-          events.push("first-admitted");
-        },
-        admission: "exclusive",
-        onAbandoned: () => {},
-      };
-      const second = createRun({ prompt: mode === "overflow" ? "second dropped" : "second" });
-      second.turnAdoptionLifecycle = {
-        onAdopted: vi
-          .fn<() => Promise<void>>()
-          .mockImplementationOnce(async () => {
-            events.push("second-rejected");
-            throw secondAdmissionError;
-          })
-          .mockImplementationOnce(async () => {
-            events.push("second-admitted");
-          }),
-        admission: "exclusive",
-        onAbandoned: () => {},
-      };
-      enqueueFollowupRun(key, first, settings);
-      enqueueFollowupRun(key, second, settings);
-      if (mode === "overflow") {
-        enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
-      }
-      await drainSettledQueue(key, async (run) => {
-        if (mode === "overflow" && !run.prompt.includes("[Queue overflow]")) {
-          events.push("live-followup");
-          return;
-        }
-        const prompt = run.prompt.includes("first") ? "first" : "second";
-        events.push(mode === "overflow" ? "summary-run" : `run:${prompt}`);
-        try {
-          await admitFollowupRunLifecycle(run);
-        } catch (error) {
-          events.push(mode === "overflow" ? "summary-error" : `error:${prompt}`);
-          rejectQueuePreparation(run, error instanceof Error ? error : new Error(String(error)));
-        }
-        events.push(mode === "overflow" ? "summary-model" : `model:${prompt}`);
-      });
-      expect(events).toEqual(
-        mode === "overflow"
-          ? [
-              "summary-run",
-              "first-admitted",
-              "summary-model",
-              "summary-run",
-              "second-rejected",
-              "summary-error",
-              "summary-run",
-              "second-admitted",
-              "summary-model",
-              "live-followup",
-            ]
-          : [
-              "run:first",
-              "first-admitted",
-              "model:first",
-              "run:second",
-              "second-rejected",
-              "error:second",
-              "run:second",
-              "second-admitted",
-              "model:second",
-            ],
-      );
-      expect(second.turnAdoptionLifecycle.onAdopted).toHaveBeenCalledTimes(2);
-    },
-  );
 
   it.each([false, true])(
     "pairs inbound runtime contexts with collected messages (lone context: %s)",

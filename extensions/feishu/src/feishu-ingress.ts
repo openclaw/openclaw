@@ -234,13 +234,8 @@ export function buildFeishuFlushIngressLifecycle(
       return;
     }
     settled = true;
-    if (!transportLifecycle.onDropped) {
-      releaseReplayClaims();
-      await transportLifecycle.onAbandoned();
-      return;
-    }
     try {
-      await transportLifecycle.onDropped(reason);
+      await transportLifecycle.onDropped?.(reason);
     } catch (error) {
       releaseReplayClaims();
       throw error;
@@ -286,10 +281,12 @@ export function buildFeishuFlushIngressLifecycle(
         handedOff = true;
         await abandonAll();
       },
-      onDropped: async (reason) => {
-        handedOff = true;
-        await dropAll(reason);
-      },
+      onDropped: transportLifecycle.onDropped
+        ? async (reason) => {
+            handedOff = true;
+            await dropAll(reason);
+          }
+        : undefined,
     },
     // A gated/no-turn envelope is terminal for transport replay, but its
     // logical claim releases so a different event_id twin can run the gate.

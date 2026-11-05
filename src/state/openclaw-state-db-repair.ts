@@ -221,7 +221,9 @@ export async function repairStateSchemaAsync(
       },
     );
   try {
-    let step = await resume();
+    // Native reads can recover a journal or rebuild retained WAL evidence before yielding.
+    const capture = (scope !== "doctor" && scope !== "version") || existsSync(`${pathname}-wal`);
+    let step = capture || existsSync(`${pathname}-journal`) ? await resume() : operation.next();
     while (!step.done) {
       let failure: { error: unknown } | undefined;
       let prepared: void | (() => void) = undefined;

@@ -210,6 +210,7 @@ describe("dispatchSmsInboundEvent", () => {
     "after deferral",
     "queue-cap-old",
     "queue-cap-new",
+    "legacy abandonment",
   ] as const)("settles downloaded MMS files when %s", async (phase) => {
     const mocks = createAuthorizedRuntime();
     const events: string[] = [];
@@ -228,12 +229,20 @@ describe("dispatchSmsInboundEvent", () => {
     original.onDropped = vi.fn(async (reason) => {
       events.push(reason);
     });
+    if (phase === "legacy abandonment") {
+      original.onDropped = undefined;
+    }
     unlinkIfExistsMock.mockImplementationOnce(async () => {
       events.push("cleanup");
     });
     const msg = createMmsMessage("MM-lifecycle");
     mocks.run.mockImplementationOnce(async ({ turnAdoptionLifecycle, adapter }) => {
       wrapped = turnAdoptionLifecycle;
+      if (phase === "legacy abandonment") {
+        expect(wrapped?.onDropped).toBeUndefined();
+        wrapped?.onDeferred?.();
+        return;
+      }
       if (phase === "before adoption") {
         throw failure;
       }

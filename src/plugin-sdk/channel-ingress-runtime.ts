@@ -255,11 +255,7 @@ export function fanInChannelIngressLifecycles(
   };
   const abandonAll = () => settleOnce(() => fanOut((lifecycle) => lifecycle.onAbandoned()));
   const dropAll = (reason: Parameters<NonNullable<ChannelIngressLifecycle["onDropped"]>>[0]) =>
-    settleOnce(() =>
-      fanOut((lifecycle) =>
-        lifecycle.onDropped ? lifecycle.onDropped(reason) : lifecycle.onAbandoned(),
-      ),
-    );
+    settleOnce(() => fanOut((lifecycle) => lifecycle.onDropped?.(reason)));
   const failEach = (targets: readonly ChannelIngressLifecycle[], error: unknown) =>
     fanOut(
       (lifecycle) => (lifecycle.onFailed ? lifecycle.onFailed(error) : lifecycle.onAbandoned()),
@@ -283,6 +279,7 @@ export function fanInChannelIngressLifecycles(
     }
   };
   const supportsCancellation = lifecycles.every((lifecycle) => lifecycle.onCancelled !== undefined);
+  const supportsDrops = lifecycles.every((lifecycle) => lifecycle.onDropped !== undefined);
   const deferredHeartbeatIntervals = lifecycles
     .map((lifecycle) => lifecycle.deferredHeartbeatIntervalMs)
     .filter(
@@ -342,10 +339,16 @@ export function fanInChannelIngressLifecycles(
         handedOff = true;
         await abandonAll();
       },
-      onDropped: async (reason) => {
-        handedOff = true;
-        await dropAll(reason);
-      },
+      ...(supportsDrops
+        ? {
+            onDropped: async (
+              reason: Parameters<NonNullable<ChannelIngressLifecycle["onDropped"]>>[0],
+            ) => {
+              handedOff = true;
+              await dropAll(reason);
+            },
+          }
+        : {}),
     },
     // A gated or deliberately skipped turn still consumed every source claim.
     settle: async () => {

@@ -173,8 +173,10 @@ whose migration completion is already recorded.
 
 A custom path also accepts the older `/api/messages` alias with its existing
 deprecation warning when that route is available. If another plugin owns the
-alias, startup logs the conflict and keeps serving the configured path. Update
-Azure Bot to the configured path.
+alias, startup logs the conflict and keeps serving the configured path. If a
+named account sets `webhook.path` to `/api/messages`, that account receives
+`/api/messages` on the Gateway port instead. Update Azure Bot to the configured
+path.
 
 The Gateway reserves `/health`, `/healthz`, `/ready`, `/readyz`, `/startup`, and
 `/startupz` for checks, including URLs with query strings. If your former Teams

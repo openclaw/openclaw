@@ -1,4 +1,3 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createInboundDebouncer } from "../auto-reply/inbound-debounce.js";
 import {
@@ -98,10 +97,17 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
 
   it("joins failed queue drops through fan-in and debounce", async () => {
     const gate = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
     const error = new Error("drop failed");
     const onError = vi.fn();
     const first = { ...createLifecycle(), onDropped: vi.fn().mockRejectedValue(error) };
-    const second = { ...createLifecycle(), onDropped: vi.fn(() => gate.promise) };
+    const second = {
+      ...createLifecycle(),
+      onDropped: vi.fn(() => {
+        started.resolve();
+        return gate.promise;
+      }),
+    };
     const combined = fanInChannelIngressLifecycles([first, second]);
     const debouncer = createInboundDebouncer({
       debounceMs: 0,
@@ -117,7 +123,7 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     });
 
     const dropping = debouncer.enqueue({ id: "message" });
-    await nextTurn();
+    await started.promise;
     const failuresBeforeSettlement = onError.mock.calls.length;
     gate.resolve();
     await dropping;
@@ -133,11 +139,12 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
   });
 
   it("cancellation-settles every source in mixed capable and legacy fan-in", async () => {
-    const modern = createCancellableLifecycle();
+    const modern = { ...createCancellableLifecycle(), onDropped: vi.fn() };
     const legacy = { ...createLifecycle(), onFailed: vi.fn(async () => {}) };
     const combined = fanInChannelIngressLifecycles([modern, legacy]);
 
     expect(combined.lifecycle).not.toHaveProperty("onCancelled");
+    expect(combined.lifecycle).not.toHaveProperty("onDropped");
     await combined.cancel();
 
     expect(modern.onAdopted).not.toHaveBeenCalled();

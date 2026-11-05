@@ -1,5 +1,5 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { expect, it, vi } from "vitest";
 import { createFeishuBroadcastIngressSettlement } from "./bot-broadcast.js";
 
@@ -8,6 +8,14 @@ it("releases dropped lanes independently while retaining admitted broadcast cust
   const commitGate = createDeferred<void>();
   const abandonmentGate = createDeferred<void>();
   const abortController = new AbortController();
+  const replay = createChannelReplayGuard<string>({
+    dedupe: { ttlMs: 1_000, memoryMaxSize: 10 },
+    buildReplayKey: (key) => key,
+  });
+  const lateClaim = await replay.claim("late-lane");
+  if (lateClaim.kind !== "claimed") {
+    throw new Error("expected a fresh replay claim");
+  }
   const lateCommit = vi.fn(async () => true);
   let completion: Promise<void> | undefined;
   let settled = false;
@@ -19,6 +27,7 @@ it("releases dropped lanes independently while retaining admitted broadcast cust
       onAdopted: vi.fn(async () => {}),
       onDeferred: vi.fn(),
       onAdoptionFinalizing: vi.fn(),
+      onDropped: vi.fn(),
       onAbandoned: async () => {
         abortController.abort();
         await abandonmentGate.promise;
@@ -42,9 +51,8 @@ it("releases dropped lanes independently while retaining admitted broadcast cust
   const failing = broadcast.createLane();
   const dropped = broadcast.createLane();
   const late = broadcast.createLane({
-    keys: ["late-lane"],
+    ...lateClaim.handle,
     commit: lateCommit,
-    release: vi.fn(),
   });
   for (const lane of [adopting, failing, dropped, late]) {
     lane.lifecycle.onDeferred();
@@ -64,7 +72,13 @@ it("releases dropped lanes independently while retaining admitted broadcast cust
     await late.lifecycle.onAdopted();
     expect(late.lifecycle.abortSignal.aborted).toBe(true);
     expect(lateCommit).not.toHaveBeenCalled();
-    expect(await Promise.race([droppedOutcome, nextTurn().then(() => "pending")])).toBeUndefined();
+    expect(await droppedOutcome).toBeUndefined();
+    await expect(late.lifecycle.onDropped?.("queue-cap-new")).rejects.toBe(failure);
+    const retry = await replay.claim("late-lane");
+    expect(retry.kind).toBe("claimed");
+    if (retry.kind === "claimed") {
+      retry.handle.release();
+    }
     expect(settled).toBe(false);
     commitGate.resolve();
     await adoption;

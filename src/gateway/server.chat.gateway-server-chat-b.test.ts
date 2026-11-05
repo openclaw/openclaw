@@ -2065,7 +2065,11 @@ describe("gateway server chat", () => {
             expect.objectContaining({
               runId,
               ...(settlement === "dropped"
-                ? { state: "error", errorMessage: "Queued input was dropped (queue-cap-old)." }
+                ? {
+                    state: "error",
+                    errorMessage:
+                      "Your queued message was dropped because the session queue is full.",
+                  }
                 : {
                     state: "final",
                     message: expect.objectContaining({

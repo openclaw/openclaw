@@ -438,6 +438,16 @@ describe("Feishu durable ingress", () => {
     });
   });
 
+  it("preserves legacy abandonment without advertising terminal drops", async () => {
+    const replayClaim = createReplayClaim("legacy-drop");
+    const { lifecycle, calls } = createLifecycle({ onDropped: undefined }, replayClaim);
+    expect(lifecycle?.onDropped).toBeUndefined();
+    await lifecycle?.onAbandoned();
+    expect(calls.onAbandoned).toHaveBeenCalledOnce();
+    expect(replayClaim.release).toHaveBeenCalledOnce();
+    expect(replayClaim.commit).not.toHaveBeenCalled();
+  });
+
   it.each(["onAdopted", "onDropped"] as const)(
     "does not reopen %s transport claims when a logical guard commit fails",
     async (outcome) => {

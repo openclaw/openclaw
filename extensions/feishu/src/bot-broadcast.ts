@@ -243,24 +243,27 @@ export function createFeishuBroadcastIngressSettlement(params: {
             lane.replayClaim?.release({ error: new Error("feishu-broadcast-turn-abandoned") });
             await maybeSettle();
           },
-          onDropped: async (reason) => {
-            if (
-              lane.adopting ||
-              lane.status === "completed" ||
-              lane.status === "dropped" ||
-              lane.status === "failed"
-            ) {
-              return;
-            }
-            lane.status = "dropped";
-            dropReason ??= reason;
-            // The tracked aggregate retains transport custody. Holding this
-            // session's dropped head until a peer adopts can deadlock fan-out.
-            await maybeSettle();
-            if (terminal?.kind === "abandoned") {
-              throw terminal.error;
-            }
-          },
+          onDropped: params.lifecycle?.onDropped
+            ? async (reason: QueueDropReason) => {
+                if (
+                  lane.adopting ||
+                  lane.status === "completed" ||
+                  lane.status === "dropped" ||
+                  lane.status === "failed"
+                ) {
+                  return;
+                }
+                lane.status = "dropped";
+                dropReason ??= reason;
+                // The tracked aggregate retains transport custody. Holding this
+                // session's dropped head until a peer adopts can deadlock fan-out.
+                await maybeSettle();
+                if (terminal?.kind === "abandoned") {
+                  lane.replayClaim?.release({ error: terminal.error });
+                  throw terminal.error;
+                }
+              }
+            : undefined,
         },
         onDispatchComplete: async (dispatched) => {
           if (lane.adopting || lane.status !== "pending") {

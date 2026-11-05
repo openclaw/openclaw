@@ -151,12 +151,9 @@ export async function dispatchSmsInboundEvent(params: {
                 },
               );
             },
-            onDropped: (reason) =>
-              releaseMedia(() =>
-                params.turnAdoptionLifecycle?.onDropped
-                  ? params.turnAdoptionLifecycle.onDropped(reason)
-                  : params.turnAdoptionLifecycle?.onAbandoned?.(),
-              ),
+            onDropped: params.turnAdoptionLifecycle?.onDropped
+              ? (reason) => releaseMedia(() => params.turnAdoptionLifecycle?.onDropped?.(reason))
+              : undefined,
           }
         : params.turnAdoptionLifecycle;
     const route = params.channelRuntime.routing.resolveAgentRoute({

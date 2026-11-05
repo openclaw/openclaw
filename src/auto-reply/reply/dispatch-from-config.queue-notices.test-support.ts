@@ -15,6 +15,8 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
+const refusedFollowupText = "This message was not queued because the session queue is full.";
+
 export function registerQueuedFollowupNoticeCases(): void {
   it.each(["direct", "routed"] as const)(
     "delivers one explicit followup start notice before the pending %s reply",
@@ -92,14 +94,20 @@ export function registerQueuedFollowupNoticeCases(): void {
     [
       "collaborative-steering-disabled",
       undefined,
+      false,
+      false,
       "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.",
       undefined,
     ],
-    ["queue-cap", undefined, QUEUE_CAP_REJECTION_TEXT, true],
-    ["queue-cap", "queue-cap-new", undefined, undefined],
+    ["queue-cap", undefined, false, false, QUEUE_CAP_REJECTION_TEXT, true],
+    ["queue-cap", undefined, false, true, refusedFollowupText, true],
+    ["queue-cap", "queue-cap-new", false, false, QUEUE_CAP_REJECTION_TEXT, true],
+    ["queue-cap", "queue-cap-new", true, false, undefined, undefined],
+    ["queue-cap", "queue-cap-new", false, true, refusedFollowupText, true],
+    ["queue-cap", "queue-cap-new", true, true, refusedFollowupText, true],
   ] as const)(
-    "reports %s/%s without claiming queueing or cancellation",
-    async (reason, queueDisposition, notice, fallbackDelivered) => {
+    "reports %s/%s with durable=%s explicit=%s without claiming queueing",
+    async (reason, queueDisposition, durable, explicit, notice, fallbackDelivered) => {
       setNoAbort();
       diagnosticMocks.logMessageDispatchCompleted.mockClear();
       const sessionKey = `test:${reason}`;
@@ -110,9 +118,19 @@ export function registerQueuedFollowupNoticeCases(): void {
         },
       });
       const result = await dispatchReplyFromConfig({
-        ctx: buildTestCtx({ ChatType: "direct", SessionKey: sessionKey, Body: "stop" }),
+        ctx: buildTestCtx({
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Body: "stop",
+          CommandSource: explicit ? "text" : undefined,
+          CommandAuthorized: explicit,
+          CommandBody: explicit ? "/followup stop" : undefined,
+        }),
         cfg: { diagnostics: { enabled: true } },
         dispatcher,
+        replyOptions: durable
+          ? { turnAdoptionLifecycle: { onAdopted() {}, onDropped() {} } }
+          : undefined,
         replyResolver: async (_ctx, opts) => {
           const state = resolveReplyOperationRunState(opts);
           if (!state) {
@@ -143,9 +161,12 @@ export function registerQueuedFollowupNoticeCases(): void {
     { phase: "still queued", reason: "requester-mismatch" },
     { phase: "still queued", reason: "collaborative-steering-disabled" },
     { phase: "still queued", reason: "explicit-followup" },
-    { phase: "evicted before finalization", reason: "explicit-followup" },
+    { phase: "evicted before finalization", reason: "steering-unavailable" },
+    { phase: "evicted before finalization", reason: "steering-unavailable", nonDurable: true },
     { phase: "evicted during progress flush", reason: "steering-unavailable" },
-  ] as const)("keeps $reason queue feedback consistent when $phase", async ({ phase, reason }) => {
+  ] as const)("keeps $reason queue feedback consistent when $phase", async (scenario) => {
+    const { phase, reason } = scenario;
+    const durable = !("nonDurable" in scenario);
     setNoAbort();
     const sessionKey = `agent:agent:queue-notice:${reason}:${phase}`;
     const queued = createDeferred();
@@ -171,6 +192,7 @@ export function registerQueuedFollowupNoticeCases(): void {
       if (!runState) {
         throw new Error("expected reply operation state");
       }
+      run.turnAdoptionLifecycle = opts?.turnAdoptionLifecycle;
       bindReplyOperationQueueDisposition(run, runState);
       expect(enqueueFollowupRun(sessionKey, run, settings, "message-id", undefined, false)).toBe(
         true,
@@ -196,6 +218,9 @@ export function registerQueuedFollowupNoticeCases(): void {
       }),
       cfg: { agents: { defaults: { verboseDefault: "on" } } },
       dispatcher,
+      replyOptions: durable
+        ? { turnAdoptionLifecycle: { onAdopted() {}, onDropped() {} } }
+        : undefined,
       replyResolver,
     });
     const evict = () => {
@@ -238,6 +263,11 @@ export function registerQueuedFollowupNoticeCases(): void {
         ...(phase === "still queued" && reason === "explicit-followup"
           ? [
               "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
+            ]
+          : []),
+        ...(!durable
+          ? [
+              "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress. Please send it again after the current response finishes.",
             ]
           : []),
       ]);

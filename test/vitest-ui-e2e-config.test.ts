@@ -143,6 +143,11 @@ function probeOwnership(
     export const resolvePlaywrightChromiumExecutablePath = () => "/fixture/chromium";
     export const canRunPlaywrightChromium = () => ${options.available !== false};
     export const chromium = {
+      // Discovery initializes the observer but does not execute renderer scenarios.
+      connect: async () => ({
+        newBrowserCDPSession: async () => Object.assign(new EventEmitter(), { send: async () => {} }),
+        close: async () => {},
+      }),
       executablePath: () => "/fixture/chromium",
       launchServer: async () => {
         if (!canRunPlaywrightChromium()) throw new Error("fixture Chromium is unavailable");

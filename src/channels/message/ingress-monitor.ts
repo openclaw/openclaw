@@ -1,9 +1,5 @@
 /** Shared durable channel-ingress admission, pump, retention, and shutdown lifecycle. */
-import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  getPluginValueInstance,
-  wrapCurrentPluginInstance,
-} from "../../plugins/plugin-instance-scope.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
@@ -21,6 +17,7 @@ import {
   createChannelIngressAdmission,
   type ChannelIngressAdmissionContext,
 } from "./ingress-monitor-admission.js";
+import { createIngressMonitorOwner } from "./ingress-monitor-owner.js";
 import { createAdmissionClaimLock, waitForPending } from "./ingress-monitor-tasks.js";
 import type {
   ChannelIngressMonitorDeliveryResult,
@@ -29,7 +26,6 @@ import type {
   ChannelIngressMonitorRetention,
   CreateChannelIngressMonitorOptions,
 } from "./ingress-monitor-types.js";
-import type { ChannelIngressQueue } from "./ingress-queue.js";
 import {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
@@ -61,14 +57,8 @@ export const CHANNEL_INGRESS_RETENTION_DEFAULTS = Object.freeze({
 export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetadata = unknown>(
   params: CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata>,
 ) {
-  // Deferred pumps retain their plugin owner, not a completed caller's invocation.
-  const options = wrapCurrentPluginInstance(params);
-  const pluginOwner = getPluginValueInstance(options);
-  const runInBackgroundContext = pluginOwner?.lifecycle.runInBackgroundContext;
-  // Reload closes ordinary admission before stopping channel monitors. Keep new
-  // work durable in that window; admitted deliveries still own their settlement.
-  const isPluginQuiesced = () => pluginOwner?.acceptingCalls === false;
-  const now = options.now ?? Date.now;
+  const monitorOwner = createIngressMonitorOwner(params);
+  const { options, now, getQueue, getCustodyQueue, isPluginQuiesced, reportError } = monitorOwner;
   const waitForDeliveryIdleBeforeRepump = options.waitForDeliveryIdleBeforeRepump ?? false;
   const retention =
     options.retention === "standard"
@@ -76,7 +66,6 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       : { ...CHANNEL_INGRESS_RETENTION_DEFAULTS, ...options.retention };
   const { pruneIntervalMs, ...pruneOptions } = retention;
   const shutdown = new AbortController();
-  // Native AbortSignal consumers require the original handle, not its plugin view.
   const drainAbortSignal = params.abortSignal
     ? AbortSignal.any([shutdown.signal, params.abortSignal])
     : shutdown.signal;
@@ -89,10 +78,6 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     options.drain?.deferredLaneOccupancy === "release" ? startLimit : 0;
   let deferredStartCapacity = 0;
   const deferredClaims = new Set<Promise<void>>();
-  type Queue = ChannelIngressQueue<TStoredPayload, TMetadata>;
-  const suppliedQueue = options.queue;
-  const queueFactory = typeof suppliedQueue === "function" ? suppliedQueue : () => suppliedQueue;
-  let queue: Queue | undefined = typeof suppliedQueue === "function" ? undefined : suppliedQueue;
   type Drain = ReturnType<typeof createChannelIngressDrainOwner<TStoredPayload, TMetadata>>;
   let drain: Drain | undefined;
   let running = false;
@@ -120,14 +105,6 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     unsubscribeSuspension = undefined;
   };
 
-  const reportError = (error: unknown): void => {
-    try {
-      options.onError?.(error);
-    } catch {
-      // Observers must not be able to corrupt ingress bookkeeping.
-    }
-  };
-
   const publishActivity = (): void => {
     const active =
       activeInspections.size + activeDeliveries.size > 0 ||
@@ -137,16 +114,14 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     }
     lastReportedActive = active;
     try {
-      options.onActivityChange?.(active);
+      monitorOwner.maintenance.onActivityChange?.(active);
     } catch (error) {
       reportError(error);
     }
   };
 
   const createStoppedError = () =>
-    options.createStoppedError?.() ?? new Error("Channel ingress monitor is stopped.");
-
-  const getQueue = (): Queue => (queue ??= queueFactory());
+    monitorOwner.maintenance.stoppedError?.() ?? new Error("Channel ingress monitor is stopped.");
 
   const ensureQueueAvailable = (): void => {
     try {
@@ -171,7 +146,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     drain ??= createChannelIngressDrainOwner<TStoredPayload, TMetadata>(
       {
         ...options.drain,
-        queue: getQueue(),
+        queue: getCustodyQueue(),
         abortSignal: drainAbortSignal,
         now,
         onClaimSettled: requestDrain,
@@ -190,7 +165,11 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
           deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
         },
-        formatError: options.drain?.formatError ?? formatErrorMessage,
+        onLog: (message) => monitorOwner.maintenance.onLog?.(message),
+        formatError: (error) =>
+          monitorOwner.maintenance.formatError?.(error) ?? formatErrorMessage(error),
+        resolveNonRetryableFailure: (error) =>
+          monitorOwner.maintenance.resolveNonRetryableFailure?.(error) ?? null,
         dispatchClaimedEvent: async (claim, lifecycle, admittedLaneKey) => {
           // Preparation owns cancellation settlement as well as the inspection read.
           const inspection = (async () => {
@@ -403,7 +382,10 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     if (owner === "pump" && currentTime - lastPrunedAt < pruneIntervalMs) {
       return;
     }
-    await getQueue().prune({ ...pruneOptions, now: currentTime });
+    await (owner === "pump" ? getCustodyQueue() : getQueue()).prune({
+      ...pruneOptions,
+      now: currentTime,
+    });
     lastPrunedAt = currentTime;
   };
 
@@ -444,7 +426,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         requested = false;
         await pruneIfDue("pump");
         // Stop may win the async prune race; keep lazy drain creation behind this fence.
-        if (!running || isAborted() || isPluginQuiesced()) {
+        if (shouldStopDispatch()) {
           break;
         }
         const activeDrain = getDrain();
@@ -457,8 +439,8 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             recoverStaleClaims,
             shouldStop: () =>
               !running ||
-              isAborted() ||
               isPluginQuiesced() ||
+              isAborted() ||
               getGatewaySuspendAdmissionPhase() !== "accepting" ||
               activeDeliveries.size + activeInspections.size - deferredStartCapacity >= startLimit,
           });
@@ -544,8 +526,22 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       publishActivity();
       return;
     }
-    const pump = () => (options.runPumpTask ? options.runPumpTask(runPump) : runPump());
-    pumping = runInBackgroundContext ? runInBackgroundContext(pump) : pump();
+    try {
+      const pump = () => (options.runPumpTask ? options.runPumpTask(runPump) : runPump());
+      pumping = monitorOwner.runPump(pump);
+    } catch (error) {
+      requested = false;
+      pumping = Promise.reject(toErrorObject(error, "Channel ingress pump failed"));
+    }
+    const pending = pumping;
+    void pending.catch((error: unknown) => {
+      if (pumping === pending) {
+        pumping = undefined;
+        requested = false;
+      }
+      reportError(error);
+      publishActivity();
+    });
     publishActivity();
   };
 
@@ -577,8 +573,8 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
 
   const shouldStopDispatch = () =>
     !running ||
-    isAborted() ||
     isPluginQuiesced() ||
+    isAborted() ||
     isGatewayRestartDraining() ||
     getGatewayRestartDrainSignal().aborted ||
     getGatewaySuspendAdmissionPhase() !== "accepting";
@@ -651,6 +647,37 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     }
   };
 
+  const stop = () => {
+    stopTask ??= (async () => {
+      stopped = true;
+      params.abortSignal?.removeEventListener("abort", stopOnAbort);
+      running = false;
+      requested = false;
+      clearSuspensionSubscription();
+      releaseRestartFenceWake();
+      clearTimers();
+      publishActivity();
+      // Every transport callback accepted before stop keeps its durable-append guarantee.
+      await admissionTail;
+      shutdown.abort(createStoppedError());
+      await waitForPumpIdle().catch(reportError);
+      await waitForPending(() => activeInspections);
+      if (options.waitForDeliveryIdleOnStop !== false) {
+        await waitForActiveDeliveries();
+        await drain?.waitForIdle();
+      }
+      if (options.deferredClaims && options.deferredClaims !== "manual") {
+        await waitForDeferredClaims();
+      }
+      await drain?.dispose({ waitForSettlements: true }).catch(reportError);
+      monitorOwner.release();
+    })();
+    return stopTask;
+  };
+  const stopOnAbort = () => {
+    void stop().catch(reportError);
+  };
+
   return {
     admit: (
       raw: TRaw,
@@ -671,6 +698,8 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       }
       // Fail startup as dead ingress before arming a timer that would repeat the same error.
       ensureQueueAvailable();
+      monitorOwner.start(requestDrain);
+      params.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
       running = true;
       unsubscribeSuspension ??= onGatewaySuspendAdmissionChange((phase) => {
         if (!running) {
@@ -704,36 +733,10 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     ensureQueueAvailable,
     requestDrain,
     pause,
-    stop: () => {
-      stopTask ??= (async () => {
-        stopped = true;
-        running = false;
-        requested = false;
-        clearSuspensionSubscription();
-        releaseRestartFenceWake();
-        clearTimers();
-        publishActivity();
-        // Every transport callback accepted before stop keeps its durable-append guarantee.
-        await admissionTail;
-        shutdown.abort(createStoppedError());
-        await waitForPumpIdle();
-        await waitForPending(() => activeInspections);
-        if (options.waitForDeliveryIdleOnStop !== false) {
-          await waitForActiveDeliveries();
-          await drain?.waitForIdle();
-        }
-        if (options.deferredClaims && options.deferredClaims !== "manual") {
-          await waitForDeferredClaims();
-        }
-        // Callback grace may expire, but already accepted writes still own their claims.
-        await drain?.dispose({ waitForSettlements: true });
-      })();
-      return stopTask;
-    },
+    stop,
     waitForIdle: async () => {
       for (;;) {
-        await admissionTail;
-        await waitForPumpIdle();
+        await Promise.all([admissionTail, waitForPumpIdle()]);
         await waitForPending(() => activeInspections);
         await waitForActiveDeliveries();
         await drain?.waitForIdle();
