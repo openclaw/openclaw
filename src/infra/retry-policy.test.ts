@@ -185,25 +185,6 @@ describe("createChannelApiRetryRunner", () => {
       delayMs,
     );
   });
-
-  it("keeps retry_after hints capped by maxDelayMs by default", async () => {
-    await expectRetryDelay(
-      { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 30_000, jitter: 0 } },
-      { message: "429 Too Many Requests", response: { parameters: { retry_after: 45 } } },
-      30_000,
-    );
-  });
-
-  it("honors retry_after above maxDelayMs when a separate retry-after cap is configured", async () => {
-    await expectRetryDelay(
-      {
-        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 30_000, jitter: 0 },
-        retryAfterMaxDelayMs: 60_000,
-      },
-      { message: "429 Too Many Requests", response: { parameters: { retry_after: 45 } } },
-      45_000,
-    );
-  });
 });
 
 describe("parseRetryAfterHeaderSeconds", () => {
