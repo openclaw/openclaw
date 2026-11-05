@@ -2154,6 +2154,9 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
           operationDeadline,
           (run) => report(run, true),
           async (runId) => {
+            await recheckArtifactProducers(artifactProducers, status, client, true, {
+              operationDeadline,
+            });
             const source = exactTerminalRunState(priorRuns.get(runId), runId);
             assertRootRunIdentity(
               await client.getRun(rootRunId, { operationDeadline }),
@@ -2302,6 +2305,9 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       operationDeadline,
       (run) => report(run, true),
       async () => {
+        await recheckArtifactProducers(artifactProducers, status, client, false, {
+          operationDeadline,
+        });
         const retryParent = exactTerminalRunState(
           await client.getRun(rootRunId, { operationDeadline }),
           rootRunId,

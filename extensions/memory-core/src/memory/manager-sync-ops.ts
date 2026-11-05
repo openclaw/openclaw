@@ -469,7 +469,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
       failure = { error };
     }
     this.sessionsDirty =
-      sessionsFullRetryDirty || sessionsReconcileDirty || sessionsDirtyFiles.size > 0;
+      sessionsFullRetryDirty ||
+      sessionsReconcileDirty ||
+      sessionsDirtyFiles.size > 0 ||
+      this.sessionPendingFiles.size > 0 ||
+      this.sessionPendingTargets.size > 0;
     if (failure) {
       this.requestSessionIndexRetry(true);
       this.syncOutcomes.recordFailure(failure.error);

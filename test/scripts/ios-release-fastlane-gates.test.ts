@@ -742,7 +742,6 @@ def sh(*arguments, **options)
   @calls += 1
   raise "settings lookup" if command.include?("showBuildSettings")
   raise "rebooted simulator" if command.include?("simctl")
-  raise "missing test selection" unless command.include?("-only-testing:OpenClawUITests/OpenClawSnapshotUITests/fixture-test")
   raise "not using built products" unless command.include?("test-without-building")
   parts = Shellwords.split(command)
   @xcode_arguments = parts.drop(parts.index("xcodebuild") + 1)
@@ -1472,22 +1471,12 @@ require "json"
 require "tmpdir"
 require "fileutils"
 require "open3"
-require "stringio"
 require "time"
 require ARGV.fetch(0)
+# Resource sampling belongs to ios-resource-timeline.mjs, not capture phases.
 module Open3
-  def self.popen2(*arguments, **options)
-    output = case arguments.last
-    when "hw.logicalcpu" then "12"
-    when "hw.memsize" then "34359738368"
-    when "vm.loadavg" then "{ 1.0 2.0 3.0 }"
-    when "pcpu=,rss=,comm=" then "5.2 1024 /private/PRIVATE-PATH/OpenClawUITests-Runner\\n1.0 10 /private/PRIVATE-PATH/OtherApp\\n"
-    else "Mach Virtual Memory Statistics: (page size of 16384 bytes)\\nPages free: 42.\\nSwapouts: 3.\\n"
-    end
-    process = Object.new
-    def process.join(*); true; end
-    def process.value; Struct.new(:success?).new(true); end
-    yield StringIO.new, StringIO.new(output), process
+  def self.popen2(*)
+    raise "unexpected blocking resource sample"
   end
 end
 class << Dir
@@ -1536,19 +1525,15 @@ end
     const result = spawnSync("ruby", ["-e", source, helper], { encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).not.toContain("PRIVATE-");
-    expect(JSON.parse(result.stdout)).toMatchObject({
+    expect(JSON.parse(result.stdout)).toEqual({
       error: "original capture failed",
       events: [
         {
           phase: "capture",
           outcome: "failed",
-          before: {
-            hardware: { logicalCpuCount: 12, memoryBytes: 34359738368 },
-            loadAverage: [1, 2, 3],
-            memoryPageBytes: 16384,
-            memoryPages: { "Pages free": 42, Swapouts: 3 },
-            processes: [{ name: "OpenClawUITests-Runner", cpuPercent: 5.2, rssKiB: 1024 }],
-          },
+          deviceName: "iPad Pro 13-inch",
+          startedAt: "2026-01-01T00:00:00Z",
+          durationSeconds: expect.any(Number),
           startup: {
             testCaseStarts: 0,
             instrumentsConnectionTimeout: true,

@@ -4,7 +4,10 @@ import type { QaMockProviderServer } from "./providers/index.js";
 import type { QaProviderMode } from "./providers/shared/types.js";
 import { publishQaSuiteArtifactFiles } from "./suite-artifacts.js";
 
-const QA_MOCK_PROVIDER_REQUESTS_ARTIFACT = path.join("artifacts", "mock-openai-requests.json");
+export const QA_MOCK_PROVIDER_REQUESTS_ARTIFACT = path.join(
+  "artifacts",
+  "mock-openai-requests.json",
+);
 
 export async function captureQaMockProviderRequests(params: {
   outputDir: string;

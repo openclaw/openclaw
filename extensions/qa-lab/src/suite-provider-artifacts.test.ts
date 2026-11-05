@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { QaMockProviderServer } from "./providers/index.js";
-import { captureQaMockProviderRequests } from "./suite-provider-artifacts.js";
+import {
+  captureQaMockProviderRequests,
+  QA_MOCK_PROVIDER_REQUESTS_ARTIFACT,
+} from "./suite-provider-artifacts.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -40,7 +43,7 @@ it("retains mock provider requests in the QA artifact directory", async () => {
   });
   expect(release).toHaveBeenCalledOnce();
   await expect(
-    fs.readFile(path.join(outputDir, "artifacts", "mock-openai-requests.json"), "utf8"),
+    fs.readFile(path.join(outputDir, QA_MOCK_PROVIDER_REQUESTS_ARTIFACT), "utf8"),
   ).resolves.toBe(`${JSON.stringify(requests, null, 2)}\n`);
 });
 
