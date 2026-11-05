@@ -124,8 +124,13 @@ export class TranscriptLayoutOwner {
     });
   }
 
-  readonly measureRow: typeof measureTranscriptRow = (element, entry, instance) => {
-    const size = measureTranscriptRow(element, entry, instance);
+  readonly measureRow = (
+    element: HTMLElement,
+    entry: ResizeObserverEntry | undefined,
+    instance: Virtualizer<HTMLDivElement, HTMLElement>,
+    observedSize?: number,
+  ): number => {
+    const size = observedSize ?? measureTranscriptRow(element, entry, instance);
     return Math.max(size, this.rowMinimum(instance.indexFromElement(element)));
   };
 

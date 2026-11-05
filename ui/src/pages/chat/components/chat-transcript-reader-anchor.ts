@@ -1,6 +1,9 @@
 import type { Virtualizer, VirtualItem } from "@tanstack/virtual-core";
 import { isIosBrowserPlatform } from "../../../lib/browser-platform.ts";
-import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
+import {
+  maxTranscriptScrollOffset,
+  type measureTranscriptRow,
+} from "./chat-transcript-geometry.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 
@@ -47,10 +50,6 @@ export class TranscriptReaderAnchor {
   private landedShift = 0;
   private owedScroll = 0;
   private observer: ResizeObserver | null = null;
-  // A positioning owner can measure and release its anchor before this frame's resize
-  // delivery. Its restoration already accounts for that delivery's rows.
-  private ownedSinceDelivery = false;
-
   constructor(private readonly host: ReaderAnchorHost) {}
 
   /** Restoration, scroll commands, prepend and disclosure anchors place the reader themselves. */
@@ -63,6 +62,13 @@ export class TranscriptReaderAnchor {
       this.host.prependAnchor.messageKey !== null
     );
   }
+
+  /** Deferred measurements use the latest size already anchored by native resize delivery. */
+  readonly measureRow: typeof measureTranscriptRow = (element, entry, instance) => {
+    // Registration preserves explicit measurements already recorded by the viewport owner.
+    const observedSize = entry ? this.heights.get(element) : undefined;
+    return this.host.layout.measureRow(element, entry, instance, observedSize);
+  };
 
   observe(row: HTMLElement): void {
     this.observer ??= new ResizeObserver(this.resized);
@@ -89,8 +95,7 @@ export class TranscriptReaderAnchor {
     }
     const readerTop = element.getBoundingClientRect().top;
     const { virtualizer } = this.host;
-    const compensating = !this.positionOwned() && !this.ownedSinceDelivery;
-    this.ownedSinceDelivery = false;
+    const compensating = !this.positionOwned();
     // Earlier rows in this delivery push later ones; recover each row's pre-change top.
     const rows = entries
       .flatMap((entry) => {
@@ -149,7 +154,14 @@ export class TranscriptReaderAnchor {
     instance: TranscriptVirtualizer,
   ): boolean => {
     const owned = this.positionOwned();
-    this.ownedSinceDelivery ||= owned;
+    if (owned) {
+      // Positioning already accounts for this row, even if its native resize arrives later.
+      const row = instance.elementsCache.get(item.key);
+      if (row) {
+        // Delta uses the size cache, which can lead the last rendered item.
+        this.heights.set(row, (instance.itemSizeCache.get(item.key) ?? item.size) + delta);
+      }
+    }
     // An estimated initial end is not a native scroll target.
     if (this.host.initialRange.pending) {
       return false;
@@ -232,6 +244,8 @@ export class TranscriptReaderAnchor {
     this.shiftVirtual(-shift);
     this.syncColumn();
     this.scrollBy(shift);
+    // Publish the fold before a range render can discard rows using the old offset.
+    this.host.offsetState.syncNativeOffset?.();
   }
 
   /** A moved pane keeps its mounted rows observed; only pending corrections are retired. */

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
+import { createFrameQueue } from "../../../test-helpers/animation-frame-queue.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { projectChatFields } from "../chat-field-projection.ts";
 import { createMountedPanes } from "../chat-pane-mounted.test-support.ts";
@@ -188,6 +189,56 @@ it("retains the accepted history-header space while a touch holds the older row 
   expect(Math.abs(retained.getBoundingClientRect().top - top)).toBeLessThanOrEqual(2);
 });
 
+it("retains the reader after canceling a restore with measured rows", async () => {
+  const { host, session, viewport, virtualizer } = await mountPane(false, 120, undefined, 3600);
+  await expect.poll(() => virtualizer.isScrolling).toBe(false);
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPhone");
+  const measured = requireElement(host, '[data-index="27"]');
+  const changing = requireElement(host, '[data-index="28"]');
+  const reader = requireElement(host, '[data-index="30"]');
+  // The restore waits for more content while the current rows finish measuring.
+  session.restoreScrollOffset(20_000);
+  measured.style.height = "147px";
+  await settleLayout();
+  session.cancelScroll();
+  await settleLayout();
+  expect(viewport.scrollTop).toBe(3627);
+  const top = reader.getBoundingClientRect().top;
+  const duringResize = await new Promise<number>((resolve) => {
+    const observer = new ResizeObserver(() => {
+      observer.disconnect();
+      resolve(reader.getBoundingClientRect().top);
+    });
+    observer.observe(changing);
+    changing.style.height = "93px";
+  });
+  expect(duringResize).toBe(top);
+  await settleLayout();
+  expect(reader.isConnected).toBe(true);
+  expect(reader.getBoundingClientRect().top).toBe(top);
+  session.restoreScrollOffset(20_000);
+  const options = virtualizer.options;
+  virtualizer.setOptions({ ...options, anchorTo: "start" });
+  for (const height of [174, 201]) {
+    measured.style.height = `${height}px`;
+    virtualizer.resizeItem(27, height);
+  }
+  virtualizer.setOptions(options);
+  session.cancelScroll();
+  const positionedTop = reader.getBoundingClientRect().top;
+  const nextResize = await new Promise<number>((resolve) => {
+    const observer = new ResizeObserver(() => {
+      observer.disconnect();
+      resolve(reader.getBoundingClientRect().top);
+    });
+    observer.observe(measured);
+  });
+  expect(nextResize).toBe(positionedTop);
+  await settleLayout();
+  expect(reader.isConnected).toBe(true);
+  expect(reader.getBoundingClientRect().top).toBe(positionedTop);
+});
+
 it.each([
   { offset: null, rowHeight: 120, cachedRows: 100, expected: [94, 95, 96, 97, 98, 99] },
   { offset: 3600, rowHeight: 120, cachedRows: 100, expected: [27, 28, 29, 30, 31, 32, 33, 34, 35] },
@@ -354,6 +405,7 @@ it.each(["pending", "committed"] as const)(
       flush();
       await Promise.resolve();
       flush();
+      virtualizer.measureElement(requireElement(host, ".chat-virtual-row"));
       expect(notification).toHaveBeenCalledExactlyOnceWith(virtualizer, false);
       expect(updates).not.toHaveBeenCalled();
       expect(
@@ -432,6 +484,58 @@ it("synchronizes padding changes even when the viewport's outer rect stays the s
   expect(virtualizer.scrollRect).toEqual(rect);
   expect(virtualizer.options.scrollMargin).toBe(24);
   expect(virtualizer.getVirtualItems()[0]?.start).toBe(24);
+});
+
+it("retains the reader when scrolling settles before deferred row measurements land", async () => {
+  const { host, viewport, virtualizer } = await mountPane(false, 120, undefined, 3600);
+  await expect.poll(() => virtualizer.isScrolling).toBe(false);
+  // Rows 27/28 are above visible Row 30 at the saved 3600px reader offset.
+  const seed = requireElement(host, '[data-index="27"]');
+  const changing = requireElement(host, '[data-index="28"]');
+  const reader = requireElement(host, '[data-index="30"]');
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPhone");
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  onTestFinished(() => void vi.useRealTimers());
+  viewport.scrollTop -= 24;
+  await settleLayout();
+  const top = reader.getBoundingClientRect().top;
+  // Keep an already-measured correction held while the next resize is still pending.
+  seed.style.height = "981px";
+  await settleLayout();
+  expect(reader.isConnected).toBe(true);
+  expect(reader.getBoundingClientRect().top).toBe(top);
+  const { frames, request } = createFrameQueue();
+  const delayed = vi.spyOn(window, "requestAnimationFrame").mockImplementation(request);
+  try {
+    for (const pendingHeight of [1008, 981]) {
+      await new Promise<void>((resolve) => {
+        const observer = new ResizeObserver(() => {
+          observer.disconnect();
+          resolve();
+        });
+        observer.observe(changing);
+        changing.style.height = `${pendingHeight}px`;
+      });
+    }
+    vi.advanceTimersByTime(virtualizer.options.isScrollingResetDelay);
+    await host.updateComplete;
+    flush();
+    expect(reader.isConnected).toBe(true);
+    expect(reader.getBoundingClientRect().top).toBe(top);
+  } finally {
+    delayed.mockRestore();
+  }
+  for (const callback of frames.splice(0)) {
+    callback(performance.now());
+    await host.updateComplete;
+    flush();
+    expect(reader.isConnected).toBe(true);
+    expect(reader.getBoundingClientRect().top).toBe(top);
+  }
+  await settleLayout();
+  expect(reader.isConnected).toBe(true);
+  expect(reader.getBoundingClientRect().top).toBe(top);
+  expect(viewport.scrollTop).toBe(5298);
 });
 
 it("retains measured viewport geometry while its slot is hidden", async () => {
