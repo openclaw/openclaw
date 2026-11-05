@@ -1218,6 +1218,7 @@ src/infra/sqlite-database-admission-delta.ts
 src/infra/sqlite-database-admission-record.ts
 src/infra/sqlite-database-admission-seal.ts
 src/infra/sqlite-database-admission-turn.ts
+src/infra/sqlite-database-admission-wait.ts
 src/infra/sqlite-database-admission.ts
 src/infra/sqlite-error-diagnostics.ts
 src/infra/sqlite-existing-database.ts
