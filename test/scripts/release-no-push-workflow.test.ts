@@ -544,15 +544,15 @@ describe("release validation no-push transport", () => {
   );
 
   it.each([
-    ["openclaw/openclaw", "hybrid", false, "blacksmith-4vcpu-ubuntu-2404"],
-    ["openclaw/openclaw", "github", false, "ubuntu-24.04"],
-    ["openclaw/openclaw", "boat", false, "ubuntu-24.04"],
-    ["openclaw/openclaw", "", false, "ubuntu-24.04"],
-    ["fork/openclaw", "hybrid", false, "ubuntu-24.04"],
-    ["openclaw/openclaw", "hybrid", true, "ubuntu-24.04"],
+    ["openclaw/openclaw", "hybrid", false],
+    ["openclaw/openclaw", "github", false],
+    ["openclaw/openclaw", "boat", false],
+    ["openclaw/openclaw", "", false],
+    ["fork/openclaw", "hybrid", false],
+    ["openclaw/openclaw", "hybrid", true],
   ])(
     "routes short release controls and reusable candidate jobs for %s/%s (hosted=%s)",
-    (repository, backend, hosted, runner) => {
+    (repository, backend, hosted) => {
       const targets = [
         [FULL_RELEASE, "resolve_target"],
         [FULL_RELEASE, "plugin_compatibility_readiness"],
@@ -572,7 +572,7 @@ describe("release validation no-push transport", () => {
           continue;
         }
         const expression = job(readWorkflow(workflowPath!), name!)["runs-on"]!;
-        const label = workflowPath === LIVE_E2E ? runner : "ubuntu-24.04";
+        const label = "ubuntu-24.04";
         for (const runnerGroup of ["", "release"]) {
           const actual = expression.startsWith("${{")
             ? runInNewContext(
