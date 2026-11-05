@@ -305,47 +305,17 @@ export const iconData = {
     ["path", { d: "M12 7v4" }],
     ["path", { d: "M16 7v9" }],
   ]),
-  // Canonical Blobster silhouette; transparent eyes work in both navigation themes.
-  blobster: {
-    attributes: {
-      viewBox: "0 0 24 24",
-      class: "icon--filled",
-      fill: "currentColor",
-      stroke: "none",
-    },
-    children: [
-      [
-        "path",
-        {
-          d: "M46 14Q38 4 31 7M74 14Q82 4 89 7",
-          transform: "translate(2 3) scale(.166666667)",
-          fill: "none",
-          stroke: "currentColor",
-          "stroke-width": "4",
-          "stroke-linecap": "round",
-        },
-      ],
-      [
-        "path",
-        {
-          d: "M20 42C5 37 0 47 5 57C10 67 20 62 25 52C28 45 25 42 20 42Z M100 42C115 37 120 47 115 57C110 67 100 62 95 52C92 45 95 42 100 42Z",
-          transform: "translate(2 3) scale(.166666667)",
-          fill: "currentColor",
-          stroke: "none",
-        },
-      ],
-      [
-        "path",
-        {
-          d: "M60 8C32 8 16 32 16 52C16 72 30 90 44 95L44 104H54V96C58 97.5 62 97.5 66 96V104H76V95C90 90 104 72 104 52C104 32 88 8 60 8Z M50.5 32a5.5 5.5 0 1 0-11 0a5.5 5.5 0 1 0 11 0Z M80.5 32a5.5 5.5 0 1 0-11 0a5.5 5.5 0 1 0 11 0Z",
-          transform: "translate(2 3) scale(.166666667)",
-          fill: "currentColor",
-          stroke: "none",
-          style: "fill-rule: evenodd",
-        },
-      ],
+  // Blobster uses the same two-pixel outline as the other navigation icons.
+  blobster: strokeIconData([
+    [
+      "path",
+      {
+        d: "M46 14Q38 4 31 7M74 14Q82 4 89 7M20 42C5 37 0 47 5 57C10 67 20 62 25 52M100 42C115 37 120 47 115 57C110 67 100 62 95 52M60 8C32 8 16 32 16 52C16 72 30 90 44 95V104H54V96C58 97.5 62 97.5 66 96V104H76V95C90 90 104 72 104 52C104 32 88 8 60 8ZM45 30v4M75 30v4",
+        transform: "translate(2 3) scale(.166666667)",
+        "stroke-width": "12",
+      },
     ],
-  },
+  ]),
   bot: strokeIconData([
     ["path", { d: "M12 8V4H8" }],
     ["rect", { width: "16", height: "12", x: "4", y: "8", rx: "2" }],
