@@ -83,8 +83,9 @@ function fixture() {
       createTestInputFingerprint(cwd),
       qualification,
       isIndependentCompanion,
+      cwd,
     )([changedTest, unchanged]);
-  return { cwd, select };
+  return { cwd, select, qualification };
 }
 
 it("omits only qualified unchanged inputs, retaining changed and unqualified tests", () => {
@@ -132,6 +133,45 @@ it("admits qualified companions and allocations only alongside a Markdown source
   expect(select([changed, changedTest])).toEqual([changedTest, unchanged]);
   expect(select([changed, `${root}companion.spec.ts`])).toEqual([changedTest, unchanged]);
   expect(select([companion, allocation], independent)).toEqual([changedTest, unchanged]);
+});
+
+it("admits regular production companions but keeps helpers, fixtures and missing inputs conservative", () => {
+  const { cwd, select } = fixture();
+  const companions = [
+    "src/runtime.ts",
+    "extensions/example/src/runtime.ts",
+    "packages/example/runtime.mjs",
+  ];
+  const excluded = [
+    "src/test-utils/runtime.ts",
+    "src/runtime.test-support.ts",
+    "src/fixtures/runtime.ts",
+    "packages/example/vitest.config.ts",
+    "packages/example/scripts/generate.ts",
+    "scripts/runtime.ts",
+  ];
+  for (const file of [...companions, ...excluded]) {
+    fs.mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+    fs.writeFileSync(path.join(cwd, file), "export const value = 1;");
+    expect(select([changed, file])).toEqual(
+      companions.includes(file) ? [changedTest] : [changedTest, unchanged],
+    );
+  }
+  expect(select([changed, "src/missing.ts"])).toEqual([changedTest, unchanged]);
+  fs.symlinkSync(path.join(cwd, companions[0]!), path.join(cwd, "src/linked.ts"));
+  expect(select([changed, "src/linked.ts"])).toEqual([changedTest, unchanged]);
+});
+
+it("retains a qualified test when a production companion changes its input closure", () => {
+  const { cwd, select, qualification } = fixture();
+  const companion = "src/runtime.ts";
+  fs.mkdirSync(path.join(cwd, "src"));
+  fs.writeFileSync(path.join(cwd, companion), "export const value = 1;");
+  fs.appendFileSync(path.join(cwd, unchanged), '\nimport "../../../src/runtime.js";');
+  qualification.tests[unchanged] = createTestInputFingerprint(cwd)([unchanged]) ?? "";
+  expect(select([changed, companion])).toEqual([changedTest]);
+  fs.writeFileSync(path.join(cwd, companion), "export const value = 2;");
+  expect(select([changed, companion])).toEqual([changedTest, unchanged]);
 });
 
 it("shares the qualification graph with selection when changes include a non-source input", () => {
