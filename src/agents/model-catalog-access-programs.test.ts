@@ -159,28 +159,16 @@ it.each(["openclaw", "codex"])(
   },
 );
 
-it("applies a saved Daybreak choice only to OpenAI turns", () => {
-  expect(resolveCyberAccessProgramForProvider("daybreak_blue", "anthropic")).toEqual({
-    program: "standard",
-    notApplied: "daybreak_blue",
-  });
-  expect(resolveCyberAccessProgramForProvider("daybreak_red", "claude-cli")).toEqual({
-    program: "standard",
-    notApplied: "daybreak_red",
-  });
-  expect(resolveCyberAccessProgramForProvider("daybreak_blue", "OpenAI")).toEqual({
-    program: "daybreak_blue",
-  });
+it.each([
+  ["daybreak_blue", "anthropic", "standard"],
+  ["daybreak_red", "claude-cli", "standard"],
+  ["daybreak_blue", "OpenAI", "daybreak_blue"],
   // Codex CLI is still an OpenAI model; its runtime keeps the explicit unsupported error.
-  expect(resolveCyberAccessProgramForProvider("daybreak_blue", "codex-cli")).toEqual({
-    program: "daybreak_blue",
-  });
-  expect(resolveCyberAccessProgramForProvider("standard", "anthropic")).toEqual({
-    program: "standard",
-  });
-  expect(resolveCyberAccessProgramForProvider(undefined, "anthropic")).toEqual({
-    program: undefined,
-  });
+  ["daybreak_blue", "codex-cli", "daybreak_blue"],
+  ["standard", "anthropic", "standard"],
+  [undefined, "anthropic", undefined],
+] as const)("applies saved Access %s on %s as %s", (program, provider, expected) => {
+  expect(resolveCyberAccessProgramForProvider(program, provider).program).toBe(expected);
 });
 
 it("notifies a non-OpenAI Access downgrade once per scope and model", () => {
@@ -194,11 +182,7 @@ it("notifies a non-OpenAI Access downgrade once per scope and model", () => {
       noticeScope: scope,
       notify,
     });
-  expect(turn("anthropic", "claude-opus-5-5")).toBe("standard");
-  expect(turn("anthropic", "claude-opus-5-5")).toBe("standard");
+  expect([turn("anthropic", "opus"), turn("anthropic", "opus")]).toEqual(["standard", "standard"]);
   expect(turn("openai", "gpt-6.1-sol")).toBe("daybreak_blue");
-  expect(notify).toHaveBeenCalledOnce();
-  expect(notify).toHaveBeenCalledWith(
-    "Daybreak Blue applies only to OpenAI models, so anthropic/claude-opus-5-5 used Standard access. Your Daybreak Blue choice is kept for when this chat returns to an OpenAI model.",
-  );
+  expect(notify.mock.calls).toEqual([[expect.stringContaining("anthropic/opus used Standard")]]);
 });

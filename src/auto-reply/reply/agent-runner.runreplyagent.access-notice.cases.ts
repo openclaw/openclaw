@@ -4,19 +4,19 @@ import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { FollowupRun } from "./queue.js";
 
+type SessionFixture = {
+  sessionEntry: SessionEntry;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+};
 type AccessNoticeFixture = {
-  createMinimalRun: (params?: {
-    sessionEntry: SessionEntry;
-    sessionStore: Record<string, SessionEntry>;
-    storePath: string;
-    sessionCtx: Partial<TemplateContext>;
-    runOverrides: Partial<FollowupRun["run"]>;
-  }) => { run: () => Promise<ReplyPayload | ReplyPayload[] | undefined> };
-  makeSessionFixture: (overrides: Partial<SessionEntry>) => Promise<{
-    sessionEntry: SessionEntry;
-    sessionStore: Record<string, SessionEntry>;
-    storePath: string;
-  }>;
+  createMinimalRun: (
+    params: SessionFixture & {
+      sessionCtx?: Partial<TemplateContext>;
+      runOverrides: Partial<FollowupRun["run"]>;
+    },
+  ) => { run: () => Promise<ReplyPayload | ReplyPayload[] | undefined> };
+  makeSessionFixture: (overrides: Partial<SessionEntry>) => Promise<SessionFixture>;
   state: { runEmbeddedAgentMock: Mock };
 };
 
@@ -27,7 +27,7 @@ export function registerAccessProgramNoticeCases({
 }: AccessNoticeFixture): void {
   describe("runReplyAgent Access notice", () => {
     it("tells a direct chat once that a saved Daybreak choice did not apply to a non-OpenAI model", async () => {
-      const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
+      const fixture = await makeSessionFixture({
         modelProvider: "anthropic",
         model: "claude",
         cyberAccessProgram: "daybreak_blue",
@@ -38,9 +38,7 @@ export function registerAccessProgramNoticeCases({
       });
       const runOnce = async () =>
         await createMinimalRun({
-          sessionEntry,
-          sessionStore,
-          storePath,
+          ...fixture,
           sessionCtx: { ChatType: "direct" },
           runOverrides: { cyberAccessProgram: "daybreak_blue" },
         }).run();
