@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { type ExecMode, resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
 import { resolveModelExecCeiling } from "./lazy-exec-tool.js";
 import {
   projectEffectiveExecPolicy,
@@ -18,39 +19,20 @@ describe("session permission modes for exec policies", () => {
 });
 
 describe("model exec ceiling", () => {
+  const exact = (mode: ExecMode) => {
+    const { security, ask } = resolveExecPolicyForMode(mode);
+    return { mode, security, ask };
+  };
   it.each([
-    ["full config is capped to auto", { mode: "full" }, "auto", "auto", "allowlist", "on-miss"],
-    ["unset config ranks as full", {}, "deny", "deny", "deny", "off"],
-    [
-      "stricter ask is kept over auto",
-      { mode: "ask", security: "allowlist", ask: "on-miss" },
-      "auto",
-      "ask",
-      "allowlist",
-      "on-miss",
-    ],
-    [
-      "stricter allowlist is kept",
-      { mode: "allowlist", security: "allowlist", ask: "off" },
-      "auto",
-      "allowlist",
-      "allowlist",
-      "off",
-    ],
-    [
-      "legacy full/on-miss is capped",
-      { security: "full", ask: "on-miss" },
-      "ask",
-      "ask",
-      "allowlist",
-      "on-miss",
-    ],
-  ] as const)("%s", (_name, base, ceiling, mode, security, ask) => {
-    expect(projectEffectiveExecPolicy({ base, modelExecCeiling: ceiling })).toMatchObject({
-      mode,
-      security,
-      ask,
-    });
+    [{ mode: "full" }, "auto", "auto"],
+    [{}, "deny", "deny"],
+    [exact("ask"), "auto", "ask"],
+    [exact("allowlist"), "auto", "allowlist"],
+    [{ security: "full", ask: "on-miss" }, "ask", "ask"],
+  ] as const)("caps %j at %s to %s", (base, ceiling, mode) => {
+    expect(projectEffectiveExecPolicy({ base, modelExecCeiling: ceiling })).toMatchObject(
+      exact(mode),
+    );
   });
 
   it("caps per-run overrides and full sessions without host-floor bypass", () => {
