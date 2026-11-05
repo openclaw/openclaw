@@ -12,6 +12,7 @@ import {
   type EntryRow,
 } from "./session-row-projection-record.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
+import * as sessionCore from "./session-utils-core.js";
 import { selectSessionEntries } from "./session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
@@ -110,6 +111,7 @@ function fixture() {
       partitions: selected.partitions,
       retained,
       getTarget: selected.get,
+      modelSearchMayMatch: () => false,
       configuredAgentIds: selected.configuredAgentIds,
       getRowContext: () => context,
       userProfileIdentityById: context.userProfileIdentityById,
@@ -238,6 +240,51 @@ it("keeps sidebar baselines when fixed query partitions advance through many rev
   }
 });
 
+it("filters partition entries as they are read without an eager roster copy", () => {
+  const state = fixture();
+  for (let index = 0; index < 1024; index++) {
+    state.put(`agent:main:stream-${index}`, { sessionId: String(index), updatedAt: index });
+  }
+  const partitions = state.selection.read().partitions!;
+  let read = 0;
+  const spies = partitions.flatMap((part) => {
+    const each = part.entries.forEach.bind(part.entries);
+    const direct = vi.spyOn(part.entries, "forEach").mockImplementation((visit) => {
+      each((pair, key, map) => {
+        read++;
+        visit(pair, key, map);
+      });
+    });
+    const values = part.entries.values.bind(part.entries);
+    const iterated = vi.spyOn(part.entries, "values").mockImplementation(function* () {
+      for (const pair of values()) {
+        read++;
+        yield pair;
+      }
+      return undefined;
+    });
+    return [direct, iterated];
+  });
+  let filtered = 0;
+  const matches = sessionCore.matchesSessionArchiveFilter;
+  using archive = vi
+    .spyOn(sessionCore, "matchesSessionArchiveFilter")
+    .mockImplementation((entry, archived) => {
+      expect(read - filtered++).toBe(1);
+      return matches(entry, archived);
+    });
+  try {
+    const result = state.select(state.selection, { limit: 10 }, new Map());
+    expect(result.totalCount).toBe(1024);
+    expect(result.entries.map(([, entry]) => entry.sessionId)).toEqual(
+      Array.from({ length: 10 }, (_, index) => String(1023 - index)),
+    );
+    expect(archive).toHaveBeenCalledTimes(1024);
+  } finally {
+    spies.forEach((spy) => spy.mockRestore());
+  }
+});
+
 it("reads only the requested page from retained ordered partitions", () => {
   const state = fixture();
   const count = 10_800;
@@ -336,6 +383,8 @@ it.for([0x12e7, 0x4b91])("matches fresh selection after seeded write sequences (
     ),
     ...([
       { label: "alpha" },
+      { search: "alpha" },
+      { search: "nonexistent" },
       { boardFace: "dashboard" },
       { group: "work" },
       { projectId: "one" },

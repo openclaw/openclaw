@@ -4,7 +4,7 @@ import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, danger } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
@@ -49,6 +49,9 @@ import {
   resolveTelegramInboundMediaUri,
   resolveTelegramPromptMediaPath,
 } from "./prompt-media-path.js";
+
+// The child file logger never reaches stdout, where container operators look.
+const mediaLog = createSubsystemLogger("telegram/media");
 
 const HOUR_MS = 60 * 60_000;
 const SENDER_MEDIA_MAX_AGE_MS = 2 * 60_000;
@@ -98,7 +101,6 @@ export function createTelegramMessagePipeline({
   telegramCfg,
   resolveTelegramGroupConfig,
   processMessage,
-  logger,
 }: RegisterTelegramHandlerParams) {
   const { token } = opts;
   const mediaRuntimeOptions = resolveTelegramMediaRuntimeOptions({
@@ -418,10 +420,9 @@ export function createTelegramMessagePipeline({
             recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
             throw err;
           }
-          logger.warn(
-            { chatId: replyCtx.message.chat.id, error: String(err) },
-            "reply media fetch failed",
-          );
+          mediaLog.warn(`reply media fetch failed: ${String(err)}`, {
+            chatId: replyCtx.message.chat.id,
+          });
         }
         return mediaRef;
       };

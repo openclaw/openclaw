@@ -989,6 +989,9 @@ run-ID-cached bytes first.
    outage. Release Checks prints a `Release runner routing` notice while the
    flip is active. Codex extension tests run as file-bounded Plugin Prerelease
    jobs because one hosted Codex batch took 36-60 minutes.
+   If npm preflight keeps losing Blacksmith runners, dispatch a fresh FRV with
+   `-f npm_preflight_use_github_hosted_runners=true` instead of flipping the
+   repo-wide variable.
 8. If a required PR CI run is capacity-stalled with queued jobs and no active
    jobs, do not cancel unrelated work or accept a generic manual dispatch.
    First verify the PR head carries the current fallback schema:

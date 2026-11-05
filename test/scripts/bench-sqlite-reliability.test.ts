@@ -15,7 +15,7 @@ import {
   canonicalPathWithExistingParent,
   isPendingPathInRepository,
 } from "../../scripts/lib/sqlite-reliability-worker-paths.js";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import {
   resolveRuntimeWorkerThreadExecArgv,

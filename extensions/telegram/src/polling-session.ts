@@ -126,13 +126,23 @@ export class TelegramPollingSession {
           continue;
         }
 
-        if ((await this.#ensureWebhookCleanup(bot)) === "exit") {
-          return;
-        }
+        try {
+          if ((await this.#ensureWebhookCleanup(bot)) === "exit") {
+            return;
+          }
 
-        const state = await this.#runPollingCycle(bot, cycleAbortController);
-        if (state === "exit") {
-          return;
+          const state = await this.#runPollingCycle(bot, cycleAbortController);
+          if (state === "exit") {
+            return;
+          }
+        } finally {
+          cycleAbortController.abort();
+          // Bot construction owns binding registrations before polling is initialized.
+          await waitForGracefulStop(() =>
+            Promise.resolve(bot.stop())
+              .then(() => undefined)
+              .catch(() => undefined),
+          );
         }
       }
     } finally {
@@ -567,13 +577,6 @@ export class TelegramPollingSession {
       await waitForGracefulStop(() => ingressMonitor.stop());
       // Accepted replay writes and introductions keep ownership after transport grace expires.
       await ingressMonitor.waitForDeferredClaims();
-      // Fail closed when the spool stops making progress: keeping any claim live would
-      // prevent a healthy process from recovering a wedged drain.
-      await waitForGracefulStop(() =>
-        Promise.resolve(bot.stop())
-          .then(() => undefined)
-          .catch(() => undefined),
-      );
     }
   }
 }
