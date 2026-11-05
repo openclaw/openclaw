@@ -64,6 +64,8 @@ export type SpawnSecretInput = {
 
 export type ProcessAdapterConstruction = {
   executionIntent?: ProcessExecutionIntent;
+  /** Stable session budget identity, independent of command cancellation ownership. */
+  executionScopeKey?: string;
   assertCurrent?: () => void;
   initiateSpawn?: SpawnInitiation;
   /** Synchronous launch admission; never recheck after the target command starts. */
@@ -116,6 +118,7 @@ export type ProcessAdapterStartup<Adapter extends SpawnProcessAdapter> = {
 
 type SpawnBaseInput = {
   executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   initiateSpawn?: SpawnInitiation;
   /** The local subprocess transports execution owned outside its local process tree. */
   cleanupOwnership?: "external";
@@ -163,6 +166,8 @@ export type SpawnInput =
       input?: string;
       /** Prepare input authority at the adapter's stdin delivery boundary. */
       prepareInput?: () => void | Promise<void>;
+      /** Prepare async policy after transport setup, before the target starts. */
+      prepareTargetSpawn?: () => void | Promise<void>;
       stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
       secretInput?: SpawnSecretInput;
       onStdoutRaw?: (chunk: Buffer) => void;

@@ -130,6 +130,7 @@ export function claimCronRunReceiptInDatabase(params: {
   database: EngineConnection;
   handle: CronRunReceiptHandle;
   requestRunId?: string;
+  replaceDeferred?: { receiptId: string; receiptSchema: CronRunReceiptWriteSchema };
 }): CronRunReceiptHandle | undefined {
   const { handle } = params;
   const claimed = executeSqliteQueryTakeFirstSync(
@@ -161,6 +162,20 @@ export function claimCronRunReceiptInDatabase(params: {
       .onConflict((conflict) => conflict.doNothing())
       .returning("receipt_id"),
   );
+  if (claimed && params.replaceDeferred) {
+    // Replace the unstarted attempt atomically; old handles cannot finish this retry.
+    const { receiptId, receiptSchema } = params.replaceDeferred;
+    deleteExecutionOwnerLifecycleMetadata({
+      db: params.database,
+      ownerKind: "cron",
+      ownerIds: [receiptId],
+      executionOwnerLifecycleBindings: receiptSchema.executionOwnerLifecycleBindings,
+    });
+    executeSqliteQuerySync(
+      params.database,
+      query(params.database).deleteFrom("cron_run_receipts").where("receipt_id", "=", receiptId),
+    );
+  }
   return claimed ? handle : undefined;
 }
 

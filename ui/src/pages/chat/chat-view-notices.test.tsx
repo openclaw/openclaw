@@ -62,6 +62,28 @@ function publishHistory(
     check();
   }
 }
+
+it.each([false, true])("collapses a replacement diagnostic (mobile=%s)", async (mobile) => {
+  const { container, publish } = publishedComposer(
+    { runError: { summary: "First diagnostic" } },
+    mobile,
+  );
+  const details = await waitForElement(container, "details", "first diagnostic");
+  details.setAttribute("open", "");
+  publish({ messages: [], runError: { summary: "Second diagnostic" } });
+  await waitForSolid(() => {
+    expect(container.querySelector("details")).not.toBe(details);
+    expect(container.querySelector("details")?.open).toBe(false);
+  });
+});
+it("preserves caller-owned recovery instructions in request notices", async () => {
+  const error = "Session is busy; wait for the current run to finish.";
+  const { container } = publishedNotices<TopbarProps>(renderChatTopbarNotices, { error });
+  await waitForSolid(() => {
+    expect(container.querySelector(".chat-error strong")?.textContent).toBe(error);
+    expect(container.querySelector("details")).toBeNull();
+  });
+});
 const failedPlacement = (error: string) => ({
   sessionKey: "agent:main:failed-start",
   phase: "failed" as const,
@@ -75,11 +97,11 @@ afterEach(() => document.body.replaceChildren());
 it.each(["transferring", "installing"] as const)("shows %s worker progress", async (phase) => {
   const installing = phase === "installing";
   const title = installing
-    ? "Installing worker runtime"
-    : "Updating worker runtime · 25 MB of 100 MB (25%)";
+    ? "Preparing this device…"
+    : "Preparing this device · 25 MB of 100 MB (25%)";
   const body = installing
-    ? "Installing the new worker runtime on this device."
-    : "Transferring the new worker runtime to this device: 25 MB of 100 MB (25%). The next turn starts when it finishes.";
+    ? "Installing the update on this device."
+    : "Transferring the update to this device: 25 MB of 100 MB (25%). The next reply starts when it finishes.";
   const { container, publish } = publishedNotices<TopbarProps>(renderChatTopbarNotices, {
     workerRuntimeInstall: {
       phase,
@@ -279,16 +301,15 @@ it.each(["refresh", "details", "message"] as const)(
     const details = notice.querySelector("details");
     if (variant === "message") {
       expect(details).toBeNull();
-      expect(notice.querySelector("button")).toBeNull();
-      return;
+    } else {
+      expect(details?.open).toBe(false);
+      expect(details?.querySelector("summary .chat-copy-btn")).toBeNull();
+      details!.open = true;
+      expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
+      expect(details?.querySelector(".chat-copy-btn")?.getAttribute("aria-label")).toBe(
+        t("chat.copyError"),
+      );
     }
-    expect(details?.open).toBe(false);
-    expect(details?.querySelector("summary .chat-copy-btn")).toBeNull();
-    details!.open = true;
-    expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
-    expect(details?.querySelector(".chat-copy-btn")?.getAttribute("aria-label")).toBe(
-      t("chat.copyError"),
-    );
     const refresh = notice.querySelector<HTMLButtonElement>(".chat-error__refresh");
     if (variant === "refresh") {
       refresh!.click();
@@ -342,7 +363,7 @@ describe("chat view notice integration", () => {
         expect(alert.textContent).toContain("🧭");
         expect(alert.querySelector("img")).toBeNull();
         const summary = requireElement(details, "summary", "error header");
-        expect(summary.textContent).toContain("Details");
+        expect(summary.textContent).toContain("Show details");
         expect(summary.textContent).not.toContain("Error details");
         expect(alert.querySelectorAll(".chat-copy-btn")).toHaveLength(1);
         const copy = summary.querySelector<HTMLButtonElement>('[aria-label="Copy error"]');
@@ -388,11 +409,13 @@ describe("chat view notice integration", () => {
       });
       const alert = await waitForElement(container, ".chat-error", "startup error");
       expect(requireElement(alert, "pre", "startup diagnostic").textContent).toBe(
-        "The session was created, but startup needs attention:  Provisioning failed\n  Final diagnostic line  ",
+        "Couldn’t start this session. Retry setup.  Provisioning failed\n  Final diagnostic line  ",
       );
       expect(alert.textContent).not.toContain("⚠");
       const details = requireElement(alert, "details", "startup disclosure");
-      expect(requireElement(details, "summary", "startup header").textContent).toContain("Details");
+      expect(requireElement(details, "summary", "startup header").textContent).toContain(
+        "Show details",
+      );
       expect(requireElement(details, "pre", "startup diagnostic").getAttribute("aria-label")).toBe(
         "Error details",
       );
@@ -401,7 +424,7 @@ describe("chat view notice integration", () => {
       copy?.click();
       await waitForFast(() =>
         expect(writeText).toHaveBeenCalledWith(
-          "The session was created, but startup needs attention: ⚠️ Provisioning failed\n  Final diagnostic line  ",
+          "Couldn’t start this session. Retry setup. ⚠️ Provisioning failed\n  Final diagnostic line  ",
         ),
       );
       expect(details.hasAttribute("open")).toBe(false);

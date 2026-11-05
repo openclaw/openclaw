@@ -21,6 +21,10 @@
   --list-row-min-height: 48px;
   --list-row-padding: var(--space-3) var(--space-4);
   --list-row-icon-size: 15px;
+  --chrome-icon-size: 14px;
+  /* Lucide draws on a 24 grid, so these strokes render at 1px at their icon size. */
+  --list-row-icon-stroke: 1.6px;
+  --chrome-icon-stroke: calc(12px / 7);
   --list-row-title-weight: 500;
   --surface-hover-amount: 6%;
   --surface-selected-amount: 8%;
@@ -40,6 +44,8 @@
   --popover: #191c24;
   --popover-foreground: #f0f0f2;
   --chat-send-foreground: var(--primary-foreground);
+  --chat-send-hover-bg: color-mix(in srgb, var(--primary) 86%, var(--text-strong));
+  --chat-send-active-bg: var(--primary-active);
   --chat-composer-surface: var(--popover);
   /* Composer controls take their ink from the composer's own surface rather
      than the canvas. Built-in dark themes lift that surface well above the
@@ -86,7 +92,7 @@
   --sidebar-toolbar-action-opacity: 1;
   --sidebar-rail-action-bg: var(--accent);
   --sidebar-rail-action-hover-bg: var(--accent-hover);
-  --sidebar-rail-action-active-bg: color-mix(in srgb, var(--accent) 90%, var(--text));
+  --sidebar-rail-action-active-bg: var(--accent-active);
 
   /* GitHub references share an opaque neutral surface; only their ink carries status. */
   --github-item-bg: color-mix(in srgb, var(--text) 6%, var(--bg));
@@ -134,6 +140,7 @@
   --accent-muted: #ff5c5c;
   --accent-subtle: rgba(255, 92, 92, 0.1);
   --accent-foreground: #0e1015;
+  --accent-active: var(--accent);
   --accent-glow: rgba(255, 92, 92, 0.2);
   --inbox-attention: #e5243b;
   --inbox-attention-foreground: #ffffff;
@@ -164,6 +171,7 @@
   /* Imported palettes supply a fill/ink pair, not a hover pair. Keep their
      contrast intact; built-in palettes override with audited hover colors. */
   --primary-hover: var(--primary);
+  --primary-active: var(--primary);
   --primary-foreground: #ffffff;
 
   --secondary: #161920;
@@ -250,6 +258,8 @@
   --danger-muted: rgba(248, 113, 113, 0.75);
   --danger-subtle: rgba(248, 113, 113, 0.08);
   --info: #60a5fa;
+  /* A run in progress: the accent, unless a theme's accent reads as waiting or as plain text. */
+  --status-running: var(--accent);
   --info-subtle: rgba(96, 165, 250, 0.08);
   --pr-merged: #a78bfa;
   /* Categorical chart series: distinct hues validated for color-vision separation on this surface. */
@@ -303,6 +313,7 @@
   --control-ui-input-text-size: max(16px, calc(14px * var(--control-ui-text-scale)));
   --field-padding-inline: 10px;
   --field-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  --composer-radius: calc(20px * var(--openclaw-corner-radius-scale));
   --field-font-size: var(--control-ui-text-sm);
   --field-bg: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
   --field-border: color-mix(in srgb, var(--border) 70%, transparent);
@@ -407,7 +418,7 @@
     var(--text) calc(var(--surface-selected-amount) / 2),
     transparent
   );
-  --menu-surface: color-mix(in srgb, var(--popover) 90%, transparent);
+  --menu-surface: color-mix(in srgb, var(--popover) 95%, transparent);
   --menu-backdrop: blur(8px);
   /* Hairlines are spread shadows so they never consume the panel's box. */
   --menu-shadow:
@@ -483,8 +494,14 @@
   color-scheme: dark;
 }
 
-/* Menu actions follow the platform 44px touch-target contract for coarse pointers. */
+/* Touch menu rows sit one step above the 38px touch controls; phones keep their taller rows. */
 @media (pointer: coarse) {
+  :root {
+    --menu-item-height: 40px;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 640px) {
   :root {
     --menu-item-height: 44px;
   }
@@ -540,7 +557,6 @@
   .exec-approval-list.exec-approval-list,
   .login-gate__card.login-gate__card,
   .card.card,
-  .settings-group.settings-group,
   .option-card__choice.option-card__choice {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
@@ -575,8 +591,9 @@
     corner-shape: superellipse(1.5);
   }
 
-  .option-card.option-card {
-    border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  .option-card.option-card,
+  .settings-group.settings-group {
+    border-radius: var(--composer-radius);
     corner-shape: superellipse(1.5);
   }
 
@@ -1077,7 +1094,6 @@ a:where(
     .settings-row__value,
     .memory-page__link,
     .portals-preview__notice-url,
-    .settings-account,
     .transcripts-back,
     .chat-text a,
     .chat-thinking a,
@@ -1322,7 +1338,7 @@ textarea,
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 

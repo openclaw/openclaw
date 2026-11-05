@@ -4,11 +4,12 @@ import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.
 import { createAnchoredOverlay } from "../../lib/reactive/overlay-anchor.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { findMenuSearch, registerMenuShortcuts } from "../menu-shortcuts.ts";
+import { observeMenuSpacing } from "../menu-spacing.ts";
 import type { OverlayPlacement } from "../overlay-anchor.ts";
 import { createOverlay, type Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed, registryFor } from "../overlay-registry.ts";
 import { Icon } from "./icon.tsx";
-import { MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
+import { focusMenuRow, MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
 import { useMenuMachine, type MenuBinding, type MenuControls } from "./menu-machine.ts";
 import { MenuNavigationError } from "./menu-navigation-error.tsx";
 import { useOverlayControl } from "./overlay-control.ts";
@@ -247,8 +248,7 @@ export function Menu(props: BranchProps): JSX.Element {
         ? (ownItems().at(-1) ?? formControls().at(-1))
         : (ownItems()[0] ?? formControls()[0]));
     if (target) {
-      target.focus({ preventScroll: true });
-      target.scrollIntoView({ block: "nearest", inline: "nearest" });
+      focusMenuRow(target);
     }
   };
   const menuRoot = initialIdentity.root ?? overlay;
@@ -417,18 +417,25 @@ export function Menu(props: BranchProps): JSX.Element {
   };
   onSettled(() => {
     const disconnectAnchor = anchor.connect();
-    const disconnectControl = control.connect(() =>
-      props.ref?.({
-        overlay,
-        open: () => overlay.request(true, "first"),
-        close: () => overlay.request(false, "return"),
-        focusFirst: () => focusItem("first"),
-        itemElements: ownItems,
-        itemElement: (id) => ownItems().find((item) => item.dataset.value === id),
-      }),
+    let disconnectSpacing: (() => void) | undefined;
+    const disconnectControl = control.connect(
+      () =>
+        props.ref?.({
+          overlay,
+          open: () => overlay.request(true, "first"),
+          close: () => overlay.request(false, "return"),
+          focusFirst: () => focusItem("first"),
+          itemElements: ownItems,
+          itemElement: (id) => ownItems().find((item) => item.dataset.value === id),
+        }),
+      (open) => {
+        disconnectSpacing?.();
+        disconnectSpacing = open ? observeMenuSpacing(surface) : undefined;
+      },
     );
     return () => {
       disconnectControl();
+      disconnectSpacing?.();
       disconnectAnchor();
     };
   });

@@ -165,6 +165,94 @@ async function expectPendingNewSession(page: Page, message: string) {
 }
 
 suite.define(() => {
+  it.each([false, true])(
+    "keeps branch choices usable through pushed refreshes (cold cache: %s)",
+    async (cold) => {
+      await suite.withPage(DESKTOP_CONTEXT, async ({ page }) => {
+        const gateway = await openNewPage(
+          page,
+          {
+            "agents.list": LOCAL_GIT_WORKSPACE_RESPONSES["agents.list"],
+            "worktrees.branches": cold
+              ? { branches: [], refreshing: true }
+              : { ...branchList(), refreshing: true },
+          },
+          { workspaceGit: true, models: NEW_SESSION_MODEL_CATALOG },
+        );
+        await gateway.waitForRequest("worktrees.branches");
+        await page.locator("#new-session-checkout-trigger").click();
+        const picker = checkoutPopover(page);
+        await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "visible" });
+        if (cold) {
+          expect(await worktreeOption(page).isDisabled()).toBe(true);
+          await captureUiProof(suite, page, "checkout-cold-refreshing.png");
+          await gateway.setMethodResponse("worktrees.branches", {
+            ...branchList(),
+            refreshing: true,
+          });
+          await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
+          await expect.poll(() => worktreeOption(page).isDisabled()).toBe(false);
+        }
+        await worktreeOption(page).click();
+        const base = checkoutBaseRefInput(picker);
+        await base.fill("release/custom");
+        await picker.locator("[data-worktree-name]").fill("my-task");
+        await base.focus();
+        await picker.locator('[data-worktree-suggestion="main"]').waitFor({ state: "visible" });
+        expect(await requestCount(gateway, "worktrees.branches")).toBe(cold ? 2 : 1);
+        await captureUiProof(suite, page, "checkout-branches-refreshing.png");
+        await gateway.setMethodResponse("worktrees.branches", {
+          ...branchList(),
+          branches: [
+            { kind: "local", name: "main" },
+            { kind: "local", name: "feature/new" },
+          ],
+        });
+        await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
+        await picker
+          .locator('[data-worktree-suggestion="feature/new"]')
+          .waitFor({ state: "visible" });
+        await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "hidden" });
+        expect(await base.inputValue()).toBe("release/custom");
+        expect(await picker.locator("[data-worktree-name]").inputValue()).toBe("my-task");
+        expect(await requestCount(gateway, "worktrees.branches")).toBe(cold ? 3 : 2);
+        await captureUiProof(suite, page, "checkout-branches-refreshed.png");
+      });
+    },
+  );
+
+  it("keeps a failed cold refresh visible with a retry instruction", async () => {
+    await suite.withPage(DESKTOP_CONTEXT, async ({ page }) => {
+      const gateway = await openNewPage(
+        page,
+        {
+          "agents.list": LOCAL_GIT_WORKSPACE_RESPONSES["agents.list"],
+          "worktrees.branches": { branches: [], refreshing: true },
+        },
+        { workspaceGit: true, models: NEW_SESSION_MODEL_CATALOG },
+      );
+      await gateway.waitForRequest("worktrees.branches");
+      const trigger = page.locator("#new-session-checkout-trigger");
+      await trigger.click();
+      const picker = checkoutPopover(page);
+      await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "visible" });
+      await gateway.setMethodResponse("worktrees.branches", {
+        branches: [],
+        branchesUnavailable: true,
+      });
+      await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
+      await picker
+        .getByText("Couldn’t verify Git for this folder. Try again.", {
+          exact: true,
+        })
+        .waitFor({ state: "visible" });
+      expect(await trigger.isVisible()).toBe(true);
+      expect(await worktreeOption(page).isDisabled()).toBe(true);
+      expect(await requestCount(gateway, "worktrees.branches")).toBe(2);
+      await captureUiProof(suite, page, "checkout-cold-unavailable.png");
+    });
+  });
+
   it("keeps worktree editing stable and resets the accepted name", async () => {
     await suite.withPage(DESKTOP_CONTEXT, async ({ page }) => {
       const sessionKey = "agent:main:picker-inputs";
@@ -377,10 +465,16 @@ suite.define(() => {
             expect(await worktree.isDisabled()).toBe(true);
             await expect
               .poll(() => tooltipTitleText(worktree))
-              .toBe("Couldn't verify Git for this folder. Choose it again to retry.");
+              .toBe("Couldn’t verify Git for this folder. Try again.");
           }
           await checkoutPopover(page).getByRole("button", { name: "Current checkout" }).click();
-          await expect.poll(() => trigger.count()).toBe(0);
+          await expectAttribute(trigger, "data-worktree", "false");
+          expect(await trigger.isVisible()).toBe(true);
+          await checkoutPopover(page)
+            .getByText("Couldn’t verify Git for this folder. Try again.", {
+              exact: true,
+            })
+            .waitFor({ state: "visible" });
           if (folder === "custom") {
             await expect.poll(() => start.isEnabled()).toBe(true);
           }

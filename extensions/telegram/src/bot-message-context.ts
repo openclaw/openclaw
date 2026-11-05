@@ -26,7 +26,10 @@ import {
   buildTelegramInboundContextPayload,
   loadTelegramMessageContextSessionRuntime,
 } from "./bot-message-context.session.js";
-import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
+import type {
+  BuildTelegramMessageContextParams,
+  TelegramMessageContextOptions,
+} from "./bot-message-context.types.js";
 import {
   buildTypingThreadParams,
   extractTelegramForumFlag,
@@ -94,6 +97,7 @@ export type TelegramMessageContext = {
   ackReactionPromise: Promise<boolean> | null;
   statusReactionController: TelegramStatusReactionController | null;
   accountId: string;
+  pluginCommandDispatch?: TelegramMessageContextOptions["pluginCommandDispatch"];
 };
 
 export const buildTelegramMessageContext = async ({
@@ -104,6 +108,7 @@ export const buildTelegramMessageContext = async ({
   replyMedia = [],
   replyChain = [],
   promptContext = [],
+  resolveSenderMedia,
   storeAllowFrom,
   options,
   bot,
@@ -417,12 +422,17 @@ export const buildTelegramMessageContext = async ({
     }
   }
 
+  const senderMedia =
+    isGroup && requireMention && bodyResult.effectiveWasMentioned && !bodyResult.commandSource
+      ? await resolveSenderMedia?.()
+      : undefined;
   const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
     ...inboundContext,
+    ...(senderMedia ? { allMedia: [...allMedia, ...senderMedia.media] } : {}),
     conversationAvatar: resolveDirectAvatar?.(primaryCtx, cfg),
     replyMedia,
     replyChain,
-    promptContext,
+    promptContext: senderMedia?.promptContext ?? promptContext,
     isForum,
     dmThreadId,
     route,
@@ -562,5 +572,8 @@ export const buildTelegramMessageContext = async ({
     ackReactionPromise,
     statusReactionController,
     accountId: account.accountId,
+    ...(options?.pluginCommandDispatch
+      ? { pluginCommandDispatch: options.pluginCommandDispatch }
+      : {}),
   };
 };

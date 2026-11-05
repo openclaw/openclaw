@@ -313,6 +313,41 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
   });
 
+  it("publishes ready only after startup maintenance completes", async () => {
+    const abortController = new AbortController();
+    let finishMaintenance: (() => void) | undefined;
+    hoisted.runMatrixStartupMaintenance.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishMaintenance = resolve;
+        }),
+    );
+    const isReady = () =>
+      hoisted.setStatus.mock.calls.some(
+        ([status]) => (status as Record<string, unknown>).lifecycle === "ready",
+      );
+
+    const monitorPromise = monitorMatrixProvider({
+      abortSignal: abortController.signal,
+      setStatus: hoisted.setStatus,
+    });
+    await flushUntil(
+      () => hoisted.runMatrixStartupMaintenance.mock.calls.length === 1,
+      "expected startup maintenance to run",
+    );
+
+    hoisted.client.emit("sync.state", "SYNCING", "PREPARED", undefined);
+    expectLastStatusFields({ connected: false, lifecycle: "starting" });
+    expect(isReady()).toBe(false);
+
+    finishMaintenance?.();
+    await flushUntil(isReady, "expected ready status after startup maintenance");
+    expectLastStatusFields({ connected: true, lifecycle: "ready", healthState: "healthy" });
+
+    abortController.abort();
+    await expect(monitorPromise).resolves.toBeUndefined();
+  });
+
   it("aborts during startup maintenance and releases the shared client without persist", async () => {
     const abortController = new AbortController();
     const handler = vi.fn(async () => {});

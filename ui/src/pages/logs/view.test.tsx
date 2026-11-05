@@ -142,10 +142,20 @@ it("formats only new rows until the locale or effective timezone changes", async
 
   const expectTimes = (times: typeof allTimes, locale = "en", formats?: number) => {
     flush();
+    expect(
+      container
+        .querySelector<HTMLElement>(".log-stream")!
+        .style.getPropertyValue("--log-time-width"),
+    ).toMatch(/^\d+ch$/);
     if (formats !== undefined) {
       expect(formatCalls.flatMap((format) => format.mock.calls)).toHaveLength(formats);
     }
-    const native = new NativeDateTimeFormat(locale, { timeStyle: "short", timeZone });
+    const native = new NativeDateTimeFormat(locale, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZone,
+    });
     const expected = times.map((time) => {
       const date = new Date(time ?? "");
       return !time ? "" : Number.isNaN(date.getTime()) ? time : native.format(date);
@@ -235,7 +245,7 @@ it.each(["follow", "queued-follow", "reader"] as const)(
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
       this: HTMLElement,
     ) {
-      return this.classList.contains("log-stream") ? 380 : (heights.get(this) ?? 44);
+      return this.classList.contains("log-stream") ? 380 : (heights.get(this) ?? 20);
     });
     const lines = (count: number) =>
       Array.from({ length: count }, (_, id) => ({ id, raw: `line ${id}` }));
@@ -262,12 +272,12 @@ it.each(["follow", "queued-follow", "reader"] as const)(
     };
     const readBack = () => stream.dispatchEvent(new Event("scroll"));
     const resize = (row: Element) => {
-      heights.set(row, 91);
+      heights.set(row, 31);
       for (const observer of observers) {
         if (!observer.targets.has(row)) {
           continue;
         }
-        const size = [{ inlineSize: 900, blockSize: 91 }];
+        const size = [{ inlineSize: 900, blockSize: 31 }];
         observer.callback(
           [
             {
@@ -275,7 +285,7 @@ it.each(["follow", "queued-follow", "reader"] as const)(
               borderBoxSize: size,
               contentBoxSize: size,
               devicePixelContentBoxSize: size,
-              contentRect: new DOMRect(0, 0, 900, 91),
+              contentRect: new DOMRect(0, 0, 900, 31),
             },
           ],
           observer.observer,
@@ -315,7 +325,7 @@ it.each(["follow", "queued-follow", "reader"] as const)(
         flush();
         resize(rows[2]!);
         frame();
-        expect(stream.scrollTop).toBe(readerTop + 47);
+        expect(stream.scrollTop).toBe(readerTop + 11);
         return;
       }
       expect(stream.scrollHeight - stream.scrollTop - stream.clientHeight).toBeLessThan(2);
@@ -339,6 +349,134 @@ it.each(["follow", "queued-follow", "reader"] as const)(
     }
   },
 );
+
+it("shows whether the stream is following as the reader leaves and returns to the end", () => {
+  vi.useFakeTimers({
+    toFake: ["requestAnimationFrame", "cancelAnimationFrame", "setTimeout", "clearTimeout"],
+  });
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.classList.contains("log-stream") ? 380 : 20;
+  });
+  const lines = (count: number) =>
+    Array.from({ length: count }, (_, id) => ({ id, raw: `line ${id}` }));
+  const [entries, setEntries] = createSignal(lines(500));
+  const [autoFollow, setAutoFollow] = createSignal(true);
+  const onToggleAutoFollow = vi.fn(setAutoFollow);
+  const [filterText, setFilterText] = createSignal("");
+  let stream!: HTMLDivElement;
+  let jump!: () => void;
+  const view = mountSolid(() => (
+    <LogsView
+      {...createProps({
+        status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+        onToggleAutoFollow,
+        onStreamRef: (element, scroll) => {
+          stream = element;
+          jump = scroll;
+          installClampedLogsViewport(element, 378);
+        },
+      })}
+      autoFollow={autoFollow()}
+      filterText={filterText()}
+      entries={entries()}
+    />
+  ));
+  const frames = (count = 4) => {
+    for (let index = 0; index < count; index++) {
+      vi.advanceTimersByTime(16);
+      flush();
+      stream.dispatchEvent(new Event("scroll"));
+      flush();
+    }
+  };
+  const scrollTo = (top: number) => {
+    stream.scrollTop = top;
+    stream.dispatchEvent(new Event("scroll"));
+    flush();
+  };
+  const wheelTo = (top: number) => {
+    stream.dispatchEvent(new WheelEvent("wheel", { deltaY: top - stream.scrollTop }));
+    scrollTo(top);
+  };
+  const end = () => stream.scrollHeight - stream.clientHeight;
+  const expired = () => {
+    vi.advanceTimersByTime(250);
+    flush();
+  };
+  const toggle = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
+  try {
+    flush();
+    jump();
+    frames();
+    expect(toggle.checked).toBe(true);
+
+    // Scrolling the reader did not ask for, such as a trim's anchor, leaves the switch alone.
+    scrollTo(end() - 200);
+    expect(onToggleAutoFollow).not.toHaveBeenCalled();
+    scrollTo(end());
+    expect(onToggleAutoFollow).not.toHaveBeenCalled();
+
+    // Wheel jitter of less than a row keeps following.
+    wheelTo(end() - 10);
+    expect(onToggleAutoFollow).not.toHaveBeenCalled();
+    wheelTo(end());
+    expired();
+
+    // Scrolling up releases, and appended lines no longer move the reader.
+    wheelTo(end() - 200);
+    expect(onToggleAutoFollow).toHaveBeenLastCalledWith(false);
+    expect(toggle.checked).toBe(false);
+    expired();
+    const readerTop = stream.scrollTop;
+    setEntries(lines(520));
+    frames();
+    expect(stream.scrollTop).toBe(readerTop);
+    expect(toggle.checked).toBe(false);
+
+    // Returning to the end resumes.
+    wheelTo(end());
+    frames(1);
+    expect(onToggleAutoFollow).toHaveBeenLastCalledWith(true);
+    expect(toggle.checked).toBe(true);
+    expired();
+
+    // A held pointer, on the scrollbar or selecting text, counts as the reader until released.
+    stream.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expired();
+    scrollTo(end() - 200);
+    expect(toggle.checked).toBe(false);
+    document.dispatchEvent(new PointerEvent("pointerup"));
+    expired();
+
+    // End is a request for the live tail.
+    stream.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    flush();
+    expect(toggle.checked).toBe(true);
+    frames();
+    expired();
+
+    // Widening a filter while following lands on the newest line.
+    setFilterText("line 51");
+    frames();
+    setFilterText("");
+    frames(8);
+    expect(toggle.checked).toBe(true);
+    expect(Math.abs(end() - stream.scrollTop)).toBeLessThan(2);
+    expired();
+
+    // A switch turned off at the end stays off while the reader only nudges the wheel there.
+    toggle.click();
+    flush();
+    expect(toggle.checked).toBe(false);
+    wheelTo(end());
+    frames(1);
+    expect(toggle.checked).toBe(false);
+  } finally {
+    view.unmount();
+  }
+});
 
 it("keeps an in-flight hidden append at the end when the page becomes visible", async () => {
   vi.useFakeTimers({ toFake: ["performance", "setInterval", "clearInterval"] });
@@ -466,4 +604,70 @@ it("keeps an in-flight hidden append at the end when the page becomes visible", 
     }
     view.unmount();
   }
+});
+
+it("keeps one toolbar at phone width and moves page actions into a menu", async () => {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query === "(max-width: 640px)",
+    media: query,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
+  const onLevelToggle = vi.fn();
+  const onToggleAutoFollow = vi.fn();
+  const onExport = vi.fn();
+  const view = mountSolid(() => (
+    <LogsView
+      {...createProps({
+        status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+        file: "/tmp/openclaw/openclaw-gateway.log",
+        levelFilters: {
+          trace: false,
+          debug: true,
+          info: true,
+          warn: true,
+          error: true,
+          fatal: true,
+        },
+        onLevelToggle,
+        onToggleAutoFollow,
+        onExport,
+      })}
+    />
+  ));
+  flush();
+
+  const filter = view.container.querySelector<HTMLElement>(
+    '[aria-controls="logs-levels:content"]',
+  )!;
+  expect(filter.classList.contains("active")).toBe(true);
+  expect(filter.textContent).toContain("debug, info, warn, error, fatal");
+
+  filter.click();
+  flush();
+  await vi.waitFor(() => {
+    const debug = [...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')].find(
+      (item) => item.textContent?.trim() === "debug",
+    );
+    expect(debug).toBeTruthy();
+    debug!.click();
+  });
+  expect(onLevelToggle).toHaveBeenCalledWith("debug", false);
+
+  view.container.querySelector<HTMLInputElement>('.logs-toolbar input[role="switch"]')!.click();
+  expect(onToggleAutoFollow).toHaveBeenCalledWith(false);
+  expect(view.container.querySelector(".logs-footer")?.textContent).toContain(
+    "File: /tmp/openclaw/openclaw-gateway.log",
+  );
+
+  view.getByRole("button", { name: "More actions" }).click();
+  flush();
+  await vi.waitFor(() => {
+    const exportItem = [...document.querySelectorAll<HTMLElement>(".oc-menu-item")].find(
+      (item) => item.textContent?.trim() === "Export filtered",
+    );
+    expect(exportItem).toBeTruthy();
+    exportItem!.click();
+  });
+  expect(onExport).toHaveBeenCalledWith([raw], "filtered");
 });

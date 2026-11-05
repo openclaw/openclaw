@@ -2,7 +2,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isRequiredReplyExpectation } from "../../../agents/reply-completion.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
-import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
+import {
+  diagnosticLogger,
+  logMessageQueuedWithBacklogPolicy,
+} from "../../../logging/diagnostic-runtime.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { settleSessionControllerSourceInjectionOrder } from "../../../sessions/session-controller.mailbox-source.js";
@@ -14,13 +17,18 @@ import {
 } from "../../../sessions/session-controller.mailbox.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { applyQueueDropPolicy, countPendingQueueItems } from "../../../utils/queue-helpers.js";
+import { preserveAmbientOverflowContext } from "./ambient-context.js";
 import {
   createOverflowSummaryRetrySource,
   resolveFollowupAuthorizationKey,
   resolveFollowupDeliveryStorageKey,
 } from "./delivery-context.js";
 import { dropAbortedFollowups, rememberFollowupDrainCallback } from "./drain.js";
-import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./lifecycle.js";
+import {
+  admitFollowupRunLifecycle,
+  completeFollowupRunLifecycle,
+  markFollowupRunEnqueued,
+} from "./lifecycle.js";
 import {
   followupSourceRunners,
   getExistingFollowupQueue,
@@ -132,10 +140,16 @@ export function enqueueFollowupRun(
       !deferOverflow &&
       queue.dropPolicy === "new" &&
       queue.cap > 0 &&
-      countPendingQueueItems(queue.items, queue.inFlight) - supersededGoals.length >= queue.cap
+      countPendingQueueItems(queue.items, queue.inFlight) - supersededGoals.length >= queue.cap &&
+      (isDiscardableRoomEvent(run) ||
+        !queue.items.some((item) => !queue.inFlight.has(item) && isDiscardableRoomEvent(item)))
     ) {
-      run.onQueueDisposition?.("queue-cap-new");
-      completeFollowupRunLifecycle(run);
+      if (isDiscardableRoomEvent(run)) {
+        discardOverflowRoomEvent(run, "queue-cap-new", queue);
+      } else {
+        run.onQueueDisposition?.("queue-cap-new");
+        completeFollowupRunLifecycle(run);
+      }
       return false;
     }
     // Deferred publication wakes Gateway waiters, which must already see the queued phase.
@@ -240,10 +254,73 @@ export function enqueueFollowupRun(
   }
 }
 
+function isDiscardableRoomEvent(run: FollowupRun): boolean {
+  return (
+    run.currentInboundEventKind === "room_event" &&
+    !isRequiredReplyExpectation(run.run.terminalReplyExpectation) &&
+    run.protectFromQueueOverflow !== true
+  );
+}
+
+function discardOverflowRoomEvent(
+  run: FollowupRun,
+  disposition: "queue-cap-old" | "queue-cap-new",
+  queue: ReturnType<typeof getFollowupQueue>,
+  candidates: FollowupRun[] = [],
+): void {
+  const contextPreserved =
+    queue.dropPolicy === "summarize" && preserveAmbientOverflowContext(run, candidates, queue.cap);
+  if (run.controllerInput) {
+    run.controllerInput.payload = "unbound";
+  }
+  run.onQueueDisposition?.(disposition);
+  diagnosticLogger.info("followup queue discarded ambient room event at capacity", {
+    sessionId: run.run.sessionId,
+    disposition,
+    contextPreserved,
+  });
+  // This is a terminal policy decision, not abandonment: reopening durable ingress
+  // would replay the chatter we just shed. Adoption only settles source custody;
+  // no model or tool execution is admitted here.
+  void admitFollowupRunLifecycle(run).then(
+    () => {
+      completeFollowupRunLifecycle(run, "consumed");
+    },
+    (error: unknown) => {
+      completeFollowupRunLifecycle(run);
+      defaultRuntime.error?.(`followup ambient overflow settlement failed: ${String(error)}`);
+    },
+  );
+}
+
 function applyFollowupQueueOverflow(
   queue: ReturnType<typeof getFollowupQueue>,
   run: FollowupRun,
 ): boolean {
+  const pendingCount = countPendingQueueItems(queue.items, queue.inFlight);
+  if (queue.cap > 0 && pendingCount >= queue.cap) {
+    const needed = pendingCount - queue.cap + 1;
+    const ambient = queue.items
+      .filter((item) => !queue.inFlight.has(item) && isDiscardableRoomEvent(item))
+      .slice(0, needed);
+    // Ambient input must never displace requests or protected work. Same-class
+    // drop:new keeps its existing meaning; otherwise retain the newest context.
+    if (isDiscardableRoomEvent(run) && (queue.dropPolicy === "new" || ambient.length < needed)) {
+      discardOverflowRoomEvent(
+        run,
+        "queue-cap-new",
+        queue,
+        queue.items.filter((item) => !queue.inFlight.has(item)),
+      );
+      return false;
+    }
+    const survivors = queue.items.filter(
+      (item) => !queue.inFlight.has(item) && !ambient.includes(item),
+    );
+    for (const item of ambient) {
+      discardOverflowRoomEvent(item, "queue-cap-old", queue, [...survivors, run]);
+    }
+  }
   const elidedSummaryLines: string[] = [];
   // The generic drop policy owns temporary lines; publish only paired mailbox entries.
   const summarySources = queue.summaryEntries.map(({ source }) => source);

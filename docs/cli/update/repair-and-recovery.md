@@ -172,6 +172,8 @@ migration resources. The capture stays beside the selected state directory in
 `<state-directory>.update-captures/<run-id>`. Doctor continuations keep the same
 capture; they do not replace it with already migrated state. State-directory
 relocation leaves its original location and recorded paths intact.
+Each database copy is one coherent SQLite image, so a Gateway that keeps committing
+during capture, as its owner lease does every 30 seconds, leaves the copy valid.
 Continuation verifies the recorded live updater's process identity and ancestry;
 unreadable supervisors above that updater do not prevent its Doctor from reusing the capture.
 If ancestry cannot be verified through the live updater, Doctor defers maintenance
@@ -305,6 +307,14 @@ It creates no new backup or witness store and does not authorize migration,
 rollback, startup, or activation. Updates retain their existing safety gates;
 automatic migration acceptance is a separate integration.
 
+### Interrupted while the Gateway restarts
+
+A signal such as Ctrl-C or `SIGTERM` during `restarting` or `verifying` stops the
+updater's readiness wait right away instead of letting it poll until the update
+deadline. The updater then recovers and reports the interruption; a Gateway that
+already came up stays running. Run `openclaw update status`, then
+`openclaw update repair` for any recovery that remains pending.
+
 ### Interrupted state restore
 
 Update commands, including `update repair`, refuse with
@@ -415,7 +425,10 @@ by the updater's activation phase while the Gateway is currently stopped. Target
 selection may record a package-manager method without losing the handoff evidence.
 It restores a verified original installation
 when activation never started, or completes an interrupted package publication
-and runs post-core repair before restarting the verified candidate. Its private
+and runs post-core repair before restarting the verified candidate. Post-core
+repair first settles a plugin cohort that the killed updater reserved for the
+same update; a restored original runtime settles it the same way before its
+Gateway restarts. Its private
 staged runtime survives a missing installed package and records a terminal result
 in `openclaw update status`. This requires the helper that started the update to
 contain the recovery fix. `update repair` remains the backstop if the helper also

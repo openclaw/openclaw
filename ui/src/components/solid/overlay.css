@@ -291,7 +291,7 @@
   gap: 6px;
   width: 100%;
   min-height: var(--menu-item-height);
-  padding: 5px var(--oc-menu-item-padding-inline, 8px);
+  padding: 4px var(--oc-menu-item-padding-inline, 8px);
   border: 0;
   border-radius: var(--menu-item-radius);
   background: transparent;
@@ -302,10 +302,15 @@
   cursor: var(--cursor-action);
 }
 
-/* Adjacent fills stay apart. Submenu rows and groups sit inside wrappers of their own;
-   zero specificity lets a row's own margin win. */
-:where(.oc-menu-item, :has(> .oc-menu-item--submenu, > .oc-menu-item:last-child))
-  + :where(.oc-menu-item, :has(> .oc-menu-item:first-child):not(.oc-overlay)) {
+/* Standalone rows retain their gap; the menu owner marks custom row wrappers.
+   Zero specificity lets a row's own margin win. */
+:where(.oc-menu-item) + :where(.oc-menu-item) {
+  margin-block-start: var(--menu-item-gap);
+}
+
+:where(.oc-menu)
+  :where(.oc-menu-item, [data-menu-row-end])
+  + :where(.oc-menu-item, [data-menu-row-start]) {
   margin-block-start: var(--menu-item-gap);
 }
 
@@ -368,6 +373,14 @@ a.oc-menu-item[href] {
   min-width: 0;
 }
 
+/* An icon-only trigger centers its glyph instead of sitting it on a text baseline. */
+@media (max-width: 640px) {
+  :where(.oc-menu-trigger) > .oc-menu-item__label:where(:has(> svg:only-child)) {
+    display: flex;
+    justify-content: center;
+  }
+}
+
 .oc-menu-item__label > :where(.session-menu__text) {
   display: block;
   overflow: hidden;
@@ -385,6 +398,14 @@ a.oc-menu-item[href] {
 
 .oc-menu-item--submenu > .oc-menu-item__label {
   display: contents;
+}
+
+/* On phones the larger trigger exposes the label's line box: center a lone glyph in the button. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  :where(.oc-menu-trigger) > .oc-menu-item__label:where(:has(> svg:only-child)) {
+    display: flex;
+    justify-content: center;
+  }
 }
 
 .oc-menu-item__icon,

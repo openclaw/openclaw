@@ -89,7 +89,7 @@ const manifestSource = readFileSync(
 const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
-const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6";
+const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c";
 const CREATE_GITHUB_APP_TOKEN_V3_3 =
   "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
@@ -490,7 +490,7 @@ describe("release fast lane label", () => {
       .env.JOB_RESULTS.trim()
       .split("\n");
     for (const row of rows) {
-      const selected = row.slice(row.lastIndexOf("|") + 1);
+      const selected = expectDefined(row.match(/^[\w-]+=\$\{\{ .*? \}\}\|(.+)$/u)?.[1], row);
       expect(selected === "true" || selected.includes("needs.preflight.outputs."), row).toBe(true);
       expect(selected).not.toContain("release_fast_lane");
     }
@@ -498,7 +498,61 @@ describe("release fast lane label", () => {
 });
 
 describe("ci workflow guards", () => {
+  it("shares main screenshot input caches with restore-only store validation", () => {
+    const source = readCiWorkflow().jobs["ios-screenshot-capture"].steps;
+    const validation = readWorkflow(".github/workflows/ios-store-release.yml").jobs.screenshots
+      .steps;
+    for (const name of ["Restore Watch RTC build inputs", "Restore screenshot source packages"]) {
+      const producer = requiredWorkflowStep(source, name);
+      const consumer = requiredWorkflowStep(validation, name);
+      expect(consumer.uses).toBe(producer.uses);
+      expect(consumer.with).toEqual(producer.with);
+      expect(consumer["continue-on-error"]).toBe(true);
+      expect(consumer["timeout-minutes"]).toBe(3);
+    }
+    expect(requiredWorkflowStep(validation, "Identify iOS native cache inputs").run).toBe(
+      requiredWorkflowStep(source, "Identify iOS native cache inputs").run,
+    );
+    expect(
+      validation.some((step: WorkflowStep) => step.uses?.startsWith("actions/cache/save@")),
+    ).toBe(false);
+  });
+
   const ci = readCiWorkflow();
+  it("limits observation uploads to the sampled current-target CI cohort", () => {
+    const job = ci.jobs["checks-node-core-test-nondist-shard"];
+    const upload = requiredWorkflowStep(job.steps, "Upload adaptive CI observations");
+    const run = requiredWorkflowStep(job.steps, "Run Node test shard");
+    for (const [eventName, repository, frozen, runId, expected] of [
+      ["schedule", "openclaw/openclaw", "false", 101, true],
+      ["pull_request", "openclaw/openclaw", "false", 100, true],
+      ["pull_request", "openclaw/openclaw", "false", 101, false],
+      ["schedule", "openclaw/openclaw", "true", 100, false],
+      ["schedule", "example/fork", "false", 100, false],
+      ["push", "openclaw/openclaw", "false", 100, false],
+    ] as const) {
+      const context = {
+        eventName,
+        repository,
+        runId,
+        runAttempt: 1,
+        preflightOutputs: { frozen_target: frozen, diff_base_revision: "a".repeat(40) },
+      };
+      expect(evaluateWorkflowCondition(upload.if, context)).toBe(expected);
+      expect(
+        Boolean(evaluateWorkflowExpression(run.env.OPENCLAW_CI_TEST_OBSERVATIONS_DIR, context)),
+      ).toBe(expected);
+      expect(evaluateWorkflowExpression(run.env.CHECKOUT_BASE_SHA, context)).toBe("a".repeat(40));
+    }
+    expect(upload["continue-on-error"]).toBe(true);
+    expect(job.env.CHECKOUT_BASE_SHA).toBeUndefined();
+    expect(upload.with.path.trim().split("\n")).toEqual([
+      "${{ runner.temp }}/ci-test-observations/*/observations.json",
+      "${{ runner.temp }}/ci-test-observations/*/launch.json",
+    ]);
+    expect(upload.with["retention-days"]).toBe(7);
+  });
+
   function ciValue(
     job: string,
     property: "runs-on" | "timeout-minutes",
@@ -761,6 +815,7 @@ AFTER_CD
     const workflow = readWorkflow(".github/workflows/stale.yml");
     expect(Object.keys(workflow.jobs)).toEqual(["stale-lifecycle"]);
     const job = workflow.jobs["stale-lifecycle"];
+    expect(job["runs-on"]).toBe("ubuntu-24.04");
     const script = String(
       requiredWorkflowStep(job.steps, "Evaluate issue/PR inactivity").with?.script,
     );
@@ -848,15 +903,21 @@ AFTER_CD
         ["workflow_dispatch", false, "failure", false, false],
         ["workflow_dispatch", false, "success", true, false],
       ] as const) {
+        const context = {
+          eventName,
+          draft,
+          cancelled,
+          additionalNeeds: { admission: { outputs: { runner: "admitted-arm" }, result } },
+        };
         expect(
-          evaluateWorkflowExpression(workflow.jobs[jobName].if, {
-            eventName,
-            draft,
-            cancelled,
-            additionalNeeds: { admission: { outputs: {}, result } },
-          }),
+          evaluateWorkflowExpression(workflow.jobs[jobName].if, context),
           `${workflowPath}: ${eventName}, admission=${result}, cancelled=${cancelled}`,
         ).toBe(admitted);
+        if (jobName === "check-arm") {
+          expect(evaluateWorkflowRunner(workflow.jobs[jobName]["runs-on"], context)).toBe(
+            eventName === "pull_request" ? "ubuntu-24.04-arm" : "admitted-arm",
+          );
+        }
       }
     }
   });
@@ -1288,6 +1349,7 @@ AFTER_CD
   it("verifies the pinned OpenGrep release binary before installing it", () => {
     for (const workflowPath of [OPENGREP_PR_DIFF_WORKFLOW, OPENGREP_FULL_WORKFLOW]) {
       const workflow = readWorkflow(workflowPath);
+      expect(workflow.jobs.scan["runs-on"], workflowPath).toBe("ubuntu-24.04");
       const installStep = requiredWorkflowStep(workflow.jobs.scan.steps, "Install opengrep");
       const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
@@ -1985,6 +2047,21 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     });
     expect(android.with["install-native-deps"]).toBe("true");
     expect(job.steps.indexOf(node)).toBeLessThan(job.steps.indexOf(android));
+
+    const steps = readAndroidToolchainAction().runs.steps;
+    const reserve = requiredWorkflowStep(steps, "Reserve hosted runner disk for Android");
+    for (const [os, environment, expected] of [
+      ["Linux", "github-hosted", true],
+      ["Linux", "self-hosted", false],
+      ["macOS", "github-hosted", false],
+      ["Windows", "github-hosted", false],
+    ] as const) {
+      expect(runInNewContext(String(reserve.if), { runner: { os, environment } })).toBe(expected);
+    }
+    expect(reserve.run?.match(/^\s*sudo .*$/gm)).toEqual(["sudo rm -rf -- /usr/share/dotnet"]);
+    for (const name of ["Setup Java", "Setup Gradle cache", "Restore Android SDK cache"]) {
+      expect(steps.indexOf(reserve)).toBeLessThan(steps.indexOf(requiredWorkflowStep(steps, name)));
+    }
   });
 
   it("installs the Android SDK platform used by Gradle", () => {
@@ -2378,7 +2455,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     {
       file: "full-release-validation.yml",
       runner: "blacksmith-4vcpu-ubuntu-2404",
-      job: "release_checks_independent",
+      job: "release_decision",
     },
     {
       file: "openclaw-npm-preflight.yml",
@@ -2519,7 +2596,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     for (const [group, expected] of [
       ["extension-package-boundary", 40],
       ["runtime-topology-architecture", 20],
-      ["plugin-sdk-api-diff", 30],
+      ["plugin-sdk-api-diff", 60],
       ["boundaries", 20],
       [undefined, 20],
     ] as const) {
@@ -2617,7 +2694,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     }
   });
 
-  it("resolves the pull request base and changed files from the shallow security checkout", () => {
+  it("checks release fast lane test growth against the shallow pull request merge base", () => {
     const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
     const checkoutIndex = securitySteps.findIndex((step) => step.name === "Checkout");
     const checkout = expectDefined(securitySteps[checkoutIndex], "security checkout");
@@ -2658,11 +2735,19 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       ).trim();
     git(source, "init", "--initial-branch=main");
     writeFileSync(path.join(source, "base.txt"), "base\n");
+    mkdirSync(path.join(source, "config"));
+    writeFileSync(path.join(source, "config/test-lines-baseline.txt"), "0\n");
+    for (const file of collectRuntimeImportClosure(process.cwd(), [
+      "scripts/check-test-lines-ratchet.mts",
+    ])) {
+      mkdirSync(path.dirname(path.join(source, file)), { recursive: true });
+      copyFileSync(file, path.join(source, file));
+    }
     git(source, "add", ".");
     git(source, "commit", "-m", "base");
     git(source, "checkout", "-b", "pull-request");
     for (let index = 0; index < 3; index++) {
-      writeFileSync(path.join(source, "change.txt"), `change ${index}\n`);
+      writeFileSync(path.join(source, "change.test.ts"), `export const change = ${index};\n`);
       git(source, "add", ".");
       git(source, "commit", "-m", `change ${index}`);
     }
@@ -2701,7 +2786,44 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     });
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(output, "utf8").trim()).toBe(`sha=${base}`);
-    expect(git(selected, "diff", "--name-only", base, "HEAD")).toBe("change.txt");
+    expect(git(selected, "diff", "--name-only", base, "HEAD")).toBe("change.test.ts");
+    const budget = expectDefined(
+      securitySteps.find((step) => step.name === "Check release fast lane test-line budget"),
+      "release fast lane budget check",
+    );
+    expect(budget["continue-on-error"]).not.toBe(true);
+    for (const [eventName, fastLane, outcome, admitted] of [
+      ["pull_request", "true", "success", true],
+      ["pull_request", "false", "success", false],
+      ["push", "true", "success", false],
+      ["pull_request", "true", "failure", false],
+    ] as const) {
+      expect(
+        Boolean(
+          evaluateWorkflowExpression(budget.if, {
+            eventName,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: { release_fast_lane: fastLane },
+            steps: { node_setup: { outcome, outputs: {} } },
+          }),
+        ),
+      ).toBe(admitted);
+    }
+    const check = () =>
+      runWorkflowShellScript(expectDefined(budget.run, "budget script"), {
+        cwd: selected,
+        env: { ...process.env, BASE_SHA: base },
+      });
+    const unallocated = check();
+    expect(unallocated.status, unallocated.stdout + unallocated.stderr).toBe(1);
+    expect(unallocated.stderr).toContain("over by: 1; net delta: +1.");
+    mkdirSync(path.join(selected, "config/test-lines-allocations"));
+    writeFileSync(path.join(selected, "config/test-lines-allocations/regression.txt"), "1\n");
+    git(selected, "add", "config/test-lines-allocations/regression.txt");
+    const allocated = check();
+    expect(allocated.status, allocated.stdout + allocated.stderr).toBe(0);
+    expect(allocated.stdout).toContain("Test lines OK: 1; ceiling: 1; slack: 0.");
   });
 
   it("keeps action manifests within the runner's anchor-free YAML grammar", () => {
@@ -3009,7 +3131,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           testNodeExecPath +
           "\n" +
           String.raw`
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] === "-v") { console.log("fixture"); process.exit(0); }
 const log = process.env.RECIPE_LOG;
@@ -3620,62 +3742,6 @@ server.listen(0, "127.0.0.1", () => {
     });
   });
 
-  it("shares transform generations with the warmer after CI exports its harness", () => {
-    const action = readWorkflow(".github/actions/setup-node-env/action.yml");
-    const generationStep = (action.runs.steps as WorkflowStep[]).find(
-      (step) => step.name === "Resolve Vitest transform cache generation",
-    );
-    const expression = expectDefined(
-      generationStep?.run?.match(/\$\{\{(.*?)\}\}/u)?.[1],
-      "transform generation expression",
-    );
-    const sourceFiles = {
-      "pnpm-lock.yaml": "lockfileVersion: '9.0'",
-      "pnpm-workspace.yaml": "packages: ['packages/*']",
-      "package.json": '{"name":"fixture"}',
-      "packages/worker/package.json": '{"name":"worker"}',
-      "packages/worker/tsconfig.json": "{}",
-      "vitest.config.ts": "export default {}",
-      "test/vitest/shared.ts": "export const shared = {}",
-      "src/state/schema.sql": "CREATE TABLE fixture (id TEXT);",
-      ".github/actions/setup-security-review/package.json": '{"name":"review"}',
-      ".ci-harness-source/package.json": '{"name":"real-source"}',
-    };
-    const files: Record<string, string> = { ...sourceFiles };
-    const fingerprint = () =>
-      runInNewContext(expression, {
-        hashFiles: (...patterns: string[]) => {
-          const includes = patterns.filter((pattern) => !pattern.startsWith("!"));
-          const excludes = patterns
-            .filter((pattern) => pattern.startsWith("!"))
-            .map((pattern) => pattern.slice(1));
-          const hash = createHash("sha256");
-          for (const [file, contents] of Object.entries(files).toSorted(([left], [right]) =>
-            left.localeCompare(right),
-          )) {
-            if (
-              includes.some((pattern) => minimatch(file, pattern, { dot: true })) &&
-              !excludes.some((pattern) => minimatch(file, pattern, { dot: true }))
-            ) {
-              hash.update(createHash("sha256").update(contents).digest());
-            }
-          }
-          return hash.digest("hex");
-        },
-      });
-    const warmer = fingerprint();
-    files[".ci-harness/.github/actions/setup-security-review/package.json"] =
-      sourceFiles[".github/actions/setup-security-review/package.json"];
-    files[".ci-harness/tsconfig.json"] = "{}";
-    files["node_modules/dependency/package.json"] = '{"name":"dependency"}';
-    expect(fingerprint()).toBe(warmer);
-    for (const [file, contents] of Object.entries(sourceFiles)) {
-      files[file] = `${contents}\n`;
-      expect(fingerprint(), file).not.toBe(warmer);
-      files[file] = contents;
-    }
-  });
-
   it("persists isolated transform and compile caches through immutable protected archives", () => {
     const action = readWorkflow(".github/actions/setup-node-env/action.yml");
     const step = (name: string) => requiredWorkflowStep(action.runs.steps, name);
@@ -3690,8 +3756,8 @@ server.listen(0, "127.0.0.1", () => {
     }
     expect(transform.if).toContain("runner.os != 'Windows'");
     expect(transform.if).not.toMatch(/runner\.(?:environment|labels|name)/u);
-    expect(transform.with.key).toContain("vitest-fs-v4-protected-");
-    expect(compile.with.key).toContain("node-compile-v3-test-protected-");
+    expect(transform.with.key).toContain("vitest-fs-v5-protected-");
+    expect(compile.with.key).toContain("node-compile-v4-test-protected-");
     expect(compile.with.key).not.toContain("pull_request");
     const transformConfiguration = step("Configure Vitest transform cache");
     expect(transformConfiguration.env.CACHE_WRITER).toBe("0");
@@ -3763,54 +3829,16 @@ server.listen(0, "127.0.0.1", () => {
     expect(existsSync(boundaryReceipt)).toBe(true);
   });
 
-  it("keeps the Gradle sticky disk on O(1) per-task protected keys", () => {
-    const workflow = readCiWorkflow();
-    const androidSteps = workflow.jobs.android.steps as WorkflowStep[];
-    const mountWith = expectDefined(
-      androidSteps.find((step) => step.name === "Mount Gradle sticky disk")?.with,
-      "Gradle sticky mount step",
+  it("uses the Android toolchain cache without a provider-specific Gradle home", () => {
+    const androidSteps = readCiWorkflow().jobs.android.steps as WorkflowStep[];
+    const toolchain = requiredWorkflowStep(androidSteps, "Setup Android toolchain");
+    expect(toolchain.with?.["cache-mode"]).toBe(
+      "${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}",
     );
-    const pointStep = requiredWorkflowStep(androidSteps, "Point Gradle at the sticky disk");
-
-    // Task scope stays in the key (a light task like ktlint must never seed
-    // heavy build lanes), but PR number and dependency hash must not: those
-    // minted a backing disk per PR/bump until Blacksmith's installation-wide
-    // budget 429-failed every mount fleet-wide.
-    expect(mountWith.key).toBe("${{ github.repository }}-gradle-v2-${{ matrix.task }}");
-    expect(androidSteps.find((step) => step.name === "Mount Gradle sticky disk")?.if).toContain(
-      "vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'",
+    expect(androidSteps.some((step) => step.uses?.startsWith("useblacksmith/stickydisk@"))).toBe(
+      false,
     );
-    expect(pointStep.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
-    // Single semantic writer: protected pushes commit explicitly (on-change's
-    // allocated-byte heuristic can miss a same-size refresh); PR clones stay read-only.
-    expect(mountWith.commit).toBe(
-      "${{ github.event_name != 'pull_request' && 'true' || 'false' }}",
-    );
-    // Gradle owns invalidation and expiry; dependency updates must retain reusable entries.
-    const stickyRoot = tempDirs.make("openclaw-gradle-sticky-");
-    const gradleHome = path.join(stickyRoot, "gradle-user-home");
-    const cachedDependency = path.join(gradleHome, "caches", "dependency.jar");
-    const githubEnv = path.join(stickyRoot, "github-env");
-    mkdirSync(path.dirname(cachedDependency), { recursive: true });
-    writeFileSync(cachedDependency, "cached dependency");
-    writeFileSync(path.join(stickyRoot, ".openclaw-gradle-deps-fingerprint"), "old-inputs\n");
-    const result = runWorkflowShellScript(
-      expectDefined(pointStep.run, "Gradle sticky home").replace(
-        "sticky_root=/var/tmp/openclaw-gradle",
-        `sticky_root=${quoteShell(stickyRoot)}`,
-      ),
-      {
-        env: {
-          ...process.env,
-          GITHUB_ENV: githubEnv,
-          GRADLE_DEPS_FINGERPRINT: "new-inputs",
-          STICKY_WRITER: "true",
-        },
-      },
-    );
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(readFileSync(cachedDependency, "utf8")).toBe("cached dependency");
-    expect(readFileSync(githubEnv, "utf8")).toBe(`GRADLE_USER_HOME=${gradleHome}\n`);
+    expect(androidSteps.some((step) => step.run?.includes("GRADLE_USER_HOME="))).toBe(false);
   });
 
   function readStickyDisks() {
@@ -3846,7 +3874,6 @@ server.listen(0, "127.0.0.1", () => {
     // Blacksmith caps backing disks per installation; snapshot validity belongs
     // in in-job fingerprints, not per-PR, commit, run, or hash key segments.
     const stickyKeys = readStickyDisks();
-    expect(stickyKeys.length).toBeGreaterThan(0);
     for (const { file, key } of stickyKeys) {
       expect(key, file).not.toContain("github.event.pull_request.number");
       expect(key, file).not.toContain("github.sha");
@@ -4725,9 +4752,9 @@ test_count="$(grep -c '^test ' "$SWIFT_CALLS")"
       writeFileSync(
         path.join(binDir, "security"),
         `#!${process.execPath}
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 const args = process.argv.slice(2);
 assert.notEqual(process.env.HOME, ${JSON.stringify(root)});
 assert.equal(path.dirname(args.at(-1)), path.join(process.env.HOME, 'Library/Keychains'));

@@ -23,6 +23,7 @@ import {
   readConfigMachineStateAsync,
   writeConfigMachineStateAsync,
 } from "../../state/config-machine-state-async.js";
+import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { listGitWorktrees, requireGit, resolveGitMetadataPath, runGit } from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
@@ -216,24 +217,15 @@ async function maintainWorktreePacks(
   const commonDir = await requireGit(repoRoot, ["rev-parse", "--git-common-dir"], options);
   // Content writers acquire their slot before publishing refs; keep that order
   // so maintenance cannot hold the ref queue while waiting for those writers.
-  await withContentGitSlot(
-    () =>
-      enqueueGitRefMutation(
-        repoRoot,
-        commonDir,
-        async () => {
-          const packs = await readPacks();
-          assertCurrent();
-          const before = packs.filter((name) => name.endsWith(".pack")).length;
-          await report(before);
-          await cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent);
-          const after = await consolidatePacks(repoRoot, packDirectory, packs, options);
-          await report(before, after);
-        },
-        params.signal,
-      ),
-    params.signal,
-  );
+  await withContentGitSlot(async () => {
+    const packs = await readPacks();
+    assertCurrent();
+    const before = packs.filter((name) => name.endsWith(".pack")).length;
+    await report(before);
+    await cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent);
+    const after = await consolidatePacks(repoRoot, commonDir, packDirectory, packs, options);
+    await report(before, after);
+  }, params.signal);
 }
 
 async function cleanTemporaryPacks(
@@ -243,7 +235,9 @@ async function cleanTemporaryPacks(
   assertCurrent: () => void,
 ) {
   const files = names
-    .filter((name) => /^tmp_pack_[a-zA-Z0-9_-]+$/.test(name))
+    // index-pack also leaves tmp_idx_/tmp_rev_ files when interrupted; Git prune owns
+    // every tmp_ prefix, but gc.auto is disabled for managed clones.
+    .filter((name) => /^tmp_[a-z]+_[a-zA-Z0-9_-]+$/.test(name))
     .map((name) => path.join(directory, name));
   if (process.platform !== "linux" || files.length === 0) {
     return;
@@ -291,6 +285,7 @@ async function cleanTemporaryPacks(
 
 async function consolidatePacks(
   repoRoot: string,
+  commonDir: string,
   directory: string,
   names: string[],
   options: NonNullable<Parameters<typeof requireGit>[2]>,
@@ -304,7 +299,8 @@ async function consolidatePacks(
   const present = new Set(names);
   const packs = [];
   for (const name of names) {
-    if (!/^pack-[a-f0-9]+\.pack$/.test(name)) {
+    // Git also publishes indexed loose-* packs; dot-temporary packs stay excluded.
+    if (!/^(?:pack|loose)-[a-f0-9]+\.pack$/.test(name)) {
       continue;
     }
     const stem = name.slice(0, -5);
@@ -384,10 +380,10 @@ async function consolidatePacks(
         },
       );
     }
-    // index-pack publishes the promisor marker and verified index before returning
-    // the hash. Plain --stdin-packs copies every object, including unreachable ones.
+    // Copy every object, including unreachable ones, and compress separately fetched revisions.
+    // index-pack publishes the promisor marker and verified index before returning the hash.
     const alias =
-      "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=0 --threads=1 | git index-pack --stdin --threads=1" +
+      "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=10 --window-memory=8m --threads=1 | git index-pack --stdin --threads=1" +
       (promisor ? " --promisor" : "");
     const result = await requireGit(
       repoRoot,
@@ -402,22 +398,32 @@ async function consolidatePacks(
     if (!hash) {
       throw new Error("Git pack consolidation returned an invalid pack identity");
     }
-    for (const name of selected) {
-      const stem = path.join(directory, name.slice(0, -5));
-      // The union can already be one of the inputs. Never retire the output or
-      // a pack another Git writer has since pinned or marked as cruft.
-      if (
-        name === `pack-${hash}.pack` ||
-        (await lstatIfExists(`${stem}.keep`)) ||
-        (await lstatIfExists(`${stem}.mtimes`))
-      ) {
-        continue;
-      }
-      for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
-        options.beforeRun?.();
-        await fs.rm(`${stem}.${extension}`, { force: true });
-      }
-    }
+    // Copying every input object ignores refs, so verification and rewriting run
+    // beside fetch. Only retirement joins the ref queue: OpenClaw fetches read these
+    // packs, and Windows cannot unlink a pack another process has open.
+    await enqueueGitRefMutation(
+      repoRoot,
+      commonDir,
+      async () => {
+        for (const name of selected) {
+          const stem = path.join(directory, name.slice(0, -5));
+          // The union can already be one of the inputs. Never retire the output or
+          // a pack another Git writer has since pinned or marked as cruft.
+          if (
+            name === `pack-${hash}.pack` ||
+            (await lstatIfExists(`${stem}.keep`)) ||
+            (await lstatIfExists(`${stem}.mtimes`))
+          ) {
+            continue;
+          }
+          for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
+            options.beforeRun?.();
+            await fs.rm(`${stem}.${extension}`, { force: true });
+          }
+        }
+      },
+      options.signal,
+    );
   }
   const remainingNames = await fs.readdir(directory);
   return remainingNames.filter((name) => name.endsWith(".pack")).length;
@@ -557,11 +563,15 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
         );
       } catch (error) {
         assertCurrent();
-        if (error instanceof ProjectCheckoutBusyError) {
+        // Busy or lost checkout ownership says nothing about repository health. The
+        // lease reports its loss even when that loss killed the running Git child.
+        if (error instanceof OpenClawStateLeaseError) {
           progress.record(
             "git-maintenance",
             "deferred",
-            "Project checkout is busy; retry on the next cleanup pass",
+            error instanceof ProjectCheckoutBusyError
+              ? "Project checkout is busy; retry on the next cleanup pass"
+              : "Project checkout lease was lost; retry on the next maintenance pass",
             repoRoot,
           );
           await report("throttled");

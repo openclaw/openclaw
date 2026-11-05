@@ -67,7 +67,13 @@ type ResetMessageWindowCacheEntry = {
   generation: string | undefined;
   indexedSeq: number;
 } & (
-  | { window: ResetMessageWindow | null }
+  | {
+      window: ResetMessageWindow | null;
+      stats?: {
+        version: CurrentTranscriptProjection["version"];
+        value: Readonly<SessionTranscriptContextStats>;
+      };
+    }
   | { controls: readonly UnindexedTranscriptNavigation[] }
 );
 
@@ -636,7 +642,6 @@ export function* iterateVisibleMessageMetadata(
 /** Reads logical transcript bytes, reusing cached retained-tail facts after resets. */
 export function readVisibleTranscriptStats(
   projection: CurrentTranscriptProjection,
-  freshBoundary = false,
 ): SessionTranscriptContextStats {
   if (projection.contextStats) {
     return projection.contextStats;
@@ -645,9 +650,21 @@ export function readVisibleTranscriptStats(
     const { eventCount, sizeBytes } = projection.contextMetadata;
     return { eventCount, sizeBytes, boundaryActivePosition: -1 };
   }
-  const window = freshBoundary
-    ? findLatestResetMessageWindow(projection, "context")
-    : resolveTranscriptBoundaryWindow(projection, "context");
+  const key = `${projection.database.path}\0${projection.resolved.sessionId}\0context`;
+  const cacheable = !hasUncommittedSqliteWrites(projection.database.db);
+  const cached = cacheable ? resetMessageWindowCache.get(key) : undefined;
+  const stats = cached && "window" in cached ? cached.stats : undefined;
+  if (
+    cached?.database === projection.database.db &&
+    stats &&
+    stats.version.generation === projection.version.generation &&
+    stats.version.rawSeq === projection.version.rawSeq &&
+    stats.version.updatedAt === projection.version.updatedAt
+  ) {
+    return stats.value;
+  }
+  // Metadata-only rewrites retain generation and positions but can change retained-prefix bytes.
+  const window = findLatestResetMessageWindow(projection, "context");
   const base = selectActiveTranscriptEventRows(projection.database)
     .select((eb) => [
       eb.fn.countAll<number>().as("event_count"),
@@ -661,9 +678,19 @@ export function readVisibleTranscriptStats(
     projection.database.db,
     window ? base.where("active.active_position", ">", window.boundaryActivePosition) : base,
   );
-  return {
+  const result = Object.freeze({
     eventCount: (row?.event_count ?? 0) + (window?.contextPrefixEventCount ?? 0),
     sizeBytes: (row?.size_bytes ?? 0) + (window?.contextPrefixSizeBytes ?? 0),
     boundaryActivePosition: window?.boundaryActivePosition ?? -1,
-  };
+  });
+  if (cacheable) {
+    cacheResetMessageWindow(key, {
+      database: projection.database.db,
+      generation: projection.generation,
+      indexedSeq: projection.state.indexedSeq,
+      window,
+      stats: { version: { ...projection.version }, value: result },
+    });
+  }
+  return result;
 }

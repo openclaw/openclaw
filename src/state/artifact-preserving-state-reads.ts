@@ -1,8 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
-import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
+import {
+  throwSqliteLifecycleErrors,
+  SqliteSnapshotCleanupError,
+} from "../infra/sqlite-lifecycle-errors.js";
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -19,6 +21,20 @@ export const artifactPreservingReads = resolveGlobalSingleton(
       | false
     >(),
 );
+
+const liveStateReads = resolveGlobalSingleton(
+  Symbol.for("openclaw.liveStateReads"),
+  () => new AsyncLocalStorage<boolean>(),
+);
+
+/** Select live runtime state bytes without changing an inspection's side-effect policy. */
+export function withLiveStateReads<T>(operation: () => T): T {
+  return liveStateReads.run(true, operation);
+}
+
+export function isLiveStateRead(): boolean {
+  return liveStateReads.getStore() === true;
+}
 
 /**
  * `agentDatabases` makes every agent-database read a private whole-file copy. It is for

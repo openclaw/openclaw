@@ -6,6 +6,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import type { UpdateRuns } from "../state/openclaw-state-db.generated.js";
+import { parseDoctorRetirementWideningLine } from "./doctor-progress.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
@@ -33,6 +34,7 @@ const RETAINED_STEP_NAMES = [
   "candidate-gateway-startup",
   "candidate-state-cleanup",
   "post-stop-checks",
+  "warning:post-stop-checks",
   "git-checkout",
   "git-runtime-activation",
   "openclaw doctor",
@@ -43,6 +45,8 @@ const RETAINED_STEP_NAMES = [
   "diagnostic:openclaw doctor",
   "diagnostic:pre-plugin doctor",
   "diagnostic:post-plugin doctor",
+  // A later warning flood must not hide that post-update repair never ran.
+  "warning:post-plugin doctor",
   "managed-service-executor-check",
   "managed-service-install",
   "managed-service-restart",
@@ -75,6 +79,8 @@ const RETAINED_STEP_NAMES = [
 ];
 export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
   busyTimeoutMs?: number;
+  /** One-shot bookkeeping under the candidate Doctor capture, before native migration. */
+  attributeUpdateWrite?: true;
   redactPaths?: readonly string[];
 };
 
@@ -143,7 +149,10 @@ export function isRetainedStep(item: unknown): boolean {
     typeof item.step === "string" &&
     (item.termination === "signal" ||
       item.step.startsWith("finalize:") ||
-      RETAINED_STEP_NAMES.some((name) => name === item.step))
+      RETAINED_STEP_NAMES.some((name) => name === item.step) ||
+      (item.step.startsWith("diagnostic:") &&
+        typeof item.detail === "string" &&
+        parseDoctorRetirementWideningLine(item.detail) !== undefined))
   );
 }
 
@@ -169,9 +178,12 @@ function boundedJson(
           item.step !== "diagnostic:database snapshot" &&
           item.step !== "diagnostic:database migration writes" &&
           item.step !== "warning:database migration writes" &&
+          item.step !== "warning:post-plugin doctor" &&
+          item.step !== "warning:post-stop-checks" &&
           item.step !== "warning:reconcile:driver-lost-after-verification" &&
           item.step !== "diagnostic:database rollback" &&
           item.step !== "finalize:data-at-risk" &&
+          !(typeof item.detail === "string" && parseDoctorRetirementWideningLine(item.detail)) &&
           !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
             ? {
                 ...item,

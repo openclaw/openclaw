@@ -15,11 +15,18 @@ Bare `openclaw doctor --json` is read-only and non-interactive: no prompts, repa
 
 Explicit `openclaw doctor --lint` is the deployment-preflight posture. Add `--json` for machine-readable output without changing lint's threshold-based exit code. Policy findings reported here are documented in [`openclaw policy`](/cli/policy).
 
-The setup assistant's `doctor` action uses this read-only lint posture in an isolated
-process. It reports findings without applying repairs or migrations. Run
-`openclaw doctor --fix` separately on the Gateway host when you intend to repair state.
+The default `core/doctor/cron-inference-accounts` check reports older automations that need a recorded inference account and names the account that `doctor --fix` would record. Add `--all` to include auth-profile health checks, including saved account-order entries whose credentials are missing.
 
-Reports reuse a private shared-state snapshot and its reader for ordinary reads within the report,
+The setup assistant's `doctor` action runs bounded diagnostics in an isolated
+process: core configuration, Gateway configuration, command ownership, Node runtime,
+and installed runtime and Control UI assets. It never opens operator databases or
+creates database inspection copies. The report explicitly defers database, plugin,
+credential, and workspace inspections. Stop the Gateway and run
+`openclaw doctor --lint` on its host for the full report; use `openclaw doctor --fix`
+when you intend to repair state. Hosted diagnosis has a two-minute deadline;
+cancellation or timeout stops its process tree and reports the interruption to the caller.
+
+Standalone lint reports reuse a private shared-state snapshot and its reader for ordinary reads within the report,
 preserving the live database and its WAL files. `--only` reports prepare that shared
 snapshot on the first shared-state read.
 Read-only agent database inspections also reuse their captured image until the

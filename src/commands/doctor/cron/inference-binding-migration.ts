@@ -87,6 +87,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         continue;
       }
       let modelRef: string | undefined;
+      let listAccountsCommand = "openclaw models auth list";
       const label = `${normalizeOptionalString(definition.name) ?? stored.id} (${stored.id})`;
       try {
         // Malformed legacy rows must not abandon adoption for unrelated jobs or partitions.
@@ -103,6 +104,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         if (!agentId || !resolveAgentConfig(params.cfg, agentId)) {
           throw new Error("Select the job's execution agent before adopting an inference account.");
         }
+        listAccountsCommand += ` --agent ${quoteCliArg(agentId)}`;
         // Resolve legacy ownership before capturing; matching provider loads share this generation.
         // Account selection and authorization still use each job's own agent and session.
         const config = captureConfig(params.cfg);
@@ -409,7 +411,7 @@ export async function maybeRepairCronInferenceBindings(params: {
       } catch (error) {
         const recovery = isInvalidCronSessionTargetIdError(error)
           ? `Repair its session target with openclaw automations edit ${quoteCliArg(stored.id)} --session <target>, then retry Doctor.`
-          : `Explicitly adopt the intended stored account with openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef ?? "<provider/model>"}@<profileId>`)}.`;
+          : `Inspect available accounts with ${listAccountsCommand}, then explicitly adopt the intended stored account with openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef ?? "<provider/model>"}@<profileId>`)}.`;
         warnings.push(
           `Automation ${label}: inference account was not migrated: ${formatErrorMessage(error)} ${recovery}`,
         );
