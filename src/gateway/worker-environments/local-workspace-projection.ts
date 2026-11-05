@@ -100,7 +100,9 @@ async function joinLocalWorkspaceOperation<T>(
   let result: T;
   if (pending) {
     try {
-      result = await racePromiseWithAbortSignal(pending.result, options.signal);
+      result = await timeWorktreePreparationPhase("workspaceWait", () =>
+        racePromiseWithAbortSignal(pending.result, options.signal),
+      );
     } catch (error) {
       assertCurrent();
       // Retry a stopped producer only after settlement, never an uncertain write

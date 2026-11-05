@@ -50,6 +50,15 @@ export function createModelProviderConfigActions(deps: {
       (outcome) => canonicalModelAuthProviderId(outcome.provider) === id,
     );
     if (own.length === 0) {
+      // A pending provider has no outcome yet; another provider's failure is not its warning.
+      if (
+        !state.data?.catalogRequestFailed &&
+        state.data?.pendingProviders.some(
+          (pendingProvider) => canonicalModelAuthProviderId(pendingProvider) === id,
+        )
+      ) {
+        return null;
+      }
       return state.data?.catalogError ?? null;
     }
     return own.some((outcome) => outcome.status !== "ready")

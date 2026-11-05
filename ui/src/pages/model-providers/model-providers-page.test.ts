@@ -568,22 +568,29 @@ describe("ModelProvidersPage agent scope", () => {
 
   it.each([
     ["another provider fails", "ready", undefined],
+    ["the added provider is pending", "pending", undefined],
     ["the added provider fails", "unavailable", "Couldn’t load more models. Try again."],
+    ["the catalog request fails", "request-failed", "Catalog request failed."],
   ] as const)("provider-add feedback warns only when %s", async (_case, ownStatus, warning) => {
     const { context, runtimeConfig, request } = createHarness("main");
     const originalRequest = request.getMockImplementation()!;
-    request.mockImplementation(async (method) =>
-      method === "models.list"
-        ? {
-            models: [],
-            refreshFailed: true,
-            providerOutcomes: [
-              { provider: "anthropic", status: ownStatus },
-              { provider: "ollama", status: "unavailable" },
-            ],
-          }
-        : originalRequest(method),
-    );
+    request.mockImplementation(async (method) => {
+      if (method === "models.list") {
+        if (ownStatus === "request-failed") {
+          throw new Error("Catalog request failed.");
+        }
+        return {
+          models: [],
+          refreshFailed: true,
+          pendingProviders: ownStatus === "pending" ? ["anthropic"] : [],
+          providerOutcomes: [
+            ...(ownStatus === "pending" ? [] : [{ provider: "anthropic", status: ownStatus }]),
+            { provider: "ollama", status: "unavailable" },
+          ],
+        };
+      }
+      return originalRequest(method);
+    });
     const page = appendPage(context);
     await waitForProviders(page);
     await openApiKeyProvider(page, "anthropic");
@@ -598,6 +605,7 @@ describe("ModelProvidersPage agent scope", () => {
       text: "Added anthropic",
       ...(warning ? { warning } : {}),
     });
+    expect(page.view.props.addProviderOpen).toBe(Boolean(warning));
   });
 
   it("keeps a newer global-model draft after an agent switch and earlier save", async () => {
