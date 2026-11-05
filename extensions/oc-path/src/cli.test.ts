@@ -73,9 +73,7 @@ describe("openclaw path CLI", () => {
     it("CLI-V02 rejects a malformed path with code 1", async () => {
       const rt = createTestRuntime();
       await pathValidateCommand("oc://X/a\x00b", { json: true }, rt);
-      expect(rt.exitCode).toBe(1);
-      const out = JSON.parse(stdoutText(rt));
-      expect(out.valid).toBe(false);
+      expect([rt.exitCode, JSON.parse(stdoutText(rt)).valid]).toEqual([1, false]);
     });
   });
 
@@ -202,9 +200,7 @@ describe("openclaw path CLI", () => {
       );
       expect(rt.exitCode).toBe(0);
       const out = JSON.parse(stdoutText(rt));
-      expect(out.resolved).toBe(true);
-      expect(out.match.kind).toBe("leaf");
-      expect(out.match.valueText).toBe("fetch");
+      expect(out).toMatchObject({ resolved: true, match: { kind: "leaf", valueText: "fetch" } });
     });
 
     it("CLI-R02 returns 1 for not-found path", async () => {
@@ -1024,9 +1020,8 @@ describe("openclaw path CLI", () => {
       ] as const) {
         const rt = createTestRuntime();
         await pathFindCommand(prefix + suffix + "?session=proof", options, rt);
-        expect(rt.exitCode).toBe(expected.length ? 0 : 1);
         const out = JSON.parse(stdoutText(rt));
-        expect(out.count).toBe(expected.length);
+        expect([rt.exitCode, out.count]).toEqual([expected.length ? 0 : 1, expected.length]);
         expect(out.matches).toMatchObject(expected.map((valueText) => ({ match: { valueText } })));
         for (const { path, match } of out.matches) {
           expect(path).toMatch(/\?session=proof$/);
