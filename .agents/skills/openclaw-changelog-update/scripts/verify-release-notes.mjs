@@ -42,6 +42,7 @@ const excludedHandles = new Set([
   "codex",
   "hugin-bot",
   "roboclaw-bot",
+  "tideclaw-bot",
   "steipete-oai",
 ]);
 const nonEditorialTypes = new Set([
