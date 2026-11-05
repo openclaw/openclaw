@@ -75,7 +75,7 @@ export async function runSessionNavigationAction<TRouteId extends string>(
           }),
         );
       if (!handled) {
-        showToast({ message: t("sessionsView.splitUnavailable") });
+        showToast({ severity: "error", message: t("sessionsView.splitUnavailable") });
       }
       return;
     }
@@ -98,7 +98,10 @@ export async function runSessionNavigationAction<TRouteId extends string>(
       } else {
         copied = await copyToClipboard(params.session.sessionId ?? "");
       }
-      showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+      showToast({
+        severity: copied ? "success" : "error",
+        message: t(copied ? "common.copied" : "common.copyFailed"),
+      });
       return;
     }
     const face = resolveSessionPreferredFaceForKey(
@@ -130,7 +133,10 @@ export async function runSessionNavigationAction<TRouteId extends string>(
     const href = new URL(navigation.href, url.origin).href;
     if (copyLink) {
       const copied = await copyToClipboard(href);
-      showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+      showToast({
+        severity: copied ? "success" : "error",
+        message: t(copied ? "common.copied" : "common.copyFailed"),
+      });
       return;
     }
     // Reserve an inert page so popup blocking remains observable, and detach
@@ -141,9 +147,9 @@ export async function runSessionNavigationAction<TRouteId extends string>(
     if (opened) {
       opened.location.replace(href);
     } else {
-      showToast({ message: t("sessionsView.openWindowBlocked") });
+      showToast({ severity: "error", message: t("sessionsView.openWindowBlocked") });
     }
   } catch (error) {
-    showToast({ message: formatUiError(error) });
+    showToast({ severity: "error", message: formatUiError(error) });
   }
 }

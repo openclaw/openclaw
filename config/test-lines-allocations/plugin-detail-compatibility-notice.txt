@@ -1,0 +1,2 @@
+24
+# Prove SDK notices stay out of plugin details while actionable errors and warnings remain.

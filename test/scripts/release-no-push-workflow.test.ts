@@ -544,17 +544,23 @@ describe("release validation no-push transport", () => {
   );
 
   it.each([
-    ["openclaw/openclaw", "hybrid", false, "blacksmith-4vcpu-ubuntu-2404"],
-    ["openclaw/openclaw", "github", false, "ubuntu-24.04"],
-    ["openclaw/openclaw", "", false, "ubuntu-24.04"],
-    ["fork/openclaw", "hybrid", false, "ubuntu-24.04"],
-    ["openclaw/openclaw", "hybrid", true, "ubuntu-24.04"],
+    ["openclaw/openclaw", "hybrid", false],
+    ["openclaw/openclaw", "github", false],
+    ["openclaw/openclaw", "boat", false],
+    ["openclaw/openclaw", "", false],
+    ["fork/openclaw", "hybrid", false],
+    ["openclaw/openclaw", "hybrid", true],
   ])(
-    "routes serial candidate jobs for %s/%s (hosted=%s)",
-    (repository, backend, hosted, runner) => {
+    "routes short release controls and reusable candidate jobs for %s/%s (hosted=%s)",
+    (repository, backend, hosted) => {
       const targets = [
         [FULL_RELEASE, "resolve_target"],
+        [FULL_RELEASE, "plugin_compatibility_readiness"],
         [FULL_RELEASE, "evidence_reuse"],
+        [FULL_RELEASE, "release_checks_independent"],
+        [FULL_RELEASE, "release_checks_candidate"],
+        [FULL_RELEASE, "performance"],
+        [FULL_RELEASE, "release_execution_plan"],
         [".github/workflows/full-release-candidate.yml", "discover"],
         [".github/workflows/full-release-candidate.yml", "resolve_candidate"],
         [LIVE_E2E, "validate_selected_ref"],
@@ -566,17 +572,25 @@ describe("release validation no-push transport", () => {
           continue;
         }
         const expression = job(readWorkflow(workflowPath!), name!)["runs-on"]!;
-        const actual = expression.startsWith("${{")
-          ? runInNewContext(
-              expression.slice(3, -2),
-              runnerSandbox({
-                github: { repository },
-                inputs: { use_github_hosted_runners: hosted },
-                vars: { OPENCLAW_CI_RUNNER_BACKEND: backend },
-              }),
-            )
-          : expression;
-        expect(actual, `${workflowPath}:${name}`).toBe(runner);
+        const label = "ubuntu-24.04";
+        for (const runnerGroup of ["", "release"]) {
+          const actual = expression.startsWith("${{")
+            ? runInNewContext(
+                expression.slice(3, -2),
+                runnerSandbox({
+                  github: { repository },
+                  inputs: { use_github_hosted_runners: hosted, runner_group: runnerGroup },
+                  vars: {
+                    OPENCLAW_CI_RUNNER_BACKEND: backend,
+                    OPENCLAW_RELEASE_RUNNER_GROUP: runnerGroup,
+                  },
+                }),
+              )
+            : expression;
+          expect(actual, `${workflowPath}:${name}:${runnerGroup}`).toEqual(
+            runnerGroup ? { group: runnerGroup, labels: label } : label,
+          );
+        }
       }
     },
   );
@@ -748,6 +762,7 @@ describe("release validation no-push transport", () => {
       "windows-node",
       "live-e2e",
       "package",
+      "qualified-package",
       "qa-parity",
       "qa-live",
       "npm-telegram",
@@ -777,7 +792,9 @@ describe("release validation no-push transport", () => {
       '[[ "$RERUN_GROUP" =~ ^(all|plugin-prerelease)$ ]] && plugin_required=true',
     );
     expect(candidateRequest.run).toContain('[[ "$RERUN_GROUP" =~ ^(all|cross-os|windows-node)$ &&');
-    expect(candidateRequest.run).toContain('elif [[ "$RERUN_GROUP" =~ ^(all|package)$ &&');
+    expect(candidateRequest.run).toContain(
+      'elif [[ "$RERUN_GROUP" =~ ^(all|package|qualified-package)$ &&',
+    );
     expect(candidateRequest.run).toContain('elif [[ "$RERUN_GROUP" == "live-e2e" &&');
     const candidateAcquisition = job(full, "candidate_acquisition");
     expect(candidateAcquisition.if).toContain(
@@ -827,57 +844,18 @@ describe("release validation no-push transport", () => {
   });
 
   it.each([
-    {
-      group: "install-smoke",
-      groups: ["install-smoke"],
-      packageRequired: "false",
-      dockerRequired: "false",
-    },
-    {
-      group: "qa",
-      groups: ["qa-parity", "qa-live"],
-      packageRequired: "false",
-      dockerRequired: "false",
-    },
-    {
-      group: "qa-parity",
-      groups: ["qa-parity"],
-      packageRequired: "false",
-      dockerRequired: "false",
-    },
-    {
-      group: "qa-live",
-      groups: ["qa-live"],
-      packageRequired: "false",
-      dockerRequired: "false",
-    },
-    {
-      group: "cross-os",
-      groups: ["cross-os"],
-      packageRequired: "true",
-      dockerRequired: "false",
-    },
-    {
-      group: "package",
-      groups: ["package"],
-      packageRequired: "true",
-      dockerRequired: "false",
-    },
-    {
-      group: "windows-node",
-      groups: ["windows-node"],
-      packageRequired: "true",
-      dockerRequired: "false",
-    },
-    {
-      group: "live-e2e",
-      groups: ["live-e2e"],
-      packageRequired: "true",
-      dockerRequired: "true",
-    },
-  ])(
-    "maps $group to explicit release resources",
-    ({ group, groups, packageRequired, dockerRequired }) => {
+    ["install-smoke", ["install-smoke"], "false", "false"],
+    ["qa", ["qa-parity", "qa-live"], "false", "false"],
+    ["qa-parity", ["qa-parity"], "false", "false"],
+    ["qa-live", ["qa-live"], "false", "false"],
+    ["cross-os", ["cross-os"], "true", "false"],
+    ["package", ["package"], "true", "false"],
+    ["qualified-package", ["qualified-package"], "true", "false"],
+    ["windows-node", ["windows-node"], "true", "false"],
+    ["live-e2e", ["live-e2e"], "true", "true"],
+  ] as const)(
+    "maps %s to explicit release resources",
+    (group, groups, packageRequired, dockerRequired) => {
       const outputs = runReleaseGroupCapture(group);
       expect(JSON.parse(outputs.release_check_groups_json ?? "null")).toEqual(groups);
       expect(outputs.package_required).toBe(packageRequired);
@@ -982,6 +960,7 @@ describe("release validation no-push transport", () => {
 
   it.each([
     ["windows-node", "", ""],
+    ["qualified-package", "", ""],
     ["qa-live", "qa-live-matrix", ""],
     ["live-e2e", " Repo-E2E,\trepo-smoke ", ""],
     ["cross-os", "", " Windows/Packaged-Upgrade "],
@@ -1770,11 +1749,27 @@ describe("release validation no-push transport", () => {
       if: "inputs.shared_image_policy == 'no-push-artifact'",
       with: { "if-no-files-found": "error" },
     });
-    expect(step(liveProducer, "Build shared live-test image").with).toMatchObject({
-      load: true,
-      provenance: false,
-      push: false,
-      sbom: false,
+    expect(step(liveProducer, "Setup Docker builder")).toEqual({
+      name: "Setup Docker builder",
+      if: "inputs.shared_image_policy == 'no-push-artifact'",
+      uses: "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
+      with: { version: "v0.23.0" },
+    });
+    expect(step(liveProducer, "Build shared live-test image")).toMatchObject({
+      if: "inputs.shared_image_policy == 'no-push-artifact'",
+      uses: "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc",
+      with: {
+        context: ".",
+        file: "./Dockerfile",
+        target: "build",
+        "build-args": "OPENCLAW_EXTENSIONS=${{ steps.image.outputs.live_image_extensions }}\n",
+        platforms: "linux/amd64",
+        tags: "${{ steps.image.outputs.live_image }}",
+        load: true,
+        provenance: false,
+        push: false,
+        sbom: false,
+      },
     });
     const dockerLoginCondition = step(dockerProducer, "Log in to GHCR").if;
     expect(dockerLoginCondition).toContain("shared_image_policy == 'existing-only'");

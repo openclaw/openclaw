@@ -496,6 +496,21 @@ function assertConfigSurvived() {
     }
   }
 
+  if (coverage && acceptsIntent(coverage, "skill-library-split")) {
+    const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
+    assert(
+      JSON.stringify(config.tools?.allow) ===
+        JSON.stringify(
+          baseline ? ["read", "skill_workshop"] : ["read", "skill_workshop", "skill_library"],
+        ),
+      "Pre-split skill_workshop allowlist did not keep covering skill_library exactly once",
+    );
+    assert(
+      baseline || config.meta?.migrations?.skillLibraryToolSplit === true,
+      "Skill library split migration marker was not recorded",
+    );
+  }
+
   if (coverage && acceptsIntent(coverage, "silent-reply-internal-retirement")) {
     const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
     assertStrict.deepEqual(
@@ -523,6 +538,16 @@ function assertConfigSurvived() {
 
   if (acceptsIntent(coverage, "skills")) {
     assert(config.skills?.allowBundled?.includes("memory"), "memory skill allowlist changed");
+  }
+
+  if (coverage && acceptsIntent(coverage, "skill-workshop-settings")) {
+    // Candidates since the plugin move keep these settings in the plugin's own config.
+    const workshop = config.plugins?.entries?.["skill-workshop"]?.config ?? config.skills?.workshop;
+    assertStrict.deepEqual(
+      { mode: workshop?.autonomous?.mode, maxSkillBytes: workshop?.maxSkillBytes },
+      { mode: "off", maxSkillBytes: 8000 },
+      "Skill Workshop settings changed across the update",
+    );
   }
 
   if (acceptsIntent(coverage, "plugins")) {
@@ -1365,13 +1390,20 @@ function readInstalledPluginIndex() {
 
 function assertBaselinePlugin([expectedVersion, pluginId, tag]) {
   assert(["latest", "beta", "alpha"].includes(tag), "baseline plugin selector is not moving");
-  const record = readInstalledPluginIndex().installRecords[pluginId];
-  assert(record?.source === "npm", "baseline plugin was not installed from npm");
-  assert(record.spec === `@openclaw/${pluginId}@${tag}`, "baseline plugin selector changed");
-  const installed = readJson(path.join(resolveHomePath(record.installPath), "package.json"));
+  const records = readInstalledPluginIndex().installRecords;
+  const record = records[pluginId];
+  const installed =
+    record?.source === "npm"
+      ? readJson(path.join(resolveHomePath(record.installPath), "package.json"))
+      : assertExternalPluginInstall(records, pluginId, `@openclaw/${pluginId}`);
+  const prefix = record.source === "clawhub" ? "clawhub:" : "";
+  assert(
+    record.spec === `${prefix}@openclaw/${pluginId}@${tag}`,
+    "baseline plugin selector changed",
+  );
   assert(installed.name === `@openclaw/${pluginId}`, "baseline plugin package identity changed");
   assert(installed.version === expectedVersion, "baseline plugin is not the baseline version");
-  console.log(`Baseline npm plugin: @openclaw/${pluginId}@${expectedVersion}, selector=${tag}.`);
+  console.log(`Baseline plugin: @openclaw/${pluginId}@${expectedVersion}, selector=${tag}.`);
 }
 
 function assertExternalPluginInstall(records, pluginId, packageName) {

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MediaUnderstandingOutput } from "../../packages/media-understanding-common/src/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ImageCompressionModelPolicy } from "../media/web-media.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import {
   describeVideoFile,
   describeImageFile,
@@ -14,7 +15,7 @@ import {
   transcribeAudioFile,
   resolveAudioInputBudget,
 } from "./runtime.js";
-import type { MediaAttachment, MediaUnderstandingProvider } from "./types.js";
+import type { MediaAttachment } from "./types.js";
 
 const mocks = vi.hoisted(() => {
   const cleanup = vi.fn(async () => {});

@@ -43,6 +43,7 @@ async function makeWorkspace(files: Record<string, string>) {
 }
 const cacheRoots = [
   ".local/share/pnpm/store",
+  "artifacts/task-environment/local/share/pnpm/store",
   ...["tmp", ".pnpm-store", "tools"].map((name) => `.openclaw/${name}`),
   ".cache/openclaw/bun",
   ".cache/ms-playwright",
@@ -219,7 +220,7 @@ it("compares workspace inventories without allocating path-segment arrays", () =
   } finally {
     split.mockRestore();
   }
-  expect([...prepared.changed]).toEqual(["src/components/file.ts"]);
+  expect(prepared.preflight.changedPaths).toEqual(["src/components/file.ts"]);
   expect(prepared.preflight.currentNodes.map(([entryPath]) => entryPath)).toEqual([
     "src/components/file.ts",
     "src",

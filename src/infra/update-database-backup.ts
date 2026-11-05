@@ -48,14 +48,11 @@ import {
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
 import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
+import type { SqliteDatabaseGenerationReceipt } from "./update-database-generations.js";
 import {
-  readUnchangedUpdateDatabaseGeneration,
-  type SqliteDatabaseGenerationReceipt,
-} from "./update-database-generations.js";
-import {
-  readUpdatePhysicalDatabaseGenerations,
   readUpdatePhysicalDatabaseObservation,
   readUpdatePostgresDatabaseGenerations,
+  rereadUpdatePhysicalDatabaseGeneration,
 } from "./update-physical-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
@@ -120,6 +117,8 @@ type BackupInput = {
   postgresOffline?: boolean;
   /** Migration exporters may require a physical engine before any server export. */
   sourceEngine?: "sqlite";
+  /** Manual recovery evidence: live commits after its coherent image change nothing it promises. */
+  originalState?: boolean;
   pluginOwners?: UpdateDatabaseBackup["pluginOwners"];
 };
 type InspectionPlan = z.infer<typeof UpdateStateSchemaInspectionPlanSchema>;
@@ -301,27 +300,24 @@ export async function createUpdateDatabaseBackupInProcess(
     file: string,
     observation?: ReturnType<typeof readUpdatePhysicalDatabaseObservation>,
     receipt?: SqliteDatabaseGenerationReceipt,
-  ) => {
+  ): Promise<{ generation?: string; emptyReaderAlternate?: string }> => {
     try {
       if (observation) {
         if (!observation.generation.ok) {
           throw observation.generation.error;
         }
-        return observation.engine?.engine === "postgres"
-          ? (await readUpdatePostgresDatabaseGenerations([file], input.pluginOwners))[file]
-          : (observation.generation.value ?? undefined);
+        const generation =
+          observation.engine?.engine === "postgres"
+            ? (await readUpdatePostgresDatabaseGenerations([file], input.pluginOwners))[file]
+            : (observation.generation.value ?? undefined);
+        return { generation, emptyReaderAlternate: observation.emptyReaderAlternate };
       }
-      const unchanged = receipt && readUnchangedUpdateDatabaseGeneration(file, receipt);
-      return (
-        unchanged ??
-        (await readUpdatePhysicalDatabaseGenerations([file], input.pluginOwners))[file] ??
-        undefined
-      );
+      return await rereadUpdatePhysicalDatabaseGeneration(file, receipt, input.pluginOwners);
     } catch (error) {
       warnings.push(
         `Database write generation unavailable for ${file}: ${formatErrorMessageWithCode(error)}`,
       );
-      return undefined;
+      return {};
     }
   };
   const { readBackupEngine, readBackupEngineImage } =
@@ -399,7 +395,8 @@ export async function createUpdateDatabaseBackupInProcess(
             });
           }
           const snapshotPath = path.join(directory, archivePath);
-          const retainGeneration = !input.stopped && !originalCaptureSources.has(sourcePath);
+          const retainGeneration =
+            !input.stopped && !input.originalState && !originalCaptureSources.has(sourcePath);
           const before = retainGeneration
             ? await readGeneration(sourcePath, observations.get(sourcePath))
             : undefined;
@@ -465,8 +462,14 @@ export async function createUpdateDatabaseBackupInProcess(
               undefined,
               observations.get(sourcePath)?.sqliteReceipt,
             );
-            if (after !== undefined && before === after) {
-              sourceGenerations[sourcePath] = after;
+            // Like Doctor admission, a non-writing open or close between the reads is no write.
+            const expected = before?.generation;
+            if (
+              expected !== undefined &&
+              after.generation !== undefined &&
+              (expected === after.generation || expected === after.emptyReaderAlternate)
+            ) {
+              sourceGenerations[sourcePath] = after.generation;
             } else {
               warnings.push(
                 `Database changed during capture; its snapshot requires manual recovery: ${sourcePath}`,
@@ -546,7 +549,7 @@ export async function createUpdateDatabaseBackup({
   ...input
 }: BackupInput & {
   acquisition?: UpdateRecoveryCaptureAcquisition;
-  /** Original-state evidence does not need generations while its owner retains every source. */
+  /** Original-state evidence is only ever restored manually, so it never records generations. */
   purpose?: "original-state";
   nodeRunner?: string;
   timeoutMs?: number;
@@ -670,6 +673,7 @@ export async function createUpdateDatabaseBackup({
       );
       const capturedInput = {
         ...workerInput,
+        ...(purpose === "original-state" ? { originalState: true } : {}),
         excludedDatabasePaths,
         postgresOffline: input.postgresOffline || custody,
       };

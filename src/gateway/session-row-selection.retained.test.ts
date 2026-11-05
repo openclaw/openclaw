@@ -4,6 +4,7 @@ import * as pinPolicy from "../config/sessions/session-pin-policy.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
 import type { SessionListFilteredEntries } from "./session-list-filters.js";
+import { SessionListViewCache } from "./session-list-view-cache.js";
 import {
   create as createRow,
   identity,
@@ -11,6 +12,7 @@ import {
   type EntryRow,
 } from "./session-row-projection-record.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
+import * as sessionCore from "./session-utils-core.js";
 import { selectSessionEntries } from "./session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
@@ -29,7 +31,6 @@ function fixture() {
       profileId: id,
       label: id,
       avatarUrl: "/synthetic/avatar",
-      hasUploadedAvatar: false,
     });
   }
   const create = () =>
@@ -98,7 +99,7 @@ function fixture() {
   const select = (
     owner: ReturnType<typeof create>,
     opts: SessionsListParams,
-    retained?: WeakMap<object, SessionListFilteredEntries>,
+    retained?: Map<object, SessionListFilteredEntries>,
   ) => {
     const selected = owner.read(opts.sortBy ?? "updatedAt");
     return selectSessionEntries({
@@ -110,6 +111,7 @@ function fixture() {
       partitions: selected.partitions,
       retained,
       getTarget: selected.get,
+      modelSearchMayMatch: () => false,
       configuredAgentIds: selected.configuredAgentIds,
       getRowContext: () => context,
       userProfileIdentityById: context.userProfileIdentityById,
@@ -141,7 +143,7 @@ it("retains filtered partitions while publishing current usage and bookkeeping m
   const key = "agent:main:metadata";
   const entry = { sessionId: "metadata", updatedAt: now, lastInteractionAt: now };
   state.put(key, entry);
-  const retained = new WeakMap<object, SessionListFilteredEntries>();
+  const retained = new Map<object, SessionListFilteredEntries>();
   const opts = { archived: "all", limit: 2 } satisfies SessionsListParams;
   state.select(state.selection, opts, retained);
   const revisions = () => state.selection.read().partitions!.map((part) => part.revision);
@@ -185,6 +187,104 @@ it("retains filtered partitions while publishing current usage and bookkeeping m
   expect(state.select(state.selection, opts, retained)).toEqual(state.select(state.fresh(), opts));
 });
 
+it("keeps sidebar baselines when fixed query partitions advance through many revisions", () => {
+  const state = fixture();
+  for (let index = 0; index < 10_000; index++) {
+    state.put(`agent:main:retention-${index}`, {
+      sessionId: String(index),
+      updatedAt: now + index,
+    });
+  }
+  const cache = new SessionListViewCache();
+  const sidebar = [{ key: "retained-sidebar", kind: "direct" as const, updatedAt: now }];
+  cache.setRows(cache.get("sidebar"), sidebar, true);
+  const queries = [100, 150, 200, 250].map((limit) => ({ limit, archived: "all" as const }));
+  const read = (opts: (typeof queries)[number]) => {
+    const view = cache.get(String(opts.limit));
+    view.selection = state.select(state.selection, opts, cache.partitions(view));
+    cache.update(view);
+    return view;
+  };
+  try {
+    const initialBytes = queries.map((opts) => read(opts).bytes);
+    const partitions = state.selection.read().partitions!;
+    const keys = partitions.map((partition) => partition.entries.keys().next().value!);
+    // Keep old revision tokens live: pruning must follow the owner, never collection.
+    const oldRevisions: object[] = [];
+    for (let round = 0; round < 32; round++) {
+      for (const [index, key] of keys.entries()) {
+        oldRevisions.push(partitions[index]!.revision);
+        state.put(key, { ...state.rows.get(key)!.entry, updatedAt: now + 10_000 + round });
+      }
+      queries.forEach(read);
+    }
+    expect(cache.get("sidebar").rows).toBe(sidebar);
+    expect(queries.map((opts) => read(opts).bytes)).toEqual(initialBytes);
+    for (const opts of queries) {
+      const view = read(opts);
+      expect(view.selection).toEqual(state.select(state.fresh(), opts));
+      expect(oldRevisions.some((revision) => cache.partitions(view).has(revision))).toBe(false);
+    }
+    const emptied = partitions[0]!;
+    const retired = emptied.revision;
+    for (const key of emptied.entries.keys()) {
+      state.remove(key);
+    }
+    for (const opts of queries) {
+      const view = read(opts);
+      expect(cache.partitions(view).has(retired)).toBe(false);
+      expect(view.selection).toEqual(state.select(state.fresh(), opts));
+    }
+  } finally {
+    cache.clear();
+  }
+});
+
+it("filters partition entries as they are read without an eager roster copy", () => {
+  const state = fixture();
+  for (let index = 0; index < 1024; index++) {
+    state.put(`agent:main:stream-${index}`, { sessionId: String(index), updatedAt: index });
+  }
+  const partitions = state.selection.read().partitions!;
+  let read = 0;
+  const spies = partitions.flatMap((part) => {
+    const each = part.entries.forEach.bind(part.entries);
+    const direct = vi.spyOn(part.entries, "forEach").mockImplementation((visit) => {
+      each((pair, key, map) => {
+        read++;
+        visit(pair, key, map);
+      });
+    });
+    const values = part.entries.values.bind(part.entries);
+    const iterated = vi.spyOn(part.entries, "values").mockImplementation(function* () {
+      for (const pair of values()) {
+        read++;
+        yield pair;
+      }
+      return undefined;
+    });
+    return [direct, iterated];
+  });
+  let filtered = 0;
+  const matches = sessionCore.matchesSessionArchiveFilter;
+  using archive = vi
+    .spyOn(sessionCore, "matchesSessionArchiveFilter")
+    .mockImplementation((entry, archived) => {
+      expect(read - filtered++).toBe(1);
+      return matches(entry, archived);
+    });
+  try {
+    const result = state.select(state.selection, { limit: 10 }, new Map());
+    expect(result.totalCount).toBe(1024);
+    expect(result.entries.map(([, entry]) => entry.sessionId)).toEqual(
+      Array.from({ length: 10 }, (_, index) => String(1023 - index)),
+    );
+    expect(archive).toHaveBeenCalledTimes(1024);
+  } finally {
+    spies.forEach((spy) => spy.mockRestore());
+  }
+});
+
 it("reads only the requested page from retained ordered partitions", () => {
   const state = fixture();
   const count = 10_800;
@@ -200,7 +300,7 @@ it("reads only the requested page from retained ordered partitions", () => {
     { limit: 200, offset: 7 },
     { limit: 200, ownerFirst: true },
   ]) {
-    const retained = new WeakMap<object, SessionListFilteredEntries>();
+    const retained = new Map<object, SessionListFilteredEntries>();
     state.select(state.selection, opts, retained);
     const reads = { entries: 0, ownerEntries: 0 };
     for (const partition of state.selection.read().partitions!) {
@@ -283,6 +383,8 @@ it.for([0x12e7, 0x4b91])("matches fresh selection after seeded write sequences (
     ),
     ...([
       { label: "alpha" },
+      { search: "alpha" },
+      { search: "nonexistent" },
       { boardFace: "dashboard" },
       { group: "work" },
       { projectId: "one" },
@@ -309,7 +411,7 @@ it.for([0x12e7, 0x4b91])("matches fresh selection after seeded write sequences (
       query,
     ),
   );
-  const retained = queries.map(() => new WeakMap<object, SessionListFilteredEntries>());
+  const retained = queries.map(() => new Map<object, SessionListFilteredEntries>());
   const check = () => {
     const fresh = state.fresh();
     for (const [index, query] of queries.entries()) {

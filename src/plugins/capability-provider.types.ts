@@ -7,16 +7,18 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ImageGenerationProvider } from "../image-generation/provider-types.js";
-import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
-import type { MusicGenerationProvider } from "../music-generation/types.js";
+import type { MediaUnderstandingProvider } from "../media-understanding/provider-types.js";
+import type { MusicGenerationProvider } from "../music-generation/provider-types.js";
 import type { SpawnResult } from "../process/exec.js";
 import type {
-  RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderConfiguredContext,
-  RealtimeTranscriptionProviderId,
   RealtimeTranscriptionProviderResolveConfigContext,
-  RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCreateRequest,
+} from "../realtime-transcription/provider-contexts.js";
+import type {
+  RealtimeTranscriptionProviderConfig,
+  RealtimeTranscriptionProviderId,
+  RealtimeTranscriptionSession,
 } from "../realtime-transcription/provider-types.js";
 import type {
   RealtimeVoiceBrowserSessionCreateRequest,
@@ -34,22 +36,22 @@ import type {
 import type { TranscriptSourceProvider as TranscriptsSourceProviderCapability } from "../transcripts/provider-types.js";
 import type {
   SpeechDirectiveTokenParseContext,
-  SpeechDirectiveTokenParseResult,
   SpeechProviderConfiguredContext,
-  SpeechProviderConfig,
   SpeechProviderResolveConfigContext,
   SpeechProviderResolveTalkConfigContext,
   SpeechProviderResolveTalkOverridesContext,
   SpeechListVoicesRequest,
   SpeechProviderPrepareSynthesisContext,
-  SpeechProviderPreparedSynthesis,
-  SpeechProviderId,
   SpeechSynthesisRequest,
   SpeechSynthesisStreamRequest,
   SpeechTelephonySynthesisRequest,
-  SpeechVoiceOption,
 } from "../tts/provider-types.js";
 import type {
+  SpeechDirectiveTokenParseResult,
+  SpeechProviderConfig,
+  SpeechProviderPreparedSynthesis,
+  SpeechProviderId,
+  SpeechVoiceOption,
   SpeechSynthesisResult,
   SpeechSynthesisStreamResult,
   SpeechTelephonySynthesisResult,
@@ -488,6 +490,23 @@ export type WorkerProvider = {
       signal?: AbortSignal;
     },
   ) => Promise<SpawnResult | undefined>;
+  /**
+   * Restart only the same enrolled node on this dedicated lease after proving its
+   * process is absent. A live process owns reconnect. Never allocate, install, pair,
+   * change repository contents, or replay input. Settle commands on cancellation.
+   */
+  resumeNode?: (request: {
+    leaseId: string;
+    profile: WorkerProfile;
+    deviceId: string;
+    nodeBootstrapSha256: string;
+    openclawVersion: string;
+    /** Saved preparation target, not the profile's current default. */
+    platform: string;
+    signal: AbortSignal;
+    /** Required live owner authority; call after awaits and immediately before effects. */
+    assertCurrent: () => void;
+  }) => Promise<void>;
   /**
    * Prepare without allocating, renewing, enrolling, or changing a provider resource. The
    * returned operation carries prepared facts; core records allocation intent before calling it.

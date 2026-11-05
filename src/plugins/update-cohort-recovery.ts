@@ -46,6 +46,7 @@ import {
   assertPluginCohortArtifactDirectory,
   readPluginCohortArtifactIdentity as artifactIdentity,
   readPluginCohortArtifactPreimage,
+  readPluginCohortPublishedArtifactIdentity as publishedArtifactIdentity,
   ownsPluginCohortRetentionMarker as ownsRetentionMarker,
   readPluginCohortRetentionMarker,
 } from "./update-cohort-artifacts.js";
@@ -268,7 +269,7 @@ export function createPluginCohortPublication(
     forceFreshGeneration: true,
     deferRecordPublication: params.deferRecordPublication,
     async beforeManagedNpmPublish(facts) {
-      const stagedIdentity = artifactIdentity(facts.stagedPackageDir);
+      const stagedIdentity = publishedArtifactIdentity(facts.stagedPackageDir);
       assertSource(pair!, params);
       write([
         ...pair!.cohort.artifacts,
@@ -304,7 +305,7 @@ export function createPluginCohortPublication(
       const artifacts = pair!.cohort.artifacts.map((artifact) => {
         try {
           return Object.assign({}, artifact, {
-            identity: artifactIdentity(artifact.targetPackageDir),
+            identity: publishedArtifactIdentity(artifact.targetPackageDir),
           });
         } catch (error) {
           if (hasErrnoCode(error, "ENOENT")) {
@@ -354,7 +355,12 @@ export function recordPluginCohortRetentionMarker(
 
 /** Restore only matching cohort deltas. A later writer keeps its values and blocks old-core readiness. */
 export async function settleUpdatePluginCohort(
-  params: CohortOptions & { runId: string; action: "commit" | "rollback" },
+  params: CohortOptions & {
+    runId: string;
+    action: "commit" | "rollback";
+    /** Repair proved the candidate serves; commit over a recorded rollback that restored nothing. */
+    supersedeUnsettledRollback?: true;
+  },
 ): Promise<{ configPaths: string[] }> {
   params.fence.assertCurrent();
   // A cold candidate must not migrate a database just restored for its older core.
@@ -385,24 +391,42 @@ export async function settleUpdatePluginCohort(
         publication.kind === "config" ? [publication.file.filePath] : [],
       );
       assertSource(pair, options);
-      if (pair.cohort.disposition !== "pending" && pair.cohort.disposition !== params.action) {
+      const migrations = pair.cohort.publications.filter(
+        (publication) => publication.kind === "plugin-migrations",
+      );
+      let action = params.action;
+      const supersede =
+        params.supersedeUnsettledRollback === true &&
+        params.action === "commit" &&
+        pair.cohort.disposition === "rollback";
+      if (supersede) {
+        // Rollback restores migration rows before it counts settled publications.
+        // Once it restored anything, only finishing that rollback keeps state consistent.
+        const { hasRestoredPluginCohortMigrationPublications } =
+          await import("../infra/deferred-plugin-migrations.cohort.js");
+        if (
+          pair.cohort.settledPublications > 0 ||
+          hasRestoredPluginCohortMigrationPublications(migrations, { env: params.env })
+        ) {
+          action = "rollback";
+        }
+      }
+      if (
+        pair.cohort.disposition !== "pending" &&
+        pair.cohort.disposition !== action &&
+        !supersede
+      ) {
         throw new Error("Plugin cohort already selected a different settlement.");
       }
-      pair = writePluginCohortRecovery(
-        pair,
-        { ...pair.cohort, disposition: params.action },
-        fence,
-        { env: params.env },
-      );
-      if (params.action === "rollback") {
+      pair = writePluginCohortRecovery(pair, { ...pair.cohort, disposition: action }, fence, {
+        env: params.env,
+      });
+      if (action === "rollback") {
         const recordChanges = foldPluginCohortRecordPublications(pair.cohort.publications);
         const sourceSnapshotRestorations = foldPluginSourceSnapshotChanges(
           pair.cohort.publications.flatMap((publication) =>
             publication.kind === "records" ? (publication.sourceSnapshots ?? []) : [],
           ),
-        );
-        const migrations = pair.cohort.publications.filter(
-          (publication) => publication.kind === "plugin-migrations",
         );
         if (migrations.length > 0) {
           const { restorePluginCohortMigrationPublications } =
@@ -584,15 +608,7 @@ export async function settleUpdatePluginCohort(
         ) {
           continue;
         }
-        let currentMarker: string | null;
-        try {
-          currentMarker = await readMarker(artifact.targetPackageDir);
-        } catch (error) {
-          if (hasErrnoCode(error, "ENOENT")) {
-            continue;
-          }
-          throw error;
-        }
+        const currentMarker = await readMarker(artifact.targetPackageDir);
         if (currentMarker !== artifact.markerAfter) {
           continue;
         }

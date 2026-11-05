@@ -2,9 +2,10 @@ import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { readBackupEngineImage, type BackupEngine } from "./database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
-import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.types.js";
 import {
+  readUnchangedUpdateDatabaseGeneration,
   readUpdateDatabaseGeneration,
   readUpdateDatabaseGenerationPair,
   type SqliteDatabaseGenerationReceipt,
@@ -16,6 +17,7 @@ export function readUpdatePhysicalDatabaseObservation(
 ): {
   engine?: BackupEngine;
   generation: Result<string | null, unknown>;
+  emptyReaderAlternate?: string;
   preparedSource?: PreparedSqliteSnapshotSource;
   sqliteReceipt?: SqliteDatabaseGenerationReceipt;
 } {
@@ -37,6 +39,7 @@ export function readUpdatePhysicalDatabaseObservation(
     return {
       engine,
       generation: ok(observation.generation),
+      emptyReaderAlternate: observation.emptyReaderAlternate,
       preparedSource: observation.preparedSource,
       ...(engine?.engine === "sqlite" && observation.generation && observation.physical
         ? {
@@ -86,6 +89,7 @@ export async function readUpdatePostgresDatabaseGenerations(
 export async function readUpdatePhysicalDatabaseGenerations(
   paths: readonly string[],
   pluginOwners?: DatabasePortPluginOwners,
+  emptyReaderAlternates?: Record<string, string>,
 ) {
   const result: Record<string, string | null> = {};
   const postgres: string[] = [];
@@ -97,9 +101,34 @@ export async function readUpdatePhysicalDatabaseGenerations(
     result[pathname] = observation.generation.value;
     if (observation.engine?.engine === "postgres") {
       postgres.push(pathname);
+    } else if (emptyReaderAlternates && observation.emptyReaderAlternate) {
+      emptyReaderAlternates[pathname] = observation.emptyReaderAlternate;
     }
   }
   return Object.assign(result, await readUpdatePostgresDatabaseGenerations(postgres, pluginOwners));
+}
+
+/** Re-reads after capture; a matching receipt avoids a private image. */
+export async function rereadUpdatePhysicalDatabaseGeneration(
+  pathname: string,
+  receipt?: SqliteDatabaseGenerationReceipt,
+  pluginOwners?: DatabasePortPluginOwners,
+): Promise<{ generation?: string; emptyReaderAlternate?: string }> {
+  // A failed reuse propagates: the caller keeps manual recovery instead of copying again.
+  const unchanged = receipt && readUnchangedUpdateDatabaseGeneration(pathname, receipt);
+  if (unchanged) {
+    return { generation: unchanged };
+  }
+  const alternates: Record<string, string> = {};
+  const generations = await readUpdatePhysicalDatabaseGenerations(
+    [pathname],
+    pluginOwners,
+    alternates,
+  );
+  return {
+    generation: generations[pathname] ?? undefined,
+    emptyReaderAlternate: alternates[pathname],
+  };
 }
 
 export async function readUpdatePhysicalDatabaseGenerationPair(

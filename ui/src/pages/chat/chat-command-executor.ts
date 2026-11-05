@@ -81,7 +81,7 @@ function commandFailure(key: string, error: unknown): SlashCommandResult {
 
 function assertCurrentSlashCommand(context: SlashCommandContext): void {
   if (context.isCurrent?.() === false) {
-    throw new Error("The Gateway connection changed. Retry the command.");
+    throw new Error(t("chat.commandResults.connectionChanged"));
   }
 }
 

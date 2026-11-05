@@ -12,7 +12,12 @@ import {
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
   resolveCdpReachabilityTimeouts,
 } from "./cdp-timeouts.js";
-import { redactCdpUrl } from "./cdp.helpers.js";
+import {
+  appendCdpPath,
+  fetchJson,
+  normalizeCdpHttpBaseForJsonEndpoints,
+  redactCdpUrl,
+} from "./cdp.helpers.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import {
   type ChromeCdpDiagnostic,
@@ -252,38 +257,54 @@ export function createProfileAvailability({
     signal,
     pageProbe,
   ) => {
+    signal?.throwIfAborted();
     if (capabilities.usesChromeMcp) {
-      assertChromeMcpCdpTransportAllowed(profile, getCdpReachabilityPolicy());
-      const { ensureChromeMcpAvailable } = await getChromeMcpModule();
-      await ensureChromeMcpAvailable(profile.name, profile, {
-        ephemeral: true,
-        timeoutMs,
-        signal,
-        ...(pageProbe ? { pageProbe } : {}),
-      });
+      const { getChromeMcpStatus } = await getChromeMcpModule();
+      const status = getChromeMcpStatus(profile.name, profile);
+      pageProbe?.onResult(status.tabCount);
+      return status.running;
+    }
+    if (capabilities.mode === "local-extension") {
+      const relay = state().extensionRelays?.get(profile.name);
+      if (!relay) {
+        return false;
+      }
+      const ready =
+        relay.ownership === "owned"
+          ? relay.bridge.extensionConnected
+          : (await relay.client.status()).ready;
+      signal?.throwIfAborted();
+      if (!ready || state().extensionRelays?.get(profile.name) !== relay) {
+        return false;
+      }
+      // A shared relay exposes readiness; its tab count is the last explicit enumeration.
+      pageProbe?.onResult(
+        relay.ownership === "owned"
+          ? relay.bridge.accessibleTabs().length
+          : Object.keys(runtime.tabAliases?.byTargetId ?? {}).length,
+      );
       return true;
     }
-    return await isReachable(timeoutMs, { signal });
+    // HTTP inventory is passive; reachability helpers may fall back to a CDP WebSocket.
+    const tabs = await fetchJson<Array<{ type?: string }>>(
+      appendCdpPath(normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl), "/json/list"),
+      resolveTimeouts(timeoutMs).httpTimeoutMs,
+      { signal },
+      getCdpReachabilityPolicy(),
+    ).catch(() => null);
+    pageProbe?.onResult(tabs?.filter((tab) => tab.type === "page").length ?? null);
+    return tabs !== null;
   };
 
-  const isHttpReachable = async (timeoutMs?: number, signal?: AbortSignal) => {
-    if (capabilities.usesChromeMcp) {
-      return await isTransportAvailable(timeoutMs, signal);
-    }
-    const relay = await ensureExtensionRelay(signal);
-    if (relay?.ownership === "borrowed") {
-      const ready = await relay.client.status();
-      signal?.throwIfAborted();
-      return ready.ready && state().extensionRelays?.get(profile.name) === relay;
-    }
-    const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
-    return await isChromeReachable(
-      profile.cdpUrl,
-      httpTimeoutMs,
-      getCdpReachabilityPolicy(),
-      signal,
-    );
-  };
+  const isHttpReachable: AvailabilityOps["isHttpReachable"] = (timeoutMs, signal) =>
+    capabilities.usesChromeMcp || capabilities.mode === "local-extension"
+      ? isTransportAvailable(timeoutMs, signal)
+      : isChromeReachable(
+          profile.cdpUrl,
+          resolveTimeouts(timeoutMs).httpTimeoutMs,
+          getCdpReachabilityPolicy(),
+          signal,
+        );
 
   const describeCdpFailure = async (timeoutMs?: number, signal?: AbortSignal): Promise<string> => {
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);

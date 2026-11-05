@@ -31,7 +31,7 @@ export const MAX_STORED_QUEUE_ITEMS = 50;
 // existing input while the canonical queue drains back below 50.
 const MAX_RETAINED_QUEUE_ITEMS = MAX_STORED_SESSIONS * MAX_STORED_QUEUE_ITEMS;
 export const INTERRUPTED_SETTINGS_WAIT_ERROR =
-  "Chat settings update was interrupted. Review and retry when ready.";
+  "Couldn’t update session settings. The update was interrupted. Review the settings before trying again.";
 
 export type StoredComposerState = {
   version: 4;
