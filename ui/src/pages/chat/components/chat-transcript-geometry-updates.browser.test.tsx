@@ -687,7 +687,7 @@ it("defers uncompensated measurement read-back until the next frame", async () =
   }
 });
 
-it("renders new viewport rows before paint when a measurement reads a fast scroll", async () => {
+it("renders new viewport rows next frame when a measurement reads a fast scroll", async () => {
   const { host, session, viewport, virtualizer } = await mountPane();
   scrollReader(viewport, 480);
   const row = requireElement(host, '.chat-virtual-row[data-index="6"]');
@@ -706,20 +706,25 @@ it("renders new viewport rows before paint when a measurement reads a fast scrol
     virtualizer.resizeItem(6, virtualizer.options.measureElement(row, entry, virtualizer));
     await Promise.resolve();
     flush();
-    expect(render).toHaveBeenCalled();
+    expect(render).not.toHaveBeenCalled();
+    expect(paint).not.toHaveBeenCalled();
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    flush();
+    expect(render).toHaveBeenCalledOnce();
     const bounds = viewport.getBoundingClientRect();
     const visible = [...host.querySelectorAll<HTMLElement>(".chat-virtual-row")]
       .map((element) => element.getBoundingClientRect())
       .filter((rect) => rect.bottom > bounds.top && rect.top < bounds.bottom);
     expect(Math.min(...visible.map((rect) => rect.top))).toBeLessThanOrEqual(bounds.top);
     expect(Math.max(...visible.map((rect) => rect.bottom))).toBeGreaterThanOrEqual(bounds.bottom);
-    expect(paint).not.toHaveBeenCalled();
   } finally {
     cancelAnimationFrame(frame);
   }
 });
 
-it("keeps a pending native jump when outgoing rows resize before paint", async () => {
+it("keeps a pending native jump when outgoing rows resize", async () => {
   let onResize: (() => void) | undefined;
   // Deliver the native jump before the transcript's row observers in the same
   // resize delivery, with its scroll event still waiting for the next frame.
@@ -735,7 +740,7 @@ it("keeps a pending native jump when outgoing rows resize before paint", async (
   });
 
   const target = 1800;
-  const firstPaint = await new Promise<{
+  const committedFrame = await new Promise<{
     offset: number;
     top: number;
     bottom: number;
@@ -745,26 +750,30 @@ it("keeps a pending native jump when outgoing rows resize before paint", async (
     onResize = () => {
       onResize = undefined;
       viewport.scrollTop = target;
-      requestAnimationFrame(() => {
-        const bounds = viewport.getBoundingClientRect();
-        const rows = [
-          ...host.querySelectorAll<HTMLElement>(".chat-virtual-row:not([data-prepared-row])"),
-        ].map((row) => row.getBoundingClientRect());
-        resolve({
-          offset: viewport.scrollTop,
-          top: Math.min(...rows.map((row) => row.top)),
-          bottom: Math.max(...rows.map((row) => row.bottom)),
-          viewportTop: bounds.top,
-          viewportBottom: bounds.bottom,
-        });
-      });
+      // This observer queues before the transcript's observer and its layout
+      // frame. Sample after that frame's writes, not before its callback runs.
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          const bounds = viewport.getBoundingClientRect();
+          const rows = [
+            ...host.querySelectorAll<HTMLElement>(".chat-virtual-row:not([data-prepared-row])"),
+          ].map((row) => row.getBoundingClientRect());
+          resolve({
+            offset: viewport.scrollTop,
+            top: Math.min(...rows.map((row) => row.top)),
+            bottom: Math.max(...rows.map((row) => row.bottom)),
+            viewportTop: bounds.top,
+            viewportBottom: bounds.bottom,
+          });
+        }),
+      );
     };
     outgoing.style.height = "180px";
   });
 
-  expect(firstPaint.offset).toBe(target);
-  expect(firstPaint.top).toBeLessThanOrEqual(firstPaint.viewportTop);
-  expect(firstPaint.bottom).toBeGreaterThanOrEqual(firstPaint.viewportBottom);
+  expect(committedFrame.offset).toBe(target);
+  expect(committedFrame.top).toBeLessThanOrEqual(committedFrame.viewportTop);
+  expect(committedFrame.bottom).toBeGreaterThanOrEqual(committedFrame.viewportBottom);
   await settleLayout();
   expect(viewport.scrollTop).toBe(target);
 });

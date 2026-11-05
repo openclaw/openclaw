@@ -213,15 +213,12 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         // Read while measured layout is clean; a native clamp needs its rows now.
         const { threadInnerElement: inner, headerHeight: top, offsetState } = this;
         const moved = redraw && inner && this.layout.commitRange(inner, view.getTotalSize() + top);
-        // A read-back inside the committed window can share the next frame.
-        // A fast scroll reaching new rows still needs them before this paint.
+        // Native resize delivery can read a fast scroll before its scroll event.
+        // Keep its position, but replace observed rows outside the delivery cycle.
         const defer = redraw && !(moved || this.canAutoFollow() || offsetState.hasPendingAnchor);
         this.presentation.commitChange(
           () => (redraw ? (this.renderPreviousRows ?? invalidate) : invalidate)(),
-          defer &&
-            (offsetState.measuringOffset
-              ? this.renderer.coversViewport(view.calculateRange())
-              : !sync),
+          offsetState.measuringOffset || (defer && !sync),
         );
         // A caller render can replace the queued redraw without replacing this geometry receipt.
         // Retiring a reader correction can grow the native extent without changing row totals.
