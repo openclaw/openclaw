@@ -20,11 +20,24 @@ downloaded and verified artifact, use
 `--release '<unpacked-dir>=<verified-integrity>'`; both input modes may be mixed.
 Generation replaces the recorded set:
 keep empty entries, drop expired versions and their historical corrections, and
-never hand-edit recorded origins. `pnpm update:compat:check` remains a manual
-maintainer report of npm `latest`/`beta`/`extended-stable` coverage. Repeat the generation
-arguments with `--check` for a regeneration check. It is offline only when every
-input uses local `--release`; `--registry-release` checks fetch and verify the
-registry artifact again.
+never hand-edit recorded origins. Build the candidate with `pnpm build`, then run
+`pnpm update:compat:check`: it validates every recorded bridge against that
+checkout's `dist` without modifying build output, then reports npm
+`latest`/`beta`/`extended-stable` coverage. Repeat the generation arguments with
+`--check` to validate regeneration and bridgeability for an explicitly selected
+window without live dist-tag coverage. It is offline only when every input uses
+local `--release`; `--registry-release` checks fetch and verify the registry
+artifact again.
+
+A dist-tag is a source to assess, not proof that this candidate can bridge its
+updater. Schema-incompatible tags are accounted as unsupported. Even matching
+schemas can have a newer updater ABI: an extended-stable release built from a
+newer line may reference exports absent from the candidate. Do not add such an
+entry merely to satisfy tag coverage, rewrite its recorded origins, or skip the
+bridge check. Keep the supported, bridgeable window explicit and report the
+uncovered tagged version and bridge failure in release evidence; the coverage
+report remains incomplete until a compatible target or a qualified bridge exists.
+This does not certify updates from the omitted version.
 
 Run every recorded `update-first-hop-compat*` lane and the upgrade survivor lane
 from the oldest supported release. Native Windows proof must invoke the old
