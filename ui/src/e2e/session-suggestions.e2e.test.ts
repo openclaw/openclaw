@@ -378,6 +378,7 @@ suite.define(() => {
       );
       const typingRow = page.locator('[data-virtual-row-key="presence:typing"]');
       const previewBubble = typingRow.locator(".agent-chat__typing-preview-text");
+      const caret = previewBubble.locator(".agent-chat__typing-caret");
 
       await page.clock.install();
       const ownerTyping = (preview?: string) => typingEvent(gateway, preview ? { preview } : {});
@@ -405,13 +406,14 @@ suite.define(() => {
       await expect(typingRow.locator(".agent-chat__typing-preview-label")).toHaveText("Owner");
       await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("is typing…");
       await expect(typingRow.locator(".agent-chat__typing-bubble")).toHaveCount(0);
+      expect(await afterAnimation(caret)).not.toBe("none");
       const activeBox = await previewBubble.boundingBox();
       await page.clock.runFor(10_000);
       await expect(previewBubble).toHaveText(draft);
       await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("Draft");
       await expect(typingRow.locator(".sr-only")).toBeEmpty();
       expect(await previewBubble.boundingBox()).toEqual(activeBox);
-      expect(await afterAnimation(previewBubble)).toBe("none");
+      expect(await afterAnimation(caret)).toBe("none");
 
       await typingEvent(gateway, {
         actor: { type: "human", id: "zoe", label: "Zoe" },
@@ -451,10 +453,11 @@ suite.define(() => {
           await previewBubble.evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
       }
+      expect(await afterAnimation(caret)).not.toBe("none");
       await page.emulateMedia({ reducedMotion: "reduce" });
       await ownerTyping("مسودة لم ترسل بعد 👋");
       await expect(previewBubble).toHaveCSS("direction", "rtl");
-      expect(await afterAnimation(previewBubble)).toBe("none");
+      expect(await afterAnimation(caret)).toBe("none");
       await page.setViewportSize({ width: 1180, height: 760 });
       await page.evaluate(() => {
         document.documentElement.dataset.theme = "light";

@@ -211,13 +211,17 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Batch109, pinned main `486a0bddbb95`: qualify the typing-caret animation oracle
-in `session-suggestions.e2e.test.ts`. The paused and reduced-motion assertions
-currently inspect the preview wrapper rather than its animated child caret.
-The primary and production CSS are unchanged in this prerequisite carrier;
-actual browser baseline, independent pause/reduced-motion fault controls and
-candidate proof are pending native physical dependency qualification. Preserve
-all seven declarations/nine cases; no case or support-removal credit is claimed.
+Batch109, pinned main `486a0bddbb95`: the typing-preview assertions now inspect
+the animated child caret and prove active animation before each paused or
+reduced-motion check. The unchanged baseline and restored candidate pass all
+nine browser cases. Independently omitting either CSS stop rule passes both
+original rows and fails both repaired rows with `chat-typing-pulse` instead of
+`none`; all production and temporary instrumentation bytes are restored.
+All seven declarations/nine cases remain. Three test lines and their exact
+per-change allocation are added; the shared ceiling is unchanged. Scoped types,
+typed lint, formatting, ledger MDX, whitespace and the line ratchet pass. The PR
+records fresh review and hosted admission. No case or support-removal credit is
+claimed.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
