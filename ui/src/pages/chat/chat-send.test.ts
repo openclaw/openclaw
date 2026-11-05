@@ -118,8 +118,7 @@ type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = ReturnType<typeof makeChatHost>;
 
 const startupOptions = { startup: true, awaitHistory: true, deferBranches: true };
-const storageError =
-  "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
+const storageError = "Couldn’t save this message. Free browser storage or reconnect to send it.";
 
 function admitItem(
   host: TestChatHost,
@@ -1428,7 +1427,8 @@ describe("handleSendChat", () => {
 
     expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
     expect(host.chatQueue[0]).toMatchObject({
-      sendError: "Chat settings update was interrupted. Review and retry when ready.",
+      sendError:
+        "Couldn’t update session settings. The update was interrupted. Review the settings before trying again.",
       sendState: "failed",
       text,
     });
@@ -2326,7 +2326,7 @@ describe("handleSendChat", () => {
       .mockImplementationOnce(async () => {
         events.push("think-failed");
         return {
-          content: "Failed to set thinking level: gateway closed during command",
+          content: "Couldn’t change effort. Try again. gateway closed during command",
           failed: true,
         };
       })

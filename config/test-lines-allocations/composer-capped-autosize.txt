@@ -1,0 +1,2 @@
+# Capped input avoids layout reads; shrink, replacement and layout changes remeasure.
+107

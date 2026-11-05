@@ -1,14 +1,16 @@
-import type { StatementSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createReadonlySessionHistoryReader } from "../../gateway/session-history-readonly-reader.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   OpenClawAgentDatabaseReadOnlyScope,
   withScopedOpenClawAgentDatabaseReadOnly,
 } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -227,27 +229,43 @@ it.each([false, true])(
       database.db.exec("ANALYZE");
     }
     const nativeDb = requireNativeSqliteDatabase(database.db);
+    const nativeJson = new DatabaseSync(":memory:");
+    const validJson = nativeJson.prepare("SELECT json_valid(?) AS value");
+    let dependencyProjections = 0;
+    nativeDb.function("json_valid", { deterministic: true }, (value) => {
+      if (typeof value === "string" && value.includes('"pending-result"')) {
+        dependencyProjections++;
+      }
+      return validJson.get(value)?.value ?? 0;
+    });
     clearNodeSqliteKyselyCacheForDatabase(nativeDb);
     const observed = observeQueries(nativeDb);
     try {
-      const context = readSessionTranscriptBoundedActiveContextCore(scope, {
-        maxEvents: 1,
-        maxBytes: 16_384,
-      });
+      const context = runSqliteReadSnapshotSync(nativeDb, () =>
+        readSessionTranscriptBoundedActiveContextCore(scope, {
+          maxEvents: 1,
+          maxBytes: 16_384,
+          transaction: database,
+        }),
+      );
       expect(context.events.slice(1)).toMatchObject([{ id: "pending-result" }, { id: "tail" }]);
+      // Classification and result selection must share one native navigation projection.
+      expect(dependencyProjections).toBe(1);
+      const dependencies = [...observed.statements.values()].filter(({ columns }) =>
+        columns.includes("navigation_json"),
+      );
+      expect(dependencies).toHaveLength(1);
+      const eventSearches = observed
+        .plans(dependencies)
+        .filter((detail) => typeof detail === "string" && detail.startsWith("SEARCH event "));
+      // Dependency discovery must never drive a whole-session payload-index range scan.
+      expect(eventSearches).toHaveLength(1);
+      expect(eventSearches[0]).toMatch(/\(session_id=\? AND seq=\?\)/u);
     } finally {
       observed.restore();
+      await closeOpenClawAgentDatabaseByPathAsync(database.path);
+      nativeJson.close();
     }
-    const dependencies = [...observed.statements.values()].filter(({ columns }) =>
-      columns.includes("navigation_json"),
-    );
-    expect(dependencies).toHaveLength(1);
-    const eventSearches = observed
-      .plans(dependencies)
-      .filter((detail) => typeof detail === "string" && detail.startsWith("SEARCH event "));
-    // Dependency discovery must never drive a whole-session payload-index range scan.
-    expect(eventSearches).toHaveLength(1);
-    expect(eventSearches[0]).toMatch(/\(session_id=\? AND seq=\?\)/u);
   },
 );
 

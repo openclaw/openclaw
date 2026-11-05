@@ -49,7 +49,7 @@ Principles:
 | Board               | The widget board of one session. Exists iff the session has widgets/tabs. Survives `/new`/`/reset` (attached to `sessionKey`, not the transcript).                                                                                                                                      |
 | Tab                 | A presentation page of a board: which widgets and their arrangement. Boards start with one implicit tab.                                                                                                                                                                                |
 | Widget              | Named content cell owned by the session: a native report, HTML/JS, MCP App, or plugin widget. Addressed as `sessionKey` + `name`.                                                                                                                                                       |
-| Capability manifest | Per-widget declaration of reach: `data` (read bindings), `actions` (allowlisted verbs), `prompt` (send to session), `net` (allowed origins).                                                                                                                                            |
+| Capability manifest | Per-widget declaration of reach: `netOrigins` (allowed origins), `tools` (read bindings, actions, and prompt sends), and `queries` (complete approved live queries).                                                                                                                    |
 | Pin (widget)        | Moving a transcript widget onto the session's board (user affordance or agent tool arg). Unpin removes it from the board.                                                                                                                                                               |
 | Pin (session)       | Root sessions and ordinary Home-linked dashboard sessions can be pinned; spawned, subagent, and nested-child sessions reject pin requests. Subagent runs appear in session transcripts, outside sidebar navigation. Opening a pinned session restores that browser's saved task layout. |
 
@@ -371,15 +371,41 @@ through `board.data.read`. The closed parameter contract constructs only the
 repository or workflow run-list operation at `api.github.com`. Both credential
 selection and transport stay bound to `github.com`, even when project discovery
 uses a configured Enterprise host. Enterprise credentials are never used for
-this public-host capability. Authorization requires the exact normalized `github.actions.runs:<owner>/<repo>` tool grant.
+this public-host capability. Flexible reads require general Gateway read access
+and the exact normalized `github.actions.runs:<owner>/<repo>` tool grant.
 Network-origin grants never supply GitHub identity authority. Approval discloses
 that Actions metadata, including private repository data accessible to the
 agent, is shared with the widget/session audience.
 
+For saved summaries, an authorized agent selects results and publishes a
+`session:report`. Readers consume that saved session data without live query
+authority. Existing HTML widgets are not converted automatically.
+
+Live sharing uses named queries stored in the widget's `declared.queries`.
+Each definition fixes the `github.actions.runs` binding, repository, workflow,
+branch, status/date filters, result limit, pull-request handling, and response
+field allowlist. Selectors use explicit `null` values for an intentionally
+unfiltered query. Approval displays the complete definition and discloses that
+the agent's credentials supply private and future matching results to the
+session audience. Any definition change requires renewed approval under the
+existing policy, including changes with identical HTML or narrower filters.
+
+Authenticated session readers call `openclaw.data.query(name)`, which sends only
+`{ ticket, queryName }` to `board.data.read`. The Gateway resolves the current
+approved definition; extra fields and parameter overrides are rejected.
+Session readers cannot use the flexible `{ ticket, bindingId, params }` form.
+Existing repository-only grants do not authorize named queries. The router
+derives the session from the verified view ticket and retains the caller's
+current session visibility through delivery, including cached results. Current
+widget bytes, revision, view generation, query grant, and revocation checks
+remain required. Session visibility alone does not approve sharing private
+Actions metadata. Other data bindings, actions, and anonymous transcript embeds
+do not gain host API access.
+
 Author guidance is conditional on a usable connected agent identity, not a
 tool-construction-time check. `board.widget.put` verifies and revalidates that
 identity before saving HTML (including materialized Canvas documents) declaring
-this host capability. The same preparation owner
+this host capability or a named query. The same preparation owner
 serves pinning and reads, including source-config preview-credential scrubbing
 and OAuth refresh. Caller cancellation and session mutation authorization are
 rechecked before persistence. Failure leaves existing content and grants intact.
@@ -409,7 +435,8 @@ The shared transport caches only validated projections under its captured
 credential scope and request filters, across sessions using that identity.
 This internal cache write is not delivery to a widget.
 Every caller, including the initiator, followers, and cache hits, revalidates its
-own live authority before delivery. Removing one caller does not invalidate
+own live authority before delivery, and named queries project only their
+approved response fields. Removing one caller does not invalidate
 another authorized caller's result. Failed refreshes log sanitized guidance and
 evict the old result; the next read retries through the normal error boundary.
 Failed transport reads are not cached as success. See the
@@ -547,7 +574,11 @@ RPCs (core method table, typebox schemas in `gateway-protocol`):
 - `board.prompt.authorize { ticket }` — returns whether a visible prompt send
   still needs per-click confirmation — `operator.read`
 - `board.data.read { ticket, bindingId, params? }` — gateway-side allowlisted
-  core or active-plugin read binding resolution — `operator.read`
+  core or active-plugin read binding resolution — `operator.read`.
+- `board.data.read { ticket, queryName }` — resolves a complete approved named
+  `github.actions.runs` definition. Also accepts authenticated
+  `operator.sessions.read`, with ticket-derived session authorization and the
+  current widget's exact query grant. Runtime query overrides are rejected.
 - `board.action { ticket, action, ... }` — exact-grant automation dispatch
   through the existing cron run-now path or an active plugin's validated action
   verb — `operator.write`

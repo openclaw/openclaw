@@ -7,7 +7,7 @@ Welcome to the lobster tank! 🦞
 - **GitHub:** https://github.com/openclaw/openclaw
 - **Vision:** [`VISION.md`](VISION.md)
 - **Support:** https://community.openclaw.ai/
-- **Discord:** https://discord.gg/clawd
+- **Discord:** https://openclaw.ai/discord?from=github-openclaw-contributing
 - **X/Twitter:** [@openclaw](https://x.com/openclaw)
 
 ## Maintainers
@@ -91,7 +91,7 @@ must declare their own development dependencies rather than rely on hoisting.
 - When ClawSweeper, Barnacle, or a maintainer asks for more context or evidence, edit the PR description instead of only replying in a new comment. Keep **What Problem This Solves**, **User Impact**, **Why This Change Was Made**, and **Evidence** current; a short comment can point reviewers to the update, but the PR body should remain the durable explanation for maintainers and bots.
 - Keep PRs takeover-ready: open them from a branch maintainers can push to. For fork PRs, leave GitHub's **Allow edits by maintainers** option enabled so maintainers can finish urgent fixes or merge prep when needed. If GitHub shows **Allow edits and access to secrets by maintainers**, enable it only when that workflow/secrets access is acceptable and say so in the PR.
 - Do not edit the generated `CHANGELOG.md` index or release-owned `CHANGELOG/**` entries and contribution records in normal PRs or at merge. Initial changelogs are generated at release time from merged PRs and commits; keep release-note context in PR bodies or commit messages until then. Explicit release-docs publication changes follow the [release artifact procedure](.agents/skills/openclaw-changelog-update/SKILL.md#post-release-docs-mirrors).
-- Run focused tests for touched code (`pnpm test <file> --maxWorkers=1`) and targeted typecheck, lint, and format checks. Build when the change affects build output or package boundaries. Open a ready PR once focused proof passes; PR CI runs the full suite.
+- Run focused tests for touched code (`pnpm test <file> --maxWorkers=1`) and targeted typecheck, lint, and format checks. Build when the change affects build output or package boundaries. Open a ready PR once required builds and focused proof pass; PR CI runs the full suite. When build capacity is unavailable, follow the [draft/CI proof policy](.agents/skills/openclaw-testing/SKILL.md#proof-policy) before publication. A draft does not waive the build.
 - When adding a maintained standalone command or dynamically loaded child, keep Knip's graph aligned with the real execution path. A command invoked by a package script, workflow, Docker scenario, or documentation—or a child executed as a spawned, preloaded, or worker process entrypoint through an exact path—is an exact Knip entry (`repositoryScriptEntries` in `config/knip.config.ts` for root repository scripts). When a child is instead reached as a computed module edge from a parent, use the existing source-derived consumer projection that owns that edge, such as `config/knip-dynamic-consumers.mjs` for root scripts; do not declare the child as an independent root solely to suppress a finding or mask it with an ignore or wildcard. Run `pnpm deadcode:unused-files` on the exact candidate; `pnpm check:changed` and [ordinary PR CI](docs/ci/scope-and-routing/selection.md#pr-vs-hourly-vs-release) do not run this unused-file proof. If unrelated existing findings keep the aggregate scan red, verify and report whether your owned paths appear rather than calling the aggregate a pass.
 - After PR CI fails, run `pnpm test:ci-failed <pr>` and read the failure classification. Fix new failures, use `pnpm test:ci-failed <pr> --run` until those pass locally, then push once. Do not rerun CI just to chase green or run the full local suite. Pre-existing failures follow the [failure-table landing rule](.agents/skills/openclaw-pr-maintainer/references/landing.md#red-main-and-inherited-failures).
 - For iterative local commits after running equivalent targeted validation for the touched surface, `git commit --no-verify` skips commit hooks.
@@ -167,10 +167,10 @@ Use `OPENCLAW_FORMAT_TOOL=oxfmt pnpm format` to force oxfmt. The linked referenc
 covers the pinned fork, supported platforms, overrides, fallbacks, and CI parity.
 Dedicated artifact formatters are listed in the [formatter caller inventory](scripts/README.md#formatting-and-lint-selection).
 
-The normal `pnpm install` setup enables the repository's pre-commit formatting hook
-when `core.hooksPath` is unset. Existing hook selections, including an explicitly
-empty value, are preserved. Git scopes initialization to the current checkout.
-With multiple worktrees, automatic setup requires `extensions.worktreeConfig`;
+Outside CI, the normal `pnpm install` setup enables the repository's pre-commit
+formatting hook when `core.hooksPath` is unset. Existing hook selections, including
+an explicitly empty value, are preserved. Git scopes initialization to the current
+checkout. With multiple worktrees, automatic setup requires `extensions.worktreeConfig`;
 otherwise Git reports a warning and installation continues without changing hook
 settings. The repository owner can enable per-worktree configuration following
 [Git's configuration guidance](https://git-scm.com/docs/git-worktree#_configuration_file).

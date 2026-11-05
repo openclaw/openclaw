@@ -240,8 +240,8 @@ export function resolveChatPaneWorkerPresentation(
         : undefined;
     label =
       worker?.providerId && worker.profileId
-        ? `${worker.providerId} · ${worker.profileId}`
-        : t("newSession.runsOn", { place: t("newSession.cloud") });
+        ? t("sessionsView.cloudDeviceProfile", { profile: worker.profileId })
+        : t("sessionsView.cloudDevice");
     stopKey = "sessionsView.stopCloudWorker";
   } else {
     label = t("sessionsView.runsOnWorker");
