@@ -129,12 +129,13 @@ describe("mutable update execution", () => {
   registerExecutionTimeoutTests();
 
   registerNativeAdmissionTests();
-  it.each(["same", "alias", "disjoint"] as const)(
-    "preserves a serving Git runtime when activation did not stop it: %s",
-    async (destination) => {
-      await withTestDir({ prefix: "git-live-runtime-custody-" }, async (dir) => {
+  it.each(["same", "alias", "disjoint", "unmanaged", "foreign", "unverifiable"] as const)(
+    "preserves managed refusals and warns for unowned Git consumers: %s",
+    async (destination) =>
+      withTestDir({ prefix: "git-live-runtime-custody-" }, async (dir) => {
         const servingRoot = path.join(dir, "serving");
-        const targetRoot = destination === "same" ? servingRoot : path.join(dir, "target");
+        const warn = ["unmanaged", "foreign", "unverifiable"].includes(destination);
+        const targetRoot = destination === "same" || warn ? servingRoot : path.join(dir, "target");
         await fs.mkdir(path.join(servingRoot, "dist"), { recursive: true });
         if (destination === "alias") {
           await fs.symlink(
@@ -146,48 +147,47 @@ describe("mutable update execution", () => {
           await fs.mkdir(path.join(targetRoot, "dist"), { recursive: true });
         }
         const artifact = path.join(servingRoot, "dist", "prepare.runtime.js");
+        const targetArtifact = path.join(targetRoot, "dist", "prepare.runtime.js");
         await fs.writeFile(artifact, "retained serving runtime");
         const target = { schemaVersions: { state: 15, agent: 19 } };
-        mocks.maybeStopService.mockImplementation(async () => ({
-          ...serviceState(servingRoot, "inspect", "serving-generation"),
-          servicePid: 23456,
-        }));
-        vi.spyOn(readiness, "verifyPreviousGatewayForUpdate").mockResolvedValue(true);
+        const state = serviceState(servingRoot, "inspect", "serving-generation");
+        if (warn) {
+          state.serviceUpdateVerdict = destination === "foreign" ? { kind: "foreign" } : undefined;
+        }
+        mocks.maybeStopService.mockResolvedValue({ ...state, servicePid: 23456 });
+        const owner = warn ? { pid: process.pid, createdAt: "now", port: 20445 } : undefined;
+        const readOwner = vi
+          .spyOn(gatewayLock, "readActiveGatewayLockIdentity")
+          .mockResolvedValue(owner);
+        if (destination === "unverifiable") {
+          readOwner.mockRejectedValue(new Error("owner inspection unavailable"));
+        }
         mocks.runGitUpdate.mockImplementation(
           async (options: Parameters<typeof updateGitInstall>[0]) => {
             await options.inspectGitTarget?.(target);
             await options.beforeGitMutation?.(target);
-            await fs.writeFile(
-              path.join(targetRoot, "dist", "prepare.runtime.js"),
-              "candidate runtime",
-            );
+            await fs.writeFile(targetArtifact, "candidate runtime");
             return { ...successfulUpdate, mode: "git" };
           },
         );
         const execution = await execute({
           ...executionParams("git"),
           root: targetRoot,
-          shouldRestart: false,
-          opts: { json: true, restart: false },
+          shouldRestart: warn,
+          opts: { json: true, restart: warn },
         });
-        expect(await fs.readFile(artifact, "utf8")).toBe("retained serving runtime");
-        expect(mocks.serviceStopped).toBe(false);
-        if (destination === "disjoint") {
-          expect(execution?.result.status).toBe("ok");
-          expect(
-            await fs.readFile(path.join(targetRoot, "dist", "prepare.runtime.js"), "utf8"),
-          ).toBe("candidate runtime");
-        } else {
-          expect(execution).toMatchObject({
-            mutationStarted: false,
-            result: { status: "error", reason: "runtime-artifact-publication" },
-          });
-          expect(execution?.result.steps).toContainEqual(
-            expect.objectContaining({ stderrTail: expect.stringContaining("23456") }),
-          );
-        }
-      });
-    },
+        expect(await fs.readFile(artifact, "utf8")).toBe(
+          warn ? "candidate runtime" : "retained serving runtime",
+        );
+        const blocked = !warn && destination !== "disjoint";
+        expect(execution?.mutationStarted).toBe(!blocked);
+        expect(execution?.result.status).toBe(blocked ? "error" : "ok");
+        expect(execution?.result.reason).toBe(blocked ? "runtime-artifact-publication" : undefined);
+        const diagnostics = (execution?.result.steps ?? [])
+          .map((step) => step.advisory?.message ?? step.stderrTail ?? "")
+          .join("");
+        expect(diagnostics).toMatch(warn ? /previous runtime/ : blocked ? /23456/ : /^$/);
+      }),
   );
   it("retains the live update run when stopped-service context capture fails", async () => {
     await withTestDir({ prefix: "partial-stop-recovery-owner-" }, async (dir) => {

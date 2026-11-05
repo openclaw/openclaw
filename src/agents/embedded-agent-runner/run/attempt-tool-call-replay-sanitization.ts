@@ -86,7 +86,7 @@ function sanitizeReplayToolCallInputs(
   let droppedAssistantMessages = 0;
   const out: AgentMessage[] = [];
   const preservedThinkingToolCallIds = new Set<string>();
-  const priorToolCallIds = new Set<string>();
+  const priorToolCallIds = allowProviderOwnedThinkingReplay ? new Set<string>() : undefined;
   const pairing = classifyToolUseResultPairing(messages);
   const isCompleted = createCompletedToolCallPredicate(messages, pairing);
 
@@ -116,13 +116,13 @@ function sanitizeReplayToolCallInputs(
         replaySafeToolCalls.every(
           (toolCall) =>
             !preservedThinkingToolCallIds.has(toolCall.id) &&
-            (!followingToolResults.displaced || !priorToolCallIds.has(toolCall.id)) &&
+            (!followingToolResults.displaced || !priorToolCallIds?.has(toolCall.id)) &&
             followingToolResults.ids.has(toolCall.id),
         )
       ) {
         for (const toolCall of replaySafeToolCalls) {
           preservedThinkingToolCallIds.add(toolCall.id);
-          priorToolCallIds.add(toolCall.id);
+          priorToolCallIds?.add(toolCall.id);
         }
         changed ||= followingToolResults.displaced;
         out.push(message);
@@ -133,12 +133,12 @@ function sanitizeReplayToolCallInputs(
       continue;
     }
 
-    const nextContent: typeof message.content = [];
-    let messageChanged = false;
+    let nextContent: typeof message.content | undefined;
 
-    for (const block of message.content) {
+    for (let contentIndex = 0; contentIndex < message.content.length; contentIndex += 1) {
+      const block = message.content[contentIndex]!;
       if (!isRunnerToolCallBlock(block)) {
-        nextContent.push(block);
+        nextContent?.push(block);
         continue;
       }
 
@@ -147,26 +147,26 @@ function sanitizeReplayToolCallInputs(
         block.id,
         isCompleted(block) ? undefined : allowedToolNames,
       );
-      if (!resolvedName) {
-        messageChanged = true;
-        continue;
+      if (!resolvedName || block.name !== resolvedName) {
+        nextContent ??= message.content.slice(0, contentIndex);
       }
-
-      messageChanged ||= block.name !== resolvedName;
-      nextContent.push(block.name === resolvedName ? block : { ...block, name: resolvedName });
+      if (resolvedName) {
+        nextContent?.push(block.name === resolvedName ? block : { ...block, name: resolvedName });
+        // Only signed-thinking replay needs prior ids; validation already visited this call.
+        if (typeof block.id === "string") {
+          priorToolCallIds?.add(block.id);
+        }
+      }
     }
 
-    changed ||= messageChanged;
-    if (nextContent.length === 0 && messageChanged) {
+    changed ||= nextContent !== undefined;
+    if (nextContent?.length === 0) {
       droppedAssistantMessages += 1;
       continue;
     }
-    const nextMessage = messageChanged
+    const nextMessage = nextContent
       ? replaceCompactionReplayOwnerContent(message, nextContent)
       : message;
-    for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
-      priorToolCallIds.add(toolCall.id);
-    }
     out.push(nextMessage);
   }
 
