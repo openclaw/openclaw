@@ -54,6 +54,7 @@ import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import {
+  createGatewayMessageActionInput,
   createMessageActionRuntimeAuthority,
   resolveAgentRuntimeMessageActionAuthorization,
   resolveAgentRuntimeMessageActionConfig,
@@ -335,30 +336,17 @@ export const sendHandlers: GatewayRequestHandlers = {
               if (
                 canonicalAction ||
                 messageAuthority.assertScheduledWriteCurrent ||
-                request.allowNativeChannelNamespace === false
+                request.channelInferred === true
               ) {
                 const { runMessageAction } =
                   await import("../../infra/outbound/message-action-runner.js");
-                const result = await runMessageAction({
-                  ...actionContext,
-                  gatewayOwnedDelivery: true,
-                  allowNativeChannelNamespace: request.allowNativeChannelNamespace,
-                  // The delegating client records the confirmed send in its destination.
-                  callerRecordsDestinationHistory: true,
-                  ...(request.action === "send"
-                    ? {
-                        actionOrigin: trustedContext.runtimeAgentId
-                          ? ("message-tool" as const)
-                          : undefined,
-                      }
-                    : {}),
-                  params: {
-                    ...request.params,
-                    channel,
-                    ...(accountId ? { accountId } : {}),
-                    idempotencyKey: request.idempotencyKey,
-                  },
-                });
+                const result = await runMessageAction(
+                  createGatewayMessageActionInput(
+                    actionContext,
+                    request,
+                    trustedContext.runtimeAgentId,
+                  ),
+                );
                 payload = result.payload;
               } else {
                 await messageAuthority.beforeDeliveryAttempt();

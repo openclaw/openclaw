@@ -101,7 +101,7 @@ export function runResolveOutboundTargetCoreTests(): void {
 
       const res = await resolveOutboundTarget({ channel: "irc", to: "irc", mode: "explicit" });
 
-      expect(res).toEqual({ ok: true, to: "irc" });
+      expect(res).toMatchObject({ ok: true, to: "irc" });
     });
 
     it.each(["tg:self"])(

@@ -20,30 +20,23 @@ import {
   reservedTargetLiteralError,
   unknownTargetError,
 } from "./target-errors.js";
-import { classifyRewrittenTarget, detectTargetKind } from "./target-kind.js";
 import {
   looksLikeTargetId,
   maybeResolvePluginMessagingTarget,
   normalizeTargetForProvider,
   resolveNormalizedTargetInput,
   resolveReservedTargetLiteral,
+  stripNormalizedTargetProviderPrefixes,
+  type ResolvedPluginMessagingTarget,
 } from "./target-normalization.js";
-import {
-  buildNormalizedResolveResult,
-  stripTargetPrefixes,
-  type ResolvedMessagingTarget,
-} from "./target-resolution-results.js";
 
-export type { ResolvedMessagingTarget } from "./target-resolution-results.js";
+export type ResolvedMessagingTarget = Omit<ResolvedPluginMessagingTarget, "resolutionSource"> & {
+  resolutionSource: "plugin" | "directory" | "normalized";
+};
 
 type ResolveMessagingTargetResult =
   | { ok: true; target: ResolvedMessagingTarget }
-  | {
-      ok: false;
-      error: Error;
-      candidates?: ChannelDirectoryEntry[];
-      policyRejected?: true;
-    };
+  | { ok: false; error: Error; candidates?: ChannelDirectoryEntry[] };
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const directoryCache = new DirectoryCache<ChannelDirectoryEntry[]>(CACHE_TTL_MS);
@@ -67,6 +60,16 @@ export function resetDirectoryCache(params?: {
       (!params.accountId || key.startsWith(`${channelKey}:${accountKey}:`)),
     params.cfg,
   );
+}
+
+function stripTargetPrefixes(value: string, channel?: ChannelId, plugin?: ChannelPlugin): string {
+  const providerPrefixes = [channel, plugin?.id, ...(plugin?.messaging?.targetPrefixes ?? [])]
+    .map((prefix) => prefix?.trim().toLowerCase() ?? "")
+    .filter(Boolean);
+  return stripNormalizedTargetProviderPrefixes(value, providerPrefixes)
+    .replace(/^(channel|group|user):/i, "")
+    .replace(/^[@#]/, "")
+    .trim();
 }
 
 export function formatTargetDisplay(params: {
@@ -110,55 +113,40 @@ export function formatTargetDisplay(params: {
   return withoutProvider.replace(/^channel:/i, "#").replace(/^user:/i, "@");
 }
 
-function applyOutboundTargetPolicy(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  target: ResolvedMessagingTarget;
-  mode?: ChannelOutboundTargetMode;
-  allowFrom?: string[];
-  accountId?: string | null;
-  plugin?: ChannelPlugin;
-}): ResolveMessagingTargetResult {
-  const policyResult =
-    params.mode && params.plugin?.outbound?.resolveTarget
-      ? params.plugin.outbound.resolveTarget({
-          cfg: params.cfg,
-          to: params.target.to,
-          allowFrom: params.allowFrom,
-          accountId: params.accountId,
-          mode: params.mode,
-        })
-      : undefined;
-  if (policyResult && !policyResult.ok) {
-    return { ...policyResult, policyRejected: true };
+function detectTargetKind(
+  channel: ChannelId,
+  raw: string,
+  preferred?: ChannelDirectoryEntryKind,
+  plugin?: ChannelPlugin,
+): ChannelDirectoryEntryKind {
+  if (preferred) {
+    return preferred;
   }
-  const to = (policyResult?.to ?? params.target.to).trim();
-  if (!to) {
-    return {
-      ok: false,
-      error: missingTargetError(
-        params.plugin?.meta?.label ?? params.channel,
-        params.plugin?.messaging?.targetResolver?.hint,
-      ),
-    };
+  const inferredChatType = (
+    plugin ?? getRuntimeVisibleChannelPlugin(channel)
+  )?.messaging?.inferTargetChatType?.({
+    to: raw,
+  });
+  if (inferredChatType === "direct") {
+    return "user";
   }
-  return {
-    ok: true,
-    target: {
-      ...params.target,
-      to,
-      kind: classifyRewrittenTarget({
-        channel: params.channel,
-        originalTo: params.target.to,
-        originalKind: params.target.kind,
-        originalKindIsResolved:
-          params.target.resolutionSource === "directory" ||
-          params.target.resolutionSource === "plugin",
-        resolvedTo: to,
-        plugin: params.plugin,
-      }),
-    },
-  };
+  if (inferredChatType === "channel" || inferredChatType === "group") {
+    return inferredChatType;
+  }
+
+  if (raw.startsWith("@") || /^<@!?/.test(raw) || /^user:/i.test(raw)) {
+    return "user";
+  }
+  if (raw.startsWith("#") || /^channel:/i.test(raw)) {
+    return "group";
+  }
+
+  const chatTypes = plugin?.capabilities?.chatTypes ?? [];
+  if (chatTypes.length > 0 && chatTypes.every((chatType) => chatType === "direct")) {
+    return "user";
+  }
+
+  return "group";
 }
 
 function normalizeDirectoryEntryId(
@@ -252,75 +240,55 @@ export async function resolveChannelTarget(params: {
     };
   }
   const channelNamespace = resolveBareTargetChannelNamespace({ raw, plugin });
+  const allowNativeTarget = !channelNamespace || params.allowNativeChannelNamespace !== false;
   const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);
-  const normalizedInput = resolveNormalizedTargetInput(params.channel, raw, plugin);
+  // An inferred channel name must not become a plausible recipient through normalization.
+  const normalizedInput = allowNativeTarget
+    ? resolveNormalizedTargetInput(params.channel, raw, plugin)
+    : undefined;
   const normalized = normalizedInput?.normalized ?? raw;
   const reservedLiteral = resolveReservedTargetLiteral({ raw, plugin });
-  const applyPolicy = (target: ResolvedMessagingTarget) =>
-    applyOutboundTargetPolicy({
-      cfg: params.cfg,
-      channel: params.channel,
-      target,
-      mode: params.nativeTargetMode,
-      allowFrom: params.allowFrom,
-      accountId: params.accountId,
-      plugin,
-    });
-  const buildNormalizedTarget = () =>
-    buildNormalizedResolveResult({
-      normalized,
-      kind: classifyRewrittenTarget({
-        channel: params.channel,
-        originalTo: raw,
-        originalKind: kind,
-        resolvedTo: normalized,
-        plugin,
-      }),
-    }).target;
-  const resolvePluginTarget = (requireIdLike?: boolean) =>
-    maybeResolvePluginMessagingTarget({ ...params, input: raw, plugin, requireIdLike });
-  const targetLooksLikeId = Boolean(
+  const normalizedResult = (): ResolveMessagingTargetResult => ({
+    ok: true,
+    target: {
+      to: normalized,
+      kind: channelNamespace
+        ? detectTargetKind(params.channel, normalized, params.preferredKind, plugin)
+        : kind,
+      display: stripTargetPrefixes(normalized),
+      source: "normalized",
+      resolutionSource: "normalized",
+    },
+  });
+  let nativeResolverAttempted = false;
+  const resolvePluginTarget = (requireIdLike?: boolean) => {
+    nativeResolverAttempted = true;
+    return maybeResolvePluginMessagingTarget({ ...params, input: raw, plugin, requireIdLike });
+  };
+  if (
     normalizedInput &&
+    !reservedLiteral &&
     looksLikeTargetId({
       channel: params.channel,
       raw: normalizedInput.raw,
       normalized,
       plugin,
-    }),
-  );
-  // Explicit or contextual channel provenance may admit a plugin-native destination
-  // that shares the channel name. Inferred channel selection disables this path.
-  const hasConcreteMessagingResolver = Boolean(plugin?.messaging?.targetResolver?.resolveTarget);
-  const pluginAcceptsNamespaceAsNativeTarget = Boolean(
-    channelNamespace &&
-    params.allowNativeChannelNamespace !== false &&
-    (hasConcreteMessagingResolver || targetLooksLikeId),
-  );
-  let nativeNamespaceResolverMissed = false;
-  if (
-    normalizedInput &&
-    !reservedLiteral &&
-    (!channelNamespace ||
-      (pluginAcceptsNamespaceAsNativeTarget && params.nativeTargetMode !== "heartbeat")) &&
-    targetLooksLikeId
+    })
   ) {
-    const resolvedIdLikeTarget = await resolvePluginTarget(true);
-    if (resolvedIdLikeTarget) {
-      return applyPolicy(resolvedIdLikeTarget);
+    const target = await resolvePluginTarget(true);
+    if (target) {
+      return { ok: true, target };
     }
-    if (channelNamespace && hasConcreteMessagingResolver) {
-      nativeNamespaceResolverMissed = true;
-    } else {
-      return applyPolicy(buildNormalizedTarget());
+    if (!channelNamespace || !plugin?.messaging?.targetResolver?.resolveTarget) {
+      return normalizedResult();
     }
   }
   const query = stripTargetPrefixes(raw, params.channel, plugin);
-  const primaryDirectoryKind: ChannelDirectoryEntryKind = kind === "user" ? "user" : "group";
-  // A bare channel namespace has no peer/group syntax. Search both directory
-  // owners before treating it as a missing destination.
-  const directoryKinds: ChannelDirectoryEntryKind[] = channelNamespace
-    ? [primaryDirectoryKind, primaryDirectoryKind === "user" ? "group" : "user"]
-    : [primaryDirectoryKind];
+  const primaryKind = kind === "user" ? "user" : "group";
+  const directoryKinds: ChannelDirectoryEntryKind[] =
+    channelNamespace && !params.preferredKind
+      ? [primaryKind, primaryKind === "user" ? "group" : "user"]
+      : [primaryKind];
   const entries = (
     await Promise.all(
       directoryKinds.map((directoryKind) =>
@@ -356,13 +324,17 @@ export async function resolveChannelTarget(params: {
     : [];
   const [entry] = matches;
   if (matches.length === 1 && entry) {
-    return applyPolicy({
-      to: normalizeDirectoryEntryId(params.channel, entry, plugin),
-      kind: entry.kind,
-      display: entry.name ?? entry.handle ?? stripTargetPrefixes(entry.id, params.channel, plugin),
-      source: "directory",
-      resolutionSource: "directory",
-    });
+    return {
+      ok: true,
+      target: {
+        to: normalizeDirectoryEntryId(params.channel, entry, plugin),
+        kind: channelNamespace ? entry.kind : kind,
+        display:
+          entry.name ?? entry.handle ?? stripTargetPrefixes(entry.id, params.channel, plugin),
+        source: "directory",
+        resolutionSource: "directory",
+      },
+    };
   }
   if (matches.length > 1) {
     return {
@@ -375,44 +347,40 @@ export async function resolveChannelTarget(params: {
   if (reservedLiteral) {
     return { ok: false, error: reservedTargetLiteralError(providerLabel, reservedLiteral, hint) };
   }
+  const resolvedFallbackTarget =
+    allowNativeTarget && !nativeResolverAttempted ? await resolvePluginTarget() : undefined;
+  if (resolvedFallbackTarget) {
+    return {
+      ok: true,
+      target: resolvedFallbackTarget,
+    };
+  }
+
   if (channelNamespace) {
-    if (pluginAcceptsNamespaceAsNativeTarget && normalizedInput && !nativeNamespaceResolverMissed) {
-      const resolvedNativeTarget = await resolvePluginTarget();
-      if (resolvedNativeTarget) {
-        return applyPolicy(resolvedNativeTarget);
-      }
-    }
-    if (
-      params.allowNativeChannelNamespace !== false &&
-      !hasConcreteMessagingResolver &&
-      plugin?.outbound?.resolveTarget
-    ) {
-      const resolvedOutboundTarget = plugin.outbound.resolveTarget({
+    // Some plugins validate native recipients only through their outbound adapter.
+    if (allowNativeTarget && !plugin?.messaging?.targetResolver?.resolveTarget) {
+      const native = plugin?.outbound?.resolveTarget?.({
         cfg: params.cfg,
         to: raw,
-        allowFrom: params.allowFrom,
         accountId: params.accountId,
+        allowFrom: params.allowFrom,
         mode: params.nativeTargetMode ?? "explicit",
       });
-      if (!resolvedOutboundTarget.ok) {
-        return resolvedOutboundTarget;
+      if (native && !native.ok) {
+        return native;
       }
-      const outboundTarget = resolvedOutboundTarget.to.trim();
-      if (outboundTarget) {
-        return buildNormalizedResolveResult({
-          normalized: outboundTarget,
-          kind: classifyRewrittenTarget({
-            channel: params.channel,
-            originalTo: raw,
-            originalKind: kind,
-            resolvedTo: outboundTarget,
-            plugin,
-          }),
-        });
+      if (native?.to.trim()) {
+        return {
+          ok: true,
+          target: {
+            to: native.to,
+            kind: detectTargetKind(params.channel, native.to, params.preferredKind, plugin),
+            display: stripTargetPrefixes(native.to),
+            source: "normalized",
+            resolutionSource: "normalized",
+          },
+        };
       }
-    }
-    if (pluginAcceptsNamespaceAsNativeTarget && !hasConcreteMessagingResolver) {
-      return applyPolicy(buildNormalizedTarget());
     }
     return {
       ok: false,
@@ -424,13 +392,9 @@ export async function resolveChannelTarget(params: {
       ),
     };
   }
-  const resolvedFallbackTarget = await resolvePluginTarget();
-  if (resolvedFallbackTarget) {
-    return applyPolicy(resolvedFallbackTarget);
-  }
 
   if (params.unknownTargetMode === "normalized") {
-    return applyPolicy(buildNormalizedTarget());
+    return normalizedResult();
   }
 
   return {

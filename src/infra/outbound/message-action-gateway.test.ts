@@ -207,7 +207,7 @@ describe("runMessageAction gateway dispatch", () => {
       expect(readRecordField(gatewayCall, "params", "scheduled Gateway params")).toMatchObject({
         channel: "gatewaychat",
         action: "edit",
-        allowNativeChannelNamespace: false,
+        channelInferred: true,
       });
       expect(handleActionEntry).not.toHaveBeenCalled();
     },
@@ -246,7 +246,7 @@ describe("runMessageAction gateway dispatch", () => {
             action: "edit",
             params: { to, messageId: "message-1", message: "updated" },
             conversationReadOrigin: "direct-operator",
-            ...(allowNativeChannelNamespace === false ? { allowNativeChannelNamespace } : {}),
+            ...(allowNativeChannelNamespace === false ? { channelInferred: true } : {}),
             idempotencyKey: `namespace-${to}-${allowNativeChannelNamespace ?? "native"}`,
           },
           respond,

@@ -126,8 +126,8 @@ export const MessageActionParamsSchema = closedObject({
    * Missing values remain delegated, and agent runtime identity wins server-side.
    */
   conversationReadOrigin: Type.Optional(Type.Literal("direct-operator")),
-  /** Host-computed namespace restriction; callers can preserve false but never assert true. */
-  allowNativeChannelNamespace: Type.Optional(Type.Literal(false)),
+  /** Preserve implicit channel selection across delegation; callers cannot assert explicit intent. */
+  channelInferred: Type.Optional(Type.Literal(true)),
   idempotencyKey: NonEmptyString,
 });
 

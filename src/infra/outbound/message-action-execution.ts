@@ -223,7 +223,7 @@ export async function executeGatewayAction(
       agentId: ctx.agentId,
       ...(conversationReadOrigin === "direct-operator" ? { conversationReadOrigin } : {}),
       ...(ctx.input.allowNativeChannelNamespace === false
-        ? { allowNativeChannelNamespace: false }
+        ? { channelInferred: true as const }
         : {}),
       idempotencyKey,
     };

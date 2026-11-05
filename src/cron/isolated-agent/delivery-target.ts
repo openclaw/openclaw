@@ -5,6 +5,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
+import { MessageActionDeniedError } from "../../infra/outbound/message-action-denial.js";
 import type { OutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
 import { isReservedTargetLiteralError } from "../../infra/outbound/target-errors.js";
 import type { ResolvedMessagingTarget } from "../../infra/outbound/target-resolver.js";
@@ -270,8 +271,7 @@ export async function resolveDeliveryTarget(
   });
 
   let fallbackChannel: string | undefined;
-  let allowNativeChannelNamespace: boolean | undefined =
-    requestedChannel === "last" ? false : undefined;
+  let allowNativeChannelNamespace = requestedChannel !== "last";
   let channelResolutionError: Error | undefined;
   if (!preliminary.channel) {
     if (preliminary.lastChannel) {
@@ -374,8 +374,15 @@ export async function resolveDeliveryTarget(
         accountId,
         mode,
         allowFrom: effectiveAllowFrom,
+        allowNativeChannelNamespace,
       });
       if (!currentTargetResolution.ok) {
+        if (
+          currentTargetResolution.error instanceof MessageActionDeniedError &&
+          currentTargetResolution.error.reasonCode === "message_target_missing"
+        ) {
+          return failTarget(currentTargetResolution.error);
+        }
         toCandidate = allowFromOverride[0];
       }
     }
@@ -403,7 +410,6 @@ export async function resolveDeliveryTarget(
     );
   }
 
-  const preResolvedRouteTargetCandidate = toCandidate;
   const docked = await resolveOutboundTargetWithRuntime({
     channel,
     to: toCandidate,
@@ -411,7 +417,10 @@ export async function resolveDeliveryTarget(
     accountId,
     mode,
     allowFrom: effectiveAllowFrom,
+    allowNativeChannelNamespace,
   });
+  const namespaceTarget = docked.ok ? docked.namespaceTarget : undefined;
+  const preResolvedRouteTargetCandidate = docked.ok && namespaceTarget ? docked.to : toCandidate;
   if (!docked.ok) {
     if (!toCandidate || !isReservedTargetLiteralError(docked.error)) {
       return failTarget(docked.error);
@@ -419,16 +428,16 @@ export async function resolveDeliveryTarget(
   } else {
     toCandidate = docked.to;
   }
-  const targetResolution = await deliveryTargetRuntime.resolveChannelTargetForDelivery({
-    cfg,
-    channel,
-    agentId,
-    input: toCandidate,
-    accountId,
-    allowFrom: effectiveAllowFrom,
-    allowNativeChannelNamespace,
-    nativeTargetMode: mode,
-  });
+  const targetResolution =
+    namespaceTarget && namespaceTarget.to === toCandidate
+      ? { ok: true as const, target: namespaceTarget }
+      : await deliveryTargetRuntime.resolveChannelTargetForDelivery({
+          cfg,
+          channel,
+          agentId,
+          input: toCandidate,
+          accountId,
+        });
   if (!targetResolution.ok) {
     return failTarget(targetResolution.error);
   }

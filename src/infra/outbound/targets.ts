@@ -18,7 +18,6 @@ import {
   resolveOutboundChannelPlugin,
 } from "./channel-resolution.js";
 import {
-  resolveBareTargetChannelNamespace,
   resolveTargetPrefixedChannel,
   stripTargetProviderPrefix,
 } from "./channel-target-prefix.js";
@@ -47,17 +46,6 @@ type OutboundTarget = {
   lastAccountId?: string;
   implicitDefaultRoute?: true;
 };
-
-type ProactiveTargetResolution = OutboundTarget & {
-  targetAllowFrom?: string[];
-  targetPlugin?: ChannelPlugin;
-};
-
-type PreparedProactiveDeliveryTarget = [
-  delivery: OutboundTarget,
-  plugin: ChannelPlugin | undefined,
-  resolvedTarget: ResolvedMessagingTarget | undefined,
-];
 
 /** Explicit per-send policy; ordinary automations never inherit heartbeat configuration. */
 type ProactiveDeliveryPolicy = {
@@ -225,7 +213,7 @@ async function resolveProactiveOwnerRoute(
 export async function resolveProactiveDeliveryTarget(
   params: ProactiveDeliveryParams,
 ): Promise<OutboundTarget> {
-  return (await prepareProactiveDeliveryTarget(params))[0];
+  return resolveDeliveryTargetWithPolicy(params);
 }
 
 export async function hasResolvableProactiveOwnerRoute(
@@ -250,7 +238,7 @@ export async function resolveProactiveDeliveryTargetWithSessionRoute(
  */
 async function resolveDeliveryTargetWithPolicy(
   params: ProactiveDeliveryParams,
-): Promise<ProactiveTargetResolution> {
+): Promise<OutboundTarget> {
   const { cfg, entry } = params;
   const policy = params.policy;
   const rawTarget = policy?.target;
@@ -353,24 +341,22 @@ async function resolveDeliveryTargetWithPolicy(
     to: resolvedTarget.to,
     cfg,
     accountId: effectiveAccountId,
+    allowNativeChannelNamespace: target !== "last",
   };
-  const targetAllowFrom = mapAllowFromEntries(
-    ownerRoute
-      ? [ownerRoute.ownerId]
-      : plugin
-        ? await resolveChannelAllowFrom({ plugin, cfg, accountId: effectiveAccountId })
-        : undefined,
-  );
   const resolved = await resolveOutboundTargetWithPlugin({
     plugin,
     target: {
       ...targetParams,
-      allowFrom: targetAllowFrom,
+      allowFrom: ownerRoute ? [ownerRoute.ownerId] : undefined,
       mode: "heartbeat",
     },
   });
   if (!resolved?.ok) {
     return rejectDelivery(ownerMode ? "no-route" : "no-target");
+  }
+  const namespaceTarget = resolved.namespaceTarget;
+  if (namespaceTarget?.kind === "user" && policy?.directPolicy === "block") {
+    return rejectDelivery("dm-blocked");
   }
 
   // Chat type belongs to the stored channel/account/destination.
@@ -388,9 +374,28 @@ async function resolveDeliveryTargetWithPolicy(
       ? normalizeChatType(entry?.chatType)
       : undefined;
   const deliveryChatType =
-    sessionChatTypeHint ??
-    inferChatTypeFromTarget({ channel: resolvedTarget.channel, to: resolved.to, plugin });
-  if (deliveryChatType === "direct" && policy?.directPolicy === "block") {
+    (namespaceTarget ? undefined : sessionChatTypeHint) ??
+    inferChatTypeFromTarget({
+      channel: resolvedTarget.channel,
+      to:
+        namespaceTarget && plugin
+          ? stripTargetProviderPrefix(
+              resolved.to,
+              plugin.id,
+              ...(plugin.messaging?.targetPrefixes ?? []),
+            )
+          : resolved.to,
+      plugin,
+      resolvedKind:
+        namespaceTarget?.to === resolved.to && namespaceTarget.resolutionSource !== "normalized"
+          ? namespaceTarget.kind
+          : undefined,
+    });
+  // Directory kinds describe their exact recipient, not an opaque policy rewrite.
+  if (
+    policy?.directPolicy === "block" &&
+    (deliveryChatType === "direct" || (namespaceTarget && !deliveryChatType))
+  ) {
     return rejectDelivery("dm-blocked");
   }
   if (
@@ -442,8 +447,6 @@ async function resolveDeliveryTargetWithPolicy(
     threadId: resolvedTarget.threadId ?? inheritedThreadId,
     lastChannel: resolvedTarget.lastChannel,
     lastAccountId: resolvedTarget.lastAccountId,
-    ...(targetAllowFrom.length > 0 ? { targetAllowFrom } : {}),
-    ...(plugin ? { targetPlugin: plugin } : {}),
     ...(implicitDefaultRoute ? { implicitDefaultRoute: true as const } : {}),
   };
 }
@@ -463,84 +466,11 @@ function buildNoDeliveryTarget(params: {
   };
 }
 
-async function prepareProactiveDeliveryTarget(
-  params: ProactiveDeliveryParams,
-): Promise<PreparedProactiveDeliveryTarget> {
-  const { targetAllowFrom, targetPlugin, ...delivery } =
-    await resolveDeliveryTargetWithPolicy(params);
-  const policy = params.policy;
-  const ownerRouteMustBeDirect = policy?.target === undefined || policy.target === "owner";
-  if (delivery.channel === "none" || !delivery.to) {
-    return [delivery, undefined, undefined];
-  }
-  const rejectDelivery = (reason: string) => buildNoDeliveryTarget({ ...delivery, reason });
-  const deliveryTo = delivery.to;
-  const plugin =
-    targetPlugin ??
-    resolveOutboundChannelPlugin({
-      channel: delivery.channel,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      allowBootstrap: true,
-    });
-  const channelNamespace = resolveBareTargetChannelNamespace({ raw: deliveryTo, plugin });
-  if (
-    ownerRouteMustBeDirect &&
-    !isPositivelyDirectOwnerTarget({ plugin, to: deliveryTo, chatType: delivery.chatType })
-  ) {
-    return [rejectDelivery("no-route"), plugin, undefined];
-  }
-  if (
-    !plugin?.messaging?.resolveOutboundSessionRoute &&
-    !plugin?.messaging?.targetResolver &&
-    !channelNamespace
-  ) {
-    return [delivery, plugin, undefined];
-  }
-  // Ordinary normalization failures should not suppress an otherwise deliverable target.
-  const targetResolution = await resolveChannelTarget({
-    cfg: params.cfg,
-    channel: delivery.channel as ChannelId,
-    input: deliveryTo,
-    accountId: delivery.accountId,
-    unknownTargetMode: "normalized",
-    allowNativeChannelNamespace: policy?.target !== "last",
-    nativeTargetMode: "heartbeat",
-    allowFrom: targetAllowFrom,
-    plugin,
-  }).catch(() => null);
-  const resolvedTarget = targetResolution?.ok ? targetResolution.target : undefined;
-  const targetRejected =
-    (!targetResolution && channelNamespace) ||
-    (targetResolution &&
-      !targetResolution.ok &&
-      (targetResolution.policyRejected ||
-        channelNamespace ||
-        isReservedTargetLiteralError(targetResolution.error)));
-  if (targetRejected) {
-    return [rejectDelivery(ownerRouteMustBeDirect ? "no-route" : "no-target"), plugin, undefined];
-  }
-  if (resolvedTarget?.kind === "user" && policy?.directPolicy === "block") {
-    return [rejectDelivery("dm-blocked"), plugin, resolvedTarget];
-  }
-  if (
-    ownerRouteMustBeDirect &&
-    !isPositivelyDirectOwnerTarget({ plugin, to: resolvedTarget?.to ?? deliveryTo })
-  ) {
-    return [rejectDelivery("no-route"), plugin, resolvedTarget];
-  }
-  return [
-    channelNamespace && resolvedTarget ? { ...delivery, to: resolvedTarget.to } : delivery,
-    plugin,
-    resolvedTarget,
-  ];
-}
-
 /** Refines per-send policy through the channel's outbound session route. */
 async function resolveDeliveryTargetWithPolicyAndSessionRoute(
   params: ProactiveDeliveryParams & { agentId: string; currentSessionKey?: string },
 ): Promise<OutboundTarget> {
-  const [delivery, plugin, routeResolvedTarget] = await prepareProactiveDeliveryTarget(params);
+  const delivery = await resolveDeliveryTargetWithPolicy(params);
   const policy = params.policy;
   const ownerRouteMustBeDirect = policy?.target === undefined || policy.target === "owner";
   if (delivery.channel === "none" || !delivery.to) {
@@ -548,9 +478,42 @@ async function resolveDeliveryTargetWithPolicyAndSessionRoute(
   }
   const rejectDelivery = (reason: string) => buildNoDeliveryTarget({ ...delivery, reason });
   const deliveryTo = delivery.to;
+  const plugin = resolveOutboundChannelPlugin({
+    channel: delivery.channel,
+    cfg: params.cfg,
+    agentId: params.agentId,
+    allowBootstrap: true,
+  });
   const resolveSessionRoute = plugin?.messaging?.resolveOutboundSessionRoute;
   const isRejectedOwnerTarget = (to: string, chatType?: ChatType) =>
     ownerRouteMustBeDirect && !isPositivelyDirectOwnerTarget({ plugin, to, chatType });
+  if (isRejectedOwnerTarget(deliveryTo, delivery.chatType)) {
+    return rejectDelivery("no-route");
+  }
+  if (!resolveSessionRoute && !plugin?.messaging?.targetResolver) {
+    return delivery;
+  }
+  let routeResolvedTarget: ResolvedMessagingTarget | undefined;
+  const targetResolution = await resolveChannelTarget({
+    cfg: params.cfg,
+    channel: delivery.channel as ChannelId,
+    input: deliveryTo,
+    accountId: delivery.accountId,
+    unknownTargetMode: "normalized",
+    allowNativeChannelNamespace: policy?.target !== "last",
+    plugin,
+  }).catch(() => null);
+  if (targetResolution?.ok) {
+    routeResolvedTarget = targetResolution.target;
+  } else if (targetResolution && isReservedTargetLiteralError(targetResolution.error)) {
+    return rejectDelivery(ownerRouteMustBeDirect ? "no-route" : "no-target");
+  }
+  if (routeResolvedTarget?.kind === "user" && policy?.directPolicy === "block") {
+    return rejectDelivery("dm-blocked");
+  }
+  if (isRejectedOwnerTarget(routeResolvedTarget?.to ?? deliveryTo)) {
+    return rejectDelivery("no-route");
+  }
   if (!resolveSessionRoute) {
     return delivery;
   }
@@ -589,6 +552,7 @@ function inferChatTypeFromTarget(params: {
   channel: string;
   to: string;
   plugin?: ChannelPlugin;
+  resolvedKind?: ResolvedMessagingTarget["kind"];
 }): ChatType | undefined {
   const to = params.to.trim();
   if (!to) {
@@ -603,6 +567,9 @@ function inferChatTypeFromTarget(params: {
   }
   if (/^group:/i.test(to)) {
     return "group";
+  }
+  if (params.resolvedKind) {
+    return params.resolvedKind === "user" ? "direct" : params.resolvedKind;
   }
   const plugin =
     params.plugin ??

@@ -52,23 +52,20 @@ export function resolveAgentRuntimeMessageActionConfig(
     : undefined;
 }
 
-/** Translate the RPC using its captured route, independently of turn authorization. */
-export function createGatewayMessageActionInput(params: {
-  context: MessageActionInput & { channel: string; accountId?: string };
-  request: MessageActionParams;
-  runtimeAgentId?: string;
-}): MessageActionInput {
-  const { context, request, runtimeAgentId } = params;
+/** Translate the captured RPC route without changing its delivery or authorization owners. */
+export function createGatewayMessageActionInput(
+  context: MessageActionInput & { channel: string; accountId?: string },
+  request: MessageActionParams,
+  runtimeAgentId?: string,
+): MessageActionInput {
   return {
     ...context,
     gatewayOwnedDelivery: true,
-    allowNativeChannelNamespace: request.allowNativeChannelNamespace,
+    allowNativeChannelNamespace: request.channelInferred === true ? false : undefined,
+    // The delegating client records the confirmed send in its destination.
+    callerRecordsDestinationHistory: true,
     ...(request.action === "send"
-      ? {
-          // The RPC owns source-reply receipts and their transcript mirror.
-          suppressTranscriptMirror: true,
-          actionOrigin: runtimeAgentId ? ("message-tool" as const) : undefined,
-        }
+      ? { actionOrigin: runtimeAgentId ? ("message-tool" as const) : undefined }
       : {}),
     params: {
       ...request.params,
