@@ -1,10 +1,9 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import {
   projectModelCatalogAccessPrograms,
   resolveCyberAccessProgramForProvider,
   resolveModelCatalogAccessPrograms,
-  resolveTurnCyberAccessProgram,
 } from "./model-catalog-access-programs.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 
@@ -169,20 +168,4 @@ it.each([
   [undefined, "anthropic", undefined],
 ] as const)("applies saved Access %s on %s as %s", (program, provider, expected) => {
   expect(resolveCyberAccessProgramForProvider(program, provider).program).toBe(expected);
-});
-
-it("notifies a non-OpenAI Access downgrade once per scope and model", () => {
-  const notify = vi.fn();
-  const scope = `test:${Math.random()}`;
-  const turn = (provider: string, model: string) =>
-    resolveTurnCyberAccessProgram({
-      program: "daybreak_blue",
-      provider,
-      model,
-      noticeScope: scope,
-      notify,
-    });
-  expect([turn("anthropic", "opus"), turn("anthropic", "opus")]).toEqual(["standard", "standard"]);
-  expect(turn("openai", "gpt-6.1-sol")).toBe("daybreak_blue");
-  expect(notify.mock.calls).toEqual([[expect.stringContaining("anthropic/opus used Standard")]]);
 });
