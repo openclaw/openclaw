@@ -5,7 +5,6 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.js";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.js";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.js";
 
 // Setup's one-shot check behind a dialog must report a scripted provider's failures promptly.
@@ -48,7 +47,6 @@ const suite = createControlUiE2eSuite({
         agents: { entries: { main: {} } },
         models: {
           providers: {
-            // The bundled provider keeps its catalog and setup path; only the endpoint moves.
             "tencent-tokenhub": {
               baseUrl: `http://127.0.0.1:${upstream.claim.port}/v1`,
               api: "openai-completions",
@@ -57,12 +55,15 @@ const suite = createControlUiE2eSuite({
         },
       },
     });
-    const close = () =>
-      instance.cleanup().finally(async () => {
+    const close = async () => {
+      try {
+        await instance.cleanup();
+      } finally {
         upstream.listener.closeAllConnections();
         await upstream.releaseListener();
         await upstream.claim.release();
-      });
+      }
+    };
     await instance.startGateway().catch(async (error: unknown) => {
       await close();
       throw error;
@@ -87,7 +88,6 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
         await page.goto(await open("settings/model-providers"));
-        await waitForControlUiGatewayReady(page);
         await page.getByRole("button", { name: "Add account", exact: true }).first().click();
         const picker = page.getByRole("dialog", { name: "Add an account" });
         await picker.getByRole("searchbox", { name: "Search providers…" }).fill("Tencent");
