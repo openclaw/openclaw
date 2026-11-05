@@ -1,6 +1,8 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BundleMcpConfig } from "../plugins/bundle-mcp.types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -126,7 +128,31 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       broken: { default_tools_approval_mode: undefined },
     });
     await expect(fs.stat(dataDir)).rejects.toMatchObject({ code: "ENOENT" });
-    const loaded = await load();
+    const io = Promise.withResolvers<void>();
+    const mkdir = fs.mkdir;
+    using asyncMkdir = vi.spyOn(fs, "mkdir").mockImplementationOnce(async () => {
+      await io.promise;
+      return mkdir(dataDir, { recursive: true });
+    });
+    const mkdirSync = syncFs.mkdirSync;
+    using blockedMkdir = vi.spyOn(syncFs, "mkdirSync").mockImplementationOnce(() => {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      return mkdirSync(dataDir, { recursive: true });
+    });
+    let projected = false;
+    const loading = load().then((result) => {
+      projected = true;
+      return result;
+    });
+    try {
+      await setImmediate();
+      expect(projected).toBe(false);
+    } finally {
+      io.resolve();
+    }
+    const loaded = await loading;
+    expect(asyncMkdir).toHaveBeenCalledTimes(2);
+    expect(blockedMkdir).not.toHaveBeenCalled();
 
     expect((await fs.stat(dataDir)).isDirectory()).toBe(true);
     expect(loaded.configPatch?.mcp_servers.weather).toMatchObject({

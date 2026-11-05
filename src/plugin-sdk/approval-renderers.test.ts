@@ -176,10 +176,8 @@ describe("plugin-sdk/approval-renderers", () => {
     if (textExcluded) {
       expect(payload.text).not.toContain(textExcluded);
     }
-    if (presentationExpected) {
-      expect(payload.presentation).toEqual(presentationExpected);
-      expect(payload.interactive).toBeUndefined();
-    }
+    expect(payload.presentation).toEqual(presentationExpected);
+    expect(payload.interactive).toBeUndefined();
     if (channelDataExpected) {
       expect(payload.channelData).toEqual(channelDataExpected);
     }

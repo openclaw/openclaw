@@ -4,10 +4,9 @@ import {
   bindSessionSendDeliveryContext,
   readSessionSendDeliveryAdmission,
   withSessionSendDelivery,
-  type SessionSendDelivery,
 } from "./session-send-delivery.js";
 
-const delivery: SessionSendDelivery = {
+const delivery: Parameters<typeof withSessionSendDelivery>[0]["delivery"] = {
   version: 1,
   runId: "send-1",
   source: { agentId: "main", sessionKey: "agent:main:dashboard:source", sessionId: "source-id" },

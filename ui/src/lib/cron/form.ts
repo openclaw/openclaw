@@ -198,6 +198,7 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     name: job.name,
     description: job.description ?? "",
     agentId: job.agentId ?? "",
+    ownerProfileId: job.ownerProfileId ?? "",
     sessionKey: job.sessionKey ?? "",
     clearAgent: false,
     enabled: job.enabled,

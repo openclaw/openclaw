@@ -158,6 +158,11 @@ function readOrphanWindowPage(database: OpenClawAgentReadOnlyDatabase, afterSess
       .selectFrom("session_windows")
       .select(["session_id", "session_key", "plugin_owner_id"])
       .where("session_id", "not in", db.selectFrom("session_nodes").select("current_session_id"))
+      .where(
+        "session_id",
+        "not in",
+        db.selectFrom("session_transcript_cold_archives").select("session_id"),
+      )
       .$if(afterSessionId !== undefined, (query) => query.where("session_id", ">", afterSessionId!))
       .orderBy("session_id", "asc")
       .limit(ORPHAN_WINDOW_PAGE_SIZE),

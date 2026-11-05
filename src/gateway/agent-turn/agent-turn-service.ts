@@ -611,6 +611,7 @@ export function createAgentTurnService(
             dedupeLifecycle.markAccepted(accepted);
           },
           getOwnedAgentDedupeKeys: dedupeLifecycle.ownedReservationKeys,
+          releaseUnacceptedReservation: dedupeLifecycle.releaseUnacceptedReservation,
         });
         if (!preparedDispatch) {
           return;

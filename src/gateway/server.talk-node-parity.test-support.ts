@@ -9,7 +9,7 @@ import {
 import type { NodeInvokeRequestPayload } from "../node-host/invoke-types.js";
 import { prepareNodeHostRuntime } from "../node-host/runtime.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
-import type { RealtimeVoiceBrowserSessionCreateRequest } from "../talk/provider-types.js";
+import type { RealtimeVoiceBrowserSessionCreateRequest } from "../talk/provider-contexts.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 

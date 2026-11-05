@@ -6,7 +6,6 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../gateway/operator-invocation-authority.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
-import { withPluginHostCleanupTimeout } from "../plugins/host-hook-cleanup-timeout.js";
 import {
   capturePluginLifecycleAuthority,
   capturePluginRegistryLifecycleEpoch,
@@ -20,21 +19,22 @@ import {
   assertAllowedCompletionModel,
   resolvePluginLlmPolicy,
 } from "../plugins/runtime/runtime-model-policy.js";
-import { finalizePluginModelUsage } from "../plugins/runtime/runtime-model-usage.js";
 import { modelKey } from "../shared/model-key.js";
+import { completeDecisionEvaluation, type DecisionEvaluation } from "./completion.js";
+import { DecisionContractError } from "./contract-error.js";
 import { logDecisionEvaluation } from "./diagnostics.js";
-import type { DecisionProviderHost, PreparedDecisionBilling } from "./provider-host.js";
-import type { DecisionBatchV2, DecisionEvaluateOptionsV2, DecisionOutcomeV2 } from "./types-v2.js";
-import type { DecisionBatch, DecisionOutcome, DecisionRuntimeV1 } from "./types.js";
-import { validateDecisionBatchV2 } from "./validation-v2.js";
-import { DecisionContractError, validateDecisionBatch } from "./validation.js";
-
-type Options = Parameters<DecisionRuntimeV1["evaluate"]>[1];
+import type { DecisionEvaluateOptions, DecisionEvaluateOptionsV2 } from "./execution-types.js";
+import type { PreparedDecisionBillingFacts } from "./host-billing.js";
+import type { DecisionOutcome, DecisionOutcomeV2 } from "./host-outcomes.js";
+import { validateDecisionBatchV2 } from "./input-validation.js";
+import type { DecisionBatchV2 } from "./types-v2.js";
+import type { DecisionBatch } from "./types.js";
+import { validateDecisionBatch } from "./validation.js";
 
 /** Core calls carry their owner's abort signal; plugin callers additionally bind their exact instance. */
 export async function evaluateDecision(
   batch: DecisionBatch,
-  options: Options,
+  options: DecisionEvaluateOptions,
 ): Promise<DecisionOutcome> {
   return evaluateDecisionInRegistry(
     batch,
@@ -54,29 +54,6 @@ export function evaluateDecisionV2(
     getPluginRegistryForContext(),
     getRuntimeConfig(),
   );
-}
-
-type Outcome = DecisionOutcome | DecisionOutcomeV2;
-export type DecisionEvaluation<T extends Outcome = Outcome> = {
-  outcome: T;
-  usageFacts?: Pick<
-    Parameters<typeof finalizePluginModelUsage>[0],
-    "cfg" | "hostPluginId" | "target" | "preparedBilling"
-  >;
-};
-
-/** Complete only at the caller's successful return, after its late guards and projection. */
-export function completeDecisionEvaluation<T extends Outcome>(
-  evaluation: DecisionEvaluation<T>,
-): T {
-  if (evaluation.outcome.status === "ok" && evaluation.usageFacts) {
-    finalizePluginModelUsage({
-      ...evaluation.usageFacts,
-      rawUsage: evaluation.outcome.result.usage,
-      estimate: "none",
-    });
-  }
-  return evaluation.outcome;
 }
 
 export async function evaluateDecisionInRegistry(
@@ -102,7 +79,7 @@ export async function evaluateDecisionV2InRegistry(
 /** Internal callers with outer lifecycle checks retain completion until those checks pass. */
 export function evaluateDecisionOperation(
   batch: DecisionBatch,
-  options: Options,
+  options: DecisionEvaluateOptions,
   registry: PluginRegistry | null | undefined,
   config: OpenClawConfig,
   consumerId?: string,
@@ -277,32 +254,21 @@ async function evaluateVersion(
     if (timeoutMs <= 0) {
       return skipped(entry.host.unavailable("deadline"));
     }
-    let preparedBilling: PreparedDecisionBilling | undefined;
-    const onPreparedBilling = (facts: PreparedDecisionBilling) => {
+    let preparedBilling: PreparedDecisionBillingFacts | undefined;
+    const onPreparedBilling = (facts: PreparedDecisionBillingFacts) => {
       preparedBilling = facts;
     };
-    const result =
-      version === 1
-        ? await entry.host.evaluate(
-            submitted as DecisionBatch, // SAFETY: V1 validation and structuredClone preserve the admitted V1 shape.
-            { ...options, timeoutMs, signal },
-            selected.model,
-            config,
-            registry,
-            consumerId,
-            isAdmissible,
-            onPreparedBilling,
-          )
-        : await entry.host.evaluateV2(
-            submitted as DecisionBatchV2, // SAFETY: V2 validation and structuredClone preserve the admitted V2 shape.
-            { ...options, timeoutMs, signal },
-            selected.model,
-            config,
-            registry,
-            consumerId,
-            isAdmissible,
-            onPreparedBilling,
-          );
+    const result = await entry.host.evaluate(
+      submitted,
+      { ...options, timeoutMs, signal },
+      selected.model,
+      config,
+      registry,
+      version,
+      consumerId,
+      isAdmissible,
+      onPreparedBilling,
+    );
     if (!rootCaller) {
       signal.throwIfAborted();
     }
@@ -327,43 +293,4 @@ async function evaluateVersion(
     modelExecution?.release();
     capturedOperator?.release?.();
   }
-}
-
-/** Abort before dependent consumers drain. Services subsequently join actual physical settlement. */
-export function prepareDecisionProviderReload(
-  registry: PluginRegistry,
-  changedPluginIds: ReadonlySet<string>,
-) {
-  const paused: ReturnType<DecisionProviderHost["pauseForReload"]>[] = [];
-  for (const entry of registry.decisionProviders) {
-    if (changedPluginIds.has(entry.pluginId)) {
-      paused.push(entry.host.pauseForReload(changedPluginIds));
-    } else {
-      for (const pluginId of changedPluginIds) {
-        entry.host.cancelConsumer(pluginId);
-      }
-    }
-  }
-  return {
-    async rollback(signal: AbortSignal) {
-      // Timeout only observes settlement: no detached continuation may reopen admission.
-      await withPluginHostCleanupTimeout("decision reload rollback", () =>
-        Promise.all(paused.map((pause) => pause.settled)),
-      );
-      signal.throwIfAborted();
-      for (const pause of paused) {
-        pause.assertResumable();
-      }
-      for (const pause of paused) {
-        pause.resume();
-      }
-    },
-  };
-}
-
-export function inspectDecisionProviders(
-  config: OpenClawConfig,
-  registry = getPluginRegistryForContext(),
-) {
-  return registry?.decisionProviders.map((entry) => entry.host.inspect(config)) ?? [];
 }

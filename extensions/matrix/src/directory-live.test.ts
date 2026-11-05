@@ -11,9 +11,7 @@ vi.mock("./matrix/client.js", () => ({
 // mock-isolation: Directory fixtures replace the HTTP transport to prevent live Matrix requests.
 vi.mock("./matrix/sdk/http-client.js", () => ({
   MatrixAuthedHttpClient: class {
-    requestJson(params: unknown) {
-      return requestJsonMock(params);
-    }
+    requestJson = requestJsonMock;
   },
 }));
 
@@ -62,14 +60,14 @@ describe("matrix directory live", () => {
     expect(requestJsonMock).not.toHaveBeenCalled();
   });
 
-  it("resolves prefixed room aliases through the hardened Matrix HTTP client", async () => {
-    const id = "!team:example.org",
-      alias = "#Team:Example.org";
-    requestJsonMock.mockResolvedValueOnce({ room_id: id });
-
-    const results = await listMatrixDirectoryGroupsLive({ ...scoped, query: `channel:${alias}` });
-    expect(results).toEqual([{ kind: "group", id, name: alias, handle: alias }]);
-    expectRequest("GET", "/_matrix/client/v3/directory/room/%23Team%3AExample.org");
+  it.each(["NFD", "NFC"] as const)("matches canonical names (%s)", async (form) => {
+    const name = "Café chatter".normalize(form);
+    requestJsonMock.mockResolvedValueOnce({ joined_rooms: ["!room:example.org"] });
+    requestJsonMock.mockResolvedValueOnce({ name });
+    const query = "CAFÉ".normalize(form === "NFD" ? "NFC" : "NFD");
+    expect(await listMatrixDirectoryGroupsLive({ ...scoped, query })).toEqual([
+      { kind: "group", id: "!room:example.org", name, handle: `#${name}` },
+    ]);
   });
 
   it("rejects a non-object joined-rooms response instead of returning no groups", async () => {

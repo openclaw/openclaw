@@ -19,6 +19,16 @@ import {
 
 afterEach(() => replaceSlashCommands(buildFallbackSlashCommands()));
 
+it("routes /fork and its optional title to the local session operation", () => {
+  for (const text of ["/fork", "/fork Release plan"]) {
+    expect(parseSlashCommand(text)).toMatchObject({
+      command: { key: "fork", executeLocal: true, args: "[title]", icon: "copy" },
+      args: text === "/fork" ? "" : "Release plan",
+    });
+    expect(isModelIndependentChatCommand(text)).toBe(true);
+  }
+});
+
 describe("model-independent commands", () => {
   it.each([
     "/unknown",
@@ -167,14 +177,14 @@ describe("parseSlashCommand", () => {
   it("matches skill queries against both display titles and command tokens", () => {
     applyRemoteEntries(
       remoteCommand("release_notes", {
-        skillDisplayName: "Release Notes",
+        skillDisplayName: "Mu\u0308nchen Notes",
         source: "skill",
         skillModelVisible: true,
       }),
     );
 
-    const expected = [{ name: "release_notes", skillDisplayName: "Release Notes" }];
-    expect(getSkillCommandCompletions("notes")).toMatchObject(expected);
+    const expected = [{ name: "release_notes", skillDisplayName: "Mu\u0308nchen Notes" }];
+    expect(getSkillCommandCompletions("M\u00dcNCHEN")).toMatchObject(expected);
     expect(getSkillCommandCompletions("release_n")).toMatchObject(expected);
   });
 

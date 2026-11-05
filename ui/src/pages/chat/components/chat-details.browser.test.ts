@@ -1,7 +1,8 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal, merge } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
+import { observeResize } from "../../../lib/reactive/observers.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { phase } from "../../../test-helpers/solid-menu.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
@@ -107,6 +108,7 @@ async function fixture(
       update({ chat: { ...current().chat!, ...patch } }),
     open: (source: HTMLElement) => details?.open(source),
     frame,
+    elements: current().elements!,
     pane,
     footer,
     get session() {
@@ -132,6 +134,88 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
+  it("keeps unchanged resize targets and observes replaced refs in the same layout object", async () => {
+    await page.viewport(1700, 900);
+    const view = await fixture(props(), 1320, false, "desktop", true);
+    onTestFinished(observeResize([view.frame], () => {}));
+    const settle = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    await settle();
+    const read = vi.spyOn(view.frame, "getBoundingClientRect");
+    onTestFinished(() => read.mockRestore());
+    view.updateChat({ messages: [] });
+    flush();
+    await Promise.resolve();
+    expect(read).not.toHaveBeenCalled();
+
+    const replacement = document.createElement("div");
+    replacement.style.cssText = view.frame.style.cssText;
+    view.pane.append(replacement);
+    const replacedRead = vi.spyOn(replacement, "getBoundingClientRect");
+    onTestFinished(() => replacedRead.mockRestore());
+    view.elements.frame = replacement;
+    view.updateChat({ messages: [] });
+    flush();
+    await settle();
+    expect(replacedRead).toHaveBeenCalled();
+  });
+
+  it("resolves composer observation after refs attach", () => {
+    const observe = vi.spyOn(ResizeObserver.prototype, "observe");
+    const pane = document.createElement("div");
+    document.body.append(pane);
+    mounted.push(pane);
+    let input: HTMLTextAreaElement | null = null;
+    try {
+      mountSolid(
+        () => {
+          const details = createComponent(ChatDetails, {
+            chat: props(),
+            presentation: true,
+            mobile: false,
+            elements: { pane, getComposerInput: () => input },
+            setRef: () => {},
+          });
+          input = document.createElement("textarea");
+          pane.append(input);
+          return details;
+        },
+        { container: pane },
+      );
+      flush();
+      expect(observe.mock.calls.some(([target]) => target === input)).toBe(true);
+    } finally {
+      observe.mockRestore();
+    }
+  });
+
+  it("keeps native resize subscriptions across equivalent parent snapshots", async () => {
+    const observe = vi.spyOn(ResizeObserver.prototype, "observe");
+    const unobserve = vi.spyOn(ResizeObserver.prototype, "unobserve");
+    try {
+      const { pane, frame, footer, update } = await fixture();
+      const targets = new Set<Element>([pane, frame, footer]);
+      const calls = () => observe.mock.calls.filter(([target]) => targets.has(target)).length;
+      const initial = calls();
+      expect(initial).toBeGreaterThan(0);
+      update({ elements: { pane, frame, footer } });
+      flush();
+      expect(calls()).toBe(initial);
+      expect(unobserve.mock.calls.filter(([target]) => targets.has(target))).toHaveLength(0);
+      const replacement = document.createElement("div");
+      pane.append(replacement);
+      update({ elements: { pane, frame: replacement, footer } });
+      flush();
+      expect(observe.mock.calls.some(([target]) => target === replacement)).toBe(true);
+      expect(unobserve.mock.calls.some(([target]) => target === frame)).toBe(true);
+    } finally {
+      observe.mockRestore();
+      unobserve.mockRestore();
+    }
+  });
+
   it.each([undefined, "desktop"] as const)(
     "reserves automatic Details before the first resize delivery (presentation: %s)",
     async (nativePresentation) => {
@@ -251,8 +335,13 @@ describe("chat Details presentation", () => {
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     trigger.click();
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    // ResizeObserver and the native popover settle on the browser's rendering turn.
+    const shown = new Promise<void>((resolve) => {
+      panel.addEventListener("toggle", () => resolve(), { once: true });
+    });
     frame.style.width = "600px";
-    await expect.poll(() => panel.matches(":popover-open")).toBe(true);
+    await shown;
+    expect(panel.matches(":popover-open")).toBe(true);
     expect(panel.getAttribute("role")).toBe("dialog");
     expect(conversation.getBoundingClientRect().width).toBe(600);
     frame.style.width = "1320px";
@@ -295,25 +384,26 @@ describe("chat Details presentation", () => {
         createComponent(ChatDetailsDesktopBody, {
           presented: true,
           get children() {
-            return createComponent(ChatDetailsEnvironment, {
-              details: props({
-                detailsWorkspace: {
-                  root: "/workspace/details",
-                  label: null,
+            return () =>
+              createComponent(ChatDetailsEnvironment, {
+                details: props({
+                  detailsWorkspace: {
+                    root: "/workspace/details",
+                    label: null,
+                    branch: "feature/details",
+                  },
+                }),
+                presented: true,
+                onOpenUncommitted: openChanges,
+                uncommitted: {
+                  sessionKey: card.sessionKey,
                   branch: "feature/details",
+                  baseRef: "HEAD",
+                  files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
+                  additions: 3,
+                  deletions: 1,
                 },
-              }),
-              presented: true,
-              onOpenUncommitted: openChanges,
-              uncommitted: {
-                sessionKey: card.sessionKey,
-                branch: "feature/details",
-                baseRef: "HEAD",
-                files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
-                additions: 3,
-                deletions: 1,
-              },
-            });
+              });
           },
         }),
       { container: panel },

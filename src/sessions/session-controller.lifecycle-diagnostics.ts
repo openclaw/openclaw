@@ -46,6 +46,36 @@ export type SessionLifecycleDiagnosticLabel =
   | "subagent-kill-sweep"
   | "workspace-edit"
   | "worktree-cleanup";
+type SessionLifecycleDiagnosticWait =
+  | "caller-facts"
+  | "caller-stop"
+  | "descendants"
+  | "kill-intent"
+  | "admission-drain"
+  | "runtime-load"
+  | "registry-settlement"
+  | "registry-retirement";
+export type SessionLifecycleDiagnosticWaitDurations = Partial<
+  Record<`${"prepare" | "run"}.${SessionLifecycleDiagnosticWait}`, number>
+>;
+
+/** Observe pending work without changing the disabled-diagnostics promise path. */
+export function createLifecycleDiagnosticWaitRecorder(phase: () => "prepare" | "run") {
+  const subphaseDurationsMs: SessionLifecycleDiagnosticWaitDurations | undefined =
+    areDiagnosticsEnabledForProcess() ? {} : undefined;
+  const observeWait = <T>(name: SessionLifecycleDiagnosticWait, work: Promise<T>): Promise<T> => {
+    if (!subphaseDurationsMs) {
+      return work;
+    }
+    const key = `${phase()}.${name}` as const;
+    const startedAt = performance.now();
+    return work.finally(() => {
+      subphaseDurationsMs[key] = (subphaseDurationsMs[key] ?? 0) + performance.now() - startedAt;
+    });
+  };
+  return { subphaseDurationsMs, observeWait };
+}
+
 type Phase =
   | "admission"
   | "activation"
@@ -61,15 +91,8 @@ type ControllerPhase =
   | "injection-outcome"
   | "successor-barrier"
   | "followup-barrier"
-  | "lifecycle-admission"
-  | "recovery-predecessor";
-type ControllerPhaseStatus =
-  | "waiting"
-  | "selected"
-  | "settled"
-  | "failed"
-  | "reserved"
-  | "restored";
+  | "lifecycle-admission";
+type ControllerPhaseStatus = "waiting" | "selected" | "settled" | "failed";
 
 type PhaseRecord = {
   phase: ControllerPhase;
@@ -183,6 +206,7 @@ export function createLifecycleDiagnosticOperation(params: {
   identities: () => readonly string[];
   signal?: AbortSignal;
   mutationKind?: LifecycleDiagnosticOperation["mutationKind"];
+  subphaseDurationsMs?: Readonly<SessionLifecycleDiagnosticWaitDurations>;
 }): LifecycleDiagnosticOperation | undefined {
   try {
     if (!areDiagnosticsEnabledForProcess()) {
@@ -350,6 +374,16 @@ export function createLifecycleDiagnosticOperation(params: {
                   Math.round(value),
                 ]),
               ),
+              ...(params.subphaseDurationsMs
+                ? {
+                    subphaseDurationsMs: Object.fromEntries(
+                      Object.entries(params.subphaseDurationsMs).map(([phase, value]) => [
+                        phase,
+                        Math.round(value),
+                      ]),
+                    ),
+                  }
+                : {}),
               signalAborted: params.signal?.aborted ?? false,
             }),
             operation,

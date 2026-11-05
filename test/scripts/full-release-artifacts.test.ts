@@ -142,14 +142,19 @@ function fixture(sourceSha = SOURCE_SHA, workflowRef = "main") {
   writeFileSync(
     join(bin, "gh"),
     `#!/usr/bin/env node
-const { readFileSync } = require("node:fs");
+const { readFileSync, writeFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] !== "api" || args.includes("POST")) throw new Error("Unexpected GitHub mutation");
-const { responses } = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
+const fixture = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
+const { responses, calls } = fixture;
 if (!Object.hasOwn(responses, args[1])) throw new Error("Unexpected GitHub endpoint: " + args[1]);
 const response = responses[args[1]];
-if (response.fixtureError) { process.stderr.write(response.fixtureError); process.exit(1); }
-process.stdout.write(JSON.stringify(response));
+calls[args[1]] = (calls[args[1]] ?? 0) + 1;
+const failure = response.fixtureErrorOnce ?? response.fixtureError;
+delete response.fixtureErrorOnce;
+writeFileSync(process.env.FIXTURE_RESPONSES, JSON.stringify(fixture));
+if (failure) { process.stderr.write(failure); process.exit(1); }
+process.stdout.write(response.fixtureOutput ?? JSON.stringify(response));
 `,
     { mode: 0o755 },
   );
@@ -193,7 +198,7 @@ globalThis.fetch = async (input) => {
     mkdirSync(directory);
     const outputPath = join(directory, "github-output");
     const callsPath = join(directory, "calls.jsonl");
-    writeFileSync(responsesPath, JSON.stringify({ responses, downloads }));
+    writeFileSync(responsesPath, JSON.stringify({ responses, downloads, calls: {} }));
     const result = spawnSync(
       process.execPath,
       ["--import", pathToFileURL(preloadPath).href, SCRIPT, command],
@@ -238,7 +243,8 @@ globalThis.fetch = async (input) => {
       }),
     );
     const calls = readLines(callsPath).map((line) => JSON.parse(line) as string[]);
-    return { ...result, outputs, calls };
+    const apiCalls = readJson(responsesPath).calls as Record<string, number>;
+    return { ...result, outputs, calls, apiCalls };
   };
   const artifact = (
     name: string,
@@ -667,6 +673,24 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
             : [{ ...test.jobs[0], id: 999, run_attempt: 2, conclusion: "failure" }],
     );
     test.rawArtifact();
+    if (outcome === "replacement preparation failed") {
+      test.artifact("openclaw-npm-package-descriptor-81-2", "prepared-npm-bundle.json", {
+        ...test.raw,
+        producer: { ...test.raw.producer, jobId: "999", runAttempt: "2" },
+        artifact: {
+          ...test.raw.artifact,
+          id: "499",
+          name: "openclaw-npm-package-81-2",
+          runAttempt: "2",
+        },
+      });
+    } else {
+      test.list(
+        "actions/runs/81/artifacts?name=openclaw-npm-package-descriptor-81-2&per_page=100",
+        "artifacts",
+        [],
+      );
+    }
     const raw = test.wait("raw", { ARTIFACT_RUN_ATTEMPT: "2" });
     if (outcome === "replacement preparation failed") {
       expectRejected(raw, "Successful npm preparation was replaced");
@@ -677,6 +701,57 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     test.receiptArtifact(test.seal("2"), "2");
     const receipt = expectSuccess(test.wait("receipt", { ARTIFACT_RUN_ATTEMPT: "2" }));
     expect(receipt.outputs).toEqual(test.outputs);
+  });
+
+  it("keeps polling when the npm descriptor appears before its producer job completes", () => {
+    const test = fixture();
+    const pending = { ...test.jobs[0], status: "in_progress", conclusion: null };
+    test.jobsApi(1, [pending]);
+    test.api(`actions/jobs/${pending.id}`, pending);
+    test.rawArtifact();
+
+    const raw = test.wait("raw", { FIXTURE_STOP_ON_WAIT: "true" });
+    expectRejected(raw, "Fixture reached another artifact poll");
+    expect(raw.stderr).not.toContain("unique exact completed producer job");
+  });
+
+  it("ignores a failed preparation descriptor when a later retry succeeds", () => {
+    const test = fixture();
+    const current = { run_attempt: 2, ...completed };
+    const failed = { ...test.jobs[0], conclusion: "failure" };
+    const succeeded = {
+      ...test.jobs[0],
+      id: 999,
+      run_attempt: 2,
+      status: "completed",
+      conclusion: "success",
+    };
+    const retried = {
+      ...test.raw,
+      producer: {
+        ...test.raw.producer,
+        jobId: "999",
+        runAttempt: "2",
+      },
+      artifact: {
+        ...test.raw.artifact,
+        id: "499",
+        name: "openclaw-npm-package-81-2",
+        runAttempt: "2",
+      },
+    };
+    test.runApi("81", current);
+    test.runApi("81/attempts/1", { ...completed, conclusion: "failure" });
+    test.runApi("81/attempts/2", current);
+    test.jobsApi(1, [failed]);
+    test.jobsApi(2, [succeeded]);
+    test.api("actions/jobs/901", failed);
+    test.api("actions/jobs/999", succeeded);
+    test.rawArtifact();
+    test.artifact("openclaw-npm-package-descriptor-81-2", "prepared-npm-bundle.json", retried);
+
+    const raw = expectSuccess(test.wait("raw", { ARTIFACT_RUN_ATTEMPT: "2" }));
+    expect(JSON.parse(raw.outputs.prepared_bundle_json!)).toEqual(retried);
   });
 
   it.each([
@@ -729,15 +804,35 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     expect(result.stderr).toContain("Other producer jobs continue running");
   });
 
-  it("keeps waiting while a queued producer has no jobs", () => {
-    const test = fixture();
-    test.runApi("81", { status: "queued" });
-    test.jobsApi(1, []);
-    test.collect(
-      "receipt",
-      { FIXTURE_STOP_ON_WAIT: "true" },
+  it.each([
+    ["valid response", {}, "Fixture reached another artifact poll", 1],
+    [
+      "one truncated CLI response",
+      { fixtureErrorOnce: "unexpected end of JSON input" },
       "Fixture reached another artifact poll",
-    );
+      2,
+    ],
+    [
+      "persistent truncation",
+      { fixtureError: "unexpected end of JSON input" },
+      "unexpected end of JSON input",
+      2,
+    ],
+    ["authorization failure", { fixtureError: "gh: Forbidden (HTTP 403)" }, "HTTP 403", 1],
+    ["malformed successful response", { fixtureOutput: "{" }, "JSON", 1],
+  ] as const)("handles a queued producer's jobs read with %s", (_name, response, error, reads) => {
+    const test = fixture();
+    const dispatchId = "full-release-validation-51-1-artifacts-docker";
+    test.runApi("81", { status: "queued", display_title: `Full Release Artifacts ${dispatchId}` });
+    const path = "actions/runs/81/attempts/1/jobs?per_page=100&page=1";
+    test.api(path, { total_count: 0, jobs: [], ...response });
+    const result = test.wait("receipt", {
+      ARTIFACT_STAGE: "docker",
+      ARTIFACT_DISPATCH_ID: dispatchId,
+      FIXTURE_STOP_ON_WAIT: "true",
+    });
+    expectRejected(result, error);
+    expect(result.apiCalls[`repos/${REPOSITORY}/${path}`]).toBe(reads);
   });
 
   it.each([

@@ -493,11 +493,16 @@ it("recovers removed-job custody even when orphan discovery fails", async () => 
 });
 
 it("keeps live custody acquired while orphan discovery is pending", async () => {
+  const reads = vi.spyOn(await import("./registry.js"), "readRegistry");
   vi.mocked(listDockerPersistentExecContainers).mockImplementationOnce(async () => {
     await f.seedCustody("reserved");
     return [f.receipt];
   });
-  await f.owner.recover();
+  const { maybePruneSandboxes } = await import("./prune.js");
+  await maybePruneSandboxes({
+    agents: { defaults: { sandbox: { prune: { idleHours: 0, maxAgeDays: 0 } } } },
+  });
+  expect(reads).toHaveBeenCalledOnce();
   expect(stopDockerPersistentExec).not.toHaveBeenCalled();
   await f.expectCustody({ phase: "reserved" });
 });

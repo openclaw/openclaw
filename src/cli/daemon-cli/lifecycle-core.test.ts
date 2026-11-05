@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { GatewayRestartPreparationError } from "../../infra/restart-intent-error.js";
-import { withEnvAsync } from "../../test-utils/env.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-support.js";
 import {
   createGatewayServiceRunArgs as createServiceRunArgs,
@@ -20,6 +20,7 @@ const clearGatewayRestartIntentSync = vi.fn();
 const appendGatewayLifecycleAudit = vi.fn();
 const MISSING_SERVICE_PROGRAM = "/openclaw-test-missing-runtime/node";
 const scheduledMessage = "restart scheduled, gateway will restart momentarily";
+const interruptReason = new DOMException("Command interrupted by SIGINT.", "AbortError");
 function makeTokenConfig() {
   return { gateway: { auth: { token: "config-token" } } };
 }
@@ -347,30 +348,23 @@ it("repairs managed port drift before restarting", async () => {
   });
 });
 
-it("keeps Nix restart available without suggesting a forbidden token reinstall", async () => {
-  await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
-    await expect(
-      runServiceRestart({ ...createServiceRunArgs(true), opts: { json: false } }),
-    ).resolves.toBe(true);
-
-    expect(service.restart).toHaveBeenCalledOnce();
-    const output = lifecycleRuntimeLogs.join("\n");
-    expect(output).toContain("Config token differs from service token");
-    expect(output).toContain("Nix mode detected; service install is disabled.");
-    expect(output).not.toContain("gateway install --force");
-  });
-});
-
-it("compares restart drift against config token even when caller env is set", async () => {
-  command([], { OPENCLAW_GATEWAY_TOKEN: "env-token" });
+it.each(["Nix", "caller token"])("keeps drift warnings scoped to %s", async (mode) => {
+  vi.stubEnv("OPENCLAW_NIX_MODE", mode === "Nix" ? "1" : "");
   vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
-
-  await runServiceRestart(createServiceRunArgs(true));
-
-  const payload = readJsonLog();
-  expect(payload.warnings?.some((warning) => warning.includes("gateway install --force"))).toBe(
-    true,
-  );
+  const preparedCommand = {
+    programArguments: [],
+    environment: { OPENCLAW_GATEWAY_TOKEN: mode === "Nix" ? "service-token" : "env-token" },
+  };
+  await runServiceRestart({
+    ...createServiceRunArgs(() => ({ command: preparedCommand, config: loadConfig() })),
+    opts: { json: false },
+  });
+  expect(service.restart).toHaveBeenCalledOnce();
+  expect(service.readCommand).toHaveBeenCalledOnce();
+  const output = lifecycleRuntimeLogs.join("\n");
+  expect(output).toContain("Config token differs from service token");
+  expect(output.includes("Nix mode detected; service install is disabled.")).toBe(mode === "Nix");
+  expect(output.includes("gateway install --force")).toBe(mode !== "Nix");
 });
 
 it("skips drift warning when disabled", async () => {
@@ -756,3 +750,48 @@ it.each([
   expect(lifecycleTestRuntime.error).toHaveBeenCalledWith(error);
   expect(lifecycleRuntimeLogs).toContain(`Tip: ${failureHint}`);
 });
+
+it.each([
+  [
+    "start readiness",
+    (scope: AsyncWorkScope) =>
+      start({
+        postStartCheck: async () => {
+          scope.beginClose(interruptReason);
+          throw interruptReason;
+        },
+      }),
+    undefined,
+  ],
+  [
+    "restart readiness",
+    (scope: AsyncWorkScope) =>
+      restart({
+        postRestartCheck: async () => {
+          scope.beginClose(interruptReason);
+          throw interruptReason;
+        },
+      }),
+    false,
+  ],
+  [
+    "owned-process restart",
+    (scope: AsyncWorkScope) =>
+      restart({
+        restartOwnedProcess: async () => {
+          scope.beginClose(interruptReason);
+          throw interruptReason;
+        },
+      }),
+    false,
+  ],
+] as const)(
+  "never reports %s as a lifecycle failure after an accepted interrupt",
+  async (_route, run, expected) => {
+    const scope = new AsyncWorkScope();
+
+    await expect(scope.run(() => run(scope))).resolves.toBe(expected);
+    expectNoCalls(lifecycleTestRuntime.error, lifecycleTestRuntime.exit);
+    expect(lifecycleRuntimeLogs).toEqual([]);
+  },
+);

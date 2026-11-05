@@ -38,7 +38,7 @@ export function prepareDraftSubmission(
   if (!startup && !pendingPlacement) {
     const error = attachmentBatchRejection(attachments, context.gateway.snapshot.hello?.policy);
     if (error !== undefined) {
-      showToast({ message: error });
+      showToast({ severity: "error", message: error });
       return null;
     }
   }

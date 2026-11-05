@@ -1,7 +1,7 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, expect, it } from "vitest";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -15,8 +15,8 @@ import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-l
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import type { ImageGenerationRequest } from "./provider-types.js";
 import { generateImage, type GenerateImageParams } from "./runtime.js";
-import type { ImageGenerationRequest } from "./types.js";
 
 const png = Buffer.from("synthetic-image");
 const cleanups: Array<() => Promise<void>> = [];
@@ -76,14 +76,11 @@ function createNativeImageFixture(id = "native-image-owner", rejectGeneration = 
     });
 `,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      contracts: { imageGenerationProviders: [id] },
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    contracts: { imageGenerationProviders: [id] },
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+  });
   const config = {
     plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
   };

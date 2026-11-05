@@ -10,6 +10,14 @@ sidebarTitle: "Offline and reconnect"
 
 What survives a dropped connection, and how the Control UI recovers when it returns.
 
+An initial connection has a two-second grace period before connection feedback
+appears. A failed or closed connection shows feedback immediately, and retries
+keep it visible until the Gateway connects. Cached conversations retain their
+header controls; on desktop the connection indicator floats centered below the
+pane header, for example **Reconnecting… · Saved conversation**, without moving
+header controls or the transcript. Resolving a session link or loading
+history does not imply a lost connection.
+
 Returning to a suspended tab or regaining network connectivity can recover a
 stale connection. These signals do not retry a connection that requires a page
 reload, corrected credentials, or a new pairing request. Follow the displayed
@@ -22,6 +30,13 @@ Wi-Fi never reports an offline/online change. Young opening attempts and opened
 sockets keep their normal handshake. Announced startup, restart, suspension, and
 busy-Gateway waits keep their existing retry pacing; hidden tabs do not poll.
 Expected reachability failures do not trigger sign-in recovery notifications.
+
+After connecting, requests refused because the Gateway is still starting stay
+pending. The shared client honors the server's retry delay and doubles the wait
+after repeated startup refusals, up to eight seconds (or a longer server hint).
+Requests load their data on the next successful retry; their original timeout
+and cancellation still apply. Other requests can proceed independently while an
+agent or method is starting.
 
 An unanswered send starts a liveness check after about five seconds. Any inbound
 frame proves the connection is alive; otherwise, ten more seconds without a
@@ -43,6 +58,12 @@ fails. Reads for the same agent share one request across the sidebar and chat,
 including failures: subsequent reads back off from 500 ms to 5 seconds and honor
 longer Gateway retry hints. Reconnecting clears the retry wait so identity reads
 can resume on the new connection.
+
+The sidebar also keeps its display-only account identity during reconnects.
+Solo-owned sessions in **Involving me** or **My sessions** keep redundant owner
+avatars hidden when the live profile becomes temporarily unavailable;
+shared-session attribution remains visible. This retained identity does not
+authorize Gateway requests.
 
 ## Queued session changes
 
@@ -145,6 +166,20 @@ state; the full live presence roster replaces these last-known viewers when it
 arrives. The identity-only hello does not clear them. The header retains the
 sharing control's displayed mode and geometry while connecting, without enabling
 its menu or membership actions until live authority is available.
+
+The cached window also retains resolved link labels, image dimensions, archive
+attribution, and avatar source identities. Previously displayed inline thumbnails
+can paint with their rows while reconnecting, without a new network read. These
+display copies do not authorize opening originals or other Gateway actions.
+
+Thumbnail storage shares the transcript's Gateway and account scope. It holds at
+most 32 thumbnails and 8 MiB total, with a 256 KiB limit per image; animated and
+full-size originals are excluded. Display facts cover up to eight links and eight
+images per retained row, across 80 rows. Thumbnails leave the cache with their
+rows, and scope retirement, session reset, or forgetting the browser clears the
+affected copies. Missing, evicted, or incompatible data keeps the usual loader.
+Media tickets and credentials are never added to these display facts.
+
 The first chat request uses the saved cursor if the cached transcript is ready when
 the live message subscription finishes connecting. Otherwise, the live read and
 cache restoration run in parallel. Agent switches and stale asynchronous reads
@@ -164,9 +199,9 @@ Unique display-name links use the same cached route resolution, including the
 
 Exact conversation links can restore their scoped transcript without waiting for
 the sidebar roster or the socket to open. A prepared snapshot supplies the header,
-transcript, and composer in the first pane frame. The existing header connection
-indicator remains visible until live history and route confirmation finish; cached
-content stays visible while those checks run. Dashboard layouts restore before the pane renders, and embedded
+transcript, and composer in the first pane frame. Cached content stays visible
+while live history and route confirmation finish; those checks do not show the
+header connection indicator. Dashboard layouts restore before the pane renders, and embedded
 HTML widgets restore their last board metadata from the same scoped conversation
 cache and start loading the isolated sandbox while connecting. Document requests
 still require the current Gateway connection and overlap the live board refresh.
@@ -192,6 +227,7 @@ older, unbounded transcript records; a connected visit fills the new cache.
 The first upward scroll or **Show earlier** refills the Gateway's current history
 window before continuing to older pages. Automatic viewport filling does not
 trigger this refill. Overlapping cached rows are deduplicated.
+Deleting a session removes its transcript and prunes its rows from the saved sidebar without clearing unrelated conversations or sidebar content. An unchanged live handoff reuses the saved sidebar; roster read receipts alone do not trigger another write. Tabs sharing the same saved sidebar write each changed presentation once. A malformed individual transcript snapshot discards only that conversation.
 Clearing site data removes local recovery data.
 If browser storage is unavailable or no usable record exists, the connection
 screen appears as usual.
@@ -208,7 +244,8 @@ The account-scoped transcript cache replaces older unscoped derived snapshots;
 those old transcripts are discarded rather than attributed to the next account.
 A connected visit fills the new cache. Existing unowned drafts and queued input
 are preserved for explicit recovery and review, not automatically assigned or
-sent. Existing attachment stores and storage limits remain unchanged. An older
+sent. Draft and queued-input attachment stores keep their existing storage limits;
+warm transcript thumbnails use the separate bounds above. An older
 UI cannot read the new account-qualified outbox keys; rolling back does not
 convert that retained input back into an unowned queue.
 
@@ -324,8 +361,11 @@ drafts, then try **Refresh** again. **Keep drafts** leaves them protected in thi
 Each draft shows the session title, session key, and pane position captured when
 the file was opened, so matching filenames remain distinguishable. Newer edits
 remain protected if they change while you review an older draft.
-File edits stay in memory in the current page;
-an explicit browser reload or closing the browser tab discards them.
+File edits stay in memory in the current page. After editing a file, the browser
+asks for confirmation before an ordinary reload or tab close, including when the
+file preview is closed. Cancel keeps your edits available. Saving or explicitly
+discarding the last draft removes this protection. Confirming the reload or tab
+close discards the unsaved edits; it does not save them to the file.
 
 ## Visualizations during a connection loss
 
@@ -395,7 +435,8 @@ With the sidebar collapsed, a flag beside the avatar appears for four seconds on
 Hover or focus the avatar to reopen it. If the flag would cover a composer or other writing
 controls, the avatar tooltip carries the status instead. The tooltip is hidden while the flag is visible.
 On mobile, status replaces the header breadcrumb and badges the menu button; opening the drawer
-shows the full footer row. Brief disconnects keep the existing two-second grace.
+shows the full footer row. Initial connection attempts use the two-second grace;
+an observed connection close shows status immediately.
 
 The status includes the total queued messages and session changes, plus **Retry** when an immediate connection
 attempt is available. Hover or focus for the redacted connection error. Settings keeps its save feedback
@@ -508,7 +549,29 @@ conversation after a Gateway restart, the page shows **Session not found** with
 actions to open Main or browse sessions. A connection failure or a conversation
 missing from the current sidebar page does not count as deletion.
 
+Offline cache downloads yield while conversations, routes, and plugin interfaces
+load, including during the service worker's first installation. Downloads run in
+bounded batches at low priority. Interrupted downloads retain completed assets
+and resume after foreground imports and Gateway requests settle.
+
+Menu bodies load when opened instead of downloading speculatively while the page
+is idle. First open can briefly show a loading row; later opens reuse the loaded
+body. Declared next-route preloads still run after the current page is ready.
+
+When reconnecting to the same Gateway and account, the existing conversation
+history requests changes since its last cursor. The sidebar refresh runs alongside
+that history recovery instead of waiting for it. Its retained labels stay visible
+until the fresh authorized roster arrives; first loads still prioritize the open
+conversation before loading the roster.
+
 Opening a view for the first time can fail if its interface files cannot be downloaded.
+This also covers the workspace shell in source-backed development previews.
+If the shell fails to load, text entered in its loading screen stays editable below
+the error and blocks automatic and in-app reloads. Copy it somewhere safe, clear
+it, then use **Reload**. Once the chat pane opens, normal draft handling takes over.
+If the conversation cannot open, the same early text stays editable below the
+route result. Copy it before opening another conversation; navigation discards
+that input and never sends it to the replacement conversation.
 The UI waits for reachability and reloads automatically, subject to reload protection
 and the 30-second loop guard. You can also use **Reload**. The same error can occur after an update;
 it does not by itself mean a new version was installed. If unsaved work blocks the
@@ -536,9 +599,10 @@ send that can be resent. New input uses normal steering and queue rules while th
 resumed run works.
 
 A crash or forced kill does not resume work automatically. Stored conversations
-remain available for a new message. Legacy interrupted or ownerless queued inputs
-are inert and do not produce restart banners, pending counts, or history notices.
-The browser preserves submission IDs when reconciling uncertain sends.
+remain available for a new message. At startup, accepted queued input without a
+live owner or graceful-restart marker becomes a cancelled send with its text intact,
+so you can review and resend it. It does not count as pending work. Legacy interrupted
+input remains inert. The browser preserves submission IDs when reconciling uncertain sends.
 
 When the Gateway acknowledges a send, including a duplicate submission, the
 Control UI marks it sent. The browser keeps any payload needed to display

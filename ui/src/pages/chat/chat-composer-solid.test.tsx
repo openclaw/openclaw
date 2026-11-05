@@ -22,6 +22,7 @@ import { keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { clearSubmittedComposerState, cancelChatDelivery } from "./chat-send-composer.ts";
 import { appendChatAttachmentFiles } from "./components/chat-attachments.ts";
 import { ComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
@@ -91,6 +92,15 @@ function mountOwnedComposer(overrides: Partial<ChatComposerProps> = {}) {
       );
   return { owner, state, view, input, enter };
 }
+
+it("rebinds the native composer when its pane presentation changes", () => {
+  const { view, input, owner } = mountOwnedComposer({ paneId: "single" });
+  view.update({ paneId: "plugin-app:agent:main:one" });
+  expect(getChatComposerState("plugin-app:agent:main:one").composerTextarea).toBe(view.textarea());
+  input("Describe this shell.");
+  flush();
+  expect(owner.composerDraft.read().draft).toBe("Describe this shell.");
+});
 
 it("updates edits and history from the draft owner without remounting the input", () => {
   const { owner, state, view } = mountOwnedComposer();
@@ -336,7 +346,8 @@ it("updates composer text on a live locale change without disturbing an IME draf
   );
   const textarea = view.textarea();
   const heading = view.query(".chat-controls__permission-heading")!;
-  expect(heading.textContent).toBe("Execution permissions");
+  const learnMore = () => view.query(".chat-controls__permission-learn-more")?.textContent?.trim();
+  expect(learnMore()).toBe("Learn more");
   expect(textarea.placeholder).toBe("Message Locale fixture");
 
   textarea.focus();
@@ -349,7 +360,7 @@ it("updates composer text on a live locale change without disturbing an IME draf
   await i18n.setLocale("de");
   flush();
 
-  expect(heading.textContent).toBe("Ausführungsberechtigungen");
+  expect(learnMore()).toBe("Mehr erfahren");
   expect(textarea.placeholder).toBe("Nachricht an Locale fixture");
   expect(view.query(".chat-controls__permission-heading")).toBe(heading);
   expect(view.textarea()).toBe(textarea);

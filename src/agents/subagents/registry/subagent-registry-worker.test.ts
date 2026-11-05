@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
@@ -7,6 +8,11 @@ import {
   observeParentSqlite,
 } from "../../../../test/helpers/sqlite-parent-observer.js";
 import { createContext as createGatewayContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import {
+  expectCollected,
+  weak,
+  weakControl,
+} from "../../../gateway/session-collection.test-support.js";
 import * as snapshotSource from "../../../infra/sqlite-snapshot-source.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
@@ -15,6 +21,7 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-context-binding.js";
+import * as gatewayAdmission from "../../../process/gateway-work-admission.js";
 import * as sessionStateNotices from "../../../sessions/session-state-notices.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { clearOpenClawDatabaseQuarantine } from "../../../state/openclaw-quarantine-store.js";
@@ -27,6 +34,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
+import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
@@ -40,6 +48,7 @@ import {
   saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import {
+  clearSubagentRunsReadCacheForTest,
   getSubagentRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   prepareSubagentRegistrationRows,
@@ -209,7 +218,7 @@ function interceptWrites(callback: (phase: "before" | "after") => void | Promise
   });
 }
 
-function holdFirstAck(onWrite = () => {}) {
+function holdFirstAck(onWrite = () => {}, waitForRelease = true) {
   const reached = createDeferredCore();
   const release = createDeferredCore();
   let held = false;
@@ -217,7 +226,7 @@ function holdFirstAck(onWrite = () => {}) {
     if (phase === "before") {
       onWrite();
     }
-    if (phase === "after" && !held) {
+    if (phase === "after" && !held && waitForRelease) {
       held = true;
       reached.resolve();
       await release.promise;
@@ -412,6 +421,62 @@ it("publishes overlapping durable and runtime-only mutations in FIFO order", asy
   }
 });
 
+it("releases unrelated registration rows while following new owners and deletion receipts", async () => {
+  vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1");
+  const child = "agent:main:subagent:retained-registration";
+  async function capture() {
+    // A completed row is compacted away from the worker reply's object lifetime.
+    seed(
+      entry("selected", { childSessionKey: child }),
+      entry("unrelated", { execution: { status: "terminal", endedAt: 2 }, cleanupCompletedAt: 3 }),
+    );
+    const preparedRows = await prepareSubagentRegistrationRows(
+      child,
+      ["selected"],
+      captureOpenClawStateWorkerContext(),
+    );
+    const retired = weak(getSubagentRunsSnapshotForRead(new Map()).get("unrelated")!);
+    clearSubagentRunsReadCacheForTest();
+    return { preparedRows, retired };
+  }
+  // Finish the frame that read the full snapshot before testing the reader's retention.
+  const { preparedRows, retired } = await capture();
+  await expectCollected(weakControl(), retired);
+  expect([...preparedRows().keys()]).toEqual(["selected"]);
+  await register(entry("unrelated", { childSessionKey: child, generation: 2 }));
+  expect(preparedRows().get("unrelated")?.generation).toBe(2);
+  await mutateSubagentRuns(["selected"], () => postimages([["selected", null]]));
+  expect(preparedRows().has("selected")).toBe(false);
+  expect(preparedRows().has("unrelated")).toBe(true);
+});
+
+it("selects registration rows in owner order without traversing unrelated live runs", async () => {
+  const child = "agent:main:subagent:indexed-registration";
+  seed(
+    entry("first", { childSessionKey: child }),
+    entry("explicit", { createdAt: 2 }),
+    entry("unrelated"),
+  );
+  await restore();
+  const context = captureOpenClawStateWorkerContext();
+  const prepare = () => prepareSubagentRegistrationRows(child, ["explicit"], context);
+  const initial = await prepare();
+  expect([...initial().keys()]).toEqual(["first", "explicit"]);
+  const traversal = vi.spyOn(subagentRuns, Symbol.iterator);
+  const reader = await prepare();
+  expect([...reader().keys()]).toEqual(["first", "explicit"]);
+  expect(traversal).not.toHaveBeenCalled();
+  traversal.mockRestore();
+  // A live replacement leaves the durable bucket; a new live row joins it.
+  subagentRuns.set("first", entry("first", { childSessionKey: "agent:main:elsewhere" }));
+  subagentRuns.set("last", entry("last", { childSessionKey: child }));
+  expect([...reader().keys()]).toEqual(["explicit", "last"]);
+  await register(entry("durable-next", { childSessionKey: child }));
+  expect([...reader().keys()]).toEqual(["explicit", "durable-next", "last"]);
+  await mutateSubagentRuns(["explicit"], () => postimages([["explicit", null]]));
+  expect([...reader().keys()]).toEqual(["durable-next", "last"]);
+});
+
 it("persists prepared-only registration without resurrecting it after a queued deletion", async () => {
   await register(entry("warm-registration"));
   const original = entry("prepared-deletion");
@@ -490,7 +555,7 @@ it("serializes opposite multi-row orders without a lock-order deadlock", async (
   ]);
 });
 
-it("settles a requester cohort while many children finish and one is killed", async () => {
+it("settles a requester cohort and killed-child cleanup after shutdown closes admission", async () => {
   const children = Array.from({ length: 18 }, (_, index) =>
     entry(`child-${index}`, {
       completion: { required: true },
@@ -499,15 +564,20 @@ it("settles a requester cohort while many children finish and one is killed", as
     }),
   );
   const stopped = entry("killed", {
+    attachmentId: "cc30d548-d417-46f1-a15f-f057e136f3ba",
     childSessionIdentity: { sessionId: "killed-session" },
     collect: true,
-    execution: {
-      status: "running" as const,
-      startedAt: 1,
-      suppressSessionEffects: true as const,
-    },
+    execution: { status: "running", startedAt: 1, suppressSessionEffects: true },
   });
   await register(...children, stopped);
+  const attachmentDir = path.join(
+    resolveSubagentSessionAttachmentRootDir({
+      agentId: "main",
+      childSessionKey: stopped.childSessionKey,
+    }),
+    stopped.attachmentId!,
+  );
+  await fs.mkdir(attachmentDir, { recursive: true });
   const manager = createSubagentRunManager(
     createSubagentManagerTestOptions(subagentRuns, async () => {
       throw new Error("Stress fixture unexpectedly called the Gateway");
@@ -525,8 +595,6 @@ it("settles a requester cohort while many children finish and one is killed", as
       entries: [child],
       context,
       assertCurrent: () => {},
-      onCommitted: () => {},
-      onPublished: () => {},
       operation: {
         kind: "transition",
         state: { status: "dispatching", attemptCount: 1, rearmGeneration: 1 },
@@ -535,25 +603,23 @@ it("settles a requester cohort while many children finish and one is killed", as
   );
   const settlement = Promise.all(wakes).then(() =>
     mutateRequesterCompletionBatch({
-      entries: children.map(({ runId }) => {
-        const subagent = subagentRuns.get(runId);
-        if (!subagent) {
-          throw new Error("Requester wake lost its acknowledged child");
-        }
-        return subagent;
-      }),
+      entries: [...subagentRuns.values()].filter(({ runId }) => runId !== stopped.runId),
       context,
       operation: { kind: "settle", outcome: { delivered: true, path: "direct" } },
       assertCurrent: () => {},
     }),
   );
+  gatewayAdmission.markGatewayRestartDraining("stop (SIGTERM)");
   const killed = manager.markSubagentRunTerminated({
     runId: stopped.runId,
     reason: "synthetic kill",
     suppressTaskDelivery: true,
   });
-  const results = await Promise.allSettled([...completions, settlement, killed]);
+  const results = await Promise.allSettled([...completions, settlement, killed]).finally(
+    gatewayAdmission.resetGatewayWorkAdmission,
+  );
   expect(results.filter((result) => result.status === "rejected")).toEqual([]);
+  await expect(fs.stat(attachmentDir)).rejects.toMatchObject({ code: "ENOENT" });
   const saved = loadSubagentRegistryFromSqlite();
   expect(saved.size).toBe(children.length + 1);
   for (const child of children) {
@@ -683,30 +749,21 @@ it.each(["before ACK", "inside failing callback"] as const)(
   "keeps an old-source commit from notifying a replacement database (%s)",
   async (transition) => {
     await register(entry("source"));
-    const reached = createDeferredCore();
-    const release = createDeferredCore();
+    const { reached, release } = holdFirstAck(undefined, transition === "before ACK");
     const observed = vi.fn();
     const stop = subscribeSubagentRunChanges("persistence", observed);
     const revision = getSubagentRegistryPublicationRevision();
     const replaceSource = () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(fixture.state.stateDir, "replacement"));
     };
-    interceptWrites(async (phase) => {
-      if (phase === "after" && transition === "before ACK") {
-        reached.resolve();
-        await release.promise;
-      }
-    });
     const pending = change(
       "source",
       { label: "old database commit" },
       {
         onPublished: () => {
-          if (transition !== "before ACK") {
+          if (transition === "inside failing callback") {
             replaceSource();
-            if (transition === "inside failing callback") {
-              throw new Error("Synthetic custody failure after source replacement");
-            }
+            throw new Error("Synthetic custody failure after source replacement");
           }
         },
       },

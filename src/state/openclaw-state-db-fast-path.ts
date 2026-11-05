@@ -2,8 +2,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { readGatewayOwnerLeaseFromDatabase } from "../infra/gateway-owner-lease.read.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import { runWithSqliteCleanup } from "../infra/sqlite-lifecycle-errors.js";
+import { SqliteSnapshotCleanupError } from "../infra/sqlite-lifecycle-errors.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import {
   assertSqliteSchemaContains,
   createSqliteTableContractReader,
@@ -11,7 +12,7 @@ import {
   type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
 import { throwSqliteSchemaMismatches } from "../infra/sqlite-schema-issues.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
+import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { hasLegacyCronRunLogs } from "../infra/state-legacy-cron-presence.js";
 import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
@@ -22,6 +23,7 @@ import {
 } from "./openclaw-state-db-admission.js";
 import type { OpenClawStateIntegrityAdmission } from "./openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { hasHistoricalImageReserveSnapshots } from "./openclaw-state-db-image-snapshot-migration.js";
 import { assertOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-maintenance.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
@@ -37,19 +39,46 @@ import {
 } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
-export function needsOpenClawStateDatabaseSchemaRepair(
+/** Doctor must yield while preserving the captured source's WAL artifacts. */
+export async function needsOpenClawStateDatabaseSchemaRepair(
   pathname: string,
   scope: "automatic" | "doctor" = "automatic",
   integrityCheck: "quick" | "full" = "quick",
+): Promise<boolean> {
+  if (!hasUpdateDoctorMigrationCapture()) {
+    return inspectStateSchemaRepair(pathname, pathname, scope, integrityCheck);
+  }
+  const signal = resolveSqliteInspectionSignal();
+  let prepared: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>>;
+  try {
+    prepared = await prepareSqliteReadOnlyLocation(pathname, {
+      preserveSourceArtifacts: true,
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof SqliteSnapshotCleanupError) {
+      throw error;
+    }
+    signal?.throwIfAborted();
+    return true;
+  }
+  try {
+    signal?.throwIfAborted();
+    return inspectStateSchemaRepair(pathname, prepared.location, scope, integrityCheck);
+  } finally {
+    await prepared.cleanupAsync();
+  }
+}
+
+function inspectStateSchemaRepair(
+  pathname: string,
+  location: string,
+  scope: "automatic" | "doctor",
+  integrityCheck: "quick" | "full",
 ): boolean {
   let database: DatabaseSync | undefined;
-  let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
   try {
-    // A native source read can reset the captured WAL index before migration takes custody.
-    prepared = hasUpdateDoctorMigrationCapture()
-      ? prepareSqliteReadOnlyLocationSync(pathname)
-      : undefined;
-    database = openNodeSqliteDatabase(prepared?.location ?? pathname, { readOnly: true });
+    database = openNodeSqliteDatabase(location, { readOnly: true });
     if (scope === "automatic" && getStateRuntimeSchemaAdmission(database)?.startupReady) {
       return false;
     }
@@ -57,7 +86,8 @@ export function needsOpenClawStateDatabaseSchemaRepair(
     assertSupportedStateSchemaVersion(database, pathname);
     const needsRepair =
       readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
-      hasLegacyCronRunLogs(database);
+      hasLegacyCronRunLogs(database) ||
+      (scope === "doctor" && hasHistoricalImageReserveSnapshots(database));
     if (!needsRepair) {
       assertCurrentStateRuntimeSchema(database, pathname);
       if (scope === "doctor") {
@@ -69,9 +99,7 @@ export function needsOpenClawStateDatabaseSchemaRepair(
     // Preserve the repair path's existing diagnostics for unreadable or noncanonical databases.
     return true;
   } finally {
-    runWithSqliteCleanup({ release: () => prepared?.cleanup() }, "State schema inspection", () =>
-      database?.close(),
-    );
+    database?.close();
   }
 }
 

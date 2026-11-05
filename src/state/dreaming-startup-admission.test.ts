@@ -33,6 +33,10 @@ import {
 } from "../plugin-sdk/session-store-runtime.js";
 import { readSessionTranscriptEvents } from "../plugin-sdk/session-transcript-runtime.js";
 import { appendSqliteSessionTranscriptEventForTest } from "../plugin-sdk/sqlite-runtime-testing.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
 import { getPluginInstance, getPluginOriginalValue } from "../plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
@@ -90,6 +94,8 @@ const disabledCron = {
 
 function createManagedMemoryCore(config: OpenClawConfig, logger: OpenClawPluginApi["logger"]) {
   const runtime = createTestPluginApi().runtime;
+  const resourceHost = new LegacyPluginSdkResourceHost();
+  onTestFinished(() => resourceHost.close());
   Object.assign(runtime, { config: { current: () => config } });
   const owner = createPluginRegistry({ logger, runtime, activateGlobalSideEffects: false });
   const record = createPluginRecord({
@@ -106,7 +112,9 @@ function createManagedMemoryCore(config: OpenClawConfig, logger: OpenClawPluginA
     api,
     bindGateway() {
       const gateway = createGatewayRequestContext(makeContextParams());
-      bindGatewayContextResolver(runtime, () => gateway);
+      const resolver = () => gateway;
+      bindLegacyPluginSdkResourceHost(resolver, resourceHost);
+      bindGatewayContextResolver(runtime, resolver);
     },
     dispose: () => getPluginInstance(record)!.dispose(),
   };
@@ -125,7 +133,7 @@ function dreamingFixture(state: OpenClawTestState, config: OpenClawConfig) {
   const hook = owner.registry.typedHooks.find(
     (entry) => entry.hookName === "gateway_start",
   )?.handler;
-  assert(service && service.apiVersion !== 2 && hook, "Missing Memory Core startup lifecycle");
+  assert(service && service.apiVersion === 2 && hook, "Missing Memory Core startup lifecycle");
   const scheduler = createTestPluginServiceScheduler();
   const context = {
     config,
@@ -240,8 +248,9 @@ it.for(["inspection", "preparation"] as const)(
           state,
           async (admission, activate) => {
             const joining = createDeferredCore();
-            const wait = admission.waitForAgentPreparation.bind(admission);
-            vi.spyOn(admission, "waitForAgentPreparation").mockImplementation((...args) => {
+            const observer = admission.observation;
+            const wait = observer.waitForAgentPreparation.bind(observer);
+            vi.spyOn(observer, "waitForAgentPreparation").mockImplementation((...args) => {
               expect(getAgentDatabaseStartupAdmission()).toBeUndefined();
               const preparation = wait(...args);
               joining.resolve();
@@ -454,9 +463,10 @@ it.for([
         state,
         async (admission, activate) => {
           const joined = createDeferredCore();
-          const wait = admission.waitForAgentPreparation.bind(admission);
+          const observer = admission.observation;
+          const wait = observer.waitForAgentPreparation.bind(observer);
           let joinedPreparation = false;
-          vi.spyOn(admission, "waitForAgentPreparation").mockImplementation((...args) => {
+          vi.spyOn(observer, "waitForAgentPreparation").mockImplementation((...args) => {
             const preparation = wait(...args);
             joinedPreparation ||= preparation !== undefined;
             joined.resolve();

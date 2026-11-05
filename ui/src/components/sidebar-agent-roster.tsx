@@ -14,7 +14,7 @@ import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
-import { templateCreatorAction } from "../pages/templates/creator-flow.ts";
+import { templateCreatorAction } from "../pages/templates/creator-owner.ts";
 import { canCreateTemplateDraft } from "../pages/templates/draft-navigation.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderSessionListFrame } from "./app-sidebar-session-list-render.tsx";
@@ -161,12 +161,12 @@ export function SidebarAgentRoster(props: {
       return;
     }
     const confirmed = await showConfirmDialog({
-      message: t("agentsHome.deleteAgentConfirm", { agent: agent.name }),
-      details: t("agentsHome.deleteAgentDetails"),
+      title: t("agentsHome.deleteAgentConfirm", { agent: agent.name }),
+      message: t("agentsHome.deleteAgentDetails"),
       confirmLabel: t("common.delete"),
       danger: true,
     }).catch((error: unknown) => {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
       return false;
     });
     if (
@@ -179,7 +179,7 @@ export function SidebarAgentRoster(props: {
     try {
       await client.request("agents.delete", { agentId: agent.id, deleteFiles: true });
     } catch (error) {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
     } finally {
       await currentContext.agents.refreshList();
     }
@@ -487,6 +487,7 @@ export function SidebarAgentRoster(props: {
             )}
           </Show>
         </div>,
+        true,
       )}
     </openclaw-sidebar-agent-roster>
   );

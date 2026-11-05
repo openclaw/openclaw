@@ -52,7 +52,7 @@ const copy = () => run("copy-markdown");
 async function rejectCopy(errorMessage = t("sessionsView.copyTranscriptChanged")) {
   await copy();
   expect(copyToClipboard).not.toHaveBeenCalled();
-  expect(showToast).toHaveBeenCalledWith({ message: errorMessage });
+  expect(showToast).toHaveBeenCalledWith({ severity: "error", message: errorMessage });
 }
 
 function page(messages: unknown[], extra: Partial<ChatHistoryResult> = {}): ChatHistoryResult {
@@ -119,7 +119,10 @@ it.each(["open-new-tab", "open-new-window"] as const)(
 it("reports popup blocking", async () => {
   vi.spyOn(window, "open").mockReturnValue(null);
   await run("open-new-window");
-  expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.openWindowBlocked") });
+  expect(showToast).toHaveBeenCalledWith({
+    severity: "error",
+    message: t("sessionsView.openWindowBlocked"),
+  });
 });
 
 it.each([null, "leaf-3"])(
@@ -152,7 +155,7 @@ it.each([null, "leaf-3"])(
     expect(copied.match(/Middle response/g)).toHaveLength(1);
     expect(copied.indexOf("First response")).toBeLessThan(copied.indexOf("Middle response"));
     expect(copied.indexOf("Middle response")).toBeLessThan(copied.indexOf("Last response"));
-    expect(showToast).toHaveBeenCalledWith({ message: t("common.copied") });
+    expect(showToast).toHaveBeenCalledWith({ severity: "success", message: t("common.copied") });
   },
 );
 
@@ -219,7 +222,10 @@ it.each(["view", "connection", "pending"])(
       expect(request).not.toHaveBeenCalled();
     }
     expect(copyToClipboard).not.toHaveBeenCalled();
-    expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.copyTranscriptChanged") });
+    expect(showToast).toHaveBeenCalledWith({
+      severity: "error",
+      message: t("sessionsView.copyTranscriptChanged"),
+    });
   },
 );
 
@@ -251,5 +257,8 @@ it("uses the mounted chat owner's split capability and requires its handling rec
   expect(showToast).not.toHaveBeenCalled();
   window.removeEventListener(UI_COMMAND_EVENT, received);
   await run("split-right");
-  expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.splitUnavailable") });
+  expect(showToast).toHaveBeenCalledWith({
+    severity: "error",
+    message: t("sessionsView.splitUnavailable"),
+  });
 });

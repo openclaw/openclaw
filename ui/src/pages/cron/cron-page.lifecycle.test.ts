@@ -245,15 +245,13 @@ it.each([false, true])(
     emitEvent(gateway, "chat.metadata.changed");
     await expectModels(page, hasRows ? ["fixture/current"] : []);
     expect(page.textContent).toContain(
-      hasRows
-        ? "Some models could not be refreshed. Open Models to try again."
-        : "Models unavailable",
+      hasRows ? "Couldn’t refresh some models. Open Models to try again." : "Models unavailable",
     );
     result = { models: [], refreshFailed: false };
     emitEvent(gateway, "chat.metadata.changed");
     await waitForCronPage(() =>
       expect(page.textContent).not.toContain(
-        hasRows ? "Some models could not be refreshed" : "Models unavailable",
+        hasRows ? "Couldn’t refresh some models" : "Models unavailable",
       ),
     );
     await expectModels(page, []);
@@ -581,6 +579,43 @@ it("refreshes trigger authoring from scheduler status after reconnect", async ()
   );
   expect(triggerToggle).toBeUndefined();
   expect(page.textContent).toContain("disabled by cron.triggers.enabled");
+});
+
+it("replaces an in-flight inventory read when the connected profile hydrates", async () => {
+  const earlier = deferred<CronJobsListResult>(cronListResponse([]));
+  const currentJob = createCronViewJob("current-profile-job");
+  const fallback = createRequest();
+  let reads = 0;
+  const client = createTestGatewayClient((method) => {
+    if (method === "cron.list") {
+      reads += 1;
+      return reads === 1 ? earlier.promise : cronListResponse([currentJob]);
+    }
+    return fallback(method);
+  });
+  const gateway = createGateway(client, true);
+  gateway.emitSnapshot({
+    hello: {
+      ...operatorHello(["operator.admin"]),
+      features: { events: ["cron.inventory.changed"] },
+    },
+    selfUser: undefined,
+  });
+  const page = createPage(createContext(gateway));
+  await waitForCronPage(() => expect(reads).toBe(1));
+  const state = page.cron;
+  state.cronForm.name = "Retained draft";
+
+  gateway.emitSnapshot({
+    selfUser: { id: "hydrated-profile", identity: { type: "profile", id: "hydrated-profile" } },
+  });
+  earlier.resolve(cronListResponse([createCronViewJob("retired-profile-job")]));
+  await waitForCronPage(() => {
+    expect(page.cron.cronJobs.map((job) => job.id)).toEqual(["current-profile-job"]);
+    expect(page.cron.cronJobsError).toBeNull();
+  });
+  expect(page.cron).toBe(state);
+  expect(state.cronForm.name).toBe("Retained draft");
 });
 
 it.each([false, true])(

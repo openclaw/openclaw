@@ -62,11 +62,16 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   includeSessionMessageBodies?: boolean;
   /** Connection-owned timing facts, reconciled across live peers independently of the TTL cache. */
   personPresence?: { onlineSince: number; lastActivityAt?: number };
+  /** Viewer declarations belong to this live connection, independently of the TTL cache. */
+  watchedSessions?: readonly string[];
   /** Accepted interaction on this exact connection, never copied from another client. */
   connectionLastActivityAt?: number;
   authenticatedUserId?: string;
   /** Configured Enterprise account verified by trusted-proxy handshake admission. */
   authenticatedFactoryGitHubAccountId?: number;
+  /** Connection identity supplied by the selected repository integration. */
+  authenticatedGitHubAccountId?: number;
+  authenticatedRepositoryCredentialSource?: import("../../plugins/repository-integration.types.js").RepositoryConnectionIdentity["credentialSource"];
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
@@ -74,6 +79,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   preparedRecipientProfileId?: string;
   preparedSessionProfile?: UserProfileIdentity;
   authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
+  /** Initialized even for broad (undefined) access; must match this connection's published hello. */
+  profileActivity?: { viewerId: string | null | undefined };
   clientIp?: string;
   /** Server-attested inputs for rechecking browser-origin policy after config publication. */
   browserOrigin?: GatewayWsBrowserOrigin;

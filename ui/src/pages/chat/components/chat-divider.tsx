@@ -11,10 +11,12 @@ import {
   normalizeChatModelProviderId,
 } from "../../../lib/chat/model-ref.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { formatModelLabel } from "./chat-model-picker-options.ts";
+import { registerChatSearchTextBlock } from "./chat-search-highlight.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
 export type ChatNoticeProps = {
@@ -23,7 +25,13 @@ export type ChatNoticeProps = {
   modelCatalog?: ModelCatalogEntry[];
   recovery?: Pick<
     ChatThreadProps,
-    "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun" | "onDismissPendingInput"
+    | "failureActionsRunId"
+    | "runActive"
+    | "runWorking"
+    | "onRetryRun"
+    | "failedMessageEditSource"
+    | "onFocusComposer"
+    | "onDismissPendingInput"
   >;
 };
 
@@ -72,7 +80,9 @@ function SystemLine(props: {
             <Icon name="check" />
           </span>
         </Show>
-        <span class="chat-divider__title">{props.children ?? props.label}</span>
+        <span class={["chat-divider__title", { "text-shimmer": props.compaction === "active" }]}>
+          {props.children ?? props.label}
+        </span>
         <Show when={props.metric}>
           <span class="chat-divider__separator" aria-hidden="true">
             ·
@@ -113,6 +123,7 @@ export function ChatDivider(props: { item: Extract<ChatItem, { kind: "divider" }
 function NoticeBody(props: { text: string }) {
   return (
     <MarkdownHtml
+      ref={elementRef(registerChatSearchTextBlock)}
       class="chat-text chat-notice__body"
       dir={detectTextDirection(props.text)}
       markdown={props.text}

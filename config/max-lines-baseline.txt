@@ -235,7 +235,6 @@ src/cli/mcp-cli.ts
 src/cli/plugins-cli-test-helpers.ts
 src/cli/plugins-cli.runtime.ts
 src/cli/run-main.ts
-src/cli/skills-cli.ts
 src/commands/agent-via-gateway.test.ts
 src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
@@ -243,7 +242,6 @@ src/commands/doctor-auth-flat-profiles.test.ts
 src/commands/doctor-auth-flat-profiles.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
-src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
 src/commands/models/auth.ts
@@ -261,7 +259,6 @@ src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
 src/cron/isolated-agent/run.test-harness.ts
 src/daemon/systemd.test.ts
 src/flows/channel-setup.ts
-src/flows/doctor-core-checks.ts
 src/flows/doctor-health-contributions.test.ts
 src/flows/model-picker.ts
 src/gateway/call.test.ts
@@ -317,15 +314,12 @@ src/gateway/session-reset-service.ts
 src/gateway/session-utils.test.ts
 src/gateway/sessions-patch.test.ts
 src/gateway/talk/handlers/index.test.ts
-src/gateway/talk/handlers/index.ts
 src/gateway/talk/relay/index.test.ts
 src/gateway/test-helpers.server.ts
 src/gateway/watch-node-http.ts
 src/infra/backup-create.test.ts
-src/infra/command-explainer/extract.ts
 src/infra/diagnostic-events.ts
 src/infra/exec-approvals-allowlist.ts
-src/infra/exec-authorization-plan.ts
 src/infra/npm-managed-root.ts
 src/infra/outbound/deliver.test.ts
 src/infra/outbound/delivery-queue-recovery.ts
@@ -366,7 +360,6 @@ src/plugins/loader.test-harness.ts
 src/plugins/manifest-registry.test.ts
 src/plugins/marketplace.ts
 src/plugins/provider-runtime.test.ts
-src/plugins/provider-runtime.ts
 src/plugins/sdk-alias.test.ts
 src/plugins/sdk-alias.ts
 src/plugins/tools.optional.test.ts

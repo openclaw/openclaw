@@ -37,8 +37,6 @@ it.each(["accessor", "proxy"])("samples a static %s catalog without executing it
       {
         pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
         remoteCatalog: null,
-        inlineProviderModels: [],
-        configuredCatalogEntries: [],
         preparedStaticProviderCatalog,
       },
     ],
@@ -68,8 +66,6 @@ it("does not rewalk unchanged immutable remote catalogs and refreshes changed ro
   const generation = (remoteCatalog: typeof first) => ({
     pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
     remoteCatalog,
-    inlineProviderModels: [],
-    configuredCatalogEntries: [],
   });
   const firstGeneration = generation(first);
   const secondGeneration = generation(second);
@@ -109,8 +105,6 @@ it("does not rewalk published metadata on idle samples and refreshes replacement
   const generation = (pluginMetadataSnapshot: typeof first) => ({
     pluginMetadataSnapshot,
     remoteCatalog: null,
-    inlineProviderModels: [],
-    configuredCatalogEntries: [],
   });
   const firstGeneration = generation(first);
   const secondGeneration = generation(second);

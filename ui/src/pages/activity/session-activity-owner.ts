@@ -1,8 +1,10 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath, activityPersonLocation } from "../../app-route-paths.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createSessionEventRefreshCoordinator } from "../../lib/sessions/event-refresh-coordinator.ts";
@@ -393,7 +395,9 @@ export function createSessionActivity(notify: () => void) {
           }
         }
         if (!requiresRefresh && !incomplete && !changesOverflowed) {
-          eventRefresh.scheduleFallback();
+          if (currentFilters !== "current") {
+            eventRefresh.scheduleFallback();
+          }
           return;
         }
       }
@@ -539,10 +543,15 @@ export function createSessionActivity(notify: () => void) {
       })
       .catch((error: unknown) => {
         if (pendingRequest === pending && !pending.controller.signal.aborted) {
+          if (error instanceof GatewayRequestError && error.gatewayCode === "FORBIDDEN") {
+            currentResult = undefined;
+            historyRows.reset();
+            resetSummaries();
+          }
           if (filters === "current") {
             incomplete = false;
           }
-          currentError = error instanceof Error ? error.message : String(error);
+          currentError = formatUiError(error);
           pending.presentation.reject(error);
         }
       })

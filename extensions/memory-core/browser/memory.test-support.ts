@@ -16,7 +16,7 @@ export function expectText(node: Node, included: string[], excluded: string[] = 
 }
 export const findButton = (node: HTMLElement, label: RegExp) =>
   [...node.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
-    label.test(button.textContent?.trim() ?? ""),
+    label.test(button.textContent?.trim() || (button.getAttribute("aria-label") ?? "")),
   );
 
 export type MutableSnapshot = {

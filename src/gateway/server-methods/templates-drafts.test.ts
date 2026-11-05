@@ -147,35 +147,38 @@ async function publicationFixture(name = "@maker/research-brief") {
   const identity = { publisher: "maker", revoke: false };
   const write = (document = proposal) => writeFile(draft.path, JSON.stringify(document));
   await write();
-  vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
-    const request = new Request(input, init);
-    if (request.method === "POST") {
-      posts += 1;
-    }
-    expect(request.headers.get("Authorization")).toBe("Bearer fixture-personal-token");
-    if (request.url.endsWith("/whoami")) {
-      if (identity.revoke) {
-        connections.delete("draft-author");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (request.method === "POST") {
+        posts += 1;
       }
-      return Response.json({ user: { handle: identity.publisher } });
-    }
-    expect(request.method).toBe("POST");
-    const form = await request.formData();
-    const payload = form.get("payload");
-    const archive = form.get("clawpack");
-    assert(typeof payload === "string" && archive instanceof File);
-    const bytes = Buffer.from(await archive.arrayBuffer());
-    const digest = createHash("sha256").update(bytes).digest("hex");
-    expect(JSON.parse(payload)).toMatchObject({
-      name,
-      family: "template",
-      channel: "community",
-      ownerHandle: "maker",
-      expectedArtifactSha256: digest,
-    });
-    uploads.push(bytes);
-    return Response.json({ ok: true, artifactSha256: digest, publicationStatus: "pending" });
-  });
+      expect(request.headers.get("Authorization")).toBe("Bearer fixture-personal-token");
+      if (request.url.endsWith("/whoami")) {
+        if (identity.revoke) {
+          connections.delete("draft-author");
+        }
+        return Response.json({ user: { handle: identity.publisher } });
+      }
+      expect(request.method).toBe("POST");
+      const form = await request.formData();
+      const payload = form.get("payload");
+      const archive = form.get("clawpack");
+      assert(typeof payload === "string" && archive instanceof File);
+      const bytes = Buffer.from(await archive.arrayBuffer());
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      expect(JSON.parse(payload)).toMatchObject({
+        name,
+        family: "template",
+        channel: "community",
+        ownerHandle: "maker",
+        expectedArtifactSha256: digest,
+      });
+      uploads.push(bytes);
+      return Response.json({ ok: true, artifactSha256: digest, publicationStatus: "pending" });
+    }),
+  );
   return {
     workspaceDir,
     draft,

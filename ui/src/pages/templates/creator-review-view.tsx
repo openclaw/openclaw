@@ -9,13 +9,14 @@ import {
   Show,
   type Accessor,
 } from "solid-js";
+import "../../components/modal-dialog.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
 import { showToast } from "../../lib/toast.ts";
-import type { TemplateCreatorFlow } from "./creator-flow.ts";
+import type { TemplateCreator } from "./creator-publication.ts";
 
-type CreatorView = SourceProjection<TemplateCreatorFlow, TemplateCreatorFlow>;
+type CreatorView = SourceProjection<TemplateCreator, TemplateCreator>;
 
 const sections = [
   ["file", "templatesDraft.workspaceFiles"],
@@ -26,7 +27,7 @@ const sections = [
 ] as const;
 
 function OptionalSection(props: {
-  flow: TemplateCreatorFlow;
+  flow: TemplateCreator;
   view: CreatorView;
   kind: TemplateDraftReviewItem["kind"];
   title: string;
@@ -81,10 +82,10 @@ function OptionalSection(props: {
 }
 
 function TemplateReviewDialog(props: {
-  flow: TemplateCreatorFlow;
+  flow: TemplateCreator;
   view: CreatorView;
   reviewRead: Accessor<null>;
-  reviewReceipt: TemplateCreatorFlow["reviewRead"];
+  reviewReceipt: TemplateCreator["reviewRead"];
 }) {
   const state = () => props.view.read();
   const review = () => state().review!;
@@ -97,7 +98,7 @@ function TemplateReviewDialog(props: {
       // Closing or leaving releases presentation; the owner still records the write outcome.
       yield Promise.race([pending, retired]);
     } catch (error) {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
     }
   });
   async function publish() {
@@ -246,7 +247,7 @@ function TemplateReviewDialog(props: {
   );
 }
 
-export function TemplateCreatorReviewView(props: { flow: TemplateCreatorFlow; view: CreatorView }) {
+export function TemplateCreatorReviewView(props: { flow: TemplateCreator; view: CreatorView }) {
   const flow = () => props.flow;
   const view = () => props.view;
   const reviewReceipt = createMemo(() => view().read().reviewRead);

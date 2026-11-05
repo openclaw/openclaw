@@ -113,6 +113,7 @@ export function handleMessageEnd(
     return;
   }
 
+  ctx.state.commentaryTextProjection = undefined;
   // Transcript-only messages never reach the provider, so this counts exactly
   // the completed model round trips consumers see as `assistantTurns`.
   ctx.state.assistantTurnCount += 1;

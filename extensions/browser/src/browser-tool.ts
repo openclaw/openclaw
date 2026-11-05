@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   type AnyAgentTool,
@@ -9,6 +10,7 @@ import {
   readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DecisionRuntimeV2 } from "openclaw/plugin-sdk/decisions";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
@@ -217,12 +219,21 @@ export function createBrowserTool(
     runToolBinding?: unknown;
     toolCapabilities?: BrowserToolCapabilities;
   },
+  getConfig: () => OpenClawConfig = getRuntimeConfig,
 ): AnyAgentTool {
-  const { binding, capabilities, metadata } = createBrowserToolDefinition(opts, getRuntimeConfig);
+  const { binding, capabilities, metadata } = createBrowserToolDefinition(opts, getConfig);
   return {
     ...metadata,
     execute: async (_toolCallId, args, signal) => {
-      opts?.assertInvocationCurrent?.();
+      // Host guards resolve their caller from the async context they run in. Shared CDP
+      // connections deliver navigation events in whichever call's context created them, so
+      // every host check for this request runs in the context this call was admitted in.
+      const runInInvocation = AsyncLocalStorage.snapshot();
+      const bindToInvocation = (assert: (() => void) | undefined) =>
+        assert ? () => runInInvocation(assert) : undefined;
+      const assertInvocationCurrent = bindToInvocation(opts?.assertInvocationCurrent);
+      const assertLocalLoopbackCurrent = bindToInvocation(opts?.assertLocalLoopbackCurrent);
+      assertInvocationCurrent?.();
       let params = binding
         ? applyBrowserTabToolBinding(args as Record<string, unknown>, binding)
         : (args as Record<string, unknown>);
@@ -352,6 +363,7 @@ export function createBrowserTool(
             { isHostFallbackActive: () => false, route: () => undefined },
           );
           const result = await executeBrowserTabAction({
+            getConfig,
             action,
             params,
             actRequest: action === "act" ? readActRequestParam(params) : undefined,
@@ -382,7 +394,7 @@ export function createBrowserTool(
       const requestedNode = readStringParam(params, "node");
       const requestedTimeoutMs = readToolTimeoutMs(params);
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
-      const runtimeConfig = getRuntimeConfig();
+      const runtimeConfig = getConfig();
       const resolvedBrowser = resolveBrowserConfig(runtimeConfig.browser, runtimeConfig);
       const effectiveProfile = requestedProfile ?? resolvedBrowser.defaultProfile;
       const resolvedProfile = resolveProfile(resolvedBrowser, effectiveProfile);
@@ -418,14 +430,17 @@ export function createBrowserTool(
 
       let nodeTarget: Awaited<ReturnType<typeof resolveBrowserToolNodeTarget>> = null;
       try {
-        nodeTarget = await resolveBrowserToolNodeTarget({
-          requestedNode: requestedNode ?? undefined,
-          profile: requestedProfile,
-          target,
-          sandboxBridgeUrl: opts?.sandboxBridgeUrl,
-          allowHostControl: opts?.allowHostControl,
-          signal,
-        });
+        nodeTarget = await resolveBrowserToolNodeTarget(
+          {
+            requestedNode: requestedNode ?? undefined,
+            profile: requestedProfile,
+            target,
+            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+            allowHostControl: opts?.allowHostControl,
+            signal,
+          },
+          getConfig,
+        );
       } catch (error) {
         signal?.throwIfAborted();
         // Keep the logged-in user browser usable on the host when auto-discovery
@@ -441,11 +456,14 @@ export function createBrowserTool(
       const resolvedTarget = target === "node" ? undefined : target;
       const baseUrl = nodeTarget
         ? undefined
-        : resolveBrowserBaseUrl({
-            target: resolvedTarget,
-            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
-            allowHostControl: opts?.allowHostControl,
-          });
+        : resolveBrowserBaseUrl(
+            {
+              target: resolvedTarget,
+              sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+              allowHostControl: opts?.allowHostControl,
+            },
+            getConfig,
+          );
 
       const allowAutomaticHostFallback = Boolean(
         nodeTarget &&
@@ -569,6 +587,7 @@ export function createBrowserTool(
       }
       const dispatchTabAction = () =>
         executeBrowserTabAction({
+          getConfig,
           action,
           actRequest: action === "act" ? readActRequestParam(params) : undefined,
           params,
@@ -631,16 +650,17 @@ export function createBrowserTool(
       const result = await withBrowserRequestScope(
         {
           allowLocalLoopback: opts?.allowLocalLoopback === true && !baseUrl && !proxyRequest,
-          assertLocalLoopbackCurrent: opts?.assertLocalLoopbackCurrent,
-          ...(opts?.assertInvocationCurrent
+          assertLocalLoopbackCurrent,
+          ...(assertInvocationCurrent
             ? {
-                assertInvocationCurrent: opts.assertInvocationCurrent,
-                assertCurrent: opts.assertInvocationCurrent,
+                assertInvocationCurrent,
+                assertCurrent: assertInvocationCurrent,
               }
             : {}),
           ...(dashboardTarget
             ? {
                 managedOnly: true as const,
+                // Awaited on the request's own chain, never from shared listeners.
                 assertCurrent: async (
                   admittedProfile?: Parameters<
                     typeof import("./browser-dashboard.js").assertBrowserDashboardTargetCurrent
@@ -654,7 +674,7 @@ export function createBrowserTool(
                     { signal },
                     admittedProfile,
                   );
-                  opts?.assertInvocationCurrent?.();
+                  assertInvocationCurrent?.();
                 },
               }
             : {}),

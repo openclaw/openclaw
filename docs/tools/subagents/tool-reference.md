@@ -72,6 +72,8 @@ apply the inherited spawn limit.
 - **Run timeout:** pass `runTimeoutSeconds` to set a timeout for a specific native, ACP, or visible sub-agent run. When omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` if configured; otherwise it falls back to `0` (no timeout). An explicit `0` disables the timeout for that run.
 - **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
 - **Task delivery:** hidden and visible native sub-agents receive their delegated task in a user message appended after any forked history. Model-only runtime context identifies the current assignment; the Control UI displays only the task text. Hidden sub-agents receive exact child and requester session identities (omitted for `blind` children), their label, and requester channel alongside the assignment. Their system prompt carries shared runtime rules, keeping its prefix reusable across equivalent child spawns. Inherited conversation remains background context.
+- **Audience:** when Draft sessions are enabled, a child spawned from a Draft session starts as Draft before receiving its task or forked history. This applies to hidden helpers, visible sessions, and admitted ACP children. `visible: true` controls navigation and persistence, not sharing. Publishing the parent later does not change the child's audience.
+- **Disabled Draft creation:** spawning a new child from an existing Draft is refused while Draft creation is disabled, including when the policy changes during preparation. Continue in the existing Draft or ask an administrator to enable Draft creation. Work in an already-created child can continue.
 
 Guests with `operator.sessions.write` can launch hidden native children for their
 own sandboxed work and receive private parent completions. The child keeps the
@@ -259,6 +261,17 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
 <ParamField path="worktree" type="boolean" default="false">
   Provision a managed git worktree for a hidden or visible native sub-agent. Acceptance returns before checkout and setup finish; the first turn waits for the managed workspace. ACP does not support this option.
 </ParamField>
+For a same-agent repository-only parent, a cloud-profile child inherits an independent
+repository workspace instead of creating a Gateway checkout. It keeps the parent
+repository URL, selected ref, accepted base and checkpoint; setup permission is
+limited by both parent and caller. Omit `worktreeName` and `worktreeBaseRef`. The
+Gateway creates the child without an initial turn, then dispatches it before
+sending its task. A disk-authoritative parent exports current private Git history
+and working files while its workspace is quiesced. The child gets its own
+checkpoint, never the parent’s disk or old initialization mirror. The parent
+keeps its disk and staging index; the child starts with the exported HEAD and
+working files, not a copy of the parent’s staging index.
+
 <ParamField path="worktreeName" type="string">
   Optional managed-worktree name matching `[a-z0-9][a-z0-9-]{0,63}`. Pass a lowercase slug, not a branch name such as `codex/review`; OpenClaw supplies the `openclaw/` branch prefix. Invalid names are rejected before child creation. Used with `worktree: true` and `runtime: "subagent"`; hidden native children ignore this selector when `worktree` is false or omitted.
 </ParamField>

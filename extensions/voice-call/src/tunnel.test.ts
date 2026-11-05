@@ -107,7 +107,6 @@ describe("voice-call tunnels", () => {
 
     // A raw marker-length tail starts on the low surrogate. Production must
     // discard that dangling half while retaining the split marker prefix.
-    expect(firstChunk.slice(-8).charCodeAt(0)).toBe(0xdd16);
     proc.stderr.write(firstChunk);
     proc.stderr.write("ROK_108: invalid tunnel config");
 

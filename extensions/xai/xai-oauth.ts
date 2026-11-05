@@ -161,11 +161,16 @@ function parseXaiOAuthTokenResponse(
   const expires =
     resolveExpiresAtMsFromDurationSeconds(json.expires_in, { nowMs: Date.now() }) ??
     resolveExpiresAtMsFromEpochSeconds(decodeJwtPayload(accessToken).exp);
+  if (expires === undefined) {
+    throw new Error(
+      "xAI OAuth token response is missing a usable access-token lifetime. Re-run xAI OAuth login.",
+    );
+  }
   return {
     accessToken,
     ...(refreshToken ? { refreshToken } : {}),
     ...(idToken ? { idToken } : {}),
-    ...(expires ? { expires } : {}),
+    expires,
   };
 }
 
@@ -547,7 +552,7 @@ export async function refreshXaiOAuthCredential(
     provider: PROVIDER_ID,
     access: tokens.accessToken,
     refresh: tokens.refreshToken ?? refreshToken,
-    ...(tokens.expires ? { expires: tokens.expires } : {}),
+    expires: tokens.expires,
     ...(tokens.idToken ? { idToken: tokens.idToken } : {}),
     ...resolveXaiOAuthIdentity(tokens),
     tokenEndpoint,

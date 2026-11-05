@@ -13,6 +13,7 @@ import {
   prepareSessionSourceAuthority,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
+import type { SessionTranscriptTurnLifecyclePatch } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import {
   measureDiagnosticsTimelineSpan,
   observeDiagnosticsTimelinePhases,
@@ -34,7 +35,6 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MentionInbox } from "../mention-inbox.types.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
-import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-projection.js";
 import { captureWorkerTurnInputSource } from "../worker-environments/worker-turn-transcript-target.js";
 import { formatForLog } from "../ws-log.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
@@ -50,6 +50,7 @@ import type { GatewayClient } from "./shared-types.js";
 
 export type GatewayChatUserTurnPersist = (options?: {
   contextFreeCommand?: true;
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
 }) => ReturnType<UserTurnTranscriptRecorder["persistFallback"]>;
 
 type GatewayChatUserTurnController = {
@@ -184,12 +185,13 @@ export function createGatewayChatUserTurnController(params: {
     });
   const prepareWorkerGoalSource = async () =>
     prepareSessionSourceAuthority(captureWorkerGoalSource());
-  const workerGoalSource: SessionSourceAssertion | undefined = admission.workerGoalAdmission
-    ? Object.assign(() => captureWorkerGoalSource()(), {
-        prepareSessionSource: prepareWorkerGoalSource,
-        prepareSessionSourceScope: prepareWorkerGoalSource,
-      })
-    : undefined;
+  const workerGoalSource: SessionSourceAssertion | undefined =
+    admission.codexGoalAdmission === "worker"
+      ? Object.assign(() => captureWorkerGoalSource()(), {
+          prepareSessionSource: prepareWorkerGoalSource,
+          prepareSessionSourceScope: prepareWorkerGoalSource,
+        })
+      : undefined;
   const recorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
     onMessagePersisted: params.onMessagePersisted,
     ...(recoveredInput ? { message: recoveredInput.target.message } : {}),
@@ -217,12 +219,13 @@ export function createGatewayChatUserTurnController(params: {
             operation: request.goalOperation,
             runId: session.clientRunId,
             ...params.goalCommitGuard,
-            assertCurrent: admission.workerGoalAdmission
-              ? composeSessionSourceAssertion([
-                  params.goalCommitGuard?.assertCurrent,
-                  workerGoalSource,
-                ])
-              : params.goalCommitGuard?.assertCurrent,
+            assertCurrent:
+              admission.codexGoalAdmission === "worker"
+                ? composeSessionSourceAssertion([
+                    params.goalCommitGuard?.assertCurrent,
+                    workerGoalSource,
+                  ])
+                : params.goalCommitGuard?.assertCurrent,
           },
         }
       : {}),
@@ -246,17 +249,9 @@ export function createGatewayChatUserTurnController(params: {
         config: session.cfg,
       };
     },
-    ...(admission.localInputAdmission || params.commitInitialInput
-      ? {
-          sessionLifecyclePatch: {
-            ...deriveGatewaySessionLifecycleSnapshot({
-              event: { runId: session.clientRunId, ts: params.startedAt, data: { phase: "start" } },
-            }),
-            lifecycleRunId: session.clientRunId,
-            lastRunId: undefined,
-            ...(!progressRefresh ? { lastInteractionAt: params.startedAt } : {}),
-          },
-        }
+    // Commands record activity only; fresh plain input overrides this at its commit boundary.
+    ...((admission.localInputAdmission || params.commitInitialInput) && !progressRefresh
+      ? { sessionLifecyclePatch: { lastInteractionAt: params.startedAt } }
       : {}),
     errorContext: "gateway chat user turn transcript",
     assertOriginalInputCommit: composeSessionSourceAssertion([
@@ -382,12 +377,12 @@ export function createGatewayChatUserTurnController(params: {
     }
     // A setup/error fallback must not activate a Goal before placement admission.
     // The selected native harness promotes staged input through persistApproved.
-    if (admission.workerGoalAdmission && !recorder.hasPersisted()) {
+    if (admission.codexGoalAdmission && !recorder.hasPersisted()) {
       return undefined;
     }
     const persisted = await measureDiagnosticsTimelineSpan(
       "gateway.chat_send.persist_user_transcript",
-      () => recorder.persistFallback(),
+      () => recorder.persistFallback({ sessionLifecyclePatch: options?.sessionLifecyclePatch }),
       {
         phase: "agent-turn",
         config: session.cfg,
@@ -409,7 +404,7 @@ export function createGatewayChatUserTurnController(params: {
     getSessionInitializationOptions: () => ({
       requestedSessionId: session.requestedSessionId,
       resumeRequestedSession: request.reconnectResumeRequested,
-      ...(admission.localInputAdmission || admission.workerGoalAdmission
+      ...(admission.localInputAdmission || admission.codexGoalAdmission
         ? {
             expectedExistingSessionId: admission.admittedSessionId,
             pinExpectedExistingSession: true,

@@ -20,7 +20,10 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import { partitionMarkdownHtml, toSanitizedJsonHtml } from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import type { MarkdownContent as PreparedMarkdownContent } from "../../../lib/markdown-content.ts";
+import {
+  markdownContentHtml,
+  type MarkdownContent as PreparedMarkdownContent,
+} from "../../../lib/markdown-content.ts";
 import type { MarkdownDomMedia, MarkdownMediaRoot } from "../../../lib/markdown-dom-reconciler.ts";
 import { elementRef as registerElementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -34,6 +37,8 @@ import {
   type MessageTextOptions,
   prepareMessageMarkdown,
 } from "./chat-message-text-preparation.ts";
+import { ChatRowDisplayContext } from "./chat-row-display-context.ts";
+import { registerChatSearchTextBlock } from "./chat-search-highlight.ts";
 
 export type { AssistantMessageDisclosure } from "./chat-message-text-preparation.ts";
 
@@ -211,8 +216,8 @@ function DisclosureContent(props: {
     }),
     {
       equals: (before, next) =>
-        before.parts[0] === next.parts[0] &&
-        before.parts[1] === next.parts[1] &&
+        markdownContentHtml(before.parts[0]) === markdownContentHtml(next.parts[0]) &&
+        markdownContentHtml(before.parts[1]) === markdownContentHtml(next.parts[1]) &&
         before.expanded === next.expanded &&
         before.forwarded === next.forwarded &&
         before.connected === next.connected,
@@ -239,6 +244,7 @@ export function MarkdownContent(props: MarkdownContentProps) {
   // Its callbacks mount media with this context; the reconciler retires each root.
   const solidOwner = getOwner();
   const presented = useContext(ContentPresentation);
+  const display = useContext(ChatRowDisplayContext);
   const fragment = document.createDocumentFragment();
   const roots = new Map<
     HTMLElement,
@@ -292,7 +298,7 @@ export function MarkdownContent(props: MarkdownContentProps) {
       connected,
       onUpdate: props.onUpdate,
     };
-  });
+  }, display);
   markdown(fragment);
   return Array.from(fragment.childNodes);
 }
@@ -320,6 +326,7 @@ export function MarkdownText(
           props.elementRef?.(node);
           return () => releaseLinkFavicons(node);
         }),
+        registerElementRef(registerChatSearchTextBlock),
       ]}
     >
       <MarkdownContent {...props} onUpdate={hydrate()} />

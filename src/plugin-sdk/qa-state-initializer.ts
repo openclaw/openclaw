@@ -47,7 +47,7 @@ export async function initializeQaRuntimeState(): Promise<void> {
   await prepareSharedAuthStoreOwnership(env);
   const stateDir = resolveStateDir(env);
   const sharedAuth = await migrateSharedAuthStore({
-    detected: detectSharedAuthStoreMigration({
+    detected: await detectSharedAuthStoreMigration({
       stateDir,
       env,
       config: snapshot.sourceConfig,

@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqliteRuntime from "../infra/bun-sqlite-library.js";
 import {
@@ -37,6 +37,7 @@ const readResult: OpenClawStateReadOutcome = {
 
 const mocks = vi.hoisted(() => ({
   cleanupKey: Symbol("signal-custody snapshot cleanup"),
+  exitCleanup: undefined as (() => void) | undefined,
   source: "",
   sourceIdentity: { key: "", canonicalPath: "" },
   directory: "/synthetic/state/snapshot",
@@ -100,6 +101,13 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 vi.mock("../cli/signal-exit-barrier.js", () => ({ registerSignalExitFinalizer: vi.fn() }));
+// mock-isolation: invoke the real snapshot callback without retiring unrelated process owners.
+vi.mock("../infra/process-exit-cleanup.js", () => ({
+  registerProcessExitCleanup: (cleanup: () => void) => {
+    mocks.exitCleanup = cleanup;
+    return () => {};
+  },
+}));
 vi.mock("../logging/logger.js", () => ({ getChildLogger: () => ({ warn: vi.fn() }) }));
 // mock-isolation: admit only the synthetic source without opening the real SQLite cache.
 vi.mock("./openclaw-state-db-cache.js", () => ({
@@ -163,27 +171,10 @@ vi.mock("./openclaw-state-read-worker.js", async () => {
   return createReadWorkerFixture(mocks.read, mocks.close);
 });
 
-let exitCleanup: (() => void) | undefined;
-let restoreExitSpy: () => void;
-beforeAll(() => {
-  const original = process.once.bind(process);
-  const spy = vi.spyOn(process, "once").mockImplementation(function (event, listener) {
-    if (event === "exit") {
-      exitCleanup = () => listener(0);
-      return process;
-    }
-    return original(event, listener);
-  });
-  restoreExitSpy = () => spy.mockRestore();
-});
 afterAll(async () => {
-  try {
-    await cleanupSnapshotOperations();
-    expect(mocks.resources.size).toBe(0);
-    Reflect.deleteProperty(globalThis, mocks.cleanupKey);
-  } finally {
-    restoreExitSpy();
-  }
+  await cleanupSnapshotOperations();
+  expect(mocks.resources.size).toBe(0);
+  Reflect.deleteProperty(globalThis, mocks.cleanupKey);
 });
 
 beforeEach(() => {
@@ -263,8 +254,8 @@ function captureOutcome(operation: Promise<unknown>) {
 
 function assertFilesRetained() {
   expect(mocks.removed).toEqual([]);
-  expect(exitCleanup).toBeTypeOf("function");
-  exitCleanup?.();
+  expect(mocks.exitCleanup).toBeTypeOf("function");
+  mocks.exitCleanup?.();
   expect(mocks.removed).toEqual([]);
 }
 

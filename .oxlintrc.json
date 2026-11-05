@@ -229,6 +229,11 @@
   "ignorePatterns": [
     "dist/",
     "dist-runtime/",
+    // napi-rs generates the iroh binding loader and its type declarations.
+    "crates/openclaw-iroh-node/index.js",
+    "crates/openclaw-iroh-node/index.d.ts",
+    // Preserve the official Beam client bytes and recorded upstream hash.
+    "test/fixtures/beam-live-handoff-client/beam.mjs",
     // Intentional negative-test corpora contain parser and lint violations by contract.
     "test/fixtures/oxlint-boundary-guards/**",
     "extensions/diffs/assets/viewer-runtime.js",

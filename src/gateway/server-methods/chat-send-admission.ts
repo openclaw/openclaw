@@ -7,6 +7,7 @@ import {
 } from "../../agents/run-termination.js";
 import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
+import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
@@ -56,7 +57,7 @@ import {
 } from "./chat-send-admission-errors.js";
 import {
   isLocalChatInputAdmission,
-  isWorkerGoalChatAdmission,
+  resolveCodexGoalAdmission,
   withGoalChatPlacement,
   type PreparedGoalChatPlacement,
 } from "./chat-send-goal-admission.js";
@@ -192,7 +193,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   let localGoalAdmission = false;
   let localInputAdmission = false;
-  let workerGoalAdmission = false;
+  let codexGoalAdmission: "local" | "worker" | undefined;
   let initialSessionEntry: InternalSessionEntry | undefined;
   let admittedSessionEntry: InternalSessionEntry | undefined;
   let admittedSessionSettings: ReturnType<typeof captureAdmittedChatSendSessionSettings>;
@@ -387,7 +388,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }
         const placement = preparedPlacement?.facts.current();
         const acpMeta = acp?.meta ?? null;
+        codexGoalAdmission = resolveCodexGoalAdmission(params, latestSession, placement, acpMeta);
         localInputAdmission =
+          !codexGoalAdmission &&
           isLocalChatInputAdmission(
             params,
             latestSession,
@@ -402,10 +405,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
             sessionKeys: [sessionKey],
           }) === undefined;
         localGoalAdmission = Boolean(request.goalOperation && localInputAdmission);
-        workerGoalAdmission = isWorkerGoalChatAdmission(params, latestSession, placement, acpMeta);
-        if (request.goalOperation && !localGoalAdmission && !workerGoalAdmission) {
-          throw new Error(
-            "Goal start or resume requires an idle built-in local session with recoverable history or a supported Codex cloud-worker session.",
+        if (request.goalOperation && !localGoalAdmission && !codexGoalAdmission) {
+          throw new SessionGoalOperationError(
+            "invalid",
+            "Goal start or resume requires an idle built-in local session with recoverable history or a supported local or cloud-worker Codex session.",
           );
         }
       }).catch((error: unknown) => {
@@ -469,8 +472,8 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         admittedRunAbort.controller.abort(reason);
       },
     });
-    if (workerGoalAdmission && !capturedOperator.authority) {
-      throw new Error("Worker Goals require a current authenticated operator request.");
+    if (codexGoalAdmission && !capturedOperator.authority) {
+      throw new Error("Codex Goals require a current authenticated operator request.");
     }
     admittedRunAbort.initializeTiming({ now: Date.now(), timeoutMs });
     workPhase?.finish();
@@ -704,7 +707,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }),
       localGoalAdmission,
       localInputAdmission,
-      workerGoalAdmission,
+      codexGoalAdmission,
       setDiscardAbandonedPreparedMedia: setDiscardPreparedMedia,
     },
   };

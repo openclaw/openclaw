@@ -1,3 +1,4 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
@@ -6,7 +7,7 @@ import { navigateMarkdownSession } from "../../components/markdown-session-links
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canPresentGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
   projectSessionObserverDigest,
@@ -14,21 +15,21 @@ import {
 } from "../../lib/observer-digest.ts";
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { isChatBubbleMode } from "./chat-bubble-mode.ts";
 import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
+import { chatHistoryOlderSelector } from "./chat-history-request.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
 import { synchronizeChatPanePublication } from "./chat-pane-publication.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
-import { chatPaneResourceProps } from "./chat-pane-resource-presentation.ts";
+import { createChatPaneResourceProps } from "./chat-pane-resource-presentation.ts";
 import {
   createChatPaneQueuedEditProps,
   createChatPaneSessionActionCallbacks,
-  canDismissChatPendingInputs,
+  createChatPanePendingInputControls,
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
@@ -45,20 +46,20 @@ import {
 } from "./chat-pane-state.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
+import { isChatQueuePaused } from "./chat-queue-pause.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
+import { clearChatQueue, resumeChatQueue } from "./chat-send-actions.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
-import { refreshChatCommands } from "./chat-state-refresh.ts";
-import {
-  resolveChatAgentId,
-  resolveChatAvatarUrl,
-  selectedChatSessionRow,
-} from "./chat-state-route.ts";
+import { refreshChatCommands } from "./chat-session-commands.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
+import {
+  openSessionWorkspaceFile,
+  openSessionWorkspaceManagedArtifact,
+} from "./components/chat-session-workspace.ts";
 import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
-import { createChatWidgetLayout } from "./session-message-cache.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-snapshot.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
@@ -68,7 +69,7 @@ registerChatSessionEnglish();
 const emptyTranscriptItems: [] = [];
 
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
-  private readonly widgetLayout = createChatWidgetLayout();
+  private readonly resourceProps = createChatPaneResourceProps();
 
   render(
     readProviderReview?: () => ChatProviderReviewOwner | undefined,
@@ -123,8 +124,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     );
     const currentAgentId = resolveChatAgentId(state);
     this.composerCapabilities?.synchronize(state, currentAgentId);
-    const sessionScope = scopedAgentParamsForSession(state, state.sessionKey);
-    const widgetTarget = { sessionKey: state.sessionKey, ...sessionScope };
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
     const catalog = catalogKey !== null;
     const selectedAgent = this.context.agents.state.agentsList?.agents.find(
@@ -169,20 +168,21 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const multiIdentity = this.hasMultipleIdentities();
     const catalogReason = this.catalogComposerReason(catalogKey);
     const catalogDisabledReason = catalogReason?.text ?? null;
-    const { closePanelSlot, openPanelSlot, sessionWorkspace } = createChatPaneRails({
-      state,
-      sidebarLayout,
-      presentation: this.sessionPresentation,
-      visibleLayout: this.usesMobileHost ? this.presentSidebarLayout(sidebarLayout) : undefined,
-      presentationId: this.presentationId,
-      sessionTitle: this.resolveHeaderSessionTitle(selectedSession),
-      paneLabel: this.paneLabel,
-      presented: this.presented,
-      gatewaySnapshot,
-      setObserverVisibility: this.setSessionObserverVisibility,
-      updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
-      onOpenPanel: this.onSidebarPanelOpened,
-    });
+    const { closePanelSlot, openPanelSlot, onFindWorkspaceFile, sessionWorkspace } =
+      createChatPaneRails({
+        state,
+        sidebarLayout,
+        presentation: this.sessionPresentation,
+        visibleLayout: this.usesMobileHost ? this.presentSidebarLayout(sidebarLayout) : undefined,
+        presentationId: this.presentationId,
+        sessionTitle: this.resolveHeaderSessionTitle(selectedSession),
+        paneLabel: this.paneLabel,
+        presented: this.presented,
+        gatewaySnapshot,
+        setObserverVisibility: this.setSessionObserverVisibility,
+        updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
+        onOpenPanel: this.onSidebarPanelOpened,
+      });
     const gatewayScope = gatewayPresentationScope(this.context.gateway);
     const selfUser = resolveCurrentSelfUser({
       snapshotUser:
@@ -194,12 +194,15 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     });
     const selfProfileId = selfUser?.identity?.type === "profile" ? selfUser.identity.id : null;
     const userPresentation = {
-      userId: selfProfileId ?? this.presentationUserId,
+      userId:
+        selfProfileId ??
+        (gatewaySnapshot.selfUser === null
+          ? null
+          : (this.context.sessions.presentation.profileId ?? null)),
       userName: selfUser?.name ?? state.userName,
       userAvatar: selfUser?.avatarUrl ?? state.userAvatar,
       channelAvatar: selectedSession ?? undefined,
     };
-    this.presentationUserId = userPresentation.userId;
     const projectionRunId = resolveChatProjectionRunId({
       localRunId: state.chatRunId,
       activeRunIds: selectedSession?.activeRunIds,
@@ -207,7 +210,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     });
     const historyHasMore = catalogKey
       ? Boolean(this.history.catalogCursor)
-      : state.chatHistoryPagination.hasMore;
+      : chatHistoryOlderSelector(state) !== null;
     const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
       getSnapshot: () => this.context.gateway.snapshot,
       state,
@@ -281,7 +284,15 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const composerPendingReason = state.connected ? null : pendingReason;
     const auth = gatewaySnapshot.hello?.auth ?? null;
     const hasWriteScope = hasOperatorWriteAccess(auth);
-    const composerAccess = hasWriteScope || (!catalog && mutationAccess.composeScope.allowed);
+    const composerAccess = catalogKey
+      ? hasWriteScope ||
+        (catalogKey.catalogId === "beam" &&
+          canPresentGatewayMethod(
+            gatewaySnapshot,
+            "beam.owned.continue",
+            "operator.sessions.write",
+          ))
+      : hasWriteScope || mutationAccess.composeScope.allowed;
     const suggestionViewer =
       multiIdentity &&
       !selectedSessionArchived &&
@@ -354,13 +365,15 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         ? this.captureProgressCardRefreshAction()
         : undefined;
     const props: ChatProps = {
-      canDismissPendingInputs: canDismissChatPendingInputs(mutationAccess, selectedSession, {
+      ...createChatPanePendingInputControls(mutationAccess, selectedSession, {
         nativeConversation,
         participationBlocked: sessionParticipationBlocked,
       }),
       applicationContext: this.context,
       registerBrowserAnnotationFocus: this.registerBrowserAnnotationFocus,
       transcript: this.transcript,
+      // Ends with cachedSessionStatePending(); live overflow keeps its entrance fade.
+      restoring: Boolean(cachedSession),
       onHistorySentinelRef: this.registerHistorySentinel,
       onTranscriptAnnouncementRef: this.registerTranscriptAnnouncement,
       onComposerShellRef: this.registerComposerShell,
@@ -450,7 +463,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       streamStartedAt: catalog ? null : state.chatStreamStartedAt,
       runId: catalog ? null : projectionRunId,
       runUsageById: catalog ? undefined : state.chatRunUsageById,
-      assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
       draft: state.chatMessage,
@@ -508,13 +520,14 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         : undefined,
       ...composerAvailability,
       disabledReasonAction: catalogReason?.action,
-      modelSetupRequired: modelSetupRequired && !selectedSessionArchived,
-      onModelSetup: () => this.context.navigate("model-setup"),
       error: providerPaused ? null : state.lastError,
+      errorDetail: state.lastErrorDetail,
       diskSpace: placementComposer.diskSpace,
       workerRuntimeInstall: placementComposer.workerRuntimeInstall,
       runError:
-        catalogKey || providerPaused ? null : (state.chatRunError ?? placementComposer.runError),
+        catalogKey || providerPaused || selectedSessionArchived
+          ? null
+          : (state.chatRunError ?? placementComposer.runError),
       workspaceConflict: visibleWorkspaceConflict,
       onDismissWorkspaceConflict:
         visibleWorkspaceConflict && selectedSession
@@ -526,7 +539,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
           : undefined,
       sessions: state.sessionsResult,
       ...this.transcriptSessionProps(selectedSession),
+      contextUsage: this.cachedSessionState()?.contextUsage,
       toolOverrides: selectedSession?.toolOverrides,
+      incognito: Boolean(selectedSession?.incognito) || isIncognitoSessionKey(state.sessionKey),
       capabilityMenu: catalogKey
         ? undefined
         : this.composerCapabilityMenu(state, selectedSession, currentAgentId),
@@ -538,7 +553,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       },
       contextGateway: this.context.gateway,
       onOpenContext: this.openContextPanel,
-      operatorAuth: state.hello?.auth ?? null,
       providerUsage: {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,
@@ -560,10 +574,11 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onOpenSessionDiff: sessionWorkspace.onOpenDiff,
       githubPublication: this.publication.binding?.view(),
       onOpenWorkspaceFile: (target) => void openSessionWorkspaceFile(state, target),
+      onFindWorkspaceFile: state.connected && !catalog ? onFindWorkspaceFile : undefined,
+      onOpenManagedArtifact: (href) => openSessionWorkspaceManagedArtifact(state, href),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onNavigate: (routeId, options) => this.context.navigate(routeId, options),
       onRefresh: this.refreshHistory,
-      onChatScroll: (event) => this.handleTranscriptScroll(event),
       onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
       // Lazy SVG sizing can resize a committed row; re-enter the scroll owner
       // so an active follow lock stays pinned to the latest message.
@@ -588,6 +603,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       }),
       ...createChatPaneRunRecoveryActions(state, {
         canSend: composerAvailability.canSend && !catalogKey && !suggestionViewer,
+        onRewindMessage: selectedSessionArchived
+          ? undefined
+          : sessionActionCallbacks.onRewindMessage,
         isCurrent: () =>
           this.state === state && this.connectionGeneration === selectionConnectionGeneration,
         latestFailedRunId: () =>
@@ -604,6 +622,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         state.realtimeTalk.update({ realtimeTalkInputNotice: null }),
       ...sessionActionCallbacks,
       onQueueRemove: state.removeQueuedMessage,
+      queuePaused: isChatQueuePaused(state),
+      onQueueResume: providerPaused ? undefined : () => resumeChatQueue(state),
+      onQueueClear: () => clearChatQueue(state),
       onQueueRetry: providerPaused ? undefined : (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer:
         sessionParticipationBlocked || providerPaused
@@ -634,23 +655,21 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
       agentsList: state.agentsList,
       currentAgentId,
-      fullMessageAgentId: sessionScope.agentId,
       loadFullAssistantMessage: createSidebarFullMessageLoader(state, this.context.gateway),
       onSessionSelect: (next) => this.onPaneSessionChange?.(this.paneId, next),
       canvasPluginSurfaceUrl: state.canvasPluginSurfaceUrl,
       boardProvider: board.provider,
-      widgetLayout: this.widgetLayout(state.chatMessagesBySession, state, widgetTarget),
       onOpenSidebar: state.handleOpenSidebar,
       onRequestOpenImage: state.beginImageOpen,
       onOpenImage: state.handleOpenImage,
-      assistantName: state.assistantName,
-      assistantAvatar: state.assistantAvatar,
-      senderAgentAvatars: state.senderAgentAvatars,
       mainKey,
       ...userPresentation,
       personActivity: personActivityRouting(this.context),
-      ...chatPaneResourceProps(state, this.context),
+      ...this.resourceProps(state, this.context),
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
+      onComposerWidthChange: (value) => {
+        state.settings = patchSettings({ chatMessageMaxWidth: value });
+      },
       chatBubbleMode: isChatBubbleMode(
         state.settings,
         state.sessionKey,

@@ -17,10 +17,6 @@ export type PendingInputHistorySnapshot = {
   nextBefore?: number;
   currentSessionId?: string;
 };
-export type PendingInputCustodyCandidate = Pick<
-  SessionPendingInputRow,
-  "input_id" | "session_key" | "session_id" | "lifecycle_generation"
->;
 export type PendingInputHistoryWorkerInput = {
   kind: "session-pending-input-history";
   database: { agentId: string; path: string };
@@ -28,3 +24,13 @@ export type PendingInputHistoryWorkerInput = {
   query: PendingInputHistoryQuery;
   source: import("./session-entry-read-source.types.js").CapturedSessionEntryReadSource;
 };
+
+export type PendingInputOrphansWorkerInput = Omit<
+  PendingInputHistoryWorkerInput,
+  "kind" | "query"
+> & {
+  kind: "session-pending-input-orphans";
+  lifecycleGeneration: string;
+  queuedInputIds: readonly string[];
+};
+export type PendingInputOrphanTarget = { sessionKey: string; sessionId: string };

@@ -106,6 +106,8 @@ To keep the API as the primary route and use Claude Code only when it fails, pin
 
 Configured fallbacks remain eligible when the primary model fails (auth, rate limits, timeouts), even when they are not in `agents.defaults.modelPolicy.allow`. Add the fallback model to that policy only when people should also be able to select it directly. Direct selection means `/model`, a session override, or `--model`. `agents.defaults.models` only owns per-model aliases, parameters, runtime, and metadata.
 
+The runtime pin applies to the model, not to one position in the list, so an `anthropic/*` primary and fallback cannot name the same model on two routes. Existing configs that use a `claude-cli/<model>` fallback for the API primary's own model keep that ref after an update; see [Claude CLI model routing](/gateway/doctor/config-migrations#claude-cli-model-routing).
+
 ## Configuration
 
 Users choose a registered backend through the model and runtime policy. Keep
@@ -177,6 +179,10 @@ when it discovers them instead of placing every schema in the initial prompt.
 `tools.toolSearch: false` (or `{ enabled: false }`) keeps definitions upfront.
 On this native route the setting controls deferral; OpenClaw's search modes and
 catalog selectors apply to the embedded Tool Search surface, not Claude's search.
+
+Changing only this loading hint preserves the stored native Claude conversation.
+Prompt changes can still restart a warm process and resume that conversation;
+real MCP configuration or policy changes retain their reset boundary.
 
 Discovery grants no tool execution authority. Discovered calls still pass through
 OpenClaw's MCP policy and approvals. Tool-free turns do not receive `ToolSearch`.
@@ -255,7 +261,14 @@ requester cap, refuses the call before it reaches the server. Every request to a
 configured server (tool calls, resource reads, prompt fetches) rechecks the turn's
 grant just before it is sent. Each listed server's `initialize` instructions are
 passed to the CLI whole, in server-name order.
-Requester-scoped servers need a verified sender and are not offered on these turns.
+Requester-scoped servers (per-requester OAuth or a plugin connection resolver) are
+listed on every turn once the session has seen their tools. Before that, a
+per-requester OAuth server is listed as its sign-in tool; a resolver-based server
+appears after the first turn whose verified sender the plugin resolves. Each call
+uses the current turn's verified sender. A turn without one, such as a completion,
+an automation or a subagent run, refuses the call with an explicit error and never
+uses another account. A call also stops before any request to the server if the
+turn's grant ends while it waits, for example during an OAuth token refresh.
 
 Existing sessions that stored the implicit automatic policy also retain continuity.
 OpenClaw records the current policy when the next turn completes.
@@ -486,6 +499,8 @@ Native login makes the Claude CLI route available; it does not supply an Anthrop
 New sessions select saved subscription credentials through the configured account
 order and forward them to the CLI through a protected file descriptor. Existing
 sessions keep their account until you select another or remove its saved profile.
+Saved accounts are checked again before starting a CLI process and sending its first input.
+If the account was removed during preparation, the reply and saved history explain that the turn was not submitted. Select a connected account or sign in again under **Models**, then retry. Group replies omit account identifiers; personal account storage identifiers are never included in this notice.
 Explicit account selections and empty account orders remain authoritative. API keys saved
 for the `anthropic` provider require an explicit selection; they do not replace
 native subscription login automatically.
@@ -634,12 +649,15 @@ JSON examples inside double-quoted banner text are not treated as response or er
 For JSONL, banner scanning starts fresh on each line.
 
 Claude streaming limits discount recognized partial-message envelopes while
-counting their text, thinking, and tool-input payloads. Cumulative snapshots and
-tool results still count toward the output budget. Forwarded subagent assistant
+counting their text, thinking, and tool-input payloads. Pure tool-result records
+hand payloads to consumers without retaining them, so those payloads do not count
+toward the output budget; IDs, metadata, padding, and frames still do. Mixed user
+records and cumulative snapshots still count. Forwarded subagent assistant
 messages and tool-result messages that the parser discards are charged a fixed
-allowance for their parent progress id. Child attribution alone does not earn
-that discount: retained stream-event text still counts toward the same 8 MiB
-output limit. Single-line limits and bounded frame counts remain active.
+allowance for their parent progress id.
+Child attribution alone does not earn that discount: retained stream-event text
+still counts toward the same 8 MiB output limit. Single-line limits and bounded
+frame counts remain active.
 
 Input modes:
 
@@ -768,12 +786,21 @@ CLI backends do not receive OpenClaw tool calls directly, but a backend can opt 
 - `claude-cli`: generated strict MCP config file.
 - `google-gemini-cli`: generated Gemini system settings file.
 
+If Claude Code reports the `openclaw` MCP server as not connected during startup,
+OpenClaw fails the current CLI turn and retires that process. A later turn starts
+a fresh process instead of reusing one without the Gateway tools. Failed optional
+MCP servers do not trigger this check.
+
 When bundle MCP is enabled, OpenClaw:
 
 - spawns a loopback HTTP MCP server that exposes Gateway tools to the CLI process, authenticated with a per-run context grant (`OPENCLAW_MCP_TOKEN`) active only for the current execution attempt
 - binds tool access to the Gateway-selected session, account, and channel context instead of trusting child-process headers
 - loads enabled bundle-MCP servers for the current workspace and merges them with any existing backend MCP config or settings shape
 - rewrites the launch config using the backend-owned integration mode from the owning plugin.
+
+The tool catalog cache has a 30-second elapsed-time lifetime; wall-clock
+corrections do not shorten or extend it. Cached catalogs do not bypass current
+grant, session, or tool-access checks.
 
 The loopback bridge sends keepalive bytes while a tool response or notification
 stream is idle, so HTTP idle timeouts do not interrupt long-running tools. These
@@ -866,19 +893,64 @@ Backends without an exact translation still refuse to run.
 
 If no MCP servers are enabled, OpenClaw still injects a strict config when a backend opts into bundle MCP, so background runs stay isolated.
 
-Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth checks, slug generation, and active-memory recall request cleanup at run end. Stdio children and Streamable HTTP or SSE streams therefore do not outlive the run.
+Session-scoped bundled MCP runtimes stay alive between turns. Idle TTL eviction is
+opt-in: `mcp.sessionIdleTtlMs` unset or `0` keeps the session lifetime unless
+capacity eviction or explicit cleanup retires the runtime. A positive value enables
+idle TTL eviction. Detached one-shot runs without a surviving runtime session
+retire their MCP runtimes at run end; a retained transcript alone does not extend
+that lifetime. See [MCP configuration](/gateway/config-extensions#mcp) for cleanup
+triggers, capacity limits, and idle-sweep behavior.
 
 A fresh CLI session must wait for its predecessor's cleanup. If cleanup fails or
 exceeds its deadline, OpenClaw refuses replacement, including from a later run.
 Check the cleanup error and the backend's remaining processes before retrying.
 Command output and process exit alone do not confirm that descendants stopped.
 
-For `claude-cli`, the installed Claude Code process uses its current native
-login. OpenClaw uses a non-secret route marker and never reads, persists,
-refreshes, selects, or forwards the native tokens.
-Set `CLAUDE_CONFIG_DIR` on the Gateway process to use a separate Claude configuration directory.
+For `claude-cli`, the installed Claude Code process reads and refreshes its own native
+login. By default, OpenClaw uses a non-secret route marker rather than copying its tokens.
 Explicit OpenClaw-managed API-key and token profiles continue to use the
 protected, per-invocation credential-forwarding CLI path.
+
+### Separate Claude configuration
+
+Set `CLAUDE_CONFIG_DIR` in the Gateway's environment to give its local `claude-cli`
+runs a dedicated Claude configuration directory. OpenClaw passes this variable
+through to the installed `claude` process. Use absolute paths and restart the
+Gateway after changing its environment.
+
+For a separate login, run these commands as the Gateway's OS user, then set the
+same `CLAUDE_CONFIG_DIR` on the Gateway:
+
+```bash
+CLAUDE_CONFIG_DIR=/home/me/.openclaw/claude-home claude auth login
+CLAUDE_CONFIG_DIR=/home/me/.openclaw/claude-home claude auth status --text
+```
+
+On Linux and Windows, you can instead keep the existing file-backed login while
+using separate settings. Set `CLAUDE_SECURESTORAGE_CONFIG_DIR` to the directory
+containing the existing `.credentials.json` file (usually `~/.claude`). For example,
+in `openclaw.json` on Linux:
+
+```json5
+{
+  env: {
+    vars: {
+      CLAUDE_CONFIG_DIR: "/home/me/.openclaw/claude-home",
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/me/.claude",
+    },
+  },
+}
+```
+
+On macOS, a nonempty secure-storage directory selects a directory-specific
+Keychain entry; it does not reuse the default login. Set only `CLAUDE_CONFIG_DIR`
+and log in for that directory. An empty `env.vars` value is ignored by OpenClaw,
+so it cannot select the default Keychain entry through this config example.
+
+When the credential directory differs from the configuration directory,
+OpenClaw cannot attest the native login's account for
+[automatic history recovery](/gateway/cli-backends#history-account-boundaries),
+even with `historyRecovery.attestNativeLogin` enabled. Native Claude resume remains available.
 
 ## Reseed history cap
 

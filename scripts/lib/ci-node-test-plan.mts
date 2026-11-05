@@ -1571,7 +1571,9 @@ export function createUiTestShardGroups(
     e2eGroups[0]!.includePatterns = [
       ...new Set([
         ...options.uiE2eFiles.filter(includeUiTest),
-        ...(options.includeReleaseOnlyE2eTests ? uiE2eRealGatewayTestFiles : retained),
+        ...(options.includeReleaseOnlyE2eTests
+          ? uiE2eRealGatewayTestFiles.filter(includeUiTest)
+          : retained),
       ]),
     ].toSorted();
   }
@@ -1580,6 +1582,8 @@ export function createUiTestShardGroups(
     e2e: e2eGroups,
   };
 }
+
+export const UI_REAL_GATEWAY_TEST_CONFIG = "test/vitest/vitest.ui-e2e-prebuilt.config.ts";
 
 export function createUiRealGatewayTestShards(
   e2eGroups: ReturnType<typeof createUiTestShardGroups>["e2e"],
@@ -1649,7 +1653,7 @@ export function createUiRealGatewayTestShards(
     run_desktop: shard === 1 && selected.has(desktop),
     groups: [
       {
-        configs: ["test/vitest/vitest.ui-e2e-prebuilt.config.ts"],
+        configs: [UI_REAL_GATEWAY_TEST_CONFIG],
         shard_name: `ui-e2e-real-gateway-${shard === 1 ? "desktop" : "parallel"}`,
         includePatterns: buckets[shard - 1]!.files.toSorted(),
       },
@@ -2552,6 +2556,35 @@ export function isCanonicalNodeTestConfig(config: string): boolean {
   return resolveCanonicalTargetInventory(config).configs.has(config);
 }
 
+/** Resolve one exact execution plan only when its canonical owner is complete. */
+export function resolveCompleteCanonicalNodeTestConfig(
+  target: string,
+  plans: ReturnType<typeof buildVitestRunPlans>,
+): string | undefined {
+  const plan = plans[0];
+  if (!plan || plans.length !== 1 || plan.watchMode) {
+    return undefined;
+  }
+  const targets = plan.includePatterns ?? plan.forwardedArgs;
+  if (
+    targets.length !== 1 ||
+    targets[0] !== target ||
+    (plan.forwardedArgs.length > 0 &&
+      (plan.forwardedArgs.length !== 1 || plan.forwardedArgs[0] !== target))
+  ) {
+    return undefined;
+  }
+  const config = resolveCanonicalNodeTestConfig(target, plan.config);
+  if (!config) {
+    return undefined;
+  }
+  const inventory = resolveCanonicalTargetInventory(config);
+  return inventory.completeConfigs.has(config) &&
+    inventory.configsByFile.get(target)?.has(config) === true
+    ? config
+    : undefined;
+}
+
 /** Null excludes a file from a complete inventory; undefined leaves ownership unresolved. */
 export function resolveCanonicalNodeTestConfig(
   target: string,
@@ -3345,6 +3378,7 @@ const RELEASE_TIMING_CONTINUITY_SHARDS = new Set([
 
 // Preserve existing whole-job headroom until these owners have complete timings.
 const LONG_UNFITTED_RELEASE_SHARDS = new Set([
+  "agentic-agents-support",
   "agentic-cli-process",
   "agentic-control-plane-agent-chat",
   "core-runtime-config",
@@ -5324,8 +5358,8 @@ function createCompactNodeTestShardBundles(
             ),
           0,
         );
-      const admits = (groups: NodeTestShardGroup[]) =>
-        admitsCompactBin(groups, COMPACT_HYBRID_RUNTIME_JOB_SECONDS, cost);
+      const admits = (groups: NodeTestShardGroup[], seconds = cost) =>
+        admitsCompactBin(groups, COMPACT_HYBRID_RUNTIME_JOB_SECONDS, seconds);
       const prepareRecipient = (job: CompactNodeTestShard) => {
         if (job.planConcurrency !== 2) {
           return job.groups;
