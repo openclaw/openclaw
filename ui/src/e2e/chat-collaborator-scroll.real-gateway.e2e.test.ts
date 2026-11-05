@@ -259,6 +259,8 @@ async function waitForSettlement(page: Page) {
 async function wheel(page: Page, delta: number) {
   await page.locator(".chat-pane-cache__pane--active .chat-thread").hover();
   await page.mouse.wheel(0, delta);
+  // Wheel dispatch can finish before native scrolling begins.
+  await expect.poll(() => chatThreadDistanceFromBottom(page)).toBeGreaterThan(8);
   await waitForChatScrollIdle(page);
 }
 
@@ -378,7 +380,10 @@ suite.define(() => {
                 await wheel(reader, delta);
               }
               const before = await startScrollProbe(reader);
-              expect(reading ? before.distance > 8 : before.distance <= 8).toBe(true);
+              expect(
+                reading ? before.distance > 8 : before.distance <= 8,
+                `${mode}: ${JSON.stringify(before)}`,
+              ).toBe(true);
               if (mode === "older-history") {
                 expect(before.anchorText).not.toContain(mode + " paragraph");
               }
