@@ -120,8 +120,11 @@ function recordConfigPublication(
   );
 }
 
+/** A later writer changed what this publication wrote; recovery keeps that file. */
+class LaterConfigChangeError extends ConfigMutationConflictError {}
+
 function conflict(file: PluginCohortConfigFileIntent): never {
-  throw new ConfigMutationConflictError(
+  throw new LaterConfigChangeError(
     `Configuration changed after update publication: ${file.filePath}. Plugin cohort recovery preserved it.`,
     { retryable: false },
   );
@@ -201,8 +204,26 @@ function mergedAuthoredPreimage(
   return changedOwnValue ? formatJsonFileValue(result) : currentRaw;
 }
 
-/** Reopen the canonical config owner; historical facts never revive its former lock or authority. */
+/**
+ * Reopen the canonical config owner; historical facts never revive its former lock or
+ * authority. Returns false when a later writer's change was kept instead of restored.
+ */
 export async function restorePluginCohortConfigPublication(
+  file: PluginCohortConfigFileIntent,
+  authority: ConfigCohortAuthority,
+): Promise<boolean> {
+  try {
+    await restoreConfigPublication(file, authority);
+    return true;
+  } catch (error) {
+    if (error instanceof LaterConfigChangeError) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function restoreConfigPublication(
   file: PluginCohortConfigFileIntent,
   authority: ConfigCohortAuthority,
 ): Promise<void> {

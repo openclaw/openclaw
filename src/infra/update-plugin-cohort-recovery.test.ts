@@ -539,6 +539,7 @@ it.each([
         }
         intent = reopenedPublication.file;
         if (pathCase !== "root device changed") {
+          // Path identity guards the write target itself; it stays a refusal.
           await expect(
             restorePluginCohortConfigPublication(intent, authority),
           ).rejects.toBeInstanceOf(ConfigMutationConflictError);
@@ -549,7 +550,7 @@ it.each([
       }
       const historicalPathSnapshot = structuredClone(intent.pathSnapshot);
 
-      await restorePluginCohortConfigPublication(intent, authority);
+      await expect(restorePluginCohortConfigPublication(intent, authority)).resolves.toBe(true);
       expect(await fs.readFile(filePath, "utf8")).toBe(beforeRaw);
       await fs.writeFile(filePath, intent.afterRaw);
 
@@ -594,9 +595,8 @@ it.each([
       restoredGateway.port = 18791;
       const conflictingRaw = json(restored);
       await fs.writeFile(filePath, conflictingRaw);
-      await expect(restorePluginCohortConfigPublication(intent, authority)).rejects.toThrow(
-        "Configuration changed after update publication",
-      );
+      // The later writer changed this publication's own leaf; recovery keeps the file.
+      await expect(restorePluginCohortConfigPublication(intent, authority)).resolves.toBe(false);
       expect(await fs.readFile(filePath, "utf8")).toBe(conflictingRaw);
       const retainedPublication = loadPluginCohortRecovery(f.cohort.runId, f.options)!.cohort
         .publications[0];

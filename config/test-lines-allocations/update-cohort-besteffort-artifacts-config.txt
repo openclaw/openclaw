@@ -1,0 +1,4 @@
+# Best-effort plugin cohort rollback (package files, config files, source snapshots).
+# Real install-index fixtures keep a later package payload or source snapshot,
+# restore matching records, and record the kept change as an update warning.
+12

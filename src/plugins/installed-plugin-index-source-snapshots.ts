@@ -120,6 +120,20 @@ export function foldPluginSourceSnapshotChanges(
   return [...folded.values()];
 }
 
+/** Plugins whose source snapshot a later writer changed after the cohort published it. */
+export function listLaterPluginSourceSnapshotChanges(
+  current: InstalledPluginIndex | null,
+  changes: readonly PluginSourceSnapshotIndexChange[],
+): string[] {
+  const currentById = new Map(current?.plugins.map((plugin) => [plugin.pluginId, plugin]));
+  return changes.flatMap((change) => {
+    const retained = snapshotState(currentById.get(change.pluginId));
+    return isDeepStrictEqual(retained, change.after) || isDeepStrictEqual(retained, change.before)
+      ? []
+      : [change.pluginId];
+  });
+}
+
 /** Restore only a cohort's exact predecessor; a later snapshot publication keeps its own state. */
 export function restorePluginSourceSnapshotStates(
   previous: InstalledPluginIndex | null,
