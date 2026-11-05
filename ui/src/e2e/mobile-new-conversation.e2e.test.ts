@@ -103,9 +103,7 @@ suite.define(() => {
           page,
           page.locator(".shell"),
           [identity, triggers, surface],
-          {
-            animations: "disabled",
-          },
+          { animations: "disabled" },
         );
         if (dir) {
           await writeFile(path.join(dir, state.name + ".png"), frame.png);
@@ -124,9 +122,7 @@ suite.define(() => {
         ).toBeLessThanOrEqual(1);
         // #192044 renamed Local to This computer; keep the picker within half a row.
         const device = page.locator("#new-session-where-trigger");
-        expect((await device.boundingBox())!.width).toBeLessThanOrEqual(
-          (await triggers.boundingBox())!.width / 2,
-        );
+        expect((await device.boundingBox())!.width).toBeLessThanOrEqual(targetBox!.width / 2);
         expect(
           await page.locator(".new-session-page__select--agent .agent-select__label").isVisible(),
         ).toBe(true);
