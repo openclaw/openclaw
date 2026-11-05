@@ -790,7 +790,8 @@ extension AppState {
         let persistedFields = Self.gatewayConfigFieldsPersisted(by: draft)
         var externallyPersistedFields: Set<GatewayConfigField> = []
         for field in persistedFields {
-            if diskSnapshot[field] == desiredSnapshot[field] {
+            // An unchanged file cannot acknowledge an app-only primary deferral.
+            if !draft.clearsPrimaryGateway, diskSnapshot[field] == desiredSnapshot[field] {
                 externallyPersistedFields.insert(field)
             } else if diskSnapshot[field] != self.lastObservedGatewayConfig[field] {
                 self.conflictedGatewayConfigFields.insert(field)

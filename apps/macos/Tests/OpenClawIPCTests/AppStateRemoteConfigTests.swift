@@ -1483,6 +1483,8 @@ extension AppStateRemoteConfigTests {
             await state._testAwaitGatewayConfigSync()
 
             state.connectionMode = .unconfigured
+            state.applyConfigOverrides(original)
+            #expect(state._testDirtyGatewayConfigFields.contains(.mode))
             await state._testAwaitGatewayConfigSync()
 
             #expect(saves == 0)
