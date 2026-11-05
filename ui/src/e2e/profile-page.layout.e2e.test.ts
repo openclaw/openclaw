@@ -33,6 +33,7 @@ suite.define(() => {
       await page.goto(new URL("/settings/profile", suite.server.baseUrl).href);
       await expect(page.getByRole("textbox", { name: "Display name", exact: true })).toBeEnabled();
       await gateway.waitForRequest("users.channelIdentity");
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
       const row = page.locator(".settings-row").filter({
         has: page.locator(".settings-row__title", { hasText: "Discord account" }),
       });
