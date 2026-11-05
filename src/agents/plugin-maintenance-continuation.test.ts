@@ -296,7 +296,7 @@ it.each([
   ["failed", true, false, "", "activate"],
   ["failed", true, false, "", "dispose"],
   ["failed", false, false, "", "activate"],
-  ["applied", true, true, "applied", "dispose"],
+  ["applied", true, true, "completed", "dispose"],
   ["restored", false, true, "rolled back", "activate"],
   ["unchanged", false, true, "not applied", "prepare"],
 ] as const)(
@@ -336,17 +336,20 @@ it.each([
       phase,
       committed,
     });
-    await expect(
-      coordinator.complete(
-        Promise.reject(error),
-        ["example"],
-        Promise.resolve({
-          kind,
-          committed,
-          unavailablePluginIds: [],
-        }),
-      ),
-    ).rejects.toBe(error);
+    const completion = coordinator.complete(
+      kind === "applied" ? Promise.resolve("applied") : Promise.reject(error),
+      ["example"],
+      Promise.resolve({
+        kind,
+        committed,
+        unavailablePluginIds: kind === "applied" ? ["example"] : [],
+      }),
+    );
+    if (kind === "applied") {
+      await expect(completion).resolves.toBe("applied");
+    } else {
+      await expect(completion).rejects.toBe(error);
+    }
     await setImmediate();
     if (healthy) {
       expect(mocks.enqueue).toHaveBeenCalledOnce();

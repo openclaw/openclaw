@@ -122,10 +122,11 @@ export function createPluginForceReload(
                     error: formatErrorMessage(result.error),
                     replacement,
                   },
-              replacement.unavailablePluginIds.length === 0 &&
-                (replacement.kind === "applied" ||
-                  (!replacement.committed &&
-                    (replacement.kind === "restored" || replacement.kind === "unchanged"))),
+              // Unavailable ids describe old rollback code, not the applied generation.
+              replacement.kind === "applied" ||
+                (!replacement.committed &&
+                  replacement.unavailablePluginIds.length === 0 &&
+                  (replacement.kind === "restored" || replacement.kind === "unchanged")),
             ),
           )
           .catch((error: unknown) => {
