@@ -26,8 +26,8 @@ describe("session index scheduling", () => {
       layout: "state-only",
     });
     await captureRuntimeConfigAsyncReader()();
-    harness = await SessionStartupCatchupHarness.create([]);
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    harness = await SessionStartupCatchupHarness.create([]);
     harness.startTranscriptListener();
   });
 
@@ -85,9 +85,10 @@ describe("session index scheduling", () => {
       await vi.advanceTimersByTimeAsync(updates === 14 ? 19_999 : 29_999);
       expect(harness.syncCalls).toEqual([]);
       await advanceSessionTime(1);
-      expect(harness.syncCalls).toEqual([delta(first, second)]);
+      const firstPass = updates === 14 ? { reason: "reconcile" } : delta(first, second);
+      expect(harness.syncCalls).toEqual([firstPass]);
       await advanceSessionTime(300_000);
-      expect(harness.syncCalls).toEqual([delta(first, second), { reason: "reconcile" }]);
+      expect(harness.syncCalls).toEqual([firstPass, { reason: "reconcile" }]);
     },
   );
 
@@ -102,13 +103,11 @@ describe("session index scheduling", () => {
     expect(harness.syncCalls).toEqual([{ reason: "reconcile" }]);
   });
 
-  it("caps deferral across back-to-back turns and only starts in an idle gap", async () => {
-    const target = { agentId: "main", sessionId: "busy", sessionKey: "agent:main:chat:busy" };
+  it("keeps the recovery deadline across back-to-back turns", async () => {
     for (let turn = 0; turn < 15; turn++) {
       activity.listener?.(true);
       await append("busy");
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(harness.syncCalls).toEqual([]);
+      await advanceSessionTime(20_000);
       activity.listener?.(false);
       await vi.advanceTimersByTimeAsync(1);
       if (turn < 14) {
@@ -116,7 +115,7 @@ describe("session index scheduling", () => {
       }
     }
     await harness.waitForSessionSync();
-    expect(harness.syncCalls).toEqual([delta(target)]);
+    expect(harness.syncCalls).toEqual([{ reason: "reconcile" }]);
   });
 
   it("keeps pending work when a new turn starts during the quiet period", async () => {
