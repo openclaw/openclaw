@@ -352,9 +352,10 @@ function selectWebSearchCandidates(
     return provider.id;
   }
 
+  const explicitProviderId = normalizeOptionalLowercaseString(options?.providerId);
   const preferredIds = uniqueStrings(
     [
-      options?.providerId,
+      explicitProviderId,
       resolveRuntimePreferredWebSearchProviderId(),
       resolveWebSearchProviderId({
         config,
@@ -367,14 +368,13 @@ function selectWebSearchCandidates(
     ].filter((value): value is string => Boolean(value)),
   );
 
-  const explicitProviderId = options?.providerId?.trim();
   if (explicitProviderId && !providers.some((entry) => entry.id === explicitProviderId)) {
     throw new Error(`Unknown web_search provider "${explicitProviderId}".`);
   }
   const explicitSelection = hasExplicitWebSearchSelection({
     search,
     runtimeWebSearch,
-    providerId: options?.providerId,
+    providerId: explicitProviderId,
     providers,
   });
   if (preferredIds.length === 0 && !explicitSelection) {

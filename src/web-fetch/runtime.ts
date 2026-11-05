@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
@@ -143,7 +146,7 @@ export function resolveWebFetchDefinition(
   }
   const configuredProviderId = normalizeLowercaseStringOrEmpty(fetch?.provider);
   const providerId =
-    options?.providerId ??
+    normalizeOptionalLowercaseString(options?.providerId) ??
     (configuredProviderId
       ? providers.find((entry) => entry.id === configuredProviderId)?.id
       : undefined) ??
