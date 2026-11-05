@@ -61,7 +61,6 @@ describe("release publication state", () => {
       "https://registry.npmjs.org/openclaw",
       `https://registry.npmjs.org/openclaw/${version}`,
     ]);
-    expect(result.corePublished).toBe(true);
     expect(result.publishedPackages).toEqual([pkg("openclaw")]);
     expect(result.gates).toContainEqual(
       expect.objectContaining({
@@ -160,7 +159,7 @@ describe("release publication state", () => {
         ],
       });
       expect(fetch).not.toHaveBeenCalled();
-      expect(result.corePublished).toBe(decision !== "plan");
+      expect(result.publishedPackages.length).toBe(decision === "plan" ? 0 : 1);
       expect(result.gates.some((gate) => gate.status === "FAIL")).toBe(false);
       expect(result.gates.find((gate) => gate.id === "npm.package.openclaw")?.message).toContain(
         decision === "plan"
@@ -276,7 +275,6 @@ describe("release publication state", () => {
         "@openclaw/gateway-protocol",
         "openclaw",
       ]);
-      expect(result.corePublished).toBe(true);
       expect(result.publishedPackages).toEqual([
         { packageName: "openclaw", version },
         ...corePackages,
