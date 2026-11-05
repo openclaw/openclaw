@@ -594,32 +594,26 @@ it.runIf(process.platform === "darwin").each(["app", "dmg"] as const)(
         const product = "apps/macos/.build/arm64/release/OpenClaw";
         const symbols = `${product}.dSYM`;
         const dwarf = `${symbols}/Contents/Resources/DWARF/OpenClaw`;
-        const binaryBytes = readFileSync(second.file(product));
-        const symbolEntries = listDirectoryTreeStrictSync(second.file(symbols)).map(
-          ({ relativePath }) => relativePath,
-        );
-        const symbolFiles = symbolEntries
-          .filter((entry) => statSync(second.file(symbols, entry)).isFile())
-          .map((entry) => [entry, readFileSync(second.file(symbols, entry))] as const);
+        const snapshot = (borrower: typeof second) => [
+          readFileSync(borrower.file(product)),
+          listDirectoryTreeStrictSync(borrower.file(symbols)).map(({ relativePath }) => [
+            relativePath,
+            statSync(borrower.file(symbols, relativePath)).isFile()
+              ? readFileSync(borrower.file(symbols, relativePath))
+              : null,
+          ]),
+        ];
+        const expectedContents = snapshot(second);
         const expectedUUIDs = [...second.expectedUUIDs];
         // Truncation preserves the inode, exposing hardlinks or a shared seed directory.
         writeFileSync(first.file(product), "damaged binary");
         writeFileSync(first.file(dwarf), "damaged DWARF");
         first.expectedUUIDs.push("borrower-local UUID");
-        expect(readFileSync(second.file(product))).toEqual(binaryBytes);
-        for (const [entry, bytes] of symbolFiles) {
-          expect(readFileSync(second.file(symbols, entry))).toEqual(bytes);
-        }
+        expect(snapshot(second)).toEqual(expectedContents);
         rmSync(first.root, { recursive: true });
         f = makeDistributionFixture("native");
         expect(setup).toHaveBeenCalledTimes(6);
-        expect(readFileSync(f.file(product))).toEqual(binaryBytes);
-        expect(
-          listDirectoryTreeStrictSync(f.file(symbols)).map(({ relativePath }) => relativePath),
-        ).toEqual(symbolEntries);
-        for (const [entry, bytes] of symbolFiles) {
-          expect(readFileSync(f.file(symbols, entry))).toEqual(bytes);
-        }
+        expect(snapshot(f)).toEqual(expectedContents);
         expect(second.expectedUUIDs).toEqual(expectedUUIDs);
         expect(f.expectedUUIDs).toEqual(expectedUUIDs);
         expect(f.expectedUUIDs).not.toBe(second.expectedUUIDs);
