@@ -134,6 +134,10 @@ function defineSkillWorkshopEnableSuite(params: {
           await enable.click();
           // The Gateway publishes the plugin and the open page loads it in place.
           await page.getByText("No learned skills yet").waitFor({ timeout: 60_000 });
+          // Focus moves from the departed button to the panel, not the page body.
+          await expect
+            .poll(() => page.evaluate(() => document.activeElement?.id))
+            .toBe("plugins-hub-panel");
           expect(sent.filter((frame) => frame.method === "plugins.setEnabled")).toHaveLength(1);
           expect(workshopRequests().map((frame) => frame.method)).toContain("skills.workshop.list");
           expect(await pluginEnabled()).toBe(true);

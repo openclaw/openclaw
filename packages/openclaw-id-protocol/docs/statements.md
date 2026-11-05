@@ -73,7 +73,7 @@ additive change. v1-draft accepts only `ed25519`.
 
 | Type               | Body                                                                                                     | Valid signer                             | Owner capability needed                                        |
 | ------------------ | -------------------------------------------------------------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------- |
-| OwnerDeviceCert    | device_pub, peer_keys[W] (<= 5), label, scope `owner`, caps, issued_at, expires_at\|null, root_epoch     | R, or a current owner device of the claw | `approve_device`; caps within the signer's (`caps_escalation`) |
+| OwnerDeviceCert    | device_pub, peer_keys[W] (<= 10), label, scope `owner`, caps, issued_at, expires_at\|null, root_epoch    | R, or a current owner device of the claw | `approve_device`; caps within the signer's (`caps_escalation`) |
 | ServerBinding      | claw_id, hostname, k_srv, k_gw, binding_seq, root_epoch, issued_at                                       | R only                                   | n/a                                                            |
 | InviteCap          | claw_id, invite_id, role, audience {kind, value}, label, created_at, expires_at, single_use, secret_hash | current owner device (or R)              | `invite`                                                       |
 | MembershipChange   | claw_id, seq, target (by op), issued_at                                                                  | current owner device (or R)              | `manage_members`; `approve_device` for `add_owner_device`      |
@@ -155,10 +155,13 @@ nothing else. There are no certificate chains and no list of revoked keys.
   member browsers unused for 30 days are dropped (Gateway config
   `ownerDeviceInactivityDays` / `memberDeviceInactivityDays`). Inactivity never cascades: the
   devices a dropped device approved stay.
-- **Caps.** A claw lists at most 20 owner devices (`MAX_OWNER_DEVICES`), 50 members
-  (`MAX_MEMBERS`) and 5 browsers per member (`MAX_MEMBER_PEER_KEYS`); an owner device
-  certificate carries at most 5 peer keys. Adding past a cap is refused with `limit_reached`
-  ("remove one to add another"). The snapshot therefore always fits the 256-entry list limit.
+- **Caps.** A claw lists at most 20 owner devices (`MAX_OWNER_DEVICES`), 256 members
+  (`MAX_MEMBERS`) and 10 browsers per member (`MAX_MEMBER_PEER_KEYS`); an owner device
+  certificate carries at most 10 peer keys (`MAX_OWNER_DEVICE_PEER_KEYS`). Adding past a cap is
+  refused with `limit_reached` ("remove one to add another"). The snapshot therefore always fits
+  the 256-entry list limit: at most 256 members and 200 owner peer keys. A snapshot at every cap,
+  with 256-character account ids, is about 275 KiB of JSON (about 600 KiB if every id
+  character needs a JSON escape); Discovery sizes its snapshot publication limit for it.
 - **Snapshots** carry current state only: each owner device's key and granted caps, owner peer
   keys and members. Readers outside the claw (Discovery) take an owner device's caps from the
   snapshot; a certificate a browser presents is only the Gateway's approval record.

@@ -164,7 +164,7 @@ suite.define(() => {
           expect(await devicePage.locator(".settings-row__title").allTextContents()).toEqual([
             "Appearance",
             "Notifications",
-            "Allow Camera",
+            "Allow camera",
             "Keep awake",
             "Health summaries",
             "Diagnostics",

@@ -344,7 +344,7 @@ describe("ChatComposerCapabilityHost", () => {
     ],
     [
       { navigateAfterSave: true },
-      "The active session changed before it could be enabled.",
+      "Couldn’t enable this server. The active session changed. Try again.",
       ["global"],
     ],
     [{ refreshError: "refresh failed" }, "refresh failed", ["global", "load"]],
@@ -355,7 +355,7 @@ describe("ChatComposerCapabilityHost", () => {
       await harness.submit();
       expect(harness.globalWrites).toEqual([disabledServer]);
       expect(harness.alert()).toContain(
-        "The server was saved disabled globally, but enabling it for this session failed:",
+        "The server was saved but is still disabled. Couldn’t enable it for this session.",
       );
       expect(harness.alert()).toContain(error);
       expect(harness.events).toEqual(events);
