@@ -19,5 +19,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Check whether Lobster is ready for a repeatable workflow.",
+    "Design a small Lobster workflow with approval checkpoints before running it."
+  ]
 }

@@ -3,7 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { defaultRuntime } from "../../runtime.js";
 import { deferSessionControllerClaimBeforeExecution } from "../../sessions/session-controller.mailbox-claim.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import { scheduleFollowupDrain } from "./queue.js";
 import type { InternalFollowupRun } from "./queue/types.js";
 
 export function createQueueTestRun(
@@ -87,15 +87,6 @@ export async function drainRecordedQueue(
 ) {
   scheduleFollowupDrain(key, runFollowup);
   await done.promise;
-}
-
-export function enqueueTestRun(
-  key: string,
-  params: Parameters<typeof createQueueTestRun>[0],
-  settings: QueueSettings,
-  runOverrides?: Partial<FollowupRun["run"]>,
-) {
-  return enqueueFollowupRun(key, createQueueTestRun(params, runOverrides), settings);
 }
 
 /** Synthetic preparation owner: the callback has not entered a model/tool effect. */
