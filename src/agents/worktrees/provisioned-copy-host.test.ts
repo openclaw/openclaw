@@ -19,7 +19,8 @@ vi.mock("../../infra/worker-task-pool.js", () => ({
   WorkerTaskError: class extends Error {},
 }));
 // mock-isolation: Each test owns its pool; do not retain it in process-global state.
-vi.mock("../../shared/global-singleton.js", () => ({
+vi.mock("../../shared/global-singleton.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../shared/global-singleton.js")>()),
   resolveGlobalSingleton: (_key: symbol, create: () => unknown) => create(),
 }));
 // mock-isolation: Observe the receipt without dispatching diagnostics outside the fixture.
