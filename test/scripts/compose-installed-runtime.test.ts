@@ -13,6 +13,7 @@ import {
   resolveInstalledRuntimeImageRecipe,
 } from "../../scripts/compose-installed-runtime.mts";
 import { verifyInstalledRuntimeImageInputs } from "../../scripts/lib/installed-runtime-image-inputs.mjs";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 const runtimeCommit = execFileSync("git", ["rev-parse", "HEAD"], {
@@ -696,7 +697,7 @@ describe("offline installed runtime composition", () => {
       await fs.writeFile(inventoryPath, JSON.stringify([...inventory, ...Object.keys(sdkFiles)]));
       const nativeImport = (cwd: string) =>
         spawnSync(
-          process.execPath,
+          resolveTestNodeExecPath(),
           [
             "--input-type=module",
             "-e",
