@@ -33,7 +33,7 @@ export const keyboardHints = {
   subscribe: changes.subscribe,
 };
 
-export function isHardwareKeyboardEvent(event: KeyboardEvent): boolean {
+function isHardwareKeyboardEvent(event: KeyboardEvent): boolean {
   if (event.isComposing || event.keyCode === 229 || event.key === "Unidentified") {
     return false;
   }

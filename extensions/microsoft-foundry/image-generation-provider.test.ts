@@ -105,7 +105,7 @@ function requireRequest(mock = http.postJsonRequest) {
 const inputImage = { buffer: Buffer.from("input"), mimeType: "image/png" };
 describe("microsoft foundry image generation provider", () => {
   beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
     http.postJsonRequest.mockImplementation(async () => imageResponse());
   });
   afterEach(() => {

@@ -332,11 +332,12 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
     `);
   }
   registerOpenClawAgentDatabase({ agentId: "main", env, path: pathname, schemaVersion: 25 });
+  const currentEvent = makeEvent("current");
   const currentPath = createLegacyDatabaseFixture({
     agentId: "current",
     env,
     schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-    eventsBySession: { current: [makeEvent("current")] },
+    eventsBySession: { current: [currentEvent] },
   });
   const migrate = () =>
     withMaintenance(env, async () => {
@@ -359,11 +360,30 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
   expect(result).toEqual({
     changes: [
       `Upgraded agent database schema in ${pathname}: v25 -> v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
-      expect.stringMatching(/^Saved pre-repair SQLite backup: /),
+      expect.stringMatching(
+        /^Saved pre-repair SQLite backup: .*openclaw-transcript-directives-recovery-/,
+      ),
       `Repaired historical transcripts in ${currentPath}: 1 active session(s), 0 archived transcript(s).`,
     ],
     warnings: [],
   });
+  for (const notice of result.changes.slice(1, 2)) {
+    using backup = openNodeSqliteDatabase(notice.slice("Saved pre-repair SQLite backup: ".length), {
+      readOnly: true,
+    });
+    expect(
+      JSON.parse(
+        String(backup.prepare("SELECT event_json FROM transcript_events").get()?.event_json),
+      ),
+    ).toEqual(currentEvent);
+  }
+  for (const databasePath of [pathname, currentPath]) {
+    expect(
+      fs
+        .readdirSync(path.dirname(databasePath))
+        .filter((name) => name.startsWith("openclaw-media-persistence-recovery-")),
+    ).toEqual([]);
+  }
   expect(fs.readFileSync(archivePath)).toEqual(archive);
   expect(readState(pathname)).toEqual({
     version: OPENCLAW_AGENT_SCHEMA_VERSION,

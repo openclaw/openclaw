@@ -55,7 +55,7 @@ await withOpenClawTestState({ label: "session-write-hold" }, async (state) => {
       commitMs += performance.now() - start;
     }
   };
-  JSON.stringify = new Proxy(stringify, {
+  const jsonTimingTrap: ProxyHandler<typeof stringify | typeof parse> = {
     apply(target, receiver, args) {
       const start = performance.now();
       const held = holdStart !== undefined;
@@ -67,20 +67,9 @@ await withOpenClawTestState({ label: "session-write-hold" }, async (state) => {
         }
       }
     },
-  });
-  JSON.parse = new Proxy(parse, {
-    apply(target, receiver, args) {
-      const start = performance.now();
-      const held = holdStart !== undefined;
-      try {
-        return Reflect.apply(target, receiver, args);
-      } finally {
-        if (held) {
-          jsonInHoldMs += performance.now() - start;
-        }
-      }
-    },
-  });
+  };
+  JSON.stringify = new Proxy<typeof stringify>(stringify, jsonTimingTrap);
+  JSON.parse = new Proxy<typeof parse>(parse, jsonTimingTrap);
   try {
     for (let index = 0; index < 60; index += 1) {
       holdMs = 0;

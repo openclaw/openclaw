@@ -3,7 +3,7 @@ import { resolveSessionAgentId } from "../../../../src/agents/agent-scope.js";
 import { parseUsageCountedSessionIdFromFileName } from "../../../../src/config/sessions/artifacts.js";
 import { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/main-session.js";
 import { listSessionEntriesReadOnly } from "../../../../src/config/sessions/session-accessor.sqlite-entry-list.read.js";
-import { readTranscriptStatsBatchReadOnlySync } from "../../../../src/config/sessions/session-accessor.sqlite-read.js";
+import { readTranscriptStatsBatchReadOnlySync } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-stats-read.js";
 import type { CanonicalSessionReaderContinuation } from "../../../../src/config/sessions/session-canonical-key.js";
 import {
   listSessionTranscriptArchivesReadOnly,

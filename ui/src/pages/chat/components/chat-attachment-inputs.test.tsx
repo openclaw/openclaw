@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { onSettled } from "solid-js";
-import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { installDialogPolyfill } from "../../../test-helpers/modal-dialog.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
@@ -29,6 +29,9 @@ function expectRect(element: HTMLElement, ...values: number[]) {
     values.map((value) => `${value}px`),
   );
 }
+
+// The menu body is lazy; a cold transform on a loaded CI shard can outlast waitForSolid.
+beforeAll(() => import("./chat-composer-plus-menu-content.tsx"));
 
 beforeEach(() => {
   restoreDialog = installDialogPolyfill();

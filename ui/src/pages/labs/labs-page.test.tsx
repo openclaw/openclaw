@@ -206,9 +206,15 @@ describe("LabsPage", () => {
 
   it.each([
     ["Code Mode", "codeMode", false, codeMode({ enabled: true }), codeMode({ enabled: null })],
-    ["Claws", "claws", false, experimental({ claws: true }), experimental({ claws: null })],
     [
-      "Host Desktop",
+      "Templates",
+      "templates",
+      false,
+      experimental({ templates: true }),
+      experimental({ templates: null }),
+    ],
+    [
+      "Desktop on the computer running OpenClaw",
       "hostDesktop",
       false,
       hostDesktop({ enabled: true, managed: false, port: 5908, passwordFile: "/tmp/vnc-password" }),
@@ -225,9 +231,15 @@ describe("LabsPage", () => {
     ["Code Mode", "codeMode", true, codeMode({ enabled: false }), codeMode({ enabled: "auto" })],
     ["Code Mode", "codeMode", true, codeMode(false), codeMode(null)],
     ["Speech bubbles", "chatBubbles", true, {}, experimental({ chatBubbles: true })],
-    ["Claws", "claws", true, {}, experimental({ claws: true })],
-    ["Host Desktop", "hostDesktop", true, hostEnabled(false), hostEnabled(true)],
-    ["Cloud Worker Desktop", "workerDesktop", true, workerDesktop(false), workerDesktop(true)],
+    ["Templates", "templates", true, {}, experimental({ templates: true })],
+    [
+      "Desktop on the computer running OpenClaw",
+      "hostDesktop",
+      true,
+      hostEnabled(false),
+      hostEnabled(true),
+    ],
+    ["Cloud device desktop", "workerDesktop", true, workerDesktop(false), workerDesktop(true)],
     ["Advisor", "advisor", true, {}, advisor({ enabled: true })],
     ["Code Mode", "codeMode", false, {}, codeMode({ enabled: false })],
     [
@@ -311,15 +323,11 @@ describe("LabsPage", () => {
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });
 
-  it("shows default provenance", async () => {
-    const inherited = await mountPage({});
-    expect(labRow(inherited.page, "Code Mode").textContent).not.toContain("Using default:");
-    inherited.unmount();
-
+  it("does not narrate the default in the row", async () => {
     const overridden = await mountPage({
       tools: { codeMode: { enabled: "auto" }, swarm: { enabled: false } },
     });
-    expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Disabled");
+    expect(labRow(overridden.page, "Code Mode").textContent).not.toContain("Default:");
   });
 });
 
@@ -346,7 +354,7 @@ describe("LabsPage tool search enablement", () => {
     ["option-bearing override", { tools: { toolSearch: { enabled: true, maxSearchLimit: 3 } } }],
   ])("disables %s without replacing authored modes or options", async (_label, config) => {
     const { page, runtimeConfig } = await mountPage(config);
-    const toggle = labToggle(page, "Tool Search for all models");
+    const toggle = labToggle(page, "Tool search for all models");
 
     expect(toggle.checked).toBe(true);
     changeToggle(toggle, false);

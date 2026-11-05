@@ -288,6 +288,11 @@ Backend adapters retain protocol validation and special-mode handling.
     command, arguments, environment, or lifecycle policy. Process spawning,
     readiness, diagnostics, and idle-stop policy remain internal to the host.
 
+    The optional target callback `onReadinessWait(waiting)` reports `true` when
+    host readiness starts and `false` when it ends, including readiness failures.
+    Reconciliation and provider requests stay outside that phase. Caller
+    cancellation remains on `signal`; consume the request before releasing its lease.
+
     Pass the exact configured provider id and resolved request base URL. Do not
     replace aliases with an adapter id: separate aliases can point at separate
     local GPU hosts. The host rejects endpoints that do not match the configured

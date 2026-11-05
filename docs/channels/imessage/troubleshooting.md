@@ -25,6 +25,23 @@ Symptom-first fixes for the iMessage channel, plus the configuration reference l
 
   </Accordion>
 
+  <Accordion title="Replies fail after an app update, but channel status is healthy">
+    A successful `channels status --probe` checks RPC/read access, not whether Messages can send. Automation failures can therefore coexist with a healthy probe and working inbound messages.
+
+    For structured AppleScript failures, OpenClaw includes launch-context guidance with the send error. Error `-1743` means Messages Automation was denied. Error `-1712` is an Apple event timeout: a missing grant is one possible cause, not a confirmed diagnosis.
+
+    Check **System Settings → Privacy & Security → Automation** on the Mac running Messages:
+
+    - For a local app-managed Gateway, check the Gateway/launcher process macOS identifies. An app update that switches Node to Bun, or first moves the service to the stable `~/.openclaw/runtime/service/bun` path, needs this grant approved once; later updates keep that path. The error includes the current local Gateway runtime path to help distinguish it from an old entry.
+    - For SSH or custom wrappers, check that Mac's actual SSH/wrapper launch context, not the remote Gateway host's runtime.
+    - A grant to Terminal or OpenClaw.app does not by itself establish access for a background service.
+
+    Review the required grant in that user session, then verify delivery through the same Gateway and launch context using an explicitly requested test message to a consenting recipient. A Terminal-only test does not validate the background service. Pending replies may drain after recovery; do not resend them manually before checking their delivery outcome.
+
+    See [iMessage permissions](/channels/imessage/setup#requirements-and-permissions-macos) and [Gateway hosting](/platforms/mac/bundled-gateway). Changing a runtime symlink is not a verified permission-continuity fix.
+
+  </Accordion>
+
   <Accordion title="Messages send but inbound iMessages do not arrive">
     First prove whether the message reached the local Mac. If `chat.db` does not change, OpenClaw cannot receive the message even when `imsg status --json` reports a healthy bridge.
 
@@ -96,15 +113,21 @@ openclaw channels status --probe --channel imessage
 
   </Accordion>
 
+  <Accordion title="Replies fail after an app update with AppleScript -1712 or -1743">
+    A working inbound connection or successful read probe does not prove that Messages Automation is authorized. OpenClaw reports observed AppleScript Automation send failures in the account warning shown by `openclaw channels status`, including when inbound remains connected. During the current account run, the warning clears after a successful send, not a successful read probe. Restarting the Gateway resets this observed status; it does not transfer the grant.
+
+    On the Messages Mac, open **System Settings → Privacy & Security → Automation** and allow Messages for the process that runs `imsg`. For an app-managed background Gateway using bundled Bun, check the current `bun` entry. App updates use a new concrete runtime path, so a grant for an older `node` or `bun` runtime, Terminal, or OpenClaw.app may not cover the running service. Use `openclaw gateway status --deep` to inspect the service command.
+
+    AppleScript `-1712` is a timeout, not proof of a denied grant: also check for a hidden permission prompt or an unresponsive Messages.app. After restoring access, retry a send through the Gateway in the same user session. A terminal-only test can use a different permission identity. Review queued replies before manually sending replacements.
+
+    This recovery does not preserve or transfer macOS grants between runtime builds. See [macOS permissions](/platforms/mac/permissions).
+
+  </Accordion>
+
   <Accordion title="macOS permission prompts were missed">
-    Re-run in an interactive GUI terminal in the same user/session context and approve prompts:
+    Review Full Disk Access and Messages Automation in the logged-in Messages user’s macOS session for the process context that actually runs OpenClaw/`imsg`. See [Requirements and permissions](/channels/imessage/setup#requirements-and-permissions-macos), including the SSH-wrapper edge case.
 
-    ```bash
-    imsg chats --limit 1
-    imsg send <handle> "test"
-    ```
-
-    Confirm Full Disk Access + Automation are granted for the process context that runs OpenClaw/`imsg`.
+    A successful command in Terminal only verifies Terminal’s context. It does not establish permissions for a LaunchAgent or SSH wrapper. Verify the configured Gateway’s send path with an explicitly requested test message, not an automatic health-check send.
 
   </Accordion>
 </AccordionGroup>

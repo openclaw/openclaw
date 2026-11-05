@@ -12,7 +12,6 @@ import { buildActiveSubagentRuntimeContext } from "./subagent-active-context.js"
 import { buildControlledSubagentRunsReadContext } from "./subagent-control-scope.js";
 import { readSubagentListSessionEntries } from "./subagent-list.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { loadSubagentRecoverySession } from "./subagent-registry-restart-recovery-session.js";
 import { persistRegistryFixture } from "./subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
@@ -246,11 +245,6 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
                 { sessionKeys: [controllerSessionKey], descendants: false },
               ),
             );
-            const recovery = await measure("restart-recovery-session", iteration, () =>
-              loadSubagentRecoverySession({ entry: run, isOwnerCurrent: () => true }),
-            );
-            expect(recovery?.sessionEntry?.sessionId).toBe(run.runId);
-
             const context = await buildControlledSubagentRunsReadContext(
               controllerSessionKey,
               "main",

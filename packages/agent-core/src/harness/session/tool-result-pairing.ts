@@ -206,7 +206,7 @@ export function normalizeLegacyToolResultId(
   if (resultName && callName && resultName !== callName) {
     return message;
   }
-  return { ...message, toolCallId: toolCall.id, isError: true };
+  return { ...message, toolCallId: toolCall.id };
 }
 
 /** Classifies call/result ownership without reordering or synthesizing transcript messages. */
@@ -248,9 +248,10 @@ export function classifyToolUseResultPairing(
     }
   }
 
+  const pending = createToolCallOccurrenceQueue<ToolCallOccurrence>();
   for (const frame of frameRecords) {
     const { occurrences } = frame;
-    const pending = createToolCallOccurrenceQueue<ToolCallOccurrence>();
+    pending.clear();
     for (const occurrence of occurrences) {
       pending.add(occurrence.id, occurrence);
     }

@@ -210,11 +210,14 @@ suite.define(() => {
         expect(await reauth.locator(".provider-row__status").textContent()).toContain(
           "Credentials rejected",
         );
+        // The row's status already speaks for the provider's only account.
         expect(
-          await reauth.locator('[data-profile-id="example-reauth:account"]').textContent(),
-        ).toContain("Sign-in unavailable");
+          await reauth
+            .locator('[data-profile-id="example-reauth:account"] .model-providers__profile-status')
+            .textContent(),
+        ).toBe("");
         const quota = page.locator('[data-provider-id="example-quota"]');
-        expect(await quota.textContent()).toContain("Monthly quota is used up");
+        expect(await quota.textContent()).toContain("Monthly quota0% left");
         expect(await quota.textContent()).not.toContain("Sign in again");
         const rate = page.locator('[data-provider-id="example-rate"]');
         expect(await rate.textContent()).toContain("Temporary rate limit. Retry shortly.");

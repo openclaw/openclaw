@@ -1,7 +1,7 @@
 /**
  * Test SDK subpath for plugin package, registration, and public surface contracts.
  */
-import { pluginRegistrationContractRegistry } from "../plugins/contracts/registry.js";
+import { getPluginRegistrationContracts } from "../plugins/contracts/registry.js";
 import {
   installPluginRegistrationContract,
   type PluginRegistrationContractParams,
@@ -19,7 +19,7 @@ export { describePackageManifestContract } from "./test-helpers/package-manifest
 export { pluginRegistrationContractCases } from "./test-helpers/plugin-registration-contract-cases.js";
 
 function resolvePluginRegistrationContract(pluginId: string) {
-  return pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId);
+  return getPluginRegistrationContracts().find((entry) => entry.pluginId === pluginId);
 }
 
 /** Installs tests against the runtime plugin registration contract registry. */
