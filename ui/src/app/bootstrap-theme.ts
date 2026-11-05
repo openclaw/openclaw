@@ -12,7 +12,7 @@ import {
   HOST_CONTENT_ZOOM_MEDIA_QUERY,
   nativeContentZoomHost,
   usesHostContentZoom,
-} from "./native-web-chrome.ts";
+} from "./native-content-zoom.ts";
 import { backgroundPreferenceStorageKey } from "./settings-background.ts";
 import {
   bindUiPreferences,

@@ -5,8 +5,8 @@ import {
   type SettingsSearchBlock,
 } from "../../app-navigation.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
+import { usesHostContentZoom } from "../../app/native-content-zoom.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
-import { usesHostContentZoom } from "../../app/native-web-chrome.ts";
 import { currentThemeBranding } from "../../app/theme-branding.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {

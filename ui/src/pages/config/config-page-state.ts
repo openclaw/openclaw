@@ -6,7 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, sameRouteLocation } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
-import { usesHostContentZoom } from "../../app/native-web-chrome.ts";
+import { usesHostContentZoom } from "../../app/native-content-zoom.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   normalizeCatalogOpenTarget,
