@@ -155,6 +155,37 @@ it("prepares detached, ordered, case-sensitive declarations once per record", ()
   expect(readNames).toHaveBeenCalledOnce();
 });
 
+it("rejects duplicate tool names within a plugin instead of shadowing the first registration", () => {
+  const { api, registry } = declarations(() => ["dup"]);
+  api.registerTool(() => null, { name: "dup" });
+  api.registerTool(() => null, { name: "dup" });
+  expect(registry.tools).toHaveLength(1);
+  expect(registry.diagnostics).toContainEqual(
+    expect.objectContaining({
+      level: "error",
+      pluginId: "probe",
+      message: "tool already registered: dup (probe)",
+    }),
+  );
+});
+
+it("rejects cross-plugin tool name collisions", () => {
+  const { api, registry, createApi } = declarations(() => ["shared"]);
+  api.registerTool(() => null, { name: "shared" });
+  const other = createPluginRecord({ id: "other", contracts: { tools: ["shared"] } });
+  registry.plugins.push(other);
+  createApi(other, { config: {}, registrationMode: "full" }).registerTool(() => null, {
+    name: "shared",
+  });
+  expect(registry.tools).toHaveLength(1);
+  expect(registry.diagnostics).toContainEqual(
+    expect.objectContaining({
+      level: "error",
+      message: "tool already registered: shared (probe)",
+    }),
+  );
+});
+
 it.each([undefined, []])("retains empty declarations before factory validation (%j)", (names) => {
   const readNames = vi.fn(() => names);
   const { api, registry } = declarations(readNames);

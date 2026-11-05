@@ -525,6 +525,16 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       return result;
     };
     getPluginInstance(record)?.admitFactory(inspectedFactory, "tool");
+    if (normalized.length > 0) {
+      const collision = registry.tools.find((entry) =>
+        entry.names.some((name) => normalized.includes(name)),
+      );
+      if (collision) {
+        const name = normalized.find((candidate) => collision.names.includes(candidate));
+        reportRegistrationError(record, `tool already registered: ${name} (${collision.pluginId})`);
+        return;
+      }
+    }
     registry.tools.push({
       ...createRegistration(record, {
         factory: inspectedFactory,
