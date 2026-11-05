@@ -175,6 +175,37 @@ it("observes each admitted read while preserving the non-throwing request contra
   expect(onRead).toHaveBeenCalledTimes(3);
 });
 
+it("shares overlapping catalog changes and refreshes after the pending read settles", async () => {
+  const onResult = vi.fn();
+  const onRead = vi.fn<(read: Promise<ModelCatalogResult | undefined>) => void>();
+  const { reader, current, client } = fixture({ onResult, onRead });
+  const pending = createDeferred<ModelCatalogResult>();
+  current().request.mockClear();
+  current().request.mockReturnValue(pending.promise);
+  const changeCatalog = () => {
+    invalidateModelCatalogCache(client, main);
+    current().testOptions.onEvent?.({
+      type: "event",
+      event: "chat.metadata.changed",
+      payload: { modelCatalogChanged: true, commandsChanged: false, authChanged: false },
+    });
+  };
+  const retired = reader.read();
+  changeCatalog();
+  const latest = onRead.mock.calls[1]![0];
+  expect(current().request).toHaveBeenCalledTimes(1);
+  pending.resolve(first);
+  await expect(retired).resolves.toBeUndefined();
+  await expect(latest).resolves.toEqual(first);
+  expect(onResult).toHaveBeenCalledExactlyOnceWith(first);
+
+  current().request.mockResolvedValue(second);
+  changeCatalog();
+  await expect(onRead.mock.calls[2]![0]).resolves.toEqual(second);
+  expect(current().request).toHaveBeenCalledTimes(2);
+  expect(reader.snapshot.models).toEqual(second.models);
+});
+
 it.each(["document", "presentation"] as const)(
   "defers hidden %s catalog changes and catches up once on reveal",
   async (hiddenBy) => {

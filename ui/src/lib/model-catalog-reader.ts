@@ -117,15 +117,17 @@ export class ModelCatalogReader {
     if (!binding || !this.owns(binding)) {
       return Promise.resolve(undefined);
     }
-    this.controller?.abort();
+    const previousController = this.controller;
     this.controller = undefined;
     if (document.visibilityState === "hidden" || this.options.isPresented?.() === false) {
+      previousController?.abort();
       this.deferredRead = true;
       return Promise.resolve(undefined);
     }
     this.deferredRead = false;
     const cached = peekModelCatalog(binding.client, binding.scope);
     if (cached) {
+      previousController?.abort();
       this.failed = false;
       this.options.onResult?.(cached);
       const read = Promise.resolve(cached);
@@ -164,6 +166,8 @@ export class ModelCatalogReader {
         return undefined;
       },
     );
+    // Acquire the replacement subscriber before retiring the sole owner of a pending request.
+    previousController?.abort();
     this.options.onRead?.(read);
     this.notify();
     // Existing callers consume errors through onError; observers also receive the rejection.
