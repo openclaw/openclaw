@@ -14,7 +14,8 @@ const { spawn } = vi.hoisted(() => ({
 }));
 // mock-isolation: The systemd CLI is an unavailable external boundary on macOS.
 vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: () => ({ spawn }) }));
-vi.mock("../process/child-memory.js", () => ({
+vi.mock("../process/child-memory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/child-memory.js")>()),
   getHostExecMemoryBudget: () => ({ memoryBytes: 15 * 1024 ** 3, swapBytes: 5 * 1024 ** 3 }),
 }));
 vi.mock("../infra/executable-path.js", async (importOriginal) => ({

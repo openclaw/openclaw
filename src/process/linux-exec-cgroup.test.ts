@@ -57,7 +57,8 @@ vi.mock("./child-memory.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./child-memory.js")>()),
   getHostExecMemoryBudget: () => ({ memoryBytes: 1800 * 1024 ** 2, swapBytes: 0 }),
 }));
-vi.mock("./supervisor/adapters/child.js", () => ({
+vi.mock("./supervisor/adapters/child.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./supervisor/adapters/child.js")>()),
   createChildAdapter: fixture.spawn,
 }));
 
