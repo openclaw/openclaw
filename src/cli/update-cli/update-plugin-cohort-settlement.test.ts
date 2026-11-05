@@ -2,11 +2,18 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import "../../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createConfigIO } from "../../config/io.factory.js";
+import { replaceConfigFile } from "../../config/mutate.js";
 import { withPluginCohortConfigCapture } from "../../config/plugin-cohort-recovery.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
-import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-paths.js";
+import { createPackageActivationLifetimeFixture } from "../../infra/package-update-activation-lifetime.test-support.js";
+import {
+  resolvePackageActivationAnchor,
+  resolvePackageActivationControl,
+  resolvePackageActivationJournalPath,
+} from "../../infra/package-update-activation-paths.js";
+import { settlePendingPackageActivation } from "../../infra/package-update-activation.js";
 import type { PluginCohortRecovery } from "../../infra/update-plugin-cohort-schema.js";
 import { createUpdateRun, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
 import { inspectPluginCohortRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
@@ -26,8 +33,9 @@ import { settleInterruptedUpdatePluginCohort } from "./update-plugin-cohort-sett
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 const fence = { assertCurrent() {} };
-const original = { version: "2026.10.10", buildId: "2026.10.9-original" };
-const candidate = { version: "2026.10.10", buildId: "2026.10.10-candidate" };
+type Core = { version: string; buildId: string | null };
+const original: Core = { version: "2026.10.10", buildId: "2026.10.9-original" };
+const candidate: Core = { version: "2026.10.10", buildId: "2026.10.10-candidate" };
 const obligation = {
   pluginId: "discord",
   requiresStateMigration: true as const,
@@ -35,8 +43,9 @@ const obligation = {
   command: "openclaw update repair",
 };
 const SUPERSEDED = "Plugin migration obligation changed after update publication: discord";
+const CONFIG_CONFLICT = "Configuration changed after update publication";
 
-function installCore(root: string, identity: { version: string; buildId: string | null }) {
+function installCore(root: string, identity: Core) {
   fs.mkdirSync(path.join(root, "dist"), { recursive: true });
   fs.writeFileSync(
     path.join(root, "package.json"),
@@ -51,43 +60,33 @@ function installCore(root: string, identity: { version: string; buildId: string 
 }
 
 /**
- * An activated update reopened a plugin obligation, then failed after activation.
- * The candidate's Doctor later completed that obligation, superseding the publication.
+ * An activated update reopened a completed plugin obligation, and optionally
+ * changed config, before failing. Its plugin cohort is still pending.
  */
-async function supersededCohort(params: {
-  installed: { version: string; buildId: string | null };
-  servedCandidate: boolean;
-  recorded?: { disposition: "rollback"; settledPublications: 0 | 1 };
-  pendingPackageRecovery?: true;
-}) {
+async function interruptedCohort(params: { root: string; from?: Core; to?: Core; config?: true }) {
+  const { root, from = original, to = candidate } = params;
   const stateDir = dirs.make("cohort-settlement-state-");
-  const root = path.join(dirs.make("cohort-settlement-install-"), "openclaw");
-  installCore(root, params.installed);
-  if (params.pendingPackageRecovery) {
-    // A package activation record keeps its own authority to restore the original core.
-    fs.mkdirSync(resolvePackageActivationAnchor(root));
-  }
-  const options = { env: { HOME: stateDir, OPENCLAW_STATE_DIR: stateDir } };
-  const run = createUpdateRun({ trigger: "cli" }, options);
-  if (params.servedCandidate) {
-    recordUpdateRunVerification(
-      run.runId,
-      {
-        serviceRunning: true,
-        versionMatch: true,
-        runningVersion: candidate.version,
-        runningBuildId: candidate.buildId,
-        readyz: true,
-        settled: true,
-      },
-      options,
-    );
-  }
+  const configPath = path.join(stateDir, "openclaw.json");
+  const options = { env: { HOME: stateDir, OPENCLAW_STATE_DIR: stateDir, NODE_ENV: "test" } };
+  const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
+  const beforeConfig = json({ gateway: { mode: "local", port: 18789 } });
+  fs.writeFileSync(configPath, beforeConfig);
+  // The original core had already completed this obligation.
+  await recordDeferredPluginMigrations({ env: options.env, pending: [obligation] });
   await recordDeferredPluginMigrations({
     env: options.env,
     pending: [],
-    settlements: [{ pluginId: obligation.pluginId, status: "completed", reason: "settled" }],
+    settlements: [{ pluginId: obligation.pluginId, status: "completed", reason: "original" }],
   });
+  await closeOpenClawStateDatabaseAsync();
+  const row = () =>
+    openOpenClawStateDatabase(options)
+      .db.prepare(
+        "SELECT started_at, finished_at, status, report_json FROM migration_runs WHERE id = ?",
+      )
+      .get(`deferred-plugin-migration:${obligation.pluginId}`);
+  const beforeRow = row();
+  const run = createUpdateRun({ trigger: "cli" }, options);
   const reservation: UpdateRecoveryRecord = {
     runId: run.runId,
     transactionId: randomUUID(),
@@ -95,9 +94,9 @@ async function supersededCohort(params: {
     claimId: randomUUID(),
     claimKind: "initial",
     handoff: null,
-    source: { stateDir, configPath: path.join(stateDir, "openclaw.json") },
-    from: { root, nodePath: process.execPath, ...original },
-    to: { root, nodePath: process.execPath, ...candidate },
+    source: { stateDir, configPath },
+    from: { root, nodePath: process.execPath, ...from },
+    to: { root, nodePath: process.execPath, ...to },
     createdAtMs: 1,
     updatedAtMs: 1,
     effects: [],
@@ -117,89 +116,207 @@ async function supersededCohort(params: {
     settledPublications: 0,
   };
   beginPluginCohortRecovery(reservation, cohort, fence, options);
-  // The updater reopens the obligation while its parent still owns install records.
+  const io = createConfigIO({
+    env: options.env,
+    configPath,
+    observe: false,
+    pluginValidation: "skip",
+  });
   await withPluginCohortConfigCapture(
     { runId: run.runId, installKey: root, env: options.env, ...fence },
-    () => recordDeferredPluginMigrations({ env: options.env, pending: [obligation] }),
+    async () => {
+      // The updater reopens the obligation while its parent still owns install records.
+      await recordDeferredPluginMigrations({ env: options.env, pending: [obligation] });
+      if (params.config) {
+        const prepared = await io.readConfigFileSnapshotForWrite();
+        await replaceConfigFile({
+          snapshot: prepared.snapshot,
+          sourceConfig: { ...prepared.snapshot.sourceConfig, gateway: { mode: "local", port: 1 } },
+          writeOptions: { ...prepared.writeOptions, skipPluginValidation: true },
+          io: {
+            env: options.env,
+            readConfigFileSnapshotForWrite: io.readConfigFileSnapshotForWrite,
+            writeConfigFile: io.writeConfigFile,
+          },
+        });
+      }
+    },
   );
-  if (params.recorded) {
-    // An earlier repair selected rollback, then refused the superseded obligation.
-    const pair = loadPluginCohortRecovery(run.runId, options)!;
-    writePluginCohortRecovery(pair, { ...pair.cohort, ...params.recorded }, fence, options);
-  }
-  await recordDeferredPluginMigrations({
-    env: options.env,
-    pending: [],
-    settlements: [
-      { pluginId: obligation.pluginId, status: "completed", reason: "candidate completed" },
-    ],
-  });
   await closeOpenClawStateDatabaseAsync();
-  const row = () =>
-    openOpenClawStateDatabase(options)
-      .db.prepare(
-        "SELECT started_at, finished_at, status, report_json FROM migration_runs WHERE id = ?",
-      )
-      .get(`deferred-plugin-migration:${obligation.pluginId}`);
-  const later = row();
-  expect(later).toMatchObject({ status: "completed" });
-  const settle = async () => {
-    const expected = await inspectPluginCohortRecoveryAdmission(options, run.runId);
-    if (!expected) {
-      throw new Error("Expected the retained plugin cohort to require repair");
-    }
-    await settleInterruptedUpdatePluginCohort({
-      expected,
-      root,
-      options,
-      assertCurrent: () => fence.assertCurrent(),
-    });
+  const afterConfig = fs.readFileSync(configPath, "utf8");
+  return {
+    options,
+    runId: run.runId,
+    configPath,
+    beforeConfig,
+    afterConfig,
+    beforeRow,
+    row,
+    cohort: () => loadPluginCohortRecovery(run.runId, options)?.cohort,
+    serve() {
+      recordUpdateRunVerification(
+        run.runId,
+        {
+          serviceRunning: true,
+          versionMatch: true,
+          runningVersion: to.version,
+          ...(to.buildId ? { runningBuildId: to.buildId } : {}),
+          readyz: true,
+          settled: true,
+        },
+        options,
+      );
+    },
+    recordRollback(settledPublications: 0 | 1) {
+      // An earlier repair selected rollback, then refused before it finished.
+      const pair = loadPluginCohortRecovery(run.runId, options)!;
+      writePluginCohortRecovery(
+        pair,
+        { ...pair.cohort, disposition: "rollback", settledPublications },
+        fence,
+        options,
+      );
+    },
+    async completeLater() {
+      // The candidate's Doctor completes the obligation: a decision newer than the publication.
+      await recordDeferredPluginMigrations({
+        env: options.env,
+        pending: [],
+        settlements: [
+          { pluginId: obligation.pluginId, status: "completed", reason: "candidate completed" },
+        ],
+      });
+      await closeOpenClawStateDatabaseAsync();
+      expect(row()).not.toEqual(beforeRow);
+      return row();
+    },
+    async settle() {
+      const expected = await inspectPluginCohortRecoveryAdmission(options, run.runId);
+      if (!expected) {
+        throw new Error("Expected the retained plugin cohort to require repair");
+      }
+      await settleInterruptedUpdatePluginCohort({
+        expected,
+        root,
+        options,
+        assertCurrent: () => fence.assertCurrent(),
+      });
+    },
   };
-  return { options, runId: run.runId, row, later, settle };
+}
+
+function installedRoot(identity: Core, packageRecord?: true) {
+  const root = path.join(dirs.make("cohort-settlement-install-"), "openclaw");
+  installCore(root, identity);
+  if (packageRecord) {
+    // An activation anchor without its journal keeps the original owner's authority.
+    fs.mkdirSync(resolvePackageActivationAnchor(root));
+  }
+  return root;
 }
 
 it.each([
   ["pending", candidate, undefined],
-  ["refused rollback", candidate, { disposition: "rollback", settledPublications: 0 }],
+  ["refused rollback", candidate, 0],
   // Deploying a repair build replaces the candidate's build ID but not the original's absence.
-  [
-    "refused rollback under a later build",
-    { version: candidate.version, buildId: "2026.10.11-repair" },
-    { disposition: "rollback", settledPublications: 0 },
-  ],
+  ["refused rollback under a later build", { version: candidate.version, buildId: "repair" }, 0],
 ] as const)(
   "settles a %s cohort forward once its candidate verified serving",
-  async (_label, installed, recorded) => {
-    const f = await supersededCohort({ installed, servedCandidate: true, recorded });
+  async (_label, installed, refusedRollback) => {
+    const f = await interruptedCohort({ root: installedRoot(installed) });
+    f.serve();
+    if (refusedRollback !== undefined) {
+      f.recordRollback(refusedRollback);
+    }
+    const later = await f.completeLater();
     await f.settle();
-    expect(loadPluginCohortRecovery(f.runId, f.options)).toBeUndefined();
+    expect(f.cohort()).toBeUndefined();
     expect(await inspectPluginCohortRecoveryAdmission(f.options)).toBeUndefined();
-    expect(f.row()).toEqual(f.later);
+    expect(f.row()).toEqual(later);
   },
 );
 
 it.each([
-  ["the original core is installed", { installed: original, servedCandidate: true }],
+  ["the original core is installed", { installed: original, served: true }],
   [
     "the original version has no readable build",
-    { installed: { version: original.version, buildId: null }, servedCandidate: true },
+    { installed: { version: original.version, buildId: null }, served: true },
   ],
-  ["the candidate never verified serving", { installed: candidate, servedCandidate: false }],
+  ["the candidate never verified serving", { installed: candidate, served: false }],
   [
     "a package activation record remains",
-    { installed: candidate, servedCandidate: true, pendingPackageRecovery: true },
+    { installed: candidate, served: true, packageRecord: true },
   ],
   [
     "rollback already settled a publication",
-    {
-      installed: candidate,
-      servedCandidate: true,
-      recorded: { disposition: "rollback", settledPublications: 1 },
-    },
+    { installed: candidate, served: true, settledPublications: 1 },
   ],
-] as const)("keeps refusing a superseded rollback when %s", async (_label, shape) => {
-  const f = await supersededCohort(shape);
+] as const)("keeps rollback selected when %s", async (_label, shape) => {
+  const packageRecord = "packageRecord" in shape ? shape.packageRecord : undefined;
+  const f = await interruptedCohort({ root: installedRoot(shape.installed, packageRecord) });
+  if (shape.served) {
+    f.serve();
+  }
+  if ("settledPublications" in shape) {
+    f.recordRollback(shape.settledPublications);
+  }
+  const later = await f.completeLater();
+  // Rollback still refuses to overwrite the later decision.
   await expect(f.settle()).rejects.toThrow(SUPERSEDED);
-  expect(loadPluginCohortRecovery(f.runId, f.options)?.cohort.disposition).toBe("rollback");
-  expect(f.row()).toEqual(f.later);
+  expect(f.cohort()?.disposition).toBe("rollback");
+  expect(f.row()).toEqual(later);
+});
+
+it.skipIf(process.platform === "win32")(
+  "settles a verified npm cohort forward after its package activation completed",
+  async () => {
+    const lifetime = createPackageActivationLifetimeFixture();
+    try {
+      lifetime.setup();
+      const activation = await lifetime.prepare();
+      // The settled journal remains as a completion fact, not restoration authority.
+      await settlePendingPackageActivation(activation.packageRoot, () => {});
+      const anchor = resolvePackageActivationAnchor(activation.packageRoot);
+      expect(
+        fs.existsSync(resolvePackageActivationJournalPath(anchor)) ||
+          fs.existsSync(resolvePackageActivationControl(anchor)),
+      ).toBe(true);
+      const version = JSON.parse(
+        fs.readFileSync(path.join(activation.packageRoot, "package.json"), "utf8"),
+      ).version as string;
+      const f = await interruptedCohort({
+        root: activation.packageRoot,
+        from: { version: `${version}-original`, buildId: null },
+        to: { version, buildId: null },
+      });
+      f.serve();
+      const later = await f.completeLater();
+      await f.settle();
+      expect(f.cohort()).toBeUndefined();
+      expect(f.row()).toEqual(later);
+    } finally {
+      await lifetime.cleanup();
+    }
+  },
+);
+
+it("continues a rollback that restored migrations before a config conflict", async () => {
+  const f = await interruptedCohort({ root: installedRoot(candidate), config: true });
+  // Someone edits the candidate-written config, so rollback cannot restore it yet.
+  fs.writeFileSync(f.configPath, f.afterConfig.replace('"port": 1', '"port": 2'));
+  await expect(f.settle()).rejects.toThrow(CONFIG_CONFLICT);
+  expect(f.cohort()).toMatchObject({ disposition: "rollback", settledPublications: 0 });
+  expect(f.row()).toEqual(f.beforeRow);
+
+  // Rollback already reverted the obligation, so the verified candidate cannot commit over it.
+  f.serve();
+  await expect(f.settle()).rejects.toThrow(CONFIG_CONFLICT);
+  expect(f.cohort()).toMatchObject({ disposition: "rollback", settledPublications: 0 });
+  expect(f.row()).toEqual(f.beforeRow);
+
+  fs.writeFileSync(f.configPath, f.afterConfig);
+  await f.settle();
+  expect(f.cohort()).toBeUndefined();
+  expect(fs.readFileSync(f.configPath, "utf8")).toBe(f.beforeConfig);
+  expect(f.row()).toEqual(f.beforeRow);
 });
