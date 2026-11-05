@@ -72,7 +72,8 @@ export async function readByteStreamWithLimit(
       destroyReadableOnOverflow(stream, err);
       throw err;
     }
-    chunks.push(buffer);
+    // Producers may reuse binary backing storage on their next pull.
+    chunks.push(typeof chunk === "string" ? buffer : Buffer.from(buffer));
     total = nextTotal;
   }
 
