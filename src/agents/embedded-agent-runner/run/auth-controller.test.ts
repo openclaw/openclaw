@@ -154,7 +154,7 @@ it.each(["credential resolution", "runtime auth exchange", "AWS runtime auth exc
   "ends a hung %s at the run timeout without installing credentials",
   async (step) => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => void vi.useRealTimers());
     let exchangeSignal: AbortSignal | undefined;
     const late = createDeferred<{ apiKey: string }>();
     mocks.getApiKeyForModelCore.mockImplementation(({ signal }) => {
@@ -197,7 +197,7 @@ it.each([false, true])(
   "settles slow runtime auth inside the budget (cancelled: %s)",
   async (cancelled) => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => void vi.useRealTimers());
     const abort = new AbortController();
     let exchangeSignal: AbortSignal | undefined;
     mocks.getApiKeyForModelCore.mockResolvedValue(apiKeyAuth("synthetic-source"));
@@ -231,7 +231,7 @@ it.each([false, true])(
 
 it("shares the run deadline across credential lookup and token exchange", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => void vi.useRealTimers());
   mocks.getApiKeyForModelCore.mockImplementation(
     () =>
       new Promise((resolve) => {
@@ -840,7 +840,7 @@ it("rejects privileged runtime transport overrides on the first auth exchange", 
 
 it("ignores stale scheduled refresh results after auth profile rotation", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => void vi.useRealTimers());
   const staleRefresh = createDeferred<ReturnType<typeof runtimeAuth>>();
   mocks.getApiKeyForModelCore.mockImplementation(async ({ profileId }) => {
     const selected = profileId === "backup" ? "backup" : "default";
@@ -912,7 +912,7 @@ it.each([false, true, "provider-abort"])(
   "injects the AWS SDK sentinel and clears stale refresh state (exchange throws: %s)",
   async (exchangeThrows) => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => void vi.useRealTimers());
     const warn = vi.fn<(message: string) => void>();
     if (!exchangeThrows) {
       harness.runtimeAuthState = {
