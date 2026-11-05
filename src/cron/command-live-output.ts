@@ -147,6 +147,31 @@ function presentLiveOutput(raw: string, keys: PemBlockTracker): string {
   );
 }
 
+const isLineBreak = (byte: number | undefined) => byte === 0x0a || byte === 0x0d;
+
+/** Index after the first line terminator (`\r\n` counts once), or the length when there is none. */
+function endOfFirstLine(data: Buffer): number {
+  const index = data.findIndex(isLineBreak);
+  if (index === -1) {
+    return data.length;
+  }
+  return data[index] === 0x0d && data[index + 1] === 0x0a ? index + 2 : index + 1;
+}
+
+/**
+ * Redaction keys on labels such as `PASSWORD=`, so a read that starts inside a line must see the
+ * whole line. `context` is the part already delivered: it is redacted with the new text and its
+ * own redaction removed. When the two do not line up, the text is withheld rather than guessed.
+ */
+function presentAfterContext(context: Buffer, data: Buffer, keys: PemBlockTracker): string {
+  if (context.length === 0) {
+    return presentLiveOutput(data.toString("utf8"), keys);
+  }
+  const lead = presentLiveOutput(context.toString("utf8"), keys.clone());
+  const whole = presentLiveOutput(Buffer.concat([context, data]).toString("utf8"), keys);
+  return whole.startsWith(lead) ? whole.slice(lead.length) : "";
+}
+
 /** Reads the active run's tail from `cursor`; inactive jobs report `active: false`. */
 export function readCronCommandLiveOutput(
   jobId: string,
@@ -175,18 +200,22 @@ export function readCronCommandLiveOutput(
     return { ...base, cursor: from, text: "" };
   }
   const retained = sliceFrom(entry, start, entry.end - start);
-  const before = from - start;
-  let data = retained.subarray(before);
-  let skipped = 0;
-  if (from === start && start > 0) {
-    // Head trimming can leave the first retained byte inside a multi-byte character.
-    while (skipped < 3 && skipped < data.length && ((data[skipped] ?? 0) & 0xc0) === 0x80) {
-      skipped += 1;
-    }
-    data = data.subarray(skipped);
+  let before = from - start;
+  // Where the line holding `from` began; one that began before the ring lost its labels, so its
+  // remainder is dropped instead of shown unmasked.
+  let lineStart = before;
+  while (lineStart > 0 && !isLineBreak(retained[lineStart - 1])) {
+    lineStart -= 1;
   }
+  let skipped = 0;
+  if (lineStart === 0 && start > 0) {
+    skipped = endOfFirstLine(retained.subarray(before));
+    before += skipped;
+    lineStart = before;
+  }
+  const data = retained.subarray(before);
   const keys = entry.head.clone();
-  keys.feed(retained.subarray(0, before).toString("latin1"));
+  keys.feed(retained.subarray(0, lineStart).toString("latin1"));
   let cut = endOfLastLine(data);
   if (cut === 0 && data.length > MAX_PENDING_LINE_BYTES) {
     cut = endOfCompleteUtf8(data);
@@ -194,6 +223,6 @@ export function readCronCommandLiveOutput(
   return {
     ...base,
     cursor: from + skipped + cut,
-    text: presentLiveOutput(data.subarray(0, cut).toString("utf8"), keys),
+    text: presentAfterContext(retained.subarray(lineStart, before), data.subarray(0, cut), keys),
   };
 }

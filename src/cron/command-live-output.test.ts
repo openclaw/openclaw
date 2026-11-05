@@ -68,11 +68,22 @@ describe("cron command live output buffer", () => {
   });
 
   it("does not split a multi-byte character when the head is trimmed", () => {
-    const live = begin(7);
+    const live = begin(9);
     live.append(bytes("\u00e9\u00e9\u00e9\u00e9\n"));
+    live.append(bytes("ok\n"));
     const read = readCronCommandLiveOutput("job");
-    expect(read.text).not.toContain("\ufffd");
-    expect(read.text.endsWith("\n")).toBe(true);
+    expect(read.text).toBe("ok\n");
+  });
+
+  it("masks a credential whose label is cut off by the cursor or the ring head", () => {
+    const live = begin(16);
+    live.append(bytes("PASSWORD=swordfish\n"));
+    expect(readCronCommandLiveOutput("job").text).not.toContain("swordfish");
+    const roomy = begin();
+    roomy.append(bytes("PASSWORD=swordfish\nnext\n"));
+    const cut = readCronCommandLiveOutput("job", { cursor: 9, runAtMs: 1000 });
+    expect(cut.text).not.toContain("swordfish");
+    expect(cut.text).toContain("next");
   });
 
   it("flushes an overlong partial line without cutting a character", () => {
