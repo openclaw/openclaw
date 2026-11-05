@@ -329,14 +329,18 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
         }
         await input.press("Escape");
         await input.waitFor({ state: "hidden" });
-        await prepareChat(page);
+        await frames(page);
+        const restoredMessages = await result.count();
+        if (restoredMessages <= 1) {
+          throw new Error("Closing transcript search did not clear the message filter");
+        }
         if (
           (await draft.inputValue()) !== "Retained draft." ||
           !(await draft.evaluate((element) => element === document.activeElement))
         ) {
           throw new Error("Closing transcript search did not restore the focused draft");
         }
-        return { queryCharacters: 11, matchingMessages: 1 };
+        return { queryCharacters: 11, matchingMessages: 1, restoredMessages };
       },
     },
     {
