@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig, OpenClawConfig } from "../runtime-api.js";
 import { msTeamsApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import type { StoredConversationReference } from "./conversation-store.js";
-import { resolveMSTeamsSendContext } from "./send-context.js";
+import { isMSTeamsNewChannelPost, resolveMSTeamsSendContext } from "./send-context.js";
 import { sendMessageMSTeams } from "./send.js";
 import { createMSTeamsTestConfig } from "./setup.test-support.js";
 
@@ -136,6 +136,17 @@ beforeEach(() => {
   }
   vi.unstubAllEnvs();
 });
+
+it.each(["channel", "groupChat", "personal"])(
+  "applies new-post limits only to a stored channel (%s)",
+  async (conversationType) => {
+    storedChannel({ conversation: { id: conversationId, conversationType } });
+    await expect(
+      isMSTeamsNewChannelPost({ accountId: "default", to: conversationId }),
+    ).resolves.toBe(conversationType === "channel");
+    expect(loadMSTeamsSdkWithAuth).not.toHaveBeenCalled();
+  },
+);
 
 describe("resolveMSTeamsSendContext", () => {
   it("creates a proactive root without changing normal or explicit thread placement", async () => {

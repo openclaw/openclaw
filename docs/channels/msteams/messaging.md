@@ -88,7 +88,9 @@ For a proactive message-tool send, set `topLevel: true` to start a new channel
 post while keeping the configured policy for ordinary replies. A destination
 that explicitly addresses a thread still takes precedence. Do not combine
 `topLevel` with `replyTo`. A new post must fit in one message. Use a presentation
-if its text would otherwise need to be split.
+if its text would otherwise need to be split. New channel posts cannot combine
+text and an inline image because Teams delivers those as two separate
+activities. The placement option has no effect on private or group chats.
 
 ### Thread context preservation
 

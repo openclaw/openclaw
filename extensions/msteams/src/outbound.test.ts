@@ -7,11 +7,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 
 const mocks = vi.hoisted(() => ({
+  isMSTeamsNewChannelPost: vi.fn(),
   sendAdaptiveCardMSTeams: vi.fn(),
   sendMessageMSTeams: vi.fn(),
   sendPollMSTeams: vi.fn(),
   createPoll: vi.fn(),
   createMSTeamsPollStoreState: vi.fn(),
+}));
+
+// mock-isolation: supply conversation classification without reading the account's store.
+vi.mock("./send-context.js", () => ({
+  isMSTeamsNewChannelPost: mocks.isMSTeamsNewChannelPost,
 }));
 
 vi.mock("./send.js", () => ({
@@ -53,6 +59,7 @@ const render = (payload: Parameters<typeof renderPresentation>[0]["payload"]) =>
 
 describe("msteamsOutbound cfg threading", () => {
   beforeEach(() => {
+    mocks.isMSTeamsNewChannelPost.mockReset().mockResolvedValue(true);
     mocks.sendMessageMSTeams.mockReset();
     mocks.sendAdaptiveCardMSTeams.mockReset();
     mocks.sendPollMSTeams.mockReset();
@@ -96,6 +103,18 @@ describe("msteamsOutbound cfg threading", () => {
     ).rejects.toThrow("Text exceeds the single Teams post limit");
 
     expect(mocks.sendMessageMSTeams).not.toHaveBeenCalled();
+  });
+
+  it("keeps normal text chunking for a non-channel destination", async () => {
+    mocks.isMSTeamsNewChannelPost.mockResolvedValue(false);
+    const text = "long chat message ".repeat(350);
+    await sendPayload({
+      ...defaultTarget,
+      text,
+      payload: { text, channelData: { msteams: { topLevel: true } } },
+    });
+
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledTimes(2);
   });
 
   it("sends long new-post presentations as one card", async () => {

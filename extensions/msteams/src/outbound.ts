@@ -29,6 +29,7 @@ import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccountConfig } from "./a
 import { msteamsOutboundConfig, resolveMSTeamsEffectiveTextChunkLimit } from "./outbound-config.js";
 import { createMSTeamsPollStoreState } from "./polls.js";
 import { buildMSTeamsPresentationCard } from "./presentation.js";
+import { isMSTeamsNewChannelPost } from "./send-context.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
 type MSTeamsSendConfig = Parameters<typeof sendMessageMSTeams>[0]["cfg"];
@@ -235,7 +236,11 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         mediaUrl: payload.mediaUrl ?? mediaUrl,
       }),
     );
-    if (topLevel && mediaUrls.length > 1) {
+    if (
+      topLevel &&
+      mediaUrls.length > 1 &&
+      (await isMSTeamsNewChannelPost({ accountId: effectiveAccountId, to: deliveryTarget }))
+    ) {
       throw new PlatformMessageNotDispatchedError(
         "A new Teams post supports one attachment per send.",
         { cause: undefined, retryable: false },
@@ -276,7 +281,11 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
           ),
         ),
       );
-      if (topLevel && chunks.length > 1) {
+      if (
+        topLevel &&
+        chunks.length > 1 &&
+        (await isMSTeamsNewChannelPost({ accountId: effectiveAccountId, to: deliveryTarget }))
+      ) {
         throw new PlatformMessageNotDispatchedError(
           "Text exceeds the single Teams post limit. Use a presentation or shorten the text.",
           { cause: undefined, retryable: false },

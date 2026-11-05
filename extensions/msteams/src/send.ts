@@ -334,6 +334,18 @@ async function sendTextWithMedia(
     mediaMaxBytes,
     replyStyle,
   } = ctx;
+  if (
+    options.topLevel &&
+    ctx.conversationType === "channel" &&
+    replyStyle === "top-level" &&
+    text &&
+    mediaUrl
+  ) {
+    throw new PlatformMessageNotDispatchedError(
+      "A new Teams channel post cannot combine text with an inline image.",
+      { cause: undefined, retryable: false },
+    );
+  }
   const messages =
     text && mediaUrl ? [{ text }, { mediaUrl }] : [{ text: text || undefined, mediaUrl }];
 
