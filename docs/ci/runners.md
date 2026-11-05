@@ -379,10 +379,12 @@ Npm preflight uses the larger Blacksmith request by default and retains its
 explicit `use_github_hosted_runners` option.
 
 Candidate discovery and binding, plus short Full Release Validation admission,
-reuse, dispatch, and execution-plan jobs, always use `ubuntu-24.04`. They honor
-`OPENCLAW_RELEASE_RUNNER_GROUP` with the same label. Release Decision, Diagnostic
-Drain, and the nightly watcher keep their existing runner selection and
-720-minute budgets; standard hosted runners cannot preserve that lifetime.
+reuse, dispatch, and execution-plan jobs, always use `ubuntu-24.04`. Reusable
+live/E2E source admission and candidate evidence binding use the same label.
+Full Release Validation honors `OPENCLAW_RELEASE_RUNNER_GROUP`; the reusable
+workflow honors its `runner_group` input. Release Decision, Diagnostic Drain,
+and the nightly watcher keep their existing runner selection and 720-minute
+budgets; standard hosted runners cannot preserve that lifetime.
 
 Ordinary iOS smoke CI builds the app and embedded Watch targets for the runner's
 architecture, using the same iPhone simulator for compilation and voice-cleanup
