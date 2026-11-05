@@ -339,16 +339,20 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     return sessionCatalogListClient(this.context.gateway.snapshot, this.inputs.connected);
   }
 
-  private synchronizeOwnerSessionCounts(): void {
-    const hasProfiles =
+  get ownerCountsRequired(): boolean {
+    return (
       this.inputs.navigationVisible &&
       !this.inputs.navigationCollapsed &&
       this.inputs.navigationView === "online" &&
       projectPresencePayload(this.presencePayload).users.some(
         (user) => user.identity?.type === "profile",
-      );
+      )
+    );
+  }
+
+  private synchronizeOwnerSessionCounts(): void {
     this.ownerCounts.synchronize(
-      this.inputs.connected && hasProfiles ? this.context.sessions : undefined,
+      this.inputs.connected && this.ownerCountsRequired ? this.context.sessions : undefined,
       this.context.gateway.snapshot.selfUser?.id ?? null,
       this.context.connectionBootstrap,
     );
