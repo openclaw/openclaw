@@ -286,7 +286,7 @@ export class TelegramPollingSession {
       cycleAbortController.abort();
     };
     try {
-      await bot.init();
+      await bot.init(this.opts.abortSignal);
     } catch (err) {
       abortMedia();
       return await this.#waitBeforeRetryOnRecoverableSetupError(err, "Telegram bot init failed");
