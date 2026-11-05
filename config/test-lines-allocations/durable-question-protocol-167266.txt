@@ -1,0 +1,2 @@
+1
+# Public generated validator accepts an explicitly durable ordinary question request.

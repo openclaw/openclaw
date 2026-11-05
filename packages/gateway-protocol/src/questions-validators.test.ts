@@ -25,6 +25,7 @@ describe("question protocol validators", () => {
       validateQuestionRequestParams({
         id: "client-question-id",
         runId: "agent-run-id",
+        durable: true,
         questions: [question],
         timeoutMs: 100,
       }),
