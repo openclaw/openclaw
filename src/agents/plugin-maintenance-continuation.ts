@@ -5,6 +5,7 @@ import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-ev
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureOperatorToolGatewayContinuationContextInternal } from "../gateway/server-plugin-in-process-authority.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginReplacementOutcome } from "../plugins/plugin-replacement-operation.js";
 import { runOutsidePluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   getReplyOperationProducerCompletion,
@@ -32,11 +33,10 @@ import { captureExecRequestCancellation } from "./bash-process-control.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
-export type PluginMaintenanceOutcome = {
-  ok: boolean;
-  pluginIds: readonly string[];
-  error?: string;
-};
+export type PluginMaintenanceOutcome = { pluginIds: readonly string[] } & (
+  | { ok: true }
+  | { ok: false; error: string; replacement: PluginReplacementOutcome }
+);
 export type CapturedPluginMaintenanceContinuation = {
   owner: object;
   interrupt(assertMaintenanceCurrent: () => void): Promise<void>;
@@ -263,7 +263,7 @@ export function registerPluginMaintenanceContinuation(
               return;
             }
             if (!healthy) {
-              // Failed runtime restoration cannot admit queued work. Stop/revocation
+              // Failed activation or restoration cannot admit queued work. Stop/revocation
               // retains ownership of cancelling this process-local successor fence.
               log.warn(
                 "Plugin maintenance left the runtime unhealthy; successor admission remains closed.",
@@ -298,11 +298,17 @@ export function registerPluginMaintenanceContinuation(
                     runOutsidePluginRuntimeRegistryScope(() =>
                       enqueueSessionEventForHost(
                         "Plugin maintenance " +
-                          (outcome.ok ? "completed" : "rolled back") +
+                          (outcome.ok
+                            ? "completed"
+                            : outcome.replacement.committed
+                              ? "applied"
+                              : outcome.replacement.kind === "restored"
+                                ? "rolled back"
+                                : "not applied") +
                           " for " +
                           outcome.pluginIds.join(", ") +
                           ". Continue the unfinished work in this conversation from its saved transcript. Preserve completed tool results; do not replay completed external actions." +
-                          (outcome.error ? " Maintenance result: " + outcome.error : ""),
+                          (!outcome.ok ? " Maintenance result: " + outcome.error : ""),
                         {
                           agentId,
                           sessionKey,

@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { createPluginForceReload } from "../gateway/server-plugin-force-reload.js";
+import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
 import {
   getCurrentSessionControllerOwner,
   withSessionControllerOwner,
@@ -8,6 +12,7 @@ import {
 } from "../sessions/session-controller.context.js";
 import { captureSessionControllerEffects } from "../sessions/session-controller.lifecycle-work.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { tryClaimSessionControllerTask } from "../sessions/session-controller.mailbox-task.js";
 import {
   reserveSessionControllerSource,
   retireSessionControllerInput,
@@ -194,7 +199,12 @@ it("keeps unhealthy runtime successors fenced without waiting indefinitely for c
   f.operation.complete();
   retireSessionControllerInput(f.source);
   await captured!.finish(
-    { ok: false, pluginIds: ["example"], error: "restoration failed" },
+    {
+      ok: false,
+      pluginIds: ["example"],
+      error: "restoration failed",
+      replacement: { kind: "failed", committed: false, unavailablePluginIds: ["example"] },
+    },
     false,
     async () => {},
   );
@@ -229,7 +239,12 @@ it("holds a timed-out continuation until actual plugin cleanup, not bridge settl
   retireSessionControllerInput(f.source);
   await captured!.settled;
   await captured!.finish(
-    { ok: false, pluginIds: ["example"], error: "drain timed out" },
+    {
+      ok: false,
+      pluginIds: ["example"],
+      error: "drain timed out",
+      replacement: { kind: "restored", committed: false, unavailablePluginIds: [] },
+    },
     true,
     settlePluginWork,
   );
@@ -276,3 +291,69 @@ it("revalidates the maintenance principal before touching another requester's ex
   expect(mocks.enqueue).not.toHaveBeenCalled();
   captured!.cancel();
 });
+
+it.each([
+  ["failed", true, false, "", "activate"],
+  ["failed", true, false, "", "dispose"],
+  ["failed", false, false, "", "activate"],
+  ["applied", true, true, "applied", "dispose"],
+  ["restored", false, true, "rolled back", "activate"],
+  ["unchanged", false, true, "not applied", "prepare"],
+] as const)(
+  "settled %s committed=%s healthy=%s wording=%s phase=%s",
+  async (kind, committed, healthy, message, phase) => {
+    const f = fixture();
+    const captured = (await capturePluginMaintenanceContinuation(f.operation))!;
+    const instance = new PluginInstance("example");
+    const releaseWork = instance.retainWork("prepared-generation-lease", f.operation);
+    f.operation.abortSignal.addEventListener(
+      "abort",
+      () => {
+        releaseWork();
+        f.operation.complete();
+        retireSessionControllerInput(f.source);
+      },
+      { once: true },
+    );
+    const coordinator = createPluginForceReload(
+      () => {},
+      async () => captured,
+    );
+    const queued = reserveSessionControllerSource(f.sessionKey, {
+      target: f.target,
+      policy: { mode: "followup" },
+    });
+    cleanups.push(() => {
+      captured.cancel();
+      retireSessionControllerInput(queued);
+      releaseWork();
+    });
+    await coordinator.drain([instance], new AbortController().signal);
+    const error = new PluginRuntimeApplicationError(`${kind} operation failed`, {
+      operationId: "committed-activation",
+      generation: 2,
+      pluginIds: ["example"],
+      phase,
+      committed,
+    });
+    await expect(
+      coordinator.complete(
+        Promise.reject(error),
+        ["example"],
+        Promise.resolve({
+          kind,
+          committed,
+          unavailablePluginIds: [],
+        }),
+      ),
+    ).rejects.toBe(error);
+    await setImmediate();
+    if (healthy) {
+      expect(mocks.enqueue).toHaveBeenCalledOnce();
+      expect(mocks.enqueue.mock.calls[0]?.[0]).toContain(`Plugin maintenance ${message} for`);
+    } else {
+      expect(mocks.enqueue).not.toHaveBeenCalled();
+      expect(tryClaimSessionControllerTask(queued)).toBeUndefined();
+    }
+  },
+);

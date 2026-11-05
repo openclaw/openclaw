@@ -1,5 +1,8 @@
 import { expect, it, vi } from "vitest";
-import type { CapturedPluginMaintenanceContinuation } from "../agents/plugin-maintenance-continuation.js";
+import type {
+  CapturedPluginMaintenanceContinuation,
+  PluginMaintenanceOutcome,
+} from "../agents/plugin-maintenance-continuation.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createPluginForceReload } from "./server-plugin-force-reload.js";
@@ -49,7 +52,7 @@ it("captures reconciled exact owners before interruption and waits for physical 
   releaseSecond?.();
   physical.resolve();
   await draining;
-  const outcome = { ok: true, pluginIds: ["selected"] };
+  const outcome: PluginMaintenanceOutcome = { ok: true, pluginIds: ["selected"] };
   await coordinator.finish(outcome, true);
   await coordinator.finish(outcome, true);
   expect(a.finish).toHaveBeenCalledExactlyOnceWith(outcome, true, expect.any(Function));

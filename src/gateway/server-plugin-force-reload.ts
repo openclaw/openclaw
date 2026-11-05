@@ -6,8 +6,8 @@ import {
 } from "../agents/plugin-maintenance-continuation.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import type { PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
+import type { PluginReplacementOutcome } from "../plugins/plugin-replacement-operation.js";
 
 const log = createSubsystemLogger("gateway/plugin-maintenance");
 
@@ -102,24 +102,44 @@ export function createPluginForceReload(
         throw error;
       }
     },
-    complete<T>(reload: Promise<T>, pluginIds: string[]): Promise<T> {
-      // Config reload releases admission only after this returns. Captured effects
-      // own delivery; joining their successor here waits on this very reload.
-      return reload.then(
-        (result) => {
-          void this.finish({ ok: true, pluginIds }, true).catch((error: unknown) => {
+    complete<T>(
+      reload: Promise<T>,
+      pluginIds: Iterable<string>,
+      settled: Promise<PluginReplacementOutcome>,
+    ): Promise<T> {
+      const ids = [...pluginIds];
+      // Reservation release/publication is not readiness. The lifecycle owns the
+      // final activation/recovery result, including failures after publication.
+      const deliver = (result: { ok: true } | { ok: false; error: unknown }) => {
+        void settled
+          .then((replacement) =>
+            this.finish(
+              result.ok
+                ? { ok: true, pluginIds: ids }
+                : {
+                    ok: false,
+                    pluginIds: ids,
+                    error: formatErrorMessage(result.error),
+                    replacement,
+                  },
+              replacement.unavailablePluginIds.length === 0 &&
+                (replacement.kind === "applied" ||
+                  (!replacement.committed &&
+                    (replacement.kind === "restored" || replacement.kind === "unchanged"))),
+            ),
+          )
+          .catch((error: unknown) => {
             log.warn(`Plugin maintenance delivery failed: ${formatErrorMessage(error)}`);
           });
+      };
+      // Config reload releases admission after this returns; never join successors here.
+      return reload.then(
+        (result) => {
+          deliver({ ok: true });
           return result;
         },
         (error: unknown) => {
-          void this.finish(
-            { ok: false, pluginIds, error: formatErrorMessage(error) },
-            error instanceof PluginRuntimeApplicationError &&
-              !error.details.runtimeRestorationFailed,
-          ).catch((deliveryError: unknown) => {
-            log.warn(`Plugin maintenance delivery failed: ${formatErrorMessage(deliveryError)}`);
-          });
+          deliver({ ok: false, error });
           throw error;
         },
       );

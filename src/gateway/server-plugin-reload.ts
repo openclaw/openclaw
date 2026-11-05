@@ -98,6 +98,7 @@ export async function reloadGatewayPlugins(
 
   const cache = createPluginCache();
   const lifecycle = createPluginReloadLifecycle(params.pluginLifecycle?.operationId);
+  const { replacementOperation } = lifecycle;
   const requestedIds = new Set(params.pluginLifecycle?.pluginIds ?? []);
   const forceReload = params.pluginLifecycle?.force
     ? createPluginForceReload(() => params.assertInvokerOwned?.())
@@ -153,7 +154,7 @@ export async function reloadGatewayPlugins(
     prepareRegistrationFailureCleanup,
     retireUnpublished,
   } = createPluginReloadCleanup({
-    replacementOperation: lifecycle.replacementOperation,
+    replacementOperation,
     previousRegistry,
     changedPluginIds,
     waitForDrain: params.pluginLifecycle?.waitForDrain,
@@ -715,5 +716,5 @@ export async function reloadGatewayPlugins(
       }
     },
   );
-  return forceReload ? forceReload.complete(reload, [...changedPluginIds]) : reload;
+  return forceReload?.complete(reload, changedPluginIds, replacementOperation.settled) ?? reload;
 }
