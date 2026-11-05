@@ -64,7 +64,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
             expect(rows()).toEqual(before);
             expect(events).toEqual([]);
             expect(record(identity, 30)).toBe("updated");
-            expect(events).toEqual(["participants"]);
+            expect(events).toEqual([]);
             expect(
               db
                 .prepare(

@@ -53,6 +53,14 @@ backup.
 
 ## Update implementation contract
 
+Plugin updates preserve authored environment references when a replacement
+plugin moves their settings, including single-file includes. The candidate
+plugin-update command must contain this repair; the installed updater needs no
+new marker or schema migration. Existing config and plugin-index records remain
+readable. Previously flattened literals are preserved, not guessed back into
+references. Config publication, backup, rollback, and deferred data-migration
+guidance keep their existing owners.
+
 Candidate Gateway rehearsal can prepare strictly valid config in its complete
 private update namespace even when a newer release wrote the config. It preserves
 the source writer stamp for installed-updater capture checks; the target's normal
@@ -151,6 +159,12 @@ that never reached activation is removed after checking for surviving work;
 uncertain cleanup leaves a warning and retains the stage. Activation recovery
 and backups remain with their existing recovery owners. These changes must be
 present in the installed updater; a newer candidate cannot repair an old launcher.
+
+Candidate Doctor inspects the managed service even after the previous Gateway
+releases its state lease. On macOS, it unloads a loaded, enabled LaunchAgent
+between KeepAlive respawns before entering maintenance and records that stop for
+finalization to restore. Unloaded or disabled services remain stopped. This fix
+must be present in the candidate; the installed updater does not need it.
 
 If an update driver disappears after the candidate was recorded as installed and
 serving, reconciliation records success with a driver-loss warning. It preserves
@@ -631,6 +645,16 @@ before releasing database maintenance. CLI schema preparation waits while Doctor
 restores and verifies the Gateway; Gateway bootstrap keeps its normal ownership
 checks. Doctor and competing CLI processes must contain this repair. Already-running
 older processes cannot observe the reservation.
+
+Candidate-side predecessor shutdown retains its durable recovery receipt inside
+Doctor's original database-write capture. The ledger writer includes its own
+native connection close before publishing that write; the following Doctor
+rechecks the database before reacquiring native custody. Unrelated writes before
+or after the receipt still refuse migration rather than becoming a new baseline.
+A completed stop keeps its recovery receipt even when that refusal prevents
+Doctor from continuing. A loaded supervised service between crashed processes
+still goes through native service-ownership inspection, even without a live lease.
+This is candidate-side behavior; it does not change an already-running older updater.
 
 After a Doctor child settles, the updater drains its retained handles for the
 affected shared-state database and revokes their schema admission, even when
