@@ -95,13 +95,8 @@ export async function prepareToolCallExecution(
   isLocalError?: AgentCoreStreamRuntimeDeps["isLocalError"],
   interruptions?: ToolInterruptions,
 ): Promise<PreparedToolCallExecution> {
-  const interruption = interruptions?.register(
-    prepared.toolCall,
-    prepared.tool.interruptible === true ||
-      (typeof prepared.tool.interruptible === "function" &&
-        prepared.tool.interruptible(prepared.args)),
-    runSignal,
-  );
+  const canInterrupt = prepared.tool.interruptible;
+  const interruption = interruptions?.register(prepared.toolCall, Boolean(canInterrupt), runSignal);
   const signal = interruption?.signal ?? runSignal;
   const updateEvents: Promise<void>[] = [];
   let acceptingUpdates = true;
@@ -216,6 +211,10 @@ export async function prepareToolCallExecution(
             };
           }
           try {
+            // Hooks finish rewriting args before this prepared source can launch.
+            interruption?.ready(
+              canInterrupt === true || (typeof canInterrupt === "function" && canInterrupt(args)),
+            );
             const result = await run(() => {
               try {
                 onImplementationStart?.();

@@ -35,12 +35,21 @@ export class ToolInterruptions {
     }
   }
 
-  register(call: { id: string; name: string }, safe: boolean, runSignal?: AbortSignal) {
-    const controller = safe ? new AbortController() : undefined;
-    const entry = { toolCallId: call.id, toolName: call.name, controller };
+  register(call: { id: string; name: string }, supported: boolean, runSignal?: AbortSignal) {
+    const controller = supported ? new AbortController() : undefined;
+    const entry: InterruptibleToolCall & { controller?: AbortController } = {
+      toolCallId: call.id,
+      toolName: call.name,
+    };
     this.calls.add(entry);
     this.publish();
     return {
+      ready: (safe: boolean) => {
+        if (safe) {
+          entry.controller = controller;
+          this.publish();
+        }
+      },
       signal: controller
         ? runSignal
           ? AbortSignal.any([runSignal, controller.signal])
