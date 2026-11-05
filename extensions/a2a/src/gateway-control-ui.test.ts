@@ -57,10 +57,10 @@ it("returns JSON 404 for unsupported /a2a/v1 descendants instead of the Control 
             const label = `GET /a2a/v1/agent-card accept=${accept ?? "absent"}`;
             expect(response.res.statusCode, label).toBe(404);
             expect(response.getBody(), label).toBe(JSON_NOT_FOUND);
-            expect(response.setHeader, label).toHaveBeenCalledWith(
+            expect(response.headers, label).toContainEqual([
               "Content-Type",
               "application/json; charset=utf-8",
-            );
+            ]);
           }
 
           const exact = await sendRequest(server, { path: "/a2a/v1" });
