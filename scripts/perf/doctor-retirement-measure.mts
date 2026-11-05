@@ -13,7 +13,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { runSqliteImmediateTransactionSync } from "../../src/infra/sqlite-transaction.js";
 import type { UpdateRunResult } from "../../src/infra/update-runner-types.js";
+import { writeConfigMachineStateInDatabase } from "../../src/state/config-machine-state-write.js";
 
 const { values } = parseArgs({
   options: {
@@ -588,11 +590,9 @@ try {
       database.exec(
         "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA wal_checkpoint(TRUNCATE)",
       );
-      database
-        .prepare(
-          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?) ON CONFLICT (state_key) DO UPDATE SET updated_at_ms = config_machine_state.updated_at_ms + 1",
-        )
-        .run("qa:doctorgen:retained-wal", "true", 1);
+      runSqliteImmediateTransactionSync(database, () =>
+        writeConfigMachineStateInDatabase(database, "qa:doctorgen:retained-wal", true),
+      );
       fs.copyFileSync(filename, path.join(saved, "main"));
       fs.copyFileSync(`${filename}-wal`, path.join(saved, "wal"));
     } finally {
