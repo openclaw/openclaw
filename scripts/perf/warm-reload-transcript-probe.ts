@@ -8,6 +8,8 @@ export function installWarmReloadTranscriptProbe(mode: "reader" | "end" = "end")
   }> = [];
   let anchor: string | undefined;
   let previous = "";
+  let previousRows = "";
+  let finalRowsDomMs: number | null = null;
   let frame = 0;
   let readerFrame = 0;
   let readerReady = mode === "end";
@@ -50,6 +52,13 @@ export function installWarmReloadTranscriptProbe(mode: "reader" | "end" = "end")
         distanceFromEnd: thread.scrollHeight - thread.clientHeight - thread.scrollTop,
         rows,
       };
+      const rowSignature = rows
+        .map((row) => `${row.key}:${row.height}:${row.characters}`)
+        .join("|");
+      if (rowSignature !== previousRows) {
+        finalRowsDomMs = performance.now();
+        previousRows = rowSignature;
+      }
       const signature = JSON.stringify(state);
       if (signature !== previous) {
         frames.push({ atMs: performance.now(), ...state });
@@ -78,6 +87,7 @@ export function installWarmReloadTranscriptProbe(mode: "reader" | "end" = "end")
       return {
         mode,
         anchor,
+        finalRowsDomMs,
         frames,
         missingAnchorFrames: positions.length - visible.length,
         movementPx: movement,

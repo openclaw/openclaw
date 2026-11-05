@@ -65,7 +65,7 @@ export function createTranscriptReloadWitness(
     delete reactions[metadata.id];
   }
   if (active) {
-    const active = createActiveTranscriptReloadFixture(messages.slice(0, -1));
+    const active = createActiveTranscriptReloadFixture(messages);
     variants.saved = active.saved;
     variants.live = active.live;
     for (const source of ["saved", "live"] as const) {
