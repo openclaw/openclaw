@@ -12,6 +12,7 @@ import {
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withSessionTurn } from "./session-controller.admission.js";
+import { ReplyRunSuccessorAdmissionBlockedError } from "./session-controller.contracts.js";
 import { captureSessionControllerEffects } from "./session-controller.lifecycle-work.js";
 import { beginSessionEffect, captureSessionTarget } from "./session-controller.lifecycle.js";
 import {
@@ -28,6 +29,8 @@ import {
   stopSession,
   type SessionStopSource,
 } from "./session-controller.stop.js";
+import { waitForReplyRunSuccessorAdmission } from "./session-controller.wait.js";
+import { trackUserStop } from "./session-run-stopped.js";
 
 function stopHook() {
   const hook = vi.fn<(event: InternalHookEvent) => void>();
@@ -579,3 +582,147 @@ it.each(["reject", "continue"] as const)(
     expect(outcome.failures).toEqual([{ target: queued, error: cleanupError }]);
   },
 );
+
+it.each([
+  { name: "adapter fails after the commit", user: true, fail: "callback", records: 1 },
+  { name: "authority revoked after the commit", user: true, fail: "revoked", records: 1 },
+  { name: "non-user cancellation", user: false, fail: "none", records: 0 },
+  { name: "rejected before any commit", user: true, fail: "rejected", records: 0 },
+] as const)("records a user Stop once its cancellation commits: $name", async (c) => {
+  const f = fixture();
+  const source = f.reserve("run");
+  await f.start(source, true);
+  // The receipt is read only when the Stop qualifies to record.
+  const receipt = vi.fn(() => undefined);
+  let committed = false;
+  const stop = stopSession({
+    source: "client-run",
+    capture: captureSessionControllerStop({ inputs: [source] }),
+    hookContext: { sessionKey: f.sessionKey },
+    reason: createAgentRunDirectAbortError(c.user),
+    userStop: receipt,
+    assertCurrent: () => {
+      if (c.fail === "rejected" || (c.fail === "revoked" && committed)) {
+        throw new Error("Stop authority revoked");
+      }
+    },
+    onCancelled: () => {
+      committed = true;
+      if (c.fail === "callback") {
+        throw new Error("adapter failed after the commit");
+      }
+    },
+  });
+  if (c.fail === "none") {
+    await stop.completed;
+  } else {
+    await expect(stop.completed).rejects.toThrow();
+  }
+  expect(receipt).toHaveBeenCalledTimes(c.records);
+});
+
+it("fences a user-stopped turn's successor until its record settles", async () => {
+  const f = fixture();
+  const stopped = f.operation();
+  const userStop = trackUserStop({
+    reason: createAgentRunDirectAbortError(true),
+    receipt: () => undefined,
+  });
+  userStop.fence([stopped]);
+  stopped.complete();
+  expect(() => f.operation()).toThrow(ReplyRunSuccessorAdmissionBlockedError);
+  await userStop.record();
+  await expect(waitForReplyRunSuccessorAdmission(f.sessionKey, null)).resolves.toMatchObject({
+    settled: true,
+  });
+  // A non-user Stop never fences: its successor is admitted at once.
+  const next = f.operation();
+  trackUserStop({ reason: createAgentRunDirectAbortError(), receipt: () => undefined }).fence([
+    next,
+  ]);
+  next.complete();
+  f.operation();
+});
+
+it.each([
+  { name: "the parent commits", revokeAfterCommit: false },
+  // The queued input commits; the active one's authority check then throws uncommitted.
+  { name: "a later target throws uncommitted", revokeAfterCommit: true },
+])("records a committed user Stop before its children finish: $name", async (c) => {
+  const f = fixture();
+  const active = f.reserve("active-run");
+  await f.start(active, true);
+  const queued = f.reserve("queued-run");
+  const receipt = vi.fn(() => undefined);
+  const children = createDeferredCore<{ stopped: number; failed: number }>();
+  let committed = false;
+  const stop = stopSession({
+    source: "client-run",
+    capture: captureSessionControllerStop({ inputs: [queued, active] }),
+    hookContext: { sessionKey: f.sessionKey },
+    reason: createAgentRunDirectAbortError(true),
+    userStop: receipt,
+    assertCurrent: () => {
+      if (c.revokeAfterCommit && committed) {
+        throw new Error("Stop authority revoked");
+      }
+    },
+    onCancelled: () => {
+      committed = true;
+    },
+    // Descendant cleanup still runs after a failed parent phase.
+    stopChildren: async (applyParentStop) => {
+      await applyParentStop().catch(() => false);
+      return await children.promise;
+    },
+  });
+  // The parent phase has exited, so its record has started while children still run.
+  expect(receipt).toHaveBeenCalledOnce();
+  children.resolve({ stopped: 0, failed: 0 });
+  await (c.revokeAfterCommit ? expect(stop.completed).rejects.toThrow() : stop.completed);
+  expect(receipt).toHaveBeenCalledOnce();
+});
+
+it("credits an operation's backend run after cancellation detached its backend", async () => {
+  const f = fixture();
+  const operation = f.operation();
+  operation.attachBackend({
+    kind: "embedded",
+    runId: "backend-run",
+    toolAuthorityFingerprint: "policy",
+    cancel: () => {},
+    isCompacting: () => false,
+  } as Parameters<typeof operation.attachBackend>[0]);
+  operation.complete();
+  const receipt = vi.fn(() => undefined);
+  const userStop = trackUserStop({ reason: createAgentRunDirectAbortError(true), receipt });
+  userStop.cancelled(operation);
+  await userStop.record();
+  expect(receipt).toHaveBeenCalledOnce();
+});
+
+it("releases a user Stop's successor fence when it is rejected before committing", async () => {
+  const f = fixture();
+  const source = f.reserve("run");
+  const { release, execution } = await f.start(source, true);
+  let checks = 0;
+  const stop = stopSession({
+    source: "client-run",
+    capture: captureSessionControllerStop({ inputs: [source] }),
+    hookContext: { sessionKey: f.sessionKey },
+    reason: createAgentRunDirectAbortError(true),
+    userStop: () => undefined,
+    // Authority holds while the fence goes up, then fails before any target commits.
+    assertCurrent: () => {
+      if (++checks > 1) {
+        throw new Error("Stop authority revoked");
+      }
+    },
+  });
+  await expect(stop.completed).rejects.toThrow("Stop authority revoked");
+  release.resolve();
+  await execution;
+  await expect(waitForReplyRunSuccessorAdmission(f.sessionKey, 100)).resolves.toMatchObject({
+    settled: true,
+  });
+});

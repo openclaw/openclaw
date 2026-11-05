@@ -319,6 +319,8 @@ async function agentCommandInternalOwned(
           updatedAt: now,
           status: undefined,
           abortedLastRun: false,
+          userStoppedAt: undefined,
+          userStoppedSessionId: undefined,
           endedAt: undefined,
           lastRunError: undefined,
           sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,

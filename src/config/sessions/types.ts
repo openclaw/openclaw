@@ -415,6 +415,10 @@ type SessionEntryCore = SessionEntryProvenance &
     };
     systemSent?: boolean;
     abortedLastRun?: boolean;
+    /** When a user's Stop last ended this session's work; the next reply prompt says so and clears it. */
+    userStoppedAt?: number;
+    /** The sessionId that Stop ended; a Stop carried into another incarnation is never stated. */
+    userStoppedSessionId?: string;
     /** Quota cascade protection and state-aware failover status. */
     quotaSuspension?: QuotaSuspension;
     /** Core-owned durable goal state for this thread/session. */

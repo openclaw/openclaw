@@ -168,6 +168,8 @@ export type TuiBackend = {
     sessionKey: string;
     agentId?: string;
     runId?: string;
+    /** A person's Stop action: provenance for the Gateway, never cancellation authority. */
+    userInitiated?: true;
   }) => Promise<{ ok: boolean; aborted: boolean; runIds?: string[] }>;
   loadHistory: (opts: { sessionKey: string; agentId?: string; limit?: number }) => Promise<unknown>;
   loadImage?: (opts: TuiImageRequest) => Promise<TuiImageData>;

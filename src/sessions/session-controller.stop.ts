@@ -33,6 +33,11 @@ import {
   type SessionControllerStopRunEffect,
 } from "./session-controller.stop-capture.js";
 import { rpcSourcesByRunId } from "./session-controller.storage.js";
+import {
+  trackUserStop,
+  type AbortTargetMark,
+  type SessionRunStopReceipt,
+} from "./session-run-stopped.js";
 
 export {
   captureSessionControllerStop,
@@ -139,7 +144,8 @@ type SessionStopRequestBase = {
   assertCurrent?: () => void;
   reason?: unknown;
   messageIdentity?: unknown;
-  recordAbortTarget?: (options: { recordCutoff: boolean }) => Promise<void>;
+  /** Resolves the target its guarded abort mark matched, when that mark applied. */
+  recordAbortTarget?: (options: { recordCutoff: boolean }) => Promise<AbortTargetMark | void>;
   hookContext?: SessionStopHookContext;
   stopChildren?: (applyParentStop: () => Promise<boolean>) => Promise<SessionStopChildrenResult>;
   externalParent?: SessionStopExternalParent;
@@ -148,6 +154,8 @@ type SessionStopRequestBase = {
   cancelOperation?: (operation: ReplyOperation, cancel: () => boolean) => boolean;
   /** Authorized effects owned by another runtime, sequenced after queued withdrawal. */
   afterQueued?: () => void;
+  /** An explicit Stop's receipt from notifySessionRunStopped; a user-initiated one is recorded. */
+  userStop?: () => SessionRunStopReceipt | undefined;
   /** Publication effects that require the captured parent cancellation result. */
   afterParent?: (result: SessionControllerStopResult) => void;
   /** Exact external parents may decline the child cancellation they provisionally captured. */
@@ -488,6 +496,8 @@ export function stopSession(request: SessionStopRequest): SessionStopExecution {
   let parentResult: SessionControllerStopResult | undefined;
   let parentFailure: { error: unknown } | undefined;
   const unhandledFailures: unknown[] = [];
+  // A user's Stop is recorded once its cancellation commits, whatever fails after it.
+  const userStop = trackUserStop({ reason: request.reason, receipt: request.userStop });
   let runPostParent: (() => Promise<void>) | undefined;
   let resolveParentResult!: (result: SessionControllerStopResult) => void;
   let rejectParentResult!: (error: unknown) => void;
@@ -502,21 +512,41 @@ export function stopSession(request: SessionStopRequest): SessionStopExecution {
     }
     const capture = typeof request.capture === "function" ? request.capture() : request.capture;
     request.assertCurrent?.();
+    userStop.fence([
+      ...capture.operations,
+      ...capture.activeInputs.flatMap((input) => input.claim?.operation ?? []),
+    ]);
     // Select pending work once after preparation; active cancellation stays bound
     // to ingress instances, and reentrant arrivals belong to a later Stop.
     const pendingInputs = policy.cancelQueued ? capture.selectPendingInputs() : [];
-    const applied = applySessionControllerStop(capture, {
-      ...request,
-      phase: policy.cancelQueued ? "all" : "active",
-      pendingInputs,
-      onError: (target, error) => {
-        const decision = request.onError?.(target, error);
-        if (decision !== "continue") {
-          unhandledFailures.push(error);
-        }
-        return decision;
-      },
-    });
+    let applied: SessionControllerStopResult;
+    try {
+      applied = applySessionControllerStop(capture, {
+        ...request,
+        phase: policy.cancelQueued ? "all" : "active",
+        pendingInputs,
+        // Commitments are counted before the adapters' own callbacks, which can throw.
+        onCancelled: (target) => {
+          userStop.cancelled(target);
+          request.onCancelled?.(target);
+        },
+        onEffectCancelled: (effect) => {
+          userStop.effectCancelled(effect);
+          request.onEffectCancelled?.(effect);
+        },
+        onError: (target, error) => {
+          const decision = request.onError?.(target, error);
+          if (decision !== "continue") {
+            unhandledFailures.push(error);
+          }
+          return decision;
+        },
+      });
+    } finally {
+      // The fenced successor reads the note, never waits on children: record what committed,
+      // even when a later target threw.
+      userStop.recordCommitted();
+    }
     const newlyCancelled = applied.abortedInputs.filter((input) => !capture.inputs.includes(input));
     if (newlyCancelled.length) {
       applied.settled = Promise.all([
@@ -546,14 +576,22 @@ export function stopSession(request: SessionStopRequest): SessionStopExecution {
     runPostParent = async () => {
       await externalStop;
       const outcome = resolveStopOutcome(applied, externalStatus, { stopped: 0, failed: 0 });
-      if (
-        (!outcome.alreadyFinalizing || outcome.activeCancelled > 0) &&
-        request.recordAbortTarget
-      ) {
-        request.assertCurrent?.();
-        await request.recordAbortTarget({
-          recordCutoff: policy.recordMessageCutoff && request.messageIdentity !== undefined,
-        });
+      let abortMark: AbortTargetMark | undefined;
+      try {
+        if (
+          (!outcome.alreadyFinalizing || outcome.activeCancelled > 0) &&
+          request.recordAbortTarget
+        ) {
+          request.assertCurrent?.();
+          abortMark =
+            (await request.recordAbortTarget({
+              recordCutoff: policy.recordMessageCutoff && request.messageIdentity !== undefined,
+            })) ?? undefined;
+        }
+      } finally {
+        // An idle Stop records once its native abort mark applied; a Stop that cancelled runs
+        // joins the record it started at commit.
+        await userStop.record(abortMark);
       }
       if (policy.fireCommandHook) {
         const hookContext = request.hookContext;

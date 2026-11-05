@@ -14,6 +14,7 @@ import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawn
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
+import { resolveUserStoppedAt } from "../../config/sessions/terminal-status.js";
 import { resolveCronSessionWorkspaceOwnershipError } from "../../cron/run-authority.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
@@ -28,6 +29,7 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import { updateSessionControllerSourcePolicy } from "../../sessions/session-controller.mailbox.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { hasControlCommand } from "../command-detection.js";
 import {
   isExplicitFollowupCommandTurn,
@@ -76,6 +78,8 @@ import {
 import { shouldApplyStartupContext, buildSessionStartupContextPrelude } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
+
+const abortCutoffRuntimeLoader = createLazyImportLoader(() => import("./abort-cutoff.runtime.js"));
 
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
 const ROOM_EVENT_PARTICIPATION_RULE =
@@ -665,9 +669,30 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   };
 
   const promptEnvelopeBase = buildReplyPromptEnvelopeBase();
+  // The Stop this prompt may state, read once: a newer Stop must survive its retirement.
+  const statedStopAt = resolveUserStoppedAt(sessionEntry);
+  // The first prompt after the Stop says it, an automated turn's too: that turn must not resume
+  // the stopped work either. Only the prompt that claims the Stop says it, so two prepared turns
+  // never both do. A direct agent command clears it unsaid, beside abortedLastRun.
+  const stopClaimed =
+    sessionEntry !== undefined &&
+    statedStopAt !== undefined &&
+    (await (
+      await abortCutoffRuntimeLoader.load()
+    ).clearUserStopInSessionRuntime({
+      sessionId: sessionEntry.sessionId,
+      stoppedAt: statedStopAt,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath: params.storePath,
+    }));
   const prefixedBodyBase = applySessionHints({
     baseBody: promptEnvelopeBase.effectiveBaseBody,
-    abortedLastRun,
+    // A Stop another prompt claimed is never an interruption to continue.
+    abortedLastRun: abortedLastRun && statedStopAt === undefined,
+    // Without a row, abortedLastRun comes from the abort memory only a Stop sets.
+    stoppedByUser: sessionEntry ? stopClaimed : abortedLastRun,
     abortKey: command.abortKey,
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
