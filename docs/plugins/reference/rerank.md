@@ -21,3 +21,7 @@ Use any /rerank endpoint as a Decision model.
 
 - Providers: `rerank`
 - Contracts: `decisionProviders`
+
+## Related docs
+
+- [rerank](/providers/rerank)
