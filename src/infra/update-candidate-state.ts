@@ -119,10 +119,15 @@ async function withStateDatabaseSnapshot<T>(
         undefined,
         progress.onProgress,
       );
-  return withPreparedSqliteSnapshot(snapshot, async (location) => {
-    progress.complete((await fs.stat(location)).size);
-    return read(location);
-  });
+  // A leftover private copy must not fail an update; the Gateway sweep reclaims it.
+  return withPreparedSqliteSnapshot(
+    snapshot,
+    async (location) => {
+      progress.complete((await fs.stat(location)).size);
+      return read(location);
+    },
+    { bestEffortCleanup: true },
+  );
 }
 
 export async function collectStateDatabasePaths(
@@ -600,7 +605,11 @@ export async function snapshotUpdateCandidateState(
     const snapshot = await createVerifiedSqliteSnapshot({
       sourcePath: snapshotSource,
       targetPath: target,
-      sourceAcquisition: { mode: "isolated-process", stagingRoot: input.targetStateDir },
+      sourceAcquisition: {
+        mode: "isolated-process",
+        stagingRoot: input.targetStateDir,
+        bestEffortCleanup: true,
+      },
       integrity:
         snapshotSource === file
           ? {
