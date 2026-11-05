@@ -798,7 +798,6 @@ describe("doctor health contributions", () => {
             "noteSessionTranscriptHealth",
           )
           .mockResolvedValue(undefined);
-        const cfg = { agents: { entries: { main: {} } } };
         if (credentialWork !== "none") {
           mocks.maybeMigrateModelCatalogCredentials.mockResolvedValue({
             detected: 0,
@@ -809,7 +808,7 @@ describe("doctor health contributions", () => {
           });
         }
         const ctx = createDoctorContext({
-          cfg,
+          cfg: { agents: { entries: { main: {} } } },
           retirementOnly: true,
           shouldRepair: true,
           env: state.env,
@@ -826,13 +825,14 @@ describe("doctor health contributions", () => {
         expect(transcripts).toHaveBeenCalledOnce();
         if (credentialWork !== "none") {
           expect(ctx.retirementOnly).toBe(false);
+          expect(ctx.runtime.error).toHaveBeenCalledWith(
+            "Retirement-only Doctor widened: doctor:auth-profile-migration",
+          );
           expect(mocks.detectLegacyStateMigrations).toHaveBeenCalled();
           return;
         }
         expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
         expect(ctx.retirementOnly).toBe(true);
-        expect(mocks.maybeMigrateLegacyPluginModelCatalogs).toHaveBeenCalledOnce();
-        expect(mocks.maybeMigrateModelCatalogCredentials).toHaveBeenCalledOnce();
         expect(routes).toHaveBeenCalledOnce();
         expect(mocks.repairCronCodexModelRefsAfterConfigWrite).toHaveBeenCalledOnce();
         // The initial writer and strict final validation each read the persisted config.

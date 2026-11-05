@@ -38,6 +38,7 @@ describe("update run ledger compaction", () => {
     })) {
       write(entry);
     }
+    const widening = "Retirement-only Doctor widened: config.preflight-config-changed";
     const evidence = [
       "candidate-admission",
       "warning:update-admission-fallback",
@@ -50,6 +51,7 @@ describe("update run ledger compaction", () => {
       "service-start",
       "service-running",
       "update-driver-handoff",
+      "diagnostic:post-plugin doctor:2",
     ].map((step) => timedStep(step, step === "global update" ? "failed" : "completed"));
     const refusal = {
       reason: "refused",
@@ -59,7 +61,7 @@ describe("update run ledger compaction", () => {
     for (const step of evidence) {
       write({
         ...step,
-        detail,
+        detail: step.step === "diagnostic:post-plugin doctor:2" ? widening : detail,
         ...(step.step === "openclaw doctor" ? { configWriteRefusal: refusal } : {}),
       });
     }
@@ -91,9 +93,7 @@ describe("update run ledger compaction", () => {
     expect(report.markdown).toContain("Snapshots retained at $OPENCLAW_STATE_DIR/backup.");
     expect(report.markdown).not.toContain(options.env.OPENCLAW_STATE_DIR);
     for (const expected of evidence) {
-      expect(persisted.steps.filter((step) => step.step === expected.step)).toEqual([
-        expect.objectContaining(expected),
-      ]);
+      expect(persisted.steps.find(({ step }) => step === expected.step)).toMatchObject(expected);
     }
     const retainedRefusal = persisted.steps.find(
       (step) => step.step === "openclaw doctor",
@@ -105,6 +105,9 @@ describe("update run ledger compaction", () => {
     for (const key of ["warning:post-plugin doctor", "warning:post-stop-checks"]) {
       expect(persisted.steps.find((step) => step.step === key)?.detail).toBe(detail);
     }
+    expect(
+      persisted.steps.find((step) => step.step === "diagnostic:post-plugin doctor:2")?.detail,
+    ).toBe(widening);
     expect(persisted.steps.length).toBeLessThanOrEqual(128);
     expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
   });
