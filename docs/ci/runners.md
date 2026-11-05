@@ -397,8 +397,12 @@ This route requires the repository secret `BOAT_API_KEY`, the variable
 `BOAT_ORG`, and `BOAT_RELEASE_RUNNER_GROUP`. Use a dedicated Boat runner group;
 `OPENCLAW_RELEASE_RUNNER_GROUP` continues to select the existing hosted runners.
 The existing GitHub App must have organization self-hosted runner write access.
-The runner group must admit the nightly workflow on `main` and Full Release
-Validation on each immutable `release-ci/` transport ref. Install a Crabbox release supporting
+Restrict the runner group to the nightly workflow at `refs/heads/main` and
+`full-release-state-watcher.yml` at `80d330dfe6d79833a6d5abffcad7478ec1b28b86`. Full Release
+Validation pins that reviewed watcher definition from its immutable `release-ci/` refs;
+the watcher still checks out the caller's pinned tooling and admitted verifier.
+When changing the watcher definition, update the caller pin and runner-group entry
+together. Install a Crabbox release supporting
 `actions register --receipt` and `actions unregister --receipt` before enabling
 the backend. The provisioning preflight rejects older clients before creating
 a VM.

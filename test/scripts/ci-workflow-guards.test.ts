@@ -2453,9 +2453,9 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
 
   it.each([
     {
-      file: "full-release-validation.yml",
+      file: "full-release-state-watcher.yml",
       runner: "blacksmith-4vcpu-ubuntu-2404",
-      job: "release_decision",
+      job: "watch",
     },
     {
       file: "openclaw-npm-preflight.yml",
