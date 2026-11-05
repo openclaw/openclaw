@@ -403,6 +403,8 @@ export type PluginManifestBackupResource = {
   disposition: "include" | "regenerable";
   scope: "state" | "agent";
   relativePath: string;
+  /** Limit a regenerable exclusion to local restart checkpoints. */
+  profile?: "local-companion";
   /** Shared-state databases retained under this state-scoped resource. */
   databaseFamily?: "state";
 };

@@ -79,6 +79,12 @@ also carry `reason: "navigation_blocked"`. Raw blocked URLs and DNS details are
 not included in that metadata. Tab listings are observations, not authorization:
 every subsequent content read or action still enforces its own checks.
 
+Closing is the exception. `DELETE /tabs/:targetId` (including
+`targetIdMode=raw`) and `POST /tabs/action` with `action: "close"` do not
+check the tab's URL, because closing never contacts that address. Agents and
+session cleanup can therefore always end a tab, including one whose URL is
+blocked or could not be validated.
+
 If shared-secret gateway auth is configured, browser HTTP routes require auth too:
 
 - `Authorization: Bearer <gateway token>`

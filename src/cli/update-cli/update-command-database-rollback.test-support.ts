@@ -5,8 +5,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
+import { vitestWorkerRuntimeAssets } from "../../../scripts/lib/package-root-modules.mts";
 import { resolveSqliteSchemaAssetInputs } from "../../../scripts/lib/sqlite-schema-assets.mts";
-import { vitestWorkerRuntimeAssets } from "../../../scripts/lib/vitest-worker-declarations.mts";
 import { withPluginCohortConfigCapture } from "../../config/plugin-cohort-recovery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
@@ -14,7 +14,7 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { pluginCohortPublicationContext } from "../../infra/update-plugin-cohort-context.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
-import { createCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
+import { prepareCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
 import {
   readPersistedInstalledPluginIndexRowSync,
   seedInstalledPluginIndex,
@@ -40,30 +40,30 @@ export function resolveRollbackWorkerInputs() {
   return { gatewayLockUrl, databaseGenerationsUrl, sourceLoader };
 }
 
+let preparedHost: ReturnType<typeof prepareCompiledSdkHost> | undefined;
+
 /** Keep settlement on the real candidate's delegated native owner. */
 export async function prepareRollbackRuntime(root: string): Promise<string> {
-  const installed = createCompiledSdkHost(
-    [
-      runtimeProcessEntrypoints.updateMigratedFinalize,
-      runtimeProcessEntrypoints.workerNativeLifecycle,
-      runtimeProcessEntrypoints.spawnBroker,
-      runtimeProcessEntrypoints.sqliteWriterAdmission,
-      runtimeProcessEntrypoints.sqliteStore,
-      runtimeProcessEntrypoints.sqliteIntegrity,
-      runtimeProcessEntrypoints.sqliteReadOnly,
-      runtimeProcessEntrypoints.sqliteReadOnlyNativeResource,
-      runtimeProcessEntrypoints.sqliteSnapshotStaging,
-      runtimeProcessEntrypoints.sqliteSourceRevision,
-      runtimeProcessEntrypoints.sharedStateStore,
-      runtimeProcessEntrypoints.stateOwnership,
-      runtimeProcessEntrypoints.stateLeaseHeartbeat,
-      runtimeProcessEntrypoints.stateRead,
-    ],
-    () => root,
+  preparedHost ??= prepareCompiledSdkHost([
+    runtimeProcessEntrypoints.updateMigratedFinalize,
+    runtimeProcessEntrypoints.workerNativeLifecycle,
+    runtimeProcessEntrypoints.spawnBroker,
+    runtimeProcessEntrypoints.sqliteWriterAdmission,
+    runtimeProcessEntrypoints.sqliteStore,
+    runtimeProcessEntrypoints.sqliteIntegrity,
+    runtimeProcessEntrypoints.sqliteReadOnly,
+    runtimeProcessEntrypoints.sqliteReadOnlyNativeResource,
+    runtimeProcessEntrypoints.sqliteSnapshotStaging,
+    runtimeProcessEntrypoints.sqliteSourceRevision,
+    runtimeProcessEntrypoints.sharedStateStore,
+    runtimeProcessEntrypoints.stateOwnership,
+    runtimeProcessEntrypoints.stateLeaseHeartbeat,
+    runtimeProcessEntrypoints.stateRead,
+  ]);
+  assert(
+    preparedHost(() => root),
+    "Rollback fixture requires a compiled worker generation",
   );
-  if (!installed) {
-    throw new Error("Database rollback fixture requires the compiled candidate worker generation");
-  }
   // The fixture supplies dependencies from its common stage/live ancestor;
   // no checkout symlink belongs in either retained package identity.
   await fs.unlink(path.join(root, "node_modules"));

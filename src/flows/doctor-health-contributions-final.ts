@@ -4,7 +4,10 @@ import { shouldDeferConfiguredPluginInstallRepair } from "../commands/doctor/sha
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runFinalConfigValidationHealth } from "./doctor-config-validation-findings.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
-import { runCoreHealthFindingNote } from "./doctor-health-contribution-core.js";
+import {
+  runBundledHealthFindingNote,
+  runCoreHealthFindingNote,
+} from "./doctor-health-contribution-core.js";
 import {
   collectWriteConfigHealthFindings,
   runWriteConfigHealth,
@@ -248,7 +251,6 @@ export function resolveFinalDoctorHealthContributions(params: {
         ["provider-catalog-projection", "Provider catalog projection", "run"],
         ["local-audio-acceleration", "Local audio acceleration", "run"],
         ["runtime-tool-schemas", "Runtime tool schemas", "agent"],
-        ["skill-workshop-tool-policy", "Skill Workshop tool policy", "agent"],
       ] as const
     ).map(([name, label, scope]) =>
       createDoctorHealthContribution(`doctor:${name}`, label, {
@@ -256,6 +258,14 @@ export function resolveFinalDoctorHealthContributions(params: {
         healthCheckIds: [`core/doctor/${name}`],
         run: (ctx) => runCoreHealthFindingNote(ctx, `core/doctor/${name}`),
       }),
+    ),
+    createDoctorHealthContribution(
+      "doctor:skill-workshop-tool-policy",
+      "Skill Workshop tool policy",
+      {
+        updateWork: { kind: "inspection", scope: "agent" },
+        run: (ctx) => runBundledHealthFindingNote(ctx, "skill-workshop/tool-policy"),
+      },
     ),
     createDoctorHealthContribution("doctor:systemd-linger", "systemd linger", {
       healthChecks: {

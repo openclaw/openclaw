@@ -73,7 +73,10 @@ if (process.argv.includes("auth")) {
   send({ loggedIn: nativeLogin });
   process.exit(0);
 }
-appendFileSync(join(nativeRoot, "execution-launches.log"), "launch\n");
+// Model discovery initializes this protocol without opening a session.
+if (process.argv.includes("--session-id") || process.argv.includes("--resume")) {
+  appendFileSync(join(nativeRoot, "execution-launches.log"), "launch\n");
+}
 const descriptor = process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR;
 let credential = nativeLogin
   ? JSON.parse(readFileSync(join(nativeRoot, ".credentials.json"), "utf8")).claudeAiOauth?.accessToken

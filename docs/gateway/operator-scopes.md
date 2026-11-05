@@ -126,6 +126,10 @@ their per-person activity counts. The Gateway returns `FORBIDDEN`; the Control U
 shows the restriction and removes previously loaded activity. People and owner
 facets contain only the caller's own profile. Visible shared-session rows and
 their attribution remain available under the existing sharing policy.
+Presence stays visible as a person-only view: who is online, their last activity
+time, and watched sessions the caller can read. Device, network, connection, and
+email details remain `operator.read` only, as does `presence.query`
+([presence](/gateway/protocol/presence#broadcast-event-scoping)).
 Named roles with `operator.read` retain access to other people's activity even
 when a connection requests only session scopes.
 They can inspect a visible session's effective tool names with `tools.effective`.
@@ -199,6 +203,23 @@ and website widgets are discoverable with session-read access; plugin-specific
 scopes and widget approvals remain unchanged. Canvas imports require a saved widget
 receipt in the dashboard conversation, with source access retained through the write.
 Broad readers keep their existing document-ID-only access.
+
+For saved summaries, an authorized agent can publish selected results as a
+`session:report`; readers consume the saved session data. For live HTML
+dashboards, session readers can execute an explicitly approved named
+`github.actions.runs` query using only its view ticket and query name. The
+Gateway resolves its fixed repository, workflow, branch, filters, result limit,
+and returned fields. Runtime query overrides are rejected. The flexible
+`board.data.read` binding form requires broader access. A repository-only grant does not approve a
+named query, and changing a definition requires renewed approval under the
+existing policy.
+
+The Gateway authorizes the session from the view ticket and rechecks caller
+access, widget revision and view generation, and the current query grant before
+returning even cached data. Approval deliberately shares matching future and
+private Actions results obtained with the agent's credentials; readers need no
+GitHub repository access of their own. Session visibility alone is not approval.
+Other dashboard host data bindings and actions retain their broader scopes.
 
 Session readers can also use `artifacts.list`, `artifacts.get`, and
 `artifacts.download` for artifacts in a conversation they can currently read.

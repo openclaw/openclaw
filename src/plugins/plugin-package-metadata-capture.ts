@@ -9,6 +9,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside } from "../infra/path-guards.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { escapeRegExp } from "../shared/regexp.js";
+import { clearPluginSourceCaptureModuleCache } from "./native-module-require.js";
 import {
   acquirePluginSource,
   createPluginSourceValidationError,
@@ -714,14 +715,7 @@ export function createPluginSourceCapture() {
   const beginDisposal = () => {
     disposed = true;
     // Revoke cached modules before removal yields, including compiled CJS helpers.
-    // Jiti's Windows keys use forward slashes; containment follows filesystem identity.
-    const urls = pathToFileURL(directory + path.sep).href;
-    const cache = createRequire(import.meta.url).cache;
-    for (const id of Object.keys(cache)) {
-      if (id.startsWith(urls) || (path.isAbsolute(id) && isPathInside(directory, id))) {
-        delete cache[id];
-      }
-    }
+    clearPluginSourceCaptureModuleCache(directory);
     captureFailures.clear();
   };
   return {

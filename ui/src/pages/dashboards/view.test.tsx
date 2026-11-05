@@ -78,12 +78,12 @@ it.each([
   }
 
   await waitForSolid(() => {
-    expect(container.querySelector('[aria-busy="true"], .skeleton')).toBeNull();
+    expect(busy?.isConnected).toBe(false);
     expect(container.querySelector(selector)?.textContent).toContain(message);
   });
   if (outcome === "empty") {
     expect(container.querySelector(selector)?.textContent).toContain(
-      "Dashboards created in your tasks will appear here",
+      "Dashboards created in your sessions appear here.",
     );
   }
   if (outcome === "error") {

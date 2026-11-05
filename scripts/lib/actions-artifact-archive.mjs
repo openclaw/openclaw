@@ -25,6 +25,7 @@ const TRANSIENT_NETWORK_CODES = new Set([
   "ECONNRESET",
   "EAI_AGAIN",
   "ENETUNREACH",
+  "EPIPE",
   "ETIMEDOUT",
   "UND_ERR_BODY_TIMEOUT",
   "UND_ERR_CONNECT_TIMEOUT",
@@ -698,6 +699,7 @@ function requireExpectedBinding(params) {
   const runStatePolicy = assertTrimmedString(expected.runStatePolicy, "workflow run-state policy");
   if (
     runStatePolicy !== "completed-success" &&
+    runStatePolicy !== "completed-success-or-failure" &&
     runStatePolicy !== "same-run-producer-success" &&
     runStatePolicy !== "completed-producer-success"
   ) {
@@ -716,7 +718,7 @@ function requireExpectedBinding(params) {
     expected.producerStepName === undefined
       ? undefined
       : assertTrimmedString(expected.producerStepName, "producer step name");
-  if (producerStepName && runStatePolicy === "completed-success") {
+  if (producerStepName && !producerJobName) {
     throw new Error("Producer step binding requires a producer-success policy.");
   }
   if (consumerRunAttempt !== undefined && runAttempt > consumerRunAttempt) {
@@ -776,6 +778,12 @@ export function validateActionsArtifactBinding(params) {
   if (expected.runStatePolicy === "completed-success") {
     if (run.status !== "completed" || run.conclusion !== "success") {
       throw new Error("Actions workflow run does not match the immutable publication tuple.");
+    }
+  } else if (expected.runStatePolicy === "completed-success-or-failure") {
+    // Observation artifacts retain per-file completeness. An unrelated failed
+    // job must not discard those results; cancelled/in-progress runs stay out.
+    if (run.status !== "completed" || !["success", "failure"].includes(run.conclusion)) {
+      throw new Error("Observation workflow attempt must be completed successfully or failed.");
     }
   } else if (expected.runStatePolicy === "completed-producer-success") {
     // Protected recovery runs after the original workflow is terminal. Exact

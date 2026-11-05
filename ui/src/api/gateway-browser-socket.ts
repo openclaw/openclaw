@@ -5,7 +5,8 @@ import {
   type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
 import { gatewayWebSocketTransportUrl, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
-import { formatUiError } from "../lib/format-error.ts";
+import { t } from "../i18n/index.ts";
+import { formatConnectionErrorSummary } from "../lib/connection-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
 
 const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR";
@@ -14,7 +15,7 @@ export const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY
 export function formatBrowserWebSocketConstructorError(err: unknown, url: string): ErrorShape {
   const name = err && typeof err === "object" && "name" in err ? err.name : undefined;
   const browserErrorName = typeof name === "string" && name.trim() ? name : undefined;
-  const browserMessage = formatUiError(err);
+  const browserMessage = formatConnectionErrorSummary(err);
   const message = browserMessage.toLowerCase();
   const securityError =
     browserErrorName?.toLowerCase() === "securityerror" ||
@@ -28,11 +29,8 @@ export function formatBrowserWebSocketConstructorError(err: unknown, url: string
   return {
     code,
     message: securityError
-      ? "Browser refused the Gateway WebSocket for security reasons." +
-        (isPlaintextWs
-          ? " Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789."
-          : " Check the Gateway WebSocket URL and browser security policy.")
-      : `Could not create the Gateway WebSocket: ${browserMessage}`,
+      ? t(isPlaintextWs ? "runtimeErrors.socketInsecure" : "runtimeErrors.socketRefused")
+      : t("runtimeErrors.socketCreateFailed", { message: browserMessage }),
     details: { code, browserErrorName, browserMessage },
   };
 }
@@ -127,7 +125,9 @@ export function createBrowserGatewaySocket(
       return;
     }
     opening = false;
-    const reason = `gateway websocket opening timed out after ${DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS}ms`;
+    const reason = t("runtimeErrors.socketTimeout", {
+      milliseconds: String(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS),
+    });
     try {
       handlers.error(new Error(reason));
     } finally {

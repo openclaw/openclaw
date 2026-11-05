@@ -10,7 +10,14 @@ import {
   type MembershipTarget,
 } from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
-import { buildWorld, certBody, signChange, worldKey, WORLD_NOW } from "../testing/world.js";
+import {
+  buildWorld,
+  certBody,
+  signChange,
+  signRevocation,
+  worldKey,
+  WORLD_NOW,
+} from "../testing/world.js";
 import { dropInactive, nextInactivityDrop, recordSeen } from "./allowlist.js";
 import { submitStatement, type WriteContext } from "./apply.js";
 import { isAdmitted, snapshotBody, type AuthorityState } from "./state.js";
@@ -41,19 +48,9 @@ async function approve(state: AuthorityState, approver: Key, device: Key) {
   );
 }
 
-// An owner-device Revocation of `target`, signed by `signer`.
-async function revocation(target: Key, signer: Key) {
-  return signStatement(
-    "Revocation",
-    {
-      target_fp: await fingerprint(target.pub),
-      target_kind: "owner_device",
-      reason: "test",
-      root_epoch: 1,
-      issued_at: WORLD_NOW - 5,
-    },
-    signer.signer,
-  );
+// An owner-device Revocation of `target` at the claw's current seq, signed by `signer`.
+async function revocation(state: AuthorityState, target: Key, signer: Key) {
+  return signRevocation(state, signer.signer, await fingerprint(target.pub));
 }
 
 describe("owner device approval", () => {
@@ -68,7 +65,10 @@ describe("owner device approval", () => {
   it("accepts approval by a current owner device and refuses it from a removed one", async () => {
     const world = await buildWorld();
     const device3 = await worldKey("device-3");
-    const removed = await apply(world.state, await revocation(world.device2, world.device1));
+    const removed = await apply(
+      world.state,
+      await revocation(world.state, world.device2, world.device1),
+    );
     const refused = await approve(removed.state, world.device2, device3);
     expect(refused).toMatchObject({ ok: false, code: "not_an_owner" });
     const accepted = await approve(removed.state, world.device1, device3);
@@ -78,7 +78,10 @@ describe("owner device approval", () => {
 
   it("refuses a statement signed by a removed owner device", async () => {
     const world = await buildWorld();
-    const removed = await apply(world.state, await revocation(world.device2, world.device1));
+    const removed = await apply(
+      world.state,
+      await revocation(world.state, world.device2, world.device1),
+    );
     const change = await signChange(removed.state, world.device2.signer, {
       op: "add",
       account_id: "acct_bob",
@@ -99,7 +102,10 @@ describe("revocation", () => {
     const device3 = await worldKey("device-3");
     const added = await approve(world.state, world.device2, device3);
     expect(added.ok).toBe(true);
-    const result = await apply(added.state, await revocation(world.device2, world.device1));
+    const result = await apply(
+      added.state,
+      await revocation(added.state, world.device2, world.device1),
+    );
     expect(Object.keys(result.state.owner_devices)).toEqual([await fingerprint(world.device1.pub)]);
     const cut = [world.device2.peer, device3.peer].toSorted();
     expect(result.events).toEqual([
@@ -112,15 +118,26 @@ describe("revocation", () => {
 
   it("removes the approved device when the approver revokes itself, and keeps nothing", async () => {
     const world = await buildWorld();
-    const result = await apply(world.state, await revocation(world.device1, world.device1));
+    const result = await apply(
+      world.state,
+      await revocation(world.state, world.device1, world.device1),
+    );
     expect(result.state.owner_devices).toEqual({});
     expect(result.state).not.toHaveProperty("revoked");
   });
 
   it("is a no-op for a device the claw no longer lists, also through the mailbox", async () => {
     const world = await buildWorld();
-    const once = await apply(world.state, await revocation(world.device2, world.device1), mailbox);
-    const again = await apply(once.state, await revocation(world.device2, world.device1), mailbox);
+    const once = await apply(
+      world.state,
+      await revocation(world.state, world.device2, world.device1),
+      mailbox,
+    );
+    const again = await apply(
+      once.state,
+      await revocation(once.state, world.device2, world.device1),
+      mailbox,
+    );
     expect(again.state).toBe(once.state);
     expect(again.events).toEqual([]);
   });
@@ -254,7 +271,10 @@ describe("caps", () => {
 describe("snapshot", () => {
   it("lists current owner devices and members only, with no revoked list", async () => {
     const world = await buildWorld();
-    const removed = await apply(world.state, await revocation(world.device2, world.device1));
+    const removed = await apply(
+      world.state,
+      await revocation(world.state, world.device2, world.device1),
+    );
     const body = snapshotBody(removed.state, 1, WORLD_NOW);
     expect(body).not.toHaveProperty("revoked");
     expect(body.owner_devices).toEqual([
