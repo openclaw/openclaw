@@ -11,6 +11,11 @@ import type { AssistantMessage, ModelRequestHeaders } from "../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { resolveCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
 import { SAFETY_MARGIN } from "../compaction-planning.js";
+import { withCompactionWatchdogAllowance } from "../embedded-agent-runner/compact.foreground-work.js";
+import {
+  COMPACTION_CEILING_WINDOWS,
+  resolveCompactionTimeoutMs,
+} from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import {
   compactAfterSummaryRefusal,
@@ -267,6 +272,31 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
   }
 
   private async runCompactionWork(options: {
+    itemId: string;
+    settings: ReturnType<SettingsManager["getCompactionSettings"]>;
+    signal: AbortSignal;
+    customInstructions?: string;
+    mode: "manual" | "auto";
+    requestState?: "unresolved";
+    summaryOutputPolicy: SummaryOutputPolicy;
+    requestBudget?: CompactionRequestBudget;
+    requestFromEntryId?: string;
+    pendingUserEntryId?: string;
+    onSummaryReady?: () => void;
+  }): Promise<CompactionWorkOutcome> {
+    // Manual and automatic compaction both own semantic progress while they run;
+    // the controller watchdog observes within the compaction safety ceiling.
+    return await withCompactionWatchdogAllowance(
+      {
+        deadlineAtMs:
+          Date.now() +
+          resolveCompactionTimeoutMs() * COMPACTION_CEILING_WINDOWS,
+      },
+      () => this.runCompactionWorkInner(options),
+    );
+  }
+
+  private async runCompactionWorkInner(options: {
     itemId: string;
     settings: ReturnType<SettingsManager["getCompactionSettings"]>;
     signal: AbortSignal;

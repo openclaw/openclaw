@@ -7,7 +7,11 @@ import {
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { hasModelFallbackStop } from "../failover-error.js";
-import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
+import {
+  COMPACTION_CEILING_WINDOWS,
+  resolveCompactionTimeoutMs,
+} from "./compaction-safety-timeout.js";
+import { withCompactionWatchdogAllowance } from "./compact.foreground-work.js";
 import { executePreparedCompactionSession } from "./compaction-session-execution.js";
 import {
   prepareDirectCompactionAttempt,
@@ -22,22 +26,13 @@ import type { EmbeddedAgentCompactResult } from "./types.js";
 export async function compactEmbeddedAgentSessionDirectOnce(
   params: PreparedCompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  const { markSessionActivityCompaction, clearSessionActivityCompaction } =
-    await import("../../logging/diagnostic-run-activity.js");
-  const compactionOwner = {
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-    ...(params.runId ? { runId: params.runId } : {}),
-  };
-  markSessionActivityCompaction({
-    ...compactionOwner,
-    deadlineAtMs: Date.now() + resolveCompactionTimeoutMs(params.config),
-  });
-  try {
-    return await runDirectCompactionAttempt(params);
-  } finally {
-    clearSessionActivityCompaction(compactionOwner);
-  }
+  return withCompactionWatchdogAllowance(
+    {
+      deadlineAtMs:
+        Date.now() + resolveCompactionTimeoutMs(params.config) * COMPACTION_CEILING_WINDOWS,
+    },
+    () => runDirectCompactionAttempt(params),
+  );
 }
 
 async function runDirectCompactionAttempt(

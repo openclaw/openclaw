@@ -24,8 +24,6 @@ export type SessionActivity = DiagnosticArgumentChurnActivity &
     sessionKey?: string;
     lastProgressAt: number;
     lastProgressReason?: string;
-    /** Set while an embedded-run compaction holds progress responsibility. */
-    activeCompaction?: { startedAtMs: number; deadlineAtMs: number };
   };
 
 export type DiagnosticBackendActivity = {

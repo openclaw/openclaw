@@ -41,7 +41,6 @@ describe("classifySessionAttention", () => {
           activeWorkKind: "embedded_run",
           hasActiveEmbeddedRun: true,
           lastProgressAgeMs: 660_000,
-          activeCompactionStartedAtMs: Date.now() - (expired ? 700_000 : 60_000),
           activeCompactionDeadlineAtMs: Date.now() + (expired ? -1000 : 600_000),
         },
         staleMs: 120_000,

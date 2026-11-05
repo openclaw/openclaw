@@ -17,7 +17,6 @@ export type DiagnosticSessionActivitySnapshot = {
   /** Absolute provider retry deadline validated against the live logical run. */
   activeRetryWaitDeadlineAtMs?: number;
   /** Compaction owns progress while it runs; its own safety timeout bounds the allowance. */
-  activeCompactionStartedAtMs?: number;
   activeCompactionDeadlineAtMs?: number;
 };
 

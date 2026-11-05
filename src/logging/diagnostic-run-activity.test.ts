@@ -21,9 +21,7 @@ import {
   markDiagnosticArgumentChurnObservation,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
-  clearSessionActivityCompaction,
   markDiagnosticRunProgress,
-  markSessionActivityCompaction,
   resetDiagnosticRunActivityForTest,
   resolveRunStaleThresholdMs,
   RUN_STALE_TAKEOVER_MS,
@@ -81,23 +79,6 @@ describe("diagnostic run activity listener lifecycle", () => {
       activeWorkKind: undefined,
       lastProgressReason: "worker:runtime_refresh",
     });
-  });
-
-  it("marks and clears an active compaction in the activity snapshot", () => {
-    const ref = { sessionId: "cmp-session", sessionKey: "agent:main:cmp", runId: "cmp-run" };
-    markDiagnosticEmbeddedRunStarted(ref);
-    const deadline = Date.now() + 300_000;
-    markSessionActivityCompaction({ ...ref, deadlineAtMs: deadline });
-    expectActivity(ref, {
-      activeCompactionStartedAtMs: expect.any(Number),
-      activeCompactionDeadlineAtMs: deadline,
-      lastProgressReason: "compaction:started",
-    });
-    clearSessionActivityCompaction(ref);
-    const cleared = getDiagnosticSessionActivitySnapshot(ref);
-    expect(cleared.activeCompactionStartedAtMs).toBeUndefined();
-    expect(cleared.activeCompactionDeadlineAtMs).toBeUndefined();
-    expect(cleared.lastProgressReason).toBe("compaction:ended");
   });
 
   it("does not rebind existing progress across mismatched sessions or stale run owners", () => {

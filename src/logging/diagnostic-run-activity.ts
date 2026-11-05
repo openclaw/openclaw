@@ -628,45 +628,11 @@ export function getDiagnosticSessionActivitySnapshot(
       ? { activeBackendLivenessDeadlineAtMs }
       : {}),
     ...(activeRetryWaitDeadlineAtMs !== undefined ? { activeRetryWaitDeadlineAtMs } : {}),
-    ...(activity.activeCompaction
-      ? {
-          activeCompactionStartedAtMs: activity.activeCompaction.startedAtMs,
-          activeCompactionDeadlineAtMs: activity.activeCompaction.deadlineAtMs,
-        }
-      : {}),
   };
 }
 
 function markDiagnosticModelStartedForTest(params: ModelStartedActivityEvent): void {
   recordModelStarted(params, undefined, true);
-}
-
-/**
- * Compaction owns progress while it runs; its own safety timeout bounds the
- * allowance, after which normal staleness classification resumes.
- */
-export function markSessionActivityCompaction(
-  params: { sessionId?: string; sessionKey?: string; runId?: string; deadlineAtMs: number },
-  now = Date.now(),
-): void {
-  const activity = resolveSessionActivity(params);
-  if (!activity) {
-    return;
-  }
-  activity.activeCompaction = { startedAtMs: now, deadlineAtMs: params.deadlineAtMs };
-  touchSessionActivity(activity, "compaction:started", now);
-}
-
-export function clearSessionActivityCompaction(
-  params: { sessionId?: string; sessionKey?: string; runId?: string },
-  now = Date.now(),
-): void {
-  const activity = resolveSessionActivity(params);
-  if (!activity?.activeCompaction) {
-    return;
-  }
-  activity.activeCompaction = undefined;
-  touchSessionActivity(activity, "compaction:ended", now);
 }
 
 /** @internal Test-support reset; see diagnostic.test-support.ts. */
