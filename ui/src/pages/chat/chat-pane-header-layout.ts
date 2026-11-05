@@ -301,6 +301,14 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
     const headerDetails: ChatDetailsViewProps | undefined = ownsSubagentsPanel
       ? {
           elements,
+          dockingLayout: JSON.stringify([
+            window.innerWidth,
+            this.context.navigation.snapshot.navWidth,
+            this.context.navigation.snapshot.navCollapsed,
+            this.context.theme.settings.chatSplitLayout,
+            this.paneId,
+            sidebarLayout,
+          ]),
           chat: merge(paneChatProps, detailsActions, detailsOutputs, {
             cachedDetails: cached?.details,
             sessionFactsReady:

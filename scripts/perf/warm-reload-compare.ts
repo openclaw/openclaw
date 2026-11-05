@@ -19,6 +19,8 @@ type ComparisonRun = {
     helloHandledMs: number | null;
     fcpMs: number | null;
     firstPaintedRowsMs: number | null;
+    firstDetailsDomMs?: number | null;
+    firstDetailsPaintMs?: number | null;
     finalRowsDomMs: number | null;
     loafBlockingMs: number;
     cls: number;
@@ -165,6 +167,12 @@ function metrics(run: ComparisonRun): Record<string, number | null> {
     auditedMainPaintMs: run.auditedPaint?.main.atMs ?? null,
     auditedDashboardPaintMs: run.auditedPaint?.dashboard?.atMs ?? null,
     firstPaintedRowsMs: run.probe.firstPaintedRowsMs,
+    firstDetailsDomMs: run.probe.firstDetailsDomMs ?? null,
+    firstDetailsPaintMs: run.probe.firstDetailsPaintMs ?? null,
+    detailsPaintLagMs:
+      run.probe.firstDetailsPaintMs != null && run.probe.firstPaintedRowsMs !== null
+        ? run.probe.firstDetailsPaintMs - run.probe.firstPaintedRowsMs
+        : null,
     finalRowsDomMs: run.probe.finalRowsDomMs,
     loafBlockingMs: run.probe.loafBlockingMs,
     cls: run.probe.cls,

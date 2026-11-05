@@ -1,0 +1,2 @@
+26
+# Extend the existing warm-reload flow to observe the pane's first frame and connected dock flips.

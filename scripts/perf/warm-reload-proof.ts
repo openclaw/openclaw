@@ -487,6 +487,8 @@ async function captureReload(
       "allBoardWidgetsVisibleMs",
       "cachedBoardLayoutMs",
       "firstPaintedRowsMs",
+      "firstDetailsDomMs",
+      "firstDetailsPaintMs",
       "bottomParagraphPaintMs",
       "transcriptTextPaintMs",
       "pluginsCompleteMs",

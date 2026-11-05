@@ -20,6 +20,7 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
+import { ChatDetailsDesktopComposition } from "./chat-details-desktop-loader.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import "../../../styles/chat/details.css";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
@@ -33,15 +34,6 @@ const ChatDetailsProgress = lazy(() => import("./chat-details-progress.tsx"), {
 const ChatDetailsSession = lazy(() => import("./chat-details-session.tsx"), {
   export: "ChatDetailsSession",
 });
-const ChatDetailsDesktopComposition = lazy(
-  async () => {
-    const module = await import("./chat-details-session.tsx");
-    // Fill the inspector once; a nested lazy body must not push down cached Automations.
-    await module.preloadChatDetailsEnvironment();
-    return module;
-  },
-  { export: "ChatDetailsDesktopComposition" },
-);
 const ChatDetailsMobileHostContent = lazy(() => import("../chat-details-mobile-host-content.tsx"), {
   export: "ChatDetailsMobileHostContent",
 });
@@ -58,6 +50,7 @@ export type ChatDetailsViewProps = {
   chat?: ChatDetailsProps;
   elements?: ChatDetailsElements;
   presentation: PresentationValue;
+  dockingLayout?: string;
   setRef: (details: ChatDetails | undefined) => void;
   mobile: boolean;
   nativePresentation?: "desktop" | "mobile";
@@ -127,7 +120,11 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     manualChange = manual && (nextIntent === "open") !== opened();
     setChoice((previous) => ({ ...previous, intent: nextIntent }));
   };
-  const [wideEnough, setWideEnough] = createSignal(false);
+  // Reuse only a measurement of this same viewport and pane allocation.
+  const [wideEnough, setWideEnough] = createSignal<boolean>(() => {
+    const docking = props.chat?.cachedDetails?.docking;
+    return docking?.layout === props.dockingLayout ? docking?.wide === true : false;
+  });
   const canDock = () => !isMobile() && isConversationAnchor() && wideEnough();
   const opened = () =>
     isPresented() &&
@@ -248,6 +245,9 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       entrancePending = false;
     }
     setWideEnough(wide);
+    if (isDesktop && props.dockingLayout) {
+      props.chat?.onDetailsSnapshot?.({ docking: { layout: props.dockingLayout, wide } });
+    }
     if (!open) {
       return;
     }
@@ -538,9 +538,13 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     if (pane && desktop()) {
       layout.observe(pane, { attributes: true, attributeFilter: ["class", "style"] });
     }
-    // Resolve automatic docking before paint, including adaptive panes whose
-    // first ResizeObserver delivery may be delayed in a background tab.
-    reposition();
+    const initialLayout = readLayout();
+    mountSurface(initialLayout);
+    // Open surfaces already measured in the presentation effect. Closed ones
+    // still need their destination width before the first resize delivery.
+    if (!initialLayout.open) {
+      position(initialLayout);
+    }
     const stop = [
       listen(window, "resize", reposition),
       listen(document, "pointerdown", outside),
