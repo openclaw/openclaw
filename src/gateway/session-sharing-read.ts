@@ -1,8 +1,10 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { canReadSessionAccess } from "../config/sessions/session-access.js";
 import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -66,13 +68,28 @@ export function canReceiveSessionEvent(params: {
   }
   const identity = sharingIdentity(client, operatorActor);
   if (!identity) {
+    const ownerEquivalent =
+      Boolean(policyConfig.gateway?.roles) &&
+      isSessionSharingOwnerEquivalent(client, operatorActor);
     return (
       (!operatorScopeSatisfied("operator.sessions.read", client.connect.scopes ?? []) ||
         operatorActor?.kind === "system" ||
         operatorScopeSatisfied("operator.read", client.connect.scopes ?? [])) &&
-      (!policyConfig.gateway?.roles || isSessionSharingOwnerEquivalent(client, operatorActor)) &&
+      (!policyConfig.gateway?.roles || ownerEquivalent) &&
       event !== "session.suggestion" &&
-      event !== "session.typing"
+      event !== "session.typing" &&
+      (ownerEquivalent ||
+        operatorActor?.kind === "system" ||
+        client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID ||
+        sessionKeys.every((key) => {
+          const target = params.prepared.target(key, params.agentId);
+          return (
+            target !== null &&
+            (!client.authenticatedGitHubIdentitySync ||
+              resolveSessionVisibility(target.entry) !== "draft") &&
+            canReadSessionAccess(policyConfig, target.canonicalKey, target.entry, () => false)
+          );
+        }))
     );
   }
   const sharing = params.prepared.sharing;
@@ -411,12 +428,13 @@ export function prepareProjectedSessionSharing(params: {
         facts[9] === profile &&
         facts[10] === policy &&
         facts[11] === Boolean(cfg.gateway?.roles) &&
-        facts[12] === (scopes !== undefined) &&
-        facts[13] === ownerEquivalent &&
-        facts.length === 14 + (scopes?.length ?? 0)
+        facts[12] === cfg.session?.sharing?.accessPolicy &&
+        facts[13] === (scopes !== undefined) &&
+        facts[14] === ownerEquivalent &&
+        facts.length === 15 + (scopes?.length ?? 0)
       ) {
         let i = 0;
-        while (i < (scopes?.length ?? 0) && facts[14 + i] === scopes?.[i]) {
+        while (i < (scopes?.length ?? 0) && facts[15 + i] === scopes?.[i]) {
           i++;
         }
         if (i === (scopes?.length ?? 0)) {
@@ -435,6 +453,7 @@ export function prepareProjectedSessionSharing(params: {
         profile && [...profile.aliases].sort(),
         policy,
         Boolean(cfg.gateway?.roles),
+        cfg.session?.sharing?.accessPolicy,
         // Equal effective scopes can retain different source sharing authority.
         ownerEquivalent,
       ]);
@@ -451,6 +470,7 @@ export function prepareProjectedSessionSharing(params: {
         profile,
         policy,
         Boolean(cfg.gateway?.roles),
+        cfg.session?.sharing?.accessPolicy,
         scopes !== undefined,
         ownerEquivalent,
       ];
@@ -473,26 +493,37 @@ export function createSessionListEntryFilter(
 ):
   | ((
       sessionKey: string | undefined,
-      entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">,
+      entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito" | "access">,
       isMember?: boolean,
     ) => boolean)
   | undefined {
   const operatorActor = resolveGatewayOperatorRoleActor(params.client);
   const identity = sharingIdentity(params.client, operatorActor);
-  if (isGatewayAdmin(params.client)) {
+  if (
+    isGatewayAdmin(params.client) ||
+    (!identity &&
+      (operatorActor?.kind === "system" ||
+        (!params.cfg?.gateway?.roles &&
+          params.client?.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID)))
+  ) {
     return undefined;
   }
   if (!identity) {
-    return params.cfg?.gateway?.roles &&
-      !isSessionSharingOwnerEquivalent(params.client, operatorActor)
-      ? () => false
-      : undefined;
+    if (params.cfg?.gateway?.roles) {
+      return isSessionSharingOwnerEquivalent(params.client, operatorActor)
+        ? undefined
+        : () => false;
+    }
+    return (key, entry) =>
+      (!params.client?.authenticatedGitHubIdentitySync ||
+        resolveSessionVisibility(entry) !== "draft") &&
+      canReadSessionAccess(params.cfg, key, entry, () => false);
   }
   const sessionCap = prepared
     ? prepared.sessionCap
     : params.cfg && operatorSessionCap(params.client, params.cfg);
   return createProfileSessionEntryFilter(
-    { profileId: identity.id, sessionCap, membership: params.membership },
+    { profileId: identity.id, sessionCap, cfg: params.cfg, membership: params.membership },
     isCreator,
   );
 }
@@ -501,6 +532,7 @@ export function createProfileSessionEntryFilter(
   params: {
     profileId: string;
     sessionCap?: ReturnType<typeof operatorSessionCap>;
+    cfg?: OpenClawConfig;
     membership?: ReadonlySet<string>;
   },
   isCreator?: ReturnType<typeof prepareSessionCreatorProfile>,
@@ -509,11 +541,12 @@ export function createProfileSessionEntryFilter(
   const creatorMatches = isCreator ?? ((actor) => isSessionCreatorProfile(actor, params.profileId));
   return (
     sessionKey: string | undefined,
-    entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">,
+    entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito" | "access">,
     isMember = params.membership?.has(params.profileId),
   ) =>
     entry.incognito !== true &&
     !isIncognitoSessionKey(sessionKey) &&
+    canReadSessionAccess(params.cfg, sessionKey, entry, creatorMatches) &&
     (creatorMatches(entry.createdActor) ||
       (params.sessionCap !== "none" &&
         // Projection callbacks may pass metadata as the third argument; only true grants membership.

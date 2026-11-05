@@ -37,6 +37,7 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { cronHandlers } from "./cron.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 const { seedRoot, apiKey } = createAuthOwnerTestFixtures();
@@ -154,21 +155,23 @@ async function createFixture(stateDir: string, agentDir: string) {
       throw new Error("Missing cron handler");
     }
     const respond = vi.fn<RespondFn>();
+    const context = createDirectChatContext({
+      cron,
+      cronStorePath: storePath,
+      getRuntimeConfig: () => cfg,
+      getClientConnIds: (filter) =>
+        new Set(
+          client?.connId && !client.invalidated && (!filter || filter(client))
+            ? [client.connId]
+            : [],
+        ),
+    });
+    await initializeSessionReadContext(context);
     await handler({
       req: { type: "req", id: "binding-regression", method, params },
       params,
       respond,
-      context: createDirectChatContext({
-        cron,
-        cronStorePath: storePath,
-        getRuntimeConfig: () => cfg,
-        getClientConnIds: (filter) =>
-          new Set(
-            client?.connId && !client.invalidated && (!filter || filter(client))
-              ? [client.connId]
-              : [],
-          ),
-      }),
+      context,
       client,
       sessionMutationCommitGuard: options.beforeCommit,
       isWebchatConnect: () => false,

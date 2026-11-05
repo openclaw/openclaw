@@ -270,19 +270,10 @@ export function hasOperatorBoundary(
   if (resolveGatewayOperatorRoleActor(client)?.kind === "system") {
     return false;
   }
-  const scopes = client?.connect?.scopes ?? [];
-  return (
-    roleScopesAllow({
-      role: "operator",
-      requestedScopes: ["operator.sessions.read"],
-      allowedScopes: scopes,
-    }) &&
-    !roleScopesAllow({
-      role: "operator",
-      requestedScopes: ["operator.read"],
-      allowedScopes: scopes,
-    })
-  );
+  // Confidential per-session ACLs also apply without a named role. The sharing
+  // filter preserves unrestricted solo behavior, but cannot be skipped for an
+  // identity-less connection or after the source-policy configuration is removed.
+  return true;
 }
 
 /** Enforces the owning agent ceiling for session creation and run-start targets. */

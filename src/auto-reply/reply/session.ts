@@ -14,6 +14,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import { conversationIdentityFromSessionEntry } from "../../config/sessions/conversation-identity.js";
 import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
+import { resolveSessionCreationVisibility } from "../../config/sessions/creation-visibility.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
@@ -611,6 +612,7 @@ async function initSessionStateAttemptLocked(
     ...baseEntry,
     ...preservedState,
     ...creationStamp,
+    ...(!entry ? resolveSessionCreationVisibility(cfg, sessionKey) : {}),
     sessionId,
     lifecycleRevision: isNewSession ? crypto.randomUUID() : baseEntry?.lifecycleRevision,
     updatedAt: retainPendingResetMarker

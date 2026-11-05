@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -13,6 +14,7 @@ import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../auto-reply/reply/session-fork.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
+import { resolveSessionCreationVisibility } from "../config/sessions/creation-visibility.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import {
   createSessionEntryWithTranscript,
@@ -98,6 +100,7 @@ import type {
   GatewaySessionCommitResult,
   PreparedGatewaySessionLifecycle,
 } from "./session-create-service.types.js";
+import { authorizeSessionSourceCreation } from "./session-create-source-access.js";
 import {
   readRequestedSessionCreateTarget,
   readSessionCreateTarget,
@@ -186,7 +189,7 @@ async function createGatewaySessionInScope(
   // Fresh account authority covers title generation and resource preparation,
   // not just the final row. An inherited parent pin is not a new selection.
   let validateRuntimeSelection: (() => ErrorShape | undefined) | undefined;
-  let validateVisibility: (() => ErrorShape | undefined) | undefined;
+  let validateCreationSharing: (() => ErrorShape | undefined) | undefined;
   let releaseRuntimeSelection: (() => void) | undefined;
   const assertCreationCurrent = resolveSessionCreationCommitGuard(params, {
     readOperatorAuthority: () => operatorAuthority,
@@ -199,7 +202,7 @@ async function createGatewaySessionInScope(
       assertPermissionDefaultCurrent?.();
     }
     // Creation restrictions end at commit; a later policy change cannot block this chat's turn.
-    const error = !createdTargetCommitted && validateVisibility?.();
+    const error = !createdTargetCommitted && validateCreationSharing?.();
     if (error) {
       throw new SessionMutationAuthorizationChangedError(error);
     }
@@ -667,6 +670,10 @@ async function createGatewaySessionInScope(
         // This callback owns generated and explicit keys alike; no existing row
         // is the canonical signal that this request will actually create one.
         if (!existingEntry) {
+          const sourceError = authorizeSessionSourceCreation(params, target.canonicalKey);
+          if (sourceError) {
+            return { ok: false, error: sourceError };
+          }
           const creationError = authorizeGatewaySessionCreation({
             cfg: params.cfg,
             agentId: target.agentId,
@@ -695,22 +702,64 @@ async function createGatewaySessionInScope(
         if (freshSessionError) {
           return freshSessionError;
         }
+        if (
+          params.access &&
+          existingEntry &&
+          JSON.stringify(params.access) !== JSON.stringify(existingEntry.access)
+        ) {
+          return invalidSessionRequest(
+            "sessions.create access requires a new session; use sessions.patch to manage an existing audience",
+          );
+        }
+        const creationCfg = params.getCurrentConfig?.() ?? params.cfg;
         const visibility = resolveSessionCreateVisibility(
-          params,
+          {
+            ...params,
+            cfg: creationCfg,
+            getCurrentConfig: () => creationCfg,
+            sessionKey: target.canonicalKey,
+          },
           existingEntry,
           currentParentSessionEntry,
         );
         if (!visibility.ok) {
           return visibility;
         }
-        if (!existingEntry && visibility.value) {
-          validateVisibility = () => {
+        const creationAccess =
+          params.access ??
+          resolveSessionCreationVisibility(
+            creationCfg,
+            target.canonicalKey,
+            currentParentSessionEntry,
+          ).access;
+        if (!existingEntry) {
+          validateCreationSharing = () => {
+            const currentCfg = params.getCurrentConfig?.() ?? params.cfg;
             const current = resolveSessionCreateVisibility(
-              params,
+              {
+                ...params,
+                cfg: currentCfg,
+                getCurrentConfig: () => currentCfg,
+                sessionKey: target.canonicalKey,
+              },
               undefined,
               currentParentSessionEntry,
             );
-            return current.ok ? undefined : current.error;
+            if (!current.ok) {
+              return current.error;
+            }
+            const currentAccess =
+              params.access ??
+              resolveSessionCreationVisibility(
+                currentCfg,
+                target.canonicalKey,
+                currentParentSessionEntry,
+              ).access;
+            // Reject a stale prepared audience before the writer can publish the row.
+            return current.value === visibility.value &&
+              isDeepStrictEqual(currentAccess, creationAccess)
+              ? undefined
+              : errorShape(ErrorCodes.INVALID_REQUEST, "session creation sharing policy changed");
           };
         }
         // Adoption of an existing key must not stamp provenance or emit a
@@ -813,6 +862,7 @@ async function createGatewaySessionInScope(
             ? buildSessionCreationStamp({ ...creation, sandbox: creationSandbox, incognito })
             : {}),
           ...(createdNewEntry && inheritedSpawnOwner ? { owner: inheritedSpawnOwner } : {}),
+          ...(createdNewEntry && creationAccess ? { access: creationAccess } : {}),
           ...(visibility.value && createdNewEntry ? { visibility: visibility.value } : {}),
           ...projectPreparedSessionWorkspace(existingEntry, {
             projectId,
@@ -1007,7 +1057,18 @@ async function createGatewaySessionInScope(
               requireWriteSuccess: true,
             }
           : {}),
-        commitGuard,
+        commitGuard: () => {
+          commitGuard?.();
+          if (createdNewEntry) {
+            const sourceError = authorizeSessionSourceCreation(
+              { ...params, cfg: params.getCurrentConfig?.() ?? params.cfg },
+              target.canonicalKey,
+            );
+            if (sourceError) {
+              throw new Error(sourceError.message);
+            }
+          }
+        },
         followRegistration,
         ...(bindPreparedCreation || params.bindSharingCreation
           ? {

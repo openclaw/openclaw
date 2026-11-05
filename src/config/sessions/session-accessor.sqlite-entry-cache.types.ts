@@ -70,6 +70,7 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
       ? {}
       : { repositoryWorkspaceId: entry.repositoryWorkspaceId }),
     visibility: entry.visibility,
+    access: entry.access ? structuredClone(entry.access) : undefined,
     incognito: entry.incognito,
     createdActor: entry.createdActor,
     owner: entry.owner ? { ...entry.owner, assignedBy: entry.owner.assignedBy } : undefined,

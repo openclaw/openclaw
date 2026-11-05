@@ -9,6 +9,8 @@ import {
   withOpenClawAgentDatabaseRuntime,
 } from "../../state/openclaw-agent-db.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { getRuntimeConfigSnapshot } from "../runtime-snapshot.js";
+import { resolveSessionCreationVisibility } from "./creation-visibility.js";
 import { prepareSessionMetaPatch } from "./metadata.js";
 import type {
   RecordInboundSessionMetaParams,
@@ -622,10 +624,13 @@ export async function recordInboundSessionMeta(
 ): Promise<SessionEntry | null> {
   normalizeInternalTurnContext(input.ctx);
   const metadata = prepareSessionMetaPatch(input);
+  const cfg = input.cfg ?? getRuntimeConfigSnapshot() ?? {};
   return await applySessionEntryOperation(
     { sessionKey: input.sessionKey, storePath: input.storePath },
     {
       kind: "inbound-metadata",
+      defaultVisibility: resolveSessionCreationVisibility(cfg, input.sessionKey).visibility,
+      defaultAccess: resolveSessionCreationVisibility(cfg, input.sessionKey).access,
       sessionKey: input.sessionKey,
       metadata,
       creation: buildInboundSessionCreationStamp(input.ctx),
@@ -677,6 +682,7 @@ export async function updateSessionLastRouteInScope(
     normalizeInternalTurnContext(params.ctx);
   }
   const createIfMissing = params.createIfMissing ?? true;
+  const cfg = params.cfg ?? getRuntimeConfigSnapshot() ?? {};
   const { source, ...routeGuard } = params.workerGuard ?? {};
   const commitGuard = sessionEntryCommitGuardOptions(
     source
@@ -687,6 +693,8 @@ export async function updateSessionLastRouteInScope(
     scope,
     {
       kind: "last-route",
+      defaultVisibility: resolveSessionCreationVisibility(cfg, scope.sessionKey).visibility,
+      defaultAccess: resolveSessionCreationVisibility(cfg, scope.sessionKey).access,
       route: {
         channel: params.channel,
         to: params.to,

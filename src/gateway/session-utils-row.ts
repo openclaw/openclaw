@@ -392,6 +392,7 @@ function projectSessionRowProfiles(
   const participants = [...projected].flatMap(([key, participant]) =>
     key === ownerKey ? [] : [participant],
   );
+  const count = participants.length || undefined;
   return {
     createdActor: projectSessionActor(
       resolveSessionCreatorActor(entry?.createdActor),
@@ -401,13 +402,9 @@ function projectSessionRowProfiles(
     ),
     owner,
     // Keep the released v4 summary stable; expanded identities are additive for newer clients.
-    participants: participants.length
-      ? participants.slice(0, SESSION_PARTICIPANT_LIMIT)
-      : undefined,
-    expandedParticipants: participants.length
-      ? participants.slice(0, MAX_SESSION_PARTICIPANTS)
-      : undefined,
-    participantCount: participants.length || undefined,
+    participants: count ? participants.slice(0, SESSION_PARTICIPANT_LIMIT) : undefined,
+    expandedParticipants: count ? participants.slice(0, MAX_SESSION_PARTICIPANTS) : undefined,
+    participantCount: count,
     archivedBy: projectSessionActor(entry?.archivedBy, userProfileIdentityById, cfg),
   };
 }
@@ -440,6 +437,8 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     // Only explicitly requested summaries may clear swarm state in event merges.
     ...(input.includeSwarmSummary ? { swarm: input.swarm } : {}),
     visibility: entry ? (entry.visibility ?? "shared") : undefined,
+    accessMode:
+      entry?.access?.mode ?? (input.cfg.session?.sharing?.accessPolicy ? "source" : undefined),
     incognito: entry?.incognito,
     swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,

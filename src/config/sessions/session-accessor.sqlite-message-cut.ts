@@ -8,6 +8,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { getRuntimeConfigSnapshot } from "../runtime-snapshot.js";
+import { resolveSessionCreationVisibility } from "./creation-visibility.js";
 import { invalidateSessionBranchCache } from "./session-accessor.sqlite-branches.js";
 import {
   commitSqliteSessionDeletion,
@@ -119,8 +121,17 @@ export async function mutateSqliteSessionAtMessage(
   const sourceKey = normalizeStoreSessionKey(params.sessionStoreKey ?? params.sessionKey);
   const targetKey =
     mode === "fork" ? normalizeStoreSessionKey(params.targetKey ?? params.sessionKey) : sourceKey;
+  const creationVisibility =
+    mode === "fork"
+      ? resolveSessionCreationVisibility(getRuntimeConfigSnapshot() ?? {}, targetKey).visibility
+      : undefined;
   const intent: SessionMessageCutIntent = {
     canonicalSourceKey,
+    creationVisibility,
+    creationAccess:
+      mode === "fork"
+        ? resolveSessionCreationVisibility(getRuntimeConfigSnapshot() ?? {}, targetKey).access
+        : undefined,
     creation: params.creation ? structuredClone(params.creation) : undefined,
     forkWorkspace: params.forkWorkspace ? structuredClone(params.forkWorkspace) : undefined,
     entryId: params.entryId,

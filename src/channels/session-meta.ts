@@ -20,6 +20,7 @@ export async function recordInboundSessionMetaSafe(params: {
   });
   try {
     await runtime.recordInboundSessionMeta({
+      cfg: params.cfg,
       storePath,
       sessionKey: params.sessionKey,
       ctx: params.ctx,

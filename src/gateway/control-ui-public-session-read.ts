@@ -1,6 +1,7 @@
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds } from "../agents/agent-scope-config.js";
+import { resolveSessionAccess } from "../config/sessions/session-access.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
@@ -230,6 +231,10 @@ function readAuthorizedTarget(
     return undefined;
   }
   const target = state.target;
+  const access = resolveSessionAccess(cfg, target.canonicalKey, target.entry);
+  if (access && access.mode !== "unrestricted") {
+    return undefined;
+  }
   const share = resolveSessionPublicShare(target.entry);
   if (
     target.canonicalKey !== locator.sessionKey ||

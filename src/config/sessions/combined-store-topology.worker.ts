@@ -19,6 +19,7 @@ export function readCombinedSessionStoreTopology(
     includeIncognito: false,
     discovery: { ...request.options.discovery, readCandidates: request.candidates },
   };
+  const prepared = prepareCombinedSessionStore(request.config, options);
   const agentIds = request.scopeAgentIds
     ? [
         ...new Set([
@@ -40,6 +41,10 @@ export function readCombinedSessionStoreTopology(
   const scopes = request.scopeAgentIds
     ? new Map(
         selections.map(([key, selection]): [string, ResolvedGatewaySessionStoreTargets | Error] => {
+          // Indexed discovery must use the same physical stores as the prepared rows.
+          if (key === "all") {
+            return [key, prepared.targets];
+          }
           try {
             return [
               key,
@@ -57,7 +62,7 @@ export function readCombinedSessionStoreTopology(
     : undefined;
   return {
     kind: "combined-store-topology",
-    prepared: prepareCombinedSessionStore(request.config, options),
+    prepared,
     ...(scopes ? { scopes } : {}),
   };
 }

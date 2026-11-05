@@ -1,7 +1,10 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -40,6 +43,7 @@ import {
   callQuestionRpc as call,
   installQuestionTestHooks,
   manager,
+  prepareQuestionSourceFixture,
   reloadSecrets,
   requesterAuthority,
   requestParams,
@@ -312,65 +316,91 @@ it.each([
 });
 
 it("rejects duplicate ids and admits a bounded rich single-option question at the request boundary", async () => {
-  const duplicate = await call("question.request", {
-    questions: [requestParams.questions[0], requestParams.questions[0]],
-  });
-  expect(duplicate[0]).toBe(false);
-  expect((duplicate[2] as { message: string }).message).toContain("duplicate question id");
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    setRuntimeConfigSnapshot({});
+    await prepareQuestionSourceFixture();
+    const duplicate = await call("question.request", {
+      questions: [requestParams.questions[0], requestParams.questions[0]],
+    });
+    expect(duplicate[0]).toBe(false);
+    expect((duplicate[2] as { message: string }).message).toContain("duplicate question id");
 
-  const oneOption = await call("question.request", {
-    ...requestParams,
-    id: "rich-question",
-    questions: [
-      {
-        ...requestParams.questions[0],
-        url: "https://example.test/connect",
-        allowEmpty: true,
-        presentation: "form",
-        options: [{ label: "Only", thumbnail: "https://example.com/only.png" }],
-      },
-    ],
-  });
-  expect(oneOption[0]).toBe(true);
-  const richQuestion = expect.objectContaining({
-    id: "rich-question",
-    questions: [expect.objectContaining({ url: "https://example.test/connect" })],
-  });
-  expect(broadcast).toHaveBeenCalledWith("question.requested", richQuestion, publicationOptions);
-  expect(await call("question.get", { id: "rich-question" })).toEqual([
-    true,
-    { question: richQuestion },
-    undefined,
-  ]);
-  expect(await call("question.list", {})).toEqual([true, { questions: [richQuestion] }, undefined]);
-  expect(
-    (
-      await call("question.resolve", {
-        id: "rich-question",
-        answers: { answers: { destination: [] } },
-      })
-    )[1],
-  ).toEqual({ status: "answered", answers: { answers: { destination: [] } } });
-  expect(
-    (
-      await call("question.request", {
-        questions: [
-          {
-            ...requestParams.questions[0],
-            options: [{ label: "Unsafe", thumbnail: "javascript:alert(1)" }],
-          },
-        ],
-      })
-    )[0],
-  ).toBe(false);
+    const oneOption = await call("question.request", {
+      ...requestParams,
+      id: "rich-question",
+      questions: [
+        {
+          ...requestParams.questions[0],
+          url: "https://example.test/connect",
+          allowEmpty: true,
+          presentation: "form",
+          options: [{ label: "Only", thumbnail: "https://example.com/only.png" }],
+        },
+      ],
+    });
+    expect(oneOption[0]).toBe(true);
+    const richQuestion = expect.objectContaining({
+      id: "rich-question",
+      questions: [expect.objectContaining({ url: "https://example.test/connect" })],
+    });
+    expect(broadcast).toHaveBeenCalledWith("question.requested", richQuestion, publicationOptions);
+    expect(await call("question.get", { id: "rich-question" })).toEqual([
+      true,
+      { question: richQuestion },
+      undefined,
+    ]);
+    expect(await call("question.list", {})).toEqual([
+      true,
+      { questions: [richQuestion] },
+      undefined,
+    ]);
+    expect(
+      (
+        await call("question.resolve", {
+          id: "rich-question",
+          answers: { answers: { destination: [] } },
+        })
+      )[1],
+    ).toEqual({ status: "answered", answers: { answers: { destination: [] } } });
+    expect(
+      (
+        await call("question.request", {
+          questions: [
+            {
+              ...requestParams.questions[0],
+              options: [{ label: "Unsafe", thumbnail: "javascript:alert(1)" }],
+            },
+          ],
+        })
+      )[0],
+    ).toBe(false);
 
-  const clientId = "duplicate-client-id";
-  expect((await call("question.request", { ...requestParams, id: clientId }))[0]).toBe(true);
-  const reusedId = await call("question.request", { ...requestParams, id: clientId });
-  expect(reusedId[0]).toBe(false);
-  expect(reusedId[2]).toMatchObject({
-    code: "INVALID_REQUEST",
-    details: { reason: "QUESTION_ID_IN_USE" },
+    const clientId = "duplicate-client-id";
+    expect((await call("question.request", { ...requestParams, id: clientId }))[0]).toBe(true);
+    const reusedId = await call("question.request", { ...requestParams, id: clientId });
+    expect(reusedId[0]).toBe(false);
+    expect(reusedId[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: { reason: "QUESTION_ID_IN_USE" },
+    });
+    manager.close();
+    await manager.drain();
+  });
+});
+
+it("rejects session-bound question creation without a canonical row", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    setRuntimeConfigSnapshot({});
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: requestParams.sessionKey }),
+    ).toBeUndefined();
+    expect(await call("question.request", { ...requestParams, id: "missing-source" })).toEqual([
+      false,
+      undefined,
+      { code: "FORBIDDEN", message: "Session is unavailable." },
+    ]);
+    expect(manager.get("missing-source")).toBeNull();
+    expect(broadcast).not.toHaveBeenCalled();
   });
 });
 
@@ -692,6 +722,7 @@ it("rejects masked env requests while preserving ordinary question host validati
     ).toMatchObject(invalidRequest);
     expect(manager.list()).toEqual([]);
     expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
+    await prepareQuestionSourceFixture();
     const ordinaryResponse = await call("question.request", requestParams);
     const ordinaryId = (ordinaryResponse[1] as { id: string }).id;
     expect(
@@ -834,30 +865,36 @@ it("keeps store-bound questions pending when the write service is unavailable", 
 });
 
 it("returns INVALID_REQUEST for answers that violate the stored question", async () => {
-  const requested = await call("question.request", {
-    ...requestParams,
-    questions: [
-      {
-        ...requestParams.questions[0],
-        options: [{ label: "Home" }, { label: "Office" }],
-        isOther: false,
-      },
-    ],
-  });
-  const id = (requested[1] as { id: string }).id;
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    setRuntimeConfigSnapshot({});
+    await prepareQuestionSourceFixture();
+    const requested = await call("question.request", {
+      ...requestParams,
+      questions: [
+        {
+          ...requestParams.questions[0],
+          options: [{ label: "Home" }, { label: "Office" }],
+          isOther: false,
+        },
+      ],
+    });
+    const id = (requested[1] as { id: string }).id;
 
-  const resolved = await call("question.resolve", {
-    id,
-    answers: { answers: { destination: ["Somewhere else"] } },
-  });
+    const resolved = await call("question.resolve", {
+      id,
+      answers: { answers: { destination: ["Somewhere else"] } },
+    });
 
-  expect(resolved[0]).toBe(false);
-  expect(resolved[2]).toMatchObject({
-    code: "INVALID_REQUEST",
-    message: expect.stringContaining("question 'destination'"),
-    details: { reason: "QUESTION_INVALID_ANSWER" },
+    expect(resolved[0]).toBe(false);
+    expect(resolved[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("question 'destination'"),
+      details: { reason: "QUESTION_INVALID_ANSWER" },
+    });
+    expect(manager.get(id)?.status).toBe("pending");
+    manager.close();
+    await manager.drain();
   });
-  expect(manager.get(id)?.status).toBe("pending");
 });
 
 it.each([

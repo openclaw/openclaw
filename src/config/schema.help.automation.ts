@@ -79,6 +79,17 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Allows suggest visibility. In this phase it enforces the same admission policy as read-only; suggestion queues are configured by a later feature. Default: true.",
   "session.sharing.drafts":
     "Allows draft visibility, which hides sessions from non-owner, non-admin operators. Default: true.",
+  "session.sharing.accessPolicy":
+    "Confidential source-aware read/write audience, separate from Draft visibility. Missing or unknown groups are creator/admin only; exact group rules use named Gateway profile IDs. Also applies to existing sessions without an explicit access override.",
+  "session.sharing.accessPolicy.default": "Creator/admin-only fallback; never an all-staff grant.",
+  "session.sharing.accessPolicy.groups":
+    "Exact per-agent/channel/account/group audience rules; profileIds are authorized enabled-staff profiles, peerAliases are explicitly approved migration IDs. Telegram topics inherit the exact chat audience. No category-wide grants.",
+  "session.sharing.creationDefaults":
+    "Opt-in creation policy: private Draft sessions unless an exact agent/channel/account/group peer is approved. Applies before initial publication, never retroactively.",
+  "session.sharing.creationDefaults.visibility":
+    'Private fallback for newly created conversations. Only "draft" is supported; Draft visibility must remain enabled.',
+  "session.sharing.creationDefaults.sharedGroups":
+    "Exact canonical group-route allowlist for automatic Shared creation. No wildcard, roster inference, or automatic agent access. Opaque topic IDs require their own peerId entry.",
   "session.maintenance":
     "Automatic session-store maintenance controls for dashboard archiving, pruning age, entry caps, reset archive retention, and disk budget cleanup. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
   "session.maintenance.mode":

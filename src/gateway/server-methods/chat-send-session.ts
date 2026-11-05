@@ -26,6 +26,7 @@ import {
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveTextCommand } from "../../auto-reply/commands-registry.js";
+import { resolveSessionCreationVisibility } from "../../config/sessions/creation-visibility.js";
 import {
   resolveSessionRoutingContract,
   SESSION_ROUTING_CHANGED_ERROR_REASON,
@@ -176,6 +177,7 @@ function chatSendPreparationConfig(
 // Preparing the canonical creator defaults does not itself persist a session.
 export async function prepareChatSendSessionEntry(params: {
   cfg: OpenClawConfig;
+  sessionKey: string;
   client: GatewayRequestHandlerOptions["client"];
   agentId: string;
   getRuntimeConfig: () => OpenClawConfig;
@@ -185,31 +187,29 @@ export async function prepareChatSendSessionEntry(params: {
   if (creationError) {
     throw new Error(creationError.message);
   }
-  const creation = await prepareSkillLibrarySessionCreation(
+  const stamp = await prepareSkillLibrarySessionCreation(
     client,
     getRuntimeConfig,
     resolveOperatorSessionCreation(client),
   );
-  const assertSkillSelection = () =>
-    assertPreparedSkillLibrarySelection(creation.skillLibrarySelections);
   const createdAt = Date.now();
-  // A caller's retry ID must never revive a retained transcript window.
-  const sessionId = randomUUID();
   return {
     entry: {
+      ...resolveSessionCreationVisibility(cfg, params.sessionKey),
       ...buildSessionCreationStamp({
-        ...creation,
-        sandbox: resolveCreatorSandbox(cfg, creation),
+        ...stamp,
+        sandbox: resolveCreatorSandbox(cfg, stamp),
         now: createdAt,
       }),
-      sessionId,
+      // A caller's retry ID must never revive a retained transcript window.
+      sessionId: randomUUID(),
       lifecycleRevision: randomUUID(),
       updatedAt: createdAt,
       sessionStartedAt: createdAt,
       lastInteractionAt: createdAt,
       chatType: "direct",
     },
-    assertSkillSelection,
+    assertSkillSelection: () => assertPreparedSkillLibrarySelection(stamp.skillLibrarySelections),
   };
 }
 
@@ -648,6 +648,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
   }
   const prepared = await prepareChatSendSessionEntry({
     cfg,
+    sessionKey,
     client,
     agentId,
     getRuntimeConfig: context.getRuntimeConfig,

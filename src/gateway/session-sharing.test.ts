@@ -4,6 +4,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readSessionMembersInWorker } from "../config/sessions/session-sharing-store.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerRpcSource } from "../sessions/session-controller.rpc-sources.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -103,7 +104,7 @@ describe("session sharing policy", () => {
         (await authorize({ ...admin, internal: { syntheticClient: true } })).error,
       ).toMatchObject({
         code: "FORBIDDEN",
-        message: "Session communication settings require a direct human request.",
+        message: "Session communication and access settings require a direct human request.",
       });
       const admitted = await authorize(creator);
       creator.authenticatedUserProfile = peer.authenticatedUserProfile;
@@ -890,5 +891,72 @@ describe("session sharing policy", () => {
       context,
     });
     expect(error).toBeNull();
+  });
+});
+
+it("separates confidential audience admission from roleless participation and explicit ceilings", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const owner = ensureProfileForEmail("ceiling-creator@example.test");
+    const selected = ensureProfileForEmail("ceiling-selected@example.test");
+    const outsider = ensureProfileForEmail("ceiling-outsider@example.test");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    const confidential = target({ type: "human", id: owner.id });
+    confidential.entry = {
+      ...confidential.entry,
+      visibility: "shared",
+      access: { mode: "audience", profileIds: [selected.id] },
+    };
+    for (const cap of [undefined, "write", "view", "invited", "none"] as const) {
+      const cfg: OpenClawConfig = cap
+        ? {
+            gateway: {
+              roles: {
+                default: "scoped",
+                definitions: {
+                  scoped: {
+                    agents: "*" as const,
+                    scopes: ["operator.read", "operator.write"],
+                    sessions: { others: cap === "invited" ? "view" : cap },
+                  },
+                },
+              },
+            },
+          }
+        : {};
+      if (cap === "invited") {
+        // @ts-expect-error Runtime invitation policy precedes config enum activation.
+        cfg.gateway!.roles!.definitions.scoped!.sessions.others = cap;
+      }
+      setRuntimeConfigSnapshot(cfg);
+      const admitted = authorizeSessionSharingTarget({
+        cfg,
+        target: confidential,
+        client: client({ user: selected.id }),
+        isMember: false,
+      });
+      if (cap === undefined || cap === "write") {
+        expect(admitted).toBeNull();
+      } else {
+        expect(admitted).not.toBeNull();
+      }
+      expect(
+        authorizeSessionSharingTarget({
+          cfg,
+          target: confidential,
+          client: client({ user: outsider.id }),
+          isMember: false,
+        }),
+      ).toMatchObject({ code: "INVALID_REQUEST" });
+      if (cap === "invited") {
+        expect(
+          authorizeSessionSharingTarget({
+            cfg,
+            target: confidential,
+            client: client({ user: selected.id }),
+            isMember: true,
+          }),
+        ).toBeNull();
+      }
+    }
   });
 });

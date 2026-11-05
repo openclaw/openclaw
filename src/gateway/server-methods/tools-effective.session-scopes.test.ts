@@ -1,8 +1,12 @@
 import { expect, test, vi } from "vitest";
 import type { ToolsEffectiveResult } from "../../../packages/gateway-protocol/src/schema/tools-catalog.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { CODEX_GITHUB_PREVIEW_UNAVAILABLE_NOTICE } from "../../agents/tools-effective-inventory-shared.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryCanonicalReplacements } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { gatewayRequest } from "../request-frame.test-support.js";
@@ -170,5 +174,104 @@ test("scoped tool previews preserve useful identities while withholding diagnost
       }),
     );
     expect(JSON.stringify(failed.respond.mock.calls)).not.toContain(privateDetail);
+  });
+});
+
+test("retains confidential materialized rows and rechecks audience before tool publication", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = {};
+    setRuntimeConfigSnapshot(cfg);
+    const creator = roleClient("view", "tools-confidential-creator");
+    const selected = roleClient("view", "tools-confidential-selected");
+    const outsider = roleClient("view", "tools-confidential-outsider");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    const sessionKey = "agent:main:confidential-tool-preview";
+    const scope = { agentId: "main", sessionKey };
+    await upsertSessionEntryCore(scope, {
+      sessionId: "confidential-tools",
+      updatedAt: 1,
+      visibility: "shared",
+      createdActor: {
+        type: "human",
+        source: "profile",
+        id: creator.authenticatedUserProfile!.profileId,
+      },
+      access: { mode: "audience", profileIds: [selected.authenticatedUserProfile!.profileId] },
+    });
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    const request = (client: typeof selected, key = sessionKey) => {
+      const respond = vi.fn();
+      const pending = handleGatewayRequest({
+        req: gatewayRequest("confidential-tools", "tools.effective", { sessionKey: key }),
+        client,
+        context,
+        respond,
+        isWebchatConnect: () => false,
+        extraHandlers: toolsEffectiveHandlers,
+      });
+      return { respond, pending };
+    };
+    inventoryMocks.resolveEffectiveToolInventory.mockResolvedValue(inventory);
+    for (const client of [creator, selected]) {
+      testing.resetToolsEffectiveCacheForTest();
+      const allowed = request(client);
+      await allowed.pending;
+      expect(allowed.respond).toHaveBeenCalledExactlyOnceWith(true, inventory, undefined);
+    }
+    for (const key of [sessionKey, "agent:main:missing-tool-preview"]) {
+      inventoryMocks.resolveEffectiveToolInventory.mockClear();
+      const denied = request(outsider, key);
+      await denied.pending;
+      expect(denied.respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("was not found"),
+        }),
+      );
+      expect(inventoryMocks.resolveEffectiveToolInventory).not.toHaveBeenCalled();
+    }
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    testing.resetToolsEffectiveCacheForTest();
+    inventoryMocks.resolveEffectiveToolInventory.mockImplementationOnce(async () => {
+      entered.resolve();
+      await resume.promise;
+      return inventory;
+    });
+    const pending = request(selected);
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        pending.pending,
+        "tool inventory did not enter",
+      );
+      await applySessionEntryCanonicalReplacements({
+        agentId: "main",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        sessionKeys: [sessionKey],
+        update: (rows) => ({
+          result: undefined,
+          replacements: rows.map((row) => ({
+            ...row,
+            previousSessionKeys: [],
+            accessMutation: true,
+            entry: { ...row.entry, access: { mode: "creator" as const } },
+          })),
+        }),
+      });
+    } finally {
+      resume.resolve();
+      await pending.pending;
+    }
+    expect(pending.respond).toHaveBeenCalledExactlyOnceWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("was not found"),
+      }),
+    );
   });
 });

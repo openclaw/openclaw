@@ -10,7 +10,7 @@ import type { SessionEntry, SessionProfileInvolvement } from "./types.js";
 
 export type SessionSharingExpectedEntry = Pick<
   SessionEntry,
-  "sessionId" | "createdActor" | "visibility" | "incognito"
+  "sessionId" | "createdActor" | "visibility" | "incognito" | "access"
 >;
 export type SessionMetadataExpectedEntry = SessionSharingExpectedEntry &
   Pick<SessionEntry, "lifecycleRevision">;

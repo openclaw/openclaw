@@ -11,7 +11,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toAgentStoreSessionKey } from "../routing/session-key.js";
 import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
-import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
+import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
@@ -22,21 +22,30 @@ import type {
   GatewayRequestContext,
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
+import { authorizeSessionSourceCreation } from "./session-create-source-access.js";
 import {
   isAgentRunStartMethod,
   isSessionArchiveMutation,
   isSessionProfileDependentMethod,
+  mayCreateSessionTarget,
 } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import {
+  authorizeIncognitoSessionTarget,
   authorizeOwnSessionMutation,
+  authorizeSessionAgentRun,
+  authorizeSessionSharingTarget,
+  hiddenSessionNotFound,
   isGatewayAdmin,
+  sharingIdentity,
   withSessionSharingTarget,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
+import { createSessionListEntryFilter } from "./session-sharing-read.js";
 import type {
   createSessionSharingConsumption,
   PreparedMutationSharing,
@@ -83,6 +92,116 @@ export type SessionMutationAuthorizationParams = {
   preparedProfiles?: PreparedSessionSharingProfiles;
 };
 
+/** Keep source creation, incognito, visibility, and current sharing checks on one policy path. */
+export function createSessionTargetPolicyAuthorizer(context: {
+  params: SessionMutationAuthorizationParams;
+  authorizesAgentRun: boolean;
+  authorizesRead: boolean;
+  targetOwnership: { requireOwner: boolean; ownerAction?: string };
+  sessionCap: (cfg: OpenClawConfig) => ReturnType<typeof operatorSessionCap> | undefined;
+  resolveMembership: (
+    target: SessionSharingTarget,
+    identityId: string | undefined,
+    members: readonly string[] | undefined,
+    projection: SessionRowProjection | undefined,
+  ) => boolean | undefined;
+}) {
+  const {
+    params,
+    authorizesAgentRun,
+    authorizesRead,
+    targetOwnership,
+    sessionCap,
+    resolveMembership,
+  } = context;
+  return (
+    targetRef: SessionMutationTarget,
+    target: SessionSharingTarget | null,
+    cfg: OpenClawConfig,
+    policy: ReturnType<ReturnType<typeof createSessionSharingConsumption>["policy"]>,
+    projection?: SessionRowProjection,
+    members?: readonly string[],
+    visibilityAuthorized?: boolean,
+  ) => {
+    if (!target && (mayCreateSessionTarget(params.method) || authorizesAgentRun)) {
+      const canonicalKey = resolveSessionMutationWriteRoute(cfg, targetRef).canonicalKey;
+      const sourceError = authorizeSessionSourceCreation(
+        {
+          cfg,
+          operatorRoleActor: params.client
+            ? resolveGatewayOperatorRoleActor(params.client)
+            : { kind: "system" },
+          requestingOperatorScopes: params.client?.connect?.scopes,
+        },
+        canonicalKey,
+      );
+      if (sourceError) {
+        // Messaging must not disclose whether a private channel target already exists.
+        return params.method === "sessions.send" || params.method === "sessions.steer"
+          ? hiddenSessionNotFound(canonicalKey)
+          : sourceError;
+      }
+    }
+    const error =
+      (target && authorizesAgentRun
+        ? authorizeSessionAgentRun(
+            { cfg, client: params.client, target },
+            policy ? { policy: policy.policy } : undefined,
+          )
+        : null) ??
+      authorizeIncognitoSessionTarget({
+        client: params.client,
+        sessionKey: targetRef.sessionKey,
+        target,
+      });
+    const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
+    const isMember = target
+      ? resolveMembership(target, identity?.id, members, projection)
+      : undefined;
+    const entryFilter = policy
+      ? policy.entryFilter
+      : createSessionListEntryFilter({ cfg, client: params.client });
+    if (target && !error) {
+      const visible = policy
+        ? policy.canReadTarget(target)
+        : entryFilter?.(target.canonicalKey, target.entry, isMember) !== false;
+      if (!visible) {
+        return hiddenSessionNotFound(target.canonicalKey);
+      }
+    }
+    if (
+      error ||
+      !target ||
+      (visibilityAuthorized ??
+        (VISIBILITY_AUTHORIZED_METHODS.has(params.method) &&
+          ((policy ? policy.sessionCap : sessionCap(cfg)) ?? "write") === "write"))
+    ) {
+      return error;
+    }
+    if (authorizesRead) {
+      const visible = policy
+        ? policy.canReadTarget(target)
+        : entryFilter?.(target.storeKey, target.entry, isMember) !== false;
+      return visible ? null : hiddenSessionNotFound(target.canonicalKey);
+    }
+    return policy
+      ? authorizeSessionSharingTarget(
+          { cfg, client: params.client, target, ...targetOwnership },
+          {
+            value: policy.sessionCap,
+            role: policy.roleForTarget(target),
+          },
+        )
+      : authorizeSessionSharingTarget({
+          cfg,
+          client: params.client,
+          target,
+          ...targetOwnership,
+          isMember,
+        });
+  };
+}
+
 export function prepareSessionMutationAuthorizationRequest(
   request: SessionMutationAuthorizationParams,
 ) {
@@ -118,19 +237,23 @@ export function prepareSessionMutationAuthorizationRequest(
     params.method === "sessions.patchMany" && isRecord(params.requestParams)
       ? params.requestParams.patch
       : params.requestParams;
+  const requiresAccessAuthority =
+    ["sessions.create", "sessions.patch", "sessions.patchMany"].includes(params.method) &&
+    isRecord(patch) &&
+    Object.hasOwn(patch, "access");
   const requiresCommunicationAuthority =
     ["sessions.create", "sessions.patch", "sessions.patchMany"].includes(params.method) &&
     isRecord(patch) &&
     Object.hasOwn(patch, "communication");
   if (
-    requiresCommunicationAuthority &&
+    (requiresCommunicationAuthority || requiresAccessAuthority) &&
     (!params.client || isSyntheticGatewayCaller(params.client))
   ) {
     return {
       ok: false as const,
       error: errorShape(
         ErrorCodes.FORBIDDEN,
-        "Session communication settings require a direct human request.",
+        "Session communication and access settings require a direct human request.",
       ),
     };
   }
@@ -159,14 +282,20 @@ export function prepareSessionMutationAuthorizationRequest(
     requiresSessionFacts:
       !adminBypass ||
       requiresCommunicationAuthority ||
+      requiresAccessAuthority ||
       bindsProgressLifecycle ||
       bindsTalkTarget ||
       params.expectedTarget !== undefined,
     targetOwnership: {
       requireOwner:
         requiresCommunicationAuthority ||
+        requiresAccessAuthority ||
         isSessionArchiveMutation(params.method, params.requestParams),
-      ownerAction: requiresCommunicationAuthority ? "change communication settings" : undefined,
+      ownerAction: requiresAccessAuthority
+        ? "change confidential access"
+        : requiresCommunicationAuthority
+          ? "change communication settings"
+          : undefined,
     },
   };
 }

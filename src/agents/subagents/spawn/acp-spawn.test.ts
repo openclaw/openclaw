@@ -11,6 +11,7 @@ import { createExecutionIdentityAdmissionToken } from "../../../audit/execution-
 import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import { getLoadedChannelPluginForRead } from "../../../channels/plugins/registry-loaded.js";
 import type { ChannelPlugin } from "../../../channels/plugins/types.public.js";
+import { canReadSessionAccess } from "../../../config/sessions/session-access.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../../../config/types.agent-defaults.js";
 import type { AgentEntryConfig } from "../../../config/types.agents.js";
@@ -410,6 +411,37 @@ function trackActiveAcpTurn(sessionKey: string, ownerSessionKey: string) {
 }
 
 describe("spawnAcpDirect", () => {
+  it.each(["disabled", "source", "private parent"] as const)(
+    "child confidentiality is opt-in for ACP spawn: %s",
+    async (mode) => {
+      if (mode === "source") {
+        hoisted.state.cfg.session = {
+          ...hoisted.state.cfg.session,
+          sharing: { accessPolicy: { default: "creator" } },
+        };
+      }
+      const parent = "agent:main:dashboard:opt-in-parent";
+      configureParentDelivery(parent, {
+        visibility: "shared",
+        ...(mode === "private parent"
+          ? { access: { mode: "audience", profileIds: ["selected"] } }
+          : {}),
+      });
+      const { childSessionKey } = expectAcceptedSpawn(
+        await spawn({ mode: "run" }, { agentSessionKey: parent }),
+      );
+      const call = hoisted.upsertSessionEntryMock.mock.calls.find(
+        ([scope]) => scope.sessionKey === childSessionKey,
+      );
+      const entry = expectDefined(call, "child creation write")[1] as SessionEntry;
+      expect(entry.access).toEqual(
+        mode === "disabled" ? undefined : { mode: mode === "source" ? "source" : "creator" },
+      );
+      expect(canReadSessionAccess(hoisted.state.cfg, childSessionKey, entry, () => false)).toBe(
+        mode === "disabled",
+      );
+    },
+  );
   it.each([
     { agent: "codex", exists: true, denied: false },
     { agent: "claude-code", exists: true, denied: false },

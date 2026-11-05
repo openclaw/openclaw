@@ -11,6 +11,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import {
   clearAgentRunContext,
@@ -389,4 +390,60 @@ it("updates personal membership after owner, participant, and archive publicatio
     await expectMembership(["owned", "participant", "reassigned"], [count(ada, 2), count(bob, 1)]);
     await patchSessionEntryCore(mainScope("participant"), () => ({ archivedAt: 20 }));
     await expectMembership(["owned", "reassigned"], [count(ada, 2)]);
+  }));
+
+it("revokes a source-bound audience before the next cached list without using Draft", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const creator = ensureProfileForEmail("acl-creator@example.test").id;
+    const selected = ensureProfileForEmail("acl-selected@example.test").id;
+    const outsider = ensureProfileForEmail("acl-outsider@example.test").id;
+    const rule = {
+      agentId: "main",
+      channel: "telegram",
+      peerId: "-100123",
+      profileIds: [selected],
+    };
+    const config = {
+      agents: { entries: { main: {} } },
+      gateway: {
+        roles: {
+          default: "staff",
+          definitions: {
+            staff: {
+              agents: ["main"],
+              scopes: ["operator.read", "operator.write"],
+              sessions: { others: "write" as const },
+            },
+          },
+        },
+      },
+      session: { sharing: { accessPolicy: { default: "creator", groups: [rule] } } },
+    } satisfies OpenClawConfig;
+    setRuntimeConfigSnapshot(config);
+    const context = requestContext(config);
+    const sessionKey = "agent:main:telegram:group:-100123:topic:7";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey },
+      {
+        ...profileEntry("confidential", Date.now(), creator),
+        visibility: "shared",
+        access: { mode: "source" },
+      },
+    );
+    const member = identifiedClient(selected);
+    const other = identifiedClient(outsider);
+    const own = identifiedClient(creator);
+    const read = (client: typeof member) =>
+      listSessions({ client, context, request: { archived: "all", limit: 100 } });
+    expect((await read(member)).sessions.map((row) => row.key)).toEqual([sessionKey]);
+    expect((await read(other)).sessions).toEqual([]);
+    // Publish the same-object policy edit through its owner before reusing the list cache.
+    rule.profileIds = [];
+    setRuntimeConfigSnapshot(config);
+    expect((await read(member)).sessions).toEqual([]);
+    expect((await read(other)).sessions).toEqual([]);
+    expect((await read(own)).sessions.map((row) => row.key)).toEqual([sessionKey]);
+    rule.profileIds = [selected];
+    setRuntimeConfigSnapshot(config);
+    expect((await read(member)).sessions.map((row) => row.key)).toEqual([sessionKey]);
   }));

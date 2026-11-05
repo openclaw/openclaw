@@ -19,6 +19,7 @@ it.each(["list", "prepared-list", "status", "run"] as const)(
         getPluginRuntimeGatewayRequestScope()?.context,
         "local Gateway context",
       );
+      await context.ensureSessionRowProjection?.();
       const partition = {
         storeKey: `/old/${"state-directory/".repeat(30)}cron/jobs.json`,
         jobs: 3,
@@ -85,6 +86,7 @@ it("lists compact attention facts without automation definitions", async () => {
       getPluginRuntimeGatewayRequestScope()?.context,
       "local Gateway context",
     );
+    await context.ensureSessionRowProjection?.();
     const autoDisabled = {
       reason: "consecutive-failures" as const,
       atMs: 1_788_587_495_278,

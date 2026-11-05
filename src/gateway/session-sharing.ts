@@ -20,8 +20,8 @@ import type { SessionMutationAuthorization } from "./server-methods/types.js";
 import * as methods from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import type { SessionRowProjection } from "./session-row-projection.js";
 import {
+  createSessionTargetPolicyAuthorizer,
   expectedSessionMutationTargetError,
   createSessionCreationAuthorizationRecorder,
   assertSessionMutationProjectionCurrent,
@@ -32,7 +32,6 @@ import {
   resolveSessionMutationWriteRoute,
   resolveOwnSessionProfileAuthorization,
   sessionMutationTargetChanged,
-  VISIBILITY_AUTHORIZED_METHODS,
   type AuthorizedSessionMutationTarget,
   type SessionMutationAuthorizationParams,
 } from "./session-sharing-authorization.js";
@@ -40,11 +39,9 @@ import * as sessionSharingDescribe from "./session-sharing-describe.js";
 import {
   authorizeIncognitoSessionTarget,
   authorizeOwnSessionMutation,
-  authorizeSessionAgentRun,
-  authorizeSessionSharingTarget,
   hiddenSessionNotFound,
-  resolveIncognitoSessionSharingTarget,
   sharingIdentity,
+  resolveIncognitoSessionSharingTarget,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
@@ -133,64 +130,14 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     consuming.sharing || consuming.profiles
       ? preparedPolicy(cfg)?.sessionCap
       : operatorSessionCap(params.client, cfg);
-  const authorizeTargetPolicy = (
-    targetRef: SessionMutationTarget,
-    target: SessionSharingTarget | null,
-    cfg: OpenClawConfig,
-    policy: ReturnType<typeof preparedPolicy>,
-    projection?: SessionRowProjection,
-    members?: readonly string[],
-  ) => {
-    const error =
-      (target && authorizesAgentRun
-        ? authorizeSessionAgentRun(
-            { cfg, client: params.client, target },
-            policy ? { policy: policy.policy } : undefined,
-          )
-        : null) ??
-      authorizeIncognitoSessionTarget({
-        client: params.client,
-        sessionKey: targetRef.sessionKey,
-        target,
-      });
-    if (
-      error ||
-      !target ||
-      (VISIBILITY_AUTHORIZED_METHODS.has(params.method) &&
-        ((policy ? policy.sessionCap : sessionCap(cfg)) ?? "write") === "write")
-    ) {
-      return error;
-    }
-    const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
-    if (authorizesRead) {
-      const entryFilter = policy
-        ? policy.entryFilter
-        : createSessionListEntryFilter({ cfg, client: params.client });
-      const visible = policy
-        ? policy.canReadTarget(target)
-        : entryFilter?.(
-            target.storeKey,
-            target.entry,
-            resolveSessionSharingMembership(target, identity?.id, members, projection),
-          ) !== false;
-      return !visible ? hiddenSessionNotFound(target.canonicalKey) : null;
-    }
-    return policy
-      ? authorizeSessionSharingTarget(
-          { cfg, client: params.client, target, ...targetOwnership },
-          {
-            value: policy.sessionCap,
-            role: policy.roleForTarget(target),
-          },
-        )
-      : authorizeSessionSharingTarget({
-          cfg,
-          client: params.client,
-          target,
-          ...targetOwnership,
-          isMember: resolveSessionSharingMembership(target, identity?.id, members, projection),
-        });
-  };
+  const authorizeTargetPolicy = createSessionTargetPolicyAuthorizer({
+    params,
+    authorizesAgentRun,
+    authorizesRead,
+    targetOwnership,
+    sessionCap,
+    resolveMembership: resolveSessionSharingMembership,
+  });
   const resolveAuthorizedTarget = (targetRef: SessionMutationTarget) => {
     if (params.preparedTargets) {
       const retained = findPreparedSharingTarget(params, targetRef);
@@ -317,7 +264,8 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     ) {
       return { error: hiddenSessionNotFound(targetRef.sessionKey) };
     }
-    const policy = preparedPolicy(getPolicyConfig());
+    const cfg = getPolicyConfig();
+    const policy = preparedPolicy(cfg);
     const error =
       expectedSessionMutationTargetError(params.expectedTarget, target, params.method) ??
       authorizeOwnSessionMutation({
@@ -329,7 +277,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       authorizeTargetPolicy(
         targetRef,
         target,
-        getPolicyConfig(),
+        cfg,
         policy,
         "projection" in resolved ? resolved.projection : undefined,
       );
@@ -492,9 +440,6 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     if (ownershipError) {
       throw new SessionMutationAuthorizationChangedError(ownershipError);
     }
-    if (!current) {
-      return;
-    }
     const error = authorizeTargetPolicy(
       targetRef,
       current,
@@ -506,7 +451,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     if (error) {
       throw new SessionMutationAuthorizationChangedError(error);
     }
-    if (bindSessionIdentity) {
+    if (bindSessionIdentity && current) {
       admittedInput.bindCurrentEffect();
     }
   };

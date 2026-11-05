@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
+import { resolveSessionCreationVisibility } from "../../config/sessions/creation-visibility.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import { loadReplySessionInitializationSnapshot } from "../../config/sessions/session-accessor.js";
@@ -166,6 +167,7 @@ export async function initFastReplySessionState(params: {
         }
       : {}),
     ...resetPreservedSelection,
+    ...(!existingEntry ? resolveSessionCreationVisibility(cfg, sessionKey) : {}),
     updatedAt: now,
     sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),
     lastInteractionAt: now,

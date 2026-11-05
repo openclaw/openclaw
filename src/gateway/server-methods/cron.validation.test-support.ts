@@ -23,6 +23,12 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import {
+  bindSessionRowProjection,
+  getSessionRowProjection,
+} from "../session-row-projection-access.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type MutationOptions = {
@@ -293,7 +299,8 @@ export function createCronCallerClient(
   }
   return {
     connect: {} as GatewayClient["connect"],
-    internal: { agentRuntimeIdentity: identity },
+    // This fixture models a host-owned runtime, not an authenticated human reader.
+    internal: { agentRuntimeIdentity: identity, operatorRoleActor: { kind: "system" } },
   };
 }
 
@@ -317,6 +324,12 @@ export function createCronTestInvoker(
   ) {
     const context = options.context ?? createCronTestContext(options.currentJob, getRuntimeConfig);
     const respond = options.respond ?? vi.fn();
+    // Raw writers own fail-fast database admission before any session-row read.
+    if (method !== "cron.add" && method !== "cron.update" && method !== "wake") {
+      const readContext = createDirectChatContext({ getRuntimeConfig: context.getRuntimeConfig });
+      await initializeSessionReadContext(readContext);
+      bindSessionRowProjection(context, () => getSessionRowProjection(readContext));
+    }
     await expectDefined(
       handlers[method],
       "cronHandlers[method] test invariant",

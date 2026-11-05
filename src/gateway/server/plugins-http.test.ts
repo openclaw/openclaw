@@ -511,13 +511,8 @@ describe("plugin HTTP authenticated session reads", () => {
           key: sessionKey("shared"),
           sharingRole: "viewer",
         });
-        // Discovery always hides foreign drafts. Existing no-roles deployments
-        // still allow an explicitly addressed draft; named roles return a null row.
-        await expectSession(
-          dispatch,
-          "foreign-draft",
-          roles ? null : { key: sessionKey("foreign-draft"), sharingRole: "viewer" },
-        );
+        // Confidential Drafts stay hidden from an authenticated outsider without named roles too.
+        await expectSession(dispatch, "foreign-draft", null);
         expect(
           await dispatch("sessions.describe", "agent:main:dashboard:incognito-http-reader"),
         ).toMatchObject({ ok: false });

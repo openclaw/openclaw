@@ -16,6 +16,8 @@ import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
 } from "../../commands/doctor/cron/legacy-repair.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { cronRunLogEntryToDetail } from "../../cron/run-history-detail.js";
 import { CronService } from "../../cron/service.js";
@@ -1619,6 +1621,7 @@ describe("cron method validation", () => {
   });
 
   it("projects declaration metadata and existing run and delivery state in compact lists", async () => {
+    setRuntimeConfig({ agents: { entries: { main: {}, ops: {} } } });
     const job = createCronJob({
       declarationKey: "daily-report",
       displayName: "Daily report",
@@ -1636,6 +1639,18 @@ describe("cron method validation", () => {
       },
     });
     const context = createCronContext(job);
+    const missing = await invokeCron("cron.list", { compact: true }, { context });
+    expectCronReply(missing.respond, expect.objectContaining({ jobs: [], total: 0 }));
+    await upsertSessionEntryCore(
+      {
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        storePath: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+          agentId: "ops",
+        }),
+      },
+      { sessionId: "declaration-owner", updatedAt: 1, visibility: "shared" },
+    );
     const { respond } = await invokeCron("cron.list", { compact: true }, { context });
 
     expectCronReply(

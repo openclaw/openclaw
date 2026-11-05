@@ -1,6 +1,7 @@
 import { expect, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { dismissTaskSuggestion, listTaskSuggestions } from "../task-suggestion-registry.js";
 import { taskSuggestionsHandlers } from "./task-suggestions.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -39,12 +40,12 @@ export function requirePayload(result: Awaited<ReturnType<typeof call>>): unknow
   return result.response?.[1];
 }
 
-export async function dismissPendingTaskSuggestions(): Promise<void> {
-  const listed = await call("taskSuggestions.list", {});
-  const payload = requirePayload(listed) as { suggestions: Array<{ id: string }> };
-  for (const suggestion of payload.suggestions) {
-    await call("taskSuggestions.dismiss", { taskId: suggestion.id });
+export function dismissPendingTaskSuggestions(): Promise<void> {
+  // The source fixture may be disposed; cleanup owns registry state, not RPC access.
+  for (const suggestion of listTaskSuggestions({})) {
+    expect(dismissTaskSuggestion(suggestion.id)).toBe(true);
   }
+  return Promise.resolve();
 }
 
 export const operatorClient = (): GatewayClient => ({

@@ -10,6 +10,7 @@ import {
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../../../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { resolveSessionCreationVisibility } from "../../../config/sessions/creation-visibility.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
@@ -496,6 +497,7 @@ export async function spawnAcpDirect(
           { storePath, sessionKey, agentId: ownerAgentId },
           {
             ...creation.stamp,
+            ...resolveSessionCreationVisibility(cfg, sessionKey, parentEntry),
             spawnedBy: requesterInternalKey,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
             // Navigation parent is stamped at creation so the durable tree edge

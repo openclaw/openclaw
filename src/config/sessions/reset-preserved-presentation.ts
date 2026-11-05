@@ -10,6 +10,7 @@ export function preserveResetSessionPresentation(entry: SessionEntry | undefined
     boardFace: entry?.boardFace,
     boardPresentation: entry?.boardPresentation,
     visibility: entry?.visibility,
+    access: entry?.access,
     displayName: entry?.displayName,
     pinnedAt: entry?.pinnedAt,
     sidebarRoot: entry?.sidebarRoot,

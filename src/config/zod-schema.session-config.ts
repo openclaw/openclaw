@@ -67,6 +67,49 @@ export const SessionSchema = z
         readOnly: z.boolean().optional(),
         suggest: z.boolean().optional(),
         drafts: z.boolean().optional(),
+        accessPolicy: z
+          .strictObject({
+            default: z.literal("creator"),
+            groups: z
+              .array(
+                z.strictObject({
+                  agentId: z.string().trim().min(1),
+                  channel: z.string().trim().min(1),
+                  accountId: z.string().trim().min(1).optional(),
+                  chatType: z.enum(["group", "channel"]).optional(),
+                  peerId: z.string().trim().min(1),
+                  peerAliases: z.array(z.string().trim().min(1)).optional(),
+                  profileIds: z.array(z.string().trim().min(1)).max(1000),
+                }),
+              )
+              .optional(),
+          })
+          .optional(),
+        creationDefaults: z
+          .strictObject({
+            visibility: z.literal("draft"),
+            sharedGroups: z
+              .array(
+                z.strictObject({
+                  agentId: z.string().trim().min(1),
+                  channel: z.string().trim().min(1),
+                  chatType: z.enum(["group", "channel"]).optional(),
+                  accountId: z.string().trim().min(1).optional(),
+                  peerId: z.string().trim().min(1),
+                }),
+              )
+              .optional(),
+          })
+          .optional(),
+      })
+      .superRefine((sharing, ctx) => {
+        if (sharing.creationDefaults && sharing.drafts === false) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["drafts"],
+            message: "creationDefaults requires Draft visibility to remain enabled",
+          });
+        }
       })
       .optional(),
     maintenance: z

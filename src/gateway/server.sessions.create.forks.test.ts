@@ -14,7 +14,6 @@ import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/sessi
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import type { SessionCatalogProvider } from "../plugins/session-catalog.js";
 import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,
@@ -24,8 +23,10 @@ import { createReplyOperation } from "../sessions/session-controller.operation.j
 import {
   setupSessionCreateTestHarness,
   requireNonEmptyString,
+  installSessionCatalog,
 } from "./server.sessions.create.test-support.js";
 import type { GatewaySessionCommitResult } from "./session-create-service.types.js";
+import { roleClient } from "./session-sharing.test-utils.js";
 import { agentDiscoveryMock, testState, writeSessionStore } from "./test-helpers.js";
 import { createClaudeCliRegistrationFixture } from "./test-helpers.plugin-registry.js";
 import {
@@ -150,12 +151,18 @@ test("sessions.create forks the parent transcript into the new session", async (
   const { dir, storePath } = await createSessionStoreDir();
   testState.sessionConfig = { scope: "per-sender" };
   const parent = await createCompactedSessionFixture(dir);
+  const creator = roleClient("write", "transcript-fork-creator");
+  const creatorProfileId = requireNonEmptyString(
+    creator.authenticatedUserProfile?.profileId,
+    "fork creator profile",
+  );
   const projectRoot = path.join(dir, "qa-writer");
   await fs.mkdir(projectRoot);
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(parent.sessionId, {
         visibility: "draft",
+        createdActor: { type: "human", source: "profile", id: creatorProfileId },
         sessionFile: parent.sessionFile,
         projectId: "qa-writer",
         spawnedCwd: projectRoot,
@@ -190,12 +197,16 @@ test("sessions.create forks the parent transcript into the new session", async (
       totalTokens?: number;
       totalTokensFresh?: boolean;
     };
-  }>("sessions.create", {
-    agentId: "main",
-    parentSessionKey: "main",
-    key: "agent:main:dashboard:fork-publication",
-    fork: true,
-  });
+  }>(
+    "sessions.create",
+    {
+      agentId: "main",
+      parentSessionKey: "main",
+      key: "agent:main:dashboard:fork-publication",
+      fork: true,
+    },
+    { client: creator },
+  );
 
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
@@ -265,8 +276,18 @@ test("sessions.create forks the parent transcript into the new session", async (
       key: string;
       forkedFromParent?: boolean;
     }>;
-  }>("sessions.list", {});
-  expect(listed.payload?.sessions?.find((row) => row.key === key)?.forkedFromParent).toBe(true);
+  }>("sessions.list", {}, { client: creator });
+  expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
+  const listedFork = listed.payload?.sessions?.find((row) => row.key === key);
+  expect(listedFork).toBeDefined();
+  expect(listedFork?.forkedFromParent).toBe(true);
+  const hidden = await directSessionReq<{ sessions: Array<{ key: string }> }>(
+    "sessions.list",
+    {},
+    { client: roleClient("write", "transcript-fork-outsider") },
+  );
+  expect(hidden.ok, JSON.stringify(hidden.error)).toBe(true);
+  expect(hidden.payload?.sessions.some((row) => row.key === key)).toBe(false);
   testState.sessionConfig = undefined;
 });
 
@@ -547,28 +568,6 @@ type CreatedSession = Pick<
   "key" | "entry" | "resolved"
 > & { sessionId: string };
 
-function installSessionCatalog(
-  resolveCreateSession: NonNullable<SessionCatalogProvider["resolveCreateSession"]>,
-  cli = false,
-) {
-  const registry = createEmptyPluginRegistry();
-  if (cli) {
-    registry.cliBackends.push(createClaudeCliRegistrationFixture());
-  }
-  registry.sessionCatalogs.push({
-    pluginId: "anthropic",
-    source: "test",
-    provider: {
-      id: "claude",
-      label: "Claude Code",
-      resolveCreateSession,
-      list: vi.fn(async () => []),
-      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
-    },
-  });
-  setActivePluginRegistry(registry);
-}
-
 test.each(["cli", "enabled", "disabled"] as const)(
   "sessions.create resolves a catalog target server-side with a %s harness",
   async (harness) => {
@@ -602,7 +601,10 @@ test.each(["cli", "enabled", "disabled"] as const)(
       model: "anthropic/claude-opus-4-8",
       agentRuntime,
     }));
-    installSessionCatalog(resolveCreateSession, harness === "cli");
+    installSessionCatalog(
+      resolveCreateSession,
+      harness === "cli" ? createClaudeCliRegistrationFixture() : undefined,
+    );
     testState.sessionConfig = { dmScope: "main" };
     await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent-catalog") } });
 

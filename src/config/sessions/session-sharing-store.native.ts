@@ -56,9 +56,10 @@ function assertAuthorizedSessionInstance(
           sessionId: entry.sessionId,
           createdActor: entry.createdActor,
           visibility: entry.visibility,
+          access: entry.access,
           incognito: entry.incognito,
         },
-        expectedEntry,
+        { ...expectedEntry, access: expectedEntry.access },
       )
     ) {
       throw new Error("session ownership changed before sharing mutation");

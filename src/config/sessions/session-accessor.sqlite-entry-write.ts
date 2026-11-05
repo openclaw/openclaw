@@ -80,6 +80,8 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionEntryWriteOptions = {
   allowStoredAliases?: boolean;
+  /** Set only by the current-row, authorized confidential access owner. */
+  accessMutation?: boolean;
   /** Only the personal involvement owner may replace this logical-node state. */
   profileInvolvement?: SessionEntry["profileInvolvement"];
   /** Only the provider review owner may replace a generation-bound pause. */

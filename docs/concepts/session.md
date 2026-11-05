@@ -97,6 +97,110 @@ Stopping with `/stop`, deleting, resetting, or archiving a session cancels only 
 the selected conversation. Another agent's active turn and queued messages are
 preserved even when the agents use the same session key.
 
+## Confidential sessions on multi-user Gateways
+
+Routing (`dmScope`), confidential access, and visual/collaboration mode (`visibility`)
+are independent. Configure source-aware access without using Draft as a privacy workaround:
+
+```json5
+{
+  session: {
+    dmScope: "per-account-channel-peer",
+    sharing: {
+      accessPolicy: {
+        default: "creator",
+        groups: [
+          {
+            agentId: "main",
+            channel: "telegram",
+            peerId: "-1001234567890",
+            peerAliases: ["-123456789"],
+            profileIds: ["profile-selected-staff"],
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+All identifiers above are synthetic placeholders. Supply each work chat's explicitly
+authorized audience as canonical Gateway profile IDs. An operator may choose historical
+archive message authors matched to enabled staff as that audience; this is an explicit
+policy decision, not evidence of current Telegram membership. Categories, names,
+participation members and `work_internal` never mean all staff. There are no special
+team-wide chat exceptions.
+
+Rules match canonical agent/channel/account/chat-type/peer IDs, never mutable
+`origin` or a guessed creator. `accountId` omission matches only an account-less route;
+`chatType` defaults to `group`. Explicit `peerAliases` handle migration IDs. Telegram
+numeric `:topic:<id>` and `:thread:<id>` descendants use the same chat audience.
+Unknown groups, DMs (including account-specific DMs), web chats, children, personal
+agents without an exact rule, and ambiguous duplicate rules fail closed to creator/admin.
+Use per-peer routing: access control cannot split several people's conversations already
+routed into a single key. Missing verified creator attribution is admin-only, not an
+invitation to infer identity from names.
+
+New entries atomically persist `access: {mode: "source"}` before their first publication.
+Source-bound access resolves the current configuration at disclosure/mutation time:
+removing a profile or rule revokes the next read, write and event. Removing the whole
+setting leaves persisted source-bound sessions creator/admin-only. The setting also
+restricts existing entries with no explicit `access` field, without rewriting their rows.
+An explicit per-session access policy takes precedence. Existing Drafts stay Draft;
+their membership remains inactive until their creator/admin separately changes visibility.
+Incognito guarantees, creator/admin authority, role ceilings and agent ceilings are unchanged.
+A named audience restricts access; it does not grant an otherwise disallowed agent or scope.
+When this policy is enabled, only trusted channel ingress or an authenticated gateway
+administrator can initially create a channel-shaped session key. Web operators, including
+selected audience members, cannot preclaim a group/DM key and acquire creator authority;
+they can create ordinary web sessions or access an existing authorized channel session.
+
+### Manage a single confidential audience
+
+Direct authenticated creators/admins can pass `access` to `sessions.create`, or use
+`sessions.patch` / `sessions.patchMany` with `expectedSessionId` for existing sessions:
+
+```json
+{
+  "key": "agent:main:dashboard:example",
+  "expectedSessionId": "current-session-id",
+  "access": { "mode": "audience", "profileIds": ["profile-selected-staff"] }
+}
+```
+
+Modes are `creator` (creator/admin only), `audience` (creator/admin plus named profiles),
+`source` (live configured source policy, creator-only if absent), and `unrestricted`
+(explicitly restore legacy role/visibility-based discovery). Omitting `access` preserves
+it. Participation members do not override confidentiality. Nonmembers cannot change
+access; selected participants cannot widen their audience. Session rows expose only
+`accessMode`, not the confidential profile roster. Confidential sessions cannot be
+publicly published; an old bearer share stops resolving while access is restrictive.
+
+### Visual creation defaults (optional compatibility)
+
+`session.sharing.creationDefaults: {visibility: "draft", sharedGroups: [...]}` remains
+an independent opt-in visual default. Its exact route allowlist sets initial Shared
+visibility only; it never overrides confidential `accessPolicy`. An explicit authorized
+`sessions.create.visibility` wins over this visual default, not over the access ACL.
+`drafts: false` cannot be combined with the Draft creation setting. Omit visual defaults
+for ordinary-looking confidential chats; do not globally redefine Draft.
+
+### Rollout and rollback
+
+Validate the reviewed build and synthetic creator/selected/nonmember/admin checks before
+live activation. Keep temporary containment and existing Draft migration until initial
+creation, cached discovery, direct history/search/events, mutation and revocation pass
+on the deployed candidate. Configuration affects existing source-bound/unset policies;
+review the complete exact per-chat audiences before enabling it. Changing Draft to Shared
+is a separate explicit migration after the confidential ACL is verified. Source tests are
+not deployment or channel E2E proof.
+
+Before binary rollback, restore restrictive containment (for example no foreign-session
+access), revoke public grants where applicable, and preserve backups. Older binaries
+ignore access metadata and cannot safely enforce this ACL. Removing config alone is not
+a safe downgrade: legacy unset rows would resume legacy discovery. Never downgrade with
+staff write access until affected sessions have another verified confidentiality boundary.
+
 ## Creators and assigned owners
 
 New delegated sessions and automations retain the verified human who initiated

@@ -138,6 +138,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "fastMode",
   "permissionMode",
   "communication",
+  "access",
 ]);
 
 const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set([

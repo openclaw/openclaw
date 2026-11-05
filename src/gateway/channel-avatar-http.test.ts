@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   loadEntry: vi.fn(),
   resolveReference: vi.fn(),
   readMedia: vi.fn(),
+  readSharing: vi.fn(),
 }));
 
 vi.mock("./http-utils.js", () => ({
@@ -39,6 +40,11 @@ vi.mock("../media/media-reference.js", () => ({
 
 vi.mock("../media/store.js", () => ({
   readMediaBuffer: (...args: unknown[]) => mocks.readMedia(...args),
+}));
+
+// Image-format unit cases isolate storage; confidential policy is covered by the real-policy suite.
+vi.mock("./session-sharing-preparation.js", () => ({
+  prepareSessionMutationFacts: async () => ({ readCurrent: mocks.readSharing, release() {} }),
 }));
 
 const { handleChannelAvatarHttpRequest } = await import("./channel-avatar-http.js");
@@ -109,6 +115,10 @@ describe("handleChannelAvatarHttpRequest", () => {
       ),
     );
     mocks.loadEntry.mockReset().mockResolvedValue({ entry: avatarEntry() });
+    mocks.readSharing.mockReset().mockReturnValue({
+      target: { entry: avatarEntry() },
+      membership: new Set<string>(),
+    });
     mocks.resolveReference.mockReset().mockResolvedValue({
       id: "channel-avatar.png",
       normalizedSource: AVATAR_REFERENCE,

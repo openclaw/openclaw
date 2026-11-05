@@ -192,7 +192,11 @@ export function executeSessionActorMemoryEntryCommand(
         ...(replacement.label === undefined ? {} : { label: replacement.label }),
         ...(replacement.owner ? { owner: replacement.owner } : {}),
       },
-      { routeContext: replacement.routeContext, consumePendingReset },
+      {
+        routeContext: replacement.routeContext,
+        consumePendingReset,
+        accessMutation: replacement.accessMutation,
+      },
     );
     if (replacement.transcriptEvents) {
       const target = context.edit(replacement.sessionKey);

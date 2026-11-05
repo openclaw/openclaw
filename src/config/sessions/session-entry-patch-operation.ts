@@ -84,12 +84,16 @@ type SessionEntryPatchStep = (
     }
   | {
       kind: "inbound-metadata";
+      defaultVisibility?: SessionEntry["visibility"];
+      defaultAccess?: SessionEntry["access"];
       metadata: PreparedSessionMetaPatch;
       sessionKey: string;
       creation: ReturnType<typeof buildSessionCreationStamp>;
     }
   | {
       kind: "last-route";
+      defaultVisibility?: SessionEntry["visibility"];
+      defaultAccess?: SessionEntry["access"];
       route: Omit<Parameters<typeof projectLastRoutePatch>[0], "existing">;
       creation: ReturnType<typeof buildSessionCreationStamp>;
     }
@@ -304,11 +308,25 @@ export function reduceSessionEntryPatch(
         existing: existingEntry,
         sessionKey: operation.sessionKey,
       });
-      return existingEntry ? patch : { ...operation.creation, ...patch };
+      return existingEntry
+        ? patch
+        : {
+            ...operation.creation,
+            visibility: operation.defaultVisibility,
+            access: operation.defaultAccess,
+            ...patch,
+          };
     }
     case "last-route": {
       const patch = projectLastRoutePatch({ ...operation.route, existing: existingEntry });
-      return existingEntry ? patch : { ...operation.creation, ...patch };
+      return existingEntry
+        ? patch
+        : {
+            ...operation.creation,
+            visibility: operation.defaultVisibility,
+            access: operation.defaultAccess,
+            ...patch,
+          };
     }
     case "ensure-identity":
       return existingEntry?.sessionId

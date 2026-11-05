@@ -8,17 +8,24 @@ import {
   deleteSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryCanonicalReplacements } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { CronRunLogEntry } from "../../cron/run-log-types.js";
 import type { CronService } from "../../cron/service.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
+import * as cronHistoryStore from "../../cron/store/read-only.js";
 import type { CronRunHistoryWrite } from "../../cron/store/run-history.types.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import {
+  roleClient,
+  rolePolicyConfig,
+  sharingPolicyClient,
+} from "../session-sharing.test-utils.js";
 import {
   callCron as invokeCron,
   createReadService,
@@ -91,12 +98,17 @@ async function withCronHistory(
     viewer: GatewayClient;
     owner: GatewayClient;
   }) => Promise<void>,
-  options: { unresolvedDefault?: boolean; agentId?: string; scheduled?: boolean } = {},
+  options: {
+    unresolvedDefault?: boolean;
+    agentId?: string;
+    roles?: boolean;
+    scheduled?: boolean;
+  } = {},
 ) {
   await withOpenClawTestState(profileState, async (state) => {
     const agentId = options.agentId ?? "main";
     const cfg = {
-      ...rolePolicyConfig(),
+      ...(options.roles === false ? {} : rolePolicyConfig()),
       agents: {
         entries: {
           [agentId]: { workspace: state.workspaceDir },
@@ -210,6 +222,152 @@ async function withCronHistory(
 }
 
 describe("cron.runs session visibility", () => {
+  it("requires a live owner binding for unkeyed deleted-job summaries", () =>
+    withCronHistory(
+      async ({ query, cron, jobId, owner, viewer }) => {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: "agent:main:history-own" },
+          { visibility: "draft" },
+        );
+        await cron.remove(jobId);
+        for (const denied of [viewer, owner, sharingPolicyClient({})]) {
+          expectReply(
+            await query({ id: jobId, view: "summary", runId: "history-run-3" }, denied),
+            expect.objectContaining({ entries: [], total: 0 }),
+          );
+        }
+        for (const allowed of [owner, sharingPolicyClient({})]) {
+          expectVisibleRuns(
+            await query({ id: jobId, view: "summary", runId: "history-run-1" }, allowed),
+            ["history-run-1"],
+          );
+        }
+        expectVisibleRuns(
+          await query(
+            { id: jobId, view: "summary", runId: "history-run-3" },
+            sharingPolicyClient({ scopes: ["operator.admin"] }),
+          ),
+          ["history-run-3"],
+        );
+      },
+      { roles: false },
+    ));
+
+  it("hides Draft cron metadata from pending profiles without restricting the anonymous solo owner", () =>
+    withCronHistory(
+      async ({ query, jobId, foreignJobId }) => {
+        for (const sessionKey of ["agent:main:history-own", "agent:main:history-foreign"]) {
+          await upsertSessionEntryCore({ agentId: "main", sessionKey }, { visibility: "draft" });
+        }
+        const pending = sharingPolicyClient({ githubSyncPending: true });
+        const solo = sharingPolicyClient({});
+        expectReply(
+          await query({ includeDisabled: true, compact: true }, pending, "cron.list"),
+          expect.objectContaining({ jobs: [], total: 0, hasMore: false, nextOffset: null }),
+        );
+        expectNotFound(await query({ id: jobId }, pending, "cron.get"), jobId);
+        expectNotFound(await query({ id: jobId, view: "summary" }, pending), jobId);
+        expectReply(
+          await query({ scope: "all", view: "summary" }, pending),
+          expect.objectContaining({ entries: [], total: 0, hasMore: false, nextOffset: null }),
+        );
+        expectReply(
+          await query({ includeDisabled: true, compact: true }, solo, "cron.list"),
+          expect.objectContaining({
+            total: 2,
+            jobs: expect.arrayContaining([
+              expect.objectContaining({ id: jobId }),
+              expect.objectContaining({ id: foreignJobId }),
+            ]),
+          }),
+        );
+        expectReply(
+          await query({ id: jobId }, solo, "cron.get"),
+          expect.objectContaining({ id: jobId }),
+        );
+        expectReply(
+          await query({ scope: "all", view: "summary" }, solo),
+          expect.objectContaining({ total: 6 }),
+        );
+      },
+      { roles: false },
+    ));
+
+  it.each(["view", "write"] as const)(
+    "filters confidential summaries and page metadata for %s outsiders and revocation",
+    (cap) =>
+      withCronHistory(async ({ query, jobId, viewer, owner }) => {
+        const setAccess = async (
+          sessionKey: string,
+          access: NonNullable<SessionEntry["access"]>,
+        ) => {
+          await applySessionEntryCanonicalReplacements({
+            agentId: "main",
+            storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+            sessionKeys: [sessionKey],
+            update: (rows) => {
+              expect(rows).toHaveLength(1);
+              return {
+                result: undefined,
+                replacements: rows.map((row) => ({
+                  ...row,
+                  previousSessionKeys: [],
+                  accessMutation: true,
+                  entry: { ...row.entry, access },
+                })),
+              };
+            },
+          });
+        };
+        await setAccess("agent:main:history-own", {
+          mode: "audience",
+          profileIds: [expectDefined(viewer.authenticatedUserProfile, "fixture viewer").profileId],
+        });
+        await setAccess("agent:main:history-foreign", { mode: "creator" });
+        const outsider = roleClient(cap, `confidential-history-outsider-${cap}`);
+        const all = { scope: "all", view: "summary", sortDir: "asc" };
+        expectReply(
+          await query({ ...all, limit: 1 }, outsider),
+          expect.objectContaining({ entries: [], total: 0, hasMore: false, nextOffset: null }),
+        );
+        expectNotFound(await query({ id: jobId, view: "summary" }, outsider), jobId);
+        expectReply(
+          await query({ ...all, query: "needle" }, outsider),
+          expect.objectContaining({ entries: [], total: 0, hasMore: false, nextOffset: null }),
+        );
+        const visibleRuns = ["history-run-1", "history-run-3", "history-run-4"];
+        for (const allowed of [viewer, owner]) {
+          expectVisibleRuns(await query(all, allowed), visibleRuns);
+          expectReply(
+            await query({ ...all, limit: 1 }, allowed),
+            expect.objectContaining({
+              entries: [expect.objectContaining({ runId: "history-run-1" })],
+              total: 3,
+              hasMore: true,
+              nextOffset: 1,
+            }),
+          );
+        }
+        const read = cronHistoryStore.readCronRunHistoryRecords;
+        const held = vi
+          .spyOn(cronHistoryStore, "readCronRunHistoryRecords")
+          .mockImplementationOnce(async (...args) => {
+            const details = await read(...args);
+            await setAccess("agent:main:history-own", { mode: "creator" });
+            return details;
+          });
+        try {
+          expectReply(
+            await query(all, viewer),
+            expect.objectContaining({ entries: [], total: 0, hasMore: false, nextOffset: null }),
+          );
+          expect(held).toHaveBeenCalledTimes(1);
+        } finally {
+          held.mockRestore();
+        }
+        expectVisibleRuns(await query(all, owner), visibleRuns);
+      }),
+  );
   it("lets an admitted job read its receipts across delivery accounts, but no other job", async () => {
     await withCronHistory(
       async ({ jobId, foreignJobId, query, owner }) => {

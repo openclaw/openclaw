@@ -5,10 +5,13 @@ import {
   type ErrorShape,
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { canReadSessionAccess } from "../../config/sessions/session-access.js";
 import { runWithoutSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { CreatedGatewaySession } from "../session-create-service.types.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
+import { prepareSessionCreatorProfile } from "../session-creator.js";
 import {
   normalizeRpcAttachmentsToChatAttachments,
   type RpcAttachmentInput,
@@ -119,6 +122,7 @@ export async function validateSessionCreateInitialMentions(params: {
   message?: string;
   mentions: NonNullable<SessionsCreateParams["mentions"]>;
   visibility: SessionsCreateParams["visibility"];
+  access?: SessionsCreateParams["access"];
   runId: string;
 }): Promise<ErrorShape | undefined> {
   const { client, context, agentId, sessionKey, message, mentions, visibility, runId } = params;
@@ -144,6 +148,22 @@ export async function validateSessionCreateInitialMentions(params: {
     return (
       eligible?.error ??
       errorShape(ErrorCodes.UNAVAILABLE, "Human mentions are unavailable; reconnect and retry.")
+    );
+  }
+  const cfg = context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig();
+  const entry = {
+    access: params.access,
+    createdActor: resolveOperatorSessionCreation(client).actor,
+  };
+  if (
+    mentions.some(
+      ({ profileId }) =>
+        !canReadSessionAccess(cfg, sessionKey, entry, prepareSessionCreatorProfile(profileId)),
+    )
+  ) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "A mention recipient cannot access this confidential session.",
     );
   }
   return undefined;

@@ -369,13 +369,18 @@ function resumePreparedRestartStore(
   const recovery = getRestartRecovery(params.context);
   let work = recovery.stores.get(prepared.target.storePath);
   if (!work) {
-    work = Promise.resolve().then(() =>
-      withAgentInputRecovery(
+    work = Promise.resolve().then(async () => {
+      // Native writes must be ready; the recovery owns its separate input-admission fence.
+      await params.context.agentDatabaseStartup?.waitForAgentPreparation(
+        prepared.target.physicalAgentId,
+        { env: prepared.target.env, signal: params.signal, forWrite: true },
+      );
+      return withAgentInputRecovery(
         params.context.agentDatabaseStartup,
         prepared.target.physicalAgentId,
         () => resumeRestartStore(params, prepared),
-      ),
-    );
+      );
+    });
     recovery.stores.set(prepared.target.storePath, work);
   }
   return work;

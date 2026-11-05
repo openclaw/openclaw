@@ -46,6 +46,7 @@ import {
   resolveThinkingProfile,
 } from "../auto-reply/thinking.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import { resolveSessionCreationVisibility } from "../config/sessions/creation-visibility.js";
 import {
   buildSessionCreationStamp,
   type SessionCreatedVia,
@@ -284,6 +285,8 @@ function* projectSessionPatchSteps(
     ...(params.preparedSessionRoot ? { sessionRoot: params.preparedSessionRoot } : {}),
     // Stamp only genuinely new rows; existing placeholder aliases must not be restamped.
     ...(creation && params.existingEntry === undefined ? buildSessionCreationStamp(creation) : {}),
+    ...(params.existingEntry === undefined ? resolveSessionCreationVisibility(cfg, storeKey) : {}),
+    ...(patch.access ? { access: patch.access } : {}),
   };
   if (existing && !existing.sessionId) {
     delete next.label;

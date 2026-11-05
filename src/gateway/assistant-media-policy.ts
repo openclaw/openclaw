@@ -11,6 +11,7 @@ import { resolvePreparedSandboxRuntimeStatus } from "../agents/sandbox/runtime-s
 import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { canReadSessionAccess } from "../config/sessions/session-access.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError } from "../infra/fs-safe.js";
@@ -263,21 +264,25 @@ function resolvePreparedAssistantMediaPolicy(
     if (!auth.operatorScopes.includes("operator.admin")) {
       const profileId = auth.authenticatedUserProfile?.profileId;
       if (profileId && profileId !== GATEWAY_OWNER_PROFILE_ID) {
-        // Match artifact reads: named people cannot read incognito; named roles
-        // additionally apply the session catalog's creator/visibility ceiling.
+        // Standalone media and issued tickets use the same live confidential ACL
+        // as transcript/artifact reads, including callers without a named role.
         if (entry.incognito || isIncognitoSessionKey(loaded.canonicalKey)) {
           return undefined;
         }
         if (
-          (auth.operatorRolePolicy || messageId) &&
           !createProfileSessionEntryFilter({
             profileId,
             sessionCap: auth.operatorRolePolicy?.sessions.others,
+            cfg: config,
           })(loaded.canonicalKey, entry)
         ) {
           return undefined;
         }
-      } else if (!profileId && config.gateway?.roles) {
+      } else if (
+        !profileId &&
+        (config.gateway?.roles ||
+          !canReadSessionAccess(config, loaded.canonicalKey, entry, () => false))
+      ) {
         return undefined;
       }
     }

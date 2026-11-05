@@ -288,6 +288,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         message,
         mentions: p.mentions,
         visibility: p.visibility,
+        access: p.access,
         runId: initialRunId,
       });
       if (mentionError) {
@@ -516,6 +517,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ...(requestingOperatorProfileId ? { requestingOperatorProfileId } : {}),
       ...(operatorRoleActor ? { operatorRoleActor } : {}),
       visibility: p.visibility,
+      access: p.access,
       allowExistingModelSelection: authorizeOperatorScopesForRequiredScope(
         ADMIN_SCOPE,
         clientScopes,

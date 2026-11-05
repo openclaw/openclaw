@@ -209,6 +209,7 @@ export function sharingExpectedEntry(target: SessionSharingTarget) {
     sessionId: target.entry.sessionId,
     createdActor: target.entry.createdActor,
     visibility: target.entry.visibility,
+    access: target.entry.access,
     incognito: target.entry.incognito,
   };
 }

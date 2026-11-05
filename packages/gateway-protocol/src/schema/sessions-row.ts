@@ -278,6 +278,14 @@ export const SessionRowSchema = Type.Object(
     ),
     participantCount: Type.Optional(Type.Integer({ minimum: 0 })),
     visibility: Type.Optional(SessionVisibilitySchema),
+    accessMode: Type.Optional(
+      Type.Union([
+        Type.Literal("creator"),
+        Type.Literal("audience"),
+        Type.Literal("source"),
+        Type.Literal("unrestricted"),
+      ]),
+    ),
     sharingRole: Type.Optional(SessionSharingRoleSchema),
     /** Recipient-local send admission; null explicitly clears a previous restriction. */
     sendDisabledReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
