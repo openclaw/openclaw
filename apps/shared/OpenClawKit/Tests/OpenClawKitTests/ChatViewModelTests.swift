@@ -13003,6 +13003,7 @@ struct ChatViewModelTests {
             onVerboseLevelChanged: { callbacks.values.append($0) })
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await waitForObservedState { !vm.isLoading }
         await MainActor.run { vm.selectVerboseLevel("on") }
         await patchCount.wait { $0 >= 1 }
         #expect(await patchCount.current() == 1)
