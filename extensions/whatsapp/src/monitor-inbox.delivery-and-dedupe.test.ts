@@ -184,11 +184,11 @@ describe("web monitor inbox delivery and dedupe", () => {
     }),
   );
 
-  it("dead-letters permanently unresolved LID DMs through the shared retry limits", () =>
+  it("dead-letters permanently unresolved LID DMs across monitor restarts", () =>
     withRetryClock(async () => {
       const onMessage = vi.fn();
       const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
-      const { listener, sock } = await startInboxMonitor(onMessage, { durableInboundQueue: queue });
+      let { listener, sock } = await startInboxMonitor(onMessage, { durableInboundQueue: queue });
       const receivedAt = Date.now();
       try {
         sock.ev.emit(
@@ -203,12 +203,16 @@ describe("web monitor inbox delivery and dedupe", () => {
         await waitForInboundWorkDrained();
         expect(await queue.listPending({ limit: "all" })).toMatchObject([{ attempts: 1 }]);
         for (let attempt = 2; attempt <= 8; attempt += 1) {
-          await vi.advanceTimersByTimeAsync(1_000 * 2 ** (attempt - 2));
+          // Closing joins worker settlement before the next monitor recovers the row.
+          await listener.close();
+          await vi.advanceTimersByTimeAsync(3 * 60_000);
+          ({ listener, sock } = await startInboxMonitor(onMessage, { durableInboundQueue: queue }));
           await waitForInboundWorkDrained();
+          expect(await queue.listPending({ limit: "all" })).toMatchObject([{ attempts: attempt }]);
         }
-        expect(await queue.listPending({ limit: "all" })).toMatchObject([{ attempts: 8 }]);
+        await listener.close();
         vi.setSystemTime(receivedAt + 24 * 60 * 60_000);
-        await vi.advanceTimersByTimeAsync(3 * 60_000);
+        ({ listener, sock } = await startInboxMonitor(onMessage, { durableInboundQueue: queue }));
         await waitForInboundWorkDrained();
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
         expect(await queue.listFailed?.()).toMatchObject([{ reason: "retry-limit-exceeded" }]);

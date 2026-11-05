@@ -5967,9 +5967,12 @@ jobs:
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
+            -only-testing:OpenClawTests/SettingsHubTests
+            -only-testing:OpenClawTests/SettingsHubVisualProofTests/testIngressAuthorizedDashboardEntryPointsLoadTheSelectedGatewayPage
             -only-testing:OpenClawTests/ChatComposerTextViewIOSTests
             -only-testing:OpenClawTests/GatewayIngressControllerTests
             -only-testing:OpenClawTests/GatewayIngressLoginPreparationTests
+            -only-testing:OpenClawTests/GatewayAccessDeviceAuthBindingTests
             -only-testing:OpenClawTests/GatewayConnectionControllerTests
             -only-testing:OpenClawTests/LegacyManualGatewayMigrationTests
             -only-testing:OpenClawTests/GatewayOperatorFleetTests
@@ -6714,7 +6717,8 @@ jobs:
           printf '%s\n' "$acceleration"
           grep -Eiq '\bKVM\b.*\b(available|usable)\b' <<<"$acceleration"
           printf 'no\n' | avdmanager create avd --name openclaw-access --package "$SYSTEM_IMAGE" --device pixel_6
-          /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
+          # Bound disposable userdata so the hosted runner can boot after SDK setup.
+          /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -partition-size 4096 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
           emulator_pid=$!
           trust_evidence="$RUNNER_TEMP/android-native-tls-trust"
           mkdir -p "$trust_evidence"
