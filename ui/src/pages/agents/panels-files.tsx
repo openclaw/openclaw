@@ -15,7 +15,7 @@ import { LitContent } from "../../lit/solid-bridge.ts";
 import { resetAgentFilePreview, setPreviewExpandButtonState } from "./agent-file-preview-state.ts";
 import { AgentFilePreview } from "./agent-file-preview.tsx";
 import { AgentFileError } from "./file-conflict-callout.tsx";
-import { hasAgentFileContent, type AgentFilesViewState } from "./files.ts";
+import { hasAgentFileContent, isAgentFileDirty, type AgentFilesViewState } from "./files.ts";
 import { AgentPanelAction } from "./panel-ui.tsx";
 
 function getExtensionLabel(fileName: string) {
@@ -126,7 +126,7 @@ export function AgentFiles(
   });
   const baseContent = createMemo(() => editor()?.content ?? "");
   const draft = createMemo(() => editor()?.draft ?? baseContent());
-  const isDirty = createMemo(() => hasContent() && (!hasBase() || draft() !== baseContent()));
+  const isDirty = createMemo(() => isAgentFileDirty(editor()));
 
   return (
     <>
