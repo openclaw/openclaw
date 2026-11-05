@@ -98,11 +98,8 @@ describe("active-memory provider-neutral trigger recall", () => {
     ["whole words", "This party starts at eight", "art", 0.2],
     ["unrelated message", "Explain SQLite indexes", "flight booking", 0.8],
   ] as const)("rejects weak matches for %s", (_label, message, triggers, score) => {
-    expect(
-      selectStrongTriggerMatches(message, [
-        result({ score, automaticRecall: { eligible: true, triggers } }),
-      ]),
-    ).toEqual([]);
+    const entry = result({ score, automaticRecall: { eligible: true, triggers } });
+    expect(selectStrongTriggerMatches(message, [entry])).toEqual([]);
   });
 
   it("prepares the message once across trigger candidates", () => {
