@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 struct SessionArtifactDetail: View {
     let artifact: IOSSessionArtifact
     let load: @MainActor @Sendable () async throws -> OpenClawChatMediaData
-    @State private var media: OpenClawChatMediaData?
+    @State private var hasLoadedFile = false
     @State private var preview: Preview = .unavailable
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -53,7 +53,7 @@ struct SessionArtifactDetail: View {
                         }
                     }
                 }
-                .disabled(self.media == nil || self.isLoading || self.isSharing)
+                .disabled(!self.hasLoadedFile || self.isLoading || self.isSharing)
                 .accessibilityLabel("Share or save file")
                 .accessibilityIdentifier("artifact-share")
             }
@@ -144,7 +144,7 @@ struct SessionArtifactDetail: View {
                 nil as UIImage?
             }
             try Task.checkCancellation()
-            self.media = media
+            self.hasLoadedFile = true
             switch Self.previewKind(mimeType: media.mimeType) {
             case .text:
                 let limit = 256 * 1024
@@ -186,7 +186,7 @@ struct SessionArtifactDetail: View {
     }
 
     private func share() {
-        guard !self.isSharing, self.media != nil else { return }
+        guard !self.isSharing, self.hasLoadedFile else { return }
         self.isSharing = true
         self.shareTask = Task {
             defer { self.isSharing = false }
