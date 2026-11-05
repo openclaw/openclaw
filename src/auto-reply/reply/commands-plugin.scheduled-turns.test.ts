@@ -1,6 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
+import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { listSwarmRunReservationIds } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import {
@@ -272,6 +274,8 @@ describe("native scheduled command execution", () => {
       let childRunId: string | undefined;
       let childSessionKey: string | undefined;
       fixture.handler.mockImplementation(async (ctx) => {
+        // A stored tool ceiling does not grant recursive command scheduling.
+        expect(ctx.runtimeContext?.scheduledTurns).toBeUndefined();
         const native = expectDefined(ctx.runtimeContext?.subagents, "scheduled native runtime");
         const child = await native.spawn({
           requestId: "scheduled-positive",
@@ -295,6 +299,7 @@ describe("native scheduled command execution", () => {
         status: "ok",
         outputText: "child accepted",
       });
+      expect((await fixture.readJobs()).map((job) => job.id)).toEqual([id]);
       const parent = fixture.params();
       const child = loadSessionEntry({
         agentId: "main",
@@ -302,8 +307,25 @@ describe("native scheduled command execution", () => {
         storePath: parent.storePath,
       });
       expect(child?.spawnedBy).toBe(parent.sessionKey);
-      // The child inherits the stored ceiling minus scheduling: no recursive schedules.
-      expect(child?.inheritedToolAllow).toEqual(["read", "sessions_spawn", "agents_wait"]);
+      // The stored ceiling is separate from the hidden child's hard-denied tools.
+      expect(child?.inheritedToolAllow).toEqual([
+        "read",
+        "automations",
+        "sessions_spawn",
+        "agents_wait",
+      ]);
+      const childCapabilities = await prepareConversationCapabilityProfile({
+        config: fixture.cfg,
+        sessionKey: expectDefined(childSessionKey, "accepted child session"),
+        agentId: "main",
+      });
+      expect(
+        projectConversationToolNames({
+          capabilityProfile: childCapabilities,
+          toolNames: ["read", "automations", "cron"],
+          warn: () => undefined,
+        }),
+      ).toEqual(["read"]);
       expect(subagentRuns.get(expectDefined(childRunId, "accepted child run"))).toMatchObject({
         requesterSessionKey: parent.sessionKey,
         requesterTurnRunId: expectDefined(capacity.occurrenceRunId(), "scheduled occurrence run"),
