@@ -302,10 +302,15 @@
   cursor: var(--cursor-action);
 }
 
-/* Only marked menu wrappers need boundary inference. A universal :has() here
-   makes unrelated typing pay for menu matching on every style pass. */
-:where(.oc-menu-item, .oc-menu-group:has(> .oc-menu-item--submenu, > .oc-menu-item:last-child))
-  + :where(.oc-menu-item, .oc-menu-group:has(> .oc-menu-item:first-child):not(.oc-overlay)) {
+/* Standalone rows retain their gap; the menu owner marks custom row wrappers.
+   Zero specificity lets a row's own margin win. */
+:where(.oc-menu-item) + :where(.oc-menu-item) {
+  margin-block-start: var(--menu-item-gap);
+}
+
+:where(.oc-menu)
+  :where(.oc-menu-item, [data-menu-row-end])
+  + :where(.oc-menu-item, [data-menu-row-start]) {
   margin-block-start: var(--menu-item-gap);
 }
 

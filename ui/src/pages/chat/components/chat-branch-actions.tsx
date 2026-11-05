@@ -117,7 +117,7 @@ export function ChatBranchActions(props: {
       </Show>
       <StatusWarning status={props.status} />
       <Show when={props.branch && props.onDismiss}>
-        <div class="chat-pr-menu__group oc-menu-group">
+        <div class="chat-pr-menu__group">
           <button
             ref={dismissRef}
             class="oc-menu-item"
