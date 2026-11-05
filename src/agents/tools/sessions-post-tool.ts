@@ -13,6 +13,7 @@ import {
   isSessionToolRequesterCreator,
   readDescribedSessionVisibilityRow,
   resolveSessionToolAccess,
+  resolveSessionToolCreatorReadAccess,
 } from "./sessions-access.js";
 import { resolveSessionToolContext } from "./sessions-helpers.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
@@ -88,20 +89,23 @@ export async function executeSessionPost(
     });
   }
   // Reuse the send decision so explicit outbound denials and native-child exceptions agree.
-  // Read eligibility above still owns creator-only tree widening; this never admits a turn.
+  // Preserve only the authenticated creator's tree exception; this never admits a turn.
   const readConfig = createRuntimeConfigReader(context.cfg);
   const checkOutbound = () =>
-    createSessionVisibilityDecisionChecker({
-      action: "send",
-      defaultAgentId: targetAgentId,
-      requesterAgentId,
-      requesterSessionKey,
-      mainSessionKey: context.mainSessionKey,
-      visibility: context.sessionVisibility,
-      a2aPolicy: createAgentToAgentPolicy(readConfig(), { sandboxed: opts?.sandboxed }),
-    }).check(targetRow);
+    resolveSessionToolCreatorReadAccess(
+      createSessionVisibilityDecisionChecker({
+        action: "send",
+        defaultAgentId: targetAgentId,
+        requesterAgentId,
+        requesterSessionKey,
+        mainSessionKey: context.mainSessionKey,
+        visibility: context.sessionVisibility,
+        a2aPolicy: createAgentToAgentPolicy(readConfig(), { sandboxed: opts?.sandboxed }),
+      }).check(targetRow),
+      session.createdActor,
+    );
   const outbound = checkOutbound();
-  if (!outbound.allowed && outbound.reasonCode === "agent_to_agent_send_not_allowed") {
+  if (!outbound.allowed) {
     return jsonResult({
       status: "forbidden",
       error: formatSessionToolAccessDenial(outbound, {
@@ -114,7 +118,7 @@ export async function executeSessionPost(
     method: "sessions.post",
     sessionMutationCommitGuard: () => {
       const current = checkOutbound();
-      if (!current.allowed && current.reasonCode === "agent_to_agent_send_not_allowed") {
+      if (!current.allowed) {
         throw new Error(
           formatSessionToolAccessDenial(current, {
             action: "send",

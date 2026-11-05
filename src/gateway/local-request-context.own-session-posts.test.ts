@@ -15,7 +15,10 @@ import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { createSessionsTool } from "../agents/tools/sessions-tool.js";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { appendTranscriptMessage } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  loadTranscriptEvents,
+} from "../config/sessions/session-accessor.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { mockSessionStatusModelDependencies } from "./local-request-context.session-status.test-support.js";
@@ -492,42 +495,52 @@ it("keeps reads allowed while enforcing explicit outbound post denial", async ()
   );
 });
 
-it("rejects a pending cross-agent post when outbound permission is revoked", async () => {
-  await withParticipantSessionToolsFixture(
-    async ({ cfg, turn, alice }) => {
-      const key = "agent:other:dashboard:revoked-post";
-      await seedSessionToolsFixtureSession({
-        agentId: "other",
-        sessionKey: key,
-        sessionId: "revoked-post-session",
-        creatorId: alice.profileId,
-        visibility: "draft",
-      });
-      const options = {
-        agentSessionKey: REQUESTER,
-        requesterTurnRunId: turn.runtimeIdentity.operationalRunInstance.runId,
-        callGateway: <T>(request: Parameters<typeof callAgentToolGatewayRequest>[0]) => {
-          if (request.method === "sessions.post") {
-            cfg.agents!.entries!.main!.tools!.agentToAgent!.send = [];
-            setRuntimeConfigSnapshot({ ...cfg });
-          }
-          return callAgentToolGatewayRequest<T>(request);
-        },
-      };
-      await expect(
-        createSessionsSendTool(options).execute("revoked-post", {
+it.each(["sender send list", "global A2A enablement", "global A2A allow list"])(
+  "rejects a pending cross-agent post when %s is revoked",
+  async (policy) => {
+    await withParticipantSessionToolsFixture(
+      async ({ cfg, turn, alice }) => {
+        const key = "agent:other:dashboard:revoked-post";
+        await seedSessionToolsFixtureSession({
+          agentId: "other",
           sessionKey: key,
-          user: alice.profileId,
-          mode: "post",
-          message: "Must not persist after revocation",
-        }),
-      ).rejects.toThrow();
-      const history = await createSessionsHistoryTool(options).execute("revoked-history", {
-        sessionKey: key,
-        user: alice.profileId,
-      });
-      expect(JSON.stringify(history.details)).not.toContain("Must not persist after revocation");
-    },
-    { visibility: "all", mainSend: ["other"] },
-  );
-});
+          sessionId: "revoked-post-session",
+          creatorId: alice.profileId,
+          visibility: "draft",
+        });
+        const options = {
+          agentSessionKey: REQUESTER,
+          requesterTurnRunId: turn.runtimeIdentity.operationalRunInstance.runId,
+          callGateway: <T>(request: Parameters<typeof callAgentToolGatewayRequest>[0]) => {
+            if (request.method === "sessions.post") {
+              if (policy === "sender send list") {
+                cfg.agents!.entries!.main!.tools!.agentToAgent!.send = [];
+              } else if (policy === "global A2A enablement") {
+                cfg.tools!.agentToAgent!.enabled = false;
+              } else {
+                cfg.tools!.agentToAgent!.allow = ["main"];
+              }
+              setRuntimeConfigSnapshot({ ...cfg });
+            }
+            return callAgentToolGatewayRequest<T>(request);
+          },
+        };
+        await expect(
+          createSessionsSendTool(options).execute("revoked-post", {
+            sessionKey: key,
+            user: alice.profileId,
+            mode: "post",
+            message: "Must not persist after revocation",
+          }),
+        ).rejects.toThrow(/tools\.agentToAgent/);
+        const messages = await loadTranscriptEvents({
+          agentId: "other",
+          sessionKey: key,
+          sessionId: "revoked-post-session",
+        });
+        expect(JSON.stringify(messages)).not.toContain("Must not persist after revocation");
+      },
+      { visibility: "all", mainSend: ["other"], agentToAgent: { enabled: true } },
+    );
+  },
+);
