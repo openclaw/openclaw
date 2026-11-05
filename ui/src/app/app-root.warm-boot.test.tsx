@@ -432,13 +432,13 @@ describe("warm boot app root", () => {
     const gate = loginGate(container);
     const connect = vi.spyOn(runtime!.context.gateway, "connect").mockImplementation(() => {});
     gate.props.onGatewayUrlChange("wss://edited.example");
-    gate.props.onBrowserPaired("bootstrap", "wss://issuing.example");
+    gate.props.onBrowserPaired("wss://issuing.example");
+    // No session credentials, so the stored device token for that Gateway is selected.
     expect(connect).toHaveBeenCalledWith({
       gatewayUrl: "wss://issuing.example",
       token: "",
       password: "",
-      bootstrapToken: "bootstrap",
-      bootstrapProfile: "owner",
+      bootstrapToken: "",
     });
   });
 

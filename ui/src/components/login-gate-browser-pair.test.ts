@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserPairSession } from "../lib/browser-pair.ts";
+import { loadDeviceAuthToken } from "../lib/nodes/index.ts";
 // Preloaded so the gate's lazy card import resolves within one fake-timer settle.
 import "./login-gate-browser-pair.tsx";
 import { canPairBrowserWithGateway } from "./login-gate-solid.tsx";
@@ -18,7 +19,16 @@ vi.mock("../lib/nodes/index.ts", async (importOriginal) => ({
 }));
 
 const started = { requestId: "request-1", code: "ABCDEFGH", expiresAtMs: Date.now() + 600_000 };
-const approved = { status: "approved", bootstrapToken: "bootstrap" };
+const approved = {
+  status: "approved",
+  deviceToken: "device-token",
+  role: "operator",
+  scopes: ["operator.admin", "operator.read"],
+};
+
+function storedToken(url: string) {
+  return loadDeviceAuthToken({ deviceId: "0123456789abcdef", gatewayUrl: url, role: "operator" });
+}
 const gatewayUrl = `ws://${window.location.host}`;
 
 function json(body: unknown, status = 200) {
@@ -103,7 +113,8 @@ describe("browser pairing", () => {
     await settle();
     gate.approve();
     await settle();
-    expect(gate.onBrowserPaired).toHaveBeenCalledWith("bootstrap", gatewayUrl);
+    expect(gate.onBrowserPaired).toHaveBeenCalledWith(gatewayUrl);
+    expect(storedToken(gatewayUrl)).toMatchObject({ token: "device-token" });
     // Connection progress and errors show on the sign-in card.
     expect(gate.element.querySelector("#login-gate-url")).not.toBeNull();
   });
@@ -148,8 +159,17 @@ describe("browser pairing", () => {
       browserId: "01234567",
     });
     await vi.advanceTimersByTimeAsync(4_100);
-    expect(pair.onApproved).toHaveBeenCalledWith("bootstrap", "ws://gateway.example");
+    expect(pair.onApproved).toHaveBeenCalledWith("ws://gateway.example");
     expect(fetchMock).toHaveBeenCalledTimes(4);
+    // The issuing Gateway's paired token is what the next connect selects.
+    expect(storedToken("ws://gateway.example")).toMatchObject({
+      token: "device-token",
+      scopes: expect.arrayContaining(["operator.admin", "operator.read"]),
+    });
+    // Same-origin cookies go along, so an auth proxy in front of the Gateway admits the route.
+    for (const [, init] of fetchMock.mock.calls as unknown as [string, RequestInit][]) {
+      expect(init.credentials).toBe("same-origin");
+    }
   });
 
   it.each([
@@ -194,7 +214,7 @@ describe("browser pairing", () => {
     await pair.start("ws://gateway.example");
     await vi.advanceTimersByTimeAsync(2_100);
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(pair.onApproved).toHaveBeenCalledWith("bootstrap", "ws://gateway.example");
+    expect(pair.onApproved).toHaveBeenCalledWith("ws://gateway.example");
   });
 
   it("offers pairing only for the Gateway serving this page", () => {
@@ -204,6 +224,10 @@ describe("browser pairing", () => {
     expect(canPairBrowserWithGateway(`${gatewayUrl}/other`, "/team")).toBe(false);
     expect(canPairBrowserWithGateway(gatewayUrl, "/team")).toBe(false);
     expect(canPairBrowserWithGateway("wss://other.example", "")).toBe(false);
+    // A plain-HTTP page's Gateway answers on ws:; wss: on the same host is another listener.
+    expect(window.location.protocol).toBe("http:");
+    expect(canPairBrowserWithGateway(`wss://${window.location.host}`, "")).toBe(false);
+    expect(canPairBrowserWithGateway(`http://${window.location.host}`, "")).toBe(false);
     expect(canPairBrowserWithGateway("", "")).toBe(false);
   });
 });

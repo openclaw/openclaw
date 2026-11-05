@@ -15,7 +15,7 @@ export function LoginGateBrowserPairCard(props: {
   host: LoginGateElement;
   basePath: string;
   gatewayUrl: string;
-  onPaired: (bootstrapToken: string, gatewayUrl: string) => void;
+  onPaired: (gatewayUrl: string) => void;
   onBack: () => void;
 }) {
   const [state, setState] = createSignal<BrowserPairState>({ kind: "idle" });
@@ -24,7 +24,7 @@ export function LoginGateBrowserPairCard(props: {
       return props.basePath;
     },
     onState: setState,
-    onApproved: (bootstrapToken, gatewayUrl) => props.onPaired(bootstrapToken, gatewayUrl),
+    onApproved: (gatewayUrl) => props.onPaired(gatewayUrl),
   });
   onSettled(() => {
     // An approval is only valid for its issuer: a new target ends the attempt before Solid commits it.

@@ -1,14 +1,13 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
-import { revokeDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import { signDevicePayload } from "../infra/device-identity.js";
 import { decideBrowserPairRequest } from "../infra/device-pairing-browser-code.js";
 import { withDevicePairingLock } from "../infra/device-pairing-lock.js";
-import { getPairedDevice } from "../infra/device-pairing.js";
+import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { buildBrowserPairPayload, type BrowserPairAction } from "../shared/browser-pair.js";
-import { CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES } from "../shared/device-bootstrap-profile.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { CONTROL_UI_OPERATOR_SCOPES } from "./control-ui-bootstrap-contract.js";
 import { issueOperatorToken, loadDeviceIdentity } from "./device-authz.test-helpers.js";
 import { CONTROL_UI_CLIENT, openWs, originForPort } from "./server.auth.test-helpers.js";
 import {
@@ -99,13 +98,21 @@ function decide(code: string, requestId: string, decision = "approve", socket = 
   return rpcReq(socket, "device.pair.code", { code, requestId, decision });
 }
 
-function connectBrowser(browser: Browser, bootstrapToken: string) {
+async function approveAndCollect(browser: Browser): Promise<string> {
+  const { requestId, code } = await start(browser);
+  expect((await decide(code, requestId)).ok).toBe(true);
+  const collected = await collect(browser, requestId);
+  expect(collected.body).toMatchObject({ status: "approved", role: "operator" });
+  return collected.body.deviceToken as string;
+}
+
+function connectBrowser(browser: Browser, deviceToken: string) {
   return openWs(harness.port, { origin: originForPort(harness.port) }).then(async (socket) => {
     const result = await connectReq(socket, {
       skipDefaultAuth: true,
-      bootstrapToken,
+      deviceToken,
       role: "operator",
-      scopes: [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES],
+      scopes: [...CONTROL_UI_OPERATOR_SCOPES],
       client: CONTROL_UI_CLIENT,
       deviceIdentityPath: browser.identityPath,
     });
@@ -122,22 +129,26 @@ function setExpiry(requestId: string, expiresAtMs: number) {
   );
 }
 
-/** Owner-credential facts at the final effect: the request row and every issued bootstrap row. */
+/** Facts at the final effect: the request row and the requesting device's pairing rows. */
 function readFinalEffect(requestId: string) {
+  const device = "(SELECT device_id FROM device_pairing_browser_requests WHERE request_id = ?)";
   return runOpenClawStateWriteTransaction(({ db }) => ({
     request: db
-      .prepare(
-        "SELECT status, bootstrap_token FROM device_pairing_browser_requests WHERE request_id = ?",
-      )
+      .prepare("SELECT status FROM device_pairing_browser_requests WHERE request_id = ?")
       .get(requestId),
-    issued: db.prepare("SELECT count(*) AS total FROM device_bootstrap_tokens").get(),
+    paired: db
+      .prepare(`SELECT count(*) AS total FROM device_pairing_paired WHERE device_id = ${device}`)
+      .get(requestId),
+    pending: db
+      .prepare(`SELECT count(*) AS total FROM device_pairing_pending WHERE device_id = ${device}`)
+      .get(requestId),
   }));
 }
 
-const untouched = { request: { status: "pending", bootstrap_token: null } };
+const untouched = { request: { status: "pending" }, paired: { total: 0 }, pending: { total: 0 } };
 
 describe("browser device-code pairing", () => {
-  it("connects only the browser that holds the requesting key", async () => {
+  it("pairs a first-time browser as an ordinary admin device only for its own key", async () => {
     const browser = newBrowser();
     const stranger = newBrowser();
     const started = await start(browser);
@@ -171,21 +182,34 @@ describe("browser device-code pairing", () => {
       body: { error: "not_found" },
     });
 
+    // Approval alone pairs the device through the owner approval rules, with no handoff.
+    const paired = await getPairedDevice(browser.identity.deviceId);
+    expect(paired).toMatchObject({
+      publicKey: browser.publicKey,
+      approvedVia: "owner",
+      roles: ["operator"],
+      approvedScopes: expect.arrayContaining([...CONTROL_UI_OPERATOR_SCOPES]),
+    });
+    expect(readFinalEffect(requestId)).toMatchObject({
+      paired: { total: 1 },
+      pending: { total: 0 },
+    });
+    // Like tokens issued at connect, it retires when the shared Gateway secret rotates.
+    expect(paired?.tokens?.operator?.issuer?.kind).toBe("shared-gateway-auth");
+
     // Consecutive polls of one request are paced by the route.
     await delay(1_100);
     const collected = await collect(browser, requestId);
     expect(collected.status).toBe(200);
-    const bootstrapToken = collected.body.bootstrapToken as string;
-    expect(bootstrapToken).toBeTruthy();
+    const deviceToken = collected.body.deviceToken as string;
+    expect(deviceToken).toBe(paired?.tokens?.operator?.token);
+    // A dropped reply can be collected again until expiry; the token stays key-bound.
+    expect((await collect(browser, requestId)).body).toMatchObject({ deviceToken });
 
-    // The handoff is useless to anyone else, even when they obtain the bytes.
-    expect((await connectBrowser(stranger, bootstrapToken)).ok).toBe(false);
+    // The token is useless to anyone else, even when they obtain the bytes.
+    expect((await connectBrowser(stranger, deviceToken)).ok).toBe(false);
     expect(await getPairedDevice(stranger.identity.deviceId)).toBeNull();
-
-    expect((await connectBrowser(browser, bootstrapToken)).ok).toBe(true);
-    const paired = await getPairedDevice(browser.identity.deviceId);
-    expect(paired?.approvedScopes).toEqual([...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES]);
-    expect(paired?.approvedVia).toBe("bootstrap");
+    expect((await connectBrowser(browser, deviceToken)).ok).toBe(true);
   });
 
   it("refuses a code nobody is waiting on", async () => {
@@ -210,29 +234,32 @@ describe("browser device-code pairing", () => {
     expect((await decide(code, requestId)).error?.message).toContain("expired");
   });
 
-  it("does not issue a credential when the request expires while approval waits for the lock", async () => {
+  it("does not pair when the request expires while approval waits in the writer queue", async () => {
     const browser = newBrowser();
     const { requestId, code } = await start(browser);
     const expiresAtMs = Date.now() + 60_000;
     setExpiry(requestId, expiresAtMs);
-    const held = Promise.withResolvers<void>();
-    const locked = Promise.withResolvers<void>();
-    const holder = withDevicePairingLock(async () => {
-      locked.resolve();
-      await held.promise;
-    }, "browser-pair-expiry-test");
-    await locked.promise;
-    // Queued before expiry; the clock passes the deadline before the lock is released.
-    const approval = decideBrowserPairRequest({ code, requestId, decision: "approve" });
-    const clock = vi.spyOn(Date, "now").mockReturnValue(expiresAtMs + 1);
+    const before = readFinalEffect(requestId);
+    let now = expiresAtMs - 1;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     try {
-      held.resolve();
-      await holder;
+      // The decision reads its clock before the deadline; the first authority check
+      // runs after that read and before the writer admits it, so time passes there.
+      const approval = decideBrowserPairRequest({
+        code,
+        requestId,
+        decision: "approve",
+        callerScopes: ["operator.admin"],
+        assertCurrent: () => {
+          now = expiresAtMs + 1;
+        },
+      });
       expect(await approval).toEqual({ status: "expired" });
     } finally {
       clock.mockRestore();
     }
-    expect(readFinalEffect(requestId).request).toBeUndefined();
+    expect(readFinalEffect(requestId)).toEqual(before);
+    expect(await getPairedDevice(browser.identity.deviceId)).toBeNull();
   });
 
   it("reports a host rejection to the browser and spends the code", async () => {
@@ -248,20 +275,55 @@ describe("browser device-code pairing", () => {
     expect((await decide(code, "another-request")).error?.message).toContain("No browser");
   });
 
-  it("gives a removed browser a fresh code instead of its spent request", async () => {
+  it("pairs a removed browser again with a fresh code", async () => {
     const browser = newBrowser();
-    const first = await start(browser);
-    expect((await decide(first.code, first.requestId)).ok).toBe(true);
-    const collected = await collect(browser, first.requestId);
-    expect((await connectBrowser(browser, collected.body.bootstrapToken as string)).ok).toBe(true);
+    expect((await connectBrowser(browser, await approveAndCollect(browser))).ok).toBe(true);
     await rpcReq(adminSocket, "device.pair.remove", { deviceId: browser.identity.deviceId });
 
-    const second = await start(browser);
-    expect(second.requestId).not.toBe(first.requestId);
-    expect((await decide(second.code, second.requestId)).ok).toBe(true);
-    const again = await collect(browser, second.requestId);
-    expect((await connectBrowser(browser, again.body.bootstrapToken as string)).ok).toBe(true);
+    expect((await connectBrowser(browser, await approveAndCollect(browser))).ok).toBe(true);
     expect(await getPairedDevice(browser.identity.deviceId)).not.toBeNull();
+  });
+
+  it("approves only operator access over the browser's own earlier pending request", async () => {
+    const browser = newBrowser();
+    // An unauthenticated handshake from the same key asked for more than a code grants.
+    await requestDevicePairing({
+      deviceId: browser.identity.deviceId,
+      publicKey: browser.publicKey,
+      role: "node",
+      roles: ["node", "operator"],
+      scopes: ["operator.talk.secrets"],
+    });
+    const { requestId, code } = await start(browser);
+    expect(readFinalEffect(requestId).pending).toEqual({ total: 1 });
+    expect((await decide(code, requestId)).ok).toBe(true);
+    const paired = await getPairedDevice(browser.identity.deviceId);
+    expect(paired?.roles).toEqual(["operator"]);
+    expect(paired?.tokens?.node).toBeUndefined();
+    expect(paired?.approvedScopes).not.toContain("operator.talk.secrets");
+    expect(readFinalEffect(requestId).pending).toEqual({ total: 0 });
+  });
+
+  it("refuses to restore an operator token an administrator reduced", async () => {
+    const browser = newBrowser();
+    await approveAndCollect(browser);
+    const deviceId = browser.identity.deviceId;
+    const rotated = await rpcReq(adminSocket, "device.token.rotate", {
+      deviceId,
+      role: "operator",
+      scopes: ["operator.read"],
+    });
+    expect(rotated.ok).toBe(true);
+    const reduced = await getPairedDevice(deviceId);
+
+    const { requestId, code } = await start(browser);
+    const refused = await decide(code, requestId);
+    expect(refused.ok).toBe(false);
+    expect(refused.error?.message).toContain("does not lift that limit");
+    expect(refused.error?.message).toContain(`openclaw devices remove ${deviceId}`);
+    expect(await getPairedDevice(deviceId)).toEqual(reduced);
+    // Still pending, so the same code works once the owner removes the device.
+    expect(readFinalEffect(requestId).request).toEqual({ status: "pending" });
   });
 
   it("refuses a browser without its key and a page from another site", async () => {
@@ -336,38 +398,36 @@ describe("browser device-code pairing", () => {
     expect((await collect(browser, requestId)).body).toEqual({ status: "pending" });
   });
 
-  it.each([1, 2, 3])(
-    "rolls back when authority ends at check %i of the approval",
-    async (failAtCheck) => {
+  it("rolls back when authority ends at any check of the approval", async () => {
+    const approve = (started: Started, assertCurrent: () => void) =>
+      decideBrowserPairRequest({
+        code: started.code,
+        requestId: started.requestId,
+        decision: "approve",
+        callerScopes: ["operator.admin"],
+        assertCurrent,
+      });
+    let total = 0;
+    await approve(await start(newBrowser()), () => {
+      total += 1;
+    });
+    expect(total).toBeGreaterThanOrEqual(3);
+    for (let failAtCheck = 1; failAtCheck <= total; failAtCheck += 1) {
       const browser = newBrowser();
-      const { requestId, code } = await start(browser);
-      const before = readFinalEffect(requestId);
+      const started = await start(browser);
+      const before = readFinalEffect(started.requestId);
       let checks = 0;
-      const assertCurrent = () => {
-        checks += 1;
-        if (checks === failAtCheck) {
-          throw new Error("administrator revoked");
-        }
-      };
       await expect(
-        decideBrowserPairRequest({ code, requestId, decision: "approve", assertCurrent }),
+        approve(started, () => {
+          checks += 1;
+          if (checks === failAtCheck) {
+            throw new Error("administrator revoked");
+          }
+        }),
       ).rejects.toThrow("administrator revoked");
-      expect(readFinalEffect(requestId)).toEqual(before);
+      expect(readFinalEffect(started.requestId)).toEqual(before);
       expect(await getPairedDevice(browser.identity.deviceId)).toBeNull();
-    },
-  );
-
-  it("creates no paired device from a revoked bootstrap credential", async () => {
-    const browser = newBrowser();
-    const { requestId, code } = await start(browser);
-    expect((await decide(code, requestId)).ok).toBe(true);
-    const collected = await collect(browser, requestId);
-    expect(collected.body.status).toBe("approved");
-    const bootstrapToken = collected.body.bootstrapToken as string;
-    expect((await revokeDeviceBootstrapToken({ token: bootstrapToken })).removed).toBe(true);
-
-    expect((await connectBrowser(browser, bootstrapToken)).ok).toBe(false);
-    expect(await getPairedDevice(browser.identity.deviceId)).toBeNull();
+    }
   });
 
   // Last: a second Gateway replaces the shared auth state this file's sockets rely on.

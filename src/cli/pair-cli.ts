@@ -56,7 +56,7 @@ function logRequest(request: DevicePairCodeResult): void {
     ["Browser ID", formatBrowserPairDeviceId(request.deviceId)],
     ["Requested", formatMinutesAgo(request.createdAtMs)],
   ];
-  defaultRuntime.log("A browser is asking for full administrator access to this Gateway.");
+  defaultRuntime.log("A browser is asking to pair with administrator access to this Gateway.");
   defaultRuntime.log("");
   for (const [label, value] of rows) {
     if (value) {
@@ -68,7 +68,7 @@ function logRequest(request: DevicePairCodeResult): void {
     "Approve only if you opened this page yourself and it shows this code and Browser ID.",
   );
   defaultRuntime.log(
-    "If someone sent you this code or command, answer no: approving gives their browser full control of this Gateway.",
+    "If someone sent you this code or command, answer no: approving gives their browser administrator control of this Gateway.",
   );
 }
 
@@ -100,6 +100,9 @@ export async function runPairCommand(rawCode: string, opts: PairOpts): Promise<v
     return;
   }
   defaultRuntime.log("Approved. The waiting browser connects by itself.");
+  defaultRuntime.log(
+    `It is listed in \`openclaw devices list\`; remove it with \`openclaw devices remove ${approved.deviceId}\` to end its access.`,
+  );
 }
 
 export function registerPairCli(program: Command) {

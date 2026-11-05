@@ -3,7 +3,11 @@ import { randomInt, randomUUID } from "node:crypto";
 import { buildBrowserPairCode } from "../shared/browser-pair.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
-import { executeDevicePairingMutation } from "./device-pairing-worker.js";
+import { publishDevicePairingResolution } from "./device-pairing-resolution.js";
+import {
+  DevicePairingAuthorityRefusedError,
+  executeDevicePairingMutation,
+} from "./device-pairing-worker.js";
 
 const BROWSER_PAIR_REQUEST_TTL_MS = 10 * 60 * 1000;
 // The route is public, so a source rotating its address can keep this table full and
@@ -71,17 +75,58 @@ export async function decideBrowserPairRequest(
     code: string;
     requestId: string;
     decision: "approve" | "reject";
+    /** Scopes of the approving operator; the paired grant must stay within them. */
+    callerScopes: readonly string[];
+    /** Live shared-auth generation; issued browser tokens are bound to it. */
+    readSharedGatewaySessionGeneration?: () => string | undefined;
   },
 ) {
-  const { context, assertCurrent, ...input } = params;
-  // Read the clock once the lock is held: an approval queued before expiry must not
-  // issue a credential after it.
-  return await withDevicePairingLock(
-    async () =>
-      await executeDevicePairingMutation(
-        { type: "devicePairing.decideBrowserRequest", input: { ...input, nowMs: Date.now() } },
-        { context, assertCurrent },
-      ),
-    "devicePairing.decideBrowserRequest",
-  );
+  const { context, assertCurrent, readSharedGatewaySessionGeneration, ...input } = params;
+  return await withDevicePairingLock(async () => {
+    const nowMs = Date.now();
+    const sharedGatewaySessionGeneration = readSharedGatewaySessionGeneration?.();
+    let expired = false;
+    const result = await executeDevicePairingMutation(
+      {
+        type: "devicePairing.decideBrowserRequest",
+        input: {
+          ...input,
+          sharedGatewaySessionGeneration,
+          nowMs,
+          collectExpiresAtMs: nowMs + BROWSER_PAIR_REQUEST_TTL_MS,
+        },
+      },
+      {
+        context,
+        assertCurrent,
+        // The writer queue can hold an approval past the deadline the worker saw, so
+        // the live clock decides at admission and a late approval rolls back.
+        admit: (facts) => {
+          if (facts.kind !== "browser-pair.decision") {
+            return;
+          }
+          if (facts.expiresAtMs <= Date.now()) {
+            expired = true;
+            throw new DevicePairingAuthorityRefusedError("Browser pairing request expired");
+          }
+          // A shared secret rotated while queued would issue a token that is already stale.
+          if (readSharedGatewaySessionGeneration?.() !== sharedGatewaySessionGeneration) {
+            throw new DevicePairingAuthorityRefusedError("Gateway shared auth changed");
+          }
+        },
+        onAuthorityRefused: () => {
+          if (!expired) {
+            throw new DevicePairingAuthorityRefusedError();
+          }
+          return { status: "expired" as const };
+        },
+      },
+    );
+    if (result.status === "approved") {
+      for (const superseded of result.superseded) {
+        publishDevicePairingResolution(superseded, "superseded");
+      }
+    }
+    return result;
+  }, "devicePairing.decideBrowserRequest");
 }

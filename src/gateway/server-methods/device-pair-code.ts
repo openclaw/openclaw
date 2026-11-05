@@ -9,6 +9,8 @@ import {
 } from "../../infra/device-pairing-browser-code.js";
 import { normalizeBrowserPairCode } from "../../shared/browser-pair.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { broadcastRejectedDevicePairing } from "../pairing-events.js";
+import { resolveDeviceSessionAuthz } from "./device-management-authz.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -20,12 +22,20 @@ const REFUSALS = {
   decided: "This code was already answered. Choose Pair this browser again to get a new one.",
 } as const;
 
+function formatReducedRefusal(deviceId: string): string {
+  return (
+    "This browser is already paired with revoked or narrower access, and a code does not lift that limit. " +
+    "To restore administrator access, run `openclaw dashboard` on the Gateway host and open its link in that browser, " +
+    `or run \`openclaw devices remove ${deviceId}\` and pair again.`
+  );
+}
+
 export const devicePairCodeHandlers: GatewayRequestHandlers = {
   "device.pair.code": defineValidatedGatewayHandler(
     "device.pair.code",
     validateDevicePairCodeParams,
     async (options) => {
-      const { params, respond, context } = options;
+      const { params, respond, context, client } = options;
       await respondUnavailableOnThrow(respond, async () => {
         const { requestId, decision } = params;
         const code = normalizeBrowserPairCode(params.code);
@@ -37,22 +47,45 @@ export const devicePairCodeHandlers: GatewayRequestHandlers = {
           context: captureOpenClawStateWorkerContext(),
           assertCurrent: readGatewayRequestMutationAuthority(options).assertCurrent,
         };
-        const result =
-          requestId && decision
-            ? await decideBrowserPairRequest({ code, requestId, decision, ...authority })
-            : await inspectBrowserPairRequest({ code, ...authority });
-        if (!("requestId" in result)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, REFUSALS[result.status]),
-          );
+        const refuse = (message: string) =>
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+        if (!requestId || !decision) {
+          const inspected = await inspectBrowserPairRequest({ code, ...authority });
+          if (!("requestId" in inspected)) {
+            refuse(REFUSALS[inspected.status]);
+            return;
+          }
+          respond(true, inspected, undefined);
           return;
         }
-        if (result.status === "approved") {
-          context.logGateway.info(`browser pairing approved device=${result.deviceId}`);
+        const decided = await decideBrowserPairRequest({
+          code,
+          requestId,
+          decision,
+          callerScopes: resolveDeviceSessionAuthz(client).callerScopes,
+          // Browser tokens follow shared-secret rotation like those issued at connect.
+          readSharedGatewaySessionGeneration: () =>
+            context.sharedGatewaySessionGenerationState?.requiredGeneration,
+          ...authority,
+        });
+        if (decided.status === "reduced") {
+          refuse(formatReducedRefusal(decided.deviceId));
+          return;
         }
-        respond(true, result, undefined);
+        if (!("requestId" in decided)) {
+          refuse(REFUSALS[decided.status]);
+          return;
+        }
+        // The result schema is closed; superseded handshakes are announced, not returned.
+        const { superseded, ...request } = decided;
+        if (request.status === "approved") {
+          const resolvedAt = Date.now();
+          for (const pairing of superseded) {
+            broadcastRejectedDevicePairing(context.broadcast, pairing, resolvedAt);
+          }
+          context.logGateway.info(`browser pairing approved device=${request.deviceId}`);
+        }
+        respond(true, request, undefined);
       });
     },
   ),

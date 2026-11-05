@@ -217,9 +217,9 @@ export const DevicePairSetupCodeResultSchema = closedObject({
 /**
  * Reads the browser request named by a code shown in that browser. Adding
  * `requestId` and `decision` settles exactly that inspected request, so a decision
- * cannot land on a request the operator never saw. Approval grants the browser the
- * Control UI owner profile, so this method requires operator.admin (enforced by
- * the core method descriptor).
+ * cannot land on a request the operator never saw. Approval pairs the browser as an
+ * operator device with the Control UI's admin scopes under the caller's own scopes,
+ * so this method requires operator.admin (enforced by the core method descriptor).
  */
 export const DevicePairCodeParamsSchema = closedObject({
   code: Type.String({ minLength: 8, maxLength: 16 }),

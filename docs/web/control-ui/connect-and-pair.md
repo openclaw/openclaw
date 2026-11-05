@@ -97,9 +97,9 @@ Use this when a browser has no Gateway token and you can run a command on the Ga
   </Step>
 </Steps>
 
-Approval gives that browser full administrator access, the same access as a link from `openclaw dashboard`. **Only approve a code you requested yourself.** A code is not a secret: it names a waiting browser, and anyone can display one. Running a code someone else sent you gives their browser control of your Gateway, so answer no unless the Browser ID in the terminal matches the page in front of you.
+Approval pairs that browser as an operator device with the Control UI's administrator scopes, the same result as approving it with `openclaw devices approve`. It then appears in `openclaw devices list` and the Devices page, where you can remove it. **Only approve a code you requested yourself.** A code is not a secret: it names a waiting browser, and anyone can display one. Running a code someone else sent you gives their browser control of your Gateway, so answer no unless the Browser ID in the terminal matches the page in front of you.
 
-Codes expire after ten minutes. Only the browser that asked can collect the result, because the Gateway checks the signature of its device key, and the credential it receives works for that key alone. If you answer no, the page shows that the request was declined.
+Codes expire after ten minutes. Only the browser that asked can collect the result, because the Gateway checks the signature of its device key, and the device token it receives works for that key alone. A browser that is already paired with a revoked or narrowed operator token keeps that limit, so the code is refused; use the `openclaw dashboard` owner handoff described below, or remove the device first. If you answer no, the page shows that the request was declined.
 
 The page must be served by the Gateway it is connecting to. Pairing also works on plain `http://` LAN addresses, but anyone on that network can read the Gateway traffic afterwards, so prefer HTTPS. See [`openclaw pair`](/cli/pair) for the command's options.
 

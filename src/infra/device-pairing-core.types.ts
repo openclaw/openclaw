@@ -107,6 +107,11 @@ export type DevicePairingApprovalOptions = {
    * same-key upgrade. The live role set is rechecked under the pairing lock.
    */
   autoApproveNewDeviceScopes?: readonly string[];
+  /**
+   * Bind issued tokens to the Gateway's current shared-auth generation. Browser tokens
+   * without one are refused while shared auth is configured.
+   */
+  tokenIssuer?: DeviceAuthToken["issuer"];
 };
 
 export type DeviceBootstrapApprovalOptions = Pick<

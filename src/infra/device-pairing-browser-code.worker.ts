@@ -1,6 +1,18 @@
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { CONTROL_UI_OPERATOR_SCOPES } from "../gateway/control-ui-bootstrap-contract.js";
+import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import { ensureDevicePairingBrowserRequestSchema } from "../state/openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { issueBoundControlUiOwnerBootstrapToken } from "./device-bootstrap.worker-kernel.js";
+import { approveDevicePairingInWorker } from "./device-pairing-approval.kernel.js";
+import { requestDevicePairingInWorker } from "./device-pairing-core.kernel.js";
+import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
+import { loadDevicePairingStateForMutation } from "./device-pairing-state.kernel.js";
+import { persistDevicePairingStoreState } from "./device-pairing-store.js";
+import { resolveRoleTokenScopes } from "./device-pairing-token-utils.js";
+import type { PairedDevice } from "./device-pairing.types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -9,6 +21,8 @@ import {
 import type { EngineConnection } from "./sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 import { deferSqlitePostCommitPublication } from "./sqlite-post-commit.js";
+
+const OPERATOR_ROLE = "operator";
 
 type BrowserRequestDatabase = Pick<OpenClawStateKyselyDatabase, "device_pairing_browser_requests">;
 const initializedDatabases = new WeakSet<EngineConnection>();
@@ -31,7 +45,6 @@ type BrowserRequestRow = {
   user_agent: string | null;
   origin: string | null;
   status: string;
-  bootstrap_token: string | null;
   created_at_ms: number;
   expires_at_ms: number;
 };
@@ -68,6 +81,30 @@ function describeRequest(row: BrowserRequestRow, status: "pending" | "approved" 
     createdAtMs: row.created_at_ms,
     expiresAtMs: row.expires_at_ms,
   };
+}
+
+/**
+ * A revoked operator token, or one below the device's approved scopes, is a limit the
+ * approval rules keep. Code pairing refuses rather than report access it cannot grant.
+ */
+function hasReducedOperatorToken(device: PairedDevice | undefined): boolean {
+  const token = device?.tokens?.[OPERATOR_ROLE];
+  if (!device || !token) {
+    return false;
+  }
+  if (token.revokedAtMs !== undefined) {
+    return true;
+  }
+  return (
+    resolveMissingRequestedScope({
+      role: OPERATOR_ROLE,
+      requestedScopes: resolveRoleTokenScopes(
+        OPERATOR_ROLE,
+        device.approvedScopes ?? device.scopes,
+      ),
+      allowedScopes: token.scopes,
+    }) !== null
+  );
 }
 
 /** File one browser's request, keeping its live code across repeated clicks. */
@@ -128,7 +165,6 @@ export function startBrowserPairRequestInWorker(
       user_agent: input.userAgent ?? null,
       origin: input.origin ?? null,
       status: "pending",
-      bootstrap_token: null,
       created_at_ms: input.nowMs,
       expires_at_ms: input.expiresAtMs,
     }),
@@ -141,7 +177,11 @@ export function startBrowserPairRequestInWorker(
   };
 }
 
-/** Return a request's decision only to the key that filed it. */
+/**
+ * Return a request's decision only to the key that filed it. An approved request keeps
+ * answering until expiry so a dropped reply can be collected again; the token is read
+ * from the paired device each time, which stays its only owner.
+ */
 export function collectBrowserPairRequestInWorker(
   db: EngineConnection,
   input: { requestId: string; deviceId: string; publicKey: string; nowMs: number },
@@ -154,14 +194,24 @@ export function collectBrowserPairRequestInWorker(
     deleteRequest(db, row.request_id);
     return { status: "expired" as const };
   }
-  if (row.status === "approved" && row.bootstrap_token) {
-    return {
-      status: "approved" as const,
-      bootstrapToken: row.bootstrap_token,
-      expiresAtMs: row.expires_at_ms,
-    };
+  if (row.status === "rejected") {
+    return { status: "rejected" as const };
   }
-  return { status: row.status === "rejected" ? ("rejected" as const) : ("pending" as const) };
+  if (row.status !== "approved") {
+    return { status: "pending" as const };
+  }
+  const device = loadDevicePairingStateForMutation(input.nowMs).pairedByDeviceId[row.device_id];
+  const token = device?.tokens?.[OPERATOR_ROLE];
+  // Removed, re-keyed, or revoked since approval: the owner's later decision wins.
+  if (!device || device.publicKey !== row.public_key || !token || token.revokedAtMs) {
+    return { status: "expired" as const };
+  }
+  return {
+    status: "approved" as const,
+    deviceToken: token.token,
+    role: OPERATOR_ROLE,
+    scopes: token.scopes,
+  };
 }
 
 /** Look up what a host operator is about to decide. */
@@ -184,14 +234,24 @@ export function inspectBrowserPairRequestInWorker(
 }
 
 /**
- * Settle the exact request the operator inspected. Approval issues the owner
- * handoff bound to the request's key, so the collected token cannot be redeemed
- * by anything but that browser; rejection stays readable until expiry so the
+ * Settle the exact request the operator inspected. Approval files and approves an
+ * ordinary operator pairing for the request's key under the caller's scopes, so
+ * the result is the same paired device `openclaw devices approve` would produce,
+ * never a bootstrap owner handoff. Rejection stays readable until expiry so the
  * waiting browser can show the outcome.
  */
 export function decideBrowserPairRequestInWorker(
   db: EngineConnection,
-  input: { code: string; requestId: string; decision: "approve" | "reject"; nowMs: number },
+  input: {
+    code: string;
+    requestId: string;
+    decision: "approve" | "reject";
+    callerScopes: readonly string[];
+    /** Shared-auth generation browser tokens must carry, when shared auth is configured. */
+    sharedGatewaySessionGeneration?: string;
+    nowMs: number;
+    collectExpiresAtMs: number;
+  },
 ) {
   const row = selectRequest(db, "code", input.code);
   if (!row || row.request_id !== input.requestId) {
@@ -204,6 +264,11 @@ export function decideBrowserPairRequestInWorker(
   if (row.status !== "pending") {
     return { status: "decided" as const };
   }
+  // The caller rechecks the deadline with its live clock once this reaches the writer.
+  requestDevicePairingMutationAdmission({
+    kind: "browser-pair.decision",
+    expiresAtMs: row.expires_at_ms,
+  });
   const kysely = browserRequestDatabase(db);
   if (input.decision === "reject") {
     executeSqliteQuerySync(
@@ -213,19 +278,69 @@ export function decideBrowserPairRequestInWorker(
         .set({ status: "rejected" })
         .where("request_id", "=", row.request_id),
     );
-    return describeRequest(row, "rejected");
+    return { ...describeRequest(row, "rejected"), superseded: [] };
   }
-  const issued = issueBoundControlUiOwnerBootstrapToken({
-    deviceId: row.device_id,
-    publicKey: row.public_key,
-    nowMs: input.nowMs,
-  });
+  const state = loadDevicePairingStateForMutation(input.nowMs);
+  if (hasReducedOperatorToken(state.pairedByDeviceId[row.device_id])) {
+    return { status: "reduced" as const, deviceId: row.device_id };
+  }
+  // The browser's own earlier requests came from an unauthenticated handshake; the
+  // operator approved this key for operator access, not whatever those asked for.
+  const superseded = Object.values(state.pendingById)
+    .filter((pending) => pending.deviceId === row.device_id)
+    .map(({ requestId, deviceId }) => ({ requestId, deviceId }));
+  if (superseded.length > 0) {
+    for (const { requestId } of superseded) {
+      delete state.pendingById[requestId];
+    }
+    persistDevicePairingStoreState(state, undefined, "pending");
+  }
+  const filed = requestDevicePairingInWorker(
+    {
+      deviceId: row.device_id,
+      publicKey: row.public_key,
+      clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+      clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      ...(row.origin ? { browserOrigin: row.origin } : {}),
+      ...(row.remote_ip ? { remoteIp: row.remote_ip } : {}),
+      role: OPERATOR_ROLE,
+      roles: [OPERATOR_ROLE],
+      scopes: [...CONTROL_UI_OPERATOR_SCOPES],
+    },
+    input.nowMs,
+  );
+  const approved = approveDevicePairingInWorker(
+    filed.request.requestId,
+    {
+      callerScopes: [...input.callerScopes],
+      approvedVia: "owner",
+      ...(input.sharedGatewaySessionGeneration
+        ? {
+            tokenIssuer: {
+              kind: "shared-gateway-auth" as const,
+              generation: input.sharedGatewaySessionGeneration,
+            },
+          }
+        : {}),
+    },
+    input.nowMs,
+  );
+  if (approved?.status !== "approved") {
+    // The method requires operator.admin, which covers every requested scope. Throwing
+    // rolls back the filed request instead of leaving it in the operator approval list.
+    throw new Error(
+      `Browser pairing approval was refused: ${approved?.reason ?? "request missing"}`,
+    );
+  }
   executeSqliteQuerySync(
     db,
     kysely
       .updateTable("device_pairing_browser_requests")
-      .set({ status: "approved", bootstrap_token: issued.token, expires_at_ms: issued.expiresAtMs })
+      .set({ status: "approved", expires_at_ms: input.collectExpiresAtMs })
       .where("request_id", "=", row.request_id),
   );
-  return describeRequest({ ...row, expires_at_ms: issued.expiresAtMs }, "approved");
+  return {
+    ...describeRequest({ ...row, expires_at_ms: input.collectExpiresAtMs }, "approved"),
+    superseded,
+  };
 }

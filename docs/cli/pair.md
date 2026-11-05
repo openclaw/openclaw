@@ -17,7 +17,7 @@ openclaw pair ABCD-EFGH
 The command prints what the Gateway knows about the requesting browser, then asks before approving:
 
 ```text
-A browser is asking for full administrator access to this Gateway.
+A browser is asking to pair with administrator access to this Gateway.
 
   Code                ABCD-EFGH
   Browser (reported)  Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ...
@@ -29,7 +29,11 @@ A browser is asking for full administrator access to this Gateway.
 
 **Address** is the peer the Gateway saw. Rows marked `(reported)` come from the requester, so treat them as hints. Compare **Browser ID** with the one on the page in front of you.
 
-Approve only a code you requested yourself. Anyone can display a code, and approving one someone sent you gives their browser full control of your Gateway. Answering no tells the browser it was declined.
+Approve only a code you requested yourself. Anyone can display a code, and approving one someone sent you gives their browser administrator control of your Gateway. Answering no tells the browser it was declined.
+
+Approving pairs the browser the same way `openclaw devices approve` would: it becomes an operator device with the Control UI's administrator scopes, and your own connection must hold those scopes. It appears in `openclaw devices list` and the Devices page. To end its access, run `openclaw devices remove <deviceId>`.
+
+If that browser is already paired and its operator token was revoked or rotated to fewer scopes, the command refuses instead of restoring it. To restore administrator access, run [`openclaw dashboard`](/cli/dashboard) on the Gateway host and open its link in that browser. Alternatively, remove the device with `openclaw devices remove <deviceId>` and run the same command again while the code is still valid.
 
 Codes are not case-sensitive and the hyphen is optional. They expire after ten minutes and work once.
 

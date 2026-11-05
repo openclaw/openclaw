@@ -7,7 +7,11 @@ import {
   formatBrowserPairDeviceId,
   type BrowserPairAction,
 } from "../../../src/shared/browser-pair.js";
-import { loadOrCreateDeviceIdentity, signDevicePayload } from "./nodes/index.ts";
+import {
+  loadOrCreateDeviceIdentity,
+  signDevicePayload,
+  storeDeviceAuthToken,
+} from "./nodes/index.ts";
 
 const BROWSER_PAIR_POLL_INTERVAL_MS = 2_000;
 
@@ -31,7 +35,8 @@ async function postBrowserPair(params: {
   const payload = buildBrowserPairPayload({ action, deviceId: identity.deviceId, requestId });
   return await fetch(`${params.basePath}${BROWSER_PAIR_ROUTE_PREFIX}/${action}`, {
     method: "POST",
-    credentials: "omit",
+    // Same-origin cookies reach the route, so an auth proxy in front of the Gateway admits it.
+    credentials: "same-origin",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       deviceId: identity.deviceId,
@@ -45,8 +50,8 @@ async function postBrowserPair(params: {
 export function createBrowserPairSession(params: {
   basePath: string;
   onState: (state: BrowserPairState) => void;
-  /** Receives the Gateway that issued the approval, which is the only valid redeemer. */
-  onApproved: (bootstrapToken: string, gatewayUrl: string) => void;
+  /** The paired device token is stored for the Gateway that issued it; connect there. */
+  onApproved: (gatewayUrl: string) => void;
 }) {
   let attempt = 0;
   let attemptGatewayUrl: string | undefined;
@@ -94,11 +99,20 @@ export function createBrowserPairSession(params: {
       return;
     }
     // SAFETY: Same-origin reply from the Gateway that ships with this UI; unknown statuses keep polling.
-    const body = result?.body as { status?: string; bootstrapToken?: string } | undefined;
-    if (body?.status === "approved" && body.bootstrapToken) {
+    const body = result?.body as
+      | { status?: string; deviceToken?: string; role?: string; scopes?: string[] }
+      | undefined;
+    if (body?.status === "approved" && body.deviceToken && body.role) {
+      storeDeviceAuthToken({
+        deviceId: identity.deviceId,
+        gatewayUrl,
+        role: body.role,
+        token: body.deviceToken,
+        scopes: body.scopes ?? [],
+      });
       // The login gate owns connection progress and errors from here.
       params.onState({ kind: "idle" });
-      params.onApproved(body.bootstrapToken, gatewayUrl);
+      params.onApproved(gatewayUrl);
       return;
     }
     if (body?.status === "rejected") {

@@ -64,7 +64,9 @@ function admissionFacts(value: unknown): DevicePairingAdmissionFacts[] {
           typeof entry.credentialDigest !== "string" ||
           typeof entry.provisionOperationId !== "string" ||
           typeof entry.ownerEpoch !== "number")) ||
-      ((entry.kind === "bootstrap.consume" || entry.kind === "bootstrap.token") &&
+      ((entry.kind === "bootstrap.consume" ||
+        entry.kind === "bootstrap.token" ||
+        entry.kind === "browser-pair.decision") &&
         typeof entry.expiresAtMs !== "number")
     ) {
       throw new Error("Invalid pairing admission facts");

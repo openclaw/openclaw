@@ -14,7 +14,6 @@ import {
   type Element,
 } from "solid-js";
 import "../components/link-reader-hovercard-registration.ts";
-import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { LazyViewError } from "../components/solid/lazy-view-error.tsx";
 import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
 import { LoadingState } from "../components/solid/loading-state.tsx";
@@ -530,15 +529,10 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
             onOpenGatewaySettings: context.gateway.hasStoredDeviceToken?.()
               ? () => context.navigate("connection")
               : undefined,
-            onBrowserPaired: (bootstrapToken: string, gatewayUrl: string) => {
+            onBrowserPaired: (gatewayUrl: string) => {
               setLoginGatePinned(true);
-              context.gateway.connect({
-                gatewayUrl,
-                token: "",
-                password: "",
-                bootstrapToken,
-                bootstrapProfile: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
-              });
+              // Empty session credentials let connect select the stored device token.
+              context.gateway.connect({ gatewayUrl, token: "", password: "", bootstrapToken: "" });
             },
             onConnect: () => {
               setLoginGatePinned(true);

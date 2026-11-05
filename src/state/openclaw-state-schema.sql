@@ -650,7 +650,6 @@ CREATE TABLE IF NOT EXISTS device_pairing_browser_requests (
   user_agent TEXT,
   origin TEXT,
   status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
-  bootstrap_token TEXT,
   created_at_ms INTEGER NOT NULL,
   expires_at_ms INTEGER NOT NULL
 ) STRICT;

@@ -48,13 +48,15 @@ const LoginGateBrowserPairCard = lazy(() => import("./login-gate-browser-pair.ts
 
 /**
  * Whether the selected Gateway is the one serving this page's pairing route. Pairing
- * posts to the page's base path while redemption dials the selected URL, so Gateways
- * mounted under different paths on one host are different issuers.
+ * posts to the page's origin and base path while the token is used on the selected URL,
+ * so another scheme (its default port differs too) or mount path is another Gateway.
  */
 export function canPairBrowserWithGateway(gatewayUrl: string, basePath: string): boolean {
   const parsed = URL.parse(gatewayUrl);
+  const socketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return (
-    parsed?.host === window.location.host &&
+    parsed?.protocol === socketProtocol &&
+    parsed.host === window.location.host &&
     normalizeBasePath(parsed.pathname) === normalizeBasePath(basePath)
   );
 }
@@ -68,8 +70,8 @@ export type LoginGateProps = LoginFailureFeedbackParams & {
   showGatewaySecret: boolean;
   onGatewayUrlChange: (value: string) => void;
   onSecretChange: (value: string) => void;
-  /** Connect to the issuing Gateway with the owner handoff this browser collected. */
-  onBrowserPaired: (bootstrapToken: string, gatewayUrl: string) => void;
+  /** Connect to the issuing Gateway with the device token pairing stored for it. */
+  onBrowserPaired: (gatewayUrl: string) => void;
   onToggleGatewaySecret: () => void;
   onConnect: () => void;
   onOpenGatewaySettings?: () => void;
@@ -639,10 +641,10 @@ function LoginGateContent(model: () => LoginGateProps, host: LoginGateElement): 
                 host={host}
                 basePath={normalizeBasePath(model().resourceBasePath)}
                 gatewayUrl={model().gatewayUrl}
-                onPaired={(bootstrapToken, gatewayUrl) => {
+                onPaired={(gatewayUrl) => {
                   // Connection progress and errors belong to the sign-in card.
                   setPairCardOpen(false);
-                  model().onBrowserPaired(bootstrapToken, gatewayUrl);
+                  model().onBrowserPaired(gatewayUrl);
                 }}
                 onBack={() => setPairCardOpen(false)}
               />
