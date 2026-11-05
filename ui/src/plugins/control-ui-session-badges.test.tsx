@@ -11,9 +11,12 @@ import {
   createInitializationContext,
   createGatewayBrowserClientFixture,
 } from "../pages/chat/chat-application-context.test-support.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { createApplicationGateway } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import * as loader from "./control-ui-loader.ts";
@@ -41,20 +44,27 @@ it("shares passive live/cache facts and retires observers with the current regis
     gatewayUrl: location.origin.replace(/^http/u, "ws"),
     request,
   });
-  const { gateway } = createApplicationGateway({
-    client,
-    phase: "connected",
-    hello: gatewayHelloForMethods(
-      ["plugins.controlUi.list", "plugins.controlUi.report"],
-      ["operator.read"],
-    ),
-  });
+  const { gateway } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client,
+      phase: "connected",
+      hello: gatewayHelloForMethods(
+        ["plugins.controlUi.list", "plugins.controlUi.report"],
+        ["operator.read"],
+      ),
+    }),
+  );
+  const configuration = createApplicationConfigCapability({ resourceBasePath: "" });
   let context: ApplicationContext = {
     ...createInitializationContext(client),
     gateway,
     config: {
-      ...createApplicationConfigCapability({ resourceBasePath: "" }),
-      refresh: async () => ({ pluginAssetsRequireAuth: false, pluginFrameGrants: [] }),
+      ...configuration,
+      refresh: async () => ({
+        ...configuration.current,
+        pluginAssetsRequireAuth: false,
+        pluginFrameGrants: [],
+      }),
     },
   };
   let fact: ControlUiSessionBadge = {

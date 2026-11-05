@@ -183,9 +183,7 @@ export function createWorkspacePublicationHost(params: {
       const registration: Registration = { provider: next, signal: ownerSignal };
       current = registration;
       discovery.clear();
-      const stopIdentityChanges = next.subscribeWorkerIdentityChanges?.(() =>
-        discovery.invalidate(),
-      );
+      let stopIdentityChanges: (() => void) | undefined;
       const instance = getPluginValueInstance(next);
       let subscriptionStopped = false;
       let removeInstanceCleanup: (() => void) | undefined;
@@ -199,7 +197,6 @@ export function createWorkspacePublicationHost(params: {
         removeInstanceCleanup = undefined;
         remove?.();
       };
-      removeInstanceCleanup = instance?.lifecycle.onDispose(stopIdentitySubscription);
       const uninstall = () => {
         ownerSignal.removeEventListener("abort", uninstall);
         if (current === registration) {
@@ -212,8 +209,10 @@ export function createWorkspacePublicationHost(params: {
           stopIdentitySubscription();
         }
       };
-      ownerSignal.addEventListener("abort", uninstall, { once: true });
       try {
+        stopIdentityChanges = next.subscribeWorkerIdentityChanges?.(() => discovery.invalidate());
+        removeInstanceCleanup = instance?.lifecycle.onDispose(stopIdentitySubscription);
+        ownerSignal.addEventListener("abort", uninstall, { once: true });
         await ready;
         ownerSignal.throwIfAborted();
         next.assertCurrent();

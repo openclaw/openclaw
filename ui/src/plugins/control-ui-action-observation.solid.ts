@@ -96,7 +96,17 @@ export function observeSessionMenuActions(
       }
     }
   };
+  let actions = runtime.registrations("actions");
   const stopRuntime = runtime.subscribe(() => {
+    const next = runtime.registrations("actions");
+    // A registration replacement has a new signal; diagnostics preserve the same lifetimes.
+    if (
+      next.length === actions.length &&
+      next.every((entry, index) => entry.signal === actions[index]?.signal)
+    ) {
+      return;
+    }
+    actions = next;
     reconcile();
     changed();
   });
