@@ -494,7 +494,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     }
     expect(bodies.join("")).toBe(body);
   });
-
   it("passes mention-forward targets to non-streaming plain text replies without rewriting body text", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness({
@@ -508,7 +507,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
     });
   });
-
   it("puts required bot mentions on every chunk and disables streaming cards", async () => {
     const runtime = getFeishuRuntimeMock();
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
@@ -1075,6 +1073,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["fence inner", ["~~~\n```\n    ~", null, "~~~\n```\n    ~~~"], ["~~~\n```\n    ~", "~~~\n~~"]],
     ["fence text", ["````\n```\n``", null, "````\n```\n````y"], ["````\n```\n``", "````\n``y"]],
     ["fence crlf", ["```\n```\r\n", null, "```\n```\r\n```\nD"], ["```\n```\r\n", "```\nD"]],
+    ["fence cr", ["~~~\rz\n```", null, "~~~\rz\n```\n```\nD"], ["~~~\rz\n```", "~~~\n```\nD"]],
+    ["fence ls", ["~~~\u2028\n```", null, "~~~\u2028\n```\n~~~\nD"], ["~~~\u2028\n```", "D"]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();

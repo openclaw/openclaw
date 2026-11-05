@@ -329,16 +329,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     });
   };
 
-  // The opener line of a fenced block that text leaves open, using core's fence rules.
+  // The opener line of a fenced block that text leaves open, using core's fence rules on
+  // CommonMark lines: CRLF, CR and LF end a line, and a line or paragraph separator does not.
   const openFence = (text: string) => {
     let open: { line: string; char: string; size: number } | undefined;
-    for (const line of text.split("\n")) {
-      const [, marker = "", info = ""] = /^ {0,3}(`{3,}|~{3,})(.*?)\r?$/u.exec(line) ?? [];
+    for (const line of text.split(/\r\n?|\n/u)) {
+      const [, marker = "", info = ""] = /^ {0,3}(`{3,}|~{3,})(.*)$/su.exec(line) ?? [];
       const char = marker.charAt(0);
       if (open && char === open.char && marker.length >= open.size && !/[^ \t]/u.test(info)) {
         open = undefined;
       } else if (!open && marker && !(char === "`" && info.includes("`"))) {
-        open = { line: line.replace(/\r$/u, ""), char, size: marker.length };
+        open = { line, char, size: marker.length };
       }
     }
     return open?.line;
@@ -355,11 +356,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       .slice(from.length)
       .replace(from.endsWith("\n") ? /^\s*\n/u : /^\s*\n|^[^\S\n]+/u, "");
     const opener = rest && openFence(from);
-    const lineEnd = text.indexOf("\n", text.length - rest.length);
+    const at = text.length - rest.length;
+    const lineEnd = at + text.slice(at).search(/[\r\n]|$/u);
     // A continuation that starts with or completes the closing fence drops it instead of reopening.
-    if (opener && !openFence(lineEnd < 0 ? text : text.slice(0, lineEnd))) {
-      const lineStart = text.lastIndexOf("\n", text.length - rest.length - 1) + 1;
-      return openFence(text.slice(0, lineStart)) ? rest.replace(/^[^\n]*(?:\s*\n)?/u, "") : rest;
+    if (opener && !openFence(text.slice(0, lineEnd))) {
+      const lineStart =
+        Math.max(text.lastIndexOf("\n", at - 1), text.lastIndexOf("\r", at - 1)) + 1;
+      return openFence(text.slice(0, lineStart))
+        ? rest.replace(/^[^\r\n]*(?:\s*[\r\n])?/u, "")
+        : rest;
     }
     return opener ? `${opener}\n${rest}` : rest;
   };
