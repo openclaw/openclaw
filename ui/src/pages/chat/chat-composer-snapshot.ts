@@ -85,9 +85,11 @@ export function cacheChatComposerSnapshot(host: ChatPageHost, result: ModelCatal
           thinkingLevels: profile?.thinkingLevels?.slice(0, 30),
           permissionMode: session.permissionMode,
           defaultPermissionMode: agent?.defaultPermissionMode,
-          contextWindow: session.contextWindow,
-          contextWindowDefault: session.contextWindowDefault,
-          contextWindows: session.contextWindows?.slice(0, 30),
+          contextWindowDisplay: session.contextWindows && {
+            contextWindow: session.contextWindow,
+            contextWindowDefault: session.contextWindowDefault,
+            contextWindows: session.contextWindows.slice(0, 30),
+          },
         }
       : null;
     if (JSON.stringify(previous?.composer) === JSON.stringify(composer)) {

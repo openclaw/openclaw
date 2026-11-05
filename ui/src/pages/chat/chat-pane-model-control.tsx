@@ -23,9 +23,7 @@ export function ChatPaneModelControl(props: {
             model: saved.id,
             modelProvider: saved.provider,
             modelOverrideSource: "user" as const,
-            contextWindow: saved.contextWindow,
-            contextWindowDefault: saved.contextWindowDefault,
-            contextWindows: saved.contextWindows,
+            ...saved.contextWindowDisplay,
           },
         }
       : undefined;
