@@ -241,6 +241,8 @@ export function reduceSessionEntryPatch(
   switch (operation.kind) {
     case "writer-revoke":
       return {
+        // Fencing a producer is not Stop: restart and settled cleanup retain pursuit custody.
+        // Explicit Stop and Goal/session transitions clear it through their own owners.
         activeWriterRunId: undefined,
         ...(operation.terminalAtMs !== undefined &&
         entry.status === undefined &&

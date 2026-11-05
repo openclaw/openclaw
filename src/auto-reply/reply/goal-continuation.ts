@@ -19,6 +19,7 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { transferCommandOwnerAuthorityToSuccessor } from "../command-owner-authority.js";
 import { createGoalContinuationReturnScope } from "./goal-continuation-return.js";
 import type { GoalContinuation } from "./goal-continuation.types.js";
+import { persistGoalSuccessorCustody } from "./goal-successor-custody.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { scheduleFollowupDrain } from "./queue/drain.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
@@ -266,6 +267,25 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
     strandedReplyRetry: undefined,
     stalledTurnRecovery: undefined,
   };
+  // Publish before the predecessor can disappear or the mailbox can accept work.
+  // Store only source facts; the live queue still owns execution and fresh admission.
+  const persisted = await persistGoalSuccessorCustody({
+    base: nudge,
+    entry,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    sourceRunId: params.sourceRunId,
+    phase: "pending",
+    assertCurrent: () => {
+      params.base.operatorAuthority?.assertCurrent();
+      if (!eligible()) {
+        throw new Error("Goal continuation lost its source before custody publication");
+      }
+    },
+  });
+  if (!persisted || !eligible()) {
+    return false;
+  }
   if (params.controllerInput) {
     bindSessionControllerSource(params.controllerInput, nudge);
   }

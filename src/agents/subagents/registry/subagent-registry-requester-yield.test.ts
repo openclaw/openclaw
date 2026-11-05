@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import * as goalReturn from "../../../auto-reply/reply/goal-continuation-return.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import {
   createOpenClawTestState,
@@ -122,6 +124,53 @@ beforeAll(async () => {
 afterAll(() => state.cleanup());
 
 afterEach(() => vi.restoreAllMocks());
+
+it("awaits Goal custody publication before releasing or scheduling a committed requester cohort", async () => {
+  const child = makeRun("goal-publication-child");
+  const entered = createDeferredCore();
+  const committed = createDeferredCore();
+  const prepare = vi
+    .spyOn(goalReturn, "prepareGoalContinuationYield")
+    .mockImplementation(async (params) => {
+      expect(params.requesterTurnRunId).toBe(REQUESTER_TURN);
+      expect(params.entries.map((entry) => entry.runId)).toEqual([child.runId]);
+      entered.resolve();
+      await committed.promise;
+    });
+  const beforeWrite = vi.fn();
+  const schedule = vi.fn();
+  const work = settleRuns([child], { beforeWrite, schedule });
+  try {
+    await entered.promise;
+    expect(beforeWrite).not.toHaveBeenCalled();
+    expect(schedule).not.toHaveBeenCalled();
+    committed.resolve();
+    expect(await work).toBe(true);
+    expect(beforeWrite).toHaveBeenCalledOnce();
+    expect(schedule).toHaveBeenCalledOnce();
+  } finally {
+    committed.resolve();
+    await work;
+    prepare.mockRestore();
+  }
+});
+
+it("does not release a requester cohort when Goal custody publication fails", async () => {
+  const child = makeRun("goal-publication-failed-child");
+  vi.spyOn(goalReturn, "prepareGoalContinuationYield").mockRejectedValue(
+    new Error("custody write failed"),
+  );
+  const beforeWrite = vi.fn();
+  const schedule = vi.fn();
+  await expect(settleRuns([child], { beforeWrite, schedule })).rejects.toThrow(
+    "custody write failed",
+  );
+  expect(beforeWrite).not.toHaveBeenCalled();
+  expect(schedule).not.toHaveBeenCalled();
+  expect(loadSubagentRegistryFromSqlite().get(child.runId)?.requesterTurnRunId).toBe(
+    REQUESTER_TURN,
+  );
+});
 
 describe("markRequesterTurnYieldedInRuns", () => {
   it("tracks current requester cohorts without scanning unrelated retained runs", async () => {

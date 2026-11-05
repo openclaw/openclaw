@@ -635,4 +635,4 @@ through the real Goal tool. Finish the response without replacing that verdict w
 stale native metadata or restarting pursuit. The host still revokes on external edits
 and Stop; this fact grants no authority after the run closes.
 Do not retain these methods beyond the host run or serialize them for recovery.
-The host owns continuation; adapters own only their live native pursuit.
+The host owns durable continuation; adapters own only their live native pursuit.

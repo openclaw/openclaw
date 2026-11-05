@@ -3,6 +3,7 @@ import {
   bindGoalContinuationExecution,
   createGoalContinuationReturnScope,
   finishGoalContinuationSettlement,
+  prepareGoalContinuationYield,
   promoteGoalContinuationYield,
   revokeGoalContinuationReturn,
   withGoalContinuationSettlement,
@@ -98,7 +99,7 @@ async function retainGoalReturn(sessionId: string, sessionKey: string, goalId: s
     async () => {},
   );
   try {
-    createGoalContinuationReturnScope({
+    await createGoalContinuationReturnScope({
       base,
       sessionKey,
       storePath: requireCompactionStorePath(),
@@ -107,8 +108,9 @@ async function retainGoalReturn(sessionId: string, sessionKey: string, goalId: s
       operation,
       context: (_continuation, entry, existing) => refreshActiveGoalContext(existing, entry),
       resume,
-    })(() => {
-      bindGoalContinuationExecution("lending-turn", sessionKey);
+    })(async () => {
+      await bindGoalContinuationExecution("lending-turn", sessionKey);
+      await prepareGoalContinuationYield({ entries: [child], requesterTurnRunId: "lending-turn" });
       promoteGoalContinuationYield({
         entries: [child],
         requesterTurnRunId: "lending-turn",

@@ -13,7 +13,7 @@ import {
 import { preparedSharingReads } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
-import { bindHostNativeGoal } from "./host-native-goal.js";
+import { bindHostNativeGoal, withRequiredHostGoal } from "./host-native-goal.js";
 
 describe("admitted native goal projection", () => {
   const fixture = useTempSessionsFixture("openclaw-native-goal-");
@@ -53,6 +53,69 @@ describe("admitted native goal projection", () => {
     });
     return bindHostNativeGoal(target(), assertCurrent, owner.signal);
   }
+
+  it("shares the acquired owner with native projection through event settlement", async () => {
+    let guard = () => {};
+    await start(() => guard());
+    let release = () => {};
+    let native: Awaited<ReturnType<ReturnType<typeof bindHostNativeGoal>>>;
+    try {
+      await withRequiredHostGoal({
+        target: target(),
+        identity: {
+          sessionId: target().sessionId,
+          lifecycleRevision: "generation-1",
+          goalId: read().goal!.id,
+        },
+        assertCurrent: () => guard(),
+        onAcquired: (assertCurrent, close) => {
+          guard = assertCurrent;
+          release = close;
+        },
+        onRevoked: vi.fn(),
+        run: async () => {
+          expect(subscriptions()).toBe(1);
+          const attempt = new AbortController();
+          native = await bindHostNativeGoal(target(), () => guard(), attempt.signal)();
+          expect(subscriptions()).toBe(1);
+          await native!.onStatus({ status: "complete" });
+          guard();
+          expect(native!.signal.aborted).toBe(false);
+          expect(subscriptions()).toBe(0);
+        },
+      });
+      // Execution returning is not event settlement; final delivery still owns this fence.
+      guard();
+      expect(native!.signal.aborted).toBe(false);
+    } finally {
+      release();
+    }
+    expect(() => guard()).toThrow();
+    expect(native!.signal.aborted).toBe(true);
+  });
+
+  it("rejects the wrong required Goal before transferring any receipt", async () => {
+    await start();
+    const acquired = vi.fn();
+    const run = vi.fn();
+    await expect(
+      withRequiredHostGoal({
+        target: target(),
+        identity: {
+          sessionId: target().sessionId,
+          lifecycleRevision: "generation-1",
+          goalId: "other-goal",
+        },
+        assertCurrent: () => {},
+        onAcquired: acquired,
+        onRevoked: vi.fn(),
+        run,
+      }),
+    ).rejects.toThrow("lost its active Goal");
+    expect(acquired).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+    expect(subscriptions()).toBe(0);
+  });
 
   it.each(["complete", "blocked", "paused"] as const)(
     "projects native %s without cancelling its own successful write",

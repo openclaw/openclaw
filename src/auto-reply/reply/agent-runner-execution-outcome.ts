@@ -1,4 +1,8 @@
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import {
+  withRequiredHostGoal,
+  withoutRequiredHostGoal,
+} from "../../agents/harness/host-native-goal.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
@@ -118,7 +122,6 @@ export async function runAgentTurnWithOutcome(
   runId: string,
   run: () => Promise<AgentTurnExecutionResult>,
 ): Promise<AgentTurnExecutionResult> {
-  bindGoalContinuationExecution(runId, params.sessionKey ?? params.followupRun.run.sessionKey);
   const eventExecution = params.followupRun.run.internalEventExecution;
   const source = prepareReplyTurnRunSource(params, runId);
   let terminalRecorded = false;
@@ -129,61 +132,88 @@ export async function runAgentTurnWithOutcome(
       params.replyOperation?.abortSignal.throwIfAborted();
       eventExecution.assertCurrent?.();
     }
-    source.claim();
-    const adapter = params.followupRun.controllerInput?.sourceAdapter;
-    const result = await withExecRequestTurn(
-      {
-        identity: {
-          runId,
-          sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-          sessionId: params.followupRun.run.sessionId,
-          agentId: params.followupRun.run.agentId,
-          // Unbound event wakes inherit custody; absent fields must not erase its original actor.
-          ...(adapter?.requester?.connectionId !== undefined
-            ? { ownerConnId: adapter.requester.connectionId }
-            : {}),
-          ...(adapter?.requester?.deviceId !== undefined
-            ? { ownerDeviceId: adapter.requester.deviceId }
-            : {}),
-          ...(adapter?.initiatingPersonalOperator
-            ? { initiatingPersonalOperator: adapter.initiatingPersonalOperator }
-            : {}),
-          ...(adapter?.controlUiVisible !== undefined
-            ? { controlUiVisible: adapter.controlUiVisible }
-            : {}),
-          ...(adapter?.turnKind ? { turnKind: adapter.turnKind } : {}),
-        },
-        owners: eventExecution?.execRequestOwners,
-        abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
-      },
-      () =>
-        withVisibleWorkSessionReporter(
-          {
-            requesterSessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-            report: params.opts?.onVisibleWorkSessions,
+    const execute = async () => {
+      source.claim();
+      await bindGoalContinuationExecution(
+        runId,
+        params.sessionKey ?? params.followupRun.run.sessionKey,
+        eventExecution?.requiredGoal?.identity,
+      );
+      eventExecution?.assertCurrent?.();
+      const adapter = params.followupRun.controllerInput?.sourceAdapter;
+      const result = await withExecRequestTurn(
+        {
+          identity: {
+            runId,
+            sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+            sessionId: params.followupRun.run.sessionId,
+            agentId: params.followupRun.run.agentId,
+            // Unbound event wakes inherit custody; absent fields must not erase its original actor.
+            ...(adapter?.requester?.connectionId !== undefined
+              ? { ownerConnId: adapter.requester.connectionId }
+              : {}),
+            ...(adapter?.requester?.deviceId !== undefined
+              ? { ownerDeviceId: adapter.requester.deviceId }
+              : {}),
+            ...(adapter?.initiatingPersonalOperator
+              ? { initiatingPersonalOperator: adapter.initiatingPersonalOperator }
+              : {}),
+            ...(adapter?.controlUiVisible !== undefined
+              ? { controlUiVisible: adapter.controlUiVisible }
+              : {}),
+            ...(adapter?.turnKind ? { turnKind: adapter.turnKind } : {}),
           },
-          run,
-        ),
-    );
-    const automation = params.followupRun.run.scheduledAutomation;
-    const invocation = automation
-      ? getAgentRunContext(runId)?.cronRunsByJobId?.get(automation.job.id)
-      : undefined;
-    if (automation && invocation) {
-      invocation.closed = true;
-      if (result.outcome.kind === "settled") {
-        result.outcome.automation = {
-          result: invocation.result,
-          includeReasoning:
-            automation.job.payload.kind === "agentTurn" &&
-            automation.job.payload.includeReasoning === true,
-        };
+          owners: eventExecution?.execRequestOwners,
+          abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+        },
+        () =>
+          withVisibleWorkSessionReporter(
+            {
+              requesterSessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+              report: params.opts?.onVisibleWorkSessions,
+            },
+            run,
+          ),
+      );
+      const automation = params.followupRun.run.scheduledAutomation;
+      const invocation = automation
+        ? getAgentRunContext(runId)?.cronRunsByJobId?.get(automation.job.id)
+        : undefined;
+      if (automation && invocation) {
+        invocation.closed = true;
+        if (result.outcome.kind === "settled") {
+          result.outcome.automation = {
+            result: invocation.result,
+            includeReasoning:
+              automation.job.payload.kind === "agentTurn" &&
+              automation.job.payload.includeReasoning === true,
+          };
+        }
       }
+      await recordAgentTurnExecutionOutcome(params, result);
+      terminalRecorded = true;
+      await recordSessionEventTerminalOutcome(eventExecution, runId, result);
+      return result;
+    };
+    const requiredGoal = eventExecution?.requiredGoal;
+    if (!requiredGoal) {
+      return await withoutRequiredHostGoal(execute);
     }
-    await recordAgentTurnExecutionOutcome(params, result);
-    terminalRecorded = true;
-    await recordSessionEventTerminalOutcome(eventExecution, runId, result);
-    return result;
+    return await withRequiredHostGoal({
+      target: {
+        agentId: params.followupRun.run.agentId,
+        sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+        sessionId: params.followupRun.run.sessionId,
+        storePath: params.storePath,
+        expectedLifecycleRevision: params.getActiveSessionEntry()?.lifecycleRevision,
+      },
+      identity: requiredGoal.identity,
+      assertCurrent: eventExecution.assertCurrent ?? (() => {}),
+      signal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+      onAcquired: requiredGoal.onAcquired,
+      onRevoked: (reason) => params.replyOperation?.abort(reason),
+      run: execute,
+    });
   } catch (error) {
     eventExecution?.onFailed?.(error);
     if (!terminalRecorded) {

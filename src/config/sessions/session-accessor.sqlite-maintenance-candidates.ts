@@ -25,6 +25,7 @@ const maintenanceFields = [
   "parentSessionKey",
   "modelSelectionLocked",
   "resumeAfterRestart",
+  "goalSuccessor",
   "pendingFinalDelivery",
   "chatType",
   "delivery",

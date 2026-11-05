@@ -3,7 +3,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { runWithCliTurn } from "../../agents/cli-runner/turn-admission.js";
 import { runEmbeddedAttempt } from "../../agents/embedded-agent-runner/run/attempt.js";
-import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createOpenClawAgentHarness } from "../../agents/harness/builtin-openclaw.js";
 import { runAgentHarnessLifecycleAttempt } from "../../agents/harness/lifecycle.js";
 import {
@@ -12,7 +11,7 @@ import {
   createLifecycleHarness,
 } from "../../agents/harness/lifecycle.test-support.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
-import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import { persistSessionGoalSuccessor } from "../../config/sessions/goal-successor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
@@ -26,12 +25,10 @@ import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environm
 import { localPlacement } from "../../gateway/worker-environments/placement-suite.test-support.js";
 import { rotateAgentRunRegistryLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import {
   sessionControllerMailboxes,
   retireSessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
-import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import {
   captureSessionControllerStop,
   stopSession,
@@ -46,7 +43,6 @@ import {
   readGoalContinuationContext,
   prepareGoalContinuationContext,
   recordGoalContinuationSettlement,
-  finishGoalContinuationSettlement,
   revokeGoalContinuationReturn,
 } from "./goal-continuation-return.js";
 import {
@@ -55,8 +51,16 @@ import {
   isGoalContinuationPlacementCurrent,
   createGoalContinuationReturn,
 } from "./goal-continuation.js";
+import {
+  identity,
+  normal,
+  operations,
+  entry,
+  fixture,
+  retainedGoal,
+} from "./goal-continuation.test-support.js";
+import { recoverGoalSuccessorAfterChildSettlement } from "./goal-successor-child-settlement.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
-import type { FollowupRun } from "./queue/types.js";
 
 // mock-isolation: Exercise admitted harness context consumers without a provider call.
 vi.mock("../../agents/embedded-agent-runner/run/attempt.js", () => ({
@@ -72,6 +76,18 @@ vi.mock("../../agents/subagents/registry/subagent-registry.js", () => ({
 // mock-isolation: This owner test controls worker publications without opening a database.
 vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
   readSessionEntryReadOnlyInWorker: vi.fn(),
+}));
+// mock-isolation: Publication ordering is exercised through the real custody builder;
+// SQLite and source restoration are covered by session-goal-successor-recovery.
+vi.mock("../../config/sessions/goal-successor.js", () => ({
+  persistSessionGoalSuccessor: vi.fn(async (_target, _successor, assertCurrent) => {
+    assertCurrent();
+    return true;
+  }),
+}));
+// mock-isolation: No real Gateway owner exists in this queue/lifecycle fixture.
+vi.mock("./goal-successor-child-settlement.js", () => ({
+  recoverGoalSuccessorAfterChildSettlement: vi.fn(async () => {}),
 }));
 // mock-isolation: Queue insertion is observed here; real draining is covered by server.chat-goal.
 vi.mock("./queue/enqueue.js", () => ({
@@ -113,79 +129,16 @@ vi.mock("../../agents/harness/registry.js", async (importOriginal) => ({
       : undefined,
 }));
 
-const identity = {
-  sessionId: "goal-session",
-  lifecycleRevision: "revision-2",
-  goalId: "goal-1",
-};
-const normal: EmbeddedAgentRunResult = {
-  meta: { durationMs: 0, stopReason: "end_turn" },
-  payloads: [{ text: "More work remains." }],
-};
-const operations = new Set<ReplyOperation>();
-function entry(): SessionEntry {
-  return {
-    sessionId: identity.sessionId,
-    lifecycleRevision: "revision-2",
-    updatedAt: 2000,
-    goal: {
-      schemaVersion: 1,
-      id: identity.goalId,
-      status: "active",
-      objective: "Finish the checklist",
-      createdAt: 1000,
-      updatedAt: 1000,
-      tokenStart: 0,
-      tokensUsed: 0,
-      continuationTurns: 0,
-    },
-  };
-}
-function fixture() {
-  const controller = new AbortController();
-  const operation = createReplyOperation({
-    sessionKey: "agent:main:goal",
-    sessionId: identity.sessionId,
-    resetTriggered: false,
-    upstreamAbortSignal: controller.signal,
-  });
-  operations.add(operation);
-  const base: FollowupRun = {
-    prompt: "Initial user request",
-    enqueuedAt: 1000,
-    abortSignal: controller.signal,
-    run: {
-      agentId: "main",
-      agentDir: "/fixture",
-      sessionId: identity.sessionId,
-      sessionKey: "agent:main:goal",
-      sessionFile: "agent:main:goal",
-      workspaceDir: "/fixture",
-      config: {},
-      provider: "test",
-      model: "test",
-      timeoutMs: 10000,
-      blockReplyBreak: "text_end",
-    },
-  };
-  const params: Parameters<typeof enqueueGoalContinuation>[0] = {
-    base,
-    result: normal,
-    initialGoalId: identity.goalId,
-    expectedSession: identity,
-    sessionKey: "agent:main:goal",
-    storePath: "/fixture/sessions.json",
-    queueKey: "agent:main:goal",
-    settings: { mode: "followup", debounceMs: 0 },
-    sourceRunId: "run-1",
-    operation,
-    runFollowup: vi.fn(async () => {}),
-  };
-  return { params, controller, operation };
-}
 beforeEach(() => {
   vi.useFakeTimers();
   children.mockResolvedValue([]);
+  vi.mocked(persistSessionGoalSuccessor)
+    .mockReset()
+    .mockImplementation(async (_target, _successor, assertCurrent) => {
+      assertCurrent();
+      return true;
+    });
+  vi.mocked(recoverGoalSuccessorAfterChildSettlement).mockReset().mockResolvedValue(undefined);
   workerPlacement.supported = true;
   workerPlacement.current.mockReset();
   vi.mocked(enqueueFollowupRun).mockClear();
@@ -493,75 +446,89 @@ describe("Goal queue custody", () => {
   });
 });
 
-function retainedGoal(existingChild?: SubagentRunRecord, sessionEntry = entry()) {
-  const f = fixture();
-  const child: SubagentRunRecord = existingChild ?? {
-    runId: "goal-child",
-    childSessionKey: "agent:main:subagent:goal-child",
-    childAgentId: "main",
-    requesterSessionKey: f.params.sessionKey,
-    requesterAgentId: "main",
-    requesterDisplayKey: f.params.sessionKey,
-    task: "Verify the first item",
-    cleanup: "keep",
-    createdAt: 1000,
-    execution: { status: "terminal", endedAt: 1100, outcome: { status: "ok" } },
-    completionRequesterSessionId: identity.sessionId,
-    completionRequesterLifecycleRevision: identity.lifecycleRevision,
-    requesterSettleWake: {
-      status: "dispatching",
-      attemptCount: 1,
-      requesterYieldBatch: true,
-      rearmGeneration: 1,
-      batchRunIds: ["goal-child"],
-    },
-  };
-  const publish = (
-    verifiedSettlement = true,
-    runId = "settle-run",
-    result = normal,
-    succeeded = true,
-  ) =>
-    withGoalContinuationSettlement(
-      [child],
-      "settle-run",
-      () => true,
-      () => {
-        if (verifiedSettlement) {
-          prepareGoalContinuationContext({
-            runId,
-            sessionKey: f.params.sessionKey,
-            sessionEntry,
-          });
-        }
-        const context = readGoalContinuationContext({ runId, sessionKey: f.params.sessionKey });
-        recordGoalContinuationSettlement({
-          runId,
-          sessionKey: f.params.sessionKey,
-          result,
-          succeeded,
-        });
-        return context;
+describe("Goal successor publication ordering", () => {
+  it("does not enqueue until pending custody is committed", async () => {
+    const f = fixture();
+    const entered = createDeferred();
+    const commit = createDeferred<boolean>();
+    vi.mocked(persistSessionGoalSuccessor).mockImplementation(
+      async (_target, successor, assertCurrent) => {
+        expect(successor.phase).toBe("pending");
+        entered.resolve();
+        const persisted = await commit.promise;
+        assertCurrent();
+        return persisted;
       },
     );
-  const retain = (beforeYield?: () => void) =>
-    createGoalContinuationReturn(f.params)(() => {
-      bindGoalContinuationExecution(f.params.sourceRunId, f.params.sessionKey);
-      beforeYield?.();
-      promoteGoalContinuationYield({
-        requesterTurnRunId: f.params.sourceRunId,
-        entries: [child],
-        rearmGeneration: child.requesterSettleWake?.rearmGeneration,
-      });
+    const work = enqueueGoalContinuation(f.params);
+    await entered.promise;
+    expect(enqueueFollowupRun).not.toHaveBeenCalled();
+    commit.resolve(true);
+    expect(await work).toBe(true);
+    expect(enqueueFollowupRun).toHaveBeenCalledOnce();
+  });
+
+  it("does not enqueue when the actor rejects a stale publication", async () => {
+    vi.mocked(persistSessionGoalSuccessor).mockResolvedValue(false);
+    expect(await enqueueGoalContinuation(fixture().params)).toBe(false);
+    expect(enqueueFollowupRun).not.toHaveBeenCalled();
+  });
+
+  it("rechecks Stop inside the pending custody commit", async () => {
+    const f = fixture();
+    vi.mocked(persistSessionGoalSuccessor).mockImplementation(
+      async (_target, _successor, assertCurrent) => {
+        f.controller.abort();
+        assertCurrent();
+        return true;
+      },
+    );
+    await expect(enqueueGoalContinuation(f.params)).rejects.toThrow("lost its source");
+    expect(enqueueFollowupRun).not.toHaveBeenCalled();
+  });
+
+  it("publishes running then exact children before synchronous return promotion", async () => {
+    const f = retainedGoal();
+    await f.retain();
+    expect(vi.mocked(persistSessionGoalSuccessor).mock.calls.map((call) => call[1])).toMatchObject([
+      { phase: "running", sourceRunId: f.params.sourceRunId },
+      { phase: "children", childRunIds: [f.child.runId], sourceRunId: f.params.sourceRunId },
+    ]);
+    f.operation.complete();
+    f.publish();
+    await f.finish();
+    expect(vi.mocked(persistSessionGoalSuccessor).mock.lastCall?.[1].phase).toBe("pending");
+  });
+
+  it("fails before releasing child custody if its publication fails", async () => {
+    const f = retainedGoal();
+    vi.mocked(persistSessionGoalSuccessor).mockImplementation(async (_target, successor) => {
+      if (successor.phase === "children") {
+        throw new Error("custody write failed");
+      }
+      return true;
     });
-  return {
-    ...f,
-    child,
-    retain,
-    publish,
-    finish: (delivered = true) => finishGoalContinuationSettlement([child], delivered),
-  };
-}
+    await expect(f.retain()).rejects.toThrow("custody write failed");
+    expect(f.publish()).toBeUndefined();
+    expect(enqueueFollowupRun).not.toHaveBeenCalled();
+  });
+
+  it("awaits the persisted child settlement fallback when the return is gone", async () => {
+    const f = retainedGoal();
+    const commit = createDeferred();
+    vi.mocked(recoverGoalSuccessorAfterChildSettlement).mockReturnValue(commit.promise);
+    let finished = false;
+    const work = f.finish().then(() => {
+      finished = true;
+    });
+    expect(recoverGoalSuccessorAfterChildSettlement).toHaveBeenCalledWith([f.child], true);
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    commit.resolve();
+    await work;
+    expect(finished).toBe(true);
+  });
+});
 
 describe("Goal return from committed child custody", () => {
   it.each(["local", "remote-exec"] as const)(
@@ -583,7 +550,7 @@ describe("Goal return from committed child custody", () => {
         });
       }
       vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(current);
-      f.retain();
+      await f.retain();
       f.operation.complete();
       expect(f.publish()?.text).toContain("Active goal: Finish the checklist");
       await f.finish();
@@ -614,7 +581,7 @@ describe("Goal return from committed child custody", () => {
     if (mode === "scheduled turn") {
       f.params.base.run.scheduledAutomation = { ...TEST_SCHEDULED_TURN, job: makeCronJob({}) };
     }
-    f.retain(() => {
+    await f.retain(async () => {
       if (mode === "no creation") {
         return;
       }
@@ -640,9 +607,9 @@ describe("Goal return from committed child custody", () => {
         storePath: mode === "other store" ? "/other/sessions.json" : f.params.storePath,
         goalId: identity.goalId,
       };
-      bindCreatedGoalContinuation(created);
+      await bindCreatedGoalContinuation(created);
       if (mode === "replacement Goal") {
-        bindCreatedGoalContinuation({ ...created, goalId: "replacement-goal" });
+        await bindCreatedGoalContinuation({ ...created, goalId: "replacement-goal" });
       }
     });
     f.operation.complete();
@@ -669,7 +636,7 @@ describe("Goal return from committed child custody", () => {
     ["independent-command", "claude-cli"],
   ])("injects Goal context only for the admitted settlement (%s, %s)", async (runId, harnessId) => {
     const f = retainedGoal();
-    f.retain();
+    await f.retain();
     await withGoalContinuationSettlement(
       [f.child],
       "settle-run",
@@ -757,7 +724,7 @@ describe("Goal return from committed child custody", () => {
       kind: "deliver",
       deliver: sourceReply.deliver,
     };
-    f.retain();
+    await f.retain();
     await sourceReply.deliver({
       kind: "queued-followup",
       runId: "source",
@@ -793,8 +760,8 @@ describe("Goal return from committed child custody", () => {
 
   it("does not lend a chat Goal to a different command executing in inherited context", async () => {
     const f = retainedGoal();
-    createGoalContinuationReturn(f.params)(() => {
-      bindGoalContinuationExecution(f.params.sourceRunId, f.params.sessionKey);
+    await createGoalContinuationReturn(f.params)(async () => {
+      await bindGoalContinuationExecution(f.params.sourceRunId, f.params.sessionKey);
       promoteGoalContinuationYield({
         requesterTurnRunId: "independent-command",
         entries: [f.child],
@@ -808,7 +775,7 @@ describe("Goal return from committed child custody", () => {
 
   it("cancels the retained return when Stop arrives while children own the turn", async () => {
     const f = retainedGoal();
-    f.retain();
+    await f.retain();
     f.operation.complete();
     f.controller.abort();
     expect(f.publish()).toBeUndefined();
@@ -818,7 +785,7 @@ describe("Goal return from committed child custody", () => {
 
   it("does not carry a revoked settle capability into context or terminal publication", async () => {
     const f = retainedGoal();
-    f.retain();
+    await f.retain();
     f.operation.complete();
     let current = true;
     withGoalContinuationSettlement(
@@ -857,12 +824,12 @@ describe("Goal return from committed child custody", () => {
       retain: () => release,
     });
     first.params.base.operatorAuthority = authority;
-    first.retain();
+    await first.retain();
     first.operation.complete();
     const next = retainedGoal(first.child);
     next.params.sourceRunId = "new-source-run";
     next.params.base.operatorAuthority = authority;
-    next.retain();
+    await next.retain();
     expect(release).toHaveBeenCalledOnce();
     next.operation.complete();
     next.publish();
@@ -875,7 +842,7 @@ describe("Goal return from committed child custody", () => {
     "reuses only the exact terminal command receipt on transport replay (%s)",
     async (runId) => {
       const f = retainedGoal();
-      f.retain();
+      await f.retain();
       f.operation.complete();
       f.publish();
       withGoalContinuationSettlement(
@@ -899,7 +866,7 @@ describe("Goal return from committed child custody", () => {
     { change: "stopped", patch: { abortedLastRun: true } },
   ])("rechecks $change after the command final and batch commit", async ({ patch }) => {
     const f = retainedGoal();
-    f.retain();
+    await f.retain();
     f.operation.complete();
     f.publish();
     vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue({ ...entry(), ...patch });
@@ -918,7 +885,7 @@ describe("Goal return from committed child custody", () => {
     "different run",
   ])("does not turn %s into autonomous command work", async (boundary) => {
     const f = retainedGoal();
-    f.retain();
+    await f.retain();
     f.operation.complete();
     const result =
       boundary === "timeout"
@@ -958,7 +925,7 @@ describe("Goal return from committed child custody", () => {
           }
         },
       });
-      f.retain();
+      await f.retain();
       f.operation.complete();
       f.publish();
       const readStarted = createDeferred();

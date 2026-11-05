@@ -4,6 +4,7 @@ import {
   bindGoalContinuationExecution,
   finishGoalContinuationSettlement,
   prepareGoalContinuationContext,
+  prepareGoalContinuationYield,
   promoteGoalContinuationYield,
   readGoalContinuationContext,
   withGoalContinuationSettlement,
@@ -54,8 +55,9 @@ export function createGoalReturnEntryProbe(target: {
   };
   return {
     entry,
-    yieldFrom(runId: string) {
-      bindGoalContinuationExecution(runId, target.sessionKey);
+    async yieldFrom(runId: string) {
+      await bindGoalContinuationExecution(runId, target.sessionKey);
+      await prepareGoalContinuationYield({ entries: [child], requesterTurnRunId: runId });
       promoteGoalContinuationYield({
         entries: [child],
         requesterTurnRunId: runId,

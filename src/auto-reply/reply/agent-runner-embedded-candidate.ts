@@ -366,6 +366,7 @@ export async function runEmbeddedFallbackCandidate(
         };
       };
       params.scheduledInference?.assertCandidate(params.provider, false);
+      turn.followupRun.run.internalEventExecution?.assertCurrent?.();
       return runEmbeddedAgent(embeddedRunParams);
     });
     const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);

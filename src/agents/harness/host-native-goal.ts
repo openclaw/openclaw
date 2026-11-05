@@ -1,4 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
+import type { GoalContinuation } from "../../auto-reply/reply/goal-continuation.types.js";
 import {
   accountSessionGoalUsage,
   buildUpdatedSessionGoalStatus,
@@ -24,7 +26,9 @@ import {
 } from "../tools/gateway-caller-context.js";
 import type { AgentHarnessNativeGoal } from "./native-goal.types.js";
 
-type NativeGoalToolOwner = {
+type RequiredGoalOwner = {
+  target: AgentRunSessionTarget;
+  goal: AgentHarnessNativeGoal;
   updateStatus: (
     status: "complete" | "blocked",
     note?: string,
@@ -42,7 +46,7 @@ const runGoalTools = resolveGlobalSingleton(
       {
         target: AgentRunSessionTarget;
         updateStatus: (
-          ...args: Parameters<NativeGoalToolOwner["updateStatus"]>
+          ...args: Parameters<RequiredGoalOwner["updateStatus"]>
         ) => Promise<SessionGoal | undefined>;
       }
     >(),
@@ -53,11 +57,11 @@ function bindRunGoalTool(
   target: AgentRunSessionTarget,
   signal: AbortSignal,
   assertCurrent: SessionSourceAssertion,
-): (update: NativeGoalToolOwner["updateStatus"]) => void {
+): (update: RequiredGoalOwner["updateStatus"]) => void {
   if (!instance) {
     return () => {};
   }
-  let update: NativeGoalToolOwner["updateStatus"] | undefined;
+  let update: RequiredGoalOwner["updateStatus"] | undefined;
   const owner = {
     target: { ...target },
     updateStatus: async (
@@ -81,6 +85,77 @@ function bindRunGoalTool(
   };
 }
 
+// Lexical projection of the execution's existing Goal owner, not another pursuit owner.
+const requiredGoals = resolveGlobalSingleton(
+  Symbol.for("openclaw.requiredHostGoal"),
+  () => new AsyncLocalStorage<RequiredGoalOwner>(),
+);
+
+/** A freshly admitted turn must never inherit a predecessor's lexical Goal owner. */
+export function withoutRequiredHostGoal<T>(run: () => T): T {
+  return requiredGoals.exit(run);
+}
+
+/** Acquire before releasing the producer receipt, and retain through event settlement. */
+export async function withRequiredHostGoal<T>(params: {
+  target: AgentRunSessionTarget;
+  identity: Readonly<GoalContinuation>;
+  assertCurrent: SessionSourceAssertion;
+  signal?: AbortSignal;
+  onAcquired: (assertExecutionCurrent: () => void, release: () => void) => void;
+  onRevoked: (reason: unknown) => void;
+  run: () => Promise<T>;
+}): Promise<T> {
+  const lifetime = new AbortController();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, lifetime.signal])
+    : lifetime.signal;
+  let goal: AgentHarnessNativeGoal | undefined;
+  let assertExecutionCurrent: (() => void) | undefined;
+  let updateStatus: RequiredGoalOwner["updateStatus"] | undefined;
+  const revoke = () => params.onRevoked(goal?.signal.reason);
+  let transferred = false;
+  const release = () => {
+    goal?.signal.removeEventListener("abort", revoke);
+    lifetime.abort();
+  };
+  try {
+    if (
+      params.target.sessionId !== params.identity.sessionId ||
+      params.target.expectedLifecycleRevision !== params.identity.lifecycleRevision
+    ) {
+      throw new Error("Required Goal execution changed its session incarnation.");
+    }
+    goal = await bindIndependentHostNativeGoal(
+      params.target,
+      params.assertCurrent,
+      signal,
+      (assertAcquired, update) => {
+        assertExecutionCurrent = assertAcquired;
+        updateStatus = update;
+      },
+    )();
+    if (!goal || goal.id !== params.identity.goalId || !assertExecutionCurrent || !updateStatus) {
+      throw new Error("Required Goal execution lost its active Goal.");
+    }
+    goal.assertCurrent();
+    // This is the post-transfer execution fence. Own native completion retires its
+    // row predicate without aborting this signal; external edits revoke it sticky.
+    goal.signal.addEventListener("abort", revoke, { once: true });
+    params.onAcquired(assertExecutionCurrent, release);
+    transferred = true;
+    assertExecutionCurrent();
+    return await requiredGoals.run(
+      { target: { ...params.target }, goal, updateStatus },
+      params.run,
+    );
+  } finally {
+    if (!transferred) {
+      release();
+    }
+  }
+}
+
 /** The real Goal tool shares this execution's exact terminal transaction, not an external edit. */
 export async function updateHostGoalFromTool(params: {
   agentId: string;
@@ -97,7 +172,7 @@ export async function updateHostGoalFromTool(params: {
     throw new Error("Goal tool requires its admitted caller.");
   }
   assertCaller?.();
-  const owner = nativeOwner;
+  const owner = nativeOwner ?? requiredGoals.getStore();
   if (!owner) {
     return undefined;
   }
@@ -119,16 +194,66 @@ export function bindHostNativeGoal(
   operationalRunInstance?: OperationalRunInstanceRef,
 ): () => Promise<AgentHarnessNativeGoal | undefined> {
   const bindTool = bindRunGoalTool(operationalRunInstance, target, ownerSignal, assertCurrent);
-  return bindIndependentHostNativeGoal(target, assertCurrent, ownerSignal, (update) => {
-    bindTool(update);
+  const owner = requiredGoals.getStore();
+  if (
+    !owner ||
+    owner.target.agentId !== target.agentId ||
+    owner.target.sessionKey !== target.sessionKey
+  ) {
+    return bindIndependentHostNativeGoal(target, assertCurrent, ownerSignal, (_assert, update) => {
+      bindTool(update);
+    });
+  }
+  // Only this exact execution target may borrow the acquired owner. Provider-facing
+  // lifetime/assertions still apply, but native projection must not get a second observer.
+  const assertBorrowed = () => {
+    assertCurrent();
+    ownerSignal.throwIfAborted();
+    if (
+      target.sessionId !== owner.target.sessionId ||
+      target.expectedLifecycleRevision !== owner.target.expectedLifecycleRevision ||
+      !sameSessionTranscriptStorePath(target.storePath, owner.target.storePath)
+    ) {
+      throw new Error("Native Goal preparation changed its execution target.");
+    }
+    owner.goal.assertCurrent();
+  };
+  const borrowed = Object.freeze({
+    ...owner.goal,
+    signal: AbortSignal.any([owner.goal.signal, ownerSignal]),
+    assertCurrent: composeSessionSourceAssertion([assertCurrent], (assertSource) => {
+      assertSource();
+      assertBorrowed();
+    }),
+    readToolStatus() {
+      assertBorrowed();
+      return owner.goal.readToolStatus?.();
+    },
+    async onStatus(update: Parameters<AgentHarnessNativeGoal["onStatus"]>[0]) {
+      assertBorrowed();
+      await owner.goal.onStatus(update);
+    },
   });
+  // Built-in recovery uses the real tool without ever requesting a native capability.
+  // Bind its already-acquired owner now, not only when a native adapter prepares.
+  bindTool((status, note, assertToolCurrent) => {
+    assertBorrowed();
+    return owner.updateStatus(status, note, assertToolCurrent);
+  });
+  return async () => {
+    assertBorrowed();
+    return borrowed;
+  };
 }
 
 function bindIndependentHostNativeGoal(
   target: AgentRunSessionTarget,
   assertCurrent: SessionSourceAssertion,
   ownerSignal: AbortSignal,
-  onPrepared?: (updateStatus: NativeGoalToolOwner["updateStatus"]) => void,
+  onPrepared?: (
+    assertExecutionCurrent: () => void,
+    updateStatus: RequiredGoalOwner["updateStatus"],
+  ) => void,
 ): () => Promise<AgentHarnessNativeGoal | undefined> {
   const { agentId, sessionId, sessionKey, storePath, expectedLifecycleRevision } = target;
   let prepared: Promise<AgentHarnessNativeGoal | undefined> | undefined;
@@ -345,12 +470,22 @@ function bindIndependentHostNativeGoal(
             projecting = false;
           }
         };
-        onPrepared?.((status, note, assertToolCurrent) =>
-          projectStatus(
-            { status, reason: note },
-            { type: "agent", id: sessionKey },
-            assertToolCurrent,
-          ),
+        onPrepared?.(
+          () => {
+            // Do not recurse through source authority: the producer now delegates its
+            // Goal check here. Source/placement/policy checks remain in its own assertion.
+            ownerSignal.throwIfAborted();
+            controller.signal.throwIfAborted();
+            if (!settled && !retained?.isCurrent()) {
+              throw new Error("Required Goal execution lost its committed row.");
+            }
+          },
+          (status, note, assertToolCurrent) =>
+            projectStatus(
+              { status, reason: note },
+              { type: "agent", id: sessionKey },
+              assertToolCurrent,
+            ),
         );
         return Object.freeze({
           version: 1 as const,

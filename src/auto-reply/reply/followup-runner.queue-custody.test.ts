@@ -8,6 +8,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
   getCurrentSessionControllerOwner,
@@ -53,6 +54,24 @@ vi.mock("./agent-runner-completion.js", async (importOriginal) => ({
     consume: (completion: undefined) => Promise<T>,
   ) => await consume(undefined),
 }));
+// mock-isolation: This entry/placement fixture has no database owner. Isolate only custody
+// I/O; keep the production return scope, eligibility checks, and yield promotion intact.
+// Real SQLite custody publication/recovery is covered by session-goal-successor-recovery.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionEntryReadOnlyInWorker: vi.fn(),
+}));
+vi.mock("../../config/sessions/goal-successor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/goal-successor.js")>()),
+  persistSessionGoalSuccessor: async (
+    ...args: Parameters<
+      typeof import("../../config/sessions/goal-successor.js").persistSessionGoalSuccessor
+    >
+  ) => {
+    args[2]();
+    return true;
+  },
+}));
 vi.mock("./agent-runner-result-accounting.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-runner-result-accounting.js")>()),
   accountFollowupTurn: async () => undefined,
@@ -67,7 +86,10 @@ vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
   resolveQueuedReplyExecutionConfig: state.config,
 }));
 installQueueRuntimeErrorSilencer();
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.mocked(readSessionEntryReadOnlyInWorker).mockReset();
+  vi.clearAllMocks();
+});
 
 function admitted(queued: FollowupRun, operation: ReplyOperation, runId: string) {
   const turn: AdmittedFollowupTurn = {
@@ -91,6 +113,7 @@ goalEntryTest("retains %s Goal custody with fresh placement", async (agentHarnes
     sessionKey: `agent:agent:required-placement-${agentHarnessId}`,
   };
   const goal = createGoalReturnEntryProbe({ ...identity, agentHarnessId });
+  vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(goal.entry);
   queued.run.sessionKey = identity.sessionKey;
   queued.run.config = { cloudWorkers: { requiredProfile: "native" } };
   const options = { config: queued.run.config };
@@ -133,7 +156,7 @@ goalEntryTest("retains %s Goal custody with fresh placement", async (agentHarnes
     result.turn.session = {
       kind: "session",
       key: identity.sessionKey,
-      storePath: "/tmp/goal-return-entry-store.json",
+      storePath: "/tmp/goal-return-entry/openclaw-agent.sqlite",
       current: () => goal.entry,
       publish() {},
     };
@@ -145,7 +168,7 @@ goalEntryTest("retains %s Goal custody with fresh placement", async (agentHarnes
       expect(borrowed).toBe(successor);
     });
     markReplyOperationExecutionStarted(successor!);
-    goal.yieldFrom("required-placement-successor");
+    await goal.yieldFrom("required-placement-successor");
     try {
       await withRequiredSessionPlacement(identity, options, async () => {
         events.push("effect");

@@ -95,7 +95,7 @@ goalEntryTest("retains %s Goal custody while admission waits", async (agentHarne
         { ...target, abortSignal: params.replyOperation?.abortSignal },
         async () => {
           inboundStarted();
-          goal.yieldFrom("inbound-runtime");
+          await goal.yieldFrom("inbound-runtime");
           await runBeforeAgentReplyForTurn({
             runId: "inbound-runtime",
             trigger: "user",

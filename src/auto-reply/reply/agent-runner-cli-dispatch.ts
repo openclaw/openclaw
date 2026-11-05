@@ -469,6 +469,8 @@ async function runCliAgentWithLifecycleInternal(
   try {
     // CLI backends own native tool execution, so attribution must settle before launch.
     await params.runParams.awaitSessionDiffBaseline?.();
+    params.runParams.abortSignal?.throwIfAborted();
+    params.runParams.assertCurrent?.();
     const rawResult = await runCliAgent({
       ...params.runParams,
       ...(params.deferLifecycleStartUntilExecution

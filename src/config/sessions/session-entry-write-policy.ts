@@ -38,6 +38,25 @@ export function applySessionEntryWritePolicy(
         : {}),
     };
   }
+  const goalSuccessor = Object.hasOwn(normalizedEntry, "goalSuccessor")
+    ? normalizedEntry.goalSuccessor
+    : canonicalPreviousEntry?.goalSuccessor;
+  // A public bookkeeping projection may omit custody; Stop explicitly clears it.
+  // Restart cancellation keeps the active Goal, unlike human Stop/error pauses.
+  if (
+    goalSuccessor &&
+    canonicalPreviousEntry &&
+    !normalizedEntry.incognito &&
+    normalizedEntry.archivedAt === undefined &&
+    normalizedEntry.sessionId === goalSuccessor.sessionId &&
+    normalizedEntry.lifecycleRevision === goalSuccessor.lifecycleRevision &&
+    normalizedEntry.goal?.id === goalSuccessor.goalId &&
+    normalizedEntry.goal.status === "active"
+  ) {
+    normalizedEntry = { ...normalizedEntry, goalSuccessor };
+  } else {
+    normalizedEntry = { ...normalizedEntry, goalSuccessor: undefined };
+  }
   if (
     canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId &&
     canonicalPreviousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision &&

@@ -107,7 +107,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
         objective,
         ...(tokenBudget !== undefined ? { tokenBudget } : {}),
       });
-      bindCreatedGoalContinuation({ ...scope, runId: options.runId, goalId: goal.id });
+      await bindCreatedGoalContinuation({ ...scope, runId: options.runId, goalId: goal.id });
       return jsonResult({ status: "created", goal });
     },
   };
