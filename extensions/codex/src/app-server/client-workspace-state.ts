@@ -107,12 +107,14 @@ function readAgentsMdSnapshot(value: JsonValue | undefined): CodexAgentsMdSnapsh
 }
 
 /**
- * Mirrors Codex's rollout reconstruction (codex-rs/core/src/session/rollout_reconstruction.rs):
+ * Follows Codex's rollout reconstruction (codex-rs/core/src/session/rollout_reconstruction.rs):
  * a compaction drops the baseline, full world-state items replace it, and patches are
- * JSON merge patches over the current baseline.
+ * JSON merge patches over the current baseline. A thread rollback makes Codex replay
+ * without the dropped turns' patches; rather than mirror that turn-segment replay, the
+ * scan drops its baseline, so AGENTS.md reads as unverified until the next full snapshot.
  */
 function applyModelContextRolloutLine(scan: CodexModelContextScan, line: string): void {
-  if (!/"type":"(?:world_state|compacted)"/u.test(line)) {
+  if (!/"type":"(?:world_state|compacted|thread_rolled_back)"/u.test(line)) {
     return;
   }
   let record: unknown;
@@ -124,7 +126,12 @@ function applyModelContextRolloutLine(scan: CodexModelContextScan, line: string)
   if (!isJsonObject(record)) {
     return;
   }
-  if (record.type === "compacted") {
+  if (
+    record.type === "compacted" ||
+    (record.type === "event_msg" &&
+      isJsonObject(record.payload) &&
+      record.payload.type === "thread_rolled_back")
+  ) {
     scan.baseline = false;
     scan.agentsMd = undefined;
     return;
@@ -152,7 +159,10 @@ function applyModelContextRolloutLine(scan: CodexModelContextScan, line: string)
 }
 
 /** Applies rollout lines appended since the previous scan; a shrunken file restarts the scan. */
-async function scanCodexModelContextRollout(scan: CodexModelContextScan): Promise<void> {
+async function scanCodexModelContextRollout(
+  scan: CodexModelContextScan,
+  signal: AbortSignal | undefined,
+): Promise<void> {
   const safeRoot = await openSafeFilesystemRoot(scan.sessionsRoot, {
     hardlinks: "reject",
     maxBytes: Number.MAX_SAFE_INTEGER,
@@ -169,6 +179,8 @@ async function scanCodexModelContextRollout(scan: CodexModelContextScan): Promis
     let carry = Buffer.alloc(0);
     let position = scan.offset;
     while (position < size) {
+      // Each completed chunk is kept, so an abandoned first scan resumes on the next turn.
+      signal?.throwIfAborted();
       const chunk = Buffer.alloc(Math.min(MODEL_CONTEXT_READ_CHUNK_BYTES, size - position));
       const { bytesRead } = await opened.handle.read(chunk, 0, chunk.length, position);
       if (bytesRead === 0) {
@@ -197,6 +209,7 @@ export async function readCodexWorkspaceModelContext(
   boundRolloutPath: string | undefined,
   threadId: string,
   maxCachedSessions: number,
+  signal?: AbortSignal,
 ): Promise<CodexNativeModelContext> {
   const metadata = await readCodexWorkspaceSessionMeta(
     client,
@@ -216,11 +229,15 @@ export async function readCodexWorkspaceModelContext(
     previous?.sessionsRoot === sessionsRoot && previous.rolloutPath === rolloutPath
       ? { ...previous }
       : { sessionsRoot, rolloutPath, offset: 0, baseline: false };
-  await scanCodexModelContextRollout(scan);
-  if (!state.closed && state.modelContextScans.get(threadId) === previous) {
-    state.modelContextScans.delete(threadId);
-    state.modelContextScans.set(threadId, scan);
-    pruneMapToMaxSize(state.modelContextScans, maxCachedSessions);
+  try {
+    await scanCodexModelContextRollout(scan, signal);
+  } finally {
+    // The offset only covers applied lines, so partial progress is always consistent.
+    if (!state.closed && state.modelContextScans.get(threadId) === previous) {
+      state.modelContextScans.delete(threadId);
+      state.modelContextScans.set(threadId, scan);
+      pruneMapToMaxSize(state.modelContextScans, maxCachedSessions);
+    }
   }
   const baseInstructions = isJsonObject(metadata.base_instructions)
     ? metadata.base_instructions.text

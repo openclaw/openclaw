@@ -70,4 +70,30 @@ describe("readCodexWorkspaceModelContext", () => {
       agentsMd: { directory: "/workspace", text: "Back again." },
     });
   });
+
+  it("drops AGENTS.md after a thread rollback and recovers from an abandoned scan", async () => {
+    const sessionsRoot = tempDirs.make("codex-model-context-rollback-");
+    const rolloutPath = path.join(sessionsRoot, "rollout.jsonl");
+    const meta = line("session_meta", { id: threadId, base_instructions: { text: "Base." } });
+    await fs.writeFile(
+      rolloutPath,
+      meta +
+        worldState(true, { agents_md: { directory: "/workspace", text: "Old rules." } }) +
+        worldState(false, { agents_md: { text: "Rolled-back rules." } }),
+    );
+    const state = workspaceState();
+    const read = (signal?: AbortSignal) =>
+      readCodexWorkspaceModelContext(client, state, sessionsRoot, rolloutPath, threadId, 8, signal);
+
+    // An abandoned read reports nothing; the next read still sees the full history.
+    await expect(read(AbortSignal.abort())).rejects.toThrow();
+    await expect(read()).resolves.toMatchObject({ agentsMd: { text: "Rolled-back rules." } });
+
+    // Codex replays without the dropped turn's patch; never report the discarded text.
+    await fs.appendFile(
+      rolloutPath,
+      line("event_msg", { type: "thread_rolled_back", num_turns: 1 }),
+    );
+    await expect(read()).resolves.toEqual({ baseInstructions: "Base." });
+  });
 });

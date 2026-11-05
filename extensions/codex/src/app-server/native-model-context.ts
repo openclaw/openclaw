@@ -2,17 +2,21 @@ import path from "node:path";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexAppServerVerifiedLocalHomeDir } from "./auth-start-options.js";
 import { withCodexClientWorkspace } from "./client-runtime.js";
-import { readCodexWorkspaceModelContext } from "./client-workspace-state.js";
+import {
+  readCodexWorkspaceModelContext,
+  type CodexNativeModelContext,
+} from "./client-workspace-state.js";
 import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 
 /**
  * Codex records its base instructions and AGENTS.md injection only in its own rollout;
- * app-server responses expose neither. A missing or unreadable local record leaves
- * AGENTS.md unverified and never fails the turn.
+ * app-server responses expose neither. Undefined means no readable local record (or an
+ * abandoned read), which leaves AGENTS.md unverified; it never fails the turn.
  */
-export async function recordCodexNativeModelContext(
+export async function readCodexNativeModelContext(
   resources: StartedCodexAttemptResources,
-): Promise<void> {
+  signal: AbortSignal,
+): Promise<CodexNativeModelContext | undefined> {
   const { client, thread } = resources.state;
   try {
     const { appServer, agentDir } = resources.prompt.context.runtime.connection;
@@ -22,9 +26,9 @@ export async function recordCodexNativeModelContext(
       client.getRuntimeIdentity()?.codexHome,
     );
     if (!home) {
-      return;
+      return undefined;
     }
-    const context = await withCodexClientWorkspace(client, (state, maxCachedSessions) =>
+    return await withCodexClientWorkspace(client, (state, maxCachedSessions) =>
       readCodexWorkspaceModelContext(
         client,
         state,
@@ -32,13 +36,16 @@ export async function recordCodexNativeModelContext(
         thread.rolloutPath,
         thread.threadId,
         maxCachedSessions,
+        signal,
       ),
     );
-    resources.prompt.setNativeModelContext(context);
   } catch (error) {
-    embeddedAgentLog.debug("codex native model context unavailable for the context report", {
-      threadId: thread.threadId,
-      error: formatErrorMessage(error),
-    });
+    if (!signal.aborted) {
+      embeddedAgentLog.debug("codex native model context unavailable for the context report", {
+        threadId: thread.threadId,
+        error: formatErrorMessage(error),
+      });
+    }
+    return undefined;
   }
 }
