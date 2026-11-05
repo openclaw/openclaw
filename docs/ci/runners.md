@@ -386,6 +386,10 @@ workflow honors its `runner_group` input. Release Decision, Diagnostic Drain,
 and the nightly watcher keep their existing runner selection and 720-minute
 budgets; standard hosted runners cannot preserve that lifetime.
 
+Mantis scenario dispatch and QA actor/ref validation also use `ubuntu-24.04`.
+The QA controls honor their `runner_group` input. QA profile planning, builds,
+shards, aggregation, and live transport workloads keep their existing runners.
+
 Ordinary iOS smoke CI builds the app and embedded Watch targets for the runner's
 architecture, using the same iPhone simulator for compilation and voice-cleanup
 tests. It omits compiler indexes, which CI does not consume, and finishes
