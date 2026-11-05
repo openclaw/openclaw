@@ -1,2 +1,0 @@
-# Regression proof: text mode resolves markdown source escapes into literal page text.
-8
