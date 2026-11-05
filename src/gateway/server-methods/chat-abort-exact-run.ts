@@ -39,6 +39,70 @@ export function captureSourceAssertion(input: RpcSourceRef["input"], assertCurre
 }
 
 /**
+ * Stops one exact reserved source that has a session target but no RPC registration yet,
+ * with that turn's controlled subagents. The accepted Stop is announced before it commits.
+ */
+export async function stopReservedClientRun(params: {
+  cfg: OpenClawConfig;
+  runId: string;
+  reserved: RpcSourceRef["input"];
+  identity: Readonly<{ sessionKey: string; sessionId: string; agentId?: string }>;
+  /** Announces the Stop for this agent when the source names none. */
+  agentId: string;
+  userInitiated?: boolean;
+  lifecycleRevision?: string;
+  assertCurrent: () => void;
+  hookContext: Omit<SessionStopHookContext, "sessionKey" | "sessionId">;
+  afterParent?: () => void;
+}): Promise<Omit<ExactClientRunStopResult, "failure">> {
+  const { runId, reserved, identity, assertCurrent } = params;
+  const result: ExactClientRunStopResult = { aborted: false };
+  // Session preparation can await; recheck authority before announcing the Stop.
+  assertCurrent();
+  notifySessionRunStopped({
+    source: "client-run",
+    sessions: [{ agentId: identity.agentId ?? params.agentId, sessionKey: identity.sessionKey }],
+    runIds: [runId],
+  });
+  await stopSession({
+    source: "client-run",
+    capture: captureSessionControllerStop({ inputs: [reserved] }),
+    assertCurrent,
+    reason: createChatAbortSignalReason("rpc", params.userInitiated),
+    hookContext: {
+      ...params.hookContext,
+      sessionKey: identity.sessionKey,
+      sessionId: identity.sessionId,
+    },
+    afterParent: params.afterParent,
+    onCancelled: (target) => {
+      if (target === reserved) {
+        result.aborted = true;
+      }
+    },
+    stopChildren: async (applyParentStop) => {
+      // The settle producer can still own the registry operation needed for
+      // descendant cleanup. Cancel its captured source before entering that owner.
+      await applyParentStop();
+      result.descendants = await abortControlledSubagents({
+        cfg: params.cfg,
+        sessionKey: identity.sessionKey,
+        agentId: identity.agentId,
+        requesterTurnRunId: runId,
+        sessionId: identity.sessionId,
+        lifecycleRevision: params.lifecycleRevision,
+        assertCurrent,
+      });
+      return {
+        stopped: result.descendants?.killed ?? 0,
+        failed: result.descendants?.status === "error" ? result.descendants.failed : 0,
+      };
+    },
+  }).completed;
+  return result;
+}
+
+/**
  * Stops one exact Gateway RPC run through Stop source `client-run`: its source
  * input, its chat presentation, and that turn's controlled subagents.
  */

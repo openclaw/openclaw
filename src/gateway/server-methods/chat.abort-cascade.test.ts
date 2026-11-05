@@ -4,7 +4,7 @@
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -36,6 +36,11 @@ import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
 } from "../../infra/system-events.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
@@ -223,6 +228,11 @@ describe("descendant cascade ownership", () => {
         expectDefined(captureExecRequestOwners(identity), "original command owners"),
       );
       const owner = expectDefined(owners[0], "original command owner");
+      const runStopped = vi.fn();
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "run_stopped", handler: runStopped }]),
+      );
+      onTestFinished(resetGlobalHookRunner);
       await withExecRequestTurn(
         {
           identity: {
@@ -246,6 +256,7 @@ describe("descendant cascade ownership", () => {
           });
           expect(requireLastRespondCall(foreign)[0]).toBe(false);
           expect(owner.signal.aborted).toBe(false);
+          expect(runStopped).not.toHaveBeenCalled();
           const response = await stop({
             context,
             request,
@@ -259,6 +270,17 @@ describe("descendant cascade ownership", () => {
             { ok: true, aborted: true, runIds: [] },
           ]);
           expect(owner.signal.aborted).toBe(true);
+          // The stopped turn runs in the requested session, not where its command owner began.
+          expect(runStopped.mock.calls).toEqual([
+            [
+              {
+                source: "client",
+                sessions: [{ agentId: "main", sessionKey }],
+                runIds: ["continued-command"],
+              },
+              { agentId: "main", sessionKey },
+            ],
+          ]);
         },
       );
     },
