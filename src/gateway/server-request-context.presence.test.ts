@@ -263,7 +263,8 @@ describe("createGatewayRequestContext presence", () => {
         client.connect.client.mode = GATEWAY_CLIENT_MODES.WEBCHAT;
         client.connect.scopes = ["operator.read", "operator.write"];
       }
-      const [writer, reader] = clients as [GatewayWsClient, GatewayWsClient];
+      const writer = clients[0]!;
+      const reader = clients[1]!;
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
