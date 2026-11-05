@@ -336,6 +336,44 @@ describe("OpenAI realtime voice bridge connection", () => {
     },
   );
 
+  it.each([
+    { speechLocale: "cs-CZ", language: "cs" },
+    { speechLocale: "de_DE", language: "de" },
+    { speechLocale: "en", language: "en" },
+    { speechLocale: "xx", language: undefined },
+    { speechLocale: undefined, language: undefined },
+  ])(
+    "forwards talk.speechLocale=$speechLocale as GA transcription language=$language",
+    async ({ speechLocale, language }) => {
+      const { broker, createBrowserSession } =
+        createQuicksilverBrowserBrokerFixture("gateway-token");
+      const provider = buildOpenAIRealtimeVoiceProvider({
+        quicksilverBrowserSessionBroker: broker,
+      });
+      await provider.createBrowserSession?.({
+        cfg: { talk: speechLocale ? { speechLocale } : {} } as never,
+        providerConfig: { apiKey: "test-api-key-platform" },
+        model: "gpt-realtime-2.1",
+        clientControl: { owner: "gateway" },
+        gatewayControl: {
+          bindBridge: vi.fn(),
+          bindControl: vi.fn(),
+          onEvent: vi.fn(),
+          onReady: vi.fn(),
+          onClose: vi.fn(),
+        },
+      });
+      const gaSession = requireRecord(
+        requireRecord(createBrowserSession.mock.calls[0]?.[0], "broker request").gaSession,
+        "GA session policy",
+      );
+      expect(requireNestedRecord(gaSession, ["audio", "input", "transcription"])).toEqual({
+        model: "gpt-4o-mini-transcribe",
+        ...(language ? { language } : {}),
+      });
+    },
+  );
+
   it("waits for session.updated before draining audio and firing onReady", async () => {
     const onReady = vi.fn();
     const bridge = createNativeBridge({
