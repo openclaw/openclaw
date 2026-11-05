@@ -9,6 +9,7 @@ import {
 } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-options.ts";
+import { McpAppView } from "../../components/mcp-app-view-lazy.ts";
 import { t } from "../../i18n/index.ts";
 import { BOARD_GRID_COLUMNS } from "../../lib/board/grid-constants.ts";
 import {
@@ -673,13 +674,24 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (!this.isBoardPanelAvailable(board)) {
       return null;
     }
+    const pageWidget = this.pageBoardWidget(layout, board);
+    if (pageWidget?.contentKind === "mcp-app") {
+      // Prepare the visible page before its nested renderer mounts; the provider
+      // owns connection admission and joins the cell's eventual lease read.
+      void McpAppView.preload().catch(() => undefined);
+      if (hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null)) {
+        void board.provider
+          .widgetAppView(pageWidget.name, pageWidget.revision)
+          .catch(() => undefined);
+      }
+    }
     return {
       owner: this,
       board,
       layout,
       session: this.resolveBoardConversation(),
       connectionGeneration: this.connectionGeneration,
-      pageWidgetName: this.pageBoardWidget(layout, board)?.name,
+      pageWidgetName: pageWidget?.name,
     };
   }
 
