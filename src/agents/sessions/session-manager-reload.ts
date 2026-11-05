@@ -4,10 +4,10 @@ import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/sessi
 import { findSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import { recordSessionManagerBoundedSelection } from "./session-manager-bounded-selection.js";
 import { captureSessionManagerIncognitoBinding } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import { prepareSessionManagerMemoryRead } from "./session-manager-memory-read.js";
-import { recordSessionManagerBoundedSelection } from "./session-manager-bounded-selection.js";
 import type {
   PreparedSessionTranscriptReload,
   SessionManagerBoundedContextLimits,
