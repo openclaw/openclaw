@@ -275,7 +275,10 @@ The host selects the provider and model from the owning agent's configuration.
 `purpose` identifies the consumer operation; `rubricVersion` identifies its rubric
 in result provenance. They do not replace question instructions. Change the
 rubric version when its meaning changes. Omit `agentId` only when intentionally
-using global-default selection.
+using global-default selection. Optional `assertCurrent` is the caller's own
+authority check (for example a revocable data grant); the host re-runs it at every
+provider dispatch and retry, and a throw rejects the evaluation before more data
+leaves.
 
 An `ok` outcome contains `outcome.result.answers`, keyed by the submitted question
 IDs, plus the provider-reported model, optional usage, and provider/rubric/runtime provenance.

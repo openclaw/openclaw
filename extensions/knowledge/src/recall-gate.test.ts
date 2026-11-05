@@ -263,6 +263,8 @@ it("rechecks authority before every Decision request", async () => {
     }),
   ).rejects.toThrow("audience changed");
   expect(rt.evaluateV2).toHaveBeenCalledTimes(1);
+  // The runtime carries the same predicate to physical dispatch and every retry.
+  expect(rt.evaluateV2.mock.calls[0]![1].assertCurrent).toBe(assertCurrent);
 });
 
 it("counts the header inside the injection budget", () => {

@@ -240,6 +240,9 @@ Details:
 - The gate runs only on user-triggered turns with a known agent. Ungranted
   conversation audiences, sandboxed sessions, and agents without a provisioned
   store are skipped without a Decision request.
+- The conversation's Knowledge access is re-checked at every Decision request,
+  provider dispatch and retry. Revoking it mid-turn stops anything more from
+  being sent and injects nothing.
 
 The Decision provider receives page labels and the user message. Select a
 provider you trust with both, such as a local System One or ONNX model.

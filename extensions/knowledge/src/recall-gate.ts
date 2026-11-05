@@ -199,7 +199,10 @@ export async function decide(params: {
   decisions: DecisionRuntimeV2;
   agentId: string;
   signal: AbortSignal;
-  /** Called before every Decision request; throws when the turn's authority lapsed. */
+  /**
+   * The turn's Knowledge authority; throws once it lapsed. The Decision runtime
+   * re-checks it at every physical dispatch and retry, so revoked labels never leave.
+   */
   assertCurrent?: () => void;
 }): Promise<GateResult> {
   const { policy, entries, message, signal } = params;
@@ -220,6 +223,7 @@ export async function decide(params: {
         rubricVersion: GATE_RUBRIC_VERSION,
         timeoutMs: remaining,
         signal,
+        ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
       },
     );
   };
