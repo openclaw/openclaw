@@ -11,6 +11,15 @@ jobs:
   native:
     runs-on: macos-26
     timeout-minutes: 110
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        revision:
+          - 9a5581b4ce230381e3f200a62be4cdbe78e41c19
+          - 8149b98130829cb7d83ec153c9bc9355bcc7cc64
+    env:
+      PROOF_REVISION: ${{ matrix.revision }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -27,7 +36,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: openclaw/openclaw
-          ref: 8149b98130829cb7d83ec153c9bc9355bcc7cc64
+          ref: ${{ matrix.revision }}
           path: candidate
           fetch-depth: 0
           persist-credentials: false
@@ -44,35 +53,6 @@ jobs:
       - name: Install candidate dependencies
         working-directory: candidate
         run: pnpm install --frozen-lockfile
-      - name: Prove local ingress regression on original Core sources
-        working-directory: candidate
-        run: |
-          set -euo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof"
-          planner=src/gateway/credential-planner.ts
-          surfaces=src/secrets/runtime-gateway-auth-surfaces.ts
-          trap 'git restore -- "$planner" "$surfaces"' EXIT
-          git show 3481ca33a1bf69a445814f0c620e12719c78f947:"$planner" > "$planner"
-          git show 3481ca33a1bf69a445814f0c620e12719c78f947:"$surfaces" > "$surfaces"
-          set +e
-          pnpm test src/secrets/runtime-gateway-local-surfaces.test.ts --maxWorkers=1 -t "prepares local ingress auth independently" > "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof/core-baseline.log" 2>&1
-          code=$?
-          set -e
-          cat "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof/core-baseline.log"
-          test "$code" -ne 0
-          grep -F 'prepares local ingress auth independently' "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof/core-baseline.log"
-          grep -F 'AssertionError' "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof/core-baseline.log"
-          git restore -- "$planner" "$surfaces"
-          test -z "$(git status --porcelain)"
-      - name: Exact-head Core auth regressions and consumer tests
-        working-directory: candidate
-        env:
-          OPENCLAW_VITEST_WORKER_CACHE: "1"
-        run: |
-          set -euo pipefail
-          # Cold worker compilation took 116s inside a 120s credential test on run 41909368162.
-          node scripts/prepare-vitest-worker-cache.mts
-          pnpm test src/secrets/runtime-gateway-local-surfaces.test.ts src/gateway/credentials.test.ts src/gateway/probe-auth.test.ts --maxWorkers=1 2>&1 | tee "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof/core-tests.log"
       - name: Build actual exact-head ad-hoc app
         working-directory: candidate
         env:
@@ -84,17 +64,10 @@ jobs:
           CODESIGN_TIMESTAMP: "off"
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 8149b98130829cb7d83ec153c9bc9355bcc7cc64
+          test "$(git rev-parse HEAD)" = "$PROOF_REVISION"
           test -z "$(git status --porcelain)"
           bash scripts/package-mac-app.sh
           codesign --verify --deep --strict dist/OpenClaw.app
-      - name: Exact-head focused native tests
-        working-directory: candidate
-        run: |
-          set -euo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof"
-          swift build --package-path apps/macos --build-system native --build-tests
-          node scripts/test-macos-native.mts default --package-path apps/macos --build-system native --skip-build --filter GatewayEndpointStoreTests 2>&1 | tee "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof/current-tests.log"
       - name: Prepare published stable app and CLI
         run: |
           set -euo pipefail
@@ -112,27 +85,11 @@ jobs:
           node stable-runtime/node_modules/openclaw/openclaw.mjs --version
       - name: Actual native connection and manual upgrade observations
         run: node scripts/e2e/macos-local-auth-proof.mts candidate
-      - name: Exact-head scoped Core lint
-        if: ${{ !cancelled() }}
-        working-directory: candidate
-        timeout-minutes: 10
-        run: |
-          node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/gateway/credential-planner.ts src/secrets/runtime-gateway-auth-surfaces.ts src/secrets/runtime-gateway-local-surfaces.test.ts
-      - name: Exact-head Core typecheck
-        if: ${{ !cancelled() }}
-        working-directory: candidate
-        timeout-minutes: 15
-        run: pnpm tsgo:core
-      - name: Exact-head regression-test typecheck
-        if: ${{ !cancelled() }}
-        working-directory: candidate
-        timeout-minutes: 15
-        run: node --import ./scripts/tsx.mjs scripts/run-tsgo-core-test-shards.mts --changed-paths-json '["src/secrets/runtime-gateway-local-surfaces.test.ts"]'
       - name: Retain sanitized evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: pr128175-native-auth-8149b981
+          name: pr128175-startup-${{ matrix.revision }}
           path: .artifacts/macos-local-auth-proof
           include-hidden-files: true
           if-no-files-found: warn

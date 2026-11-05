@@ -20,7 +20,14 @@ fs.mkdirSync(evidence, { recursive: true });
 const root = fs.realpathSync(fs.mkdtempSync(path.join(process.env.RUNNER_TEMP, "local-auth-")));
 const binary = path.join(repository, "dist/OpenClaw.app/Contents/MacOS/OpenClaw");
 assert.ok(fs.existsSync(binary));
-const candidate = "8149b98130829cb7d83ec153c9bc9355bcc7cc64";
+const candidate = process.env.PROOF_REVISION;
+assert.ok(
+  candidate &&
+    [
+      "9a5581b4ce230381e3f200a62be4cdbe78e41c19",
+      "8149b98130829cb7d83ec153c9bc9355bcc7cc64",
+    ].includes(candidate),
+);
 const revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 assert.equal(
   execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim(),
@@ -97,6 +104,7 @@ type Scenario = {
     | "shorthand-dollar"
     | "shorthand-braced";
   upgrade?: boolean;
+  delayedStartup?: boolean;
 };
 
 async function observe(scenario: Scenario, port: number): Promise<void> {
@@ -361,6 +369,18 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
       }
       result.serviceReady = ready;
       assert.ok(ready, "The actual installed Gateway did not become ready");
+      // Begin with the same installed, migrated service in both variants.
+      // The delayed variant starts it only after the real app has launched.
+      const delayedStartup = scenario.delayedStartup && phase === "candidate";
+      if (delayedStartup) {
+        assert.equal(await cli("stop-before-launch", ["gateway", "stop", "--json", "--force"]), 0);
+        await assert.rejects(
+          fetch(`http://127.0.0.1:${port}/healthz`, {
+            signal: AbortSignal.timeout(1_000),
+          }),
+          "Delayed startup requires an absent listener",
+        );
+      }
       const protocolLog = path.join(state, "gateway.jsonl");
       const protocolOffset = fs.existsSync(protocolLog)
         ? fs.readFileSync(protocolLog, "utf8").length
@@ -375,17 +395,35 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
         appEnv,
         {
           signal: controller.signal,
-          timeoutMs: 90_000,
+          timeoutMs: 150_000,
         },
       ).then(
         (exit) => ({ exit }),
         (error: unknown) => ({ error }),
       );
+      // Controlled external startup timing, not a product retry or longer deadline.
       const phaseFailures: unknown[] = [];
+      const serviceStart = delayedStartup
+        ? (async () => {
+            await delay(15_000);
+            phaseResult.serviceStartRequestedAt = new Date().toISOString();
+            const exit = await cli("delayed-start", ["gateway", "start", "--json"]);
+            phaseResult.serviceStartExit = exit;
+            return exit;
+          })().catch((error: unknown) => {
+            phaseFailures.push(error);
+            return -1;
+          })
+        : Promise.resolve(0);
       try {
         // Require a protected RPC on the native app's own authenticated connection.
-        const deadline = Date.now() + 60_000;
+        // The original 60s capture ended before HealthStore's next 60s poll.
+        // Observe beyond that poll to distinguish an expired launch action from
+        // continuing RPC failure; ready-service credential proof stays at 60s.
+        const deadline = Date.now() + (delayedStartup ? 100_000 : 60_000);
         let connected: string | undefined;
+        let authenticated: string | undefined;
+        const successfulMethods = new Set<string>();
         while (Date.now() < deadline && !connected) {
           const text = fs.existsSync(protocolLog)
             ? fs.readFileSync(protocolLog, "utf8").slice(protocolOffset)
@@ -421,6 +459,13 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
               !connection.includes("…") && connection.length > 12
                 ? `${connection.slice(0, 8)}…${connection.slice(-4)}`
                 : connection;
+            authenticated = connection;
+            for (const entry of messages) {
+              if (entry.includes(`conn=${short}`)) {
+                const method = /res ✓ ([\w.-]+)/.exec(entry)?.[1];
+                if (method) successfulMethods.add(method);
+              }
+            }
             if (
               messages.some(
                 (entry) => entry.includes("res ✓ config.get") && entry.includes(`conn=${short}`),
@@ -434,12 +479,25 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
             await delay(1_000);
           }
         }
-        assert.ok(
-          connected,
-          "No successful protected config.get on a native UI connection with expected auth",
-        );
-        phaseResult.nativeConnection = connected;
-        phaseResult.protectedConfigGet = true;
+        assert.equal(await serviceStart, 0, "Owned Gateway start failed");
+        phaseResult.nativeConnection = authenticated;
+        phaseResult.protectedConfigGet = Boolean(connected);
+        phaseResult.successfulMethods = [...successfulMethods];
+        assert.ok(authenticated, "Expected native authentication never completed");
+        if (!delayedStartup) {
+          assert.ok(connected, "Ready-service control must complete config.get");
+        } else {
+          // Missing RPCs are the observation under investigation, not a passing
+          // recovery verdict. Capture the app stack to identify a blocking alert.
+          const pid = execFileSync("pgrep", ["-x", "OpenClaw"], { encoding: "utf8" }).trim();
+          assert.match(pid, /^\d+$/, "Expected exactly one fixture app");
+          phaseResult.sampleExit = await command(
+            `${name}-${phase}-sample`,
+            "/usr/bin/sample",
+            [pid, "1", "1", "-file", "/dev/stdout"],
+            env,
+          );
+        }
         assert.deepEqual(JSON.parse(fs.readFileSync(configPath, "utf8")).gateway.auth, auth);
         assert.equal(fs.readFileSync(retainedFile, "utf8"), retainedContents);
         for (const [key, expected] of [
@@ -470,6 +528,7 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
         phaseResult.failure = sanitized(String(error));
         phaseFailures.push(error);
       } finally {
+        await serviceStart;
         controller.abort();
         const outcome = await app;
         if ("error" in outcome) {
@@ -493,7 +552,7 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
             [
               "show",
               "--last",
-              "90s",
+              "180s",
               "--style",
               "json",
               "--debug",
@@ -559,28 +618,14 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
 
 try {
   const scenarios: Scenario[] = [
+    { name: "ready-upgrade-braced", kind: "shorthand-braced", surface: "token", upgrade: true },
     {
-      name: "typed-password-remote-token",
-      kind: "typed-password-remote-token",
-      surface: "password",
-    },
-    {
-      name: "suppressed-password-remote-token",
-      kind: "suppressed-password-remote-token",
+      name: "delayed-upgrade-braced",
+      kind: "shorthand-braced",
       surface: "token",
+      upgrade: true,
+      delayedStartup: true,
     },
-    {
-      name: "typed-token-remote-password",
-      kind: "typed-token-remote-password",
-      surface: "password",
-    },
-    {
-      name: "suppressed-password-remote-password",
-      kind: "suppressed-password-remote-password",
-      surface: "token",
-    },
-    { name: "upgrade-shorthand-dollar", kind: "shorthand-dollar", surface: "token", upgrade: true },
-    { name: "upgrade-shorthand-braced", kind: "shorthand-braced", surface: "token", upgrade: true },
   ];
   const scenarioFailures: unknown[] = [];
   for (const [index, scenario] of scenarios.entries()) {
@@ -611,7 +656,8 @@ try {
         revision,
         stable: "v2026.10.9",
         candidate,
-        scope: "Actual app and installed local Gateway; observations require independent judgment.",
+        scope:
+          "Matched base/candidate ready and delayed startup after stable upgrade; missing post-connect RPCs are observations, not a passing recovery verdict.",
         results,
       },
       null,
