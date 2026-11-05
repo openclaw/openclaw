@@ -532,7 +532,15 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       requested = false;
       pumping = Promise.reject(toErrorObject(error, "Channel ingress pump failed"));
     }
-    void pumping.catch(reportError);
+    const pending = pumping;
+    void pending.catch((error: unknown) => {
+      if (pumping === pending) {
+        pumping = undefined;
+        requested = false;
+      }
+      reportError(error);
+      publishActivity();
+    });
     publishActivity();
   };
 
@@ -638,6 +646,37 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     }
   };
 
+  const stop = () => {
+    stopTask ??= (async () => {
+      stopped = true;
+      params.abortSignal?.removeEventListener("abort", stopOnAbort);
+      running = false;
+      requested = false;
+      clearSuspensionSubscription();
+      releaseRestartFenceWake();
+      clearTimers();
+      publishActivity();
+      // Every transport callback accepted before stop keeps its durable-append guarantee.
+      await admissionTail;
+      shutdown.abort(createStoppedError());
+      await waitForPumpIdle().catch(reportError);
+      await waitForPending(() => activeInspections);
+      if (options.waitForDeliveryIdleOnStop !== false) {
+        await waitForActiveDeliveries();
+        await drain?.waitForIdle();
+      }
+      if (options.deferredClaims && options.deferredClaims !== "manual") {
+        await waitForDeferredClaims();
+      }
+      await drain?.dispose({ waitForSettlements: true }).catch(reportError);
+      monitorOwner.release();
+    })();
+    return stopTask;
+  };
+  const stopOnAbort = () => {
+    void stop().catch(reportError);
+  };
+
   return {
     admit: (
       raw: TRaw,
@@ -653,12 +692,13 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     admitBatch: (rawEvents: readonly TRaw[], admitOptions?: { receivedAt?: number }) =>
       scheduleAdmission((sharedOptions) => admitRawBatch(rawEvents, sharedOptions), admitOptions),
     start: () => {
-      if (running || stopped || isAborted() || isPluginQuiesced()) {
+      if (running || stopped || isAborted()) {
         return;
       }
       // Fail startup as dead ingress before arming a timer that would repeat the same error.
       ensureQueueAvailable();
       monitorOwner.start(requestDrain);
+      params.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
       running = true;
       unsubscribeSuspension ??= onGatewaySuspendAdmissionChange((phase) => {
         if (!running) {
@@ -692,36 +732,10 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     ensureQueueAvailable,
     requestDrain,
     pause,
-    stop: () => {
-      stopTask ??= (async () => {
-        stopped = true;
-        running = false;
-        requested = false;
-        clearSuspensionSubscription();
-        releaseRestartFenceWake();
-        clearTimers();
-        publishActivity();
-        // Every transport callback accepted before stop keeps its durable-append guarantee.
-        await admissionTail;
-        shutdown.abort(createStoppedError());
-        await waitForPumpIdle().catch(reportError);
-        await waitForPending(() => activeInspections);
-        if (options.waitForDeliveryIdleOnStop !== false) {
-          await waitForActiveDeliveries();
-          await drain?.waitForIdle();
-        }
-        if (options.deferredClaims && options.deferredClaims !== "manual") {
-          await waitForDeferredClaims();
-        }
-        await drain?.dispose({ waitForSettlements: true }).catch(reportError);
-        monitorOwner.release();
-      })();
-      return stopTask;
-    },
+    stop,
     waitForIdle: async () => {
       for (;;) {
-        await admissionTail;
-        await waitForPumpIdle();
+        await Promise.all([admissionTail, waitForPumpIdle()]);
         await waitForPending(() => activeInspections);
         await waitForActiveDeliveries();
         await drain?.waitForIdle();

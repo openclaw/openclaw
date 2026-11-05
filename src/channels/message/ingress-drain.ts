@@ -246,9 +246,10 @@ export function createChannelIngressDrainOwner<
   });
 
   const applyFailureDisposition = async (
-    claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
+    state: ActiveHandlerState<TPayload, TMetadata>,
     err: unknown,
   ) => {
+    const { claim } = state;
     if (err instanceof GatewayDrainingError) {
       // Root dispatch closes before durable transport admission during restart.
       // Preserve the row for the successor without spending its failure budget.
@@ -263,6 +264,9 @@ export function createChannelIngressDrainOwner<
       config: options.retryPolicy,
       now: now(),
     });
+    if (disposition.kind === "fail") {
+      state.phase = "failed";
+    }
     const committed =
       disposition.kind === "fail"
         ? await failClaim(claim, disposition.reason, disposition.message)
@@ -301,7 +305,7 @@ export function createChannelIngressDrainOwner<
       // Route the timeout through the canonical retry owner. A release/fail write
       // error must not falsely settle (would stop heartbeat and wedge recovery).
       void state
-        .settleOnce(() => applyFailureDisposition(state.claim, timeoutError))
+        .settleOnce(() => applyFailureDisposition(state, timeoutError))
         .catch((err: unknown) => {
           log(
             `ingress drain: failed to settle stalled event ${displayId}; holding claim: ${formatError(err)}`,
@@ -368,8 +372,8 @@ export function createChannelIngressDrainOwner<
         if (state.superseded) {
           throw new IngressAdoptionLostError("superseded");
         }
-        if (state.phase === "adopted" || state.phase === "settled") {
-          // Idempotent only after a genuine successful adoption path.
+        if (state.phase === "adopted" || state.phase === "failed" || state.phase === "settled") {
+          // A terminal decision already owns this claim.
           return;
         }
         // Complete at adoption, not settle — frees the lane for later events.
@@ -410,7 +414,7 @@ export function createChannelIngressDrainOwner<
           return;
         }
         // Keep recovery armed until disposition commits; removeActive clears it after success.
-        await state.settleOnce(() => applyFailureDisposition(state.claim, error));
+        await state.settleOnce(() => applyFailureDisposition(state, error));
       },
       onCancelled: async () => {
         // Cancellation means ownership ended before delivery, so preserve every
@@ -530,7 +534,7 @@ export function createChannelIngressDrainOwner<
         ) {
           return;
         }
-        if (state.phase === "settled" || state.phase === "adopted") {
+        if (state.phase === "settled" || state.phase === "adopted" || state.phase === "failed") {
           return;
         }
         if (state.guillotined || state.superseded) {
@@ -542,7 +546,7 @@ export function createChannelIngressDrainOwner<
         }
         if (result?.kind === "failed-retryable") {
           clearStallTimer(state);
-          await state.settleOnce(() => applyFailureDisposition(claim, result.error));
+          await state.settleOnce(() => applyFailureDisposition(state, result.error));
           return;
         }
         // Default: dispatch returned without deferral — complete when channel
@@ -560,16 +564,15 @@ export function createChannelIngressDrainOwner<
         if (state.guillotined || state.superseded) {
           return;
         }
-        // Adoption may have partially completed (tombstone retry wedge); keep claim.
-        // Includes handler-completed path that moved to adopted before complete().
-        if (state.phase === "adopted") {
+        // A terminal write may have failed; never convert it to a retryable delivery.
+        if (state.phase === "adopted" || state.phase === "failed") {
           log(
-            `ingress drain: post-adoption error for event ${claim.id} while claim held: ${formatError(err)}`,
+            `ingress drain: terminal settlement error for event ${claim.id} while claim held: ${formatError(err)}`,
           );
           return;
         }
         clearStallTimer(state);
-        await state.settleOnce(() => applyFailureDisposition(claim, err));
+        await state.settleOnce(() => applyFailureDisposition(state, err));
       } finally {
         releaseRootWork?.();
       }
@@ -770,6 +773,7 @@ export function createChannelIngressDrainOwner<
     for (const state of activeByClaim.values()) {
       if (
         state.phase === "adopted" ||
+        state.phase === "failed" ||
         state.superseded ||
         hasSqliteWorkerOutcomeUnknown(state.settlementFailure?.error)
       ) {

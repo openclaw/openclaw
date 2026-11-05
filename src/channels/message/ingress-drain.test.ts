@@ -709,61 +709,71 @@ describe("channel ingress drain ownership", () => {
     });
   });
 
-  it("recovers an unadopted peer after retiring failed completion custody", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir);
-      await queue.enqueue("delivered", { text: "delivered" }, { laneKey: "a" });
-      await queue.enqueue("unadopted", { text: "pending" }, { laneKey: "b" });
-      const writing = createDeferredCore();
-      const finish = createDeferredCore();
-      const failure = new Error("completion write failed");
-      const complete = queue.complete.bind(queue);
-      queue.complete = async (claim, options) => {
-        if (typeof claim !== "string" && claim.id === "delivered") {
-          writing.resolve();
-          await finish.promise;
-          throw failure;
-        }
-        return complete(claim, options);
-      };
-      const abort = new AbortController();
-      const drain = createChannelIngressDrain(
-        {
+  it.each(["complete", "fail"] as const)(
+    "recovers only an unadopted peer after failed %s custody",
+    async (method) => {
+      await withTempState(async (stateDir) => {
+        const queue = createTestIngressQueue(stateDir);
+        await queue.enqueue("delivered", { text: "delivered" }, { laneKey: "a" });
+        await queue.enqueue("unadopted", { text: "pending" }, { laneKey: "b" });
+        const writing = createDeferredCore();
+        const finish = createDeferredCore();
+        const failure = new Error("completion write failed");
+        const write = queue[method].bind(queue);
+        vi.spyOn(queue, method).mockImplementation(async (claim, options) => {
+          if (typeof claim !== "string" && claim.id === "delivered") {
+            writing.resolve();
+            await finish.promise;
+            throw failure;
+          }
+          return write(claim, options);
+        });
+        const abort = new AbortController();
+        const drain = createChannelIngressDrain(
+          {
+            queue,
+            abortSignal: abort.signal,
+            resolveNonRetryableFailure: () => ({ reason: "invalid-event", message: "poison" }),
+            dispatchClaimedEvent: (claim, lifecycle) =>
+              claim.id !== "delivered"
+                ? { kind: "deferred" }
+                : method === "complete"
+                  ? lifecycle.onAdopted()
+                  : lifecycle.onFailed?.(new Error("poison")),
+          },
+          true,
+        );
+        const delivered: string[] = [];
+        const peer = createChannelIngressDrain({
           queue,
-          abortSignal: abort.signal,
-          dispatchClaimedEvent: (claim, lifecycle) =>
-            claim.id === "delivered" ? lifecycle.onAdopted() : { kind: "deferred" },
-        },
-        true,
-      );
-      const delivered: string[] = [];
-      const peer = createChannelIngressDrain({
-        queue,
-        dispatchClaimedEvent: (claim) => {
-          delivered.push(claim.id);
-        },
+          dispatchClaimedEvent: (claim) => {
+            delivered.push(claim.id);
+          },
+        });
+        try {
+          await drain.drainOnce();
+          await writing.promise;
+          abort.abort();
+          const disposed = expect(drain.dispose({ waitForSettlements: true })).rejects.toBe(
+            failure,
+          );
+          finish.resolve();
+          await disposed;
+          expect(await peer.recoverStaleClaims()).toBe(1);
+          await peer.drainOnce();
+          await peer.waitForIdle();
+          expect(delivered).toEqual(["unadopted"]);
+          expect((await queue.listClaims()).map((claim) => claim.id)).toEqual(["delivered"]);
+        } finally {
+          abort.abort();
+          finish.resolve();
+          await drain.waitForIdle();
+          drain.dispose();
+          peer.dispose();
+        }
       });
-      try {
-        await drain.drainOnce();
-        await writing.promise;
-        abort.abort();
-        const disposed = expect(drain.dispose({ waitForSettlements: true })).rejects.toBe(failure);
-        finish.resolve();
-        await disposed;
-        expect(await peer.recoverStaleClaims()).toBe(1);
-        await peer.drainOnce();
-        await peer.waitForIdle();
-        expect(delivered).toEqual(["unadopted"]);
-        expect((await queue.listClaims()).map((claim) => claim.id)).toEqual(["delivered"]);
-      } finally {
-        abort.abort();
-        finish.resolve();
-        await drain.waitForIdle();
-        drain.dispose();
-        peer.dispose();
-      }
-    });
-  });
+    },
+  );
 
   it.each(["before", "during"] as const)(
     "keeps failed completion custody when the write rejects %s joined disposal",

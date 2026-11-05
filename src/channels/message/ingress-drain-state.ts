@@ -34,7 +34,7 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   claim: ChannelIngressQueueClaim<TPayload, TMetadata>;
   abortController: AbortController;
   startedAt: number;
-  phase: "dispatching" | "deferred" | "adopted" | "settled";
+  phase: "dispatching" | "deferred" | "adopted" | "failed" | "settled";
   occupiesLane: boolean;
   task: Promise<void>;
   settlement?: Promise<void>;
