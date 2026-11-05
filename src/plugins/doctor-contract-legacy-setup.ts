@@ -8,7 +8,10 @@ import {
 } from "./loader-channel-setup.js";
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
-import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
+import {
+  getPluginSetupModuleLoader,
+  PluginSetupPreparationRequiredError,
+} from "./plugin-setup-module.js";
 
 const log = createSubsystemLogger("plugins/doctor-contracts");
 
@@ -65,6 +68,9 @@ export function loadLegacyChannelStateMigrationDetector(
       return typeof lifecycleDetector === "function" ? lifecycleDetector : null;
     });
   } catch (error) {
+    if (error instanceof PluginSetupPreparationRequiredError) {
+      throw error;
+    }
     log.warn(
       `failed to load legacy state migration for ${record.id} from ${record.setupSource}: ${formatErrorMessage(error)}`,
     );

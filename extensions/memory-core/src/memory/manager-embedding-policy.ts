@@ -13,7 +13,19 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { EmbeddingProvider } from "./embeddings.js";
+import type { EmbeddingProvider, EmbeddingProviderRuntime } from "./embeddings.js";
+import type { MemoryEmbeddingBatchConfig } from "./manager-sync-base.js";
+
+export function resolveMemoryIndexConcurrency(
+  batch: Pick<MemoryEmbeddingBatchConfig, "enabled" | "concurrency">,
+  runtime?: EmbeddingProviderRuntime,
+): number {
+  if (batch.enabled) {
+    return batch.concurrency;
+  }
+  const declared = runtime?.inlineIndexConcurrency;
+  return declared !== undefined && Number.isSafeInteger(declared) && declared > 0 ? declared : 4;
+}
 
 export function embedMemoryQuery(
   provider: EmbeddingProvider,
