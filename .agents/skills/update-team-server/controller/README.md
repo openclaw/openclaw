@@ -224,8 +224,11 @@ old mutable wrapper, enable the historical timer, or invent a second cadence.
 
 ## Host maintenance launcher and health check
 
-The host maintenance sources are imported from the private ops repository's
-installed bytes. Original SHA-256 prefixes (provenance, not installation approval):
+The host maintenance sources were imported from the private ops repository's
+installed bytes in #193269 (`ae37d0fd`). The health body now uses Python stdlib
+read-only probes instead of the two hourly CLI bootstraps; the launcher passes
+only the private acceptance receipt's timestamp across the runtime-user boundary.
+Original SHA-256 prefixes (provenance, not installation approval):
 
 | File                                   | Original SHA-256 prefix |
 | -------------------------------------- | ----------------------- |
@@ -234,13 +237,40 @@ installed bytes. Original SHA-256 prefixes (provenance, not installation approva
 | `openclaw-hourly-health-check.service` | `03ac7f1c43509605`      |
 | `openclaw-hourly-health-check.timer`   | `0b55981e1f794115`      |
 
-The launcher admits the two fixed maintenance jobs by service cgroup. Install it
-at `/usr/local/lib/openclaw-team/disk-maintenance-launcher.py` as `root:root`,
-mode `0644`; install the health body at
-`/usr/local/lib/openclaw-team/openclaw-health-check` as `root:root`, mode `0755`.
-The health body checks Gateway health/readiness and update freshness as the runtime
-user. The service invokes the launcher; the timer schedules it hourly. Both units
-belong in `/etc/systemd/system/` as `root:root`, mode `0644`.
+The launcher admits the two fixed maintenance jobs by service cgroup. Install
+the launcher and body together from the same reviewed, merged commit; the new
+body is Python, and the launcher selects its isolated Python interpreter.
+Preserve the existing service and timer settings. Landing does not install them.
+
+| File                                   | Installed path                                              | Owner/mode          |
+| -------------------------------------- | ----------------------------------------------------------- | ------------------- |
+| `disk-maintenance-launcher.py`         | `/usr/local/lib/openclaw-team/disk-maintenance-launcher.py` | `root:root`, `0644` |
+| `openclaw-health-check`                | `/usr/local/lib/openclaw-team/openclaw-health-check`        | `root:root`, `0755` |
+| `openclaw-hourly-health-check.service` | `/etc/systemd/system/openclaw-hourly-health-check.service`  | `root:root`, `0644` |
+| `openclaw-hourly-health-check.timer`   | `/etc/systemd/system/openclaw-hourly-health-check.timer`    | `root:root`, `0644` |
+
+The body keeps the launcher's one pinned-release-path argument, stdout evidence,
+stderr failure, and zero/nonzero exit contract. It never executes that path,
+opens state databases, or scans sessions/workspaces. It reads the loaded Gateway
+unit's active/running state and port (`ExecStart --port`, then the unit's
+`OPENCLAW_GATEWAY_PORT` environment), and checks loopback `/healthz` and `/readyz`.
+It queries Prometheus at `127.0.0.1:19090` for advancing event-loop observations
+over five minutes, current running/queued sessions, and heap bytes. Each metric
+must have one sample from the same live scrape target (`up == 1`), scraped within
+two minutes. Missing, ambiguous, invalid, or stalled observations fail the check;
+zero sessions is healthy. There is no CLI or RPC fallback. A new exporter needs
+enough scrapes to establish event-loop progress. These probes observe liveness,
+not channel delivery or model inference acceptance.
+
+The launcher already refuses an unresolved activation journal under its lock.
+It reads only `verified/<current-sha>` and its mtime, retaining root-only receipt
+permissions, and hands the timestamp to the runtime body as
+`OPENCLAW_MAINTENANCE_VERIFIED_AT_MS` (internal invocation data, not configuration).
+The body reports the SHA pinned from `/opt/openclaw-team/current` by the launcher
+and its acceptance age. Missing or mismatched receipts fail.
+Age is informational: the deployer owns acceptance, and updates need explicit
+approval. This does not compare against upstream main or a package registry and
+does not invent a release-expiry threshold. No new receipt or cache is written.
 
 The launcher now takes the deployment lock exclusively and nonblockingly, then
 hands it to the release proofs as FD 9. The host's currently installed release
@@ -252,12 +282,34 @@ disk-maintenance body remains outside this closure; its launcher job entry is
 unchanged. Landing does not install these files: publication is a separate
 operator adoption under the canonical lock, approved per deployment.
 
-Run the four focused launcher tests on Linux as a non-root user (Node and Python
+Run the focused launcher and health-body tests on Linux as a non-root user (Node and Python
 stdlib only), from the repository root:
 
 ```sh
+docker run --rm -u 1000:1000 -v "$PWD":/src:ro -w /src node:24-bookworm python3 -B -m unittest discover -s .agents/skills/update-team-server/controller -p '*health-check.test.py' -v
 docker run --rm -u 1000:1000 -v "$PWD":/src:ro -w /src node:24-bookworm python3 -B .agents/skills/update-team-server/controller/disk-maintenance-launcher.test.py -v
 ```
+
+The PromQL fixtures exercise actual query evaluation (including stale/down targets)
+with a pinned Prometheus tool, without contacting a running server:
+
+```sh
+docker run --rm --network none --entrypoint /bin/promtool \
+  -v "$PWD/.agents/skills/update-team-server/controller:/proof:ro" \
+  prom/prometheus@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62 \
+  test rules /proof/openclaw-health-check.promql.test.yml
+```
+
+`health-check.bench.py --baseline <old-bash-body> --root <disposable-filesystem>`
+measures owner-process wall/CPU/memory costs and CLI/state access counts with
+five A/A pairs and five alternating before/after pairs. Run as non-root in an
+isolated Linux container with Bash, curl, strace, and free loopback ports 18789
+and 19090. It creates a sparse 35 GiB state-shaped file, 6,000 session fixtures,
+and 62,000 workspace files totaling about 1.1 GB logical, then makes state
+unreadable. Use a disposable btrfs mount for the production filesystem shape.
+HTTP/systemd responses and the baseline CLI are fixtures: baseline timings
+exclude actual CLI bootstrap/snapshot work, so this is bounded probe overhead,
+not an end-to-end Gateway speedup claim.
 
 ## Private operator configuration
 
