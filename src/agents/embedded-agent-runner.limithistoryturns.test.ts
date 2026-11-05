@@ -50,7 +50,11 @@ describe("limitHistoryTurns", () => {
     const messages = [...completed, orphan, current];
     const options = { groupConsecutiveUserTurns: true };
     expect(limitHistoryTurns(messages, 3, options)).toBe(messages);
-    expect(limitHistoryTurns(messages, 1, options)).toEqual([orphan, current]);
+    expect(limitHistoryTurns(messages, 1, options)).toEqual([
+      ...completed.slice(-2),
+      orphan,
+      current,
+    ]);
     expect(limitHistoryTurns(messages, 1)).toEqual([current]);
   });
 });
