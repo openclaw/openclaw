@@ -698,8 +698,9 @@ describe("conversation position rail", () => {
     expect(document.activeElement).toBe(provisional);
     expect(preview()).toContain("Final response");
     const persistedBubble = query('[data-entry-id="persisted-answer"]')!;
-    await settleFrames();
+    // Ref retirement releases the old target before queued additions and layout.
     expect(observed.has(streamBubble)).toBe(false);
+    await settleFrames();
     expect(observed.has(persistedBubble)).toBe(true);
     marker().click();
     await settleFrames();

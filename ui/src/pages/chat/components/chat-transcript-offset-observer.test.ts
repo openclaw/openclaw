@@ -146,6 +146,8 @@ it.each([
   expect(recordedEnd).toEqual([true]);
   expect(paneRecordedEnd).toEqual([true]);
   expect(geometryReads).toEqual([false, false]);
+  expect(onReaderScroll).toHaveBeenCalledExactlyOnceWith(true);
+  onReaderScroll.mockClear();
   const nested = document.createElement("div");
   element.append(nested);
   order.length = 0;
@@ -186,8 +188,9 @@ it.each([
 });
 
 it.each([
-  { position: "end", offset: 800, expected: 870, following: true },
-  { position: "history", offset: 600, expected: 600, following: false },
+  { position: "end", offset: 800, expected: 870, following: true, growthBeforeArrival: 0 },
+  { position: "grown end", offset: 870, expected: 940, following: true, growthBeforeArrival: 70 },
+  { position: "history", offset: 600, expected: 600, following: false, growthBeforeArrival: 0 },
 ])("preserves $position after synchronizing a reader before its scroll event", (testCase) => {
   const element = document.createElement("div");
   let scrollHeight = 1000;
@@ -250,6 +253,7 @@ it.each([
   element.dispatchEvent(new Event("scroll"));
 
   // ResizeObserver can synchronize physical movement before the native scroll event.
+  scrollHeight += testCase.growthBeforeArrival;
   element.scrollTop = testCase.offset;
   state.syncNativeOffset?.();
   expect(virtualizer.scrollOffset).toBe(testCase.offset);

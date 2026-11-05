@@ -43,8 +43,8 @@ const markdownCache = new Map<string, MarkdownCacheEntry>();
 let markdownCacheChars = 0;
 // Only speculative preparation retains pristine trees until their next mount.
 const preparedFragments = new Map<MarkdownCacheEntry, DocumentFragment>();
-// Keep two nearby windows across a session switch or transcript search.
-const PREPARED_FRAGMENT_LIMIT = 256;
+// Keep nearby windows hot; skipped rows retain sanitized HTML, not pristine DOM.
+const PREPARED_FRAGMENT_LIMIT = 32;
 export type MarkdownPrewarmMode = "html" | "idle-html" | "cold-fragment" | "fragment";
 export const HIGHLIGHTABLE_CODE_RE = /<pre><code(?! class="markdown-block-art")/u;
 

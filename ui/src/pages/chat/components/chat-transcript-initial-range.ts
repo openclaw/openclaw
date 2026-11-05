@@ -1,5 +1,6 @@
 import type { Range, Virtualizer } from "@tanstack/virtual-core";
 import type { MarkdownPrewarmMode } from "../../../components/markdown.ts";
+import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 
 // A few viewports avoid repeat mounts without making every scroll restyle a
@@ -10,9 +11,6 @@ const PREPARED_ROW_LIMIT = 12;
 const IDLE_PREWARM_ROW_LIMIT = 2048;
 // Cover the first gesture without parsing the entire untouched transcript on open.
 const INITIAL_PREWARM_ROW_LIMIT = 128;
-// A fast first gesture can skip dozens of rows before velocity is known.
-// Keep nearby sanitized DOM ready without mounting it or changing geometry.
-const IDLE_FRAGMENT_ROW_LIMIT = 128;
 
 /** Own initial tail placement and bounded preparation ahead of the visible range. */
 export class TranscriptInitialRange {
@@ -176,16 +174,19 @@ export class TranscriptInitialRange {
   }
 
   readonly prepareEnd = (ready: () => void, isCurrent: () => boolean): void => {
+    cancelLayout(this);
     this.preparingEnd = true;
     this.refresh();
     this.invalidate();
     const begin = () => {
-      if (!this.canPrepare() || !isCurrent()) {
+      if (!this.preparingEnd || !this.canPrepare() || !isCurrent()) {
         return;
       }
       if (this.measureRows()) {
         this.invalidate();
-        this.afterCommit(begin);
+        // A measurement can mount another row. Let the browser present before
+        // its next pass instead of draining every correction in one task.
+        this.afterCommit(() => scheduleLayout(this, () => begin));
         return;
       }
       this.finishEnd();
@@ -195,6 +196,7 @@ export class TranscriptInitialRange {
   };
 
   finishEnd(): void {
+    cancelLayout(this);
     if (this.preparingEnd) {
       this.preparingEnd = false;
       this.refresh();
@@ -479,7 +481,7 @@ export class TranscriptInitialRange {
           if (!row) {
             break;
           }
-          const mode = this.idleStep <= IDLE_FRAGMENT_ROW_LIMIT ? "fragment" : "idle-html";
+          const mode = this.idleStep <= PREPARED_ROW_LIMIT ? "fragment" : "idle-html";
           if (!rendered.has(row.key) && this.prewarmRow) {
             const warmed = this.prewarmRow(index, mode);
             if (warmed === undefined) {
@@ -662,6 +664,7 @@ export class TranscriptInitialRange {
   }
 
   disconnect(): void {
+    cancelLayout(this);
     this.cancelPreparation?.();
     this.cancelPreparation = undefined;
     this.preparationIsIdle = false;

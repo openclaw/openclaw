@@ -273,9 +273,12 @@ export function observeTranscriptOffset(
     const programmatic = owner.isProgrammaticScroll();
     // The follow threshold releases pane policy before a command's last pixels settle.
     const readerDelta = programmatic || owner.state.scrollCommand !== null ? 0 : delta;
+    const reachedRecordedEnd = owner.endAnchor.isRecordedEnd(offset);
+    // Capture arrival before the new window can grow the native extent.
+    const atEnd = owner.endAnchor.recordViewport(element);
     if (delta !== 0 && !programmatic) {
       // Measurement can observe arrival before the native event unlocks pane following.
-      if (delta > 0 && !owner.canFollowEnd() && owner.endAnchor.isRecordedEnd(offset)) {
+      if (delta > 0 && !owner.canFollowEnd() && (reachedRecordedEnd || atEnd)) {
         owner.onReaderScroll(true);
       }
       if (delta > 0 && owner.canFollowEnd()) {
@@ -295,8 +298,6 @@ export function observeTranscriptOffset(
       touching: owner.state.touching,
       programmatic,
     });
-    // Record the arriving viewport before row rendering dirties native layout.
-    owner.endAnchor.recordViewport(element);
     // Range selection uses this movement to budget offscreen preparation.
     owner.onOffset(readerDelta);
     callback(offset, scrolling);

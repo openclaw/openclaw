@@ -84,7 +84,7 @@ export function createTranscriptRowPrewarmer() {
     const view = content instanceof GuardedTranscriptItem ? content.native : undefined;
     // Restoring every source in an atomic row larger than the fragment cache
     // would evict its own earlier work forever. Restore a bounded prefix of
-    // eight sources; the shared cache still caps all rows at 256 fragments.
+    // eight sources; the shared cache still caps all rows at 32 fragments.
     let position = 0;
     const prewarm = (
       message: unknown,

@@ -38,11 +38,7 @@ import {
 } from "./chat-transcript-offset-observer.ts";
 import { activeTranscriptMessageId } from "./chat-transcript-position.ts";
 import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
-import {
-  focusedTranscriptRowKey,
-  leavingTranscriptMcpAppRows,
-  previewTranscriptRowKeys,
-} from "./chat-transcript-range.ts";
+import { leavingTranscriptMcpAppRows, previewTranscriptRowKeys } from "./chat-transcript-range.ts";
 import { TranscriptReaderAnchor } from "./chat-transcript-reader-anchor.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
@@ -164,7 +160,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private candidateMessageRowKeysById: ReadonlyMap<string, string> = new Map();
   private candidateMessageRowsByKey: ReadonlyMap<string, string> = new Map();
   private renderPreviousRows: (() => HTMLDivElement) | null = null;
-  private focusedRowKey: string | null = null;
   private readonly announcement = new TranscriptAnnouncementState();
   private readonly mcpAppUnmountGate: ReturnType<typeof createMcpAppUnmountGate>;
 
@@ -178,7 +173,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.initialRange = new TranscriptInitialRange(
       initialOffset,
       () => this.virtualizer,
-      (...range) => this.prependAnchor.extractRange(...range, this.focusedRowKey),
+      (...range) => this.prependAnchor.extractRange(...range, this.readerAnchor.focusedRowKey),
       invalidate,
       this.layout.rowMinimum,
       () => this.connected && this.renderer.isPresented(),
@@ -221,15 +216,19 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         // A read-back inside the committed window can share the next frame.
         // A fast scroll reaching new rows still needs them before this paint.
         const defer = redraw && !(moved || this.canAutoFollow() || offsetState.hasPendingAnchor);
+        const restoringReader =
+          this.prependAnchor.messageKey !== null && !this.initialRange.pending;
         this.presentation.commitChange(
           () => (redraw ? (this.renderPreviousRows ?? invalidate) : invalidate)(),
-          defer &&
-            (offsetState.measuringOffset
-              ? this.renderer.coversViewport(view.calculateRange())
-              : !sync),
+          restoringReader ||
+            (defer &&
+              (offsetState.measuringOffset
+                ? this.renderer.coversViewport(view.calculateRange())
+                : !sync)),
         );
         // A caller render can replace the queued redraw without replacing this geometry receipt.
-        this.scheduleEndReconcile(view.getTotalSize());
+        // Retiring a reader correction can grow the native extent without changing row totals.
+        this.scheduleEndReconcile(view.getTotalSize() + top - this.layout.rowShift);
       },
       count: 0,
       getScrollElement: () => this.scrollElement,
@@ -386,7 +385,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.prependAnchor.update(this.scrollElement, this.virtualizer, this.presentation.measureRows)
     ) {
       this.offsetState.syncNativeOffset?.();
-      this.invalidate();
+      // Retain the anchor while later measurements converge, one commit per
+      // frame instead of repeatedly laying out replacement rows in this task.
+      this.presentation.commitChange(this.invalidate, true);
     }
     if (!this.initialRange.pending || (this.layout.ready && this.rowKeys.length === 0)) {
       applyPendingScrollOffset(this.scrollRestoreHost);
@@ -453,7 +454,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.initialRange.rowIndexes.clear();
     this.messageRowKeysById = new Map();
     this.prependAnchor.reset();
-    this.focusedRowKey = null;
+    this.readerAnchor.focusedRowKey = null;
     this.offsetState.pendingScrollOffset = null;
   }
 
@@ -581,7 +582,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       () =>
         leavingTranscriptMcpAppRows(this.threadInnerElement, () =>
           rowModelChanged
-            ? previewTranscriptRowKeys(virtualizer, rows, this.focusedRowKey)
+            ? previewTranscriptRowKeys(virtualizer, rows, this.readerAnchor.focusedRowKey)
             : new Set(nextRowKeys),
         ),
       {
@@ -719,13 +720,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     }
   }
 
-  handleFocusIn(event: FocusEvent): void {
-    this.focusedRowKey = focusedTranscriptRowKey(this.scrollElement, event.target);
-  }
-
-  handleFocusOut(event: FocusEvent): void {
-    this.focusedRowKey = focusedTranscriptRowKey(this.scrollElement, event.relatedTarget);
-  }
+  readonly handleFocusIn = this.readerAnchor.handleFocusIn;
+  readonly handleFocusOut = this.readerAnchor.handleFocusOut;
 
   private syncRows(nextKeys: readonly string[]): void {
     this.rowKeys = nextKeys;

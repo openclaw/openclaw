@@ -322,7 +322,12 @@ export function createPositionRail(props: PositionRailParams) {
       );
       // Bubble refs publish virtualization changes; token paints keep their targets.
       stopMessageElements = session?.messageElements.subscribe(
-        () => {
+        (previous) => {
+          // Evicted rows must not stay alive until the next layout frame.
+          if (previous) {
+            intersectionObserver?.unobserve(previous);
+            observedMessages.delete(previous);
+          }
           targetsChanged = true;
           scheduleLayout();
         },

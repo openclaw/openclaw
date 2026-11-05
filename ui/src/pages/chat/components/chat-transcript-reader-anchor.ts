@@ -3,6 +3,7 @@ import { isIosBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
+import { focusedTranscriptRowKey } from "./chat-transcript-range.ts";
 
 type TranscriptVirtualizer = Virtualizer<HTMLDivElement, HTMLElement>;
 /** The owning virtualizer host's geometry and positioning facts. */
@@ -38,6 +39,13 @@ function isAboveReader(top: number, height: number, first: boolean, readerTop: n
  * during that gesture sees the column's first rows clipped until the gesture settles.
  */
 export class TranscriptReaderAnchor {
+  focusedRowKey: string | null = null;
+  readonly handleFocusIn = (event: FocusEvent): void => {
+    this.focusedRowKey = focusedTranscriptRowKey(this.host.scrollElement, event.target);
+  };
+  readonly handleFocusOut = (event: FocusEvent): void => {
+    this.focusedRowKey = focusedTranscriptRowKey(this.host.scrollElement, event.relatedTarget);
+  };
   // Last laid-out row heights. A new row starts from its virtual size: the flow placed the rows
   // below it as though it had that size.
   private readonly heights = new WeakMap<Element, number>();
@@ -134,6 +142,12 @@ export class TranscriptReaderAnchor {
     }
     if (!correction) {
       return;
+    }
+    // Native end arrival can precede its scroll event; preserve it before a
+    // maintenance write consumes that movement. Interior reads keep their
+    // existing deferred window rather than remounting it during resize delivery.
+    if (element.scrollTop === maxTranscriptScrollOffset(element)) {
+      this.host.offsetState.syncNativeOffset?.(true);
     }
     if (this.holdsNativeOffset()) {
       this.columnShift += correction;
