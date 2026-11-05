@@ -329,11 +329,11 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
         }
         await input.press("Escape");
         await input.waitFor({ state: "hidden" });
-        await frames(page);
+        await page.waitForFunction(
+          (selector) => document.querySelectorAll(selector).length > 1,
+          `${pane} .chat-text`,
+        );
         const restoredMessages = await result.count();
-        if (restoredMessages <= 1) {
-          throw new Error("Closing transcript search did not clear the message filter");
-        }
         if (
           (await draft.inputValue()) !== "Retained draft." ||
           !(await draft.evaluate((element) => element === document.activeElement))
@@ -347,7 +347,7 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
       ...base,
       id: "chat-actions-paste-text",
       expected:
-        "Keep 256 KiB pasted text in the draft without attachments or sends; emulate browser default insertion after an uncancelled synthetic paste.",
+        "Keep 256 KiB pasted text in the draft without attachments or sends; emulate DOM insertion and input events after an uncancelled synthetic paste, without measuring OS clipboard or native editing.",
       prepare: async (page) => {
         await prepareChat(page);
         await page.locator(composer).fill("Review this text.\n");
@@ -375,9 +375,18 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
         if (!uncancelled) {
           throw new Error("Plain-text paste was cancelled instead of remaining draft input");
         }
-        // Synthetic paste has no browser default action. Insert through native input
-        // without touching the host clipboard, preserving the application's input path.
-        await page.keyboard.insertText(text);
+        // Synthetic paste has no default action. Emulate the DOM edit and events;
+        // beforeinput supplies the composer's edit intent before input commits it.
+        await input.evaluate((element: HTMLTextAreaElement, value) => {
+          const event = { bubbles: true, inputType: "insertFromPaste", data: value };
+          if (
+            !element.dispatchEvent(new InputEvent("beforeinput", { ...event, cancelable: true }))
+          ) {
+            throw new Error("Plain-text insertion was cancelled before updating the draft");
+          }
+          element.setRangeText(value, element.selectionStart, element.selectionEnd, "end");
+          element.dispatchEvent(new InputEvent("input", event));
+        }, text);
         await frames(page);
         const attachments = await page.locator(`${pane} .chat-attachment-remove`).count();
         const chatSends = (await gateway.getRequests("chat.send")).length - sendsBefore;
