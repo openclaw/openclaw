@@ -16,6 +16,7 @@ export function createDoctorPrompterFixture(
     confirmAggressiveAutoFix: vi.fn(async () => shouldRepair),
     confirmRuntimeRepair: vi.fn(async () => shouldRepair),
     select: vi.fn(async (_params, fallback) => fallback),
+    selectRuntimeRepair: vi.fn(async (_params, fallback) => fallback),
     shouldRepair,
     shouldForce: false,
     repairMode: {

@@ -1,3 +1,4 @@
+import type { CyberAccessProgram } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-agent-context.types.js";
@@ -6,11 +7,11 @@ import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import type { AssistantErrorTranscript } from "../assistant-error-transcript.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
-import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ModelFallbackStepFields } from "../model-fallback-observation.js";
 import type {
   FallbackAttempt,
   ModelFallbackAttemptProvenance,
+  ModelFallbackResultClassification,
   ModelFallbackRouteResolution,
 } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
@@ -23,6 +24,7 @@ import type { EmbeddedAgentRunResult } from "./types.js";
 
 export type RunEntryModelResolve = {
   prompt: string;
+  onDispatch?: () => void;
   awaitSessionDiffBaseline?: () => Promise<void>;
   images?: readonly { mimeType?: string }[];
   cwd?: string;
@@ -74,6 +76,7 @@ export type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
     fallbacksOverride?: string[];
     agentDir?: string;
     userLockedAuthProfileId?: string;
+    cyberAccessProgram?: CyberAccessProgram;
   } & ModelManifestNormalizationContext;
   identity: {
     runId: string;

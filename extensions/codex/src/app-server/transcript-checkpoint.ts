@@ -31,7 +31,7 @@ export class CodexTranscriptCheckpoint {
   ) {}
 
   nextTimestamp = (): number => {
-    // Commentary and tool mirrors share this clock so equal wall-clock values
+    // Reasoning, commentary, and tool mirrors share this clock so equal wall-clock values
     // still preserve the app-server receipt order in the durable transcript.
     this.lastTimestamp = Math.max(Date.now(), this.lastTimestamp + 1);
     return this.lastTimestamp;

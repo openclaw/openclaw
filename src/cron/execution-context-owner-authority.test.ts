@@ -299,10 +299,8 @@ describe("scheduled owner authority", () => {
       const codex = await codexOwnerOnly(run);
       const cli = await callableOwnerOnly(await cliTools(run));
       expect(codex).toEqual(embedded);
-      // The CLI loopback has no self-scoped automations grant yet (phase 4); every
-      // other owner-only decision matches the embedded run.
-      expect(cli).not.toContain(AUTOMATIONS_TOOL_NAME);
-      expect(cli).toEqual(embedded.filter((name) => name !== AUTOMATIONS_TOOL_NAME));
+      // The CLI loopback carries the same self-scoped automations grant.
+      expect(cli).toEqual(embedded);
       // No scheduled run carries the explicit owner identity standing intents need.
       expect(embedded).not.toContain("intent");
       if (principal.senderIsOwner === false) {

@@ -6,7 +6,7 @@ import { parseOcPath } from "../../oc-path.js";
 
 describe("setJsoncOcPath — value replacement", () => {
   const config = `{
-  "plugins": {
+  "plugins": {"entries":{"shadowed":true}}, "plugins": {
     "entries": {
       "github": {
         "token": "old"
@@ -15,7 +15,7 @@ describe("setJsoncOcPath — value replacement", () => {
   }
 }`;
 
-  it("replaces nested objects", () => {
+  it("replaces the effective nested object", () => {
     const ast = parseJsonc(config);
     const r = setJsoncOcPath(ast, parseOcPath("oc://config/plugins.entries"), {
       kind: "object",
@@ -38,8 +38,8 @@ describe("setJsoncOcPath — value replacement", () => {
 });
 
 describe("setJsoncOcPath — $last positional", () => {
-  it("edits the last array element via $last", () => {
-    const ast = parseJsonc('{ "items": [10, 20, 30] }');
+  it("edits the last effective array element via $last", () => {
+    const ast = parseJsonc('{ "items": [0], "items": [10, 20, 30] }');
     const r = setJsoncOcPath(ast, parseOcPath("oc://config.jsonc/items/$last"), {
       kind: "number",
       value: 99,

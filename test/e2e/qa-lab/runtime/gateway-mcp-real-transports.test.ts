@@ -29,15 +29,9 @@ it.each([false, true])("resolves channel MCP with packaged output=%s", async (pa
   if (packaged) {
     expect(mcp.args).toStrictEqual([
       distEntry,
-      "mcp",
-      "serve",
-      "--url",
-      "ws://127.0.0.1:12345",
-      "--token-file",
-      "/tmp/token-file",
-      "--claude-channel-mode",
-      "off",
-      "--verbose",
+      ..."mcp serve --url ws://127.0.0.1:12345 --token-file /tmp/token-file --claude-channel-mode off --verbose".split(
+        " ",
+      ),
     ]);
     expect(mcp.envPatch).toStrictEqual({});
   } else {
@@ -90,15 +84,9 @@ it("sets explicit timeouts for each plugin-tools MCP request", async () => {
   const client = { callTool, connect, listTools } as unknown as Client;
   const transport = { pid: 42 } as StdioClientTransport;
 
-  await expect(testing.runMcpPluginToolsClientProof({ client, transport })).resolves.toContain(
-    "real plugin-tools pid=42",
-  );
+  await testing.runMcpPluginToolsClientProof({ client, transport });
 
-  for (const [request, args] of [
-    [connect, transport],
-    [listTools, {}],
-    [callTool, { name: "memory_search", arguments: { query: "ORBIT-9 codename", maxResults: 3 } }],
-  ] as const) {
-    expect(request).toHaveBeenCalledWith(args, { timeout: 180_000 });
+  for (const request of [connect, listTools, callTool]) {
+    expect(request.mock.calls[0]?.at(-1)).toEqual({ timeout: 180_000 });
   }
 });

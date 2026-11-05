@@ -60,7 +60,7 @@ export async function auditGatewayRuntime(
           : standalone
             ? "Gateway standalone runtime failed its capability check; replace the complete artifact."
             : bun
-              ? "Gateway service uses an unsupported Bun runtime; Bun 1.4.3+ with WAL-reset-safe node:sqlite is required."
+              ? "Gateway service uses an unsupported Bun runtime; Bun 1.4.4+ with WAL-reset-safe node:sqlite is required."
               : (runtime.capabilityError ?? "Gateway service Node failed its capability check."),
       detail:
         runtime.status === "probe-failed"

@@ -9,8 +9,11 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
+import * as contextEngineLifecycle from "../../harness/context-engine-lifecycle.js";
+import { createContextEngine } from "../../harness/context-engine-lifecycle.test-support.js";
 import { awaitAgentHarnessAgentEndHook } from "../../harness/lifecycle-hook-helpers.js";
 import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -121,10 +124,13 @@ function prepared(
     NonNullable<Parameters<typeof awaitAgentHarnessAgentEndHook>[0]["hookRunner"]>,
     "hasHooks" | "runAgentEnd"
   > | null = null,
+  callableTools = tools,
 ) {
   return {
     bootstrap: { shouldRecordCompletedBootstrapTurn: record },
     bundleTools: { uncompactedEffectiveTools: tools },
+    // A prompt hook's toolsAllow narrows the bundle to the callable surface.
+    promptToolPolicy: { current: { uncompactedEffectiveTools: callableTools } },
     toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
     sessionRuntime: {
       sessionManager,
@@ -182,6 +188,152 @@ describe("embedded attempt phase lifecycle state", () => {
     hoisted.shouldWaitForCompletionRequiredAsyncTasks.mockReset().mockReturnValue(false);
     hoisted.waitForCompletionRequiredAsyncTasks.mockReset();
   });
+
+  it.each(["afterTurn", "ingestBatch", "ingest", "candidate"] as const)(
+    "preserves the legacy attempt fields read during %s finalization",
+    async (mode) => {
+      const admission = prepareSystemAgentRunAdmission({}, `projection-${mode}`, "main", "test");
+      const admittedRunContext = await admission.admit("embedded");
+      const { input, sessionManager: initialManager } = streamInput();
+      let sessionManager: SessionManager = initialManager;
+      const attempt = {
+        ...input.attempt,
+        admittedRunContext,
+        // Prepared admission is deliberately absent from EmbeddedRunAttemptParams;
+        // include it as an extra legacy-spread fact to detect future consumer reads.
+        preparedRunAdmission: admission,
+        operation: "settled-tool-finalization" as const,
+        config: {},
+        sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey: "agent:main:main" },
+        modelContextWindow: 200_000,
+        contextTokenBudget: 180_000,
+        requestedModelId: "requested-model",
+        fallbackReason: "synthetic fallback",
+        degradedReason: "synthetic degradation",
+        sandboxSessionKey: "agent:main:sandbox",
+        sandboxAgentId: "sandbox-owner",
+        messageChannel: "telegram",
+        messageProvider: "telegram",
+        currentChannelId: "synthetic-channel",
+        currentThreadTs: "synthetic-thread",
+        trigger: "cron" as const,
+        inputProvenance: { kind: "external_user" as const },
+      };
+      const effects: unknown[] = [];
+      if (mode === "candidate") {
+        const { dir, target } = await seedSession("session-1", "agent:main:main");
+        const message = { role: "user" as const, content: "hello", timestamp: 1 };
+        const persisted = await appendTranscriptMessage(target, { cwd: dir, message, now: 1 });
+        if (!persisted?.anchor) {
+          throw new Error("expected persisted admission anchor");
+        }
+        const recorder = createUserTurnTranscriptRecorder({
+          message,
+          target: async () => undefined,
+        });
+        recorder.markRuntimePersisted(message, persisted.anchor);
+        sessionManager = SessionManager.open(target, dir);
+        await sessionManager.appendMessageAsync(
+          makeAgentAssistantMessage({ content: [{ type: "text", text: "done" }], timestamp: 2 }),
+        );
+        attempt.sessionTarget = target;
+        attempt.userTurnTranscriptRecorder = recorder;
+        attempt.onContextEngineTurnCandidate = (facts) => {
+          effects.push(facts);
+        };
+      }
+      const engine = createContextEngine({
+        afterTurn:
+          mode === "afterTurn"
+            ? async (params) => {
+                effects.push(params);
+              }
+            : undefined,
+        ingestBatch:
+          mode === "ingestBatch"
+            ? async (params) => {
+                effects.push(params);
+                return { ingestedCount: params.messages.length };
+              }
+            : undefined,
+        ingest: async (params) => {
+          effects.push(params);
+          return { ingested: true };
+        },
+      });
+      const finalize = contextEngineLifecycle.finalizeHarnessContextEngineTurn;
+      const spy = vi
+        .spyOn(contextEngineLifecycle, "finalizeHarnessContextEngineTurn")
+        .mockImplementation(async (params) => {
+          type Read = { key: PropertyKey; present: boolean; value: unknown };
+          const observe = (target: typeof params, reads: Read[]) =>
+            new Proxy(target, {
+              get(object, key, receiver) {
+                const value: unknown = Reflect.get(object, key, receiver);
+                reads.push({ key, present: Object.hasOwn(object, key), value });
+                return value;
+              },
+            });
+          const legacyReads: Read[] = [];
+          const projectedReads: Read[] = [];
+          // Reconstruct main's spread at the real callee boundary. Explicit caller
+          // overrides retain their precedence; nested consumers see the same Proxy.
+          const legacyOverrides = {
+            abortSignal: params.abortSignal,
+            contextEngine: params.contextEngine,
+            promptError: params.promptError,
+            aborted: params.aborted,
+            yieldAborted: params.yieldAborted,
+            sessionIdUsed: params.sessionIdUsed,
+            messagesSnapshot: params.messagesSnapshot,
+            prePromptMessageCount: params.prePromptMessageCount,
+            tokenBudget: params.tokenBudget,
+            turnCandidate: params.turnCandidate,
+            runtimeContext: params.runtimeContext,
+            contextEngineHostSupport: params.contextEngineHostSupport,
+            providerId: params.providerId,
+            runMaintenance: params.runMaintenance,
+            sessionManager: params.sessionManager,
+            warn: params.warn,
+          };
+          const legacyResult = await finalize(
+            observe({ ...attempt, ...legacyOverrides }, legacyReads),
+          );
+          const legacyEffects = effects.splice(0);
+          expect(legacyEffects).toHaveLength(1);
+          const result = await finalize(observe(params, projectedReads));
+          expect(projectedReads).toEqual(legacyReads);
+          expect(effects.splice(0)).toEqual(legacyEffects);
+          expect(result).toEqual(legacyResult);
+          for (const { key, value } of projectedReads) {
+            if (Object.hasOwn(attempt, key) && !Object.hasOwn(legacyOverrides, key)) {
+              expect(value).toBe(Reflect.get(attempt, key));
+            }
+          }
+          expect(params.admittedRunContext).toBe(admittedRunContext);
+          return result;
+        });
+      try {
+        await completeEmbeddedAttemptAfterTurn(
+          {
+            ...finalizationInput(prepared(sessionManager, false)),
+            attempt,
+            activeContextEngine: engine,
+          } as never,
+          settled("session-1", {
+            messagesSnapshot: [
+              makeAgentAssistantMessage({ content: [{ type: "text", text: "done" }] }),
+            ],
+          }) as never,
+          prompt(),
+        );
+        expect(spy).toHaveBeenCalledOnce();
+      } finally {
+        spy.mockRestore();
+        admission.close();
+      }
+    },
+  );
 
   it("re-reads compaction timeout state after the retry wait", async () => {
     let timedOut = false;
@@ -298,27 +450,35 @@ describe("embedded attempt phase lifecycle state", () => {
       }));
       const onContextEngineTurnCandidate = vi.fn();
       const config = {};
+      const enumerateAttempt = vi.fn(Reflect.ownKeys);
       await completeEmbeddedAttemptAfterTurn(
         {
-          ...finalizationInput(prepared(sessionManager)),
-          attempt: {
-            runId: "run-1",
-            sessionId: target.sessionId,
-            sessionKey: target.sessionKey,
-            sessionTarget: target,
-            sessionFile: target.sessionKey,
-            provider: "test",
-            modelId: "model",
-            model: { api: "openai-responses", contextWindow: 120_000 },
-            modelContextWindow: 200_000,
-            contextTokenBudget: 180_000,
-            workspaceDir: dir,
-            cwd: dir,
-            authProfileId: "profile-1",
-            config,
-            userTurnTranscriptRecorder: recorder,
-            onContextEngineTurnCandidate,
-          } as never,
+          ...finalizationInput(
+            prepared(sessionManager, true, [{ name: "read" }, { name: "write" }], null, [
+              { name: "read" },
+            ]),
+          ),
+          attempt: new Proxy(
+            {
+              runId: "run-1",
+              sessionId: target.sessionId,
+              sessionKey: target.sessionKey,
+              sessionTarget: target,
+              sessionFile: target.sessionKey,
+              provider: "test",
+              modelId: "model",
+              model: { api: "openai-responses", contextWindow: 120_000 },
+              modelContextWindow: 200_000,
+              contextTokenBudget: 180_000,
+              workspaceDir: dir,
+              cwd: dir,
+              authProfileId: "profile-1",
+              config,
+              userTurnTranscriptRecorder: recorder,
+              onContextEngineTurnCandidate,
+            },
+            { ownKeys: enumerateAttempt },
+          ) as never,
           activeContextEngine: {
             info: { id: "test", name: "Test" },
             assemble: vi.fn(),
@@ -335,6 +495,8 @@ describe("embedded attempt phase lifecycle state", () => {
         prompt(),
       );
 
+      // Only foreground prompt projection still copies the full attempt.
+      expect(enumerateAttempt).toHaveBeenCalledOnce();
       if (boundary === "complete") {
         expect(onContextEngineTurnCandidate).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -365,7 +527,7 @@ describe("embedded attempt phase lifecycle state", () => {
         modelId: "model",
         modelContextWindowTokens: 180_000,
         authProfileId: "profile-1",
-        skillWorkshopAvailable: false,
+        toolNames: ["read"],
         compacted: false,
         trace: {
           traceId: "11111111111111111111111111111111",
@@ -381,7 +543,7 @@ describe("embedded attempt phase lifecycle state", () => {
         },
       });
       expect(context?.config).toBe(config);
-      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
+      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].completedTurnSource).toEqual(
         sessionManager.getSessionTarget()
           ? { ...sessionManager.getSessionTarget(), entryId: terminalEntryId }
           : undefined,
@@ -590,6 +752,12 @@ describe("embedded attempt phase lifecycle state", () => {
         makeAgentAssistantMessage({ content: [{ type: "text", text: "Suppressed terminal." }] }),
       );
 
+      const executionState: Pick<EmbeddedAttemptExecutionState, "terminal" | "agentTerminal"> = {
+        terminal:
+          tail === "interrupted tool result"
+            ? { kind: "aborted", source: "external" }
+            : { kind: "ok" },
+      };
       await completeEmbeddedAttemptAfterTurn(
         {
           ...finalizationInput(prepared(sessionManager, true, [{ name: "skill_workshop" }])),
@@ -600,19 +768,19 @@ describe("embedded attempt phase lifecycle state", () => {
           } as never,
           agentDir: dir,
           setup: { effectiveWorkspace: dir, sessionAgentId: "main" },
-          state: {
-            terminal:
-              tail === "interrupted tool result"
-                ? { kind: "aborted", source: "external" }
-                : { kind: "ok" },
-          },
+          state: executionState,
         } as never,
         settled(target.sessionId) as never,
         prompt(transcriptLeafId),
       );
 
       expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
-      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
+      expect(executionState.agentTerminal).toMatchObject({
+        version: 1,
+        lastMessageRole: tail === "interrupted tool result" ? "tool_result" : "absent",
+        finalTextState: tail === "interrupted tool result" ? "not_assistant" : "unavailable",
+      });
+      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].completedTurnSource).toEqual(
         tail === "interrupted tool result"
           ? { ...sessionManager.getSessionTarget(), entryId: toolResultEntryId }
           : undefined,

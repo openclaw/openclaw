@@ -20,6 +20,16 @@ vi.mock("./worker-environments/session-repository-checkpoints.js", async (import
   withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
 const mocks = githubPublicationTestMocks();
+function setPreference(profileId: string, value: boolean | string, disableCoauthor = false) {
+  expect(
+    setUserPreferences(profileId, {
+      [PR_ATTRIBUTION_PREFERENCE_KEY]: value,
+      ...(disableCoauthor ? { [GIT_COAUTHOR_PREFERENCE_KEY]: false } : {}),
+    }).ok,
+  ).toBe(true);
+}
+const attribution = async (params: Parameters<typeof preparePrAttribution>[0]) =>
+  (await preparePrAttribution(params))();
 
 describe("managed PR attribution", () => {
   installGitHubPublicationTestHarness({
@@ -28,58 +38,41 @@ describe("managed PR attribution", () => {
     realWorktree: true,
   });
   it("omits optional branding when its preference cannot be read", async () => {
-    const read = vi
+    using _ = vi
       .spyOn(userPreferences, "getUserPreferenceValues")
       .mockRejectedValueOnce(new Error("Preference storage unavailable"));
-    try {
-      expect((await preparePrAttribution({ requesterProfileId: "unavailable-profile" }))()).toBe(
-        false,
-      );
-    } finally {
-      read.mockRestore();
-    }
+    expect(await attribution({ requesterProfileId: "unavailable-profile" })).toBe(false);
   });
   it("never uses an enabled person in incognito or without a verified requester", async () => {
     const f = await createRequesterPublicationFixture(checkpoint, "local");
-    expect(setUserPreferences(f.guestProfile, { [PR_ATTRIBUTION_PREFERENCE_KEY]: true }).ok).toBe(
-      true,
-    );
-    expect((await preparePrAttribution({ requesterProfileId: f.guestProfile }))()).toBe(true);
+    setPreference(f.guestProfile, true);
+    const requesterProfileId = f.guestProfile;
+    expect(await attribution({ requesterProfileId })).toBe(true);
+    expect(await attribution({ requesterProfileId, incognito: true })).toBe(false);
     expect(
-      (await preparePrAttribution({ requesterProfileId: f.guestProfile, incognito: true }))(),
+      await attribution({
+        requesterProfileId,
+        sessionKey: "agent:main:dashboard:incognito-private",
+      }),
     ).toBe(false);
-    expect(
-      (
-        await preparePrAttribution({
-          requesterProfileId: f.guestProfile,
-          sessionKey: "agent:main:dashboard:incognito-private",
-        })
-      )(),
-    ).toBe(false);
-    expect((await preparePrAttribution({}))()).toBe(false);
+    expect(await attribution({})).toBe(false);
   });
-  it.each(
-    (["local", "repository"] as const).flatMap((backend) =>
-      [
-        "missing",
-        "off",
-        "on",
-        "malformed",
-        "optout",
-        "existing-footer",
-        "other-requester",
-        "revoked",
-      ].map((state) => ({ backend, state })),
-    ),
-  )("$backend creation honors $state requester preference", async ({ backend, state }) => {
+  it.each([
+    ["local", "missing"],
+    ["local", "off"],
+    ["local", "on"],
+    ["local", "malformed"],
+    ["local", "optout"],
+    ["local", "existing-footer"],
+    ["local", "other-requester"],
+    ["local", "revoked"],
+    ["repository", "on"],
+    ["repository", "revoked"],
+    ["repository", "existing-footer"],
+  ] as const)("%s creation honors %s requester preference", async (backend, state) => {
     const f = await createRequesterPublicationFixture(checkpoint, backend);
     if (state !== "missing") {
-      expect(
-        setUserPreferences(f.guestProfile, {
-          [PR_ATTRIBUTION_PREFERENCE_KEY]: state === "malformed" ? "true" : state !== "off",
-          [GIT_COAUTHOR_PREFERENCE_KEY]: false,
-        }).ok,
-      ).toBe(true);
+      setPreference(f.guestProfile, state === "malformed" ? "true" : state !== "off", true);
     }
     const inputBody =
       "Keep human credit and work-session links." +
@@ -93,9 +86,7 @@ describe("managed PR attribution", () => {
       }
       const reply = await transport(argv, options);
       if (state === "revoked" && (argv.includes("push") || argv.includes("graphql"))) {
-        expect(
-          setUserPreferences(f.guestProfile, { [PR_ATTRIBUTION_PREFERENCE_KEY]: false }).ok,
-        ).toBe(true);
+        setPreference(f.guestProfile, false);
       }
       return reply;
     });

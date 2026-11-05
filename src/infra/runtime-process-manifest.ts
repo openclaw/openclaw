@@ -17,37 +17,29 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     } as const;
   }
 
+  const loaderFreeEntrypoint = (modulePath: string) =>
+    runtimeProcessEntrypoint(modulePath, undefined, undefined, ".mjs");
+
   return {
     daemonRuntimeProbe: runtimeProcessEntrypoint("infra/daemon-runtime-probe.entry"),
     pluginToolsServe: runtimeProcessEntrypoint("mcp/plugin-tools-serve"),
     openclawToolsServe: runtimeProcessEntrypoint("mcp/openclaw-tools-serve"),
-    repositoryPublicationRestore: runtimeProcessEntrypoint(
+    repositoryPublicationRestore: loaderFreeEntrypoint(
       "gateway/repository-publication-restore.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    nodeWorkspacePublicationSnapshot: runtimeProcessEntrypoint(
+    nodeWorkspacePublicationSnapshot: loaderFreeEntrypoint(
       "node-host/node-worker-publication-snapshot.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    nodeWorkspaceManifest: runtimeProcessEntrypoint(
+    nodeWorkspaceManifest: loaderFreeEntrypoint(
       "node-host/node-worker-workspace-manifest.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    nodeWorkspaceGitHistory: runtimeProcessEntrypoint(
+    nodeWorkspaceGitHistory: loaderFreeEntrypoint(
       "node-host/node-worker-workspace-git-history.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
     doctorDatabaseEngineInspection: runtimeProcessEntrypoint(
       "commands/doctor-database-engine-inspection.worker",
     ),
+    doctorDatabaseBloat: runtimeProcessEntrypoint("commands/doctor-db-bloat.worker"),
     backupDatabaseDiscovery: runtimeProcessEntrypoint("infra/backup-database-discovery.worker"),
     sqliteHeaderProbe: runtimeProcessEntrypoint("infra/sqlite-header-probe.worker"),
     databaseBackup: runtimeProcessEntrypoint("snapshot/database-backup.worker"),
@@ -58,31 +50,23 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     databasePortCommand: runtimeProcessEntrypoint(
       "infra/database-engine/port-command.entry.worker",
     ),
+    stallObserver: runtimeProcessEntrypoint("logging/diagnostic-stall-observer.worker"),
     systemCaWarmup: runtimeProcessEntrypoint("gateway/system-ca-warmup.worker"),
-    shutdownHardExit: runtimeProcessEntrypoint("cli/gateway-cli/shutdown-hard-exit.worker"),
+    shutdownHardExit: loaderFreeEntrypoint("cli/gateway-cli/shutdown-hard-exit.worker"),
     packageIntegrityHasher: runtimeProcessEntrypoint(
       "infra/package-update-integrity-hasher.worker",
     ),
     packageLocalOverrides: runtimeProcessEntrypoint("infra/package-local-overrides.worker"),
     directoryWatchHost: runtimeProcessEntrypoint("infra/directory-watch-host.worker"),
     directoryWatchParent: runtimeProcessEntrypoint("infra/directory-watch-parent.worker"),
-    workspaceQuiescenceAcquire: runtimeProcessEntrypoint(
+    workspaceQuiescenceAcquire: loaderFreeEntrypoint(
       "gateway/worker-environments/workspace-quiescence-acquire.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    workspaceQuiescenceRenew: runtimeProcessEntrypoint(
+    workspaceQuiescenceRenew: loaderFreeEntrypoint(
       "gateway/worker-environments/workspace-quiescence-renew.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    workspaceQuiescenceRelease: runtimeProcessEntrypoint(
+    workspaceQuiescenceRelease: loaderFreeEntrypoint(
       "gateway/worker-environments/workspace-quiescence-release.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
     packageActivationRecovery: runtimeProcessEntrypoint(
       "infra/package-update-activation-sealed",
@@ -116,6 +100,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     fileToolPlanning: runtimeProcessEntrypoint("agents/sessions/tools/file-tool-planning.worker"),
     fileToolRead: runtimeProcessEntrypoint("agents/sessions/tools/read-file.worker"),
     attachmentProcessor: runtimeProcessEntrypoint("media/attachment-processor.worker"),
+    widgetScriptSyntax: runtimeProcessEntrypoint("canvas/widget-script-syntax.worker"),
     gitOperations: runtimeProcessEntrypoint("infra/git-operation.worker"),
     gitPackCleanup: runtimeProcessEntrypoint("agents/worktrees/git-pack-cleanup.worker"),
     fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
@@ -197,6 +182,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
       "config/sessions/session-accessor.sqlite-archive.worker",
     ),
     sessionTranscript: runtimeProcessEntrypoint("config/sessions/session-transcript.worker"),
+    usageOverview: runtimeProcessEntrypoint("infra/session-cost-usage-overview-report.worker"),
     workerTranscriptCommit: runtimeProcessEntrypoint(
       "gateway/worker-environments/transcript-commit.worker",
     ),
@@ -259,6 +245,7 @@ export const pluginRuntimeProcessManifest = {
     ...pluginRuntimeProcess("code-mode-quickjs", "src/executor", "src/code-mode.worker"),
     sourceWorkerName: "code-mode.worker",
   },
+  codexStdio: pluginRuntimeProcess("codex", "stdio-worker-entrypoint", "stdio.worker"),
   codexCatalogPage: pluginRuntimeProcess(
     "codex",
     "catalog-page-worker-entrypoint",

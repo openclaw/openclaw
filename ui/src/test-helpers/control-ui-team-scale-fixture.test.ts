@@ -1,9 +1,12 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { CronJobSchema } from "../../../packages/gateway-protocol/src/schema/cron.ts";
+import { ChatHistoryDeltaResultSchema } from "../../../packages/gateway-protocol/src/schema/logs-chat.ts";
 import { GatewaySessionRowEvents } from "../api/gateway-session-row-events.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { canApplySessionListSnapshot } from "../lib/sessions/session-list-query.ts";
+import { sessionGatewayTest } from "./control-ui-e2e.sessions.test-support.ts";
 import { createTeamScaleSidebarListOwner } from "./control-ui-sidebar-list-fixture.ts";
 import { createControlUiTeamScaleFixture } from "./control-ui-team-scale-fixture.ts";
 
@@ -27,6 +30,119 @@ function expectAbsent(value: unknown, fields: string) {
 }
 
 describe("Team-scale Gateway fixture", () => {
+  sessionGatewayTest.for(["normal", "large"] as const)(
+    "revalidates the selected %s transcript without retransmitting cached messages",
+    async (mode, { connect }) => {
+      const fixture = createControlUiTeamScaleFixture({
+        now,
+        largeSnapshot: mode === "large",
+      });
+      const { request } = await connect(fixture.scenario);
+      const key = fixture.selectedSessionKey;
+      const cold = await request("sessions.messages.subscribe", {
+        key,
+        initialHistory: { knownState: {} },
+      });
+      const full = asOptionalRecord(asOptionalRecord(cold.payload.initialHistory)?.payload);
+      expect(full).toMatchObject({
+        deltaCursor: expect.any(String),
+        sessionId: "team-session-271",
+        sessionInfo: { key, sessionId: "team-session-271" },
+        pendingInputs: { items: [], total: 0, queuedCount: 0 },
+        metadata: { commands: [] },
+        stateRevision: {
+          sessionInfo: "fixture-session-v1",
+          commands: "fixture-commands-v1",
+          pendingInputs: "fixture-pending-inputs-v1",
+        },
+      });
+      if (mode === "normal") {
+        const catalog = await request("models.list", {});
+        expect(catalog.payload.models).toContainEqual(
+          expect.objectContaining({ id: fixture.scenario.agentModel, reasoning: true }),
+        );
+        expect(full).toHaveProperty("metadata.models", catalog.payload.models);
+      }
+      const messageCount = mode === "large" ? 1_100 : 240;
+      expect(full?.messages).toHaveLength(messageCount);
+      expect(full?.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ __openclaw: { id: "team-message-1", seq: 1 } }),
+          expect.objectContaining({
+            __openclaw: { id: `team-message-${messageCount}`, seq: messageCount },
+          }),
+        ]),
+      );
+      const cursor = full?.deltaCursor;
+      if (typeof cursor !== "string") {
+        throw new Error("The selected fixture transcript must emit a cursor");
+      }
+      const windowed = await request("sessions.messages.subscribe", {
+        key,
+        initialHistory: { limit: 80, maxBytes: 256 * 1024, knownState: {} },
+      });
+      const tail = asOptionalRecord(asOptionalRecord(windowed.payload.initialHistory)?.payload);
+      expect(tail).toMatchObject({
+        deltaCursor: cursor,
+        hasMore: true,
+        nextOffset: 80,
+        totalMessages: messageCount,
+        metadata: { commands: [] },
+        pendingInputs: { items: [], total: 0, queuedCount: 0 },
+        stateRevision: {
+          sessionInfo: "fixture-session-v1",
+          commands: "fixture-commands-v1",
+          pendingInputs: "fixture-pending-inputs-v1",
+        },
+      });
+      expect(tail?.messages).toHaveLength(80);
+      expect(tail).toHaveProperty("messages.0.__openclaw", {
+        id: `team-message-${messageCount - 79}`,
+        seq: messageCount - 79,
+      });
+      expect(tail).toHaveProperty("messages.79.__openclaw", {
+        id: `team-message-${messageCount}`,
+        seq: messageCount,
+      });
+      expect(Buffer.byteLength(JSON.stringify(windowed))).toBeLessThanOrEqual(256 * 1024);
+      const older = await request("chat.history", { sessionKey: key, limit: 80, offset: 80 });
+      expect(older.payload.messages).toHaveLength(messageCount);
+      expect(older.payload).not.toHaveProperty("nextOffset", 80);
+      const warm = await request("sessions.messages.subscribe", {
+        key,
+        initialHistory: { cursor, limit: 80, maxBytes: 256 * 1024, knownState: {} },
+      });
+      const delta = asOptionalRecord(warm.payload.initialHistory)?.payload;
+      expect(delta).toMatchObject({
+        kind: "delta",
+        messages: [],
+        deltaCursor: cursor,
+        sessionInfo: { key, sessionId: "team-session-271" },
+        pendingInputs: { items: [], total: 0, queuedCount: 0 },
+        metadata: { commands: [] },
+        stateRevision: {
+          sessionInfo: "fixture-session-v1",
+          commands: "fixture-commands-v1",
+          pendingInputs: "fixture-pending-inputs-v1",
+        },
+      });
+      expect(Value.Check(ChatHistoryDeltaResultSchema, delta)).toBe(true);
+      expect((await request("chat.history", { sessionKey: key, cursor })).payload).toMatchObject({
+        kind: "delta",
+        messages: [],
+      });
+      for (const params of [
+        { sessionKey: key, cursor: "retired-cursor" },
+        { sessionKey: "agent:main:main", cursor },
+      ]) {
+        const result = (await request("chat.history", params)).payload;
+        expect(result).not.toHaveProperty("kind");
+        expect(result.messages).toHaveLength(messageCount);
+        expect(result.sessionInfo).toMatchObject({ key: params.sessionKey });
+      }
+    },
+  );
+
   it("seeds scoped display preferences independently of the full editable config", () => {
     const { scenario } = createControlUiTeamScaleFixture({ now });
     expect(scenario.bootstrapPreferences).toMatchObject({
@@ -215,18 +331,34 @@ describe("Team-scale Gateway fixture", () => {
     expect(children.sessions.every((row) => !row.key.includes(":subagent:"))).toBe(true);
   });
 
-  it("keeps an off-roster deep-link target outside both boot windows and pins", () => {
-    const fixture = createControlUiTeamScaleFixture({ now, offRosterSession: true });
-    const owner = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
-    for (const query of [{ ownerFirst: true }, { involvingMe: true }]) {
-      const result = owner.list({ rowMode: "sidebar", limit: 200, ...query }).result;
-      expect(result.sessions.some((row) => row.key === fixture.selectedSessionKey)).toBe(false);
-    }
-    expect(fixture.pinnedKeys).not.toContain(fixture.selectedSessionKey);
-    expect(fixture.scenario.sessions?.some((row) => row.key === fixture.selectedSessionKey)).toBe(
-      true,
-    );
-  });
+  sessionGatewayTest(
+    "resolves an off-roster short deep link outside both boot windows and pins",
+    async ({ connect }) => {
+      const fixture = createControlUiTeamScaleFixture({ now, offRosterSession: true });
+      const owner = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
+      for (const query of [{ ownerFirst: true }, { involvingMe: true }]) {
+        const result = owner.list({ rowMode: "sidebar", limit: 200, ...query }).result;
+        expect(result.sessions.some((row) => row.key === fixture.selectedSessionKey)).toBe(false);
+      }
+      expect(fixture.pinnedKeys).not.toContain(fixture.selectedSessionKey);
+      expect(fixture.scenario.sessions?.some((row) => row.key === fixture.selectedSessionKey)).toBe(
+        true,
+      );
+      const { request } = await connect(fixture.scenario);
+      expect(
+        await request("sessions.resolve", { shortId: "f00dcafe", agentId: "main" }),
+      ).toMatchObject({
+        ok: true,
+        payload: {
+          ok: true,
+          key: "agent:main:dashboard:f00dcafe-0000-4000-8000-000000000271",
+          agentId: "main",
+          displayName: "Project dashboard 1",
+          boardFace: "dashboard",
+        },
+      });
+    },
+  );
 
   it("projects real row modes and bounds transcript enrichment without changing row identity on reread", () => {
     const fixture = createControlUiTeamScaleFixture({ now });

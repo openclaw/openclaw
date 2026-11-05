@@ -24,7 +24,6 @@ const mocks = vi.hoisted(() => ({
   createCacheTrace: vi.fn(),
   createSessionSettleTracker: vi.fn(),
   retainSessionPromptState: vi.fn(),
-  beginSessionSystemPrompt: vi.fn(() => false),
   installContextGuards: vi.fn(),
   prepareAgentSession: vi.fn(),
   prepareSessionBoundary: vi.fn(),
@@ -45,7 +44,6 @@ vi.mock("../../cache-trace.js", () => ({ createCacheTrace: mocks.createCacheTrac
 vi.mock("../session-prompt-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-prompt-state.js")>()),
   retainEmbeddedSessionPromptState: mocks.retainSessionPromptState,
-  beginSessionSystemPrompt: mocks.beginSessionSystemPrompt,
 }));
 vi.mock("../tool-result-truncation.js", () => ({
   restoreCacheTtlToolResultProjections: mocks.restoreProjections,
@@ -139,49 +137,56 @@ function createHistoryFixture(messages?: ReturnType<typeof buildSystemUpdateMess
 function createFixture() {
   const order: string[] = [];
   const activeMarker = { type: "custom", customType: "openclaw.cache-ttl", data: "active" };
-  const sessionManager = {
-    getBranch: () => [activeMarker],
-    getToolResultProjectionEntries: () => [activeMarker],
-  };
-  const activeSession = {
-    messages: [{ role: "user" }, { role: "assistant" }],
-    sessionId: "active-session",
+  const f = {
+    order,
+    sessionManager: {
+      getBranch: () => [activeMarker],
+      getBoundaryCount: () => 0,
+      getToolResultProjectionEntries: () => [activeMarker],
+    },
+    activeSession: {
+      messages: [{ role: "user" }, { role: "assistant" }],
+      sessionId: "active-session",
+    },
+    promptState: { toolResults: { projected: true } },
+    abortActiveSession: vi.fn(async () => undefined),
+    buildAbortSettlePromise: vi.fn(() => null),
+    contextGuards: { remove: vi.fn() },
+    trajectoryRecorder: { kind: "trajectory", recordEvent: vi.fn() },
+    transcriptPolicy: { repairToolUseResultPairing: true, inHistorySystemUpdates: false },
+    getUserTranscriptContexts: vi.fn(() => []),
+    onSessionYieldReady: vi.fn(() => order.push("own-yield")),
+    externalAbortController: {
+      setActiveSessionAbort: vi.fn(() => order.push("arm-session-abort")),
+    },
   };
   const agentSession = {
-    activeSession,
+    activeSession: f.activeSession,
     clientToolDefs: [{ name: "read" }, { name: "write" }],
     setActiveSessionSystemPrompt: vi.fn(),
   };
-  const promptState = { toolResults: { projected: true } };
-  const promptStateLease = { state: promptState, [Symbol.dispose]: vi.fn() };
-  const abortActiveSession = vi.fn(async () => undefined);
-  const buildAbortSettlePromise = vi.fn(() => null);
-  const contextGuards = { remove: vi.fn() };
-  const trajectoryRecorder = { kind: "trajectory", recordEvent: vi.fn() };
+  const promptStateLease = { state: f.promptState, [Symbol.dispose]: vi.fn() };
   const transport = {
     compactionReplayEnabled: true,
     effectivePromptCacheRetention: "long",
   };
-  const transcriptPolicy = { repairToolUseResultPairing: true, inHistorySystemUpdates: false };
-  const getUserTranscriptContexts = vi.fn(() => []);
-
   mocks.prepareSessionManager.mockImplementation(async (input) => {
     order.push("manager");
-    input.onSessionManagerCreated(sessionManager);
+    input.onSessionManagerCreated(f.sessionManager);
     return {
       isOpenAIResponsesApi: true,
       preparedUserTurnMessage: { role: "user", content: "hello" },
-      sessionManager,
-      transcriptPolicy,
+      sessionManager: f.sessionManager,
+      transcriptPolicy: f.transcriptPolicy,
       userMessageBoundary: {
-        getUserTranscriptContexts,
+        getUserTranscriptContexts: f.getUserTranscriptContexts,
         preparedUserTurnMessage: { role: "user", content: "hello" },
       },
     };
   });
   mocks.prepareAgentSession.mockImplementation(async (input) => {
     order.push("agent-session");
-    input.onSessionCreated(activeSession);
+    input.onSessionCreated(f.activeSession);
     input.onSystemPromptChanged("runtime prompt");
     return agentSession;
   });
@@ -194,12 +199,17 @@ function createFixture() {
   mocks.prepareSessionBoundary.mockImplementation(stage("boundary", {}));
   mocks.retainSessionPromptState.mockImplementation(stage("prompt-state", promptStateLease));
   mocks.createSessionSettleTracker.mockImplementation(
-    stage("settle-tracker", { abortActiveSession, buildAbortSettlePromise }),
+    stage("settle-tracker", {
+      abortActiveSession: f.abortActiveSession,
+      buildAbortSettlePromise: f.buildAbortSettlePromise,
+    }),
   );
-  mocks.installContextGuards.mockImplementation(stage("context-guards", contextGuards));
+  mocks.installContextGuards.mockImplementation(stage("context-guards", f.contextGuards));
   mocks.createCacheTrace.mockImplementation(stage("cache-trace", {}));
   mocks.createAnthropicPayloadLogger.mockImplementation(stage("payload-logger", {}));
-  mocks.createTrajectory.mockImplementation(async () => stage("trajectory", trajectoryRecorder)());
+  mocks.createTrajectory.mockImplementation(async () =>
+    stage("trajectory", f.trajectoryRecorder)(),
+  );
   mocks.prepareTransport.mockImplementation(async () => stage("transport", transport)());
 
   const resources = new Proxy<PrepareInput["resources"]>(
@@ -211,10 +221,6 @@ function createFixture() {
       },
     },
   );
-  const onSessionYieldReady = vi.fn(() => order.push("own-yield"));
-  const externalAbortController = {
-    setActiveSessionAbort: vi.fn(() => order.push("arm-session-abort")),
-  };
   const input = {
     attempt: {
       config: {},
@@ -237,9 +243,7 @@ function createFixture() {
       sessionAgentId: "main",
       effectiveWorkspace: "/tmp/workspace",
     },
-    toolBase: {
-      codeModeControlsEnabledForRun: false,
-    },
+    toolBase: { codeModeControlsEnabledForRun: false },
     toolCatalog: {
       effectiveTools: [],
       toolSearchRunPlan: { replayAllowedToolNames: new Set(["read"]) },
@@ -257,29 +261,13 @@ function createFixture() {
       }),
     },
     runAbortSignal: new AbortController().signal,
-    externalAbortController,
+    externalAbortController: f.externalAbortController,
     resources,
-    onSessionYieldReady,
+    onSessionYieldReady: f.onSessionYieldReady,
   } as unknown as PrepareInput;
 
-  return {
-    abortActiveSession,
-    activeSession,
-    agentSession,
-    buildAbortSettlePromise,
-    contextGuards,
-    externalAbortController,
-    getUserTranscriptContexts,
-    input,
-    resources,
-    onSessionYieldReady,
-    order,
-    promptState,
-    promptStateLease,
-    sessionManager,
-    trajectoryRecorder,
-    transcriptPolicy,
-  };
+  const prepare = () => prepareEmbeddedAttemptSessionRuntime(input);
+  return { ...f, agentSession, input, resources, promptStateLease, prepare };
 }
 
 beforeEach(async () => {
@@ -295,6 +283,25 @@ afterEach(async () => {
 });
 
 describe("prepareEmbeddedAttemptSessionRuntime", () => {
+  it("clears an unsent prompt without reading history when prompt updates remain enabled", async () => {
+    const fixture = createHistoryFixture();
+    const first = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+    const prompt = await first.prepareSystemPromptUpdate!("## Policy\nUnsent update");
+    prompt.commit();
+    expect(first.sessionPromptState.pendingSystemPrompt?.renderedPrefix).toBe(
+      "## Policy\nUnsent update",
+    );
+
+    const getBranch = vi.spyOn(fixture.sessionManager, "getBranch");
+    try {
+      const next = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      expect(getBranch).not.toHaveBeenCalled();
+      expect(next.sessionPromptState.pendingSystemPrompt).toBeUndefined();
+    } finally {
+      getBranch.mockRestore();
+    }
+  });
+
   it("re-pins personal bootstrap when the selected profile changes between attempts", async () => {
     const fixture = createHistoryFixture();
     mocks.retainSessionPromptState.mockImplementation(() => ({
@@ -303,7 +310,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     }));
     for (const profile of ["alice", "bob", undefined]) {
       fixture.input.attempt.bootstrapUserProfileId = profile;
-      const runtime = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const runtime = await fixture.prepare();
       const prompt = `## User\n${profile ?? "Shared"} guidance`;
       const prepared = await runtime.prepareSystemPromptUpdate!(prompt, true);
       expect(prepared).toMatchObject({ restart: true, systemPrompt: prompt });
@@ -359,7 +366,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
         input.onSessionCreated(fixture.activeSession);
         return fixture.agentSession;
       });
-      const preparing = prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const preparing = fixture.prepare();
       const refused = new Error(`Transcript preparation ${outcome}`);
       try {
         await awaitGateBeforeSettlement(entered.promise, preparing, "Constructor was not reached");
@@ -406,7 +413,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
         appendCustomEntryAsync,
       });
       const routeR = fixture.input.attempt.modelId;
-      const firstRuntime = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const firstRuntime = await fixture.prepare();
       const initial = await firstRuntime.prepareSystemPromptUpdate!("## Policy\nA");
       initial.commit();
       await persistSessionSystemPrompt(firstRuntime.sessionPromptState, appendCustomEntryAsync);
@@ -418,7 +425,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       expect(changed.systemPrompt).toBe("## Policy\nA");
 
       fixture.input.attempt.modelId = "route-S";
-      const secondRuntime = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const secondRuntime = await fixture.prepare();
       interruptRetirement = true;
       const preparedS = secondRuntime.prepareSystemPromptUpdate!("## Policy\nS");
       if (interruption === "unadmitted") {
@@ -428,7 +435,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       }
       interruptRetirement = false;
       fixture.input.attempt.modelId = routeR;
-      const resumedRuntime = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const resumedRuntime = await fixture.prepare();
       const resumed = await resumedRuntime.prepareSystemPromptUpdate!("## Policy\nB", true);
       expect(resumed.restart).toBe(true);
       expect(resumed.systemPrompt).toBe("## Policy\nB");
@@ -456,7 +463,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     const { entries, agentState, recordUpdate, persist } = fixture;
     const permissionNotice = "## Permission change\nWrite access was removed.";
     const prompt = `## Tools\nread\n<!-- openclaw:attempt:PERMISSION -->\n${permissionNotice}\n<!-- /openclaw:attempt:PERMISSION -->`;
-    const runtime = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+    const runtime = await fixture.prepare();
     const prepare = runtime.prepareSystemPromptUpdate!;
     const first = await prepare(prompt);
     expect(first.update?.content).toBe(permissionNotice);
@@ -486,7 +493,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
   it("prepares the session runtime in ownership-safe order and keeps prompt state live", async () => {
     const fixture = createFixture();
 
-    const result = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+    const result = await fixture.prepare();
 
     expect(mocks.restoreProjections).toHaveBeenCalledWith(
       fixture.promptState.toolResults,
@@ -541,9 +548,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     const fixture = createFixture();
     mocks.prepareTransport.mockRejectedValueOnce(new Error("transport failed"));
 
-    await expect(prepareEmbeddedAttemptSessionRuntime(fixture.input)).rejects.toThrow(
-      "transport failed",
-    );
+    await expect(fixture.prepare()).rejects.toThrow("transport failed");
 
     expect(fixture.resources.sessionManager).toBe(fixture.sessionManager);
     expect(fixture.resources.promptStateLease).toBe(fixture.promptStateLease);
@@ -561,7 +566,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       waitForRuntimePersistence,
     } as unknown as PrepareInput["attempt"]["userTurnTranscriptRecorder"];
 
-    const preparing = prepareEmbeddedAttemptSessionRuntime(fixture.input);
+    const preparing = fixture.prepare();
     await vi.waitFor(() => expect(waitForRuntimePersistence).toHaveBeenCalledOnce());
     expect(mocks.prepareSessionBoundary).not.toHaveBeenCalled();
 
@@ -597,7 +602,7 @@ describe("trajectory preparation through the public runtime", () => {
         assertCommitAllowed: resolveAdmittedRunActiveAssertion(admittedRunContext),
       });
     }
-    const result = await prepareEmbeddedAttemptSessionRuntime(f.input);
+    const result = await f.prepare();
     expect(result.trajectoryRecorder).toBe(f.trajectoryRecorder);
     if (retained) {
       expect(mocks.trajectoryPath).not.toHaveBeenCalled();
@@ -643,9 +648,7 @@ describe("trajectory preparation through the public runtime", () => {
         }
         return f.trajectoryRecorder;
       });
-      await expect(prepareEmbeddedAttemptSessionRuntime(f.input)).rejects.toThrow(
-        "admitted run authority is no longer active",
-      );
+      await expect(f.prepare()).rejects.toThrow("admitted run authority is no longer active");
       expect(f.trajectoryRecorder.recordEvent).not.toHaveBeenCalled();
     },
   );
@@ -653,7 +656,7 @@ describe("trajectory preparation through the public runtime", () => {
   it("resolves the transcript path but skips the recorder when disabled", async () => {
     const f = createFixture();
     f.input.attempt.disableTrajectory = true;
-    const result = await prepareEmbeddedAttemptSessionRuntime(f.input);
+    const result = await f.prepare();
     expect(result.trajectoryRecorder).toBeNull();
     expect([
       mocks.trajectoryPath.mock.calls.length,
@@ -674,7 +677,7 @@ describe("trajectory preparation through the public runtime", () => {
     f.input.attempt.sessionPersistence = "detached";
     f.input.attempt.workspaceDir = root;
     f.input.attempt.sessionFile = path.join(root, "detached.jsonl");
-    const result = await prepareEmbeddedAttemptSessionRuntime(f.input);
+    const result = await f.prepare();
     expect(result.trajectoryRecorder).toBeNull();
     expect(mocks.trajectoryPath).toHaveBeenCalledOnce();
     expect(mocks.createTrajectory).not.toHaveBeenCalled();

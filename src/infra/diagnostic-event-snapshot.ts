@@ -75,22 +75,18 @@ function isImmutableDiagnosticValue(value: unknown, seen?: WeakSet<object>): boo
   ) {
     return false;
   }
-  const visited = seen ?? new WeakSet();
-  visited.add(value);
+  let visited = seen;
   return Reflect.ownKeys(value).every((key) => {
     const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
     // Frozen getters can still return mutable data; only plain data is shareable.
-    return (
-      typeof key !== "symbol" &&
-      "value" in descriptor &&
-      isImmutableDiagnosticValue(descriptor.value, visited)
-    );
+    if (typeof key === "symbol" || !("value" in descriptor)) {
+      return false;
+    }
+    if (descriptor.value && typeof descriptor.value === "object") {
+      (visited ??= new WeakSet()).add(value);
+    }
+    return isImmutableDiagnosticValue(descriptor.value, visited);
   });
-}
-
-export function deepFreezeDiagnosticValue<T>(value: T): T {
-  freezeDiagnosticValue(value, new WeakSet());
-  return value;
 }
 
 function freezeDiagnosticValue(value: unknown, seen: WeakSet<object>): boolean {

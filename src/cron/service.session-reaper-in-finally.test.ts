@@ -186,7 +186,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       const fresh = await seedSessions(sessionStorePath);
       if (failureKind === "store load") {
         await ensureLoaded(state);
-        using loadSpy = vi.spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs");
+        using loadSpy = vi.spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobsByKey");
         loadSpy.mockRejectedValueOnce(failure);
         await expect(onTimer(state)).rejects.toBe(failure);
         expect(runIsolatedAgentJob).not.toHaveBeenCalled();

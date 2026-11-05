@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { zstdDecompressSync } from "node:zlib";
 import { afterAll, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
@@ -175,47 +176,61 @@ it("frames quoted controls and invalid raw newlines across chunk boundaries", as
   }
 });
 
-it("aborts encoded output at the cap and removes staging files", async () => {
-  const tempDir = sessionDirs.make();
-  const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-  const sessionId = "archive-output-overflow";
-  const sessionKey = "agent:main:archive-output-overflow";
-  await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
-  await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
-    {
-      type: "session",
-      id: sessionId,
-      content: randomBytes(4096).toString("base64"),
-    },
-  ]);
+it.each([false, true])(
+  "materializes without flushing disposable stages (overflow=%s)",
+  async (overflow) => {
+    const tempDir = sessionDirs.make();
+    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    const sessionId = "archive-output-overflow";
+    const sessionKey = "agent:main:archive-output-overflow";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
+    const events = [
+      {
+        type: "session",
+        id: sessionId,
+        content: overflow ? randomBytes(4096).toString("base64") : "Archive 🦞\n",
+      },
+    ];
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
 
-  const target = resolveSqliteTargetFromSessionStorePath(storePath);
-  if (!target.path) {
-    throw new Error("expected SQLite target path");
-  }
-  const database = openOpenClawAgentDatabase({
-    agentId: target.agentId ?? "main",
-    path: target.path,
-  });
-  const plan = planSessionStateDeleteIfUnreferenced({
-    archiveDirectory: path.dirname(storePath),
-    database,
-    referencedSessionIds: new Set(),
-    sessionId,
-  });
-  if (!plan) {
-    throw new Error("expected archive plan");
-  }
-  closeOpenClawAgentDatabasesForTest();
-  const { materializeTranscriptArchiveInWorker } =
-    await import("./session-accessor.sqlite-archive.worker.js");
+    const target = resolveSqliteTargetFromSessionStorePath(storePath);
+    if (!target.path) {
+      throw new Error("expected SQLite target path");
+    }
+    const database = openOpenClawAgentDatabase({
+      agentId: target.agentId ?? "main",
+      path: target.path,
+    });
+    const plan = planSessionStateDeleteIfUnreferenced({
+      archiveDirectory: path.dirname(storePath),
+      database,
+      referencedSessionIds: new Set(),
+      sessionId,
+    });
+    if (!plan) {
+      throw new Error("expected archive plan");
+    }
+    closeOpenClawAgentDatabasesForTest();
+    const { materializeTranscriptArchiveInWorker } =
+      await import("./session-accessor.sqlite-archive.worker.js");
 
-  await expect(materializeTranscriptArchiveInWorker(plan)).rejects.toThrow(
-    "Archive exceeds 1024 bytes during encoding",
-  );
-  expect(
-    fs
-      .readdirSync(path.dirname(storePath))
-      .filter((entry) => entry.includes(".stage") || entry.includes("jsonl-stage")),
-  ).toEqual([]);
-});
+    using sync = vi.spyOn(fs, "fsyncSync");
+    if (overflow) {
+      await expect(materializeTranscriptArchiveInWorker(plan)).rejects.toThrow(
+        "Archive exceeds 1024 bytes during encoding",
+      );
+    } else {
+      const { archive } = await materializeTranscriptArchiveInWorker(plan);
+      expect(archive?.encoding).toBe("zstd");
+      expect(zstdDecompressSync(Buffer.from(archive!.bytes)).toString("utf8")).toBe(
+        `${JSON.stringify(events[0])}\n`,
+      );
+    }
+    expect(sync).not.toHaveBeenCalled();
+    expect(
+      fs
+        .readdirSync(path.dirname(storePath))
+        .filter((entry) => entry.includes(".stage") || entry.includes("jsonl-stage")),
+    ).toEqual([]);
+  },
+);

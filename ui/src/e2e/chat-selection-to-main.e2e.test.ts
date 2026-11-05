@@ -32,7 +32,6 @@ function controls(page: Page) {
     composer: page.locator(".agent-chat__composer-shell textarea"),
     preview: page.getByRole("region", { name: "Comments", exact: true }),
     pendingChip: page.locator(".chat-attachments-preview .chat-selection-annotations__chip"),
-    sentChip: page.locator("openclaw-chat-sent-comments .chat-selection-annotations__chip"),
     toolbar: page.getByRole("toolbar", { name: "Selection actions" }),
     side: page.locator("openclaw-chat-session-rail"),
     sideComposer: page.locator(".chat-session-rail__input"),
@@ -58,21 +57,12 @@ async function expectPreview(preview: Locator, text: string) {
   await preview.waitFor({ state: "visible" });
   await pollText(preview).toContain(text);
 }
-async function expectReadOnlyPreview(preview: Locator, text: string) {
-  await expect.poll(() => preview.isVisible()).toBe(true);
-  await pollText(preview).toContain(text);
-  expect(await preview.locator("button").count()).toBe(0);
-}
-function attachmentText(attachment: { content: string }) {
-  return Buffer.from(attachment.content, "base64").toString("utf8");
-}
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
-type Attachment = { content: string; mimeType: string };
 async function sentMessage(gateway: Gateway) {
   return (await gateway.waitForRequest("chat.send")).params as {
     message: string;
     idempotencyKey: string;
-    attachments: Attachment[];
+    attachments?: unknown[];
   };
 }
 async function sideQuestion(gateway: Gateway) {
@@ -99,14 +89,15 @@ function button(scope: Page | Locator, name: string) {
   return scope.getByRole("button", { name, exact: true });
 }
 function selectedSource(page: Page, passage = selectedText) {
-  return page.locator(".chat-bubble .chat-text p").filter({ hasText: passage });
+  // Sent comments quote the passage; the source is the unquoted paragraph.
+  return page.locator(".chat-bubble .chat-text p:not(blockquote p)").filter({ hasText: passage });
 }
 function commentEditor(page: Page) {
   return page.getByRole("dialog", { name: "Comment", exact: true });
 }
 async function addComment(page: Page, comment: string, passage = selectedText) {
   await selectText(selectedSource(page, passage));
-  await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to chat").click();
+  await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to message").click();
   await commentEditor(page).getByRole("textbox").fill(comment);
   await commentEditor(page).getByRole("textbox").press("Enter");
 }
@@ -214,15 +205,19 @@ suite.define(() => {
           }
           await editor.waitFor({ state: "detached" });
           const send = side.locator(".chat-session-rail__composer button[type=submit]");
-          // A text comment alone is not a question.
-          expect(await send.isDisabled()).toBe(true);
-          await sideComposer.press("Enter");
-          expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
-          expect(await chip.count()).toBe(1);
-          await sideComposer.fill("Explain the selected text.");
+          if (scenario === "normal") {
+            // Saving a comment is sufficient input; no second question is required.
+            expect(await send.isEnabled()).toBe(true);
+          } else {
+            await sideComposer.fill("Explain the selected text.");
+          }
           await send.click();
           const params = await sideQuestion(gateway);
-          expect(params.question).toBe("Explain the selected text.");
+          expect(params.question).toBe(
+            scenario === "normal"
+              ? "Respond to the selected text and comments."
+              : "Explain the selected text.",
+          );
           expect(params.attachments).toBeUndefined();
           expect(params.selectionContext).toContain(`Selected text:\n${passage}`);
           expect(params.selectionContext).toContain(
@@ -241,15 +236,13 @@ suite.define(() => {
   it("reveals draft and sent comments by touch before and after reload", async () => {
     await withPage(
       async ({ page, composer, editor, comment, preview, pendingChip }) => {
-        const sent = page.locator(".chat-sent-comments-inline");
-        const sentQuote = sent.getByRole("button", { name: selectedText, exact: true });
-        const fullQuote = sent.getByRole("region", { name: "Highlighted passage:", exact: true });
-        const sentComment = sent.locator(".chat-sent-comments-inline__comment");
+        const sent = page.locator(".chat-bubble").filter({ has: page.locator("blockquote") });
+        const sentQuote = sent.locator("blockquote").filter({ hasText: selectedText });
         const gateway = await openSelection(page);
         const source = selectedSource(page);
         await source.waitFor({ state: "visible" });
         await selectText(source);
-        await button(page, "Add to chat").tap();
+        await button(page, "Add to message").tap();
         await comment.fill("Check the rollback steps. 🦞");
         await button(editor, "Save comment").tap();
         await pendingChip.tap();
@@ -260,27 +253,23 @@ suite.define(() => {
         await expect.poll(() => preview.isVisible()).toBe(false);
         await button(page, "Send message").tap();
         const request = await gateway.waitForRequest("chat.send");
+        const params = request.params as { idempotencyKey: string; message: string };
+        expect(params.message).toBe(`> ${selectedText}\n\nCheck the rollback steps. 🦞`);
         await gateway.emitChatFinal({
-          runId: (request.params as { idempotencyKey: string }).idempotencyKey,
+          runId: params.idempotencyKey,
           text: "Selected passage received.",
         });
         await page.reload();
         await sentQuote.waitFor({ state: "visible" });
-        expect(await sentComment.textContent()).toBe("Check the rollback steps. 🦞");
-        await sentQuote.tap();
-        await expectReadOnlyPreview(fullQuote, selectedText);
-        await composer.tap();
-        await expect.poll(() => fullQuote.isVisible()).toBe(false);
+        await pollText(sent).toContain("Check the rollback steps. 🦞");
         await selectText(source);
-        await button(page, "Add to chat").tap();
+        await button(page, "Add to message").tap();
         await comment.fill("Remove only this pending comment.");
         await button(editor, "Save comment").tap();
         await button(pendingChip, "Remove all comments").tap();
         await pendingChip.waitFor({ state: "detached" });
         expect(await sentQuote.count()).toBe(1);
-        await sentQuote.tap();
-        await expectReadOnlyPreview(fullQuote, selectedText);
-        expect(await sentComment.textContent()).toBe("Check the rollback steps. 🦞");
+        await pollText(sent).toContain("Check the rollback steps. 🦞");
         expect(await sent.textContent()).not.toContain("Remove only this pending comment.");
       },
       { viewport: viewports[1], hasTouch: true, isMobile: true, reducedMotion: "no-preference" },
@@ -290,7 +279,7 @@ suite.define(() => {
   it("restores staged annotations and sends ordered read-only comments", async () => {
     const viewport = viewports[1]!;
     await withPage(
-      async ({ page, composer, editor, comment, toolbar, preview, sentChip, pendingChip }) => {
+      async ({ page, composer, editor, comment, toolbar, preview, pendingChip }) => {
         const gateway = await openSelection(page);
         await composer.waitFor({ state: "visible" });
         const text = selectedSource(page);
@@ -306,7 +295,7 @@ suite.define(() => {
           page.getByRole("button", { name: `Edit comment ${number}`, exact: true });
         const open = async () => {
           await selectText(text);
-          await button(toolbar, "Add to chat").click();
+          await button(toolbar, "Add to message").click();
           await editor.waitFor({ state: "visible" });
         };
         const bounded = async (locator: Locator) => {
@@ -352,17 +341,11 @@ suite.define(() => {
         await chip(2).waitFor({ state: "visible" });
         await button(page, "Send message").click();
         const params = await sentMessage(gateway);
-        expect(params.message).toBe(draft);
-        expect(params.attachments).toHaveLength(2);
-        const contents = params.attachments.map((attachment) => {
-          expect(attachment.mimeType).toBe("text/plain");
-          return attachmentText(attachment);
-        });
-        expect(contents[0]).toContain(selectedText);
-        expect(contents[0]).toContain("Explain the rollback checks. 🦞");
-        expect(contents[0]).toContain("agent:main:main");
-        expect(contents[1]).toContain(selectedText);
-        expect(contents[1]).not.toContain("Explain the rollback checks.");
+        // Comments are part of the user message, in order, ahead of the draft.
+        expect(params.message).toBe(
+          `> ${selectedText}\n\nExplain the rollback checks. 🦞\n\n> ${selectedText}\n\n${draft}`,
+        );
+        expect(params.attachments ?? []).toHaveLength(0);
         await pollValue(composer).toBe("");
         expect(await chip(2).count()).toBe(0);
         expect(await pin(1).count()).toBe(0);
@@ -370,20 +353,13 @@ suite.define(() => {
           runId: params.idempotencyKey,
           text: "The checks are ready.",
         });
-        await sentChip.waitFor({ state: "visible" });
-        expect(await sentChip.textContent()).toContain("2 comments");
-        await sentChip.hover();
-        await expectPreview(preview, "Explain the rollback checks. 🦞");
-        expect(await preview.locator("li").count()).toBe(2);
-        expect(await preview.locator("button").count()).toBe(0);
-        await bounded(preview);
-        await page.keyboard.press("Escape");
-        await preview.waitFor({ state: "hidden" });
+        const sent = page.locator(".chat-bubble").filter({ hasText: draft });
+        const sentQuotes = sent.locator("blockquote").filter({ hasText: selectedText });
+        await pollCount(sentQuotes).toBe(2);
+        await pollText(sent).toContain("Explain the rollback checks. 🦞");
         await page.reload();
-        await sentChip.waitFor({ state: "visible" });
-        await sentChip.focus();
-        await preview.waitFor({ state: "visible" });
-        await pollText(preview).toContain("Explain the rollback checks. 🦞");
+        await pollCount(sentQuotes).toBe(2);
+        await pollText(sent).toContain("Explain the rollback checks. 🦞");
         expect(
           await page
             .locator(".chat-assistant-attachment-card__title")
@@ -396,62 +372,64 @@ suite.define(() => {
   });
 
   it("keeps comment pins and their editor anchored through scrolling and reflow", async () => {
-    const viewport = viewports[0]!;
-    await withPage(
-      async ({ page, editor, comment }) => {
-        const passage =
-          "Review the rollback checklist carefully before the deployment starts. Confirm every recovery step with the team.";
-        const filler = Array.from(
-          { length: 24 },
-          (_, index) => `Deployment context paragraph ${index + 1}.`,
-        ).join("\n\n");
-        await openSelection(page, {}, `${filler}\n\n${passage}\n\n${filler}`);
-        const text = selectedSource(page, passage);
-        await waitForChatScrollIdle(page);
-        await page.locator(".chat-thread").hover();
-        await page.mouse.wheel(0, -32);
-        await waitForChatScrollIdle(page);
-        await addComment(page, "Keep this pin on its original passage.", passage);
-        const pin = button(page, "Edit comment 1");
-        const aligned = async () => {
-          await expect
-            .poll(async () => {
-              const lastLine = await text.evaluate((element) => {
-                const range = document.createRange();
-                range.selectNodeContents(element);
-                const last = Array.from(range.getClientRects()).findLast(
-                  (rect) => rect.width && rect.height,
-                )!;
-                return { top: last.top, height: last.height, right: last.right };
-              });
-              const marker = await pin.boundingBox();
-              return marker
-                ? Math.abs(marker.y + marker.height / 2 - lastLine.top - lastLine.height / 2)
-                : 1000;
-            })
-            .toBeLessThan(3);
-        };
-        await aligned();
-        await pin.click();
-        await page.locator(".chat-thread").evaluate((element) => (element.scrollTop += 100));
-        await editor.waitFor({ state: "detached" });
-        await text.scrollIntoViewIfNeeded();
-        await aligned();
-        await pin.click();
-        await page.setViewportSize({ width: 390, height: viewport.height });
-        await aligned();
+    await withPage(async ({ page, editor, comment }) => {
+      const passage =
+        "Review the rollback checklist carefully before the deployment starts. Confirm every recovery step with the team.";
+      const filler = Array.from(
+        { length: 24 },
+        (_, index) => `Deployment context paragraph ${index + 1}.`,
+      ).join("\n\n");
+      const sourceMarkdown = `**${passage}** This context is not selected.`;
+      await openSelection(page, {}, `${filler}\n\n${sourceMarkdown}\n\n${filler}`);
+      const text = selectedSource(page, passage);
+      await waitForChatScrollIdle(page);
+      await page.locator(".chat-thread").hover();
+      await page.mouse.wheel(0, -32);
+      await waitForChatScrollIdle(page);
+      await selectText(text.locator("strong"));
+      await button(page, "Add to message").click();
+      await submitComment(comment, "Keep this pin on its original passage.");
+      const pin = button(page, "Edit comment 1");
+      const aligned = async () => {
         await expect
           .poll(async () => {
+            const lastLine = await text.evaluate((element) => {
+              const last = [...element.querySelector("strong")!.getClientRects()].at(-1)!;
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const right = Math.max(
+                ...Array.from(range.getClientRects(), (rect) =>
+                  rect.top < last.bottom && rect.bottom > last.top ? rect.right : 0,
+                ),
+              );
+              return { top: last.top, height: last.height, right };
+            });
             const marker = await pin.boundingBox();
-            const popup = await editor.boundingBox();
-            return marker && popup ? verticalGap(popup, marker) : 1000;
+            return marker && marker.x >= lastLine.right
+              ? Math.abs(marker.y + marker.height / 2 - lastLine.top - lastLine.height / 2)
+              : 1000;
           })
-          .toBeLessThan(12);
-        expect(await comment.inputValue()).toBe("Keep this pin on its original passage.");
-        await comment.press("Escape");
-      },
-      { viewport },
-    );
+          .toBeLessThan(3);
+      };
+      await aligned();
+      await pin.click();
+      await page.locator(".chat-thread").evaluate((element) => (element.scrollTop += 100));
+      await editor.waitFor({ state: "detached" });
+      await text.scrollIntoViewIfNeeded();
+      await aligned();
+      await pin.click();
+      await page.setViewportSize({ width: 390, height: viewports[0]!.height });
+      await aligned();
+      await expect
+        .poll(async () => {
+          const marker = await pin.boundingBox();
+          const popup = await editor.boundingBox();
+          return marker && popup ? verticalGap(popup, marker) : 1000;
+        })
+        .toBeLessThan(12);
+      expect(await comment.inputValue()).toBe("Keep this pin on its original passage.");
+      await comment.press("Escape");
+    });
   });
 
   it.each([false, true])(
@@ -521,9 +499,8 @@ suite.define(() => {
           await composer.fill(draft);
           await send.click();
           const params = await sentMessage(gateway);
-          expect(params.message).toBe(draft);
-          expect(params.attachments).toHaveLength(1);
-          expect(attachmentText(params.attachments[0]!)).toContain("Review before deployment.");
+          expect(params.message).toBe(`> ${selectedText}\n\nReview before deployment.\n\n${draft}`);
+          expect(params.attachments ?? []).toHaveLength(0);
           await pollCount(pin).toBe(0);
         },
         { reducedMotion: "no-preference" },
@@ -531,23 +508,21 @@ suite.define(() => {
     },
   );
 
-  it("keeps formatted selection text and DOM source offsets consistent", async () => {
+  it("quotes every line of formatted selection text in the message", async () => {
     await withPage(async ({ page }) => {
       const gateway = await openSelection(page, {}, "A  \nB");
       const paragraph = page.locator(".chat-bubble .chat-text p");
       await paragraph.waitFor({ state: "visible" });
-      const sourceText = await page.locator(".chat-bubble").textContent();
-      const selectedDomText = await paragraph.textContent();
       await selectText(paragraph);
-      await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to chat").click();
+      await button(
+        page.getByRole("toolbar", { name: "Selection actions" }),
+        "Add to message",
+      ).click();
       await button(commentEditor(page), "Save comment").click();
       await button(page, "Send message").click();
       const params = await sentMessage(gateway);
-      const content = attachmentText(params.attachments[0]!);
-      expect(content).toContain("Selected text:\nA\nB");
-      const offsets = /DOM text UTF-16 range: \[(\d+), (\d+)\)/.exec(content);
-      expect(offsets).not.toBeNull();
-      expect(sourceText?.slice(Number(offsets![1]), Number(offsets![2]))).toBe(selectedDomText);
+      expect(params.message).toBe("> A\n> B");
+      expect(params.attachments ?? []).toHaveLength(0);
     });
   });
 });

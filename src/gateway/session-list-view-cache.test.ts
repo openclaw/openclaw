@@ -1,15 +1,33 @@
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   onTrustedInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import { registerSerializedJsonArray } from "./serialized-json.js";
-import { SessionListViewCache } from "./session-list-view-cache.js";
+import { SessionListViewCache, shareSessionRowFacts } from "./session-list-view-cache.js";
 import { serializeSessionRow } from "./session-row-serialization.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 const row: GatewaySessionRow = { key: "one", kind: "direct", updatedAt: 1, rowMode: "sidebar" };
+
+it("packs all-row facts without encoding their identical recipient lists", () => {
+  const rows = ["one", "two", "three"].map((key) => ({
+    key,
+    kind: "direct" as const,
+    updatedAt: 1,
+    pinned: false,
+    visibility: "shared" as const,
+  }));
+  using join = vi.spyOn(Array.prototype, "join");
+  const packed = shareSessionRowFacts(rows);
+  const joins = join.mock.calls.length;
+  join.mockRestore();
+  expect(joins).toBe(0);
+  expect(packed.sharedFacts).toEqual([{ pinned: false, visibility: "shared" }]);
+  expect(packed.sessions.map((value) => value.sharedFacts)).toEqual([[0], [0], [0]]);
+});
+
 let cache: SessionListViewCache;
 let reports: { views: number; refs: number; estimatedBytes: number }[];
 let retirements: string[];
@@ -80,6 +98,25 @@ it("coalesces a turn of retention updates into one report with the final counter
     { views: 1, refs: 2, estimatedBytes: 1_050 },
     { views: 0, refs: 0, estimatedBytes: 0 },
   ]);
+});
+
+it("charges an encoding prepared after a shared row was admitted until its last view retires", async () => {
+  const lateRow = { ...row, label: "Late encoding" };
+  const other = { ...row, key: "other" };
+  const first = cache.get("first");
+  cache.setRows(first, [lateRow, other], true, 0, () => 30);
+  const encodedBytes = serializeSessionRow(lateRow).length * 2;
+  const singleton = cache.get("singleton");
+  cache.setRows(singleton, [lateRow], true);
+  await flushReports();
+  expect(reports.at(-1)?.estimatedBytes).toBe(first.bytes + singleton.bytes + 60 + encodedBytes);
+
+  cache.retireRows(singleton);
+  await flushReports();
+  expect(reports.at(-1)?.estimatedBytes).toBe(first.bytes + singleton.bytes + 60 + encodedBytes);
+  cache.retireRows(first);
+  await flushReports();
+  expect(reports.at(-1)?.estimatedBytes).toBe(first.bytes + singleton.bytes);
 });
 
 it("evicts least recently used views under byte pressure and releases all accounting", async () => {

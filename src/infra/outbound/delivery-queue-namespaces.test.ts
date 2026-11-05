@@ -7,8 +7,8 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { movePendingDeliveryQueueEntryNamespace } from "../delivery-queue-sqlite-namespace.js";
 import {
+  movePendingDeliveryQueueEntryNamespaceInDatabase,
   commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase,
   upsertDeliveryQueueEntryOnceAcrossNamespacesInDatabase,
 } from "../delivery-queue-sqlite-namespace.kernel.js";
@@ -210,13 +210,12 @@ describe("outbound delivery namespace ownership", () => {
         } else {
           seed(PREPARATION_QUEUE, entry);
           expect(
-            movePendingDeliveryQueueEntryNamespace({
+            movePendingDeliveryQueueEntryNamespaceInDatabase(database(), {
               sourceQueueName: PREPARATION_QUEUE,
               destinationQueueName: PREPARED_QUEUE,
               conflictQueueNames: admission.conflictQueueNames,
               expectedSourceEntry: entry,
               destinationEntry: { ...entry, enqueuedAt: 2_051 },
-              stateDir,
             }),
           ).toBe(expired ? "moved" : "destination-exists");
         }

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PreparedLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.types.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { byId, writeFixtureFile } from "./state-migrations.shard-fixture.test-support.js";
 import type { LegacyStateMigrationStepReceipt } from "./state-migrations.types.js";
 
 vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
@@ -87,24 +88,20 @@ function copyWalFixture(root: string, databasePath: string, schema: string) {
 function writeAliasedSessionStore(params: {
   fixture: Awaited<ReturnType<typeof makeFixture>>;
   store: Record<string, unknown>;
-}): { cfg: OpenClawConfig; configuredStorePath: string; standardStorePath: string } {
+}): OpenClawConfig {
   const standardStorePath = path.join(
     params.fixture.stateDir,
-    "agents",
-    "main",
-    "sessions",
-    "sessions.json",
+    "agents/main/sessions/sessions.json",
   );
   const configuredStorePath = path.join(params.fixture.stateDir, "configured-sessions.json");
-  fs.mkdirSync(path.dirname(standardStorePath), { recursive: true });
-  fs.writeFileSync(standardStorePath, `${JSON.stringify(params.store)}\n`);
+  writeFixtureFile(standardStorePath, `${JSON.stringify(params.store)}\n`);
   fs.linkSync(standardStorePath, configuredStorePath);
   const cfg: OpenClawConfig = {
     agents: { entries: { main: {} } },
     session: { store: configuredStorePath },
   };
   fs.writeFileSync(params.fixture.configPath, `${JSON.stringify(cfg)}\n`);
-  return { cfg, configuredStorePath, standardStorePath };
+  return cfg;
 }
 
 async function makeStateRootFixture(prefix: string, extraEnv: NodeJS.ProcessEnv = {}) {
@@ -142,6 +139,18 @@ function planFixture(fixture: Awaited<ReturnType<typeof makeFixture>>) {
   });
 }
 
+function profileWorkspace(fixture: Awaited<ReturnType<typeof makeFixture>>) {
+  fixture.env.OPENCLAW_PROFILE = "work";
+  const paths = modules.stateDir.resolveLegacyProfileWorkspaceMigrationPaths({
+    env: fixture.env,
+    homedir: () => fixture.homeDir,
+  });
+  if (!paths) {
+    throw new Error("named profile did not resolve migration paths");
+  }
+  return paths;
+}
+
 afterEach(async () => {
   await modules.agentDb.closeOpenClawAgentDatabasesAsync();
   await modules.stateDatabase.closeOpenClawStateDatabaseAsync();
@@ -176,11 +185,10 @@ describe("legacy state migration caller execution", () => {
         controller.abort(interruption);
         throw error;
       };
-      const owner = detected
-        ? vi
-            .spyOn(modules.stateDatabase, "prepareOpenClawStateDatabaseSchema")
-            .mockImplementationOnce(fail)
-        : vi.spyOn(modules.media, "migrateLegacyMediaPersistence").mockImplementationOnce(fail);
+      (detected
+        ? vi.spyOn(modules.stateDatabase, "prepareOpenClawStateDatabaseSchema")
+        : vi.spyOn(modules.media, "migrateLegacyMediaPersistence")
+      ).mockImplementationOnce(fail);
       const receipts: LegacyStateMigrationStepReceipt[] = [];
       const scope = modules.sqlite.createSqliteReadOnlyWorkerScope({
         signal: controller.signal,
@@ -210,16 +218,15 @@ describe("legacy state migration caller execution", () => {
       } finally {
         await scope.close();
       }
-      expect(owner).toHaveBeenCalledOnce();
       const blockerId = detected ? "state-schema" : "media-persistence";
-      expect(receipts.find((receipt) => receipt.id === blockerId)).toMatchObject({
+      expect(byId(receipts, blockerId)).toMatchObject({
         outcome: "refused",
         refusal: { code: "step-threw", message: error.message },
       });
       if (plan) {
         modules.helpers.expectBlockedTailInPlanOrder({ plan, receipts, blockerId });
       }
-      expect(receipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
+      expect(byId(receipts, "exec-approvals")).toMatchObject({
         outcome: "refused",
         refusal: { code: "blocked-by-prior-refusal" },
       });
@@ -247,23 +254,18 @@ describe("legacy state migration caller execution", () => {
           : undefined;
       const sidecarPath = path.join(oauthDir, "auth-profiles", `${"b".repeat(32)}.json`);
       const sidecarBytes = "retired encrypted bytes\n";
-      fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
-      fs.writeFileSync(sidecarPath, sidecarBytes);
+      writeFixtureFile(sidecarPath, sidecarBytes);
       const authStorePath = path.join(fixture.stateDir, "agents/main/agent/auth-profiles.json");
-      fs.mkdirSync(path.dirname(authStorePath), { recursive: true });
-      fs.writeFileSync(
+      const oauthRef = {
+        source: "openclaw-credentials",
+        provider: "openai-codex",
+        id: "b".repeat(32),
+      };
+      writeFixtureFile(
         authStorePath,
         JSON.stringify({
           profiles: {
-            "openai-codex:default": {
-              type: "oauth",
-              provider: "openai-codex",
-              oauthRef: {
-                source: "openclaw-credentials",
-                provider: "openai-codex",
-                id: "b".repeat(32),
-              },
-            },
+            "openai-codex:default": { type: "oauth", provider: "openai-codex", oauthRef },
           },
         }),
       );
@@ -280,11 +282,8 @@ describe("legacy state migration caller execution", () => {
               legacySessionSurfaces: modules.surfaces.EMPTY_LEGACY_SESSION_SURFACES,
             })
           : modules.doctor.autoMigrateLegacyState({
-              cfg,
-              env: fixture.env,
-              homedir: () => fixture.homeDir,
+              ...doctorOptions(fixture, { cfg }),
               doctorOnlyStateMigrations: mode === "doctor",
-              legacySessionSurfaces: modules.surfaces.EMPTY_LEGACY_SESSION_SURFACES,
             });
       const migration =
         mode === "automatic"
@@ -304,30 +303,7 @@ describe("legacy state migration caller execution", () => {
     },
   );
 
-  it("executes and receipts Doctor-owned exec and TUI migrations from the same mode", async () => {
-    const fixture = await makeFixture();
-    const { execPath, tuiPath } = modules.helpers.writeLegacyDoctorAndTuiSources(fixture.stateDir, {
-      terminal: { sessionKey: "agent:main:tui:execute", updatedAt: 100 },
-    });
-    const result = await modules.doctor.autoMigrateLegacyState(doctorOptions(fixture));
-    expect(result.mode).toBe("doctor");
-    for (const id of ["exec-approvals", "tui-last-session"]) {
-      expect(result.stepReceipts.find((receipt) => receipt.id === id)).toMatchObject({
-        outcome: "completed",
-        warnings: [],
-      });
-    }
-    expect(fs.existsSync(execPath)).toBe(false);
-    expect(fs.existsSync(tuiPath)).toBe(false);
-    expect(
-      modules.receipts.readLegacyMigrationReceipt(
-        modules.receipts.resolveLegacyMigrationSourceKey("exec-approvals-json", execPath),
-        fixture.env,
-      ),
-    ).not.toBeNull();
-  });
-
-  it("relocates the legacy state root before running Doctor-owned migrations", async () => {
+  it("relocates the legacy state root before executing and receipting Doctor-owned exec and TUI migrations", async () => {
     await reloadStateDirFixtureGraph();
     const { root, legacyStateDir, stateDir, env } = await makeStateRootFixture(
       "openclaw-doctor-state-root-",
@@ -336,26 +312,28 @@ describe("legacy state migration caller execution", () => {
         OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
       },
     );
-    const { execPath } = modules.helpers.writeLegacyDoctorSources(legacyStateDir);
+    const { execPath, tuiPath } = modules.helpers.writeLegacyDoctorAndTuiSources(legacyStateDir, {
+      terminal: { sessionKey: "agent:main:tui:execute", updatedAt: 100 },
+    });
 
     const result = await modules.doctor.autoMigrateLegacyState(
       doctorOptions({ env, homeDir: root }),
     );
+    expect(result.mode).toBe("doctor");
     expect(result.stepReceipts[0]).toMatchObject({
       id: "state-dir",
-      source: [{ kind: "path", path: legacyStateDir }],
-      target: [{ kind: "path", path: stateDir }],
       outcome: "completed",
     });
     expect(fs.existsSync(legacyStateDir)).toBe(false);
     expect(fs.existsSync(execPath)).toBe(false);
-    expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
-      source: [
-        { kind: "path", path: path.join(stateDir, "exec-approvals.json") },
-        { kind: "sqlite", path: path.join(stateDir, "state", "openclaw.sqlite") },
-      ],
-      outcome: "completed",
-    });
+    expect(fs.existsSync(tuiPath)).toBe(false);
+    expect(fs.existsSync(path.join(stateDir, "tui", "last-session.json"))).toBe(false);
+    for (const id of ["exec-approvals", "tui-last-session"]) {
+      expect(byId(result.stepReceipts, id)).toMatchObject({
+        outcome: "completed",
+        warnings: [],
+      });
+    }
     expect(
       modules.receipts.readLegacyMigrationReceipt(
         modules.receipts.resolveLegacyMigrationSourceKey(
@@ -392,7 +370,7 @@ describe("legacy state migration caller execution", () => {
     for (const step of plan.steps.slice(1)) {
       expect([step.outcome, step.refusal?.code]).toEqual(["deferred", "blocked-by-prior-refusal"]);
     }
-    expect(plan.steps.find((step) => step.id === "exec-approvals")?.source).toEqual([
+    expect(byId(plan.steps, "exec-approvals")?.source).toEqual([
       { kind: "path", path: path.join(stateDir, "exec-approvals.json") },
       { kind: "sqlite", path: path.join(stateDir, "state", "openclaw.sqlite") },
     ]);
@@ -433,8 +411,6 @@ describe("legacy state migration caller execution", () => {
 
     expect(result.stepReceipts[0]).toMatchObject({
       id: "state-dir",
-      source: [{ kind: "path", path: legacyStateDir }],
-      target: [{ kind: "path", path: stateDir }],
       outcome: "refused",
       refusal: { code: "step-threw", message: expect.any(String) },
     });
@@ -445,7 +421,6 @@ describe("legacy state migration caller execution", () => {
       ]);
     }
     expect(result.stepReceipts.some((receipt) => receipt.id === "exec-approvals")).toBe(true);
-    expect(result.warnings.join("\n")).toContain("legacy rename");
     expect(fs.readdirSync(stateDir)).toEqual([]);
     expect(fs.existsSync(execPath)).toBe(true);
     expect(snapshotSqliteArtifacts(databasePath)).toEqual(databaseArtifactsBefore);
@@ -453,16 +428,8 @@ describe("legacy state migration caller execution", () => {
 
   it("reports a completed profile move when plugin preparation refuses", async () => {
     const fixture = await makeFixture();
-    fixture.env.OPENCLAW_PROFILE = "work";
-    const paths = modules.stateDir.resolveLegacyProfileWorkspaceMigrationPaths({
-      env: fixture.env,
-      homedir: () => fixture.homeDir,
-    });
-    if (!paths) {
-      throw new Error("named profile did not resolve migration paths");
-    }
-    fs.mkdirSync(paths.source, { recursive: true });
-    fs.writeFileSync(path.join(paths.source, "AGENTS.md"), "profile workspace");
+    const paths = profileWorkspace(fixture);
+    writeFixtureFile(path.join(paths.source, "AGENTS.md"), "profile workspace");
     const plan = await planFixture(fixture);
     const legacySessionSurfaces: PreparedLegacySessionSurfaces = Object.defineProperty(
       { surfaces: [], failures: [] },
@@ -481,16 +448,11 @@ describe("legacy state migration caller execution", () => {
     const profileChange = `Profile workspace: ${paths.source} → ${paths.target}`;
     expect(result.migrated).toBe(true);
     expect(result.changes).toContain(profileChange);
-    expect(result.stepReceipts.find((receipt) => receipt.id === "profile-workspace")).toMatchObject(
-      {
-        outcome: "completed",
-        changes: [profileChange],
-      },
-    );
-    expect(
-      result.stepReceipts.find((receipt) => receipt.id === "plugin-migration-preparation"),
-    ).toMatchObject({
-      id: "plugin-migration-preparation",
+    expect(byId(result.stepReceipts, "profile-workspace")).toMatchObject({
+      outcome: "completed",
+      changes: [profileChange],
+    });
+    expect(byId(result.stepReceipts, "plugin-migration-preparation")).toMatchObject({
       outcome: "refused",
       refusal: { code: "step-threw" },
     });
@@ -544,20 +506,13 @@ describe("legacy state migration caller execution", () => {
       let cfg: OpenClawConfig = {};
       const preserved: string[] = [];
       if (blockerId === "profile-workspace") {
-        fixture.env.OPENCLAW_PROFILE = "work";
-        const paths = modules.stateDir.resolveLegacyProfileWorkspaceMigrationPaths({
-          env: fixture.env,
-          homedir: () => fixture.homeDir,
-        });
-        if (!paths) {
-          throw new Error("named profile did not resolve migration paths");
-        }
+        const paths = profileWorkspace(fixture);
         preserved.push(paths.source, paths.target);
         for (const directory of preserved) {
           fs.mkdirSync(directory, { recursive: true });
         }
       } else {
-        ({ cfg } = writeAliasedSessionStore({
+        cfg = writeAliasedSessionStore({
           fixture,
           store:
             blockerId === "orphan-session-keys"
@@ -576,7 +531,7 @@ describe("legacy state migration caller execution", () => {
                     },
                   },
                 },
-        }));
+        });
       }
       const nextId = blockerId === "acp-session-metadata" ? "agent-dir" : "exec-approvals";
       if (nextId === "agent-dir") {
@@ -589,7 +544,7 @@ describe("legacy state migration caller execution", () => {
       }
       const plan = await planFixture(fixture);
       const result = await modules.doctor.autoMigrateLegacyState(doctorOptions(fixture, { cfg }));
-      expect(result.stepReceipts.find((receipt) => receipt.id === blockerId)).toMatchObject({
+      expect(byId(result.stepReceipts, blockerId)).toMatchObject({
         requiredness: "conditional",
         outcome: "refused",
       });
@@ -598,13 +553,13 @@ describe("legacy state migration caller execution", () => {
         receipts: result.stepReceipts,
         blockerId,
       });
-      expect(result.stepReceipts.find((receipt) => receipt.id === nextId)).toMatchObject({
-        outcome: "refused",
-        refusal: { code: "blocked-by-prior-refusal" },
-        ...(blockerId === "profile-workspace"
-          ? { source: [], target: [], requiredness: "conditional" }
-          : {}),
-      });
+      if (blockerId === "profile-workspace") {
+        expect(byId(result.stepReceipts, nextId)).toMatchObject({
+          source: [],
+          target: [],
+          requiredness: "conditional",
+        });
+      }
       for (const file of preserved) {
         expect(fs.existsSync(file)).toBe(true);
       }

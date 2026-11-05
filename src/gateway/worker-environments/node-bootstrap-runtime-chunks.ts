@@ -71,15 +71,27 @@ export async function resolveNodeBootstrapRuntimeChunks(
       continue;
     }
     const source = (await read(file)).toString("utf8");
+    const literalCalls = new Set<string>();
+    const staticImports: string[] = [];
     const fileImports = collectPackageDistImports({
       files: [file],
       includeTypeScript,
       readText: () => source,
+      onLiteralCall: (specifier) => literalCalls.add(specifier),
+      onStaticImport: (specifier) => {
+        staticImports.push(specifier);
+      },
     });
     sourceFacts.set(file, { imports: fileImports });
     const dependencies = new Set(fileImports.map(({ importedPath }) => importedPath));
     const resolveImport = createRequire(path.join(packageRoot, file)).resolve;
-    for (const specifier of collectPackageRootImports(preparePackageDistJavaScript(file, source))) {
+    // Dist inspection deliberately skips nested dependencies; keep their existing
+    // scope-aware fallback. Root bundles use the bounded statement scan instead.
+    const rootImports = /(?:^|\/)node_modules\//u.test(file)
+      ? collectPackageRootImports(preparePackageDistJavaScript(file, source))
+      : new Set([...staticImports, ...literalCalls]);
+    // False positives only retain extra chunks; required-import validation stays exact.
+    for (const specifier of rootImports) {
       if (!specifier.startsWith(".")) {
         continue;
       }

@@ -177,24 +177,37 @@ it("classifies current and legacy space metadata through the group boundary", ()
   expect(isGoogleChatGroupSpace({})).toBe(true);
 });
 describe("outbound session routing", () => {
-  it("classifies API space type SPACE", async () => {
-    const fetchMock = stubResponse(jsonResponse({ name: "spaces/AAA", spaceType: "SPACE" }));
-    const route = await sessionRoute("googlechat:spaces/AAA");
+  it.each([
+    ["googlechat:spaces/AAA", "spaces/AAA", "SPACE", "group", "/spaces/AAA"],
+    [
+      "users/alice",
+      "spaces/DM-AAA",
+      "DIRECT_MESSAGE",
+      "direct",
+      "/spaces:findDirectMessage?name=users%2Falice",
+    ],
+  ] as const)(
+    "classifies %s using one metadata request",
+    async (target, name, spaceType, kind, url) => {
+      const fetchMock = stubResponse(jsonResponse({ name, spaceType }));
+      const route = await sessionRoute(target);
 
-    expect(route).toMatchObject({
-      peer: { kind: "group", id: "spaces/AAA" },
-      chatType: "group",
-      from: "googlechat:spaces/AAA",
-      to: "spaces/AAA",
-    });
-    expect(fetchMock).toHaveBeenCalledWith("https://chat.googleapis.com/v1/spaces/AAA", {
-      method: "GET",
-      headers: {
-        Authorization: "Bearer token",
-        "Content-Type": "application/json",
-      },
-    });
-  });
+      expect(route).toMatchObject({
+        peer: { kind, id: name },
+        chatType: kind,
+        from: `googlechat:${name}`,
+        to: name,
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledWith(`https://chat.googleapis.com/v1${url}`, {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer token",
+          "Content-Type": "application/json",
+        },
+      });
+    },
+  );
 
   it("rejects an unclassified space response", async () => {
     stubResponse(jsonResponse({ name: "spaces/AAA" }));
@@ -270,7 +283,8 @@ describe("downloadGoogleChatMedia", () => {
 
   it("bounds chunked endpoint media downloads at the configured cap", async () => {
     const chunk = Buffer.alloc(1024 * 1024);
-    const totalBytes = 32 * chunk.length;
+    const maxBytes = 20 * chunk.length;
+    const overflowBytes = maxBytes + chunk.length;
     let bytesSent = 0;
     let responseClosed = false;
     const closed = Promise.withResolvers<void>();
@@ -286,18 +300,14 @@ describe("downloadGoogleChatMedia", () => {
           if (responseClosed) {
             return;
           }
-          if (bytesSent >= totalBytes) {
-            res.end();
-            return;
+          while (bytesSent < overflowBytes) {
+            bytesSent += chunk.byteLength;
+            if (!res.write(chunk)) {
+              res.once("drain", writeNext);
+              return;
+            }
           }
-          bytesSent += chunk.byteLength;
-          const canContinue = res.write(chunk);
-          const scheduleNext = () => setTimeout(writeNext, 1);
-          if (canContinue) {
-            scheduleNext();
-          } else {
-            res.once("drain", scheduleNext);
-          }
+          // No EOF: only the reader's overflow cancellation may close this response.
         };
         writeNext();
       },
@@ -306,7 +316,7 @@ describe("downloadGoogleChatMedia", () => {
           response: await fetch(`${baseUrl}/media`),
           release,
         }));
-        await expect(download(20 * 1024 * 1024)).rejects.toThrow(
+        await expect(download(maxBytes)).rejects.toThrow(
           "Google Chat media exceeds max bytes (20971520)",
         );
         await closed.promise;
@@ -314,7 +324,6 @@ describe("downloadGoogleChatMedia", () => {
     );
     expect(release).toHaveBeenCalledOnce();
     expect(responseClosed).toBe(true);
-    expect(bytesSent).toBeLessThan(totalBytes);
   });
 });
 

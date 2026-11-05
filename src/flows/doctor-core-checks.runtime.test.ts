@@ -27,13 +27,6 @@ const mocks = vi.hoisted(() => {
     metadataScopes: [] as AsyncDisposable[],
   };
   const replacements = {
-    "../agents/model-catalog.js": {
-      findModelInCatalog: (
-        catalog: Array<{ provider?: string; id?: string }>,
-        provider: string,
-        modelId: string,
-      ) => catalog.find((entry) => entry.provider === provider && entry.id === modelId),
-    },
     "../agents/prepared-model-catalog.js": {
       loadProviderScopedThinkingCatalog: vi.fn(async () => []),
       readPreparedModelCatalog: handles.catalog,
@@ -59,12 +52,24 @@ const mocks = vi.hoisted(() => {
       inspectProviderToolSchemasWithPlugin: () => [],
       normalizeProviderToolSchemasWithPlugin: handles.normalizeTools,
     },
-    "../plugins/providers.runtime.js": { resolvePluginProvidersCore: handles.providers },
+    "../plugins/providers.runtime.js": {
+      withPluginProviders: async <T>(
+        _params: unknown,
+        run: (providers: Array<Record<string, unknown>>) => Promise<T>,
+      ) => run(handles.providers()),
+    },
   };
   for (const [module, exports] of Object.entries(replacements)) {
     vi.doMock(module, () => exports);
   }
   const partials = {
+    "../agents/model-catalog-lookup.js": {
+      findModelInCatalog: (
+        catalog: Array<{ provider?: string; id?: string }>,
+        provider: string,
+        modelId: string,
+      ) => catalog.find((entry) => entry.provider === provider && entry.id === modelId),
+    },
     "../agents/model-selection.js": { resolveDefaultModelForAgent: handles.defaultModel },
     "../daemon/runtime-paths.js": { resolveNodeRuntimeInfo: handles.nodeInfo },
   };

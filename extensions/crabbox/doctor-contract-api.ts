@@ -8,12 +8,10 @@ import {
   LEGACY_WARM_LEASE_MAX_ENTRIES,
   projectCrabboxLegacyWarmLeases,
   WARM_IMAGE_MAX_ENTRIES,
+  type WarmAllocationRecord,
+  type WarmImageRecord,
+  type WarmProfileRecord,
 } from "./src/crabbox-worker-warm-image-records.js";
-import type {
-  WarmAllocationRecord,
-  WarmImageRecord,
-  WarmProfileRecord,
-} from "./src/crabbox-worker-warm-image-store.js";
 
 type LegacyWarmImageRecord = Omit<
   WarmImageRecord,

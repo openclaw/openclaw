@@ -83,7 +83,7 @@ it("keeps failed provider outcomes from a fulfilled explicit refresh", async () 
   }));
   expect(await h.load(true)).toMatchObject({
     providerOutcomes: [{ provider: "ollama", status: "unavailable" }],
-    catalogError: "More models could not be discovered.",
+    catalogError: "Couldn’t load models from ollama. Try again.",
     error: null,
   });
   expect(h.cached(true)?.models).toEqual([retained]);

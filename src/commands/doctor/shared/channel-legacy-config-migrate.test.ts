@@ -162,11 +162,10 @@ describe("bundled channel legacy config migrations", () => {
     const config = pluginConfig({ config: { summaryModel: model } });
     const result = applyChannelDoctorCompatibilityMigrations(config);
 
-    expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledOnce();
-    expect(applyPluginDoctorCompatibilityMigrations.mock.calls[0]).toStrictEqual([
-      expect.any(Object),
-      { config, pluginIds: ["lossless-claw"], historicalWebhookListeners: undefined },
-    ]);
+    expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledExactlyOnceWith(
+      config,
+      expect.objectContaining({ config, pluginIds: ["lossless-claw"] }),
+    );
     expect(result.changes).toEqual(["Configured plugins.entries.lossless-claw.llm.allowedModels."]);
   });
 });

@@ -83,44 +83,52 @@ function wrapBodyStream(
   };
   const cancel = async (reason: unknown) => await finalize(async () => await reader.cancel(reason));
   const wrappedBody = new ReadableStream<Uint8Array>(
-    {
-      pull(controller) {
-        const signal = params.signal;
-        if (signal && !abortAttached) {
-          abortAttached = true;
-          detachAbort = attachBodyAbort(signal, new WeakRef(controller), cancel);
-        }
-        if (finalized) {
-          return undefined;
-        }
-        const onError = async (error: unknown) => {
-          if (finalized) {
-            return;
-          }
-          // The SDK response contract exposes release failures; guarded streams
-          // report the source failure immediately and release resources best-effort.
-          if (errorSource === "release") {
-            await finalize();
-          }
-          controller.error(error);
-          await finalize();
-        };
-        return reader.read().then((chunk) => {
-          try {
-            if (chunk.done) {
-              controller.close();
-              return finalize().catch(onError);
+    // Keep controller-owning continuations out of the finalizer's closure scope.
+    (() => {
+      let onError: (error: unknown) => Promise<void>;
+      let onChunk: (chunk: ReadableStreamReadResult<Uint8Array>) => Promise<void> | undefined;
+      return {
+        start(controller: ReadableStreamDefaultController<Uint8Array>) {
+          onError = async (error: unknown) => {
+            if (finalized) {
+              return;
             }
-            params.refreshTimeout?.();
-            controller.enqueue(chunk.value);
-            return undefined;
-          } catch (error) {
-            return onError(error);
+            // The SDK response contract exposes release failures; guarded streams
+            // report the source failure immediately and release resources best-effort.
+            if (errorSource === "release") {
+              await finalize();
+            }
+            controller.error(error);
+            await finalize();
+          };
+          onChunk = (chunk) => {
+            try {
+              if (chunk.done) {
+                controller.close();
+                return finalize().catch(onError);
+              }
+              params.refreshTimeout?.();
+              controller.enqueue(chunk.value);
+              return undefined;
+            } catch (error) {
+              return onError(error);
+            }
+          };
+        },
+        pull(controller: ReadableStreamDefaultController<Uint8Array>) {
+          const signal = params.signal;
+          if (signal && !abortAttached) {
+            abortAttached = true;
+            detachAbort = attachBodyAbort(signal, new WeakRef(controller), cancel);
           }
-        }, onError);
-      },
-      cancel,
-    },
+          if (finalized) {
+            return undefined;
+          }
+          return reader.read().then(onChunk, onError);
+        },
+        cancel,
+      };
+    })(),
     params.signal ? { highWaterMark: 0 } : undefined,
   );
   guardedBodyCleanupRegistry.register(wrappedBody, { finalize }, cleanupRegistrationToken);

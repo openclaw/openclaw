@@ -113,7 +113,7 @@ async function recoverStartup(
   await page.reload();
   await expect.poll(failure.documentCount).toBe(1);
   await expect.poll(() => documentProbes).toBeGreaterThan(0);
-  const alert = pane.getByRole("alert").filter({ hasText: "startup needs attention" });
+  const alert = pane.getByRole("alert").filter({ hasText: "Couldn’t start this session" });
   await button(alert, "Retry").waitFor();
   const readStartup = () =>
     evaluateControlUiContext(
@@ -223,7 +223,8 @@ async function recoverStartup(
     // blocks document replacement. Manual reload must still stop at the guard.
     const probesBeforeManualReload = documentProbes;
     await reload.click();
-    const toast = page.locator(".app-toast__message");
+    // Two-sentence copy renders as a title plus description; read both.
+    const toast = page.locator(".app-toast__body");
     await expect.poll(() => toast.textContent()).toContain(warning);
 
     expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
@@ -257,7 +258,18 @@ async function recoverStartup(
     await button(alert, "Retry").click();
     documentReachable = true;
   }
-  expect(await gateway.waitForRequest("chat.send")).toMatchObject({
+  const initialSend = await gateway.waitForRequest("chat.send").catch(async (cause: unknown) => {
+    const requestCount = (await gateway.getRequests("chat.send")).length;
+    const recoveryPresent = await page.evaluate(
+      (key) => sessionStorage.getItem(key) !== null,
+      storageKey,
+    );
+    throw new Error(
+      `Initial saved replay did not send (requests=${requestCount}, recoveryPresent=${recoveryPresent})`,
+      { cause },
+    );
+  });
+  expect(initialSend).toMatchObject({
     params: {
       sessionKey,
       sessionId,
@@ -281,11 +293,25 @@ async function recoverStartup(
     runId: messageId,
     text: "Initial turn finished.",
   });
-  expect(await gateway.waitForRequest("chat.send", { after: 1 })).toMatchObject({
+  const queuedSend = await gateway
+    .waitForRequest("chat.send", { after: 1 })
+    .catch(async (cause: unknown) => {
+      const requestCount = (await gateway.getRequests("chat.send")).length;
+      const recoveryPresent = await page.evaluate(
+        (key) => sessionStorage.getItem(key) !== null,
+        storageKey,
+      );
+      throw new Error(
+        `Queued follow-up did not send (requests=${requestCount}, recoveryPresent=${recoveryPresent})`,
+        { cause },
+      );
+    });
+  expect(queuedSend).toMatchObject({
     params: { sessionKey, message: "later ordinary turn" },
   });
   expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
   expect(await gateway.getRequests("chat.send")).toHaveLength(2);
+  expect(await gateway.getSocketCount()).toBe(1);
   expect(failure.documentCount()).toBe(2);
   if (incognito) {
     expect(

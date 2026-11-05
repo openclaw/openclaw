@@ -7,10 +7,15 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { GatewayHelloOk } from "../api/gateway.ts";
+import { i18n } from "../i18n/lib/translate.ts";
 import { goalOperationScopePrefix } from "../lib/chat/goal-operation-storage.ts";
-import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import {
+  readAvatarGatewayContext,
+  setAvatarGatewayOrigin,
+} from "../lib/identity-avatar-context.ts";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
+import { writeSnapshotFixture } from "../pages/chat/session-snapshot.test-support.ts";
 import type { BootRecord } from "./boot-record.ts";
 import {
   createGatewayEvent,
@@ -77,6 +82,19 @@ describe("createApplicationGateway authentication diagnostics", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("localizes disconnections without translating the Gateway close reason", () => {
+    gateway.connect();
+    accept();
+    const translate = vi.spyOn(i18n, "t").mockReturnValue("localized disconnect");
+    current().testOptions.onClose?.({
+      code: 4001,
+      reason: "external Gateway reason",
+      willRetry: false,
+    });
+    expect(gateway.snapshot.lastError).toBe("localized disconnect external Gateway reason");
+    expect(translate).toHaveBeenCalledWith("connection.interrupted", { code: "4001" });
   });
 
   it("rejects a different development target before accepting its credentials or opening a client", () => {
@@ -402,7 +420,9 @@ describe("createApplicationGateway authentication diagnostics", () => {
           accept();
         }
         Object.defineProperty(current(), "recoveryScope", { value: recoveryScope });
+        Object.defineProperty(current(), "recoveryScopeReady", { value: true });
         current().testOptions.onRecoveryScopeChange?.();
+        expect(readAvatarGatewayContext().storageScope).toBe(recoveryScope || undefined);
         expect(sessionStorage.getItem(ownKey)).toBe(recoveryScope ? request : null);
         expect(sessionStorage.getItem(oldKey)).toBeNull();
         expect(sessionStorage.getItem(otherGatewayKey)).toBe(request);
@@ -510,13 +530,13 @@ describe("createApplicationGateway authentication diagnostics", () => {
     vi.stubGlobal("location", new URL("http://control.test/"));
     const sessionKey = 'scope:["ws://control.test","account-a"]\u0000agent:main:credential-scope';
     const snapshots = new SessionSnapshotStore();
-    snapshots.write(sessionKey, {
+    writeSnapshotFixture(snapshots, sessionKey, {
       messages: ["private transcript"],
       pagination: { hasMore: false, completeSnapshot: true },
       sessionId: "credential-session",
     });
     const peerKey = 'scope:["ws://control.test","account-b"]\u0000agent:main:peer';
-    snapshots.write(peerKey, {
+    writeSnapshotFixture(snapshots, peerKey, {
       messages: ["peer transcript"],
       sessionId: "peer-session",
       pagination: { hasMore: false, completeSnapshot: true },

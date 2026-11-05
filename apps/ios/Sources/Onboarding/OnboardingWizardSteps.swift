@@ -228,11 +228,15 @@ struct OnboardingIntroStep: View {
     let onContinue: () -> Void
 
     var body: some View {
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
+
         OnboardingActivationCanvas {
             VStack(alignment: .leading, spacing: 0) {
                 OnboardingHeroHeader(
                     title: "OpenClaw",
-                    subtitle: "Your agent, in your pocket. Pair this iPhone with your gateway to get started.")
+                    subtitle: isPad
+                        ? "Your agent, in your pocket. Pair this iPad with your gateway to get started."
+                        : "Your agent, in your pocket. Pair this iPhone with your gateway to get started.")
                     .padding(.top, 18)
 
                 OnboardingIntroPanel {
@@ -242,7 +246,9 @@ struct OnboardingIntroStep: View {
                             title: "Your agent runs on your own computer")
                         OnboardingSafetyRow(
                             symbol: "qrcode.viewfinder",
-                            title: "Pair this iPhone by scanning a setup code")
+                            title: isPad
+                                ? "Pair this iPad by scanning a setup code"
+                                : "Pair this iPhone by scanning a setup code")
                         OnboardingSafetyRow(
                             symbol: "message.fill",
                             title: "Chat, talk, and approve actions from anywhere")

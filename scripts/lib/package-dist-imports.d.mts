@@ -20,4 +20,6 @@ export function collectPackageDistImports(params: {
   packageJsons?: ReadonlyMap<string, string>;
   readText: (relativePath: string) => string;
   includeTypeScript?: boolean;
+  onStaticImport?: (specifier: string) => void;
+  onLiteralCall?: (specifier: string) => void;
 }): PackageDistImport[];

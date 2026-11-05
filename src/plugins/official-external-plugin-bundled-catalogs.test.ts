@@ -1,22 +1,15 @@
 import { expect, it, vi } from "vitest";
+import { configMayRequireStartupPluginConvergence } from "../commands/doctor/shared/startup-plugin-convergence-plan.js";
 import {
   getOfficialExternalPluginCatalogEntry as entryFor,
   getOfficialExternalPluginCatalogEntryForPackage as packageEntry,
   isOfficialExternalPluginId as isOfficial,
   listOfficialExternalChannelCatalogEntries,
-  listOfficialExternalPluginCatalogEntries,
   listOfficialExternalProviderCatalogEntries,
   resolveOfficialExternalProviderContractPluginIds as contractPlugins,
   resolveOfficialExternalProviderPluginIds as providerPlugins,
 } from "./official-external-plugin-catalog.js";
 import type { OfficialExternalPluginCatalogEntry } from "./official-external-plugin-catalog.types.js";
-import {
-  hasOfficialExternalChannelTarget as channelTarget,
-  hasOfficialExternalContractTarget as hasContract,
-  hasOfficialExternalProviderTarget as providerTarget,
-  hasOfficialExternalWebContractEnvTarget as webEnvTarget,
-  hasOfficialExternalWebSearchTarget as webTarget,
-} from "./official-external-plugin-targets.js";
 
 const embedding = "embeddingProviders";
 const fixtures = vi.hoisted(() => {
@@ -108,26 +101,28 @@ it("keeps exact lookup identities separate from lowercase canonical and provider
 });
 
 it.each([
-  ["plugin", listOfficialExternalPluginCatalogEntries],
   ["channel", listOfficialExternalChannelCatalogEntries],
   ["provider", listOfficialExternalProviderCatalogEntries],
-] as const)("returns independent %s arrays with shared row identities", (_kind, list) => {
-  const first = list();
-  expect(first).not.toBe(list());
-  expect(first[0]).toBe(fixtures.winner);
-  first.length = 0;
-  expect(list()[0]).toBe(fixtures.winner);
+] as const)("filters admitted %s entries", (_kind, list) => {
+  expect(list()).toEqual([fixtures.winner]);
 });
 
 it.each(["shadow", "rejected"])("keeps repair targets from excluded %s rows", (prefix) => {
   const env = (kind: string) => ({ [`${prefix}_${kind}_KEY`]: "key" });
   expect(entryFor(`${prefix}-model`)).toBeUndefined();
-  expect([
-    providerTarget({ providerIds: [` ${prefix.toUpperCase()}-MODEL `], env: {} }),
-    providerTarget({ providerIds: [], env: env("MODEL") }),
-    hasContract({ contract: embedding, providerIds: [`${prefix}-embedding`] }),
-    channelTarget({ config: {}, env: env("CHANNEL") }),
-    webEnvTarget({ env: env("WEB") }),
-    webTarget({ providerId: `${prefix}-web`, env: {} }),
-  ]).toEqual([true, true, true, true, true, true]);
+  expect(
+    [
+      {
+        config: {
+          agents: { defaults: { model: { primary: ` ${prefix.toUpperCase()}-MODEL /fixture` } } },
+        },
+        env: {},
+      },
+      { config: {}, env: env("MODEL") },
+      { config: { memory: { search: { provider: `${prefix}-embedding` } } }, env: {} },
+      { config: {}, env: env("CHANNEL") },
+      { config: { tools: { web: { search: { enabled: false } } } }, env: env("WEB") },
+      { config: { tools: { web: { search: { provider: `${prefix}-web` } } } }, env: {} },
+    ].map(configMayRequireStartupPluginConvergence),
+  ).toEqual([true, true, true, true, true, true]);
 });

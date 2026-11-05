@@ -16,12 +16,8 @@ function keydown(init: KeyboardEventInit) {
   return new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
 }
 
-it.each([
-  { open: false, via: "direct" },
-  { open: true, via: "direct" },
-  { open: true, via: "shortcut" },
-  { open: true, via: "new-session" },
-])("restores dismissal focus without stealing destination focus ($open, $via)", ({ open, via }) => {
+it.each(["closed", "direct", "shortcut", "new-session"])("restores drawer focus via %s", (via) => {
+  const open = via !== "closed";
   const frames: FrameRequestCallback[] = [];
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
   const shell = createShellOwner();
@@ -82,14 +78,13 @@ it("wraps Tab across composed drawer controls using the modal focus order", () =
   }
 });
 it("selects live registered drawer toggles in visible DOM order", () => {
-  const root = document.createElement("main");
+  const root = document.body.appendChild(document.createElement("main"));
   const elements = new RouteElements();
   root.addEventListener("openclaw-route-element", (event) =>
     elements.register(event as RouteElementEvent),
   );
   const topbar = root.appendChild(document.createElement("button"));
   const chat = root.appendChild(document.createElement("button"));
-  document.body.append(root);
   let topbarVisible = true;
   Object.defineProperty(topbar, "checkVisibility", { value: () => topbarVisible });
   Object.defineProperty(chat, "checkVisibility", { value: () => true });

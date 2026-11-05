@@ -91,6 +91,9 @@ export function createPositionRail(props: PositionRailParams) {
       return;
     }
     layoutFrame = requestAnimationFrame(() => {
+      if (observationPending) {
+        observeLayout();
+      }
       layoutFrame = undefined;
       syncLayout();
     });
@@ -102,7 +105,7 @@ export function createPositionRail(props: PositionRailParams) {
     if (!scroller) {
       return;
     }
-    // Observer and scroll delivery supply clean geometry; the frame only publishes it.
+    // Native observers supply geometry; offset-only changes read it in the queued frame.
     const height = scroller.clientHeight;
     viewportVisible = height > 0;
     if (!viewportVisible) {
@@ -146,9 +149,8 @@ export function createPositionRail(props: PositionRailParams) {
   function requestObservation() {
     if (scrollElement && resizeObserver && !observationPending) {
       observationPending = true;
-      // Same-size content and programmatic offsets still need a clean measurement.
-      resizeObserver.unobserve(scrollElement);
-      resizeObserver.observe(scrollElement);
+      // Re-observing during a row resize creates a shallower delivery and a WebKit loop error.
+      scheduleLayout();
     }
   }
 
@@ -310,10 +312,37 @@ export function createPositionRail(props: PositionRailParams) {
         { root, threshold: [0, Number.EPSILON, 1] },
       );
       // Bubble refs publish virtualization changes; token paints keep their targets.
-      stopMessageElements = session?.messageElements.subscribe(() => {
-        targetsChanged = true;
-        scheduleLayout();
-      });
+      stopMessageElements = session?.messageElements.subscribe(
+        () => {
+          targetsChanged = true;
+          scheduleLayout();
+        },
+        () => {
+          syncVisibilityTargets();
+          const box = root.getBoundingClientRect();
+          const left = box.left + root.clientLeft;
+          const top = box.top + root.clientTop;
+          // Client dimensions round; keep the fractional scrollport edges.
+          const right = box.right - (root.offsetWidth - root.clientWidth - root.clientLeft);
+          const bottom = box.bottom - (root.offsetHeight - root.clientHeight - root.clientTop);
+          const offset = root.scrollTop;
+          const messages = [...observedMessages].map(
+            ([element, message]) => [message, element.getBoundingClientRect()] as const,
+          );
+          return () => {
+            const delta = root.scrollTop - offset;
+            for (const [message, rect] of messages) {
+              const width = Math.min(rect.right, right) - Math.max(rect.left, left);
+              const height =
+                Math.min(rect.bottom - delta, bottom) - Math.max(rect.top - delta, top);
+              message.visible =
+                width >= 0 && height >= 0 && (rect.width * rect.height === 0 || width * height > 0);
+            }
+            observeLayout();
+            syncLayout();
+          };
+        },
+      );
       targetsChanged = true;
     }
     if (!targetsChanged) {
@@ -495,6 +524,7 @@ export function createPositionRail(props: PositionRailParams) {
       observationPending = true;
       resizeObserver = new ResizeObserver(observeLayout);
       resizeObserver.observe(scrollElement);
+      onSettled(syncVisibilityTargets);
       scheduleLayout();
     }
   };

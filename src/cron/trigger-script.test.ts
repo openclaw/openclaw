@@ -23,7 +23,7 @@ function completed(value: unknown, output: unknown[] = []): CodeModeHeadlessResu
 function createPreparedRuntime(config: OpenClawConfig, tools?: AnyAgentTool[]) {
   const context = { config, agentId: "main", sessionKey: "cron:test:trigger" };
   const tool = wrapToolWithBeforeToolCallHook(makeTool("probe", vi.fn()), context);
-  return { createTools: async () => tools ?? [tool], context };
+  return { createTools: async () => tools ?? [tool], context, scheduledToolPolicy: undefined };
 }
 
 function makeTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool {
@@ -61,6 +61,33 @@ function createEvaluator(
 
 const INPUT = { jobId: "probe", script: "return result", state: null };
 const INTERNAL_ERROR = expect.objectContaining({ kind: "error", code: "internal_error" });
+
+it("snapshots a cron tool result without temporary object-value arrays", async () => {
+  const details = {
+    rows: Array.from({ length: 40 }, (_, snapshotRow) => ({ snapshotRow, state: "ready" })),
+  };
+  const probe = makeTool("snapshot_probe", async () => jsonResult(details));
+  const { evaluate } = createEvaluator(runCodeModeScriptHeadless, {
+    prepareRuntime: async ({ runtimeConfig }) => createPreparedRuntime(runtimeConfig, [probe]),
+  });
+  const objectValues = Object.values;
+  let snapshotArraySlots = 0;
+  const values = vi.spyOn(Object, "values").mockImplementation((object) => {
+    const members = objectValues(object);
+    if (Object.hasOwn(object, "snapshotRow")) {
+      snapshotArraySlots += members.length;
+    }
+    return members;
+  });
+  try {
+    await expect(
+      evaluate({ script: "return { fire: true, state: await snapshot_probe({}) };" }),
+    ).resolves.toMatchObject({ kind: "evaluated", fire: true, state: details });
+    expect(snapshotArraySlots).toBe(0);
+  } finally {
+    values.mockRestore();
+  }
+});
 
 function execEvaluator(host: "auto" | "node" | "gateway", node?: string) {
   return createCronScriptRuntime({
@@ -218,6 +245,28 @@ it("keeps an uncanonicalized alias-name cap fail-closed for exec", async () => {
   expect(result.kind === "error" ? result.error : "").toContain("exec is not defined");
 });
 
+it("projects typed exec details into trigger scripts without content wrappers", async () => {
+  const evaluate = execEvaluator("gateway");
+
+  await expect(
+    evaluate({
+      ...INPUT,
+      toolsAllow: ["exec"],
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+      script: `
+        const result = await exec({ command: "printf watcher-ready" });
+        return {
+          fire:
+            result.status === "completed" &&
+            result.exitCode === 0 &&
+            result.aggregated === "watcher-ready" &&
+            result.content === undefined,
+        };
+      `,
+    }),
+  ).resolves.toEqual({ kind: "evaluated", fire: true });
+});
+
 it.each([
   [
     "prefers the return value",
@@ -320,14 +369,17 @@ it("reuses a preparation that outlives its first evaluation's deadline", async (
 it("keeps preparation past the trigger deadline and evicts it at its own limit", async () => {
   vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
   const signals: AbortSignal[] = [];
+  const release = createDeferred();
+  const dispose = vi.fn();
   const { evaluate, prepareRuntime } = createEvaluator(undefined, {
     prepareRuntime: async (params) => {
       if (params.signal) {
         signals.push(params.signal);
       }
       if (signals.length === 1) {
-        // Ignores its signal, like a synchronous plugin load that never yields.
-        await new Promise(() => {});
+        // A non-cooperative preparation can finish after its cache entry expires.
+        await release.promise;
+        return { ...createPreparedRuntime(params.runtimeConfig), [Symbol.dispose]: dispose };
       }
       return createPreparedRuntime(params.runtimeConfig);
     },
@@ -342,7 +394,11 @@ it("keeps preparation past the trigger deadline and evicts it at its own limit",
     expect(signals[0]?.aborted).toBe(true);
     await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", fire: false });
     expect(prepareRuntime).toHaveBeenCalledTimes(2);
+    release.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dispose).toHaveBeenCalledOnce();
   } finally {
+    release.resolve();
     vi.useRealTimers();
   }
 });

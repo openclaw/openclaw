@@ -45,6 +45,7 @@ import {
 } from "./lib/bun-standalone-plugins.mjs";
 import {
   createStandaloneExternalModuleBootstrap,
+  createStandaloneModuleResolverBootstrap,
   createStandaloneRequireAdapter,
 } from "./lib/bun-standalone-require.mjs";
 import {
@@ -487,27 +488,7 @@ globalThis.__openclawStandaloneImport = (parent, specifier, options) => {
 };
 ${requireAdapter.bootstrap}
 ${createStandaloneExternalModuleBootstrap({ source: Boolean(sourceGraph) })}
-let resolving = false;
-if (isMainThread) Bun.plugin({ name: "openclaw-embedded-modules", setup(build) {
-  // Bun checks the filter against the compiled entry before invoking callbacks.
-  const filter = new RegExp("^(?!" + RegExp.escape(Bun.main) + "(?![\\\\s\\\\S]))");
-  build.onResolve({ filter }, ({path: specifier, importer, kind}) => {
-    if (kind === "require-resolve" || resolving || specifier.startsWith("node:") || specifier.startsWith("bun:")) return;
-    let target;
-    try {
-      resolving = true;
-      target = globalThis.__openclawStandaloneNativeResolve(importer || path.join(root, "openclaw.mjs"), specifier)
-        ?? (specifier.startsWith("file:") ? fileURLToPath(specifier)
-        : path.isAbsolute(specifier) ? specifier
-        : (() => {
-          try { return Bun.resolveSync(specifier, importer ? path.dirname(importer) : root); }
-          catch { return Bun.resolveSync(specifier, root); }
-        })());
-    } catch { return; } finally { resolving = false; }
-    const entry = embedded(target);
-    if (entry) return globalThis.__openclawStandaloneExternalModuleResolution(entry);
-  });
-}});
+${createStandaloneModuleResolverBootstrap()}
 if (process.env.OPENCLAW_STANDALONE_TRACE_PRELOAD) {
   await import(process.env.OPENCLAW_STANDALONE_TRACE_PRELOAD);
 }

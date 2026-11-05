@@ -65,6 +65,7 @@ function cliComplete(overrides: Parameters<typeof complete>[0] = {}) {
 const cliOwner = { kind: "cli", id: "claude-cli" };
 const runtimeLease = () => ({
   snapshot: preparedModelRuntime,
+  run: <T>(run: () => T): T => run(),
   [Symbol.asyncDispose]: releaseRuntimeLease,
 });
 const admittedFixture = () => ({
@@ -233,7 +234,7 @@ describe("runIsolatedCompletion", () => {
     "rotates quota failure %s within one deadline (%s ms)",
     async (errorMessage, elapsedMs) => {
       prepareQuotaProfiles();
-      const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+      using now = vi.spyOn(performance, "now").mockReturnValue(1_000);
       const dispatch = vi
         .fn()
         .mockImplementationOnce(async () => {
@@ -243,26 +244,22 @@ describe("runIsolatedCompletion", () => {
         .mockResolvedValueOnce(reply("recovered"));
       registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
 
-      try {
-        const completion = complete();
-        if (elapsedMs === 1_000) {
-          await expect(completion).rejects.toThrow("timed out");
-          expect(dispatch).toHaveBeenCalledOnce();
-        } else {
-          await expect(completion).resolves.toMatchObject({ text: "recovered" });
-          expect(dispatch).toHaveBeenCalledTimes(2);
-          expect(
-            dispatch.mock.calls.map(([params]) => params.authorization.plan.forwardedAuthProfileId),
-          ).toEqual(["openai:first", "openai:backup"]);
-          expect(dispatch).toHaveBeenNthCalledWith(
-            2,
-            expect.objectContaining({ timeoutMs: 1_000 - elapsedMs }),
-          );
-        }
-        expect(releaseRuntimeLease).toHaveBeenCalledOnce();
-      } finally {
-        now.mockRestore();
+      const completion = complete();
+      if (elapsedMs === 1_000) {
+        await expect(completion).rejects.toThrow("timed out");
+        expect(dispatch).toHaveBeenCalledOnce();
+      } else {
+        await expect(completion).resolves.toMatchObject({ text: "recovered" });
+        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(
+          dispatch.mock.calls.map(([params]) => params.authorization.plan.forwardedAuthProfileId),
+        ).toEqual(["openai:first", "openai:backup"]);
+        expect(dispatch).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ timeoutMs: 1_000 - elapsedMs }),
+        );
       }
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
     },
   );
 

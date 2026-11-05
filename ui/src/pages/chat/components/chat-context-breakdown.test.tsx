@@ -13,6 +13,7 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import {
@@ -20,7 +21,7 @@ import {
   buildDeferredContextGroups,
 } from "./chat-context-breakdown-model.ts";
 import { ChatContextBreakdown } from "./chat-context-breakdown.tsx";
-import { ChatContextPage } from "./chat-context-page.tsx";
+import { ChatContextPanel } from "./chat-context-panel.tsx";
 
 const workspaceFile = (path: string, chars = 16000) => ({
   name: "AGENTS.md",
@@ -48,7 +49,7 @@ const usage = (key: string, sessionId = key, contextWeight = report) => ({
 type ContextGateway = ReturnType<typeof createApplicationGateway>["gateway"];
 function mountPage(gateway: ContextGateway, key = "first", empty = false, compact = false) {
   return mountSolid(() => (
-    <ChatContextPage
+    <ChatContextPanel
       presented
       details={{
         currentAgentId: "main",
@@ -102,7 +103,12 @@ it("keeps total usage when session replacement rejects a report from another inc
     .mockResolvedValue(usage("second", "retired"));
   const { gateway, publish } = createApplicationGateway();
   const client = createTestGatewayClient(request);
-  publish({ ...gateway.snapshot, phase: "connected", client });
+  publish({
+    ...gateway.snapshot,
+    phase: "connected",
+    client,
+    hello: gatewayHelloForMethods(["sessions.usage"]),
+  });
   const [session, setSession] = createSignal<GatewaySessionRow>({
     key: "agent:main:first",
     kind: "direct",
@@ -143,13 +149,18 @@ it("offers retry after a rejected read and keeps loading until recovery settles"
     request.mock.calls.length === 1 ? first.promise : retry.promise,
   );
   const { gateway, publish } = createApplicationGateway();
-  publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
+  publish({
+    ...gateway.snapshot,
+    phase: "connected",
+    client: createTestGatewayClient(request),
+    hello: gatewayHelloForMethods(["sessions.usage"]),
+  });
   const view = mountPage(gateway, "current");
   await expect.poll(() => request.mock.calls.length).toBe(1);
   first.reject(new Error("Context read failed"));
   await expect
     .poll(() => view.container.textContent)
-    .toContain("Couldn't load the context breakdown");
+    .toContain("Couldn’t load the context breakdown. Try again.");
   view.getByRole("button", { name: "Retry" }).click();
   await expect.poll(() => request.mock.calls.length).toBe(2);
   expect(view.container.querySelector(".chat-context-page--loading")).not.toBeNull();
@@ -211,7 +222,12 @@ it("reports only the current manual refresh failure after reconnect", async () =
     .mockRejectedValue(denied);
   const { gateway, publish } = createApplicationGateway();
   const client = createTestGatewayClient(request);
-  publish({ ...gateway.snapshot, phase: "connected", client });
+  publish({
+    ...gateway.snapshot,
+    phase: "connected",
+    client,
+    hello: gatewayHelloForMethods(["sessions.usage"]),
+  });
   const notify = vi.spyOn(toast, "showToast").mockReturnValue(true);
   const view = mountPage(gateway);
   try {
@@ -239,7 +255,13 @@ it("reports only the current manual refresh failure after reconnect", async () =
 
 function mountContextPage(
   value: SessionSystemPromptReport = report,
-  options: { empty?: boolean; offline?: boolean; missing?: boolean; failure?: boolean } = {},
+  options: {
+    empty?: boolean;
+    offline?: boolean;
+    missing?: boolean;
+    failure?: boolean;
+    restricted?: boolean;
+  } = {},
 ) {
   const request = createGatewayRequestMock().mockResolvedValue({
     sessions: options.missing ? [] : usage("first", "first", value).sessions,
@@ -249,11 +271,19 @@ function mountContextPage(
   }
   const { gateway, publish } = createApplicationGateway();
   if (!options.offline) {
-    publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
+    publish({
+      ...gateway.snapshot,
+      phase: "connected",
+      client: createTestGatewayClient(request),
+      hello: gatewayHelloForMethods(
+        ["sessions.usage"],
+        options.restricted ? ["operator.sessions.read"] : undefined,
+      ),
+    });
   }
   const view = mountPage(gateway, "first", options.empty, true);
   flush();
-  const requested = !options.empty && !options.offline;
+  const requested = !options.empty && !options.offline && !options.restricted;
   expect(request).toHaveBeenCalledTimes(requested ? 1 : 0);
   const ready = requested ? refresh(gateway) : Promise.resolve();
   return { ...view, request, gateway, ready };
@@ -379,9 +409,18 @@ it.each([20, 21])(
 
 it.each([
   { options: { empty: true }, message: "Send a message to capture context usage.", retry: false },
-  { options: { offline: true }, message: "Connect to the Gateway", retry: false },
+  { options: { offline: true }, message: "Reconnect to load the context breakdown.", retry: false },
   { options: { missing: true }, message: "No matching context report", retry: false },
-  { options: { failure: true }, message: "Couldn't load the context breakdown", retry: true },
+  {
+    options: { failure: true },
+    message: "Couldn’t load the context breakdown. Try again.",
+    retry: true,
+  },
+  {
+    options: { restricted: true },
+    message: "Couldn’t view the context breakdown. Ask an admin to grant read access.",
+    retry: false,
+  },
 ])("shows only the standard empty state for $message", async ({ options, message, retry }) => {
   const view = mountContextPage(report, options);
   try {

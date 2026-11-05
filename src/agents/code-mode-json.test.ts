@@ -25,7 +25,9 @@ describe("Code Mode JSON normalization", () => {
       state.append(captureCodeModeOutput([{ type: "text", text }], 65_536));
     }
     const stringify = JSON.stringify;
+    const parse = JSON.parse;
     let serializedChars = 0;
+    let parsedChars = 0;
     let serializations = 0;
     const stringSpy = vi.spyOn(globalThis, "String");
     const spy = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
@@ -33,6 +35,10 @@ describe("Code Mode JSON normalization", () => {
       const json = stringify(...args);
       serializedChars += json?.length ?? 0;
       return json;
+    });
+    const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((...args) => {
+      parsedChars += args[0].length;
+      return parse(...args);
     });
     let result;
     let stringConversions: number;
@@ -45,11 +51,14 @@ describe("Code Mode JSON normalization", () => {
       stringConversions = stringSpy.mock.calls.length;
       stringSpy.mockRestore();
       spy.mockRestore();
+      parseSpy.mockRestore();
     }
     expect(JSON.stringify(result)).toHaveLength(16_000);
     // Trials measure captured JSON and changed prefix intervals, not whole envelopes.
     expect(serializedChars).toBeLessThan(210_000);
     expect(serializations).toBeLessThanOrEqual(5);
+    // Rejected complete channels must not be decoded before selecting their bounded prefix.
+    expect(parsedChars).toBeLessThan(16_000);
     // Decimal marker widths must not allocate one string per prefix byte.
     expect(stringConversions).toBeLessThan(100);
   });

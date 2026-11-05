@@ -164,7 +164,12 @@ describe("repairProviderWrappedModelOverride", () => {
     model: "anthropic/claude-haiku-4.5",
     contextTokens: 200_000,
   };
-  const defaultSelection = { defaultProvider: "openai", defaultModel: "gpt-5.4" };
+  const unknownRoute = () => false;
+  const defaultSelection = {
+    defaultProvider: "openai",
+    defaultModel: "gpt-5.4",
+    isKnownRoute: unknownRoute,
+  };
 
   it("rejects provider-wrapped repair for locked sessions without mutating them", () => {
     const entry = wrappedEntry({ ...runtime, modelSelectionLocked: true });
@@ -179,7 +184,11 @@ describe("repairProviderWrappedModelOverride", () => {
   it.each([false, true])("repairs a wrapped override (default=%s)", (isDefault) => {
     const entry = wrappedEntry(isDefault ? {} : runtime);
     const selection = isDefault
-      ? { defaultProvider: runtime.modelProvider, defaultModel: runtime.model }
+      ? {
+          defaultProvider: runtime.modelProvider,
+          defaultModel: runtime.model,
+          isKnownRoute: unknownRoute,
+        }
       : defaultSelection;
     expect(repairProviderWrappedModelOverride({ entry, ...selection }).updated).toBe(true);
     if (isDefault) {
@@ -193,6 +202,21 @@ describe("repairProviderWrappedModelOverride", () => {
       expectCleared(entry, "modelProvider", "model", "contextTokens");
     }
     expect(entry.updatedAt).toBeGreaterThan(before);
+  });
+
+  it("keeps a cataloged direct route that resembles aligned runtime fields", () => {
+    const entry = wrappedEntry(runtime);
+    const unchanged = { ...entry };
+
+    const result = repairProviderWrappedModelOverride({
+      entry,
+      defaultProvider: "openai",
+      defaultModel: "anthropic/claude-haiku-4.5",
+      isKnownRoute: (ref) => ref.provider === "anthropic" && ref.model === "claude-haiku-4.5",
+    });
+
+    expect(result.updated).toBe(false);
+    expect(entry).toEqual(unchanged);
   });
 });
 

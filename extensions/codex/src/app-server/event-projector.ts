@@ -31,6 +31,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { asCodexToolArguments } from "./tool-progress-normalization.js";
 
 const optedOutNotificationMethods = new Set<string>(CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS);
 
@@ -103,6 +104,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       turnId: this.turnId,
       upstreamUserText: this.options.upstreamUserText,
       completedItemIds: this.completedItemIds,
+      reasoningMessages: this.reasoningProjection.collectMessages(true),
       assistantProjection: this.assistantProjection,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
     });
@@ -145,13 +147,10 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
   }
 
   async handleNotification(notification: CodexPreparedServerNotification): Promise<void> {
-    if (this.projectionClosed) {
+    if (this.projectionClosed || !isJsonObject(notification.params)) {
       return;
     }
-    const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params) {
-      return;
-    }
+    const params = notification.params;
     if (notification.method === "hook/started" || notification.method === "hook/completed") {
       if (!this.isHookNotificationForCurrentThread(params)) {
         return;
@@ -179,6 +178,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     ) {
       this.eventProjection.flushPendingGuardianWarning();
     }
+    this.diagnostics.recordNotification(notification, params);
     this.nativeToolLifecycleProjector.handleNotification(notification);
     this.assistantProjection.handleNotification(notification.method, params);
 
@@ -337,9 +337,15 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     namespace?: string | null;
     tool: string;
     arguments?: JsonValue;
+    hideFromChannelProgress?: boolean;
   }): void {
     this.toolSearchEvidenceProjection?.recordDynamicToolCall(params);
-    this.toolTranscriptProjection.recordDynamicToolCall(params);
+    this.toolTranscriptProjection.recordToolCall({
+      id: params.callId,
+      name: params.tool,
+      arguments: asCodexToolArguments(params.arguments),
+      hideFromChannelProgress: params.hideFromChannelProgress,
+    });
   }
 
   /** Projects a successful OpenClaw progress_card call through the native plan stream. */
@@ -408,6 +414,12 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
 
   private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
+    await this.settlement.project("media_projection", () =>
+      this.generatedMediaProjection.recordItemIdentity(item),
+    );
+    if (this.projectionClosed) {
+      return;
+    }
     if (item?.type === "agentMessage" && item.text) {
       this.eventProjection.markSafetyBufferingAssistantStarted();
     }
@@ -427,6 +439,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       this.activeCompactionItemIds.add(itemId);
       this.usageProjection.beginCompaction();
     }
+    await this.reasoningProjection.recordItemStarted(item);
     await this.assistantProjection.recordItemStarted(item, itemId);
     if (
       this.projectionClosed ||

@@ -6,6 +6,7 @@ import {
   recordDefaultProactiveJobInDatabase,
 } from "../cron/proactive-job-receipt.js";
 import { saveCronJobsStore, saveCronStore } from "../cron/store.js";
+import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
@@ -75,8 +76,9 @@ function recordDefaults(
   atMs = 1,
 ) {
   runOpenClawStateWriteTransaction(({ db }) => {
+    const storeKey = resolveCronStoreKeyInDatabase(db, service.storePath);
     for (const job of jobs) {
-      recordDefaultProactiveJobInDatabase(db, service.storePath, job.agentId, job.id, atMs);
+      recordDefaultProactiveJobInDatabase(db, storeKey, job.agentId, job.id, atMs);
     }
   });
 }
@@ -223,7 +225,8 @@ describe("Gateway legacy heartbeat projection lifecycle", () => {
 
       await service.cron.stopAndDrain();
       runOpenClawStateWriteTransaction(({ db }) => {
-        recordConvertedProactiveJobInDatabase(db, service.storePath, "main", converted.id);
+        const storeKey = resolveCronStoreKeyInDatabase(db, service.storePath);
+        recordConvertedProactiveJobInDatabase(db, storeKey, "main", converted.id);
       });
       await service.cron.start();
       expect(projectionReads()).toHaveLength(2);

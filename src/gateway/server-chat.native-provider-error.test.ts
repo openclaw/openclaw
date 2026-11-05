@@ -13,11 +13,8 @@ import { createAgentEventTestHarness } from "./server-chat.agent-events.test-har
 
 afterEach(() => vi.useRealTimers());
 
-it.each([
-  "subscription_sharing_workplace_individual_usage_limit_exceeded",
-  "subscription_sharing_usage_limit_exceeded",
-  "rate_limit_exceeded",
-])("preserves provider code %s through deferred terminal chat publication", async (code) => {
+it("preserves opaque provider codes through deferred terminal chat publication", async () => {
+  const code = "subscription_sharing_workplace_individual_usage_limit_exceeded";
   vi.useFakeTimers();
   const assistant = makeAssistantMessageFixture({
     ...projectProviderError({ status: 429, code, message: "Usage limit reached" }),

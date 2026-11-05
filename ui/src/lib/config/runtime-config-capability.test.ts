@@ -911,7 +911,7 @@ describe("runtime config load subscriptions", () => {
     try {
       await expect(runtimeConfig.ensureLoaded()).rejects.toThrow("observer failed");
       unsubscribe();
-      await runtimeConfig.ensureLoaded();
+      await runtimeConfig.refresh();
       expect(request).toHaveBeenCalledTimes(2);
       expect(state.configSnapshot?.hash).toBe("ready");
     } finally {

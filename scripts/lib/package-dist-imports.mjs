@@ -93,22 +93,40 @@ function resolvesCommonJs(importedPath, fileSet, packageJsons) {
   return loadIndex(importedPath);
 }
 
-function appendImportEdges(source, importerPath, imports, sourceType, includeTypeScript) {
+function appendImportEdges(
+  source,
+  importerPath,
+  imports,
+  sourceType,
+  includeTypeScript,
+  onStaticImport,
+  onLiteralCall,
+) {
   function visit(node) {
     // These leaves cannot contain import edges; avoid allocating property lists for them.
     if (node.type === "Identifier" || node.type === "Literal" || node.type === "TemplateElement") {
       return;
+    }
+    // Pruning can conservatively retain resolvable literal targets without making
+    // ordinary path arguments required imports or performing full scope analysis.
+    if (onLiteralCall && node.type === "CallExpression") {
+      const argument = literal(node.arguments[0]);
+      if (argument?.startsWith(".")) {
+        onLiteralCall(argument);
+      }
     }
     let kind;
     let specifier;
     if (
       node.type === "ImportDeclaration" ||
       node.type === "ExportNamedDeclaration" ||
-      node.type === "ExportAllDeclaration"
+      node.type === "ExportAllDeclaration" ||
+      node.type === "ImportExpression"
     ) {
       specifier = literal(node.source);
-    } else if (node.type === "ImportExpression") {
-      specifier = literal(node.source);
+      if (node.source?.type === "Literal" && typeof node.source.value === "string") {
+        onStaticImport?.(node.source.value);
+      }
     } else if (
       node.type === "CallExpression" &&
       node.callee.type === "Identifier" &&
@@ -247,6 +265,8 @@ export function collectPackageDistImports(params) {
       imports,
       sourceTypeFor(importerPath, packageJsons),
       params.includeTypeScript,
+      params.onStaticImport,
+      params.onLiteralCall,
     );
   }
 

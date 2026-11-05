@@ -21,6 +21,7 @@ import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   projectHeartbeatSummary,
+  readHeartbeatSummaryForStatus,
   readHeartbeatSummarySnapshot,
 } from "../../infra/heartbeat-summary-snapshot.js";
 import { redactToolPayloadTextWithConfig } from "../../logging/redact.js";
@@ -35,6 +36,7 @@ import { listPluginServiceHealthFailures } from "../../plugins/service-health.js
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { createPermitPool } from "../../shared/permit-pool.js";
 import {
   ABSOLUTE_DEADLINE_EXPIRED,
@@ -142,22 +144,18 @@ async function prepareHealthAgentSummaries(
   projection?: SessionRowProjection,
   cronState?: Pick<GatewayCronState, "storePath" | "readHeartbeatSummary">,
 ) {
-  const { prepareStatusSessionStores } = await import("../../status/session-stores.js");
-  const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
+  const [{ prepareStatusSessionStores }, { isTransientSqliteError }] = await Promise.all([
+    import("../../status/session-stores.js"),
+    import("../../infra/unhandled-rejections.js"),
+  ]);
   // Receipts list the primary job first; retain it when converted siblings share an agent.
-  const heartbeatJobs = new Map(
-    (
-      await (cronState?.readHeartbeatSummary?.(cfg) ??
-        readHeartbeatSummarySnapshot(cfg, cronState?.storePath))
-    )
-      .toReversed()
-      .map((job) => [job.agentId, job]),
-  );
-  const sessionStores = await prepareStatusSessionStores(
-    cfg,
-    ordered,
-    HEALTH_RECENT_SESSION_LIMIT,
-    {
+  const [heartbeat, sessionStores] = await settleCurrentReadPreparations([
+    readHeartbeatSummaryForStatus(
+      () =>
+        cronState?.readHeartbeatSummary?.(cfg) ??
+        readHeartbeatSummarySnapshot(cfg, cronState?.storePath),
+    ),
+    prepareStatusSessionStores(cfg, ordered, HEALTH_RECENT_SESSION_LIMIT, {
       projection,
       fallbackToUnscopedStore: true,
       recoverReadError(error) {
@@ -166,8 +164,9 @@ async function prepareHealthAgentSummaries(
         }
         return { count: 0, recent: [], byAgent: new Map() };
       },
-    },
-  );
+    }),
+  ] as const);
+  const heartbeatJobs = new Map(heartbeat.jobs.toReversed().map((job) => [job.agentId, job]));
   return {
     publish() {
       const stores = sessionStores.publish();
@@ -180,7 +179,7 @@ async function prepareHealthAgentSummaries(
         agentId: agent.id,
         name: agent.name,
         isDefault: agent.id === displayDefaultId,
-        heartbeat: projectHeartbeatSummary(heartbeatJobs.get(agent.id)),
+        heartbeat: projectHeartbeatSummary(heartbeatJobs.get(agent.id), heartbeat.selectionWarning),
         sessions: projectHealthSessions(store.path, store),
       }));
       return {
@@ -637,8 +636,10 @@ export async function collectGatewayHealthSnapshot(params: {
   }
 
   const pluginHealth = buildPluginHealthSummary(cfg);
-  const contextEngineHealth = await buildContextEngineHealthSummary();
-  const deliveryQueueHealth = await buildDeliveryQueueHealthSummary(stateContext);
+  const [contextEngineHealth, deliveryQueueHealth] = await settleCurrentReadPreparations([
+    buildContextEngineHealthSummary(),
+    buildDeliveryQueueHealthSummary(stateContext),
+  ] as const);
   const { agents, sessions } = agentSummaries.publish();
   const summaryAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
   const heartbeatSummaryAgent = agents.find((agent) => agent.heartbeat.enabled) ?? summaryAgent;
