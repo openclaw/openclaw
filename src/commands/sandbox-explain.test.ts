@@ -246,15 +246,18 @@ describe("sandbox explain command", () => {
     const sessionKey = "agent:builder:claude-node-session";
     const localWorkspace = path.join(tempDir, "local-workspace");
     const remoteCwd = "/remote/claude-worktree";
-    await replaceSessionEntry({ storePath, sessionKey }, {
-      sessionId: "node-claude-session",
-      updatedAt: Date.now(),
-      execHost: "node",
-      execNode: "claude-node",
-      spawnedCwd: remoteCwd,
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-7",
-    } as SessionEntry);
+    await replaceSessionEntry(
+      { storePath, sessionKey },
+      {
+        sessionId: "node-claude-session",
+        updatedAt: Date.now(),
+        execHost: "node",
+        execNode: "claude-node",
+        spawnedCwd: remoteCwd,
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-7",
+      },
+    );
     mockCfg = {
       agents: {
         defaults: {
@@ -269,7 +272,7 @@ describe("sandbox explain command", () => {
       session: { store: storePath },
     };
 
-    const parsed = await explain({ json: true, session: sessionKey });
+    const parsed = await explain({ session: sessionKey });
     expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(path.resolve(localWorkspace));
     expect(parsed.sandbox.runtimeWorkdir).toBe(remoteCwd);
     expect(parsed.sandbox.workspaceSource).toBe("direct");
