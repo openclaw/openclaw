@@ -219,12 +219,18 @@ async function readGuardedGatewayRunConfig(
           if (!current.valid) {
             return prepare();
           }
-          const [{ resolveDatabaseEngineSelection }, { withDatabaseEngineSelection }] =
-            await Promise.all([
-              import("../../infra/database-engine/config.js"),
-              import("../../infra/database-engine/context.js"),
-            ]);
-          const selection = await resolveDatabaseEngineSelection(current.config, recoveryEnv);
+          const [
+            { resolveDatabaseEngineSelection },
+            { withDatabaseEngineSelection },
+            { resolveDatabaseFamilyEngines },
+          ] = await Promise.all([
+            import("../../infra/database-engine/config.js"),
+            import("../../infra/database-engine/context.js"),
+            import("../../infra/database-engine/registry.js"),
+          ]);
+          const healthConfig =
+            resolveDatabaseFamilyEngines(current.config).state === "postgres" ? current.config : {};
+          const selection = await resolveDatabaseEngineSelection(healthConfig, recoveryEnv);
           return withDatabaseEngineSelection(selection, prepare);
         },
       );

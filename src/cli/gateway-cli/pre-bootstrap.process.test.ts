@@ -125,6 +125,64 @@ function readResult(result: Awaited<ReturnType<typeof runIsolatedModuleScript>>)
 }
 
 describe("Gateway config selection before migration admission", () => {
+  it.each(["state", "workboard"])(
+    "requires PostgreSQL credentials before recovery only for the health store (%s)",
+    async (family) => {
+      const { stateDir, configPath, env, options } = createFixture("openclaw-mixed-recovery-");
+      const dsn = "postgresql://synthetic@127.0.0.1:1/mixed_recovery";
+      const current = {
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+        database: {
+          families: { [family]: { engine: "postgres" } },
+          postgres: {
+            connection: { source: "env", provider: "default", id: "PREBOOT_MIXED_DSN" },
+          },
+        },
+      };
+      writeJson(configPath, current);
+      writeJson(`${configPath}.bak`, {
+        ...current,
+        env: { vars: { PREBOOT_MIXED_DSN: dsn } },
+        messages: { ackReaction: "retained".repeat(1024) },
+      });
+      const before = stateManifest(stateDir);
+      const result = await runIsolatedModuleScript(
+        { ...env, PREBOOT_MIXED_DSN: undefined },
+        `
+        const { selectGatewayRunEnvironment } = await import("./src/cli/gateway-cli/pre-bootstrap.ts");
+        const { withDatabaseEngineSelection, getDatabaseEngineSelection } = await import("./src/infra/database-engine/context.ts");
+        const { resolveDatabaseFamilyEngines } = await import("./src/infra/database-engine/registry.ts");
+        const ambient = { effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }), postgres: { connection: ${JSON.stringify(dsn)} } };
+        let failure = null;
+        let restored = false;
+        await withDatabaseEngineSelection(ambient, async () => {
+          try {
+            await selectGatewayRunEnvironment({ opts: {}, runtime: { log() {}, error: console.error, exit(code) { throw new Error("unexpected exit " + code); } } });
+          } catch (error) { failure = error.message; }
+          restored = getDatabaseEngineSelection() === ambient;
+        });
+        console.log("__RESULT__" + JSON.stringify({ failure, restored, installed: getDatabaseEngineSelection() !== undefined,
+          recovered: process.env.PREBOOT_MIXED_DSN === ${JSON.stringify(dsn)} }));
+      `,
+        options,
+      );
+      const observed = readResult(result);
+      if (family === "state") {
+        expect(observed.failure).toContain("PREBOOT_MIXED_DSN");
+      } else {
+        expect(observed.failure).toBeNull();
+      }
+      expect(observed).toMatchObject({
+        restored: true,
+        installed: false,
+        recovered: family !== "state",
+      });
+      expect(stateManifest(stateDir)).toEqual(before);
+    },
+    75_000,
+  );
+
   const postgresConnection: unknown = getEnvironmentData(
     "openclaw.test.state.conformance.connection",
   );
