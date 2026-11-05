@@ -82,6 +82,7 @@ type ConfigViewOptions = Partial<
     | "chatMessageMaxWidth"
     | "chatFollowUpMode"
     | "openLinksInControlUiBrowser"
+    | "hostContentZoom"
   >
 > & {
   textScale: number;

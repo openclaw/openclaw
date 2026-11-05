@@ -5,6 +5,7 @@ import {
   type SettingsSearchBlock,
 } from "../../app-navigation.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
+import { usesHostContentZoom } from "../../app/native-content-zoom.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { currentThemeBranding } from "../../app/theme-branding.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
@@ -90,6 +91,7 @@ export function findSettingsSearchBlocks(params: {
             (params.identityAvailable || !block.requiresIdentity) &&
             (params.multipleProfiles || !block.requiresMultipleProfiles) &&
             (params.nativeDeviceSettings || !block.requiresNativeDeviceSettings) &&
+            (!block.requiresTextSizeControl || !usesHostContentZoom()) &&
             isSettingsNavigationRouteVisible(
               block.routeId,
               params.canAdmin !== false,

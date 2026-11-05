@@ -172,7 +172,8 @@ async function readResolvedPrimaryHover(page: Page): Promise<number[]> {
 
 suite.define(() => {
   it("removes synced and browser-local overrides, then reloads inherited defaults", async () => {
-    await suite.withPage(contextOptions, async ({ context, page }) => {
+    // Touch-only hosts retain the Text size accessibility control.
+    await suite.withPage({ ...contextOptions, hasTouch: true }, async ({ context, page }) => {
       await seedSettings(context, { textScale: 110 }, true);
       const initialPrefs = { locale: "en", theme: "knot", themeMode: "dark" };
       const gateway = await appearanceGateway(page, initialPrefs, "appearance-defaults-1");

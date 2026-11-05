@@ -1,4 +1,4 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { normalizeTextScale, TEXT_SCALE_STOPS, type TextScaleStop } from "../../app/settings.ts";
 import { normalizeTerminalFontFamily } from "../../app/terminal-font.ts";
 import type { ThemeName } from "../../app/theme.ts";
@@ -50,25 +50,27 @@ export function TextSection(
       <SettingsSectionHeader title={t("configView.appearance.languageAndText")} />
       <div class="settings-group">
         <LanguageRow {...props} />
-        <div id={APPEARANCE_SETTINGS_TARGET_IDS.textSize}>
-          <SettingsRow
-            title={t("configView.appearance.textSize")}
-            description={t("quickSettings.personal.browserOnly")}
-            stackedOnNarrow={true}
-            control={
-              <SettingsSegmented
-                value={String(props.textScale)}
-                ariaLabel={t("configView.appearance.textSize")}
-                options={TEXT_SCALE_STOPS.map((stop) => ({
-                  value: String(stop),
-                  label: `${stop}%`,
-                  title: t(TEXT_SCALE_LABELS[stop]),
-                }))}
-                onChange={(value) => props.setTextScale(normalizeTextScale(Number(value)))}
-              />
-            }
-          />
-        </div>
+        <Show when={!props.hostContentZoom}>
+          <div id={APPEARANCE_SETTINGS_TARGET_IDS.textSize}>
+            <SettingsRow
+              title={t("configView.appearance.textSize")}
+              description={t("quickSettings.personal.browserOnly")}
+              stackedOnNarrow={true}
+              control={
+                <SettingsSegmented
+                  value={String(props.textScale)}
+                  ariaLabel={t("configView.appearance.textSize")}
+                  options={TEXT_SCALE_STOPS.map((stop) => ({
+                    value: String(stop),
+                    label: `${stop}%`,
+                    title: t(TEXT_SCALE_LABELS[stop]),
+                  }))}
+                  onChange={(value) => props.setTextScale(normalizeTextScale(Number(value)))}
+                />
+              }
+            />
+          </div>
+        </Show>
         <For each={["ui", "chat"] as const}>
           {(slot) => {
             const isUi = slot === "ui";

@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, sameRouteLocation } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
+import { usesHostContentZoom } from "../../app/native-content-zoom.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   normalizeCatalogOpenTarget,
@@ -544,6 +545,7 @@ export function createConfigPage(
       tabIconAgentAvatar: agent ? resolveAgentAvatarUrl(agent, identities.read().get(id)) : null,
       tabIconLobsters: LOBSTER_PET_PALETTES.filter((palette) => unlocked.has(palette.id)),
       textScale: settings().textScale ?? UI_APPEARANCE_DEFAULTS.textScale,
+      hostContentZoom: usesHostContentZoom(),
       textScaleOverridden: settings().textScale !== undefined,
       setTextScale: (value: number) =>
         preferences.apply({

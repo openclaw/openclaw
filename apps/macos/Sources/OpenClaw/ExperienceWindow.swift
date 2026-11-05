@@ -1,6 +1,40 @@
 import AppKit
 
 class ExperienceWindow: NSWindow {
+    private var contentZoomWebView: DashboardWebView? {
+        guard self.attachedSheet == nil else { return nil }
+        func find(in view: NSView) -> DashboardWebView? {
+            guard !view.isHidden else { return nil }
+            if let webView = view as? DashboardWebView { return webView }
+            return view.subviews.lazy.compactMap { find(in: $0) }.first
+        }
+        return self.contentView.flatMap { find(in: $0) }
+    }
+
+    @objc func zoomContentIn(_: Any?) { self.contentZoomWebView?.changeContentZoom(by: 1) }
+    @objc func zoomContentOut(_: Any?) { self.contentZoomWebView?.changeContentZoom(by: -1) }
+    @objc func resetContentZoom(_: Any?) { self.contentZoomWebView?.setContentZoom(1) }
+
+    override func becomeKey() {
+        super.becomeKey()
+        guard !self.isHiddenForExperience else { return }
+        self.contentZoomWebView?.finishContentZoomInitialization()
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard self.contentZoomWebView != nil,
+              event.type == .keyDown,
+              event.modifierFlags.intersection([.command, .control, .option]) == .command,
+              let key = event.charactersIgnoringModifiers else { return super.performKeyEquivalent(with: event) }
+        switch key {
+        case "=", "+": self.zoomContentIn(nil)
+        case "-" where !event.modifierFlags.contains(.shift): self.zoomContentOut(nil)
+        case "0" where !event.modifierFlags.contains(.shift): self.resetContentZoom(nil)
+        default: return super.performKeyEquivalent(with: event)
+        }
+        return true
+    }
+
     var isHiddenForExperience = false {
         didSet {
             NotificationCenter.default.removeObserver(
