@@ -29,8 +29,8 @@ function legacyCoverageWarning(status: MemoryProviderStatus): string | undefined
   }
   const providerState = status.custom?.providerState;
   if (providerState && typeof providerState === "object" && "mode" in providerState) {
-    // Request-local status managers stay pending until something initializes
-    // embeddings. A stored empty or complete index is not incomplete coverage.
+    // Pending describes this manager's initialization, not stored vector coverage.
+    // Empty and complete indexes remain usable before embeddings initialize.
     const indexState = status.vector?.index?.state;
     if (
       providerState.mode === "pending" &&
