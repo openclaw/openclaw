@@ -1,6 +1,9 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import type { GatewayServer } from "../../gateway/server-public.js";
-import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
+import {
+  GatewayShutdownCleanupRetainedError,
+  GatewayStartupCleanupError,
+} from "../../gateway/server-shutdown.js";
 import type { GatewayInstallationReplacement } from "../../gateway/stale-install.js";
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
@@ -99,7 +102,7 @@ export async function settleGatewayStartupFailure({
   // generation whose startup cleanup failed. The outer CLI exits nonzero.
   if (startupFailureEndsLoop() || err instanceof GatewayStartupCleanupError) {
     await cleanup.waitForCleanup();
-    if (!cleanup.failed && !cleanup.drained) {
+    if (!cleanup.failed && !cleanup.drained && !cleanup.retained) {
       try {
         try {
           await cleanup.waitForPersistence(iterationStartupOperations.drain());
@@ -110,7 +113,9 @@ export async function settleGatewayStartupFailure({
           }
         }
         // A clean kernel rollback does not own process-wide providers or snapshots.
-        await cleanup.drainProcessResources();
+        if (!cleanup.retained) {
+          await cleanup.drainProcessResources();
+        }
       } catch (cleanupError) {
         throw new GatewayStartupCleanupError(err, cleanupError);
       }
@@ -129,6 +134,9 @@ export async function settleGatewayStartupFailure({
     let hasAdditionalStartupFailure = false;
     try {
       await cleanup.waitForCleanup();
+      if (cleanup.retained) {
+        throw new GatewayShutdownCleanupRetainedError([]);
+      }
       if (cleanup.failed) {
         throw new Error("gateway cleanup failed before Tailscale Serve recovery wait", {
           cause: err,
@@ -141,6 +149,9 @@ export async function settleGatewayStartupFailure({
           additionalStartupFailure = startupError;
           hasAdditionalStartupFailure = true;
         }
+      }
+      if (cleanup.retained) {
+        throw new GatewayShutdownCleanupRetainedError([]);
       }
       await cleanup.drainProcessResources();
       await cleanup.waitForCleanup();

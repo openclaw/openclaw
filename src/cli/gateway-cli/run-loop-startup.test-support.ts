@@ -424,7 +424,9 @@ export function registerGatewayStartupFailureTests(
           .fn<Parameters<typeof runGatewayLoop>[0]["start"]>()
           .mockImplementationOnce(async (options) => {
             expect(options?.exitAfterStartupFailure?.(startupError)).toBe(false);
-            expect(options?.exitAfterStartupFailure?.(new Error("ordinary startup failure"))).toBe(true);
+            expect(options?.exitAfterStartupFailure?.(new Error("ordinary startup failure"))).toBe(
+              true,
+            );
             return createGatewayServer(firstClose, Promise.reject(startupError));
           })
           .mockImplementationOnce(async () =>

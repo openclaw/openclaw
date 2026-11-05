@@ -146,6 +146,50 @@ export function registerGatewayStartupFailureSettlementTests(
     });
   });
 
+  it("retains startup dependencies when prerequisite cleanup exceeds its grace", async () => {
+    const { runGatewayLoop } = await import("./run-loop.js");
+    const { TailscaleBackendAuthenticationRequiredError } =
+      await import("../../infra/tailscale-backend-ready.js");
+    const { GatewayStartupCleanupError } = await import("../../gateway/server-shutdown.js");
+    setPlatform("linux");
+    setTestEnvValue("OPENCLAW_SYSTEMD_UNIT", "openclaw-gateway.service");
+    const heldStartup = createDeferredCore();
+    const closeEntered = createDeferredCore();
+    const failure = new TailscaleBackendAuthenticationRequiredError("NeedsLogin", "serve", {
+      bin: "tailscale",
+      prefix: [],
+    });
+    const onRestartStartupFailure = vi.fn();
+    const receipt = vi.fn();
+    hasManagedProviderLocalServices.mockReturnValue(true);
+    let tracked: Promise<void> | undefined;
+    await withIsolatedSignals(async () => {
+      vi.useFakeTimers();
+      const loop = runGatewayLoop({
+        start: async (options) => {
+          tracked = options!.startupOperation!(() => heldStartup.promise);
+          return createGatewayServer(async () => closeEntered.resolve(), Promise.reject(failure));
+        },
+        onRestartStartupFailure,
+        onProcessResourcesSettled: receipt,
+      });
+      const outcome = loop.catch((error: unknown) => error);
+      try {
+        await closeEntered.promise;
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(await outcome).toBeInstanceOf(GatewayStartupCleanupError);
+        expect(stopManagedProviderLocalServices).not.toHaveBeenCalled();
+        expect(onRestartStartupFailure).not.toHaveBeenCalled();
+        expect(receipt).toHaveBeenCalledExactlyOnceWith("retained");
+      } finally {
+        heldStartup.resolve();
+        await tracked;
+        await outcome;
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it.for([
     { cleanup: "clean", supervised: false, platform: "linux" },
     { cleanup: "failed", supervised: false, platform: "linux" },
