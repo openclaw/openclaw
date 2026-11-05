@@ -303,6 +303,7 @@ export class SessionListViewCache {
 
 /** Immutable row identities own field preparation; fact indexes stay response-local. */
 function createSessionRowFactSharing<T extends GatewaySessionRow>() {
+  // Negative numbers encode a leading run [0, -rows); nonnegative numbers are singletons.
   type Fact = { encoded: string; fact: Partial<T>; rows: number | number[] };
   const prepared = new WeakMap<
     T,
@@ -322,7 +323,7 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
     if (sessions.length < 2) {
       return { sessions, sharedFacts: [] };
     }
-    type SharedFact = { fact: Partial<T>; rows: number[] };
+    type SharedFact = { fact: Partial<T>; rows: number | number[] };
     const candidates = new Map<string, Fact>();
     const rows: GatewaySessionRow[] = [];
     const fieldCounts = new Uint32Array(sessions.length);
@@ -364,12 +365,20 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
         const candidate = candidates.get(fact.encoded);
         if (candidate) {
           if (typeof candidate.rows === "number") {
-            candidate.rows = [candidate.rows, index];
+            if (candidate.rows === -index) {
+              candidate.rows--;
+            } else {
+              candidate.rows =
+                candidate.rows < 0
+                  ? Array.from({ length: -candidate.rows }, (_, i) => i)
+                  : [candidate.rows];
+              candidate.rows.push(index);
+            }
           } else {
             candidate.rows.push(index);
           }
         } else {
-          fact.rows = index;
+          fact.rows = index === 0 ? -1 : index;
           candidates.set(fact.encoded, fact);
         }
       }
@@ -397,10 +406,11 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
     // Facts with the same recipients share one reference, including common scalar defaults.
     const groups = new Map<string, SharedFact>();
     for (const candidate of candidates.values()) {
-      const recipients = candidate.rows;
+      let recipients = candidate.rows;
       // Recipient scratch belongs to this response, never to the retained row facts.
       candidate.rows = 0;
-      if (typeof recipients === "number") {
+      if (typeof recipients === "number" && recipients >= -1) {
+        recipients = Math.max(0, recipients);
         const previous = previousRows[recipients];
         if (
           !previous ||
@@ -413,8 +423,11 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
         fieldCounts[recipients]!++;
         continue;
       }
-      // All-row recipient sets are identical within this response.
-      const key = recipients.length === sessions.length ? "" : recipients.join(",");
+      // Common defaults need no per-field copies of the same all-row index vector.
+      if (typeof recipients === "number" && recipients !== -sessions.length) {
+        recipients = Array.from({ length: -recipients }, (_, i) => i);
+      }
+      const key = typeof recipients === "number" ? "" : recipients.join(",");
       const group = groups.get(key);
       if (group) {
         Object.assign(group.fact, candidate.fact);
@@ -425,7 +438,9 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
     const sharedFacts: Partial<T>[] = [];
     for (const group of groups.values()) {
       const reference = sharedFacts.push(group.fact) - 1;
-      for (const index of group.rows) {
+      const count = typeof group.rows === "number" ? -group.rows : group.rows.length;
+      for (let offset = 0; offset < count; offset++) {
+        const index = typeof group.rows === "number" ? offset : group.rows[offset]!;
         const position = referenceCounts[index]!++;
         const previous = previousRows[index];
         if (
