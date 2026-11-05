@@ -25,6 +25,7 @@ import {
 import { missingMessageActionTargetError } from "./target-errors.js";
 
 const THREAD_ID_PARAM_KEYS = ["threadId", "thread_id", "messageThreadId", "message_thread_id"];
+const TARGET_PARAM_KEYS = ["target", "to", "channelId"];
 
 export function resolveImplicitMessageActionTarget(
   toolContext: ChannelThreadingToolContext | undefined,
@@ -75,6 +76,19 @@ export function normalizeMessageActionInput(params: {
   const [threadId] = threadIds;
   if (threadId && normalizedArgs.threadId !== threadId) {
     normalizedArgs.threadId = threadId;
+  }
+  // Provider readers may take numeric ids for these keys (Telegram's chat id reader does), but
+  // the target fold below reads only strings. Stringify exact integer ids so they follow the
+  // same contract; any other number cannot name a conversation exactly.
+  for (const key of TARGET_PARAM_KEYS) {
+    const value = normalizedArgs[key];
+    if (typeof value !== "number") {
+      continue;
+    }
+    if (!Number.isSafeInteger(value)) {
+      throw new Error(`Action ${action} received a numeric ${key} that is not an exact id.`);
+    }
+    normalizedArgs[key] = String(value);
   }
   const explicitChannel = normalizeOptionalString(normalizedArgs.channel) ?? "";
   const inferredChannel =

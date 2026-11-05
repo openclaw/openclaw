@@ -1,6 +1,7 @@
 // Covers core message-action send fallback, TTS application, and durable send
 // policy after plugin preparation is absent.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { jsonResult } from "../../agents/tools/common.js";
 import type {
   ChannelMessageActionName,
   ChannelPlugin,
@@ -285,6 +286,26 @@ describe("runMessageAction core send routing", () => {
       params: { target: undefined, chatId: "-1001234567890", name: "New topic" },
       boundToChat: true,
     },
+    // Telegram also reads a numeric channelId ahead of the target.
+    {
+      name: "a new topic through a numeric channelId of another chat",
+      action: "topic-create",
+      params: { target: undefined, channelId: -1009999999999, name: "New topic" },
+      boundToChat: true,
+      denied: true,
+    },
+    {
+      name: "a new topic through the numeric channelId of the chat its turn is bound to",
+      action: "topic-create",
+      params: { target: undefined, channelId: -1001234567890, name: "New topic" },
+      boundToChat: true,
+    },
+    {
+      name: "a rename through a numeric channelId of another chat",
+      action: "topic-edit",
+      params: { target: undefined, threadId: "42", channelId: -1009999999999 },
+      denied: true,
+    },
   ])("judges a restricted Telegram turn's request for $name", async (scenario) => {
     const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
       pluginId: "telegram",
@@ -335,6 +356,45 @@ describe("runMessageAction core send routing", () => {
         ? "message_cross_context_denied"
         : "allowed";
     expect(outcomes).toEqual([expected, expected]);
+  });
+
+  it("drops a numeric channelId that disagrees with a Telegram topic target before the action runs", async () => {
+    const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
+      pluginId: "telegram",
+      artifactBasename: "api.ts",
+    });
+    const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: { ...telegramPlugin, actions: { ...telegramPlugin.actions, handleAction } },
+        },
+      ]),
+    );
+    await runMessageAction({
+      cfg: {
+        channels: { telegram: { botToken: "123:test" } },
+        tools: { message: { crossContext: { confineChatTypes: ["group"] } } },
+      },
+      action: "topic-create",
+      params: {
+        channel: "telegram",
+        target: "-1001234567890",
+        channelId: -1009999999999,
+        name: "New topic",
+      },
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:-1001234567890",
+        currentChatType: "group",
+      },
+      dryRun: false,
+    });
+    const { params } = mockFirstRecordArg(handleAction, "handle action");
+    expect(params).not.toHaveProperty("channelId");
+    expect(params).toMatchObject({ to: "telegram:-1001234567890" });
   });
 
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {
