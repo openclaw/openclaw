@@ -505,7 +505,7 @@ describe.runIf(browserMode)("Review layout", () => {
     expect(write).toHaveBeenCalledExactlyOnceWith("added.ts");
     expect(copy.disabled).toBe(true);
     rejectWrite?.(new DOMException("Clipboard denied", "NotAllowedError"));
-    await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
+    await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied"));
     expect(fallback).toHaveBeenCalledExactlyOnceWith("copy");
     expect(copy.isConnected).toBe(true);
     expect(surface.matches(":popover-open")).toBe(true);

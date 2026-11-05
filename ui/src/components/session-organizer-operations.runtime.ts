@@ -168,7 +168,10 @@ export async function deleteSessionsBatch(
     }
     if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       if (result.preservedWorktrees.length > 0) {
-        showToast({ message: formatPreservedWorktreesNotice(result.preservedWorktrees) });
+        showToast({
+          severity: undefined,
+          message: formatPreservedWorktreesNotice(result.preservedWorktrees),
+        });
       }
       return;
     }
@@ -447,6 +450,7 @@ export async function assignSessionCategory(
   const currentSession = options.resolveSession ? options.resolveSession() : session;
   if (!currentSession) {
     showToast({
+      severity: catalogChanged ? "error" : undefined,
       message: t(catalogChanged ? "sessionsView.newGroupMoveSkipped" : "common.refresh"),
     });
     return "failed";
@@ -462,11 +466,11 @@ export async function assignSessionCategory(
   );
 }
 
-export async function forkSession(
+export async function createChildSession(
   deps: SessionActionHost,
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
-  options: { title?: string } = {},
+  options: { fork: boolean; title?: string },
 ): Promise<SidebarSessionMutationResult> {
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
@@ -475,9 +479,13 @@ export async function forkSession(
   const createParams = {
     parentSessionKey: session.key,
     ...(options.title?.trim() ? { label: options.title.trim() } : {}),
-    fork: true,
-    ...((session.gatewayHasActiveRun ?? session.hasActiveRun)
-      ? { forkFrom: "last-completed" as const }
+    ...(options.fork
+      ? {
+          fork: true,
+          ...((session.gatewayHasActiveRun ?? session.hasActiveRun)
+            ? { forkFrom: "last-completed" as const }
+            : {}),
+        }
       : {}),
     agentId,
   };
@@ -523,6 +531,7 @@ export async function stopCloudWorker(
   const confirmed = await showConfirmDialog({
     title: t(`${stopAction.copyKey}Confirm`, { session: session.label }),
     message: t(`${stopAction.copyKey}Description`),
+    details: t("sessionsView.stopCloudWorkerTarget", { session: session.label }),
     confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
     danger: true,
     signal: scope.signal,
@@ -624,7 +633,10 @@ export async function deleteSession(
     }
     if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       if (outcome.worktreePreserved) {
-        showToast({ message: formatPreservedWorktreesNotice([outcome.worktreePreserved]) });
+        showToast({
+          severity: undefined,
+          message: formatPreservedWorktreesNotice([outcome.worktreePreserved]),
+        });
       }
       return;
     }
@@ -653,9 +665,7 @@ export async function deleteSession(
         // Reconnect cancels the worktree prompt, not the confirmed deletion.
         // Report the preserved worktree without using the retired client.
         if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-          showToast({
-            message: formatPreservedWorktreesNotice([preserved]),
-          });
+          showToast({ severity: undefined, message: formatPreservedWorktreesNotice([preserved]) });
           return;
         }
         if (removeWorktree) {

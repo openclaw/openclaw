@@ -10,7 +10,6 @@ import {
   isJavaScriptModulePath,
   resolvePluginLoaderTryNative,
   tryNativeRequireJavaScriptModule,
-  useNodeModuleHooks,
 } from "./native-module-require.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -179,16 +178,14 @@ console.log("native contracts passed");
   );
 });
 
-// Temporary ESM aliases belong to the selected Node hooks path; Bun owns its native resolver.
-it.runIf(useNodeModuleHooks())(
-  "retains terminal ESM failures across eviction and alias changes until a new path loads",
-  async () => {
-    // tsx changes named-import linking, so this contract needs an unhooked Node process.
-    await expectProbe(
-      (
-        ownerUrl,
-        dir,
-      ) => `import { tryNativeRequireJavaScriptModule as load } from ${JSON.stringify(ownerUrl)};
+// Exercise Node's ESM hooks even when the parent suite runs under Bun.
+it("retains terminal ESM failures across eviction and alias changes until a new path loads", async () => {
+  // tsx changes named-import linking, so this contract needs an unhooked Node process.
+  await expectProbe(
+    (
+      ownerUrl,
+      dir,
+    ) => `import { tryNativeRequireJavaScriptModule as load } from ${JSON.stringify(ownerUrl)};
 const require = createRequire(import.meta.url);
 const dir = ${JSON.stringify(dir)};
 const brokenPath = path.join(dir, "broken.mjs");
@@ -237,10 +234,10 @@ assert.deepEqual(load(aliasRequest, {
 }), { ok: true, moduleExport: "first" });
 console.log("terminal error retained; new generation recovered");
 `,
-      "terminal error retained; new generation recovered",
-    );
-  },
-);
+    "terminal error retained; new generation recovered",
+    { node: true },
+  );
+});
 it("isJavaScriptModulePath only accepts JavaScript runtime extensions", () => {
   expect(isJavaScriptModulePath("/plugin/index.js")).toBe(true);
   expect(isJavaScriptModulePath("/plugin/index.mjs")).toBe(true);

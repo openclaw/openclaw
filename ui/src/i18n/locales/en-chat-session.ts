@@ -6,6 +6,13 @@ import { en } from "./en.ts";
 // This copy follows its lazy rendering consumers; shared labels stay in en.ts.
 const enChatSession = {
   chat: {
+    settingErrors: {
+      model: "Couldn’t change the model. Try again. {error}",
+      thinking: "Couldn’t change effort. Try again. {error}",
+      speed: "Couldn’t change the speed. Try again. {error}",
+      contextWindow: "Couldn’t change the context window. Try again. {error}",
+      accessProgram: "Couldn’t change the access program. Try again. {error}",
+    },
     savedConversation: "{status} · Saved conversation",
     sessionAutomation: {
       everyDuration: "Every {duration}",
@@ -29,10 +36,10 @@ const enChatSession = {
       settings: "Task progress settings",
       progressHidden: "Task progress hidden in this browser.",
       automationError: en.chat.sessionDetails.automationError,
-      automationUpdateError: "Couldn't update automations.",
+      automationUpdateError: "Couldn’t update automations. Try again.",
       automationShowMore: "Show more",
       automationUnavailable: en.chat.sessionDetails.automationUnavailable,
-      automationOffline: "Offline · last-known automations",
+      automationOffline: "Disconnected · last-known automations",
       automationLoading: en.chat.sessionDetails.automationLoading,
       automationEmpty: en.chat.sessionDetails.automationEmpty,
       automationMore: en.chat.sessionDetails.automationMore,
@@ -98,7 +105,7 @@ const enChatSession = {
       more: "More…",
       back: "Back to quick reactions",
       search: "Search emoji…",
-      noMatches: "No matching emoji",
+      noMatches: "No emoji match your search.",
       you: "You",
       andOthers: "{names} and {count} others",
       reactedWith: "{names} reacted with {emoji}",
@@ -169,7 +176,7 @@ const enChatSession = {
       adminRequired: "You need admin access to start suggested tasks.",
       reconnectRequired: "Reconnect to start suggested tasks.",
       unavailable: "Starting suggested tasks isn’t available here.",
-      copyPromptFailed: "Couldn't copy the prompt to the clipboard",
+      copyPromptFailed: "Couldn’t copy the prompt. Try again.",
       startUnconfirmed: "Couldn't confirm the task started. Retry checks the same task.",
     },
     view: {
@@ -225,15 +232,15 @@ const enChatSession = {
     },
     thread: {
       search: "Search messages",
-      searchPlaceholder: "Search messages...",
+      searchPlaceholder: "Search messages…",
       closeSearch: "Close search",
-      loading: "Loading chat",
+      loading: "Loading conversation…",
       showEarlier: "Show earlier",
       retryEarlier: "Retry earlier messages",
-      earlierUnavailable: "Couldn’t load earlier messages",
+      earlierUnavailable: "Couldn’t load earlier messages. Try again.",
       earlierInterrupted: "History refreshed before this page loaded. Try again.",
       earlierHint: "Scroll up for earlier messages",
-      noMatches: "No matching messages",
+      noMatches: "No messages match your search.",
       noMessages: "No messages yet",
       positionRail: "Conversation position",
       positionMarker: "{label}, marker {position} of {count}",
@@ -249,7 +256,7 @@ const enChatSession = {
     sessionDiscussion: {
       show: "Show discussion",
       hide: "Hide discussion",
-      disconnected: "Gateway is disconnected.",
+      disconnected: "Reconnect to view the discussion.",
       loading: "Loading discussion…",
       opening: "Opening discussion…",
       requiresWriteAccess: "Operator write access is required to open this discussion.",

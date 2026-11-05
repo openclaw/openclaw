@@ -198,7 +198,7 @@ const catalog = {
       undo: "Undo",
       undoing: "Undoing…",
       undone: "Undone",
-      undoError: "Could not undo: {error}",
+      undoError: "Couldn’t undo the skill change. Try again. Details: {error}",
     },
     youtube: {
       provider: "YouTube",
@@ -272,7 +272,7 @@ const catalog = {
       readPlain: "Open plain source",
       fileTree: "Changed files tree",
       searchFiles: "Search changed files",
-      noMatchingFiles: "No files match your search.",
+      noMatchingFiles: "No files match this view.",
       cycleMode: "Diff mode: {mode}. Switch to next mode",
       editFile: "Edit file",
       collapseContext: "Hide {count} unmodified lines",
@@ -288,7 +288,7 @@ const catalog = {
       workspaceStopped:
         "Saved changed files are shown. Start the cloud session to load full diffs and line counts.",
       workspaceStoppedFile: "Start the cloud session to load this diff.",
-      disconnected: "Reconnect to view workspace files.",
+      disconnected: "Reconnect to view changes.",
       allChanges: "All changes",
       uncommitted: "Uncommitted",
       commitsAhead: "{count} commits ahead of {base}",

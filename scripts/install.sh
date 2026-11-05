@@ -21,6 +21,10 @@ fi
 
 set -euo pipefail
 
+# Distros with user private groups (Ubuntu, Fedora) default to umask 002; the
+# installed runtime must not be group-writable or owned-path checks refuse it.
+umask go-w
+
 # BEGIN GENERATED UPDATE NETWORK BUDGET
 # Source: src/infra/update-network-budget.ts; regenerate: node scripts/generate-update-network-budget.mjs
 UPDATE_NETWORK_TIMEOUT_SECONDS=300
@@ -1270,7 +1274,7 @@ Options:
   --bun-path <absolute path>          Use an existing OpenClaw Bun fork executable
   --beta                               Use beta if available, else latest
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw)
-  --no-git-update                      Skip git pull for existing checkout
+  --no-git-update                     Skip rebasing local main (Git fetches can still occur)
   --no-onboard                          Skip onboarding (non-interactive)
   --no-prompt                           Disable prompts (required in CI/automation)
   --verify                              Run a post-install smoke verify

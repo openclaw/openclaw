@@ -260,7 +260,7 @@ it("surfaces clipboard failure through the pane error path", async () => {
 
   expect(writeText).toHaveBeenCalledWith(suggestion.prompt);
   expect(execCommand).toHaveBeenCalledWith("copy");
-  const failure = "Couldn't copy the prompt to the clipboard";
+  const failure = "Couldn’t copy the prompt. Try again.";
   expect(state).toMatchObject({ lastError: failure, chatError: failure });
 });
 

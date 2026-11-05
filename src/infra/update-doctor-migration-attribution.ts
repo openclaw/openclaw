@@ -161,6 +161,8 @@ export function hasUpdateDoctorMigrationCapture(): boolean {
 }
 
 type SqliteMigrationOptions = {
+  /** Close a one-shot native owner before publishing its final generation. */
+  close?: () => void;
   retainExclusive?: boolean;
   created?: boolean;
   /** Already-open companion custody stays held through this synchronous native phase. */
@@ -350,6 +352,7 @@ function* updateSqliteMigrationSteps<T>(
       }
       assertCurrent();
       truncateSqliteWal(db, pathname);
+      options?.close?.();
       let after: string | null | undefined;
       yield {
         read() {
@@ -401,6 +404,9 @@ function* updateSqliteMigrationSteps<T>(
       "Update migration exclusion completed, but releasing its resource failed",
       releaseError,
     );
+  }
+  if (options?.close) {
+    capture.openedSqlitePaths?.delete(key);
   }
   if ("error" in outcome) {
     throw outcome.error;

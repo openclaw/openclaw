@@ -1,6 +1,6 @@
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
+import { isPreparedModelRuntimePluginLifecycleFailure } from "../agents/prepared-model-runtime.errors.js";
 import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
 import {
   isConfiguredAgentDatabaseTarget,
@@ -241,7 +241,8 @@ export function activateGatewayAgentDatabaseStartup(params: {
             isPublicationCurrent: () => assertionSucceeds(assertPreparationCurrent),
           }),
         ).catch(async (error: unknown) => {
-          if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+          // A reload retires this owner's plugins and supersedes its build alike.
+          if (!isPreparedModelRuntimePluginLifecycleFailure(error)) {
             throw error;
           }
           // Let the current publication settle before the admission owner's bounded retry.

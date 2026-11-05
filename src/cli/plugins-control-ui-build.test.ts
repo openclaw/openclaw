@@ -173,7 +173,12 @@ describe("native plugin browser builds", () => {
     },
   );
 
-  it("preserves esbuild's existing non-Solid JSX compilation", async () => {
+  it("requires author-installed compilers without replacing existing builds", async () => {
+    const missing = await fixture();
+    await fs.unlink(path.join(missing.rootDir, "node_modules/esbuild"));
+    const failure = buildPluginControlUi(missing);
+    await expect(failure).rejects.toHaveProperty("humanOutput");
+    await expect(failure).rejects.toHaveProperty("cause.code", "MODULE_NOT_FOUND");
     const project = await fixture();
     await writeFiles(project.rootDir, {
       "renderer.js":
@@ -185,6 +190,16 @@ describe("native plugin browser builds", () => {
     const declaration = await buildPluginControlUi(project);
     const built = await browserModule(project.rootDir, declaration.entry);
     expect(built.view).toEqual({ tag: "p", props: null, children: ["Existing JSX"] });
+    await writeFiles(project.rootDir, {
+      "view.tsx": "/** @jsxImportSource @solidjs/web */\nexport const view = <p>Ready</p>;",
+      [project.source]: 'export * from "./view.tsx";',
+    });
+    await expect(buildPluginControlUi(project)).rejects.toThrow(
+      "Install @solidjs/compiler in this plugin's devDependencies",
+    );
+    expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
+      path.basename(path.dirname(declaration.entry)),
+    ]);
   });
 
   it("bundles a Solid TSX view with reactive updates and owned disposal", async () => {
@@ -249,21 +264,6 @@ export { flush };
     } finally {
       dom.window.close();
     }
-  });
-
-  it("requires the author-installed Solid compiler only for opted-in TSX", async () => {
-    const project = await fixture();
-    const first = await buildPluginControlUi(project);
-    await writeFiles(project.rootDir, {
-      "view.tsx": "/** @jsxImportSource @solidjs/web */\nexport const view = <p>Ready</p>;",
-      [project.source]: 'export * from "./view.tsx";',
-    });
-    await expect(buildPluginControlUi(project)).rejects.toThrow(
-      "Install @solidjs/compiler in this plugin's devDependencies",
-    );
-    expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
-      path.basename(path.dirname(first.entry)),
-    ]);
   });
 
   it("removes unused dependency loaders without treating text as imports", async () => {

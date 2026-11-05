@@ -114,6 +114,17 @@ Session-only connections receive the same read-safe repository identity for
 projects they can already discover, without repository URLs, credentials, or host
 checkout paths. This label does not grant access to private repository content.
 
+## Create a nested session
+
+Right-click a session in the sidebar and choose **New child session** to open an
+empty, persistent child beneath it. The parent expands to show the new session,
+and the Control UI opens the child conversation.
+
+This does not copy the parent conversation or start an agent run. Use
+**Advanced → Fork session** when you want a child with copied history. The
+Gateway checks your write access to the parent before creating either kind of
+child.
+
 ## Automatic session names
 
 New Dashboard conversations receive a title from their opening task. Later messages
@@ -179,11 +190,17 @@ Reloading a previously visited chat restores the last settled sidebar while the 
 
 The saved sidebar also retains unread marks, activity and attention glyphs, pull-request badges, and the Inbox count. Live facts replace this display projection together with the rows; pins outside the roster retain their saved presentation until their own details arrive. The Inbox button reserves its place while connecting.
 
+The Online sidebar loads people's open and running session counts when you open it. Switching to Sessions or Pages stops those count refreshes; opening Online again loads current counts. Restoring a Sessions sidebar does not wait for Online counts.
+
 Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
+
+The desktop **Subagents** tab places nested subagents beneath the subagent that started them. Each row keeps its own activity and controls. Floating **Details** and the mobile list remain compact, direct-child views.
 
 When a conversation has a saved Details snapshot, desktop task progress keeps its saved runtime presentation while reconnecting. Live reads refresh those values in place after the progress and child reads settle; the saved presentation does not authorize actions.
 
 Saved desktop Details also restores session attribution, participant counts, and the branch/worktree row before live session facts arrive. Automations keeps its position while those facts refresh.
+
+The saved Details snapshot also retains the running-process preview while reconnecting, so Processes does not appear later and push Automations down. Saved process rows cannot stop processes. Live process reads refresh the preview, remove finished processes, and hide it if access is denied.
 
 A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. The **Show earlier** label stays steady while reconnecting or loading. The control exposes its busy and unavailable state to assistive technology and ignores activation until ready.
 
@@ -244,6 +261,8 @@ navigation hints also prepare modules for the open page. These hints take priori
 over the worker's bulk download, which resumes after page requests settle.
 
 If the selected session changes while its message subscription is being admitted, chat retries that read with fresh access checks for up to one minute. Saved replies load after the subscription succeeds, without resending your message. Switching chats or losing access stops recovery; a persistent failure leaves **Retry** available.
+
+Opening a nested session from a **Waiting on** link, a direct URL, or browser history expands its owning sidebar group and session ancestors so you can see where the session belongs. Other branches keep their disclosure state, and ordinary refreshes do not undo a branch you collapse while staying in the same session.
 
 Use **Snooze → Choose another time** in a session menu to pick a future date and time in your browser’s local time zone. After a successful snooze, **Custom** shows that exact date and time in other session menus for one hour. Choosing another custom time replaces it; presets and Undo leave the remembered choice unchanged. The browser stores this choice separately for each Gateway and signed-in account, and removes it when it expires or the wake time passes. If browser storage is unavailable, the choice remains reusable only in the current page.
 
@@ -660,7 +679,7 @@ their agent's avatar as the icon.
 Other sessions appear under collapsible agent headers in configured roster order,
 which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
 open that agent's main chat. The separate collapse control only folds its sessions.
-The accented rail **+** below the workspace mark, labeled **New conversation**, opens the New session composer directly with your last-selected agent.
+The accented rail **+** below the workspace mark, labeled **New session**, opens the New session composer directly with your last-selected agent.
 The selection is remembered in this browser for each Gateway; you can choose a
 different agent inside the composer.
 Each group's **+** opens a composer for that specific agent, appearing on hover or keyboard focus and remaining visible on touch devices. Selecting a session switches the active
@@ -813,7 +832,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="side-panel-keyboard-shortcuts" />[Side panel keyboard shortcuts](/web/control-ui/settings#side-panel-keyboard-shortcuts)
 - <a id="this-mac-(macos-app)" />[This device (macOS and iOS apps)](/web/control-ui/settings#this-mac-macos-app)
 - <a id="custom-plugin-ui" />[Custom plugin UI](/web/control-ui/settings#custom-plugin-ui)
-- <a id="import-assistant-memory" />[Import assistant memory](/web/control-ui/settings#import-assistant-memory)
+- <a id="import-assistant-memory" />[Import agent memory](/web/control-ui/settings#import-assistant-memory)
 - <a id="mcp-page" />[MCP page](/web/control-ui/settings#mcp-page)
 - <a id="activity-tab" />[Activity tab](/web/control-ui/settings#activity-tab)
 - <a id="meetings-page" />[Meetings page](/web/control-ui/settings#meetings-page)

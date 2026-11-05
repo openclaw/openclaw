@@ -202,7 +202,7 @@ it.each(["advanced", "security"] as const)(
       expect(split).toHaveBeenCalled();
       uiHints = { [`${section}.value`]: { advanced: true } };
       await runtimeConfig.refreshSchema();
-      // Privacy & Security titles its sections itself, so advanced settings stay in place.
+      // Privacy & security titles its sections itself, so advanced settings stay in place.
       await waitForSolid(() => {
         const disclosure = view.page.querySelector(".config-advanced-disclosure");
         if (pageId === "security") {

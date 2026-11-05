@@ -11,6 +11,7 @@ import {
   sessionEntryCommitGuardOptions,
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
+import { isOwnedTranscriptPayload } from "../../../config/sessions/transcript-json.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
@@ -259,9 +260,9 @@ export async function prepareEmbeddedAttemptHistory(
     warn: (message) => log.warn(message),
   });
   input.setup.prepStages.mark("context-engine");
-  // Restored history stays writable through preparation; published replies are complete.
+  // Transcript admission already seals retained replies; restored or replaced replies still need it.
   for (const message of messages) {
-    if (message.role === "assistant") {
+    if (message.role === "assistant" && !isOwnedTranscriptPayload(message)) {
       freezeJsonSnapshot(message);
     }
   }

@@ -6,6 +6,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   runSqliteImmediateTransactionSync,
+  sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { Check } from "typebox/value";
 import type { VaultAccess } from "./access.js";
@@ -468,9 +469,22 @@ export class StorageBase {
           }
           observeWithdrawals(db, records, this.retrievalBinding(access));
           this.enqueueGit(db, key, changes, "external observation");
-          // Never materialize stored raw text just to compare hashes.
-          const priorOf = db.prepare(
-            "SELECT path,hash,revision FROM observations WHERE scope=? AND id=?",
+          // Share metadata across reconciliation and deletion, retaining tombstone
+          // revisions only for IDs that reappeared in this scan.
+          const observations = new Map(
+            executeSqliteQuerySync(
+              db,
+              getNodeSqliteKysely<StorageTables>(db)
+                .selectFrom("observations")
+                .select(["id", "path", "hash", "revision"])
+                .where("scope", "=", key)
+                .where((eb) =>
+                  eb.or([
+                    eb("hash", "!=", ""),
+                    eb("id", "in", sqliteStringSet([...idCounts.keys()])),
+                  ]),
+                ),
+            ).rows.map((row) => [row.id, row]),
           );
           const exactWriter = db.prepare(
             "SELECT provenance,agent_id,sequence FROM history WHERE scope=? AND id=? AND hash=? ORDER BY sequence DESC LIMIT 1",
@@ -481,11 +495,11 @@ export class StorageBase {
           for (const r of records.filter(
             (record) => record.valid && idCounts.get(record.id) === 1,
           )) {
-            const prior = priorOf.get(key, r.id);
+            const prior = observations.get(r.id);
             if (prior && (prior.hash !== r.hash || prior.path !== r.path)) {
-              r.revision = Math.max(r.revision, Number(prior.revision) + 1);
+              r.revision = Math.max(r.revision, prior.revision + 1);
             } else if (prior) {
-              r.revision = Math.max(r.revision, Number(prior.revision));
+              r.revision = Math.max(r.revision, prior.revision);
             }
             if (!prior || prior.hash !== r.hash || prior.path !== r.path) {
               this.recordObservation(db, key, r, prior ? "external-edit" : "observed");
@@ -504,26 +518,23 @@ export class StorageBase {
               r.writtenByAgentId = String(writer.agent_id);
             }
           }
-          const present = new Set(records.map((r) => r.id));
-          for (const prior of db
-            .prepare("SELECT id,path,revision FROM observations WHERE scope=? AND hash!=''")
-            .all(key)) {
-            if (!present.has(String(prior.id))) {
+          for (const prior of observations.values()) {
+            if (prior.hash !== "" && !idCounts.has(prior.id)) {
               db.prepare(
                 "INSERT INTO history(scope,id,provenance,at,path,revision,hash,raw) VALUES (?,?,?,?,?,?,?,?)",
               ).run(
                 key,
-                prior.id!,
+                prior.id,
                 "external-unavailable",
                 new Date().toISOString(),
-                prior.path!,
-                Number(prior.revision) + 1,
+                prior.path,
+                prior.revision + 1,
                 "",
                 "",
               );
               db.prepare(
                 "UPDATE observations SET hash='',revision=revision+1 WHERE scope=? AND id=?",
-              ).run(key, prior.id!);
+              ).run(key, prior.id);
             }
           }
         },

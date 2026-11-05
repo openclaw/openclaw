@@ -59,8 +59,8 @@ describe("workspace conflict copy actions", () => {
   });
 
   it.each([
-    { copied: true, expected: "Copied!" },
-    { copied: false, expected: "Copy failed" },
+    { copied: true, expected: "Copied" },
+    { copied: false, expected: "Couldn’t copy. Try again." },
   ])("shows visible feedback when clipboard success is $copied", async ({ copied, expected }) => {
     const writeText = copied
       ? vi.fn().mockResolvedValue(undefined)

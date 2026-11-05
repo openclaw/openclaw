@@ -54,6 +54,14 @@ Shared-state schema 39 adds nullable lifecycle custody after disk-authority sche
 Older environments remain unretained. Package-only downgrade is refused; restore the
 matching pre-upgrade backup and binary only after settling retained operations and cleanup.
 
+On Gateway restart, local workspace recovery journals settle before readiness.
+Remote provider reconciliation and Git publication recovery run in the background,
+so an unavailable cloud provider does not block the Gateway from becoming ready.
+Restart recovery may interrupt only placement turn claims captured before startup;
+newly admitted or replaced claims keep their live execution ownership. Gateway
+shutdown drains accepted recovery work before stopping the environment service.
+Gateway readiness does not imply that every retained worker is ready to execute.
+
 ## Dispatch a session
 
 `sessions.dispatch` rejects a busy session without interrupting its active work. Wait for the current turn to finish, then retry. For an idle session, dispatch closes local turn admission, validates the workspace source, provisions the lease for the selected execution mode, and runs setup. With project warm images enabled, it prepares the committed checkout and node runtime and captures any needed image before enrollment. It then enrolls the node, installs the required pinned Gateway bundle, applies the session workspace, and returns once the placement reaches `active` ownership. Gateway-source inventory validation happens before provider allocation. Repository-only inventory is captured on the enrolled node after fetching the pinned source; either path reports actionable size or entry limits. Budget several minutes for the first cloud dispatch, including capture when needed; later dispatches can reuse the image, project seed, and runtime installs. After that, talk to the session as usual. OpenClaw turns route to the worker process; Codex native operations run on the authorized cloud node, paired device, or supported SSH-backed provider.
@@ -212,7 +220,7 @@ ordinary reconcile-first move instead.
 
 ## Stop, reclaim, or remove a session
 
-To stop a running turn in the Control UI, use chat **Stop** or `/stop` first. Once no turn is running, choose **Stop cloud device…** from the placement chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before resetting or deleting the session. An environment in `draining` or `destroying` has not yet confirmed release: teardown errors remain visible, and Stop can be retried. Starting another turn after reclaim provisions a replacement worker only while its original cloud profile remains configured for the same provider; deleting that profile prevents new cloud allocation.
+To stop a running turn in the Control UI, use **Stop** on **Chat** or `/stop` first. Once no turn is running, choose **Stop cloud device…** from the placement chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before resetting or deleting the session. An environment in `draining` or `destroying` has not yet confirmed release: teardown errors remain visible, and Stop can be retried. Starting another turn after reclaim provisions a replacement worker only while its original cloud profile remains configured for the same provider; deleting that profile prevents new cloud allocation.
 
 Stop and idle suspension retain this final-save obligation across Gateway restarts, even when capture failed before a workspace result was staged. Startup resumes reconciliation before releasing the machine. If Stop is interrupted after the placement enters `draining` but before its final-save claim is recorded, background recovery enrolls the save on the same attached worker without requiring a Gateway restart. It leaves active claims and moves with their existing owners; an offline worker waits for reconnection without replaying input or allocating a replacement. If a Gateway update changed the worker bundle, recovery stops the old process, installs the current bundle on that exact draining placement, and finishes the save and teardown without restarting a turn. Failed capture or installation retains the machine for another recovery attempt. If the machine is gone, only the last accepted workspace survives and the session records the failure, as described below.
 

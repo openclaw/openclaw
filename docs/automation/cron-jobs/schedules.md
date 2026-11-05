@@ -329,6 +329,10 @@ watcher keeps its usual `once` behavior; renaming it does not reset its conditio
 If condition-evaluation capacity is busy, the unevaluated occurrence stays due
 through the scheduler's existing admission deferral rather than counting as a quiet check.
 
+Cold runtime preparation can continue after an evaluation times out, so a later
+tick can reuse it. Preparation is limited to two minutes, or the script payload's
+budget when longer; cancelling the evaluation that started it still cancels preparation.
+
 Scripts call configured MCP server tools through the same `MCP.<server>.<tool>({ ...input })` namespace that interactive Code Mode uses. MCP is opt-in per server: a script can reach only the servers its job's `toolsAllow` (`--tools`) names with a server prefix, either an exact tool such as `wispr-flow__search_meetings` or a server-scoped glob such as `wispr-flow__*`. A wildcard `*`, a missing `toolsAllow`, or a glob without a server prefix gives the script no `MCP` namespace and starts no server, because evaluations can run every 30 seconds. A script whose source never mentions `MCP` also starts no server, even when `toolsAllow` names one for the payload. Within a named server, the owning agent's tool policy still applies, as in an interactive run. MCP calls go through the same before-tool-call hooks and approvals and return the same untrusted-content results. Each evaluation starts its own runtime for the named servers only and retires it when the evaluation ends; a slow server shutdown finishes in the background after a 1-second grace. Connecting and listing tools count toward the 30-second budget, and each MCP call counts toward the 5-call limit. A named server that fails to start is absent from `MCP`; if the script then fails, the run error ends with `MCP server "<name>" is unavailable: <reason>`.
 
 Returning `fire: false` from an MCP-backed check skips the payload, and its model call, on quiet ticks:

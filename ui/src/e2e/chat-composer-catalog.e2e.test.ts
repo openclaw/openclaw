@@ -418,7 +418,7 @@ suite.define(() => {
       await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
       await expectText(
         composer.locator("[data-chat-model-catalog-state]"),
-        "Some models could not be refreshed.",
+        "Couldn’t refresh some models.",
       );
       await expectVisible(modelOption(composer, "openai/startup-model"));
 

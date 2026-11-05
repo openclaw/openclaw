@@ -11,7 +11,6 @@ it("expands shared ancestors with linear path-insertion work", async () => {
   try {
     paths = await selectLocalWorkspaceCanonicalPaths({
       root: "/unused-prepared-inventory",
-      admittedPaths: "[]",
       preparedPaths,
       baselinePaths: new Set(["source/saved/retained.txt"]),
       assertCurrent() {},
