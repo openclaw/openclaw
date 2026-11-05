@@ -29,16 +29,13 @@ On a fresh install, open the app and follow **Setting up OpenClaw on this Mac**:
 An already configured model is kept. You can then set up optional features
 and start chatting. To choose the connection yourself, select **Set up manually**.
 
-Automatic first run applies only when there is no existing configuration,
-saved Gateway profile, connection setting, or previous onboarding. It never
-selects a discovered Gateway automatically. Existing local and remote setups
-keep their connections and open manual onboarding only if needed.
+Existing configurations and saved connections keep their settings; setup does
+not automatically switch to a discovered Gateway. Older apps may open manual setup first; developer builds and Gateways without
+automatic setup support use it instead. Nix mode and
+background-only launches do not run automatic first setup.
 
-Older apps and unbundled developer builds may open manual setup first.
-Nix mode and background-only launches do not run automatic first setup.
-If setup fails, the app opens the relevant manual step and shows the error.
-A Gateway without automatic setup support opens the AI picker instead.
-If you close setup before the dashboard opens, reopen it from the app menu.
+If setup fails, the app opens the relevant manual step with the error visible.
+If you close setup early, reopen it from the app menu.
 
 ## macOS prompts
 
@@ -117,33 +114,19 @@ any local process connect; use it only on a fully trusted machine.
 </Step>
 <Step title="Prepare the local runtime">
 <a id="cli" />
-The **Getting things ready** page appears only when local setup is needed.
-The app prepares its bundled Bun runtime and matching CLI, Gateway, and
-Control UI. It includes no Node executable and needs no global npm, pnpm,
-or Bun installation.
+Wait for **Getting things ready** to finish. This step appears only when local
+runtime setup is needed. Connecting to an independently managed Gateway skips
+installation without taking over its CLI or service. See
+[Gateway on macOS](/platforms/mac/bundled-gateway#automatic-setup) for runtime details.
 
-Connecting to an independently managed local Gateway skips installation and
-goes straight to AI checks. The app does not take over that Gateway's CLI or
-service. See [Gateway on macOS](/platforms/mac/bundled-gateway#automatic-setup).
-
-<Accordion title="Developer builds and the Git prompt">
-Unbundled DEBUG builds use a separate installer and channel chooser. They can
-reuse a compatible CLI or install OpenClaw and Node in a private runtime.
-
-For a new workspace without Git metadata, OpenClaw runs `git --version` and,
-if available, `git init`. Apple's Git stub may prompt you to install Command
-Line Tools. Git is optional: workspace creation continues if it is missing or
-initialization fails. Install the tools if you want Git in the workspace.
-</Accordion>
+macOS may offer to install Command Line Tools when OpenClaw initializes Git in
+a new workspace. Git is optional; setup continues without it. Install the tools
+if you want to use Git.
 </Step>
 <Step title="Connect your AI">
 Choose a detected connection, sign in to a provider, or enter an API key or
 token. The manual picker waits for your choice before testing, installing,
 or saving anything. Setup must pass a live AI test before you can continue.
-
-The setup sheet shows the provider and current activity. Answer any review or
-sign-in prompts; plugin installation and the final AI test stay in the same
-flow. Installation shows a spinner, not an estimated percentage.
 
 See [AI connection options](/start/onboarding#ai-connection-options) below for login reuse,
 local models, and custom endpoints.
@@ -154,13 +137,11 @@ channels, and optional features, then agent chat. An already configured model
 opens the normal dashboard.
 
 - **Import memory (optional):** choose files during guided setup or later in
-  **Settings → Import Memory**. Local Gateways support Claude Code auto-memory,
-  Codex consolidated memories, and Hermes memory files. Files are copied to
-  `memory/imports/` for indexed recall; previously imported files are skipped.
-- **Grant macOS access as needed:** open **Settings → Permissions**. There is
-  no separate native permissions walkthrough. Options include Automation
-  (AppleScript), Notifications, Accessibility, Screen Recording, Microphone,
-  Speech Recognition, Camera, and Location. See [macOS permissions](/platforms/mac/permissions).
+  **Settings → Import Memory**. Local Gateways can import Claude Code, Codex,
+  and Hermes memories into `memory/imports/`; previously imported files are skipped.
+- **Grant macOS access as needed:** open **Settings → This Mac → Permissions** for features
+  such as screen recording, microphone access, and automation. See
+  [macOS permissions](/platforms/mac/permissions) for the full list and recovery steps.
 
 See [Bootstrapping](/start/bootstrapping) for the agent's first turn.
 You can return to **Settings → OpenClaw** later.
@@ -208,45 +189,27 @@ the offered ChatGPT sign-in uses a separate home. To switch, choose **Use a
 separate login** on the setup card, or sign in with ChatGPT or an OpenAI API key
 in **Model Setup**. Completing that sign-in selects the isolated home.
 
-<Accordion title="Codex home settings and conversation discovery">
-Reuse sets `plugins.entries.codex.config.appServer.homeScope: "user"`, so
-Codex uses `CODEX_HOME` or, when unset, `~/.codex`. Codex handles authentication
-and token refresh; OpenClaw does not copy OAuth tokens into its auth store.
-Manual setup keeps its existing API-key import behavior. See
+Choosing a Claude or Codex model does not automatically show native
+conversations in the sidebar. Enable conversation discovery separately if you want to browse them.
+For shared-home settings and authentication details, see
 [Native Codex state](/plugins/codex-harness/native-features#share-threads-with-codex-desktop-and-cli).
-
-Native Claude/Codex conversation discovery stays off during automatic setup.
-Enable it separately to show native conversations in the sidebar without
-copying transcripts. Choosing a Claude or Codex model does not enable it.
-</Accordion>
 
 ### Other connections
 
 <AccordionGroup>
 <Accordion title="Local models">
-Discovery never downloads models. Ollama checks `/api/ps` for loaded models.
-For an eligible model installed on disk but not loaded, use **Choose connection
-→ Local only**. See [Ollama](/providers/ollama).
+Discovery checks loaded models; it never downloads one. For an eligible Ollama
+model installed on disk but not loaded, use **Choose connection → Local only**.
+See [Ollama](/providers/ollama).
 </Accordion>
 <Accordion title="Provider sign-in, API keys, and tokens">
-The picker uses installed provider manifests and the official plugin catalog,
-so providers such as Meta can appear before their plugin is installed.
-OAuth and device-pairing choices include Chutes, GitHub Copilot, MiniMax Global
-and CN, OpenAI/ChatGPT, OpenRouter, and xAI. Google uses an AI Studio API key.
-Available choices come from active text-inference plugins, not a fixed app list;
-the key/token picker uses the same registry.
+Choose a provider in the picker and follow its sign-in or key/token prompts.
+Available providers depend on your Gateway's plugins; some can be installed
+from the picker. See [Model providers](/providers) for provider-specific setup.
 
 To use a Claude subscription without a Claude CLI login on the Gateway host,
 run `claude setup-token` on a machine with Claude Code. Paste the result as
 **Anthropic setup-token** under **Connect with an API key or token**.
-
-Pi and OpenCode may appear for context, but are whole-agent harnesses rather
-than reusable setup inference routes. Their session integrations need separate
-runtime and plugin setup. Gemini CLI and Antigravity are not detected setup routes.
-
-Each provider supplies its starter model and configuration. OpenClaw resolves
-starter aliases to full model names for testing and saving, preserving existing
-model settings the starter does not replace.
 </Accordion>
 <Accordion title="Custom endpoints">
 For a local Gateway, choose **Custom OpenAI/Anthropic-compatible endpoint**
@@ -263,31 +226,27 @@ When a connection needs a runtime plugin, review its source, capabilities, and
 integrity (when available), then confirm installation or activation. This also
 applies to verified first-party packages in manual setup.
 
-Declining or confirming cancellation stops the attempt; setup does not choose
-another route. If confirmation fails, the app keeps the saved credential and
-any plugins installed for that attempt. Retry the saved sign-in in **Model Setup**
-without signing in again.
+Declining stops the attempt without choosing another route. If confirmation
+fails, retry the saved sign-in in **Model Setup**; your credential and any
+plugins installed for that attempt are kept.
 
-A replacement credential stays inactive until verification finishes and you
-accept **Activate this saved sign-in?** Declining keeps both your current
-connection and the saved replacement. Unrelated configuration edits are
-preserved. If the same connection settings changed during verification, review
-them and retry the saved sign-in instead of overwriting the newer settings.
+A replacement sign-in becomes active only after verification and your acceptance
+of **Activate this saved sign-in?** Declining keeps your current connection and
+the saved replacement. If connection settings changed during verification,
+review them and retry instead of overwriting the newer settings.
 </Accordion>
 </AccordionGroup>
 
 ## If AI setup stalls
 
-- **An earlier attempt may still be running:** choose **Check again**. This
-  checks the existing attempt; it does not start another activation, discard
-  the attempt, or shorten the wait. Replacement setup stays blocked meanwhile.
+- **An earlier attempt may still be running:** choose **Check again** to check
+  its status without starting another activation. Wait for it to finish before
+  replacing the connection.
 - **The wait ends without a confirmed result:** setup returns to connection
   choices with the error visible. Retry that connection or choose another;
   it does not automatically retry detected credentials.
-- **You want to cancel:** choose **Cancel** and wait for confirmation. The
-  Gateway may need to finish an operation it has already committed to. If
-  cancellation cannot be confirmed, the sheet warns that setup may still be
-  running and lets you retry **Cancel**.
+- **You want to cancel:** choose **Cancel** and wait for confirmation. If the
+  sheet says setup may still be running, retry **Cancel**.
 
 ## Related
 
