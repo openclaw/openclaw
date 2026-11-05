@@ -79,6 +79,7 @@ describe("memory source sessions", () => {
             hookExternalContentSource: "gmail",
             chatType: "group",
           });
+          expect(reader).toHaveBeenCalledOnce();
           expect(metadataSql.queries.some((sql) => /from "session_participants"/i.test(sql))).toBe(
             false,
           );
