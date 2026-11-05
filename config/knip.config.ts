@@ -42,6 +42,8 @@ const repositoryScriptEntries = [
   "test/scripts/fixtures/native-profile-census.mjs!",
   // Spawned directly by mantis-telegram-failure.test.ts.
   "test/scripts/fixtures/mantis-telegram-failure.mts",
+  // Spawned directly by beam-handoff.joined.e2e.test.ts.
+  "test/fixtures/beam-live-handoff-client/beam.mjs",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-android-release-history.mts!",
   "scripts/bench-duplicate-paragraphs.mts!",
@@ -92,6 +94,8 @@ const repositoryScriptEntries = [
   "scripts/ci-shard-timings-refresh.mts!",
   "scripts/ci-test-observations.mjs!",
   "scripts/ci-adaptive-select.mjs!",
+  "scripts/ci-adaptive-evaluate.mjs!",
+  "scripts/ci-adaptive-jev.mjs!",
   "scripts/ci-adaptive-priors.mjs!",
   "scripts/ci-adaptive-costs.mjs!",
   // The scheduled-run execution context design invokes this development replay by path.

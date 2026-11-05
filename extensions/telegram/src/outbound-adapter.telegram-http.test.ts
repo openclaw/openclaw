@@ -59,6 +59,7 @@ const telegramRegistry = () =>
   createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]);
 const approveId = "plugin:123e4567-e89b-12d3-a456-426614174000";
 const location = { latitude: 48.858844, longitude: 2.294351 };
+const effectId = "5104841245755180586";
 const droppedButton = () => ({ label: "Copy manually", value: "x".repeat(65) });
 const uploadBytes = async (fields: Record<string, unknown>, key: string) =>
   Buffer.from(await resolveTelegramTestUpload(fields, key).arrayBuffer());
@@ -171,14 +172,9 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       ...cfg,
       agents: { ownership: "explicit", entries: { main: {}, other: {} } },
     };
-    const request = {
-      cfg: ownerCfg,
-      accountId: "default",
-      to: "123",
-      text: "Owner routing control",
-      payload: { text: "Owner routing control" },
-    };
-    await expect(registeredSend(request)).rejects.toMatchObject({
+    const sendControl = () =>
+      sendPayload({ text: "Owner routing control" }, { cfg: ownerCfg, accountId: "default" });
+    await expect(sendControl()).rejects.toMatchObject({
       name: "PlatformMessageNotDispatchedError",
       retryable: false,
       message: expect.stringContaining("no explicit owner"),
@@ -186,17 +182,25 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     expect(requests).toEqual([]);
 
     ownerCfg.bindings = [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }];
-    await registeredSend(request);
+    await sendControl();
     expectMethods("sendMessage");
     expect(requests[0]!.fields.text).toBe("Owner routing control");
   });
 
-  it.each([false, true])(
-    "delivers selected-account rich presentations with explicit HTML=%s",
-    async (html) => {
+  it.each([
+    [false, "123", effectId],
+    [true, "123", effectId],
+    [true, "-1001", undefined],
+  ] as const)(
+    "delivers selected-account presentations with explicit HTML=%s to %s",
+    async (html, to, expectedEffect) => {
       await sendPayload(
-        { presentation: { blocks: [pipelineTable, ...buttonPresentation(continueButton).blocks] } },
         {
+          presentation: { blocks: [pipelineTable, ...buttonPresentation(continueButton).blocks] },
+          channelData: { telegram: { messageEffectId: effectId } },
+        },
+        {
+          to,
           cfg: accountConfig(
             "selected",
             { botToken: cfg.channels.telegram.botToken, richMessages: true },
@@ -207,6 +211,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
         },
       );
       expectMethods(html ? "sendMessage" : "sendRichMessage");
+      expect(requestFields().message_effect_id).toBe(expectedEffect);
       const fields = requests[0]!.fields;
       if (!html) {
         expect(fields.rich_message).toMatchObject({
@@ -443,7 +448,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       {
         text: "[origin: another conversation]",
         location: { ...location, accuracy: 5 },
-        channelData: { telegram: { quoteText: "exact quote" } },
+        channelData: { telegram: { quoteText: "exact quote", messageEffectId: effectId } },
       },
       { replyToId: "888" },
     );
@@ -451,11 +456,13 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     expect(requests[0]!.fields.text).toBe("[origin: another conversation]");
     expect(requests[0]!.fields.reply_parameters).toBeUndefined();
     expect(requests[0]!.fields.reply_to_message_id).toBeUndefined();
+    expect(requestFields().message_effect_id).toBeUndefined();
     expectFields(
       {
         ...location,
         reply_parameters: { message_id: 888, quote: "exact quote" },
         horizontal_accuracy: 5,
+        message_effect_id: effectId,
       },
       1,
     );
@@ -579,12 +586,8 @@ describe("Telegram registered adapter conformance over HTTP", () => {
 
     it("returns bounded cancellation rather than fake delivery or hook diagnostics", async () => {
       const registry = telegramRegistry();
-      addTestHook({
-        registry,
-        pluginId: "cancel",
-        hookName: "message_sending",
-        handler: () => ({ cancel: true, cancelReason: "private-hook-diagnostics" }),
-      });
+      const cancel = () => ({ cancel: true, cancelReason: "private-hook-diagnostics" });
+      addTestHook({ registry, pluginId: "cancel", hookName: "message_sending", handler: cancel });
       initializeGlobalHookRunner(registry);
       const result = await action("send", { to: "123", message: "cancel me" });
       expect(result.details).toEqual({
@@ -600,6 +603,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       const result = await send({
         to: "tg:123",
         message: "Quarterly results",
+        effect: effectId,
         presentation: {
           blocks: [
             { type: "text", text: "Do not duplicate this block" },
@@ -612,6 +616,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
         expect(text).toContain(content);
       }
       expect(text).not.toContain("Do not duplicate this block");
+      expect(requestFields().message_effect_id).toBe(effectId);
       expect(requests[0]!.fields.reply_markup).toEqual(
         replyMarkup({ text: "Deploy", callback_data: "env|prod" }),
       );
@@ -781,12 +786,10 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       expect(requests[0]!.fields.name).toBe("Primary");
       expectFields({ message_thread_id: 99, icon_custom_emoji_id: "5231419410191111111" }, 2);
       resetTelegramTopicNameCacheForTest();
-      await expect(
-        getTopicName("-1001", 99, resolveStorePath(actionCfg.session?.store, { agentId: "ops" })),
-      ).resolves.toBe("Renamed");
-      await expect(
-        getTopicName("-1001", 99, resolveStorePath(actionCfg.session?.store, { agentId: "main" })),
-      ).resolves.toBeUndefined();
+      const opsStore = resolveStorePath(actionCfg.session?.store, { agentId: "ops" });
+      const mainStore = resolveStorePath(actionCfg.session?.store, { agentId: "main" });
+      await expect(getTopicName("-1001", 99, opsStore)).resolves.toBe("Renamed");
+      await expect(getTopicName("-1001", 99, mainStore)).resolves.toBeUndefined();
     });
   });
 });

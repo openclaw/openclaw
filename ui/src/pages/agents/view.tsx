@@ -151,7 +151,7 @@ export function Agents(props: AgentsProps) {
       createLabel={t("custodian.newAgent")}
       createDisabled={rosterPending() || !props.access.canCreateAgent}
       createDisabledReason={
-        !props.access.canCreateAgent ? t("custodian.accessRequired") : undefined
+        !props.access.canCreateAgent ? t("custodian.adminAccessRequired") : undefined
       }
       onCreate={props.onCreateAgent}
       refreshLabel={t(rosterPending() ? "common.loading" : "common.refresh")}
@@ -171,12 +171,12 @@ export function Agents(props: AgentsProps) {
       />
       <Show when={!phone()}>
         <ReasonedDisabledControl
-          reason={!props.access.canCreateAgent ? t("custodian.accessRequired") : undefined}
+          reason={!props.access.canCreateAgent ? t("custodian.adminAccessRequired") : undefined}
         >
           <button
             class="btn btn--sm agents-create-btn"
             disabled={rosterPending() || !props.access.canCreateAgent}
-            title={!props.access.canCreateAgent ? t("custodian.accessRequired") : undefined}
+            title={!props.access.canCreateAgent ? t("custodian.adminAccessRequired") : undefined}
             onClick={() => props.onCreateAgent()}
           >
             {t("custodian.newAgent")}

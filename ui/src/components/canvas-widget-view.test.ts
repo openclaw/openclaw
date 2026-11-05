@@ -551,7 +551,7 @@ describe("Canvas widget view", () => {
     view.preferredHeight = 520;
     await settle(view);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(notice(view)).toContain("recover automatically");
+    expect(notice(view)).toContain("reconnects automatically");
     expect(view.querySelector<HTMLElement>('[role="status"]')?.style.minHeight).toBe("520px");
     await vi.advanceTimersByTimeAsync(5_000);
     slowRead.resolve(documentView);
@@ -633,7 +633,7 @@ describe("Canvas widget view", () => {
         sessionKey: view.sessionKey,
         text: `Inline widget "${expectedTitle}" (${docId}) threw a script error after rendering: ${expectedMessage}, line 12, column 7. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`,
       });
-      expect(notice(view)).toBe(`Script error: ${expectedMessage}`);
+      expect(notice(view)).toBe(`Couldn’t run this widget. Try again. ${expectedMessage}`);
       expect(view.querySelector("iframe")).toBe(frame);
       view.remove();
       const remount = await frameFor(mount(client, docId));
@@ -674,7 +674,7 @@ describe("Canvas widget view", () => {
       const frame = await frameFor(view);
       message(frame, { type: "openclaw:widget-runtime-error", message: "Missing element" });
       await view.updateComplete;
-      expect(notice(view)).toBe("Script error: Missing element");
+      expect(notice(view)).toBe("Couldn’t run this widget. Try again. Missing element");
       expect(client.request.mock.calls.filter(([method]) => method === "wake")).toHaveLength(0);
       expect(view.querySelector("iframe")).toBe(frame);
     },

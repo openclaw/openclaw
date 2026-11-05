@@ -88,7 +88,7 @@ function sessionDeleteSkipPreference(
 // Delete always confirms; bound automations add an unskippable pause warning.
 function confirmSessionDelete(
   sessions: readonly SessionActionRow[],
-  options: { message: string; skipPreference?: ConfirmDialogSkipPreference },
+  options: { title: string; message: string; skipPreference?: ConfirmDialogSkipPreference },
   scope: SidebarSessionMutationScope,
 ): Promise<boolean> {
   const dialog = {
@@ -122,7 +122,8 @@ export async function deleteSessionsBatch(
   const confirmed = await confirmSessionDelete(
     rows,
     {
-      message: t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }),
+      title: t("sessionsView.deleteSessionsTitle", { count: String(rows.length) }),
+      message: t("sessionsView.deleteSessionsConfirm"),
       skipPreference: sessionDeleteSkipPreference(scope),
     },
     scope,
@@ -167,7 +168,10 @@ export async function deleteSessionsBatch(
     }
     if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       if (result.preservedWorktrees.length > 0) {
-        showToast({ message: formatPreservedWorktreesNotice(result.preservedWorktrees) });
+        showToast({
+          severity: undefined,
+          message: formatPreservedWorktreesNotice(result.preservedWorktrees),
+        });
       }
       return;
     }
@@ -446,6 +450,7 @@ export async function assignSessionCategory(
   const currentSession = options.resolveSession ? options.resolveSession() : session;
   if (!currentSession) {
     showToast({
+      severity: catalogChanged ? "error" : undefined,
       message: t(catalogChanged ? "sessionsView.newGroupMoveSkipped" : "common.refresh"),
     });
     return "failed";
@@ -461,11 +466,11 @@ export async function assignSessionCategory(
   );
 }
 
-export async function forkSession(
+export async function createChildSession(
   deps: SessionActionHost,
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
-  options: { title?: string } = {},
+  options: { fork: boolean; title?: string },
 ): Promise<SidebarSessionMutationResult> {
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
@@ -474,9 +479,13 @@ export async function forkSession(
   const createParams = {
     parentSessionKey: session.key,
     ...(options.title?.trim() ? { label: options.title.trim() } : {}),
-    fork: true,
-    ...((session.gatewayHasActiveRun ?? session.hasActiveRun)
-      ? { forkFrom: "last-completed" as const }
+    ...(options.fork
+      ? {
+          fork: true,
+          ...((session.gatewayHasActiveRun ?? session.hasActiveRun)
+            ? { forkFrom: "last-completed" as const }
+            : {}),
+        }
       : {}),
     agentId,
   };
@@ -520,7 +529,9 @@ export async function stopCloudWorker(
     return;
   }
   const confirmed = await showConfirmDialog({
-    message: t("sessionsView.stopCloudWorkerConfirm", { session: session.label }),
+    title: t(`${stopAction.copyKey}Confirm`, { session: session.label }),
+    message: t(`${stopAction.copyKey}Description`),
+    details: t("sessionsView.stopCloudWorkerTarget", { session: session.label }),
     confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
     danger: true,
     signal: scope.signal,
@@ -574,7 +585,8 @@ export async function deleteSession(
   const confirmed = await confirmSessionDelete(
     [session],
     {
-      message: t("sessionsView.deleteSessionConfirm", { session: session.label }),
+      title: t("sessionsView.deleteSessionTitle", { session: session.label }),
+      message: t("sessionsView.deleteSessionConfirm"),
       ...(options.offerSkip ? { skipPreference: sessionDeleteSkipPreference(scope) } : {}),
     },
     scope,
@@ -621,7 +633,10 @@ export async function deleteSession(
     }
     if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       if (outcome.worktreePreserved) {
-        showToast({ message: formatPreservedWorktreesNotice([outcome.worktreePreserved]) });
+        showToast({
+          severity: undefined,
+          message: formatPreservedWorktreesNotice([outcome.worktreePreserved]),
+        });
       }
       return;
     }
@@ -641,6 +656,7 @@ export async function deleteSession(
         window.alert(formatPreservedWorktreesNotice([preserved]));
       } else {
         const removeWorktree = await showConfirmDialog({
+          title: t("sessionsView.removePreservedWorktreeTitle", { branch: preserved.branch }),
           message: formatPreservedWorktreeConfirmation(preserved),
           confirmLabel: t("common.remove"),
           danger: true,
@@ -649,9 +665,7 @@ export async function deleteSession(
         // Reconnect cancels the worktree prompt, not the confirmed deletion.
         // Report the preserved worktree without using the retired client.
         if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-          showToast({
-            message: formatPreservedWorktreesNotice([preserved]),
-          });
+          showToast({ severity: undefined, message: formatPreservedWorktreesNotice([preserved]) });
           return;
         }
         if (removeWorktree) {

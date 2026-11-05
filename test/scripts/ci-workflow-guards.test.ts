@@ -815,6 +815,7 @@ AFTER_CD
     const workflow = readWorkflow(".github/workflows/stale.yml");
     expect(Object.keys(workflow.jobs)).toEqual(["stale-lifecycle"]);
     const job = workflow.jobs["stale-lifecycle"];
+    expect(job["runs-on"]).toBe("ubuntu-24.04");
     const script = String(
       requiredWorkflowStep(job.steps, "Evaluate issue/PR inactivity").with?.script,
     );
@@ -902,15 +903,21 @@ AFTER_CD
         ["workflow_dispatch", false, "failure", false, false],
         ["workflow_dispatch", false, "success", true, false],
       ] as const) {
+        const context = {
+          eventName,
+          draft,
+          cancelled,
+          additionalNeeds: { admission: { outputs: { runner: "admitted-arm" }, result } },
+        };
         expect(
-          evaluateWorkflowExpression(workflow.jobs[jobName].if, {
-            eventName,
-            draft,
-            cancelled,
-            additionalNeeds: { admission: { outputs: {}, result } },
-          }),
+          evaluateWorkflowExpression(workflow.jobs[jobName].if, context),
           `${workflowPath}: ${eventName}, admission=${result}, cancelled=${cancelled}`,
         ).toBe(admitted);
+        if (jobName === "check-arm") {
+          expect(evaluateWorkflowRunner(workflow.jobs[jobName]["runs-on"], context)).toBe(
+            eventName === "pull_request" ? "ubuntu-24.04-arm" : "admitted-arm",
+          );
+        }
       }
     }
   });
@@ -1342,6 +1349,7 @@ AFTER_CD
   it("verifies the pinned OpenGrep release binary before installing it", () => {
     for (const workflowPath of [OPENGREP_PR_DIFF_WORKFLOW, OPENGREP_FULL_WORKFLOW]) {
       const workflow = readWorkflow(workflowPath);
+      expect(workflow.jobs.scan["runs-on"], workflowPath).toBe("ubuntu-24.04");
       const installStep = requiredWorkflowStep(workflow.jobs.scan.steps, "Install opengrep");
       const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
@@ -2447,7 +2455,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     {
       file: "full-release-validation.yml",
       runner: "blacksmith-4vcpu-ubuntu-2404",
-      job: "release_checks_independent",
+      job: "release_decision",
     },
     {
       file: "openclaw-npm-preflight.yml",
