@@ -37,6 +37,7 @@ import {
   resolveManagedSecretRefRuntimeProviderAuth,
 } from "./model-auth-runtime-config.js";
 import {
+  assertProviderAuthSupportsHttp,
   ProviderAuthError,
   resolveDirectProviderCredentialMode,
   type ResolvedProviderAuth,
@@ -164,6 +165,7 @@ export async function resolveProviderEntryApiKeyAuth(params: {
       mode: binding.auth.mode,
       authFlow: binding.auth.authFlow,
     });
+    assertProviderAuthSupportsHttp(binding.auth, provider);
     return binding.auth;
   }
   if (binding.kind === "profile-incompatible") {
@@ -610,6 +612,7 @@ export async function resolveApiKeyForProviderCore(input: {
   });
   params.signal?.throwIfAborted();
   if (syntheticLocalAuth) {
+    assertProviderAuthSupportsHttp(syntheticLocalAuth, provider);
     return syntheticLocalAuth;
   }
 

@@ -55,6 +55,7 @@ async function prepareClaudeCliAuth({
         apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER,
         source: "Claude CLI native auth",
         mode: "oauth" as const,
+        nativeAuth: { runtime: CLAUDE_CLI_BACKEND_ID, mode: "oauth" as const },
       }
     : undefined;
 }
