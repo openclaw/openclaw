@@ -236,9 +236,9 @@ suite.define(() => {
             await page.locator(".chat-pane-cache__pane--active .chat-pane__header").waitFor();
             await page.evaluate(
               () =>
-                new Promise((resolve) =>
-                  requestAnimationFrame(() => requestAnimationFrame(resolve)),
-                ),
+                new Promise((resolve) => {
+                  requestAnimationFrame(() => requestAnimationFrame(resolve));
+                }),
             );
             environmentModule.release();
           }
