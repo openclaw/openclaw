@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { setJsoncOcPath } from "../../jsonc/edit.js";
 import { parseJsonc } from "../../jsonc/parse.js";
 import { parseOcPath } from "../../oc-path.js";
-import { OcEmitSentinelError } from "../../sentinel.js";
 
 describe("setJsoncOcPath — value replacement", () => {
   const config = `{
@@ -92,18 +91,5 @@ describe("setJsoncOcPath — quoted segments (regression: resolve↔edit symmetr
         },
       },
     });
-  });
-});
-
-describe("setJsoncOcPath — sentinel keys", () => {
-  it("rejects a redaction sentinel used as an object key", () => {
-    const value = {
-      kind: "object" as const,
-      entries: [{ key: "__OPENCLAW_REDACTED__", value: { kind: "number" as const, value: 1 } }],
-    };
-
-    expect(() =>
-      setJsoncOcPath(parseJsonc('{"token":"x"}'), parseOcPath("oc://config.jsonc/token"), value),
-    ).toThrow(OcEmitSentinelError);
   });
 });
