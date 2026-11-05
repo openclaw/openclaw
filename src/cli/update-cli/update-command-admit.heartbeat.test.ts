@@ -32,6 +32,7 @@ afterEach(() => {
 
 const source = "Source checklist.\n";
 const operatorScratch = "Operator-owned checklist.\n";
+const incompleteTasksMessage = "no complete name/interval/prompt entries";
 
 type Scenario = {
   name: string;
@@ -140,6 +141,31 @@ function fixture(scenario: Scenario, withDatabase = true) {
   return { config, configPath, contextPath, sourcePath, snapshot };
 }
 
+async function expectUnchangedHeartbeatAdmission(
+  f: ReturnType<typeof fixture>,
+  refusalMessage?: string,
+) {
+  const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  const before = f.snapshot();
+  await updateAdmitCommand(f.contextPath);
+  expect(output).toHaveBeenCalledOnce();
+  const verdict = parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0]);
+  expect(process.exitCode).toBe(refusalMessage ? 3 : 0);
+  expect(verdict).toMatchObject({
+    verdict: refusalMessage ? "refuse" : "admit",
+    reasons: refusalMessage
+      ? [
+          expect.objectContaining({
+            code: "heartbeat-migration",
+            message: expect.stringContaining(refusalMessage),
+          }),
+        ]
+      : [],
+  });
+  expect(f.snapshot()).toEqual(before);
+  return verdict;
+}
+
 it.each(["absent", "file", "unreadable"] as const)(
   "checks unresolved cron update admission (heartbeat source: %s)",
   async (sourceKind) => {
@@ -165,25 +191,10 @@ it.each(["absent", "file", "unreadable"] as const)(
       db.prepare("UPDATE cron_jobs SET store_key = ?").run(oldKey);
       db.prepare("UPDATE cron_job_scratch SET store_key = ?").run(oldKey);
     }
-    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    const before = f.snapshot();
-
-    await updateAdmitCommand(f.contextPath);
-
-    const blocked = sourceKind === "unreadable";
-    expect(process.exitCode).toBe(blocked ? 3 : 0);
-    expect(parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0])).toMatchObject({
-      verdict: blocked ? "refuse" : "admit",
-      reasons: blocked
-        ? [
-            expect.objectContaining({
-              code: "heartbeat-migration",
-              message: expect.stringContaining("regular file"),
-            }),
-          ]
-        : [],
-    });
-    expect(f.snapshot()).toEqual(before);
+    await expectUnchangedHeartbeatAdmission(
+      f,
+      sourceKind === "unreadable" ? "regular file" : undefined,
+    );
   },
 );
 
@@ -217,29 +228,10 @@ it.each<Scenario>([
     }
     fs[scenario.retainedSource === "link" ? "linkSync" : "symlinkSync"](target, f.sourcePath);
   }
-  const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   const errors = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-  const before = f.snapshot();
-
-  await updateAdmitCommand(f.contextPath);
-
-  expect(output).toHaveBeenCalledOnce();
-  const verdict = parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0]);
-  expect(process.exitCode).toBe(scenario.message ? 3 : 0);
-  expect(verdict).toMatchObject({
-    protocol: 1,
-    verdict: scenario.message ? "refuse" : "admit",
-    reasons: scenario.message
-      ? [
-          expect.objectContaining({
-            code: "heartbeat-migration",
-            message: expect.stringContaining(scenario.message),
-          }),
-        ]
-      : [],
-  });
+  const verdict = await expectUnchangedHeartbeatAdmission(f, scenario.message);
+  expect(verdict).toMatchObject({ protocol: 1 });
   expect(errors).not.toHaveBeenCalled();
-  expect(f.snapshot()).toEqual(before);
 
   if (scenario.scratch === operatorScratch && !scenario.invalidSource) {
     const notes = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
@@ -410,24 +402,7 @@ it.each([
     } else {
       fs.unlinkSync(f.sourcePath);
     }
-    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    const before = f.snapshot();
-
-    await updateAdmitCommand(f.contextPath);
-
-    expect(parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0])).toMatchObject({
-      verdict: incomplete ? "refuse" : "admit",
-      reasons: incomplete
-        ? [
-            expect.objectContaining({
-              code: "heartbeat-migration",
-              message: expect.stringContaining("no complete name/interval/prompt entries"),
-            }),
-          ]
-        : [],
-    });
-    expect(process.exitCode).toBe(incomplete ? 3 : 0);
-    expect(f.snapshot()).toEqual(before);
+    await expectUnchangedHeartbeatAdmission(f, incomplete ? incompleteTasksMessage : undefined);
   },
 );
 
@@ -479,23 +454,6 @@ it.each([false, true])(
       stateReadOnly,
       "withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync",
     ).mockImplementation(async (operation) => readStore(operation));
-    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    const before = f.snapshot();
-
-    await updateAdmitCommand(f.contextPath);
-
-    expect(parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0])).toMatchObject({
-      verdict: incomplete ? "refuse" : "admit",
-      reasons: incomplete
-        ? [
-            expect.objectContaining({
-              code: "heartbeat-migration",
-              message: expect.stringContaining("no complete name/interval/prompt entries"),
-            }),
-          ]
-        : [],
-    });
-    expect(process.exitCode).toBe(incomplete ? 3 : 0);
-    expect(f.snapshot()).toEqual(before);
+    await expectUnchangedHeartbeatAdmission(f, incomplete ? incompleteTasksMessage : undefined);
   },
 );
