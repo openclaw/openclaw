@@ -5,6 +5,10 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildMockOpenAiResponsesProvider } from "../../src/gateway/test-openai-responses-model.js";
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
+import {
+  LEGACY_USAGE_COST_PARTITION_SCOPE,
+  USAGE_COST_PARTITION_SCOPE,
+} from "../../src/infra/session-cost-usage-partitions.js";
 import { reserveTestPortListener } from "../../src/test-utils/port-claims.js";
 import { writeOpenAiResponsesText } from "./openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
@@ -123,6 +127,9 @@ export async function inspectUpgradeDatabases(root: string) {
     digest: string;
     cacheDigest?: string;
     cacheCount?: number;
+    retainedCacheDigest?: string;
+    retiredUsagePartitionCount?: number;
+    currentUsagePartitionCount?: number;
     hasQuestions?: boolean;
     hasOutboxSequence?: boolean;
   }> = [];
@@ -175,6 +182,19 @@ export async function inspectUpgradeDatabases(root: string) {
             ...(cache
               ? {
                   cacheCount: cache.length,
+                  retainedCacheDigest: createHash("sha256")
+                    .update(
+                      JSON.stringify(
+                        cache.filter((row) => row.scope !== LEGACY_USAGE_COST_PARTITION_SCOPE),
+                      ),
+                    )
+                    .digest("hex"),
+                  retiredUsagePartitionCount: cache.filter(
+                    (row) => row.scope === LEGACY_USAGE_COST_PARTITION_SCOPE,
+                  ).length,
+                  currentUsagePartitionCount: cache.filter(
+                    (row) => row.scope === USAGE_COST_PARTITION_SCOPE,
+                  ).length,
                   cacheDigest: createHash("sha256").update(JSON.stringify(cache)).digest("hex"),
                 }
               : {}),

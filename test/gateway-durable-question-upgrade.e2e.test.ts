@@ -203,12 +203,21 @@ it.skipIf(!stableRoot)(
         const baselineAgent = baseline.find((row) => row.cacheCount !== undefined);
         expect(baselineAgent?.version).toBe(stableSchemas.agent);
         expect(baselineAgent?.cacheCount).toBeGreaterThan(0);
+        expect(
+          (baselineAgent?.cacheCount ?? 0) - (baselineAgent?.retiredUsagePartitionCount ?? 0),
+        ).toBeGreaterThan(0);
+        if (stableVersion === "2026.10.10") {
+          expect(baselineAgent?.retiredUsagePartitionCount).toBeGreaterThan(0);
+          expect(baselineAgent?.currentUsagePartitionCount).toBe(0);
+        }
         expect(baseline.some((row) => row.version === stableSchemas.state)).toBe(true);
         trace("stable-persisted", {
           binaryVersion: stableManifest.version,
           versions: baseline.map((row) => row.version),
           cacheCount: baselineAgent?.cacheCount,
           cacheDigest: baselineAgent?.cacheDigest,
+          retainedCacheDigest: baselineAgent?.retainedCacheDigest,
+          retiredUsagePartitionCount: baselineAgent?.retiredUsagePartitionCount,
         });
         const archive = instance.state.path("stable-complete.tar.gz");
         const backup = await instance.cli([
@@ -233,19 +242,28 @@ it.skipIf(!stableRoot)(
         const migratedAgent = migrated.find((row) => row.cacheCount !== undefined);
         expect(migratedAgent?.version).toBe(41);
         expect(migratedAgent).toMatchObject({ hasQuestions: true, hasOutboxSequence: true });
-        expect(migratedAgent?.cacheDigest).toBe(baselineAgent?.cacheDigest);
+        // Main #191790 retires the released v1 usage partitions; every other cache cell stays exact.
+        expect(migratedAgent?.retiredUsagePartitionCount).toBe(0);
+        expect(migratedAgent?.cacheCount).toBeGreaterThan(0);
+        expect(migratedAgent?.retainedCacheDigest).toBe(baselineAgent?.retainedCacheDigest);
         expect(migrated.some((row) => row.version === 39)).toBe(true);
         trace("candidate-doctor", {
           versions: migrated.map((row) => row.version),
           cacheCount: migratedAgent?.cacheCount,
           cacheDigest: migratedAgent?.cacheDigest,
+          retainedCacheDigest: migratedAgent?.retainedCacheDigest,
+          retiredUsagePartitionCount: migratedAgent?.retiredUsagePartitionCount,
         });
         await instance.startGateway();
         client = await connect();
         await assertHistory();
         await assertSettings();
+        await persistUsageCache();
         await stop();
         const beforeRefusal = await inspectUpgradeDatabases(instance.state.stateDir);
+        expect(
+          beforeRefusal.find((row) => row.cacheCount !== undefined)?.currentUsagePartitionCount,
+        ).toBeGreaterThan(0);
         fixture.useBinary(path.join(stableRoot, "openclaw.mjs"));
         let refused = false;
         try {
