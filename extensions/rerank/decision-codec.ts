@@ -1,7 +1,6 @@
 import type {
   DecisionAnswerV2,
   DecisionBatchV2,
-  DecisionEntry,
   DecisionProviderContextV2,
 } from "openclaw/plugin-sdk/decisions";
 
@@ -46,7 +45,7 @@ export type RerankPlan = {
   readonly slots: readonly (readonly Slot[])[];
 };
 
-function render(value: DecisionEntry): string {
+function render(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
@@ -56,7 +55,7 @@ function stateQuery(batch: DecisionBatchV2): string | undefined {
     return state.text;
   }
   if (state.type === "json") {
-    return render(state.value as DecisionEntry);
+    return render(state.value);
   }
   return undefined;
 }
@@ -141,6 +140,10 @@ function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function field(value: unknown, key: string): unknown {
+  return value !== null && typeof value === "object" ? Reflect.get(value, key) : undefined;
+}
+
 /**
  * Read one `/rerank` response into scores aligned with the request's documents.
  * Accepts the Cohere-style `{ results: [{ index, relevance_score }] }` used by
@@ -148,22 +151,22 @@ function finiteNumber(value: unknown): number | undefined {
  * TEI's bare `[{ index, score }]` array. Every document must be scored once.
  */
 export function readRerankScores(payload: unknown, count: number): number[] | undefined {
-  const container = payload as { results?: unknown; data?: unknown } | null;
-  const rows = Array.isArray(payload)
+  const results = field(payload, "results");
+  const data = field(payload, "data");
+  const rows: unknown[] | undefined = Array.isArray(payload)
     ? payload
-    : Array.isArray(container?.results)
-      ? container.results
-      : Array.isArray(container?.data)
-        ? container.data
+    : Array.isArray(results)
+      ? results
+      : Array.isArray(data)
+        ? data
         : undefined;
   if (!rows || rows.length !== count) {
     return undefined;
   }
   const scores: (number | undefined)[] = Array.from({ length: count });
-  for (const row of rows as unknown[]) {
-    const entry = row as { index?: unknown; relevance_score?: unknown; score?: unknown } | null;
-    const index = entry?.index;
-    const score = finiteNumber(entry?.relevance_score) ?? finiteNumber(entry?.score);
+  for (const row of rows) {
+    const index = field(row, "index");
+    const score = finiteNumber(field(row, "relevance_score")) ?? finiteNumber(field(row, "score"));
     if (
       typeof index !== "number" ||
       !Number.isInteger(index) ||
@@ -176,7 +179,8 @@ export function readRerankScores(payload: unknown, count: number): number[] | un
     }
     scores[index] = score;
   }
-  const complete = scores as number[];
+  // count unique in-range indices over count rows fill every slot.
+  const complete = scores.filter((score): score is number => score !== undefined);
   // Most servers already return [0, 1] relevance. Raw logits (any value
   // outside that range) go through the sigmoid every cross-encoder uses.
   return complete.every((score) => score >= 0 && score <= 1)

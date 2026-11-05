@@ -40,13 +40,22 @@ function rerankConfig(root: string, origin: string, apiKey?: string) {
         rerank: {
           baseUrl: origin + "/v1",
           ...(apiKey ? { apiKey } : {}),
-          // Operators list only the model id; the plugin declares Decision facts.
-          models: [{ id: "bge-reranker-v2-m3", name: "BGE reranker v2 m3" }],
+          // The row authors no inference block; the plugin declares Decision facts.
+          models: [
+            {
+              id: "bge-reranker-v2-m3",
+              name: "BGE reranker v2 m3",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              maxTokens: 1,
+            },
+          ],
         },
       },
     },
     plugins: { allow: ["rerank"], slots: { memory: "none" } },
-  } as OpenClawConfig;
+  } satisfies OpenClawConfig;
 }
 
 afterEach(() => resetDecisionTestRuntime());

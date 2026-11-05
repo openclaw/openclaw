@@ -164,7 +164,7 @@ async function rerank(
   return last;
 }
 
-export async function evaluateRerankDecision(
+async function evaluateRerankDecision(
   batch: DecisionBatchV2,
   context: DecisionProviderContextV2,
 ): Promise<ProviderDecisionOutcomeV2> {
