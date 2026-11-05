@@ -22,7 +22,7 @@ export function validatePluginRecommendedPrompts(
       return { ok: false, error: "entries must be non-empty strings" };
     }
     const prompt = entry.replace(/\s+/gu, " ").trim();
-    if ([...prompt].length > MAX_PLUGIN_RECOMMENDED_PROMPT_LENGTH) {
+    if (Array.from(prompt).length > MAX_PLUGIN_RECOMMENDED_PROMPT_LENGTH) {
       return {
         ok: false,
         error: `entries must be at most ${MAX_PLUGIN_RECOMMENDED_PROMPT_LENGTH} Unicode code points`,

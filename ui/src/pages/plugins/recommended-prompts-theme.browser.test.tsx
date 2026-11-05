@@ -10,7 +10,7 @@ let container: HTMLDivElement;
 let styles: HTMLStyleElement;
 let initialTheme: string | undefined;
 let initialMode: string | undefined;
-const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+const frame = () => new Promise<number>(requestAnimationFrame);
 const panel = () => container.querySelector<HTMLElement>(".plugin-recommended-prompts")!;
 const layers = () => [
   ...container.querySelectorAll<HTMLElement>(".plugin-recommended-prompts__art > span"),
@@ -55,15 +55,20 @@ beforeEach(async () => {
   await frame();
 });
 afterEach(() => {
-  if (initialTheme === undefined) delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = initialTheme;
-  if (initialMode === undefined) delete document.documentElement.dataset.themeMode;
-  else document.documentElement.dataset.themeMode = initialMode;
+  if (initialTheme === undefined) {
+    delete document.documentElement.dataset.theme;
+  } else {
+    document.documentElement.dataset.theme = initialTheme;
+  }
+  if (initialMode === undefined) {
+    delete document.documentElement.dataset.themeMode;
+  } else {
+    document.documentElement.dataset.themeMode = initialMode;
+  }
   cleanupSolid();
   container.remove();
   styles.remove();
 });
-
 it("recolors the real artwork layers from live primary, independently of accent", async () => {
   const art = container.querySelector<HTMLElement>(".plugin-recommended-prompts__art")!;
   expect(getComputedStyle(art).isolation).toBe("isolate");
@@ -86,8 +91,9 @@ it("recolors the real artwork layers from live primary, independently of accent"
     document.documentElement.dataset.theme = mode === "custom" ? "light" : mode;
     document.documentElement.dataset.themeMode = mode === "dark" ? "dark" : "light";
     container.style.backgroundColor = "var(--bg)";
-    if (mode === "custom")
+    if (mode === "custom") {
       container.style.cssText += ";--bg:#eef4ff;--card:#ffffff;--card-foreground:#182033";
+    }
     container.style.setProperty("--primary", `rgb(${primary.join(" ")})`);
     await frame();
     expect(layers().map((layer) => rgb(getComputedStyle(layer).backgroundColor))).toEqual([
@@ -110,7 +116,7 @@ it("recolors the real artwork layers from live primary, independently of accent"
         .reduce((total, c, i) => total + c * [0.2126, 0.7152, 0.0722][i]!, 0);
     const values = [getComputedStyle(row).color, getComputedStyle(row).backgroundColor]
       .map(luminance)
-      .sort((a, b) => b - a);
+      .toSorted((a, b) => b - a);
     expect((values[0]! + 0.05) / (values[1]! + 0.05), mode).toBeGreaterThanOrEqual(4.5);
   }
 });

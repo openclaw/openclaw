@@ -39,16 +39,16 @@ describe("manifest recommended prompts", () => {
     ]);
     expect(registry.diagnostics).toEqual([]);
   });
-
   it.each([{ prompts: undefined }, { prompts: [] }])(
     "accepts absent or empty optional metadata: $prompts",
     ({ prompts }) => {
       const result = loadPluginManifest(fixture(prompts).rootDir, false);
-      if (!result.ok) throw new Error(result.error);
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
       expect(result.manifest.recommendedPrompts).toEqual(prompts);
     },
   );
-
   it.each([
     { prompts: null },
     { prompts: ["Valid", "x".repeat(129)] },

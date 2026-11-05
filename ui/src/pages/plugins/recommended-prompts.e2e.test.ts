@@ -142,7 +142,6 @@ async function expectUnsent(
 describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
-
   it("omits absent metadata, keeps header/actions, waits for install and preserves another chat draft", async () => {
     const context = await newContext();
     const page = await context.newPage();
@@ -248,7 +247,6 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
       await context.close();
     }
   });
-
   it("keeps chat-creation failure visible after installation changes to the runtime identity", async () => {
     const context = await newContext();
     const page = await context.newPage();
@@ -285,7 +283,6 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
       await context.close();
     }
   });
-
   it("retains an install failure and lets recommendation retry open exactly one unsent chat", async () => {
     const context = await newContext();
     const page = await context.newPage();
@@ -328,7 +325,6 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
       await context.close();
     }
   });
-
   it("requires activation approval before enable and capability-consent, then opens an unsent chat", async () => {
     const context = await newContext();
     const page = await context.newPage();
@@ -344,9 +340,11 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
       await recommendation(page).first().waitFor();
       // Reject real modal preparation once; keep the confirmation owner and retry flow intact.
       await page.evaluate(() => {
-        const get = customElements.get;
+        const get = customElements.get.bind(customElements);
         customElements.get = function (tag) {
-          if (tag !== "openclaw-modal-dialog") return get.call(this, tag);
+          if (tag !== "openclaw-modal-dialog") {
+            return get(tag);
+          }
           customElements.get = get;
           throw new Error("Synthetic confirmation preparation failed");
         };
@@ -418,7 +416,6 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
       await context.close();
     }
   });
-
   it("already-enabled recommendations create directly and deduplicate held session creation", async () => {
     const context = await newContext();
     const page = await context.newPage();
@@ -462,7 +459,6 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
       await context.close();
     }
   });
-
   it("keeps native text visible while multiline drafts scroll and during synthetic composition", async () => {
     const context = await newContext();
     const page = await context.newPage();
@@ -517,7 +513,6 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
       await context.close();
     }
   });
-
   it("does not follow a superseded agent selection after session creation was submitted", async () => {
     const context = await newContext();
     const page = await context.newPage();
@@ -563,7 +558,6 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
       await context.close();
     }
   });
-
   it("permanently retires a held chat launch after leaving and returning to its plugin page", async () => {
     const context = await newContext();
     const page = await context.newPage();
