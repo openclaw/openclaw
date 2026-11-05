@@ -9,18 +9,16 @@ import {
   createDuplicateParagraphProjector,
 } from "./duplicate-paragraphs.js";
 import { stripLeadingEmptyLines } from "./strip-leading-empty-lines.js";
+import type {
+  TextProjection,
+  TextProjectionUpdate,
+  TextProjector,
+} from "./text-projection-types.js";
 import { trimTextPreservingCode } from "./trim-code-text.js";
 
 export { trimTextPreservingCode };
+export type { TextProjection, TextProjector } from "./text-projection-types.js";
 
-export type TextProjection = { text: string; delta: string | null };
-type TextProjectionUpdate = TextProjection & {
-  // Producer-owned unchanged prefix, ending in non-whitespace, and mutable tail.
-  retained?: { prefix: string; tail: string };
-};
-export type TextProjector = ((input: TextProjectionUpdate) => TextProjectionUpdate) & {
-  canReplaceFrom?: (start: number) => boolean;
-};
 // Token absence must prove identity; activated syntax stays with the canonical transform.
 type TextCheckpoint = {
   text: string;

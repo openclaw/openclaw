@@ -5,7 +5,7 @@ import {
   findCodeOwnership,
   findCodeRegions,
 } from "./code-regions.js";
-import type { TextProjector } from "./text-projection.js";
+import type { TextProjector } from "./text-projection-types.js";
 
 function collapsePlainDuplicateParagraphs(text: string): string {
   return createDuplicateParagraphProjector(false)({ text, delta: null }).text;
