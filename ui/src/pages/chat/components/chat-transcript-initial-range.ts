@@ -573,8 +573,13 @@ export class TranscriptInitialRange {
         if (!moving && !warmOnly) {
           this.idleMeasureStep = step + 1;
         }
+        // Medium rows warm data forward. Reverse scrolling still needs advance
+        // DOM to avoid concentrating cold predecessor mounts in the scroll frame.
         const canPrepareRow =
-          row.retainDom && !rendered.has(row.key) && !this.preparedRowKeys.has(row.key);
+          row.retainDom &&
+          (!row.prewarm || direction < 0) &&
+          !rendered.has(row.key) &&
+          !this.preparedRowKeys.has(row.key);
         // Idle admission skips retained DOM and live/widget rows to keep
         // measuring beyond a cached prefix after the reader changes direction.
         if (moving || warmOnly || canPrepareRow) {

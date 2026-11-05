@@ -300,8 +300,10 @@ async function transcriptFixture(
   };
 }
 
-it("warms medium row data without mounting unseen DOM while idle", async () => {
+it("warms medium row data without mounting unseen DOM and reuses visited rows", async () => {
   const view = await transcriptFixture(0, true, false, "data-only");
+  const visited = view.container.querySelector('[data-virtual-row-key="fragment:5"]');
+  expect(visited).not.toBeNull();
   const initialRows = new Set(
     transcriptRows(view.container).map((row) => row.dataset.virtualRowKey),
   );
@@ -313,6 +315,19 @@ it("warms medium row data without mounting unseen DOM while idle", async () => {
   expect(
     transcriptRows(view.container).filter((row) => !initialRows.has(row.dataset.virtualRowKey)),
   ).toEqual([]);
+
+  await view.scrollTo(8);
+  const afterScroll = new Set(transcriptRows(view.container));
+  for (let turn = 0; turn < 4; turn++) {
+    await view.frame(1, false);
+    await view.task();
+  }
+  expect(transcriptRows(view.container).filter((row) => !afterScroll.has(row))).toEqual([]);
+  expect(view.container.querySelector('[data-virtual-row-key="fragment:5"]')).toBe(visited);
+  expect(visited?.hasAttribute("data-prepared-row")).toBe(true);
+  await view.scrollTo(0);
+  expect(view.container.querySelector('[data-virtual-row-key="fragment:5"]')).toBe(visited);
+  expect(visited?.hasAttribute("data-prepared-row")).toBe(false);
 });
 
 it("bounds initial HTML warming and keeps distant rows out of the DOM", async () => {
