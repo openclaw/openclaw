@@ -302,7 +302,7 @@ async function transcriptFixture(
   };
 }
 
-it("warms medium row data while idle and paints the next viewport during fast scroll", async () => {
+it("warms medium row data while idle and paces preparation during fast scroll", async () => {
   const view = await transcriptFixture(0, true, false, "data-only");
   const initialRows = transcriptRows(view.container);
   for (let turn = 0; turn < 160; turn++) {
@@ -313,13 +313,12 @@ it("warms medium row data while idle and paints the next viewport during fast sc
   expect(transcriptRows(view.container)).toEqual(initialRows);
 
   await view.scrollTo(8);
-  expect(view.container.querySelector('[data-virtual-row-key="fragment:16"]')).not.toBeNull();
-  expect(
-    view.container.querySelector('[data-virtual-row-key="fragment:16"]')?.hasAttribute("inert"),
-  ).toBe(false);
+  await view.frame(1, false);
+  await view.task();
+  expect(view.container.querySelector("[data-preparing-row]")).not.toBeNull();
   const rows = transcriptRows(view.container);
   const active = rows.filter((row) => !row.hasAttribute("inert"));
-  expect(rows.length).toBeLessThanOrEqual(Math.max(12, active.length));
+  expect(rows.length).toBeLessThanOrEqual(Math.max(12, active.length + 8));
 });
 
 it("bounds initial HTML warming and keeps distant rows out of the DOM", async () => {

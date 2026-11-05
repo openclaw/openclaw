@@ -6,6 +6,7 @@ import type { TranscriptRow } from "./chat-transcript-layout.ts";
 // A few viewports avoid repeat mounts without making every scroll restyle a
 // large parked subtree. Geometry and prepared Markdown outlive DOM eviction.
 const PREPARED_ROW_LIMIT = 12;
+const SCROLL_PREPARE_ROW_LIMIT = 8;
 // Use idle time before a fast sweep reaches distant rows. The shared HTML cache
 // still bounds admission; DOM and pristine-fragment limits stay unchanged.
 const IDLE_PREWARM_ROW_LIMIT = 2048;
@@ -105,10 +106,10 @@ export class TranscriptInitialRange {
       for (const index of this.endIndexes()) {
         indexes.add(index);
       }
-      const limit = this.hasForwardWindow(range)
-        ? Math.max(PREPARED_ROW_LIMIT, indexes.size)
+      const limit = this.hasForwardPreparation(range)
+        ? Math.max(PREPARED_ROW_LIMIT, indexes.size + SCROLL_PREPARE_ROW_LIMIT)
         : Infinity;
-      // Arriving rows share the retained budget; keep required rows and newest history first.
+      // Keep the active and paced preparation windows; spend remaining slots on recent history.
       for (const key of [...this.preparedRowKeys].reverse()) {
         const index = this.rowIndexes.get(key);
         if (index !== undefined && (indexes.has(index) || indexes.size < limit)) {
@@ -162,7 +163,7 @@ export class TranscriptInitialRange {
       : [];
   }
 
-  private hasForwardWindow(range: Range): boolean {
+  private hasForwardPreparation(range: Range): boolean {
     return (
       this.isReaderMoving() &&
       this.scrollSample.direction > 0 &&
@@ -182,7 +183,7 @@ export class TranscriptInitialRange {
       // The first row starts at its cached offset. Shorter arriving rows leave
       // space after the window, so retain following overscan without mounting
       // the already-skipped preceding neighbour during a large jump.
-      const indexes = this.normalRange(
+      return this.normalRange(
         {
           ...range,
           endIndex: Math.min(range.count - 1, range.endIndex + range.overscan),
@@ -190,23 +191,6 @@ export class TranscriptInitialRange {
         },
         this.rowIndexes,
       );
-      if (this.hasForwardWindow(range)) {
-        const virtualizer = this.virtualizer();
-        const top = (virtualizer.scrollOffset ?? 0) + this.scrollSample.distance;
-        const start = virtualizer.getVirtualItemForOffset(top);
-        const end = virtualizer.getVirtualItemForOffset(
-          top + (virtualizer.scrollRect?.height ?? 600),
-        );
-        if (start && end) {
-          // Keep the next viewport painted without mounting the rows skipped between jumps.
-          const upcoming = Array.from(
-            { length: end.index - start.index + 1 },
-            (_, i) => start.index + i,
-          );
-          return [...new Set([...indexes, ...upcoming])].toSorted((left, right) => left - right);
-        }
-      }
-      return indexes;
     }
     return this.normalRange(range, this.rowIndexes);
   }
@@ -358,12 +342,6 @@ export class TranscriptInitialRange {
       direction: Math.sign(delta),
     };
     this.finish();
-    // Refresh entering, advancing or leaving a predicted forward window, even
-    // when the visible range has not crossed a row boundary.
-    const height = this.virtualizer().scrollRect?.height ?? 600;
-    if ((delta > 0 && delta >= height) || (previous.direction > 0 && previous.distance >= height)) {
-      this.refresh();
-    }
   }
 
   readonly measureElement = (
@@ -577,7 +555,7 @@ export class TranscriptInitialRange {
           : undefined;
       const domLookahead =
         velocity || warmOnly
-          ? 8
+          ? SCROLL_PREPARE_ROW_LIMIT
           : Math.max(
               // A full visible window still measures one temporary row so idle
               // geometry can finish and hand off to distant Markdown warming.
@@ -614,13 +592,8 @@ export class TranscriptInitialRange {
         if (!moving && !warmOnly) {
           this.idleMeasureStep = step + 1;
         }
-        // Medium rows warm data forward. Reverse scrolling still needs advance
-        // DOM to avoid concentrating cold predecessor mounts in the scroll frame.
         const canPrepareRow =
-          row.retainDom &&
-          (!row.prewarm || direction < 0) &&
-          !rendered.has(row.key) &&
-          !this.preparedRowKeys.has(row.key);
+          row.retainDom && !rendered.has(row.key) && !this.preparedRowKeys.has(row.key);
         // Idle admission skips retained DOM and live/widget rows to keep
         // measuring beyond a cached prefix after the reader changes direction.
         if (moving || warmOnly || canPrepareRow) {
