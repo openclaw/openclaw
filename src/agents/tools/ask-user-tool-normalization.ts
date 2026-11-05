@@ -108,7 +108,7 @@ export const AskUserToolSchema = Type.Object(
     timeoutSeconds: Type.Optional(
       Type.Integer({
         description:
-          "Maximum human wait in seconds; default 900, clamped 30-3600. Earlier run cancellation or overall run timeout still applies.",
+          "Maximum human wait in seconds; default 900, clamped 30-3600. Transient questions also end when their asking run ends.",
       }),
     ),
   },

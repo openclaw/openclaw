@@ -97,7 +97,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   };
   let didDeliverVisiblePartialReply = false;
   let replyResolverError: string | undefined;
-  const pendingToolProgress = new Set<Promise<void>>();
+  const pendingToolProgress = new Set<Promise<boolean>>();
   let explicitFollowupStartNotice: Promise<void> | undefined;
   const {
     onBlockReply,
@@ -309,13 +309,13 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 markProgress();
                 const run = async () => {
                   if (isDispatchOperationAborted()) {
-                    return;
+                    return false;
                   }
                   await waitForPendingDirectBlockReplyDelivery(
                     getDispatchAbortOperation()?.abortSignal,
                   );
                   if (isDispatchOperationAborted()) {
-                    return;
+                    return false;
                   }
                   markInboundDedupeReplayUnsafe();
                   // Buffered commentary preceded this tool; land it before the summary.
@@ -337,7 +337,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       isForcedToolProgress ||
                       (await state.shouldDeliverVerboseProgressDespiteSourceSuppression()));
                   if (params.replyOptions?.suppressToolProgressMessages && !durableToolResult) {
-                    return;
+                    return false;
                   }
                   const shouldForwardToolResultProgress = forceToolResultProgress
                     ? !requiresDurableToolResult &&
@@ -362,7 +362,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     : undefined;
                   let toolResultProgressVisible = false;
                   if (isDispatchOperationAborted()) {
-                    return;
+                    return false;
                   }
                   state.assertProgressCurrent();
                   if (toolResultProgressCallback) {
@@ -373,7 +373,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     ).visible;
                   }
                   if (isDispatchOperationAborted()) {
-                    return;
+                    return false;
                   }
                   if (
                     toolResultProgressCallback &&
@@ -381,10 +381,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       ? toolResultProgressVisible || !shouldDeliverFastModeAutoProgress
                       : forceToolResultProgress)
                   ) {
-                    return;
+                    return toolResultProgressVisible;
                   }
                   if (state.sendPolicyDenied) {
-                    return;
+                    return false;
                   }
                   const bypassToolSummarySuppression =
                     isForcedToolProgress || shouldDeliverFastModeAutoProgress;
@@ -393,7 +393,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     !bypassToolSummarySuppression &&
                     !hasAskUserPayload(payload)
                   ) {
-                    return;
+                    return false;
                   }
                   const visibleToolPayload = preparePayload(
                     dispatcher,
@@ -404,7 +404,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     state.progressState,
                   );
                   if (!visibleToolPayload) {
-                    return;
+                    return false;
                   }
                   const ttsPayload = await maybeApplyTtsWithFinalizationLease(
                     visibleToolPayload,
@@ -415,47 +415,48 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     ? normalizedPayload
                     : await resolveToolDeliveryPayload(normalizedPayload);
                   if (!deliveryPayload || isDispatchOperationAborted()) {
-                    return;
+                    return false;
                   }
                   if (
                     state.shouldSuppressLateTextOnlyToolProgress(deliveryPayload) &&
                     !bypassToolSummarySuppression
                   ) {
-                    return;
+                    return false;
                   }
                   if (await state.shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)) {
-                    return;
+                    return false;
                   }
                   if (
                     !(await state.shouldSendToolSummariesAsync()) &&
                     !bypassToolSummarySuppression &&
                     !requiresDurableToolResultDelivery(deliveryPayload)
                   ) {
-                    return;
+                    return false;
                   }
                   const askUserQuestionId = readAskUserQuestionId(deliveryPayload);
                   if (
                     askUserQuestionId !== undefined &&
                     !(await isAskUserPromptPending(askUserQuestionId))
                   ) {
-                    return;
+                    return false;
                   }
                   if (isDispatchOperationAborted()) {
-                    return;
+                    return false;
                   }
                   state.assertProgressCurrent();
                   if (shouldRouteToOriginating) {
-                    await sendPayloadAsync(deliveryPayload);
-                  } else {
-                    const delivery = state.turnLedger.sendQueued("tool", deliveryPayload);
-                    if (hasAskUserPayload(deliveryPayload)) {
-                      await requireQueuedReplyDelivery({
-                        delivery,
-                        dispatcher,
-                        abortSignal: getDispatchAbortOperation()?.abortSignal,
-                      });
-                    }
+                    const routed = await sendPayloadAsync(deliveryPayload);
+                    return routed !== null && state.isRoutedReplyDelivered(routed);
                   }
+                  const delivery = state.turnLedger.sendQueued("tool", deliveryPayload);
+                  if (hasAskUserPayload(deliveryPayload)) {
+                    await requireQueuedReplyDelivery({
+                      delivery,
+                      dispatcher,
+                      abortSignal: getDispatchAbortOperation()?.abortSignal,
+                    });
+                  }
+                  return delivery.queued;
                 };
                 const pending = run();
                 pendingToolProgress.add(pending);

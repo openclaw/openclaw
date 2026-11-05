@@ -115,6 +115,7 @@ async function plan(
       },
       webSearchUnconfigured: false,
       hasNativeWebSearch: false,
+      runtimeContinuationStarted: false,
       codeModeControlsEnabledForRun: surface.codeModeControlsEnabled,
       codeModeSkills: [],
       computerContextEpoch: { value: 0 },

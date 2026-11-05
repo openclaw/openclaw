@@ -1023,6 +1023,7 @@ export async function runTelegramTestScenario({
   args,
   repoRoot,
   signal,
+  prepareGatewayState,
   acquireCredential = acquireTelegramTestCredential,
   checkCredential = checkScenarioCredential,
   driveScenario = drive,
@@ -1045,6 +1046,7 @@ export async function runTelegramTestScenario({
         }
         const result = await driveScenario(args, repoRoot, credential, {
           signal: scope.signal,
+          prepareGatewayState,
         });
         scope.assertActive();
         return result;
@@ -1076,7 +1078,7 @@ export async function runTelegramTestScenario({
   }
 }
 
-async function drive(args, repoRoot, creds) {
+async function drive(args, repoRoot, creds, { prepareGatewayState } = {}) {
   const scope = currentTelegramRun();
   const leaseHealth = scope.health;
   let telegramProxy;
@@ -1093,13 +1095,14 @@ async function drive(args, repoRoot, creds) {
         telegramProxy,
       },
       leaseHealth,
+      prepareGatewayState,
     );
   } finally {
     await scope.closeProxy(telegramProxy);
   }
 }
 
-async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
+async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth, prepareGatewayState) {
   const driverEnv = { ...sanitizeChildEnvironment(), ...creds.driverEnv };
   const tester = await readTester(driverEnv, repoRoot);
   assertTesterMatchesLease(tester, creds);
@@ -1157,6 +1160,13 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
   let mock;
   let gateway;
   try {
+    leaseHealth.assertHealthy();
+    await prepareGatewayState?.({
+      stateDir: temp.stateDir,
+      configPath: temp.configPath,
+      testerId: tester.id,
+      signal: currentTelegramRun().signal,
+    });
     leaseHealth.assertHealthy();
     if (args.backend === "mock") {
       fs.writeFileSync(requestLog, "");
