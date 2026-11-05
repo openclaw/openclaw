@@ -5,7 +5,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import markdownQualification from "../../config/ci-adaptive-markdown.json" with { type: "json" };
 import { createAdaptiveMarkdownFilter } from "../../scripts/lib/ci-adaptive-markdown.mjs";
 import { resolveChangedNodeTestTargets } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { createTestInputFingerprint } from "../../scripts/test-projects.test-support.mts";
+import * as sourceFacts from "../../scripts/lib/test-selector-source-facts.mts";
+import {
+  createTestInputFingerprint,
+  resolveAffectedTestsFromImportGraph,
+} from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 vi.mock("../../config/ci-adaptive-markdown.json", async (importOriginal) => {
@@ -135,5 +139,24 @@ it("admits a real separate-process companion with qualified inputs, retaining sh
   } finally {
     markdownQualification.commonHash = commonHash;
     markdownQualification.tests["packages/markdown-core/src/fences.test.ts"] = testHash;
+  }
+});
+
+it("shares the qualification graph with selection when changes include a non-source input", () => {
+  const { cwd } = fixture();
+  const changes = [changed, "config/test-lines-allocations/transport.txt"];
+  const scans = vi.spyOn(sourceFacts, "readTestSelectorSourceFacts");
+  try {
+    expect(createTestInputFingerprint(cwd, changes)([unchanged])).not.toBeNull();
+    expect(
+      resolveAffectedTestsFromImportGraph(changes, cwd, {
+        tooling: true,
+        resolveAliases: true,
+        runtimeOnly: true,
+      }),
+    ).toEqual([changedTest]);
+    expect(scans).toHaveBeenCalledTimes(1);
+  } finally {
+    scans.mockRestore();
   }
 });
