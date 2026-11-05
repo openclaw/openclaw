@@ -414,9 +414,12 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           }
           if (!opened || !settled) {
             failConnect(
-              new Error(
-                this.options.connectClosedBeforeReadyMessage ??
-                  `${this.options.providerId} realtime transcription connection closed before ready`,
+              Object.assign(
+                new Error(
+                  this.options.connectClosedBeforeReadyMessage ??
+                    `${this.options.providerId} realtime transcription connection closed before ready`,
+                ),
+                { closeCode: code },
               ),
             );
             return;
