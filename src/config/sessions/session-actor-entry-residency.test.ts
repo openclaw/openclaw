@@ -670,6 +670,12 @@ it("keeps exact accounting through appends and rewrites beyond the actor's resid
     );
     const originalBytes = events.reduce((total, event) => total + storedBytes(event), 0);
     context.expectAccounting(events.length, originalBytes);
+    // An entry-only native writer invalidates the actor, but not its transcript accounting.
+    f.database.db
+      .prepare(
+        "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', ?) WHERE session_key = ?",
+      )
+      .run("native metadata", f.target.sessionKey);
     const appended = {
       type: "message" as const,
       id: "after-window",
@@ -720,6 +726,30 @@ it("keeps exact accounting through appends and rewrites beyond the actor's resid
         maxEvents: 100,
       }),
     ).toMatchObject({ events: [...events.slice(-99), rewritten], truncated: true });
+    const prior = f.read().transcript.version;
+    const first = {
+      ...events[0]!,
+      message: { ...events[0]!.message, __openclaw: { steerTargetRunId: "native-rewrite" } },
+    };
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      f.database.db
+        .prepare("UPDATE session_nodes SET label = ? WHERE session_key = ?")
+        .run("invalidate before native rewrite", f.target.sessionKey);
+      rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
+        { seq: 0, expectedEventJson: JSON.stringify(events[0]), event: first },
+      ]);
+    });
+    context.install();
+    expect(f.read().transcript.version).toMatchObject({
+      generation: prior.generation,
+      rawSeq: prior.rawSeq,
+    });
+    expect(f.read().transcript.version.updatedAt).not.toBe(prior.updatedAt);
+    context.expectAccounting(
+      events.length + 1,
+      originalBytes + storedBytes(rewritten) + storedBytes(first) - storedBytes(events[0]!),
+    );
+    expect(stats.counts.aggregate).toBe(1);
   }));
 
 it("retains one oversized actor across competing small actors and replaces it with a second oversized actor", () =>
