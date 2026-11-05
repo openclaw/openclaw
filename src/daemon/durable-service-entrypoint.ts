@@ -247,6 +247,8 @@ async function installUnderPackageLock(
   let activation: Promise<void> | undefined;
   let swapped = false;
   let settled = false;
+  let recoveryStarted = false;
+  let installError: unknown;
   let outcome: "installed" | "verified" | "failed" = "failed";
   // Cleanup reports through warn so it never replaces the install's own error.
   const settle = async (decision: "restore" | "retain" | "retire") => {
@@ -263,6 +265,7 @@ async function installUnderPackageLock(
   const failedInstallDecision = () => (swapped && !replacesExisting ? "retire" : "restore");
   // Native recovery restarts the previous definition, so its copy must be back first.
   const beforeRecovery = async () => {
+    recoveryStarted = true;
     if (!activation || settled) {
       return;
     }
@@ -287,6 +290,9 @@ async function installUnderPackageLock(
     // A throwing verify still leaves an installed service.
     outcome = "installed";
     outcome = (await params.verify()) ? "verified" : "installed";
+  } catch (error) {
+    installError = error;
+    throw error;
   } finally {
     if (!activation) {
       try {
@@ -296,6 +302,21 @@ async function installUnderPackageLock(
       } catch (error) {
         params.warn(`Durable OpenClaw copy cleanup failed: ${String(error)}`);
       }
+    } else if (
+      !settled &&
+      !recoveryStarted &&
+      outcome === "failed" &&
+      (await import("./service-update-authority.js")).isGatewayServiceRecoveryIncomplete(
+        installError,
+      )
+    ) {
+      // Native recovery stopped before its hook: the replacement may still be queued or running
+      // on this copy and its definition is still installed, so restoring would change files
+      // under it. Keep the copy and its backup for the operator.
+      params.warn(
+        `Service recovery did not finish, so the durable OpenClaw copy at ${replacement.packageRoot} was left as installed and the previous copy's backup was kept. Check the service, then rerun the install.`,
+      );
+      await settle("retain");
     } else if (!settled) {
       await settle(
         outcome === "verified"

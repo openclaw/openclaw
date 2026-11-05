@@ -277,6 +277,17 @@ function retainServiceAuthorityFailure(error: unknown): unknown {
   return error;
 }
 
+// Errors this module raised because native recovery could not restore the previous definition.
+const incompleteRecoveries = new WeakSet<object>();
+
+/**
+ * Whether an install failed with native recovery incomplete: the previous definition was not
+ * restored and the replacement may still be queued, running or registered.
+ */
+export function isGatewayServiceRecoveryIncomplete(error: unknown): boolean {
+  return typeof error === "object" && error !== null && incompleteRecoveries.has(error);
+}
+
 /** Only captured publication receipts may use this while their original lock is live. */
 export async function withGatewayServiceInstallationRecovery<T>(
   install: () => Promise<T>,
@@ -317,9 +328,12 @@ export async function withGatewayServiceInstallationRecovery<T>(
         [error, recoveryError],
         `${error instanceof Error ? error.message : String(error)}\nThe previous service definition could not be restored.`,
       );
-      throw error instanceof GatewayServiceAuthorityError
-        ? new GatewayServiceAuthorityError(failure, "recovery-pending")
-        : failure;
+      const raised =
+        error instanceof GatewayServiceAuthorityError
+          ? new GatewayServiceAuthorityError(failure, "recovery-pending")
+          : failure;
+      incompleteRecoveries.add(raised);
+      throw raised;
     }
     throw error instanceof GatewayServiceAuthorityError
       ? new GatewayServiceAuthorityError(
