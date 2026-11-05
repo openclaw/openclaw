@@ -184,9 +184,7 @@ export function applyChannelDoctorCompatibilityMigrations(
             ? [...new Set([...pluginIds, ...HISTORICAL_WEBHOOK_CHANNELS])]
             : pluginIds,
           historicalWebhookListeners: options?.historicalWebhookListeners,
-          ...(options?.pluginCompatibility
-            ? { manifestRegistry: options.pluginCompatibility.manifestRegistry }
-            : {}),
+          manifestRegistry: options?.pluginCompatibility?.manifestRegistry,
         })
       : { config: bundled.config, changes: [] };
   // Bundled and installed contract views can report the same warning-only condition.
