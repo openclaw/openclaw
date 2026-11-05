@@ -99,12 +99,14 @@ function nativeAuthorization(
   challenge: Challenge,
   token = "synthetic-native-grant",
   kind: "token" | "password" | "deviceToken" | "credentialless" = "deviceToken",
+  expectedGatewayId?: string,
 ) {
   return {
     id: challenge.id,
     result: {
       client: nativeClient,
       scopes,
+      ...(expectedGatewayId ? { expectedGatewayId } : {}),
       auth: kind === "credentialless" ? {} : { [kind]: token },
       ...(kind === "credentialless"
         ? {
@@ -363,6 +365,7 @@ describe("native authenticated Control UI", () => {
 
   type Rejection =
     | { kind: "credential"; auth: Record<string, string> }
+    | { kind: "gateway"; expectedGatewayId: unknown }
     | {
         kind: "personalRequirement";
         auth?: unknown;
@@ -373,6 +376,9 @@ describe("native authenticated Control UI", () => {
     | { kind: "unavailable"; failure: "missing bridge" | "wrong challenge" | "subframe" }
     | { kind: "challenge"; challenge: { nonce: string; ts: number } };
   it.each<Rejection>([
+    { kind: "gateway", expectedGatewayId: "" },
+    { kind: "gateway", expectedGatewayId: "  " },
+    { kind: "gateway", expectedGatewayId: 1 },
     { kind: "credential", auth: { bootstrapToken: "not-a-reusable-native-grant" } },
     { kind: "credential", auth: { token: "shared", deviceToken: "ambiguous-second-method" } },
     { kind: "credential", auth: { token: "" } },
@@ -410,6 +416,14 @@ describe("native authenticated Control UI", () => {
         const reply = nativeAuthorization(challenge);
         return { ...reply, result: { ...reply.result, auth: scenario.auth } };
       });
+    } else if (scenario.kind === "gateway") {
+      respondWith((challenge) => {
+        const reply = nativeAuthorization(challenge);
+        return {
+          ...reply,
+          result: { ...reply.result, expectedGatewayId: scenario.expectedGatewayId },
+        };
+      });
     } else if (scenario.kind === "personalRequirement") {
       bridge.postMessage.mockImplementation((message) => {
         const reply = nativeAuthorization(JSON.parse(message));
@@ -446,7 +460,9 @@ describe("native authenticated Control UI", () => {
       scenario.kind === "challenge" ? scenario.challenge : undefined,
     );
     await expectRejected(socket);
-    if (scenario.kind === "credential" || scenario.kind === "personalRequirement") {
+    if (scenario.kind === "gateway") {
+      expect(gateway!.snapshot.lastError).toContain("invalid Gateway authorization");
+    } else if (scenario.kind === "credential" || scenario.kind === "personalRequirement") {
       expect(gateway!.snapshot.lastError).toContain("invalid Gateway credential");
     } else if (scenario.kind === "target") {
       expect(bridge.postMessage).not.toHaveBeenCalled();
@@ -465,9 +481,14 @@ describe("native authenticated Control UI", () => {
     expect(localStorage.getItem(identityKey)).toBeNull();
   });
 
-  it.each(["Android", "WebKit", "Tauri"] as const)(
-    "uses credentialless Tailscale auth over %s only with the app-approved personal recovery scope",
-    async (transport) => {
+  it.each([
+    ["Android", undefined],
+    ["WebKit", "gateway-boot-a"],
+    ["Tauri", undefined],
+    ["WebKit", "cloned-gateway-boot"],
+  ] as const)(
+    "checks the app-approved personal identity over %s and returned Gateway boot %s",
+    async (transport, bootId) => {
       if (transport === "WebKit") {
         Object.assign(window, {
           OpenClawNativeGatewayAuth: undefined,
@@ -475,7 +496,7 @@ describe("native authenticated Control UI", () => {
             messageHandlers: {
               OpenClawNativeGatewayAuth: {
                 postMessage: async (challenge: Challenge) =>
-                  nativeAuthorization(challenge, undefined, "credentialless"),
+                  nativeAuthorization(challenge, undefined, "credentialless", "gateway-boot-a"),
               },
             },
           },
@@ -518,6 +539,7 @@ describe("native authenticated Control UI", () => {
         payload: {
           type: "hello-ok",
           protocol: 3,
+          ...(bootId ? { server: { bootId } } : {}),
           auth: {
             role: "operator",
             scopes,
@@ -527,6 +549,11 @@ describe("native authenticated Control UI", () => {
         },
       });
       await vi.advanceTimersByTimeAsync(0);
+      if (bootId === "cloned-gateway-boot") {
+        expect(gateway!.snapshot.hello).toBeNull();
+        expect(gateway!.snapshot.lastError).toContain("app-approved Tailscale identity");
+        return;
+      }
       expect(gateway!.snapshot.phase).toBe("connected");
       expect(gateway!.snapshot.hello?.auth).toMatchObject({
         method: "tailscale",

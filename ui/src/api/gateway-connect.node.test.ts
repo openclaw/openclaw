@@ -69,6 +69,7 @@ function emitNativeHello(
   ws: MockWebSocket,
   id: string,
   auth: Partial<NonNullable<GatewayHelloOk["auth"]>>,
+  bootId?: string,
 ) {
   ws.emitMessage({
     type: "res",
@@ -77,6 +78,7 @@ function emitNativeHello(
     payload: {
       type: "hello-ok",
       protocol: PROTOCOL_VERSION,
+      ...(bootId ? { server: { bootId } } : {}),
       auth: { role: "operator", scopes: [], ...auth },
     },
   });
@@ -410,11 +412,13 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     });
 
     it.each([
-      { method: "token", recoveryScope: "tailscale-account-a" },
-      { method: "tailscale", recoveryScope: "tailscale-account-b" },
+      ["token", "tailscale-account-a", undefined, undefined],
+      ["tailscale", "tailscale-account-b", undefined, undefined],
+      ["tailscale", "tailscale-account-a", "gateway-boot-a", undefined],
+      ["tailscale", "tailscale-account-a", "gateway-boot-a", "cloned-gateway-boot"],
     ] as const)(
-      "rejects a native hello with $method auth and $recoveryScope before publishing events or requests",
-      async ({ method, recoveryScope }) => {
+      "rejects native hello auth %s / scope %s / expected boot %s / returned boot %s before publication",
+      async (method, recoveryScope, expectedGatewayId, bootId) => {
         const onHello = vi.fn();
         const onEvent = vi.fn();
         const onListenerEvent = vi.fn();
@@ -422,7 +426,10 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
         const onClose = vi.fn();
         client = createClient({
           url: "ws://127.0.0.1:18789",
-          nativeConnectAuth,
+          nativeConnectAuth: async (challenge) => ({
+            ...(await nativeConnectAuth(challenge)),
+            expectedGatewayId,
+          }),
           onHello,
           onEvent,
           onRecoveryScopeChange,
@@ -437,7 +444,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
         expect(onEvent).not.toHaveBeenCalled();
         expect(onListenerEvent).not.toHaveBeenCalled();
 
-        emitNativeHello(ws, connectFrame.id, { method, recoveryScope });
+        emitNativeHello(ws, connectFrame.id, { method, recoveryScope }, bootId);
         await Promise.resolve();
         await Promise.resolve();
 
@@ -448,6 +455,8 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
         expect(client.recoveryScope).toBe("");
         expect(client.recoveryScopeReady).toBe(false);
         expect(client.connected).toBe(false);
+        expect(client.hello).toBeNull();
+        expect(client.auth).toBeNull();
         expect(ws.lastClose).toEqual({ code: 4008, reason: "connect failed" });
         ws.emitClose(4008, "connect failed");
         await Promise.all([earlyRequest, earlyCatalog]);
@@ -456,44 +465,56 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       },
     );
 
-    it("admits a native Tailscale hello only for its expected personal recovery scope", async () => {
-      const onHello = vi.fn();
-      const onEvent = vi.fn();
-      const onListenerEvent = vi.fn();
-      client = createClient({
-        url: "ws://127.0.0.1:18789",
-        nativeConnectAuth,
-        onHello,
-        onEvent,
-      });
-      const { ws, connectFrame } = await startConnect(client);
-      const removeListener = client.addEventListener(onListenerEvent);
-      const earlyRequest = client.request("gateway.info").catch(() => undefined);
-      ws.emitMessage({ type: "event", event: "chat", payload: { state: "delta" }, seq: 1 });
-      expect(ws.sent.map((frame) => JSON.parse(frame).method)).toEqual(["connect"]);
-      expect(onEvent).not.toHaveBeenCalled();
-      expect(onListenerEvent).not.toHaveBeenCalled();
+    it.each([undefined, "gateway-boot-a"])(
+      "admits the expected personal identity and optional boot %s",
+      async (expectedGatewayId) => {
+        const onHello = vi.fn();
+        const onEvent = vi.fn();
+        const onListenerEvent = vi.fn();
+        client = createClient({
+          url: "ws://127.0.0.1:18789",
+          nativeConnectAuth: async (challenge) => ({
+            ...(await nativeConnectAuth(challenge)),
+            expectedGatewayId,
+          }),
+          onHello,
+          onEvent,
+        });
+        const { ws, connectFrame } = await startConnect(client);
+        const removeListener = client.addEventListener(onListenerEvent);
+        const earlyRequest = client.request("gateway.info").catch(() => undefined);
+        ws.emitMessage({ type: "event", event: "chat", payload: { state: "delta" }, seq: 1 });
+        expect(ws.sent.map((frame) => JSON.parse(frame).method)).toEqual(["connect"]);
+        expect(onEvent).not.toHaveBeenCalled();
+        expect(onListenerEvent).not.toHaveBeenCalled();
 
-      emitNativeHello(ws, connectFrame.id, {
-        method: "tailscale",
-        recoveryScope: "tailscale-account-a",
-      });
-      await Promise.resolve();
-      await Promise.resolve();
+        expect(client.connected).toBe(false);
+        emitNativeHello(
+          ws,
+          connectFrame.id,
+          {
+            method: "tailscale",
+            recoveryScope: "tailscale-account-a",
+          },
+          expectedGatewayId,
+        );
+        await Promise.resolve();
+        await Promise.resolve();
 
-      expect(onHello).toHaveBeenCalledOnce();
-      expect(client.recoveryScope).toBe("tailscale-account-a");
-      ws.emitMessage({ type: "event", event: "chat", payload: { state: "delta" }, seq: 2 });
-      expect(onEvent).toHaveBeenCalledOnce();
-      expect(onListenerEvent).toHaveBeenCalledOnce();
+        expect(onHello).toHaveBeenCalledOnce();
+        expect(client.recoveryScope).toBe("tailscale-account-a");
+        ws.emitMessage({ type: "event", event: "chat", payload: { state: "delta" }, seq: 2 });
+        expect(onEvent).toHaveBeenCalledOnce();
+        expect(onListenerEvent).toHaveBeenCalledOnce();
 
-      const request = client.request("gateway.info");
-      const requestFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
-      expect(requestFrame.method).toBe("gateway.info");
-      ws.emitMessage({ type: "res", id: requestFrame.id, ok: true, payload: { ready: true } });
-      await expect(request).resolves.toEqual({ ready: true });
-      removeListener();
-      await earlyRequest;
-    });
+        const request = client.request("gateway.info");
+        const requestFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+        expect(requestFrame.method).toBe("gateway.info");
+        ws.emitMessage({ type: "res", id: requestFrame.id, ok: true, payload: { ready: true } });
+        await expect(request).resolves.toEqual({ ready: true });
+        removeListener();
+        await earlyRequest;
+      },
+    );
   });
 });

@@ -317,7 +317,7 @@ export class GatewayBrowserClient {
   }
 
   get connected() {
-    return this.client.connected;
+    return this.nativeHelloAdmission.dispatch(() => this.client.connected) ?? false;
   }
 
   private retireConnectDispatch() {

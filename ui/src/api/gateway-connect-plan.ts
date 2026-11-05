@@ -106,6 +106,7 @@ export type ConnectPlan = {
   selectedAuth: GatewayConnectAuthSelection;
   deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null;
   expectedHelloAuth?: NativeGatewayHelloExpectation;
+  expectedGatewayId?: string;
 };
 
 export class NativeGatewayHelloAdmission {
@@ -116,15 +117,19 @@ export class NativeGatewayHelloAdmission {
   }
 
   expect(plan: ConnectPlan): void {
-    this.required = Boolean(plan.expectedHelloAuth);
+    this.required = Boolean(plan.expectedHelloAuth || plan.expectedGatewayId);
   }
 
-  validateHello(hello: Pick<HelloOk, "auth">, plan: ConnectPlan): GatewayRequestError | null {
+  validateHello(
+    hello: Pick<GatewayHelloOk, "auth" | "server">,
+    plan: ConnectPlan,
+  ): GatewayRequestError | null {
     const expected = plan.expectedHelloAuth;
     if (
-      expected &&
-      (hello.auth?.method !== expected.method ||
-        hello.auth?.recoveryScope !== expected.recoveryScope)
+      (plan.expectedGatewayId && hello.server?.bootId !== plan.expectedGatewayId) ||
+      (expected &&
+        (hello.auth?.method !== expected.method ||
+          hello.auth?.recoveryScope !== expected.recoveryScope))
     ) {
       return new GatewayRequestError({
         code: "UNAVAILABLE",
@@ -382,5 +387,6 @@ export async function buildBrowserGatewayConnectPlan({
     selectedAuth,
     deviceIdentity,
     ...(nativeAuth?.expectedHelloAuth ? { expectedHelloAuth: nativeAuth.expectedHelloAuth } : {}),
+    ...(nativeAuth?.expectedGatewayId ? { expectedGatewayId: nativeAuth.expectedGatewayId } : {}),
   };
 }

@@ -27,6 +27,7 @@ export type NativeGatewayAuthorization = {
     | { password: string; token?: never; deviceToken?: never }
     | Record<string, never>;
   expectedHelloAuth?: NativeGatewayHelloExpectation;
+  expectedGatewayId?: string;
   device: NonNullable<ConnectParams["device"]>;
 };
 
@@ -98,6 +99,13 @@ function readAuthorization(
   ) {
     throw new Error(t("runtimeErrors.nativeAuthorization"));
   }
+  const expectedGatewayId = result.expectedGatewayId;
+  if (
+    expectedGatewayId !== undefined &&
+    (typeof expectedGatewayId !== "string" || expectedGatewayId.trim().length === 0)
+  ) {
+    throw new Error(t("runtimeErrors.nativeAuthorization"));
+  }
   let nativeAuth: NativeGatewayAuthorization["auth"];
   let expectedHelloAuth: NativeGatewayAuthorization["expectedHelloAuth"];
   if (Object.keys(auth).length === 0) {
@@ -127,6 +135,7 @@ function readAuthorization(
     scopes: result.scopes,
     auth: nativeAuth,
     ...(expectedHelloAuth ? { expectedHelloAuth } : {}),
+    ...(expectedGatewayId !== undefined ? { expectedGatewayId } : {}),
     device: {
       id: device.id,
       publicKey: device.publicKey,
