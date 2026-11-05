@@ -10,9 +10,13 @@ import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-suppo
 installGatewayTestHooks();
 const createFixture = useBrowserFollowupFixture();
 
-it.for(["/status", "/new"] as const)(
-  "does not make completed %s recoverable after a prior agent turn",
-  async (command) => {
+it.for([
+  { command: "/status", commitBeforeReply: false },
+  { command: "/new", commitBeforeReply: false },
+  { command: "/status", commitBeforeReply: true },
+])(
+  "does not make completed $command recoverable (early commit: $commitBeforeReply)",
+  async ({ command, commitBeforeReply }) => {
     const fixture = await createFixture({ active: false });
     await patchSessionEntryCore(fixture.scope, () => ({
       status: "done",
@@ -26,11 +30,19 @@ it.for(["/status", "/new"] as const)(
     const revision = loadSessionEntry(fixture.scope)?.lifecycleRevision;
     const config = withFullRuntimeReplyConfig(fixture.context.getRuntimeConfig());
     const dispatchActual = await loadRealChatDispatch();
-    dispatchInboundMessageMock.mockImplementation((params: unknown) =>
-      dispatchActual({ ...(params as Parameters<typeof dispatchInboundMessage>[0]), cfg: config }),
-    );
+    dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
+      const input = params as Parameters<typeof dispatchInboundMessage>[0];
+      if (commitBeforeReply) {
+        const recorder = input.replyOptions?.userTurnTranscriptRecorder;
+        if (!recorder) {
+          throw new Error("Expected the admitted input recorder");
+        }
+        await recorder.persistApproved();
+      }
+      return dispatchActual({ ...input, cfg: config });
+    });
     fixture.params.message = command;
-    fixture.params.idempotencyKey = `command-${command.slice(1)}`;
+    fixture.params.idempotencyKey = `command-${command.slice(1)}-${commitBeforeReply}`;
     try {
       const response = await fixture.send(
         undefined,

@@ -1,2 +1,2 @@
-104
-# Prior-session and reset command regressions plus queued-start publication ordering.
+116
+# Prior/reset/early-committed command regressions and queued-start publication ordering.

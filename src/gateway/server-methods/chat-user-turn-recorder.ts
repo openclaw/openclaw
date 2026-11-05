@@ -34,7 +34,6 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MentionInbox } from "../mention-inbox.types.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
-import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-projection.js";
 import { captureWorkerTurnInputSource } from "../worker-environments/worker-turn-transcript-target.js";
 import { formatForLog } from "../ws-log.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
@@ -50,9 +49,6 @@ import type { GatewayClient } from "./shared-types.js";
 
 export type GatewayChatUserTurnPersist = (options?: {
   contextFreeCommand?: true;
-  sessionLifecyclePatch?: NonNullable<
-    Parameters<UserTurnTranscriptRecorder["persistApproved"]>[0]
-  >["sessionLifecyclePatch"];
 }) => ReturnType<UserTurnTranscriptRecorder["persistFallback"]>;
 
 type GatewayChatUserTurnController = {
@@ -251,17 +247,9 @@ export function createGatewayChatUserTurnController(params: {
         config: session.cfg,
       };
     },
-    ...(admission.localInputAdmission || params.commitInitialInput
-      ? {
-          sessionLifecyclePatch: {
-            ...deriveGatewaySessionLifecycleSnapshot({
-              event: { runId: session.clientRunId, ts: params.startedAt, data: { phase: "start" } },
-            }),
-            lifecycleRunId: session.clientRunId,
-            lastRunId: undefined,
-            ...(!progressRefresh ? { lastInteractionAt: params.startedAt } : {}),
-          },
-        }
+    // Input custody records activity; only runtime lifecycle events mark a run as started.
+    ...((admission.localInputAdmission || params.commitInitialInput) && !progressRefresh
+      ? { sessionLifecyclePatch: { lastInteractionAt: params.startedAt } }
       : {}),
     errorContext: "gateway chat user turn transcript",
     assertOriginalInputCommit: composeSessionSourceAssertion([
@@ -392,7 +380,7 @@ export function createGatewayChatUserTurnController(params: {
     }
     const persisted = await measureDiagnosticsTimelineSpan(
       "gateway.chat_send.persist_user_transcript",
-      () => recorder.persistFallback(options),
+      () => recorder.persistFallback(),
       {
         phase: "agent-turn",
         config: session.cfg,

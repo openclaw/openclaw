@@ -589,14 +589,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
             await finalizeChatSendDispatchedReplies({
               ...replyFinalization,
               foldCommandBlocks: isInternalTextSlashCommandTurn || replyDispatchRun !== undefined,
-              persistUserTurnTranscript: (options) =>
-                persistGatewayUserTurnTranscriptBestEffort({
-                  ...options,
-                  // Completed commands have no runtime to resume or terminalize.
-                  ...(!agentRunStarted
-                    ? { sessionLifecyclePatch: { lastInteractionAt: session.now } }
-                    : {}),
-                }),
+              persistUserTurnTranscript: persistGatewayUserTurnTranscriptBestEffort,
               suppressReplies: !replyDispatchRun && replyDispatch.hasAppendedWebchatAgentMedia(),
               // Bound ACP writes its own transcript; the dashboard still needs its reply.
               runtimeOwnsTranscript:
