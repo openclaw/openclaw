@@ -15,6 +15,32 @@ import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
 afterEach(() => clearDiscordComponentEntriesForTest());
 
+it("retires unclicked expired component and modal entries during registration", async () => {
+  const now = 1_700_000_000_000;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    await registerDiscordComponentEntries({
+      entries: [
+        { id: "expired", kind: "button", label: "Expired", expiresAt: now + 1 },
+        { id: "live", kind: "button", label: "Live", expiresAt: now + 1_000 },
+      ],
+      modals: [
+        { id: "expired", title: "Expired", fields: [], expiresAt: now + 1 },
+        { id: "live", title: "Live", fields: [], expiresAt: now + 1_000 },
+      ],
+    });
+    clock.mockReturnValue(now + 2);
+    await registerDiscordComponentEntries({
+      entries: [{ id: "fresh", kind: "button", label: "Fresh" }],
+      modals: [{ id: "fresh", title: "Fresh", fields: [] }],
+    });
+    expect([...discordComponentRegistryState.componentEntries.keys()]).toEqual(["live", "fresh"]);
+    expect([...discordComponentRegistryState.modalEntries.keys()]).toEqual(["live", "fresh"]);
+  } finally {
+    clock.mockRestore();
+  }
+});
+
 function store<T extends { id: string }>() {
   const rows = new Map<string, { version: 1; entry: T }>();
   return {
