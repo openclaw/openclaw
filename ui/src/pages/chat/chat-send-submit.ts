@@ -56,7 +56,7 @@ import {
   chatSendHoldReason,
   formatChatQueueAdmissionError,
   isChatResetCommand,
-  OFFLINE_QUEUE_STORAGE_ERROR,
+  chatOfflineQueueStorageError,
   prependReplyQuote,
   annotationMessageContext,
 } from "./chat-send-support.ts";
@@ -408,7 +408,7 @@ export async function handleSendChat(
               host.chatAttachments = attachmentsToSend;
               host.composerDraftChanged?.();
             }
-            setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+            setChatError(host, chatOfflineQueueStorageError());
             return;
           }
           // Submission resumes follow; delayed command results respect later reader input.

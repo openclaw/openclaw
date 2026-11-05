@@ -18,6 +18,7 @@ import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { requiresChannelMentionDisplayRead } from "./chat-display-projection.channel-mentions.js";
 import { isPendingAssistantError } from "./chat-display-projection.core.js";
 import { prepareForwardedMessageCronJobNameResolver } from "./chat-display-projection.cron.js";
 import { readPluginSteeringId } from "./chat-display-projection.history.js";
@@ -593,7 +594,10 @@ async function handleTranscriptUpdateBroadcast(
       if (projected?.deferredAssistantError) {
         return;
       }
-      const historyReset = message === undefined || projected?.requiresHistoryReset;
+      const historyReset =
+        message === undefined ||
+        projected?.requiresHistoryReset ||
+        (Boolean(projected?.payload) && requiresChannelMentionDisplayRead(message));
       if (!historyReset && projected?.payload) {
         params.broadcastToConnIds("session.message", projected.payload, connIds, broadcastOptions);
         return;

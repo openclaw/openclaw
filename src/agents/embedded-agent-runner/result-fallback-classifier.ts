@@ -4,7 +4,7 @@ import { readAgentTerminalPayloadSnapshot } from "../agent-terminal-snapshot.js"
 import { classifyFailoverReason, isProviderRequestSizeCeilingError } from "../failover/classify.js";
 import type { FailoverReason } from "../failover/signal.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
-import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
+import type { ModelFallbackResultClassification } from "../model-fallback.types.js";
 import { resolveReplyExpectation } from "../reply-completion.js";
 import {
   hasCommittedOutboundDeliveryEvidence,
@@ -113,6 +113,7 @@ function providerErrorPayloadReason(failoverReason: FailoverReason | null) {
     case "billing":
     case "rate_limit":
     case "server_error":
+    case "route_unavailable":
     case "overloaded":
     case "timeout":
       return failoverReason;

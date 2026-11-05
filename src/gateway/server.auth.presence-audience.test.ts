@@ -27,6 +27,7 @@ import {
   openWs,
   rpcReq,
   testState,
+  waitForWsClose,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
 import type { SessionsListResult } from "./session-utils.types.js";
@@ -63,6 +64,27 @@ function responseScopes(response: Awaited<ReturnType<typeof connectReq>>): strin
   return (response.payload as { auth?: { scopes?: string[] } } | undefined)?.auth?.scopes;
 }
 
+const GUEST_PRESENCE_FIELDS = new Set([
+  "ts",
+  "text",
+  "reason",
+  "lastActivityAt",
+  "user",
+  "watchedSessions",
+]);
+
+function personOnlyViolations(row: Partial<SystemPresence>): string[] {
+  return [
+    ...Object.keys(row).filter((field) => !GUEST_PRESENCE_FIELDS.has(field)),
+    ...(row.user?.email ? ["user.email"] : []),
+  ];
+}
+
+function guestPresenceView(row: Omit<SystemPresence, "watchedSessions">) {
+  const { email: _email, ...user } = row.user!;
+  return { ts: row.ts, text: "", lastActivityAt: row.lastActivityAt, user };
+}
+
 describe("gateway presence audience", () => {
   test("shares people only with readers and filters their session references across hello, RPC, and activity events", async () => {
     await configureGatewayAuth(
@@ -87,6 +109,11 @@ describe("gateway presence audience", () => {
           maintainer: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
           pairing: { sessions: { others: "none" }, agents: [], scopes: ["operator.pairing"] },
           guest: { sessions: { others: "view" }, agents: "*", scopes: ["operator.sessions.write"] },
+          visitor: {
+            sessions: { others: "view" },
+            agents: "*",
+            scopes: ["operator.sessions.write"],
+          },
         },
       },
     );
@@ -101,6 +128,7 @@ describe("gateway presence audience", () => {
     setUserProfileRole(ensureProfileForEmail("pairing@example.com").id, "pairing");
     const guestProfile = ensureProfileForEmail("guest@example.com");
     setUserProfileRole(guestProfile.id, "writer");
+    setUserProfileRole(ensureProfileForEmail("visitor@example.com").id, "visitor");
     const sharedKey = "agent:main:presence-shared";
     const guestKey = "agent:main:presence-guest";
     const sharedSessionId = randomUUID();
@@ -204,7 +232,7 @@ describe("gateway presence audience", () => {
         };
       };
       try {
-        const guest = await openRecipient("guest", ["operator.sessions.write"]);
+        let guest = await openRecipient("guest", ["operator.sessions.write"]);
         const activity = {
           source: "activity",
           includePeople: true,
@@ -223,15 +251,26 @@ describe("gateway presence audience", () => {
             ]),
           },
         });
-        // Reuse this connection and its warmed selection after revoking the role's authority.
+        // A changed current-role presentation claim retires the warmed connection.
+        const demoted = waitForWsClose(guest.ws, 1_000);
         setUserProfileRole(guestProfile.id, "guest");
-        for (const method of ["users.list", "presence.query", "system-presence"]) {
+        expect(await demoted).toBe(true);
+        guest = await openRecipient("guest", ["operator.sessions.write"]);
+        for (const method of ["users.list", "presence.query"]) {
           expect(await rpcReq(guest.ws, method, {})).toMatchObject({
             ok: false,
             error: { code: "FORBIDDEN" },
           });
         }
-        expect(guest.hello.snapshot.presence).toEqual([]);
+        // Online status stays visible to session readers, without device or activity detail.
+        const guestPresence = await rpcReq(guest.ws, "system-presence", {});
+        expect(guestPresence.ok).toBe(true);
+        if (!Value.Check(Type.Array(PresenceEntrySchema), guestPresence.payload)) {
+          throw new Error("demoted guest system-presence returned invalid presence rows");
+        }
+        for (const rows of [guest.hello.snapshot.presence, guestPresence.payload]) {
+          expect(rows.flatMap((row) => personOnlyViolations(row))).toEqual([]);
+        }
         expect(await rpcReq(guest.ws, "sessions.describe", { key: sharedKey })).toMatchObject({
           ok: true,
           payload: { session: { sessionId: sharedSessionId } },
@@ -334,6 +373,7 @@ describe("gateway presence audience", () => {
             scopes: ["operator.admin"],
             allowed: [sharedKey, draftKey, incognitoKey, restrictedKey],
           },
+          { name: "visitor", scopes: ["operator.sessions.write"], allowed: [sharedKey] },
           { name: "pairing", scopes: ["operator.pairing"], allowed: [] },
           { name: "no-read", scopes: [], allowed: [] },
           { name: "node", scopes: [], allowed: [] },
@@ -396,8 +436,16 @@ describe("gateway presence audience", () => {
             "presence.query",
             scenario.name === "reader" ? { include: ["devices", "network"] } : {},
           );
-          expect(query.ok, `${scenario.name} presence.query scope`).toBe(canRead);
-          if (canRead) {
+          if (scenario.name === "visitor") {
+            expect(
+              (await rpcReq(recipient.ws, "presence.activity", {})).ok,
+              "guest reports its own activity",
+            ).toBe(true);
+          }
+          // Device and network inventory stays an operator.read surface.
+          const canQuery = canRead && scenario.name !== "visitor";
+          expect(query.ok, `${scenario.name} presence.query scope`).toBe(canQuery);
+          if (canQuery) {
             expect(query.payload).toMatchObject({
               status: "ok",
               observedAt: expect.any(Number),
@@ -465,7 +513,7 @@ describe("gateway presence audience", () => {
               frame.event === "presence" &&
               frame.payload.presence.some(
                 (entry) =>
-                  entry.instanceId === watcherInstanceId &&
+                  entry.user?.id === watcherProfile.id &&
                   entry.lastActivityAt !== undefined &&
                   entry.lastActivityAt >= typingStartedAt,
               ),
@@ -500,15 +548,30 @@ describe("gateway presence audience", () => {
             if (!Value.Check(Type.Array(PresenceEntrySchema), rows)) {
               throw new Error(`${recipient.name} ${surface} returned invalid presence rows`);
             }
-            const received = rows.find((entry) => entry.instanceId === watcherInstanceId);
+            const personOnly = recipient.name === "visitor";
+            const received = rows.find((entry) =>
+              personOnly
+                ? entry.user?.id === watcherProfile.id
+                : entry.instanceId === watcherInstanceId,
+            );
             const { watchedSessions, ...receivedPerson } = received ?? {};
+            const expected = surface === "presence event" ? activePerson : person;
             expect
               .soft(
                 receivedPerson,
                 `${recipient.name} ${surface} preserves the person and timestamp without hidden counts`,
               )
-              .toEqual(surface === "presence event" ? activePerson : person);
-            expect(rows.find((entry) => entry.instanceId === "presence-idle")).toEqual(idlePerson);
+              .toEqual(personOnly ? guestPresenceView(expected) : expected);
+            if (personOnly) {
+              expect(
+                rows.flatMap((row) => personOnlyViolations(row)),
+                `${surface} hides device, network, connection, and email fields from guests`,
+              ).toEqual([]);
+            } else {
+              expect(rows.find((entry) => entry.instanceId === "presence-idle")).toEqual(
+                idlePerson,
+              );
+            }
             expect
               .soft(
                 watchedSessions ?? [],

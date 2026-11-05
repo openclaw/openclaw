@@ -491,7 +491,11 @@ export class ShellOwner
           gatewayStatus: state.gatewayStatus,
           connectionRecovery: this.connectionRecovery,
           connectionFlagVisible: this.connectionFlagVisible,
-          connectionFlagAllowed: state.navCollapsed && !state.mobileNavLayout,
+          // The floating refresh notice speaks for the collapsed sidebar.
+          connectionFlagAllowed:
+            state.navCollapsed &&
+            !state.mobileNavLayout &&
+            !state.floatingUpdateCard.refreshRequired,
         });
       }
       this.syncNavigationPresentation(state);

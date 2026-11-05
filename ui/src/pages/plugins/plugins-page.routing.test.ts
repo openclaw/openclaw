@@ -1,6 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
@@ -204,7 +204,7 @@ it.each([true, false])("retries failed configuration recovery (write=%s)", async
   expect(refresh).toHaveBeenCalledTimes(write ? 0 : 1);
 });
 
-it("closes setting menus before Escape dismisses settings and commits a focused field", async () => {
+it("closes menus before Escape commits the focused field and bubbles to the shell", async () => {
   const result = createResult();
   const { harness } = pageGateway({
     "plugins.inspect": () => createInspectResult(),
@@ -268,17 +268,19 @@ it("closes setting menus before Escape dismisses settings and commits a focused 
     releaseDrawer();
     drawer.remove();
   }
+  const shellEscape = vi.fn();
+  document.addEventListener("keydown", shellEscape);
+  onTestFinished(() => document.removeEventListener("keydown", shellEscape));
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  expect(shellEscape).toHaveBeenCalledOnce();
   await page.updateComplete;
-  expect(page.querySelector(".plugin-editor")).toBeNull();
+  expect(page.querySelector(".plugin-editor")).not.toBeNull();
   expect(runtimeConfig.runtimeConfig.patchForm).toHaveBeenCalledExactlyOnceWith(
     ["plugins", "entries", "workboard", "config", "refreshMinutes"],
     30,
   );
   expect(runtimeConfig.runtimeConfig.flushFormChanges).toHaveBeenCalledOnce();
-  expect(context.replace).toHaveBeenCalledWith("plugin-settings", {
-    pathname: "/settings/plugins",
-  });
+  expect(context.replace).not.toHaveBeenCalled();
 });
 
 it("keeps the autosaved inspection when an older optional catalog completes", async () => {

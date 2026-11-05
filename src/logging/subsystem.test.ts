@@ -431,6 +431,7 @@ describe("createSubsystemLogger().isEnabled", () => {
       admitted: true,
       phaseDurationsMs: { open: 3, validation: 8 },
       note: "two words",
+      peer: "a\u001b]0;x\u0007\u009b2J\u2028\u2029",
       skipped: undefined,
       error: new Error("boom"),
     });
@@ -439,7 +440,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     const warnLine = consoleLine(warn);
     expect(warnLine).toContain("slow Codex catalog list phases");
     expect(warnLine).toContain(
-      'elapsedMs=12345 admissionWaitMs=0 admitted=true phaseDurationsMs={"open":3,"validation":8} note="two words" error={"name":"Error","message":"boom"',
+      'elapsedMs=12345 admissionWaitMs=0 admitted=true phaseDurationsMs={"open":3,"validation":8} note="two words" peer="a\\u001b]0;x\\u0007\\u009b2J\\u2028\\u2029" error={"name":"Error","message":"boom"',
     );
     expect(warnLine).not.toContain("skipped=");
     expect(consoleLine(error)).toContain("catalog failed reason=timeout");

@@ -52,23 +52,38 @@ describe("Templates discovery", () => {
   it.each([
     {
       names: ["AGENTS.md", "SOUL.md", "USER.md", "notes/context.md"],
-      ordered: ["SOUL.md", "AGENTS.md", "USER.md", "notes/context.md"],
+      ordered: ["SOUL.md", "AGENTS.md", "USER.md", "View all"],
     },
-    { names: ["USER.md", "notes/context.md"], ordered: ["USER.md", "notes/context.md"] },
+    { names: ["USER.md", "notes/context.md"], ordered: ["USER.md", "View all"] },
+    { names: ["templates/AGENTS.md", "fixtures/request.json"], ordered: ["View all"] },
     { names: ["IDENTITY.md"], ordered: ["IDENTITY.md"] },
-  ])("lists every release file inline for $names", async ({ names, ordered }) => {
-    const { detail } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
-    await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).not.toBeNull());
-    const section = detail.querySelector(".plugin-capabilities")!;
-    const titles = [...section.querySelectorAll(".settings-row__title")].map(
-      (node) => node.textContent,
-    );
-    expect(titles).toEqual(ordered);
-    expect(section.querySelectorAll(".templates-workspace-file__info")).toHaveLength(names.length);
-  });
+  ])(
+    "lists only root agent documents and a View all row for $names",
+    async ({ names, ordered }) => {
+      const { detail } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
+      await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).not.toBeNull());
+      const section = detail.querySelector(".plugin-capabilities")!;
+      const titles = [...section.querySelectorAll(".settings-row__title")].map(
+        (node) => node.textContent,
+      );
+      expect(titles).toEqual(ordered);
+      expect(section.querySelectorAll(".templates-workspace-file__info")).toHaveLength(
+        ordered.filter((name) => name !== "View all").length,
+      );
+    },
+  );
 
-  it("opens every release file inline without treating help as navigation", async () => {
-    const names = ["AGENTS.md", "SOUL.md", "USER.md", "BOOTSTRAP.md", "notes/context.md"];
+  it("opens named files and View all in the shared complete-file preview without navigating from help", async () => {
+    const names = [
+      "AGENTS.md",
+      "SOUL.md",
+      "USER.md",
+      "BOOTSTRAP.md",
+      "templates/AGENTS.md",
+      "fixtures/request.json",
+      "schemas/report.json",
+      "avatars/agent.svg",
+    ];
     const { detail, request } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
     await vi.waitFor(() =>
       expect(detail.querySelector(".templates-workspace-file__info")).not.toBeNull(),
@@ -87,9 +102,21 @@ describe("Templates discovery", () => {
     );
     const preview = detail.querySelector("openclaw-file-preview-modal")!;
     expect(preview.files.map((file) => file.path)).toEqual(names);
-    expect(section.querySelectorAll(".templates-workspace-file__open")).toHaveLength(names.length);
+    expect(section.querySelectorAll(".templates-workspace-file__open")).toHaveLength(5);
+    preview.dispatchEvent(new CustomEvent("file-preview-close", { bubbles: true }));
+    await waitForSolid(() =>
+      expect(detail.querySelector("openclaw-file-preview-modal")).toBeNull(),
+    );
+    [...section.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "View all")!
+      .click();
+    await waitForSolid(() =>
+      expect(detail.querySelector("openclaw-file-preview-modal")).not.toBeNull(),
+    );
+    const allFilesPreview = detail.querySelector("openclaw-file-preview-modal")!;
+    expect(allFilesPreview.files.map((file) => file.path)).toEqual(names);
     for (const name of names) {
-      preview.dispatchEvent(
+      allFilesPreview.dispatchEvent(
         new CustomEvent("file-preview-select", { detail: name, bubbles: true }),
       );
       await vi.waitFor(() =>
@@ -153,7 +180,7 @@ describe("Templates discovery", () => {
     );
     expect(result).toEqual({ type: "notFound", data: undefined });
     expect(ensureConfigLoaded).toHaveBeenCalledOnce();
-    expect(page.textContent).toContain("Templates is disabled");
+    expect(page.textContent).toContain("Templates is turned off");
     expect(page.querySelector("[data-templates-explore]")).toBeNull();
     expect(page.querySelector("[data-templates-confirm]")).toBeNull();
     expect(request.mock.calls.some(([method]) => method.startsWith("templates."))).toBe(false);
@@ -164,7 +191,7 @@ describe("Templates discovery", () => {
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
     setTemplatesEnabled(false);
     await vi.waitFor(() => expect(page.querySelector("[data-templates-explore]")).toBeNull());
-    expect(page.textContent).toContain("Templates is disabled");
+    expect(page.textContent).toContain("Templates is turned off");
   });
 
   it("shows official Templates and opens their dedicated route", async () => {
@@ -182,7 +209,7 @@ describe("Templates discovery", () => {
       pathname: "/templates/packages/%40openclaw%2Fworkflow-operator",
     });
     expect(request).toHaveBeenCalledWith("templates.catalog.search", {
-      category: "productivity",
+      overview: true,
       limit: 8,
     });
   });
@@ -398,6 +425,53 @@ describe("Templates discovery", () => {
     expect(find("[data-templates-confirm] button")).toHaveProperty("disabled", false);
   });
 
+  it("falls back to legacy shelves only for an unsupported overview and retires pending probes", async () => {
+    const { page, request, setPhase } = createPage({ templatesEnabled: true });
+    await waitForSolid(() =>
+      expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1),
+    );
+    const original = request.getMockImplementation()!;
+    const retired = createDeferredCore<unknown>();
+    let overviewReads = 0;
+    request.mockImplementation((method, params, options) => {
+      if (
+        method === "templates.catalog.search" &&
+        params &&
+        typeof params === "object" &&
+        Reflect.get(params, "overview")
+      ) {
+        return ++overviewReads === 1 ? { entries: [] } : retired.promise;
+      }
+      return original(method, params, options);
+    });
+    setPhase("reconnecting");
+    flush();
+    setPhase("connected");
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith("templates.catalog.search", {
+        category: "productivity",
+        limit: 8,
+      }),
+    );
+    await waitForSolid(() =>
+      expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1),
+    );
+    setPhase("reconnecting");
+    flush();
+    setPhase("connected");
+    await waitForSolid(() => expect(overviewReads).toBe(2));
+    const search = page.querySelector<HTMLInputElement>("[data-templates-search]")!;
+    search.value = "missing";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await waitForSolid(() => expect(page.textContent).toContain("No templates match your search."));
+    const reads = request.mock.calls.length;
+    retired.resolve({ entries: [] });
+    await retired.promise;
+    flush();
+    expect(request.mock.calls).toHaveLength(reads);
+    expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(0);
+  });
+
   it("cancels superseded Explore debounce and ignores an older search result", async () => {
     const { page, request } = createPage({ templatesEnabled: true });
     await waitForSolid(() =>
@@ -429,7 +503,12 @@ describe("Templates discovery", () => {
     };
     enter("cancelled");
     enter("stale");
-    expect(page.querySelectorAll(".agents-home__template-skeleton")).toHaveLength(4);
+    const loading = page.querySelectorAll('[role="status"][aria-label="Loading templates…"]');
+    expect(loading).toHaveLength(1);
+    expect(loading[0]!.children.length).toBeGreaterThan(0);
+    expect(
+      Array.from(loading[0]!.children).every((card) => card.getAttribute("aria-hidden") === "true"),
+    ).toBe(true);
     await vi.advanceTimersByTimeAsync(149);
     expect(request).not.toHaveBeenCalledWith("templates.catalog.search", { query: "stale" });
     await vi.advanceTimersByTimeAsync(1);
@@ -441,6 +520,7 @@ describe("Templates discovery", () => {
     await waitForSolid(() =>
       expect(page.querySelector("[data-templates-results]")?.textContent).toContain("Fresh result"),
     );
+    expect(page.querySelector('[role="status"][aria-label="Loading templates…"]')).toBeNull();
     stale.resolve({ entries: [workflowOperator] });
     await stale.promise;
     flush();

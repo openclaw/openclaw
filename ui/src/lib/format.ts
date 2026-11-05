@@ -30,8 +30,11 @@ export function formatCountdown(deadlineMs: number, nowMs: number, padMinutes = 
 let localeFormatters:
   | {
       locale: string;
-      units: Partial<Record<`${DurationPart["unit"]}:${"narrow" | "long"}`, Intl.NumberFormat>>;
+      units: Partial<
+        Record<`${DurationPart["unit"] | "byte"}:${"narrow" | "long"}`, Intl.NumberFormat>
+      >;
       relative?: Intl.RelativeTimeFormat;
+      numbers: Map<string, Intl.NumberFormat>;
     }
   | undefined;
 
@@ -40,7 +43,7 @@ function getLocaleFormatters() {
   // Keep one locale's closed unit set; switching languages releases the old
   // formatters without retaining labels or subscribing to component lifetimes.
   if (localeFormatters?.locale !== locale) {
-    localeFormatters = { locale, units: {} };
+    localeFormatters = { locale, units: {}, numbers: new Map() };
   }
   return localeFormatters;
 }
@@ -49,7 +52,7 @@ export function formatUnit({
   value,
   unit,
   unitDisplay = "narrow",
-}: DurationPart & { unitDisplay?: "narrow" | "long" }): string {
+}: (DurationPart | { value: number; unit: "byte" }) & { unitDisplay?: "narrow" | "long" }): string {
   const formatters = getLocaleFormatters();
   const key = `${unit}:${unitDisplay}` as const;
   return (formatters.units[key] ??= new Intl.NumberFormat(formatters.locale, {
@@ -148,13 +151,18 @@ export function createMsFormatter(
   fallback?: string,
 ): (ms?: number | null) => string {
   let formatter: Intl.DateTimeFormat | undefined;
+  let locale: string | undefined;
   return (ms) => {
     const timestampMs = asDateTimestampMs(ms);
     if (timestampMs === undefined) {
       return fallback ?? t("common.na");
     }
+    if (locale !== i18n.getLocale()) {
+      locale = i18n.getLocale();
+      formatter = undefined;
+    }
     formatter ??= new Intl.DateTimeFormat(
-      i18n.getLocale(),
+      locale,
       options ?? {
         year: "numeric",
         month: "numeric",
@@ -220,11 +228,40 @@ export function toNumber(value: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/** Formats USD using the UI locale, retaining the caller's scale-specific precision. */
 export function formatCost(cost: number | null | undefined): string {
-  if (cost == null || !Number.isFinite(cost) || cost === 0) {
-    return "$0.00";
+  const value = cost != null && Number.isFinite(cost) && cost !== 0 ? cost : 0;
+  const digits = value === 0 ? 2 : value < 0.01 ? 4 : value < 1 ? 3 : 2;
+  return formatUsd(value, digits);
+}
+
+export function formatUsd(value: number, digits = 2): string {
+  return formatNumber(value, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+export function formatNumber(value: number, options: Intl.NumberFormatOptions = {}): string {
+  const cache = getLocaleFormatters();
+  const key = JSON.stringify(options);
+  let formatter = cache.numbers.get(key);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(cache.locale, options);
+    cache.numbers.set(key, formatter);
   }
-  return `$${cost.toFixed(cost < 0.01 ? 4 : cost < 1 ? 3 : 2)}`;
+  return formatter.format(value);
+}
+
+export function formatDateTimeRangeMs(first: number, last: number): string {
+  return new Intl.DateTimeFormat(i18n.getLocale(), {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).formatRange(first, last);
 }
 
 // Keep token presentation consistent across UI session and usage surfaces.
