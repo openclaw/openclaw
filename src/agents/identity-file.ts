@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { findMarkdownCodeRegions } from "../../packages/markdown-core/src/markdown-code-regions.js";
 import type { IdentityConfig } from "../config/types.base.js";
 import { DEFAULT_IDENTITY_FILENAME } from "./workspace-bootstrap-policy.js";
 
@@ -121,9 +122,34 @@ function stripIdentityValueDecoration(value: string): string {
   }
 }
 
+// Mask fenced examples without shifting the line indexes used by identity updates.
+function identityLinesOutsideFences(
+  content: string,
+  regions = findMarkdownCodeRegions(content, { includeIndentedCode: false }).filter(
+    (region) => region.block,
+  ),
+): string[] {
+  let regionIndex = 0;
+  let offset = 0;
+  return content.split("\n").map((line) => {
+    let region = regions[regionIndex];
+    while (region && offset >= region.end) {
+      region = regions[++regionIndex];
+    }
+    const lineEnd = offset + line.length;
+    const outsideCodeBlock = !region || lineEnd <= region.start;
+    offset = lineEnd + 1;
+    return outsideCodeBlock ? line : "";
+  });
+}
+
 function parseIdentityMarkdown(content: string): AgentIdentityFile | null {
+  return parseIdentityLines(identityLinesOutsideFences(content));
+}
+
+function parseIdentityLines(lines: string[]): AgentIdentityFile | null {
   const identity: AgentIdentityFile = {};
-  for (const line of content.split(/\r?\n/)) {
+  for (const line of lines) {
     const parsed = parseIdentityLine(line);
     if (!parsed) {
       continue;
@@ -139,17 +165,17 @@ function parseIdentityMarkdown(content: string): AgentIdentityFile | null {
   return Object.keys(identity).length > 0 ? identity : null;
 }
 
-function resolveIdentityInsertIndex(lines: string[]): number {
+function resolveIdentityInsertIndex(lines: string[], unfencedLines: string[]): number {
   // New fields stay grouped with existing rich identity fields; otherwise place
   // them directly after the title block so legacy prose remains intact.
-  const lastIdentityIndex = lines.findLastIndex((line) =>
+  const lastIdentityIndex = unfencedLines.findLastIndex((line) =>
     isRichIdentityLabel(parseIdentityLine(line)?.label ?? ""),
   );
   if (lastIdentityIndex >= 0) {
     return lastIdentityIndex + 1;
   }
 
-  const headingIndex = lines.findIndex((line) => line.trim().startsWith("#"));
+  const headingIndex = unfencedLines.findIndex((line) => line.trim().startsWith("#"));
   if (headingIndex === -1) {
     return 0;
   }
@@ -160,46 +186,132 @@ function resolveIdentityInsertIndex(lines: string[]): number {
   return insertIndex;
 }
 
+type IdentityMarkdownLine = { text: string; originalLine: number };
+
+function identityFenceState(lines: IdentityMarkdownLine[]) {
+  const content = lines.map((line) => line.text).join("\n");
+  const regions = findMarkdownCodeRegions(content, { includeIndentedCode: false }).filter(
+    (region) => region.block,
+  );
+  const offsets: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    offsets.push(offset);
+    offset += line.text.length + 1;
+  }
+  let lineIndex = 0;
+  const position = (boundary: number) => {
+    while (lineIndex + 1 < offsets.length && offsets[lineIndex + 1]! <= boundary) {
+      lineIndex++;
+    }
+    return { line: lineIndex, column: boundary - offsets[lineIndex]! };
+  };
+  const protectedLines = new Set<number>();
+  const signatures = regions.map(({ start, end }) => {
+    const first = position(start);
+    // A closing boundary can be the next line start; map its final character.
+    const last = position(end - 1);
+    const sources = lines.slice(first.line, last.line + 1).map((line) => line.originalLine);
+    for (const source of sources) {
+      protectedLines.add(source);
+    }
+    return JSON.stringify([sources, first.column, last.column, content.slice(start, end)]);
+  });
+  return {
+    signatures,
+    protectedLines,
+    unfencedLines: identityLinesOutsideFences(content, regions),
+  };
+}
+
 /**
- * Merge writable identity fields into existing IDENTITY.md content, replacing
- * duplicate labels and preserving unrelated markdown.
+ * Merge writable identity fields while preserving fenced examples and the
+ * container boundaries that keep those examples out of identity reads.
  */
 export function mergeIdentityMarkdownContent(
   content: string | undefined,
   identity: Pick<AgentIdentityFile, "name" | "theme" | "emoji" | "avatar">,
 ): string {
-  const nextLines = content
-    ? content.replace(/\r\n/g, "\n").split("\n")
-    : ["# IDENTITY.md - Agent Identity", ""];
-
-  for (const [field, label] of WRITABLE_IDENTITY_FIELDS) {
+  const original = (content || "# IDENTITY.md - Agent Identity\n")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n*$/, "\n")
+    .split("\n")
+    .map((text, originalLine) => ({ text, originalLine }));
+  const originalState = identityFenceState(original);
+  const updates = WRITABLE_IDENTITY_FIELDS.flatMap(([field, label]) => {
     const value = identity[field]?.trim();
-    if (!value) {
-      continue;
-    }
-    const identityLine = `- ${label}: ${value}`;
-
-    const matchingIndexes = nextLines.reduce<number[]>((indexes, line, index) => {
-      if (line.trim().startsWith("-") && parseIdentityLine(line)?.label === field) {
-        indexes.push(index);
+    return value ? [{ field, text: "- " + label + ": " + value }] : [];
+  });
+  const edit = (input: IdentityMarkdownLine[], conservative = false) => {
+    const lines = input.map((line) => ({ ...line }));
+    const missing: IdentityMarkdownLine[] = [];
+    for (const { field, text } of updates) {
+      const unfenced = lines.map((line) =>
+        originalState.protectedLines.has(line.originalLine) ? "" : line.text,
+      );
+      const matching = unfenced.flatMap((line, index) =>
+        (conservative || line.trim().startsWith("-")) && parseIdentityLine(line)?.label === field
+          ? [index]
+          : [],
+      );
+      if (matching.length) {
+        for (const index of conservative ? matching : matching.slice(0, 1)) {
+          lines[index]!.text = conservative
+            ? (lines[index]!.text.match(/^\s*(?:-\s*)?/)?.[0] ?? "") + text.slice(2)
+            : text;
+        }
+        if (!conservative) {
+          for (const index of matching.slice(1).toReversed()) {
+            lines.splice(index, 1);
+          }
+        }
+      } else if (conservative) {
+        missing.push({ text, originalLine: -1 });
+      } else {
+        const index = resolveIdentityInsertIndex(
+          lines.map((line) => line.text),
+          unfenced,
+        );
+        lines.splice(index, 0, { text, originalLine: -1 });
       }
-      return indexes;
-    }, []);
-
-    const [firstIndex, ...duplicateIndexes] = matchingIndexes;
-    if (firstIndex !== undefined) {
-      nextLines[firstIndex] = identityLine;
-      for (const duplicateIndex of duplicateIndexes.toReversed()) {
-        nextLines.splice(duplicateIndex, 1);
-      }
-      continue;
     }
-
-    const insertIndex = resolveIdentityInsertIndex(nextLines);
-    nextLines.splice(insertIndex, 0, identityLine);
+    return missing.length
+      ? [...missing, ...["", "<!-- -->", ""].map((text) => ({ text, originalLine: -1 })), ...lines]
+      : lines;
+  };
+  const render = (lines: IdentityMarkdownLine[]) =>
+    lines
+      .map((line) => line.text)
+      .join("\n")
+      .replace(/\n*$/, "\n");
+  const ordinary = edit(original);
+  if (!originalState.signatures.length) {
+    return render(ordinary);
   }
-
-  return nextLines.join("\n").replace(/\n*$/, "\n");
+  const canonical = updates.map(({ text }) => text);
+  const expected = canonical.some((text) => text.includes("\n"))
+    ? parseIdentityMarkdown(canonical.join("\n"))
+    : parseIdentityLines(canonical);
+  const valid = (lines: IdentityMarkdownLine[]) => {
+    const state = identityFenceState(lines);
+    const actual = parseIdentityLines(state.unfencedLines);
+    return (
+      state.signatures.length === originalState.signatures.length &&
+      state.signatures.every((signature, index) => signature === originalState.signatures[index]) &&
+      updates.every(({ field }) => actual?.[field] === expected?.[field])
+    );
+  };
+  if (valid(ordinary)) {
+    return render(ordinary);
+  }
+  // Retain list prefixes and duplicate containers when normalizing them would
+  // expose an example or make an unclosed fence consume ordinary prose.
+  const conservative = edit(original, true);
+  if (!valid(conservative)) {
+    throw new Error("Identity update would change fenced Markdown content or field values");
+  }
+  const normalized = edit(conservative);
+  return render(valid(normalized) ? normalized : conservative);
 }
 
 export async function buildIdentityMarkdownForWrite(params: {
