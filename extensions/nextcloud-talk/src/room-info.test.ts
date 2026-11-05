@@ -157,7 +157,7 @@ describe("nextcloud talk room info", () => {
   });
 
   it("serves the cached room kind within the window regardless of the wall clock", async () => {
-    let perfNow = 0;
+    const perfNow = 0;
     let wallNow = Date.UTC(2026, 7, 31);
     vi.spyOn(performance, "now").mockImplementation(() => perfNow);
     vi.spyOn(Date, "now").mockImplementation(() => wallNow);
