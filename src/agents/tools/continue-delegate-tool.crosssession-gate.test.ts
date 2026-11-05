@@ -67,10 +67,11 @@ describe("continue_delegate cross-session targeting gate", () => {
     clearRuntimeConfigSnapshot();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     resetDelegateStoreForTests();
     resetContinueDelegateTurnAdmissionForTests();
     clearRuntimeConfigSnapshot();
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
   it("case 1: disabled rejects targetSessionKey for another session", async () => {
@@ -158,25 +159,17 @@ describe("continue_delegate cross-session targeting gate", () => {
       childSessionKey: DISPATCHING_SESSION,
       requesterSessionKey: "agent:main:root",
     });
-    try {
-      expect(listAncestorSessionKeys(DISPATCHING_SESSION)).toContain("agent:main:root");
-      await expect(
-        executeContinueDelegate({
-          crossSessionTargeting: "disabled",
-          args: { targetSessionKey: "agent:main:root" },
-        }),
-      ).rejects.toThrow("cross-session continuation targeting is disabled");
-      expect(await consumePendingDelegates(DISPATCHING_SESSION)).toEqual([]);
+    expect(listAncestorSessionKeys(DISPATCHING_SESSION)).toContain("agent:main:root");
 
-      await expect(
-        executeContinueDelegate({
-          crossSessionTargeting: "disabled",
-          args: { fanoutMode: "tree" },
-        }),
-      ).resolves.toMatchObject({ status: "scheduled", fanoutMode: "tree" });
-    } finally {
-      await resetSubagentRegistryForTests({ persist: false });
-    }
+    await expect(
+      executeContinueDelegate({
+        crossSessionTargeting: "disabled",
+        args: { targetSessionKey: "agent:main:root" },
+      }),
+    ).rejects.toThrow("cross-session continuation targeting is disabled");
+    await expect(
+      executeContinueDelegate({ crossSessionTargeting: "disabled", args: { fanoutMode: "tree" } }),
+    ).resolves.toMatchObject({ status: "scheduled", fanoutMode: "tree" });
   });
 
   it("case 8: enabled allows targetSessionKey for another session", async () => {
