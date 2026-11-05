@@ -132,8 +132,18 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       }
     });
   };
+  private readonly reconcileReader = () => {
+    if (
+      !this.offsetState.touchActive &&
+      this.prependAnchor.update(this.virtualizer, this.readerAnchor.rowsMeasured)
+    ) {
+      this.offsetState.syncNativeOffset?.();
+      this.presentation.commitChange(this.invalidate, true);
+    }
+    this.reconcileEnd();
+  };
   private readonly rowRefs: TranscriptRowRefs;
-  private readonly readerAnchor = new TranscriptReaderAnchor(this, () => this.invalidate());
+  private readonly readerAnchor = new TranscriptReaderAnchor(this, this.reconcileReader);
   private readonly captureInteractionResize = (event: Event) => {
     const anchor = resolveChatTranscriptInteractionAnchor(event);
     if (!anchor) {
@@ -367,17 +377,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.didCommit();
     }
   }
-
-  private readonly reconcileReader = () => {
-    if (
-      !this.offsetState.touchActive &&
-      this.prependAnchor.update(this.virtualizer, this.readerAnchor.rowsMeasured)
-    ) {
-      this.offsetState.syncNativeOffset?.();
-      this.presentation.commitChange(this.invalidate, true);
-    }
-    this.reconcileEnd();
-  };
 
   private readonly didCommit = () => {
     this.entryAnimations.didCommit();
