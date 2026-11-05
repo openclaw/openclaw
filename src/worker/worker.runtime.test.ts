@@ -896,6 +896,14 @@ function managedCommand() {
   };
 }
 
+registerWorkerBackgroundExecLifecycleTests({
+  setup,
+  waitForFast,
+  bundleHash: BUNDLE_HASH,
+  sessionId: SESSION_ID,
+  inferenceStartTimeoutMs: WORKER_INFERENCE_START_TIMEOUT_MS,
+});
+
 afterEach(async () => {
   browserRuntimeMocks.createWorkerBrowserToolRuntime.mockClear();
   browserRuntimeMocks.dispose.mockClear();
@@ -905,14 +913,6 @@ afterEach(async () => {
   for (const tempDir of tempDirs.splice(0)) {
     await rm(tempDir, { recursive: true, force: true });
   }
-});
-
-registerWorkerBackgroundExecLifecycleTests({
-  setup,
-  waitForFast,
-  bundleHash: BUNDLE_HASH,
-  sessionId: SESSION_ID,
-  inferenceStartTimeoutMs: WORKER_INFERENCE_START_TIMEOUT_MS,
 });
 
 it("settles a real image above 64 KiB through input and a tool result", async () => {
