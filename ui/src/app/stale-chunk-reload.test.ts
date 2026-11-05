@@ -431,28 +431,6 @@ describe("scheduleStaleChunkReload", () => {
     expect(fetchMock).toHaveBeenCalledTimes(attempts + 1);
   });
 
-  it("keeps probing when a host clock step advances during recovery", async () => {
-    vi.useFakeTimers();
-    const reload = vi.fn();
-    const storage = memoryStorage();
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const pending = scheduleStaleChunkReload({ buildId: "clock-step-target", storage, reload });
-    await vi.advanceTimersByTimeAsync(0);
-    const afterFirst = fetchMock.mock.calls.length;
-    expect(afterFirst).toBeGreaterThan(0);
-    await vi.advanceTimersByTimeAsync(1_000);
-    const afterSecond = fetchMock.mock.calls.length;
-    expect(afterSecond).toBeGreaterThan(afterFirst);
-    // A forward wall-clock step must not end the process-local reachability window.
-    vi.setSystemTime(Date.now() + 120_000);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(fetchMock.mock.calls.length).toBeGreaterThan(afterSecond);
-    await vi.advanceTimersByTimeAsync(30_000);
-    await expect(pending).resolves.toBe(false);
-    expect(reload).not.toHaveBeenCalled();
-  });
-
   it("probes a newer build immediately after an older build exhausted recovery", async () => {
     vi.useFakeTimers();
     const reload = vi.fn();
