@@ -410,6 +410,37 @@ const protectedRuntimeTestFiles = new Set(PR_PROTECTED_RUNTIME_TEST_FILES);
 // opt-in scripts/control-ui-retention census, keep their own config and command.
 const CHANGED_TEST_ROOTS = ["src", "test", "extensions", "packages", "ui"];
 
+function isIndependentMarkdownCompanion(file: string, cwd: string): boolean {
+  // Canonical inventories resolve against the process root, even for explicit targets.
+  if (
+    path.resolve(cwd) !== process.cwd() ||
+    !isTestFileTarget(file) ||
+    !lstatSync(path.resolve(cwd, file), { throwIfNoEntry: false })?.isFile()
+  ) {
+    return false;
+  }
+  const plans = buildVitestRunPlans([file], cwd);
+  const plan = plans[0];
+  if (!plan || plans.length !== 1 || plan.watchMode) {
+    return false;
+  }
+  const targets = plan.includePatterns ?? plan.forwardedArgs;
+  if (
+    targets.length !== 1 ||
+    targets[0] !== file ||
+    (plan.includePatterns && plan.forwardedArgs.length > 0)
+  ) {
+    return false;
+  }
+  const config = resolveCanonicalNodeTestConfig(file, plan.config);
+  // Each config runs in its own process; unit-fast shares the Markdown worker.
+  return Boolean(
+    config &&
+    config !== "test/vitest/vitest.unit-fast.config.ts" &&
+    listNodeTestConfigFiles(config)?.includes(file),
+  );
+}
+
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
 export function resolveChangedNodeTestTargets(
   changedPaths: string[],
@@ -428,7 +459,9 @@ export function resolveChangedNodeTestTargets(
     boundedOwners: true,
     baseRef: options.baseRef,
     aggressive: aggressive ? { maxDirectImporters: 20, maxDirectoryTests: 30 } : undefined,
-    adaptiveMarkdown: options.adaptiveMarkdown,
+    adaptiveMarkdown: options.adaptiveMarkdown
+      ? { isIndependentCompanion: (file) => isIndependentMarkdownCompanion(file, cwd) }
+      : undefined,
     combineSiblingWithImportGraph: true,
     resolveAliases: true,
     runtimeOnly: true,

@@ -177,7 +177,7 @@ type ChangedTestTargetOptions = {
   combineSiblingWithImportGraph?: boolean;
   boundedOwners?: boolean;
   aggressive?: { maxDirectImporters: number; maxDirectoryTests: number };
-  adaptiveMarkdown?: boolean;
+  adaptiveMarkdown?: { isIndependentCompanion: (file: string) => boolean };
   onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
   forceFullImportGraph?: boolean;
   resolveAliases?: boolean;
@@ -4707,6 +4707,7 @@ function resolveBoundedChangedTestTargetPlan(
           changedPaths,
           createTestInputFingerprint(cwd),
           adaptiveMarkdownQualification,
+          options.adaptiveMarkdown.isIndependentCompanion,
         )
       : (owners: string[]) => owners;
   const graphOptions = {
