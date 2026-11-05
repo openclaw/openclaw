@@ -59,35 +59,11 @@ describe("normalizeAttachments", () => {
 });
 
 describe("resolveAttachmentKind", () => {
-  it("treats stickers as images despite conflicting MIME", () => {
-    expect(
-      resolveAttachmentKind({
-        url: "https://cdn.example.test/sticker",
-        kind: "sticker",
-        mime: "audio/ogg",
-        index: 0,
-      }),
-    ).toBe("image");
-  });
-
-  it("classifies by file name when the channel reports unknown as the MIME type", () => {
-    expect(
-      resolveAttachmentKind({
-        path: "/Users/openclaw/Library/Messages/Attachments/ab/Audio Message.caf",
-        kind: "unknown",
-        mime: "unknown",
-        index: 0,
-      }),
-    ).toBe("audio");
-  });
-
-  it("keeps an unclassified declared MIME type authoritative over the file name", () => {
-    expect(
-      resolveAttachmentKind({
-        path: "/tmp/voice.caf",
-        mime: "application/x-custom",
-        index: 0,
-      }),
-    ).toBe("unknown");
+  it.each([
+    { kind: "sticker", mime: "audio/ogg", want: "image" },
+    { kind: "unknown", mime: "unknown", want: "audio" },
+    { mime: "application/x-custom", want: "unknown" },
+  ] as const)("resolves kind $kind with MIME $mime to $want", ({ want, ...fact }) => {
+    expect(resolveAttachmentKind({ path: "/tmp/Audio Message.caf", ...fact, index: 0 })).toBe(want);
   });
 });
