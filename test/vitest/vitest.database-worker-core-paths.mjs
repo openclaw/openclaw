@@ -829,6 +829,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-repair-handoff.test.ts",
   "src/cli/update-cli/update-repair-service.test.ts",
   "src/cli/update-cli/update-repair-cancellation.test.ts",
+  "src/cli/update-cli/update-plugin-cohort-settlement.test.ts",
   "src/commands/auth-choice.test.ts",
   "src/commands/models/auth.test.ts",
   "src/flows/doctor-health.fleet-preflight.test.ts",

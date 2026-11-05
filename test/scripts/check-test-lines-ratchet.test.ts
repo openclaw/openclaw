@@ -1,13 +1,14 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { devNull } from "node:os";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-test-lines-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => vi.stubEnv("OPENCLAW_RELEASE_CONTEXT_REF", "main"));
 afterEach(() => vi.restoreAllMocks());
 afterEach(() => vi.unstubAllEnvs());
 const baseline = "config/test-lines-baseline.txt";
@@ -46,6 +47,7 @@ function fixture(initial: Record<string, string>) {
 }
 
 it("does not require test-line allocations on release branches", () => {
+  vi.stubEnv("OPENCLAW_RELEASE_CONTEXT_REF", "");
   vi.stubEnv("GITHUB_ACTIONS", "");
   const f = fixture({ [baseline]: "1\n", "a.test.ts": "one\n" });
   f.write("a.test.ts", "one\ntwo\n");

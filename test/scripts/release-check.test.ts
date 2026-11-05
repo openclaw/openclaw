@@ -14,7 +14,7 @@ import { create } from "tar";
 import { describe, expect, vi } from "vitest";
 import { parse } from "yaml";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
 import {
   checkPackedTargetBootstrap as checkTarget,
   createPackedTarballInstallArgs as installArgs,
