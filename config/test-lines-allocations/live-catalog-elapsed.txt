@@ -1,2 +1,3 @@
-43
-# Clock-step regressions for the shared live provider catalog cache and its upstream feed.
+76
+# Clock-step regressions for the shared live provider catalog cache, its upstream feed,
+# and the opencode catalog.run discovery trace (base-red / head-green).

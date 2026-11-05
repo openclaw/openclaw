@@ -545,6 +545,35 @@ describe("opencode provider plugin", () => {
     );
   });
 
+  it("reloads the upstream provider catalog after a backwards clock step", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchGuard = createCatalogFetchGuard({
+        metadata: [{ id: "clock-step-fixture" }],
+        advertised: [],
+      });
+      const metadataCalls = () =>
+        fetchGuard.mock.calls.filter(([request]) => request.url === METADATA_URL).length;
+
+      // First live discovery through catalog.run downloads the upstream metadata once.
+      await buildLiveCatalog(fetchGuard, "runtime-key", "discovery-key");
+      expect(metadataCalls()).toBe(1);
+
+      // A second live discovery inside the 300 s elapsed TTL reuses the cache.
+      await buildLiveCatalog(fetchGuard, "runtime-key", "discovery-key");
+      expect(metadataCalls()).toBe(1);
+
+      // A backwards wall-clock step past the elapsed TTL must force an upstream reload;
+      // a Date.now deadline would stay "fresh" for the step's length and skip it.
+      vi.setSystemTime(Date.now() - 60 * 60 * 1000);
+      await vi.advanceTimersByTimeAsync(301_000);
+      await buildLiveCatalog(fetchGuard, "runtime-key", "discovery-key");
+      expect(metadataCalls()).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["failed", "filtered"] as const)(
     "keeps refreshed metadata separate from %s model advertising",
     async (advertising) => {
