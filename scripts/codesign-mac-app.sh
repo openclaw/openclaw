@@ -199,9 +199,7 @@ fi
 
 APP_ENTITLEMENTS="$ENT_TMP_APP"
 
-# The Claude SDK CLI and the Codex code-mode host need JIT memory but retain
-# library validation. Hardened runtime without allow-jit makes that host's V8
-# fail to reserve its code range.
+# Claude SDK and Codex code-mode executables need JIT memory but retain library validation.
 cat > "$ENT_TMP_JIT" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -425,8 +423,8 @@ while IFS= read -r -d '' runtime_kind && IFS= read -r -d '' runtime_file; do
   elif [[ "$runtime_kind" == "executable" && (
     "$runtime_relative" == */node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude ||
     "$runtime_relative" == */node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/claude ||
-    "$runtime_relative" == */node_modules/@openai/codex-darwin-arm64/vendor/*/bin/codex-code-mode-host ||
-    "$runtime_relative" == */node_modules/@openai/codex-darwin-x64/vendor/*/bin/codex-code-mode-host
+    "$runtime_relative" == */node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex-code-mode-host ||
+    "$runtime_relative" == */node_modules/@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/bin/codex-code-mode-host
   ) ]]; then
     sign_item "$runtime_file" "$ENT_TMP_JIT"
   else

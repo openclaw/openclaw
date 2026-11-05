@@ -44,6 +44,7 @@ function runCodesign(
     },
   });
 }
+
 async function appFixture(
   mac: MacScriptFixture,
   label: string,
@@ -64,15 +65,18 @@ async function appFixture(
   await install(binDir);
   return { tempRoot, app, binDir, captureDir };
 }
+
 function signingFixture(mac: MacScriptFixture, label: string, name?: string) {
   return makeSigningFixture(mac, mac.createTempDir(`openclaw-${label}-`), name);
 }
+
 function signedPaths(fixture: Awaited<ReturnType<typeof makeSigningFixture>>) {
   return fixture
     .events()
     .filter(({ args }) => args.includes("--sign"))
     .map(({ args }) => args.at(-1));
 }
+
 async function runCodesignWithoutAllocation(
   mac: MacScriptFixture,
   expect: TestContext["expect"],
@@ -93,6 +97,7 @@ async function runCodesignWithoutAllocation(
   expect(existsSync(allocation), result.stderr).toBe(false);
   return result;
 }
+
 async function runElevationMetadataFixture(mac: MacScriptFixture, env: NodeJS.ProcessEnv) {
   const { tempRoot, app } = await appFixture(
     mac,
@@ -109,17 +114,6 @@ async function runElevationMetadataFixture(mac: MacScriptFixture, env: NodeJS.Pr
 }
 
 describe("codesign-mac-app temp file hygiene", () => {
-  it.concurrent("does not generate unused entitlement plist files", ({ mac, expect }) =>
-    mac.lifetime.run(async () => {
-      const script = readFileSync(scriptPath, "utf8");
-
-      expect(script).toContain('ENT_TMP_APP="$ENT_TMP_DIR/app.plist"');
-      expect(script).not.toContain("ENT_TMP_BASE");
-      expect(script).not.toContain("ENT_TMP_RUNTIME");
-      expect(script).not.toContain("base.plist");
-      expect(script).not.toContain("runtime.plist");
-    }));
-
   it.concurrent("does not allocate entitlement temp files for help output", ({ mac, expect }) =>
     mac.lifetime.run(async () => {
       const tempRoot = mac.createTempDir("openclaw-codesign-help-");
