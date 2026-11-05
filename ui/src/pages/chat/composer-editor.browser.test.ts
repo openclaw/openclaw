@@ -21,7 +21,12 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-function fixture(kind: "chat" | "new-session", text = "Ask @Alex after", width = 230) {
+function fixture(
+  kind: "chat" | "new-session",
+  text = "Ask @Alex after",
+  width = 230,
+  selected?: readonly HumanMention[],
+) {
   const surface = document.createElement("div");
   surface.className = "agent-chat__input";
   surface.style.cssText = `width: ${width}px; --chat-composer-editor-size:14px; --chat-composer-editor-line:20px; --chat-composer-editor-inset-block:0px; --chat-composer-editor-inset-inline:0px; --chat-composer-editor-max-lines:3; font:14px/20px Arial;`;
@@ -36,7 +41,7 @@ function fixture(kind: "chat" | "new-session", text = "Ask @Alex after", width =
   input.value = text;
   let raw = text;
   const inputEvents: InputEvent[] = [];
-  let mentions: readonly HumanMention[] = [
+  let mentions: readonly HumanMention[] = selected ?? [
     { profileId: "alex-one", start: text.indexOf("@"), end: text.indexOf("@") + 5 },
   ];
   input.addEventListener("input", (event) => {
@@ -65,62 +70,249 @@ async function layout() {
 }
 
 describe.each(["chat", "new-session"] as const)("%s document-aware composer", (kind) => {
-  it("reserves a full font-sized avatar and gap before editable name text, with honest caret/wrap geometry", async () => {
+  it("keeps required separators when deleting whitespace beside a chip", async () => {
+    const f = fixture(kind);
+    focusComposerInput(f.input);
+    selectComposerInput(f.input, 9, 9);
+    await userEvent.keyboard("{Delete}");
+    expect(f.raw()).toBe("Ask @Alex after");
+    expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 4, end: 9 }]);
+    selectComposerInput(f.input, 4, 4);
+    await userEvent.keyboard("{Backspace}");
+    expect(f.raw()).toBe("Ask @Alex after");
+    expect(f.mentions()).toHaveLength(1);
+  });
+
+  it("keeps a composition undo separate from earlier draft edits", async () => {
+    const f = fixture(kind);
+    f.view.dispatch({ changes: { from: 0, insert: "Hello " }, userEvent: "input.type" });
+    selectComposerInput(f.input, 15, 15);
+    focusComposerInput(f.input);
+    f.content.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    const position = f.view.state.selection.main.head;
+    f.view.dispatch({
+      changes: { from: position, insert: "你" },
+      selection: { anchor: position + 1 },
+      userEvent: "input.type.compose",
+    });
+    f.content.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "你" }));
+    await userEvent.keyboard("{Control>}z{/Control}");
+    expect(f.raw()).toBe("Hello Ask @Alex after");
+    expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 10, end: 15 }]);
+  });
+
+  it("cancels composition padding without resurrecting it in undo", async () => {
+    const f = fixture(kind);
+    f.view.dispatch({ changes: { from: 0, insert: "Hello " }, userEvent: "input.type" });
+    selectComposerInput(f.input, 15, 15);
+    focusComposerInput(f.input);
+    f.content.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    f.content.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "" }));
+    expect(f.raw()).toBe("Hello Ask @Alex after");
+    await userEvent.keyboard("{Control>}z{/Control}");
+    expect(f.raw()).toBe("Ask @Alex after");
+    expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 4, end: 9 }]);
+  });
+
+  it.each([
+    [0, 4],
+    [9, 10],
+  ])("preserves chips when IME replaces adjacent selection %s..%s", (start, end) => {
+    const f = fixture(kind);
+    selectComposerInput(f.input, start, end);
+    f.content.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    f.view.dispatch({ ...f.view.state.replaceSelection("你"), userEvent: "input.type.compose" });
+    f.content.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "你" }));
+    expect(f.raw()).toBe(start === 0 ? "你 @Alex after" : "Ask @Alex 你after");
+    expect(f.mentions()).toEqual([
+      { profileId: "alex-one", start: start === 0 ? 2 : 4, end: start === 0 ? 7 : 9 },
+    ]);
+  });
+
+  it.each([4, 9])("retains recipients during composition beside a chip at %s", (at) => {
+    const f = fixture(kind);
+    selectComposerInput(f.input, at, at);
+    // Exercise CM's composition transaction contract; not an OS IME claim.
+    f.content.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    const position = f.view.state.selection.main.head;
+    f.view.dispatch({
+      changes: { from: position, insert: "你" },
+      selection: { anchor: position + 1 },
+      userEvent: "input.type.compose",
+    });
+    expect(f.raw()).toBe(at === 4 ? "Ask 你 @Alex after" : "Ask @Alex 你 after");
+    expect(f.mentions()).toEqual([
+      { profileId: "alex-one", start: at === 4 ? 6 : 4, end: at === 4 ? 11 : 9 },
+    ]);
+  });
+
+  it("cuts the intended identical label without stripping the other person", () => {
+    const f = fixture(kind, "@Alex @Alex", 230, [
+      { profileId: "alex-one", start: 0, end: 5 },
+      { profileId: "alex-two", start: 6, end: 11 },
+    ]);
+    selectComposerInput(f.input, 0, 6);
+    f.content.dispatchEvent(
+      new ClipboardEvent("cut", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: new DataTransfer(),
+      }),
+    );
+    expect(f.raw()).toBe("@Alex");
+    expect(f.mentions()).toEqual([{ profileId: "alex-two", start: 0, end: 5 }]);
+  });
+
+  it("pads incoming chip metadata when pasted into an ordinary word", () => {
+    const f = fixture(kind);
+    selectComposerInput(f.input, 12, 12);
+    const clipboard = new DataTransfer();
+    clipboard.setData("text/plain", "@Bob");
+    clipboard.setData(
+      "application/x-openclaw-mentions",
+      JSON.stringify([{ profileId: "bob", start: 0, end: 4 }]),
+    );
+    f.content.dispatchEvent(
+      new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }),
+    );
+    expect(f.raw()).toBe("Ask @Alex af @Bob ter");
+    expect(f.mentions()).toEqual([
+      { profileId: "alex-one", start: 4, end: 9 },
+      { profileId: "bob", start: 13, end: 17 },
+    ]);
+  });
+
+  it("preserves clipboard recipients when a chip-boundary separator is inserted", async () => {
+    const f = fixture(kind);
+    selectComposerInput(f.input, 4, 9);
+    const clipboard = new DataTransfer();
+    f.content.dispatchEvent(
+      new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData: clipboard }),
+    );
+    selectComposerInput(f.input, 4, 4);
+    f.content.dispatchEvent(
+      new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }),
+    );
+    expect(f.raw()).toBe("Ask @Alex @Alex after");
+    expect(f.mentions()).toEqual([
+      { profileId: "alex-one", start: 4, end: 9 },
+      { profileId: "alex-one", start: 10, end: 15 },
+    ]);
+  });
+
+  it("renders the selected person as one sent-style chip with real avatar width and honest wrapping", async () => {
     const f = fixture(kind);
     await layout();
-    const avatar = f.surface.querySelector<HTMLElement>(".markdown-person-reference__avatar")!;
-    const label = f.surface.querySelector<HTMLElement>(".chat-composer-mention-label")!;
-    expect(label.classList.contains("markdown-person-reference")).toBe(true);
-    expect(label.contains(avatar)).toBe(true);
-    const font = Number.parseFloat(getComputedStyle(label).fontSize);
+    const chips = f.surface.querySelectorAll<HTMLElement>(".chat-composer-mention");
+    expect(chips).toHaveLength(1);
+    const chip = chips[0]!;
+    expect(chip.classList.contains("markdown-person-reference")).toBe(true);
+    expect(chip.getAttribute("contenteditable")).toBe("false");
+    const avatar = chip.querySelector<HTMLElement>(".markdown-person-reference__avatar")!;
+    const chipText = document.createTreeWalker(chip, NodeFilter.SHOW_TEXT);
+    let nameNode = chipText.nextNode();
+    while (nameNode && nameNode.textContent !== "Alex") {
+      nameNode = chipText.nextNode();
+    }
+    const range = document.createRange();
+    range.selectNodeContents(nameNode!);
+    const font = Number.parseFloat(getComputedStyle(chip).fontSize);
     const rect = avatar.getBoundingClientRect();
-    const nameNode = [...label.childNodes].find(
-      (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.includes("Alex"),
-    )!;
-    const nameRange = document.createRange();
-    nameRange.selectNodeContents(nameNode);
-    const name = nameRange.getBoundingClientRect();
-    expect(Math.abs(rect.width - font)).toBeLessThan(0.1);
-    expect(Math.abs(rect.height - font)).toBeLessThan(0.1);
-    expect(name.left - rect.right).toBeGreaterThanOrEqual(2);
+    // The composer reuses the sent-message avatar: a font-sized circle and gap.
+    expect(rect.width).toBeGreaterThanOrEqual(font);
+    expect(rect.height).toBeGreaterThanOrEqual(font);
+    expect(range.getBoundingClientRect().left - rect.right).toBeGreaterThanOrEqual(2);
     expect(f.surface.querySelectorAll('[role="textbox"]')).toHaveLength(1);
     expect(f.content.getAttribute("aria-keyshortcuts")).toBe("Control+Enter");
     expect(f.input.hidden).toBe(true);
     expect(f.input.getBoundingClientRect().width).toBe(0);
-    expect(f.view.dom.getBoundingClientRect().width).toBeGreaterThan(0);
+    // One document, no overlay: the raw text exists once and the chip replaces it.
     expect(f.view.state.doc.toString()).toBe("Ask @Alex after");
-    expect(f.view.coordsAtPos(5)!.left).toBeCloseTo(name.left, 0);
-    // The end position is outside the shared pill's trailing padding.
-    expect(f.view.coordsAtPos(9)!.left).toBeCloseTo(label.getBoundingClientRect().right, 0);
+    const nameNodes: Node[] = [];
+    const walker = document.createTreeWalker(f.content, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.textContent?.includes("Alex")) {
+        nameNodes.push(node);
+      }
+    }
+    expect(nameNodes).toHaveLength(1);
+    expect(f.surface.querySelectorAll(".chat-composer-mention-layer")).toHaveLength(0);
+    expect(f.view.coordsAtPos(4)!.right).toBeCloseTo(chip.getBoundingClientRect().left, 0);
+    expect(f.view.coordsAtPos(9)!.left).toBeCloseTo(chip.getBoundingClientRect().right, 0);
     f.surface.style.width = "70px";
     await layout();
     const after = f.view.coordsAtPos(f.view.state.doc.length)!;
     expect(after.bottom).toBeGreaterThan(f.view.coordsAtPos(0)!.bottom);
-    expect(after.left).toBeGreaterThanOrEqual(f.content.getBoundingClientRect().left);
     expect(after.right).toBeLessThanOrEqual(f.content.getBoundingClientRect().right + 1);
   });
 
-  it("types around a mention, edits its name, deletes its avatar and preserves native undo/redo", async () => {
+  it("moves, selects and clicks over a mention as one character", async () => {
     const f = fixture(kind);
     focusComposerInput(f.input);
-    selectComposerInput(f.input, 0, 0);
-    await userEvent.keyboard("Hello ");
-    expect(f.raw()).toBe("Hello Ask @Alex after");
-    expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 10, end: 15 }]);
-    selectComposerInput(f.input, 15, 15);
+    selectComposerInput(f.input, 4, 4);
+    await userEvent.keyboard("{ArrowRight}");
+    expect(f.view.state.selection.main.head).toBe(9);
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(f.view.state.selection.main.head).toBe(4);
+    await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    expect([f.view.state.selection.main.from, f.view.state.selection.main.to]).toEqual([4, 9]);
+    await userEvent.keyboard("{ArrowLeft}");
+    await layout();
+    const chip = f.surface
+      .querySelector<HTMLElement>(".chat-composer-mention")!
+      .getBoundingClientRect();
+    for (const ratio of [0.2, 0.5, 0.8]) {
+      await userEvent.click(f.content, {
+        position: {
+          x: chip.left + chip.width * ratio - f.content.getBoundingClientRect().left,
+          y: chip.top + chip.height / 2 - f.content.getBoundingClientRect().top,
+        },
+      });
+      expect([4, 9]).toContain(f.view.state.selection.main.head);
+    }
+    expect(f.raw()).toBe("Ask @Alex after");
+    expect(f.mentions()).toHaveLength(1);
+    // Double-click word selection inside the chip widens to the whole chip.
+    await userEvent.dblClick(f.surface.querySelector(".chat-composer-mention")!);
+    expect([f.view.state.selection.main.from, f.view.state.selection.main.to]).toEqual([4, 9]);
+    // Programmatic selections can never split a chip either.
+    selectComposerInput(f.input, 6, 6);
+    expect([4, 9]).toContain(f.view.state.selection.main.head);
+    selectComposerInput(f.input, 0, 6);
+    expect([f.view.state.selection.main.from, f.view.state.selection.main.to]).toEqual([0, 9]);
+  });
+
+  it("types next to a mention, deletes it whole and restores the text with undo", async () => {
+    const f = fixture(kind);
+    focusComposerInput(f.input);
+    selectComposerInput(f.input, 4, 4);
+    await userEvent.keyboard("Hi ");
+    expect(f.raw()).toBe("Ask Hi @Alex after");
+    expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 7, end: 12 }]);
+    selectComposerInput(f.input, 12, 12);
     await userEvent.keyboard("!");
-    expect(f.raw()).toBe("Hello Ask @Alex! after");
-    expect(f.surface.querySelector(".chat-composer-editor")).toBe(f.view.dom);
-    selectComposerInput(f.input, 11, 11);
+    expect(f.raw()).toBe("Ask Hi @Alex! after");
+    expect(f.mentions()).toHaveLength(1);
+    // A letter typed against the chip gets the protocol's required separator.
+    selectComposerInput(f.input, 12, 12);
+    await userEvent.keyboard("s");
+    expect(f.raw()).toBe("Ask Hi @Alex s! after");
+    expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 7, end: 12 }]);
+    await userEvent.keyboard("{Backspace}{Backspace}");
+    expect(f.raw()).toBe("Ask Hi @Alex! after");
+    selectComposerInput(f.input, 12, 12);
     await userEvent.keyboard("{Backspace}");
-    expect(f.raw()).toBe("Hello Ask Alex! after");
+    expect(f.raw()).toBe("Ask Hi ! after");
     expect(f.mentions()).toEqual([]);
+    expect(f.surface.querySelectorAll(".chat-composer-mention")).toHaveLength(0);
     await userEvent.keyboard("{Control>}z{/Control}");
-    expect(f.raw()).toContain("@Alex");
+    expect(f.raw()).toBe("Ask Hi @Alex! after");
+    // Undo restores the chip's recipient, not just its text.
+    expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 7, end: 12 }]);
+    await expect.poll(() => f.surface.querySelectorAll(".chat-composer-mention").length).toBe(1);
     await userEvent.keyboard("{Control>}y{/Control}");
-    expect(f.raw()).not.toContain("@");
+    expect(f.raw()).toBe("Ask Hi ! after");
     expect(f.inputEvents.at(-1)?.inputType).toBe("historyRedo");
-    expect(f.inputEvents.at(-1)?.data).toBeNull();
     expect(composerInputHasFocus(f.input)).toBe(true);
   });
 
@@ -149,6 +341,17 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     expect(f.inputEvents.at(-1)?.data).toBeNull();
     expect(f.view.state.doc.length).toBe(f.raw().length);
     expect(f.mentions()).toEqual([]); // Pasted labels never invent recipients.
+    // A chip cut from this editor carries its recipient back on paste.
+    expect(JSON.parse(cut.getData("application/x-openclaw-mentions"))).toEqual([
+      { profileId: "alex-one", start: 0, end: 5 },
+    ]);
+    selectComposerInput(f.input, 4, 9);
+    f.content.dispatchEvent(
+      new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: cut }),
+    );
+    expect(f.raw()).toBe("Ask @Alex after");
+    expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 4, end: 9 }]);
+    await expect.poll(() => f.surface.querySelectorAll(".chat-composer-mention").length).toBe(1);
   });
 
   it("forwards composition and send keys through the raw controller port, honoring read-only/disabled", async () => {
@@ -214,17 +417,14 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     expect(f.view.scrollDOM.scrollHeight).toBeGreaterThan(f.view.scrollDOM.clientHeight);
   });
 
-  it("keeps name characters editable and supports forward deletion of the avatar character", async () => {
+  it("deletes a mention whole with forward Delete and never edits inside it", async () => {
     const f = fixture(kind);
     focusComposerInput(f.input);
-    selectComposerInput(f.input, 7, 7);
-    await userEvent.keyboard("x");
-    expect(f.raw()).toBe("Ask @Alxex after");
-    expect(f.mentions()).toEqual([]);
-    expect(f.view.state.selection.main.head).toBe(8);
     selectComposerInput(f.input, 4, 4);
     await userEvent.keyboard("{Delete}");
-    expect(f.raw()).toBe("Ask Alxex after");
+    expect(f.raw()).toBe("Ask  after");
+    expect(f.mentions()).toEqual([]);
+    expect(f.view.state.selection.main.head).toBe(4);
   });
 
   it("autosizes and scrolls the actual editor, then reflows when its pane widens", async () => {

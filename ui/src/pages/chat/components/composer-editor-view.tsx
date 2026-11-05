@@ -1,5 +1,5 @@
 import "../../../styles/chat/composer-surface.css";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, isolateHistory } from "@codemirror/commands";
 import {
   Compartment,
   EditorSelection,
@@ -13,66 +13,42 @@ import {
   EditorView,
   keymap,
   placeholder,
-  WidgetType,
   type DecorationSet,
+  type ViewUpdate,
 } from "@codemirror/view";
-import { render } from "@solidjs/web";
 import type { ApplicationContext } from "../../../app/context-types.ts";
-import { PersonReferenceLabel } from "../../../components/solid/person-reference-label.tsx";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
-import { readHumanMentions } from "../../../lib/chat/human-mentions.ts";
+import {
+  HUMAN_MENTION_CLIPBOARD_TYPE,
+  readHumanMentionClipboard,
+  prepareHumanMentionPaste,
+} from "../../../lib/chat/human-mention-clipboard.ts";
+import { readHumanMentions, withHumanMentionEdit } from "../../../lib/chat/human-mentions.ts";
 import { registerComposerEditor } from "../../../lib/composer-input.ts";
-import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
-
-const avatarDisposers = new WeakMap<HTMLElement, () => void>();
-class MentionAvatar extends WidgetType {
-  constructor(
-    readonly profileId: string,
-    readonly label: string,
-    readonly application: ApplicationContext | undefined,
-  ) {
-    super();
-  }
-  override eq(other: MentionAvatar) {
-    return other.profileId === this.profileId && other.label === this.label;
-  }
-  toDOM() {
-    const node = document.createElement("span");
-    node.className = "chat-composer-mention-avatar";
-    node.setAttribute("aria-hidden", "true");
-    avatarDisposers.set(
-      node,
-      // Provide the capability in this separate root; CM owns its lifetime.
-      render(
-        () =>
-          this.application ? (
-            <ApplicationProvider value={this.application}>
-              <PersonReferenceLabel profileId={this.profileId} label={this.label} avatarOnly />
-            </ApplicationProvider>
-          ) : (
-            <PersonReferenceLabel profileId={this.profileId} label={this.label} avatarOnly />
-          ),
-        node,
-      ),
-    );
-    return node;
-  }
-  override destroy(node: HTMLElement) {
-    avatarDisposers.get(node)?.();
-    avatarDisposers.delete(node);
-  }
-  override ignoreEvent() {
-    return false;
-  }
-}
+import {
+  MentionChip,
+  separateTypedTextFromMentions,
+  setMentionDecorations,
+  keepSelectionOutsideMentions,
+  restoreMentions,
+  rememberRemovedMentions,
+  mentionDecorations,
+} from "./composer-editor-mentions.tsx";
 
 /** CM owns layout, selection, history, clipboard and IME. The hidden native field
  * is only the existing controller's raw-value/event port; its geometry is never used. */
+export type ComposerEditorSnapshot = {
+  value: string;
+  mentions: readonly HumanMention[];
+  selection: { start: number; end: number; direction: "forward" | "backward" | "none" };
+};
+
 export function mountComposerEditor(
   input: HTMLTextAreaElement,
   mentions: () => readonly HumanMention[],
   application?: ApplicationContext,
+  initialHistory?: ComposerEditorSnapshot,
 ) {
   const configuration = new Compartment();
   let syncing = false;
@@ -89,23 +65,21 @@ export function mountComposerEditor(
     direction: input.selectionDirection,
   };
 
-  function decorations(): DecorationSet {
-    const ranges = currentMentions.flatMap((mention) => {
-      const label = input.value.slice(mention.start, mention.end);
-      if (!label.startsWith("@") || mention.start + 1 >= mention.end) {
-        return [];
-      }
-      return [
-        Decoration.replace({
-          widget: new MentionAvatar(mention.profileId, label, application),
-        }).range(mention.start, mention.start + 1),
-        Decoration.mark({
-          class: "markdown-person-reference chat-composer-mention-label",
-          inclusiveStart: true,
-        }).range(mention.start, mention.end),
-      ];
-    });
-    return Decoration.set(ranges, true);
+  const startingSelection = initialHistory?.selection ?? initialSelection;
+  function decorations(value = input.value): DecorationSet {
+    return Decoration.set(
+      currentMentions.flatMap((mention) => {
+        const label = value.slice(mention.start, mention.end);
+        return label.startsWith("@") && mention.start + 1 < mention.end
+          ? [
+              Decoration.replace({
+                widget: new MentionChip(mention.profileId, label, application),
+              }).range(mention.start, mention.end),
+            ]
+          : [];
+      }),
+      true,
+    );
   }
 
   function attributes() {
@@ -152,7 +126,6 @@ export function mountComposerEditor(
           .filter(Boolean)
           .join(" "),
       }),
-      EditorView.decorations.of(decorations()),
       placeholder(input.placeholder),
     ];
   }
@@ -189,16 +162,24 @@ export function mountComposerEditor(
     return forwarded.defaultPrevented;
   }
 
-  currentMentions = readHumanMentions(input.value, mentions()) ?? [];
+  currentMentions = initialHistory?.mentions ?? readHumanMentions(input.value, mentions()) ?? [];
   const view = new EditorView({
     parent: input.parentElement!,
     state: EditorState.create({
-      doc: input.value,
+      doc: initialHistory?.value ?? input.value,
       selection: EditorSelection.single(
-        initialSelection.direction === "backward" ? initialSelection.end : initialSelection.start,
-        initialSelection.direction === "backward" ? initialSelection.start : initialSelection.end,
+        startingSelection.direction === "backward"
+          ? startingSelection.end
+          : startingSelection.start,
+        startingSelection.direction === "backward"
+          ? startingSelection.start
+          : startingSelection.end,
       ),
       extensions: [
+        mentionDecorations.init(() => decorations(initialHistory?.value ?? input.value)),
+        separateTypedTextFromMentions,
+        keepSelectionOutsideMentions,
+        rememberRemovedMentions,
         configuration.of(extensions()),
         EditorView.lineWrapping,
         history(),
@@ -224,10 +205,12 @@ export function mountComposerEditor(
               return forward(event);
             },
             compositionstart(event) {
+              prepareComposition();
               forward(event);
               return false;
             },
             compositionend(event) {
+              finishComposition(event);
               forward(event);
               return false;
             },
@@ -239,8 +222,27 @@ export function mountComposerEditor(
               forward(event);
               return false;
             },
+            copy(event) {
+              return copySelection(event, false);
+            },
+            cut(event) {
+              return copySelection(event, true);
+            },
             paste(event) {
-              return forwardPaste(event);
+              rememberPastedMentions(event);
+              if (forwardPaste(event)) {
+                pendingPaste = undefined;
+                return true;
+              }
+              if (!pendingPaste) {
+                return false;
+              }
+              event.preventDefault();
+              view.dispatch({
+                ...view.state.replaceSelection(pendingPaste.text),
+                userEvent: "input.paste",
+              });
+              return true;
             },
           }),
         ),
@@ -252,7 +254,11 @@ export function mountComposerEditor(
             input.value = update.state.doc.toString();
             publishSelection();
             let inserted = "";
-            update.changes.iterChanges((_from, _to, _newFrom, _newTo, text) => {
+            let editStart = update.startState.doc.length;
+            let editEnd = 0;
+            update.changes.iterChanges((from, to, _newFrom, _newTo, text) => {
+              editStart = Math.min(editStart, from);
+              editEnd = Math.max(editEnd, to);
               inserted += text.toString();
             });
             const source =
@@ -278,18 +284,38 @@ export function mountComposerEditor(
                             : inserted === "\n"
                               ? "insertLineBreak"
                               : "insertText";
+            // Undo restores the text of a deleted chip; restore its recipient too.
+            const restored = [
+              ...update.transactions.flatMap((transaction) =>
+                transaction.effects.flatMap((effect) =>
+                  effect.is(restoreMentions) ? effect.value : [],
+                ),
+              ),
+              ...pastedMentions(update),
+            ];
             publishing = true;
             try {
-              input.dispatchEvent(
-                new InputEvent("input", {
-                  bubbles: true,
+              withHumanMentionEdit(
+                input.value,
+                restored,
+                {
+                  value: update.startState.doc.toString(),
+                  start: editStart,
+                  end: editEnd,
                   inputType,
-                  data:
-                    inputType === "insertText" || inputType === "insertCompositionText"
-                      ? inserted || null
-                      : null,
-                  isComposing: view.composing,
-                }),
+                },
+                () =>
+                  input.dispatchEvent(
+                    new InputEvent("input", {
+                      bubbles: true,
+                      inputType,
+                      data:
+                        inputType === "insertText" || inputType === "insertCompositionText"
+                          ? inserted || null
+                          : null,
+                      isComposing: view.composing,
+                    }),
+                  ),
               );
             } finally {
               publishing = false;
@@ -316,6 +342,123 @@ export function mountComposerEditor(
     }),
   });
 
+  let compositionPadding: { value: string; removals: { from: number; to: number }[] } | undefined;
+  function prepareComposition() {
+    compositionPadding = undefined;
+    const selection = view.state.selection.main;
+    let padLeft = false;
+    let padRight = false;
+    view.state.field(mentionDecorations).between(selection.from, selection.to, (from, to) => {
+      padLeft ||= to === selection.from;
+      padRight ||= from === selection.to;
+    });
+    if (!padLeft && !padRight) {
+      return;
+    }
+    const changes = [
+      ...(padLeft ? [{ from: selection.from, insert: " " }] : []),
+      ...(padRight ? [{ from: selection.to, insert: " " }] : []),
+    ];
+    const start = selection.from + Number(padLeft);
+    const end = selection.to + Number(padLeft);
+    // Reserve boundaries outside the selection BEFORE the IME owns its DOM
+    // range. Candidate rewrites must not touch the composed range or join the
+    // preceding edit's undo group (compose events always join in CM history).
+    view.dispatch({
+      changes,
+      selection:
+        selection.anchor <= selection.head
+          ? EditorSelection.range(start, end)
+          : EditorSelection.range(end, start),
+      userEvent: "input.type.compose.start",
+      annotations: isolateHistory.of("before"),
+    });
+    compositionPadding = {
+      value: view.state.doc.toString(),
+      removals: changes.map((change, index) => ({
+        from: change.from + index,
+        to: change.from + index + 1,
+      })),
+    };
+  }
+  function finishComposition(event: CompositionEvent) {
+    const padding = compositionPadding;
+    compositionPadding = undefined;
+    if (padding && !event.data && view.state.doc.toString() === padding.value) {
+      view.dispatch({
+        changes: padding.removals,
+        userEvent: "delete.compose",
+        annotations: Transaction.addToHistory.of(false),
+      });
+    }
+  }
+
+  let pendingPaste: { text: string; mentions: readonly HumanMention[] } | undefined;
+  function copySelection(event: ClipboardEvent, cut: boolean) {
+    const { from, to, empty } = view.state.selection.main;
+    if (empty || !event.clipboardData) {
+      return false;
+    }
+    const copied: HumanMention[] = [];
+    view.state.field(mentionDecorations).between(from, to, (start, end, value) => {
+      if (start >= from && end <= to && value.spec.widget instanceof MentionChip) {
+        copied.push({
+          profileId: value.spec.widget.profileId,
+          start: start - from,
+          end: end - from,
+        });
+      }
+    });
+    if (!copied.length) {
+      return false;
+    }
+    event.clipboardData.setData("text/plain", view.state.sliceDoc(from, to));
+    event.clipboardData.setData(HUMAN_MENTION_CLIPBOARD_TYPE, JSON.stringify(copied));
+    event.preventDefault();
+    if (cut && !view.state.readOnly) {
+      view.dispatch({
+        changes: { from, to },
+        selection: EditorSelection.cursor(from),
+        userEvent: "delete.cut",
+        scrollIntoView: true,
+      });
+    }
+    return true;
+  }
+  function rememberPastedMentions(event: ClipboardEvent) {
+    const copied = readHumanMentionClipboard(event.clipboardData);
+    const selection = view.state.selection.main;
+    pendingPaste = copied
+      ? prepareHumanMentionPaste(view.state.doc.toString(), selection.from, selection.to, copied)
+      : undefined;
+  }
+  function pastedMentions(update: ViewUpdate) {
+    const paste = pendingPaste;
+    pendingPaste = undefined;
+    if (
+      !paste ||
+      !update.transactions.some((transaction) => transaction.isUserEvent("input.paste"))
+    ) {
+      return [];
+    }
+    const restored: HumanMention[] = [];
+    update.changes.iterChanges((_fromA, _toA, fromB, _toB, inserted) => {
+      const text = inserted.toString();
+      // The atomic boundary filter may pad either side with one separator.
+      const offset = text.startsWith(paste.text) ? 0 : text.startsWith(" " + paste.text) ? 1 : -1;
+      if (offset < 0 || !["", " "].includes(text.slice(offset + paste.text.length))) {
+        return;
+      }
+      restored.push(
+        ...paste.mentions.map((mention) => ({
+          profileId: mention.profileId,
+          start: mention.start + fromB + offset,
+          end: mention.end + fromB + offset,
+        })),
+      );
+    });
+    return restored;
+  }
   function forwardPaste(event: ClipboardEvent) {
     // Existing attachment paste owns files; CM owns ordinary raw-text paste.
     publishSelection();
@@ -374,7 +517,10 @@ export function mountComposerEditor(
         currentMentions = nextMentions;
         mentionSignature = nextMentionSignature;
         currentAttributes = nextAttributes;
-        effects.push(configuration.reconfigure(extensions()));
+        effects.push(
+          configuration.reconfigure(extensions()),
+          setMentionDecorations.of(decorations()),
+        );
       }
       view.dom.dataset.composerSingleLine = input.dataset.composerSingleLine ?? "";
       if (input.disabled && view.hasFocus) {
@@ -480,6 +626,20 @@ export function mountComposerEditor(
   const stopScroll = listen(view.scrollDOM, "scroll", () =>
     input.dispatchEvent(new Event("scroll")),
   );
+  if (initialHistory) {
+    // The native paste already updated its owner while CM was loading. Seed
+    // that transition into CM history without publishing the paste twice.
+    syncing = true;
+    try {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: input.value },
+        selection: EditorSelection.single(initialSelection.start, initialSelection.end),
+        userEvent: "input.paste",
+      });
+    } finally {
+      syncing = false;
+    }
+  }
   sync();
   if (
     !input.disabled &&

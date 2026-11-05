@@ -1,4 +1,8 @@
-import { readHumanMentions } from "../chat/human-mentions.ts";
+import {
+  prepareHumanMentionPaste,
+  readHumanMentionClipboard,
+} from "../chat/human-mention-clipboard.ts";
+import { readHumanMentions, withHumanMentionEdit } from "../chat/human-mentions.ts";
 import { createIdleImport } from "../idle-import.ts";
 import { useOptionalApplication } from "./context.ts";
 import { elementRef } from "./element-ref.ts";
@@ -10,6 +14,9 @@ export function createComposerEditorBinding() {
   const application = useOptionalApplication();
   let input: HTMLTextAreaElement | undefined;
   let composing = false;
+  let pasteHistory:
+    | import("../../pages/chat/components/composer-editor-view.tsx").ComposerEditorSnapshot
+    | undefined;
   let editor: { sync: () => void; destroy: () => void } | undefined;
   let mountEditor:
     | typeof import("../../pages/chat/components/composer-editor-view.tsx").mountComposerEditor
@@ -28,7 +35,8 @@ export function createComposerEditorBinding() {
   }
   function activate() {
     if (input && !editor && !composing && mentions().length && mountEditor) {
-      editor = mountEditor(input, mentions, application);
+      editor = mountEditor(input, mentions, application, pasteHistory);
+      pasteHistory = undefined;
     }
   }
   const loader = createIdleImport(
@@ -50,6 +58,42 @@ export function createComposerEditorBinding() {
       }
     });
     observer.observe(node, { attributes: true, attributeFilter: ["data-composer-mentions"] });
+    // Keep clipboard behavior consistent before the first chip loads CM.
+    const stopPaste = listen(node, "paste", (event) => {
+      if (editor || composing || event.defaultPrevented || node.disabled || node.readOnly) {
+        return;
+      }
+      const copied = readHumanMentionClipboard(event.clipboardData);
+      if (!copied) {
+        return;
+      }
+      const value = node.value;
+      const start = node.selectionStart;
+      const end = node.selectionEnd;
+      const paste = prepareHumanMentionPaste(value, start, end, copied);
+      pasteHistory ??= {
+        value,
+        mentions: mentions(),
+        selection: { start, end, direction: node.selectionDirection },
+      };
+      event.preventDefault();
+      node.setRangeText(paste.text, start, end, "end");
+      const restored = paste.mentions.map((mention) => ({
+        profileId: mention.profileId,
+        start: mention.start + start,
+        end: mention.end + start,
+      }));
+      withHumanMentionEdit(
+        node.value,
+        restored,
+        { value, start, end, inputType: "insertFromPaste" },
+        () => {
+          node.dispatchEvent(
+            new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: null }),
+          );
+        },
+      );
+    });
     const stopStart = listen(node, "compositionstart", () => {
       composing = true;
     });
@@ -62,7 +106,9 @@ export function createComposerEditorBinding() {
     }
     return () => {
       input = undefined;
+      pasteHistory = undefined;
       observer.disconnect();
+      stopPaste();
       stopStart();
       stopEnd();
       editor?.destroy();

@@ -51,15 +51,56 @@ export function readHumanMentions(
   return mentions;
 }
 
+let pendingRestoration:
+  | { text: string; mentions: readonly HumanMention[]; input: HumanMentionInput }
+  | undefined;
+
+/** Supplies the editor's exact edit and restored recipients during one synchronous owner update. */
+export function withHumanMentionEdit<T>(
+  text: string,
+  mentions: readonly HumanMention[],
+  input: HumanMentionInput,
+  run: () => T,
+): T {
+  const previous = pendingRestoration;
+  pendingRestoration = { text, mentions, input };
+  try {
+    return run();
+  } finally {
+    pendingRestoration = previous;
+  }
+}
+
+function restoreHumanMentions(next: string, mentions: readonly HumanMention[]) {
+  if (pendingRestoration?.text !== next) {
+    return mentions;
+  }
+  const merged = [...mentions];
+  for (const restored of pendingRestoration.mentions) {
+    if (
+      readHumanMentions(next, [restored]) &&
+      !merged.some((mention) => mention.start < restored.end && restored.start < mention.end)
+    ) {
+      merged.push(restored);
+    }
+  }
+  merged.sort((left, right) => left.start - right.start);
+  return readHumanMentions(next, merged) ?? mentions;
+}
+
 /** A contiguous edit shifts later spans and invalidates every token it touches. */
 export function updateHumanMentions(
   previous: string,
   next: string,
   mentions: readonly HumanMention[] = [],
-  input?: HumanMentionInput,
+  inputHint?: HumanMentionInput,
 ): readonly HumanMention[] {
+  const input =
+    pendingRestoration?.text === next && pendingRestoration.input.value === previous
+      ? pendingRestoration.input
+      : inputHint;
   if ((!input && previous === next) || mentions.length === 0) {
-    return mentions;
+    return restoreHumanMentions(next, mentions);
   }
   let start = 0;
   while (start < previous.length && start < next.length && previous[start] === next[start]) {
@@ -115,7 +156,11 @@ export function updateHumanMentions(
     }
     return [];
   });
-  return readHumanMentions(next, shifted) ?? [];
+  // Invalidate only the tokens this edit broke; unrelated recipients survive.
+  return restoreHumanMentions(
+    next,
+    shifted.filter((mention) => readHumanMentions(next, [mention])),
+  );
 }
 
 /** Text and UTF-16 spans must be normalized together at the submission boundary. */

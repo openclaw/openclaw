@@ -1552,24 +1552,16 @@
   opacity: 0.5;
   cursor: default;
 }
-.chat-composer-mention-label {
-  color: var(--chat-text-link, var(--link));
-  cursor: text;
-  box-decoration-break: clone;
+/* A selected person is one atomic chip, styled exactly like a sent reference. */
+.chat-composer-editor .chat-composer-mention {
+  /* One unit: wrap before the chip, never between its avatar and name. */
+  white-space: nowrap;
 }
-.chat-composer-mention-avatar {
-  display: inline-block;
-  width: calc(1em + 2px);
-  height: 1em;
-  vertical-align: -0.12em;
-}
-.chat-composer-mention-avatar .markdown-person-reference__avatar {
-  width: 1em;
-  height: 1em;
-  margin: 0;
-  margin-inline-end: 2px;
-  vertical-align: top;
-  font-size: 1em;
+
+/* A selected chip highlights as one unit, avatar included. */
+.chat-composer-editor .chat-composer-mention .markdown-person-reference__avatar {
+  user-select: text;
+  -webkit-user-select: text;
 }
 .agent-chat__composer-combobox:has(> .chat-composer-editor) > .agent-chat__composer-placeholder {
   display: none;

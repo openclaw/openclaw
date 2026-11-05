@@ -8,7 +8,6 @@ export function PersonReferenceLabel(props: {
   profileId: string;
   label: string;
   literalPrefix?: boolean;
-  avatarOnly?: boolean;
 }) {
   const avatar = useIdentityAvatarView(() => ({
     id: props.profileId,
@@ -32,22 +31,20 @@ export function PersonReferenceLabel(props: {
           />
         </Show>
       </span>
-      <Show when={!props.avatarOnly}>
-        {props.label.startsWith("@") ? (
-          <>
-            <span class="markdown-person-reference__prefix" aria-hidden="true">
-              {props.literalPrefix ? (
-                <span class="markdown-person-reference__literal-prefix">@</span>
-              ) : (
-                "@"
-              )}
-            </span>
-            {props.label.slice(1)}
-          </>
-        ) : (
-          props.label
-        )}
-      </Show>
+      {props.label.startsWith("@") ? (
+        <>
+          <span class="markdown-person-reference__prefix" aria-hidden="true">
+            {props.literalPrefix ? (
+              <span class="markdown-person-reference__literal-prefix">@</span>
+            ) : (
+              "@"
+            )}
+          </span>
+          {props.label.slice(1)}
+        </>
+      ) : (
+        props.label
+      )}
     </>
   );
 }

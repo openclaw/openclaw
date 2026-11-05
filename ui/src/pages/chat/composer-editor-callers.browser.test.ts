@@ -12,6 +12,34 @@ afterEach(resetMentionComposerFixture);
 describe.each(["chat", "new-session"] as const)(
   "%s rich composer controller integration",
   (kind) => {
+    it("pastes a recipient into a fresh native composer before the editor loads", async () => {
+      const f = composerFixture(kind, "", []);
+      vi.useRealTimers();
+      const input = f.query("textarea") as HTMLTextAreaElement;
+      expect(input.hidden).toBe(false);
+      expect(f.query('[data-composer-editor="true"]')).toBeNull();
+      const clipboard = new DataTransfer();
+      clipboard.setData("text/plain", "@Alex");
+      clipboard.setData(
+        "application/x-openclaw-mentions",
+        JSON.stringify([mention("alex-one", 0, 5)]),
+      );
+      input.dispatchEvent(
+        new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }),
+      );
+      f.refresh();
+      expect(f.value()).toEqual({ draft: "@Alex", mentions: [mention("alex-one", 0, 5)] });
+      await expect.poll(() => f.query(".chat-composer-mention")?.textContent).toContain("Alex");
+      expect(input.hidden).toBe(true);
+      focusComposerInput(input);
+      await userEvent.keyboard("{Control>}z{/Control}");
+      f.refresh();
+      expect(f.value()).toEqual({ draft: "", mentions: [] });
+      await userEvent.keyboard("{Control>}{Shift>}z{/Shift}{/Control}");
+      f.refresh();
+      expect(f.value()).toEqual({ draft: "@Alex", mentions: [mention("alex-one", 0, 5)] });
+    });
+
     it("lazily mounts one real textbox and routes editing, selection and send through the existing owner", async () => {
       const f = composerFixture(kind, "Ask @Alex after", [mention("alex-one", 4, 9)]);
       vi.useRealTimers();
@@ -27,7 +55,7 @@ describe.each(["chat", "new-session"] as const)(
         draft: "Hello Ask @Alex after",
         mentions: [mention("alex-one", 10, 15)],
       });
-      await expect.poll(() => f.query(".chat-composer-mention-label")?.textContent).toBe("Alex");
+      await expect.poll(() => f.query(".chat-composer-mention")?.textContent).toContain("Alex");
       expect(editor.contains(document.activeElement)).toBe(true);
       expect(input.selectionStart).toBe(6);
       await userEvent.keyboard("{Enter}");
@@ -63,7 +91,7 @@ describe.each(["chat", "new-session"] as const)(
       f.refresh();
       await expect
         .poll(() =>
-          [...f.container.querySelectorAll(".chat-composer-mention-label")]
+          [...f.container.querySelectorAll(".chat-composer-mention")]
             .map((label) => label.textContent)
             .join(" "),
         )

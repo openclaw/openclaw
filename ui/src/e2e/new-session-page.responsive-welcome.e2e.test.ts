@@ -369,25 +369,28 @@ suite.define(() => {
     });
     await page.getByRole("option", { name: /Bob/ }).click();
     const editor = surface.locator('[data-composer-editor="true"]');
-    const mark = editor.locator(".chat-composer-mention-label");
+    const mark = editor.locator(".chat-composer-mention");
     await pollText(mark).toContain("averylongmentionlabel");
     await pollCount(surface.getByRole("textbox")).toBe(1);
     await pollCount(page.locator(".chat-compose__mention-preview")).toBe(0);
-    await expect.poll(() => backing.evaluate((element) => element.hidden)).toBe(true);
+    await expect
+      .poll(() => backing.evaluate((element) => element instanceof HTMLElement && element.hidden))
+      .toBe(true);
     for (const width of [390, 320]) {
       await page.setViewportSize({ width, height: 720 });
       await waitForLayoutSettled(page, ".new-session-page__composer");
       const geometry = await editor.evaluate((element) => {
-        const person = element.querySelector(".chat-composer-mention-label")!;
+        const person = element.querySelector(".chat-composer-mention")!;
         const avatar = person
           .querySelector(".markdown-person-reference__avatar")!
           .getBoundingClientRect();
-        const nameNode = [...person.childNodes].find(
-          (node) =>
-            node.nodeType === Node.TEXT_NODE && node.textContent?.includes("averylongmentionlabel"),
-        )!;
+        const walker = document.createTreeWalker(person, NodeFilter.SHOW_TEXT);
+        let nameNode = walker.nextNode();
+        while (nameNode && !nameNode.textContent?.includes("averylongmentionlabel")) {
+          nameNode = walker.nextNode();
+        }
         const range = document.createRange();
-        range.selectNodeContents(nameNode);
+        range.selectNodeContents(nameNode!);
         return {
           font: Number.parseFloat(getComputedStyle(person).fontSize),
           avatarWidth: avatar.width,
@@ -396,8 +399,10 @@ suite.define(() => {
           documentWidth: document.documentElement.scrollWidth,
         };
       });
-      expect(Math.abs(geometry.avatarWidth - geometry.font)).toBeLessThan(0.5);
-      expect(Math.abs(geometry.avatarHeight - geometry.font)).toBeLessThan(0.5);
+      // Same avatar as a sent reference: the text size plus its 2px ring.
+      expect(geometry.avatarWidth).toBeGreaterThanOrEqual(geometry.font);
+      expect(geometry.avatarWidth).toBeLessThanOrEqual(geometry.font + 2.5);
+      expect(geometry.avatarHeight).toBeCloseTo(geometry.avatarWidth, 1);
       expect(geometry.gap).toBeGreaterThanOrEqual(2);
       expect(geometry.documentWidth).toBeLessThanOrEqual(width);
     }
