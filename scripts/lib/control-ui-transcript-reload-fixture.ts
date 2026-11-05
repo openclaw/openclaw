@@ -32,42 +32,44 @@ export function createTranscriptReloadWitness(
     },
   };
   const variants: Record<"saved" | "live", unknown[]> = { saved: messages, live: messages };
-  for (const source of ["saved", "live"] as const) {
-    const witness = witnesses[source];
-    witness.rowKey = `group:assistant:msg:id:${witness.messageId}:0`;
-    let replacements = 0;
-    const content = message.content.map((value) => {
-      if (
-        value.type !== "text" ||
-        typeof value.text !== "string" ||
-        !value.text.includes(originalText)
-      ) {
-        return value;
+  const activeHistory = active ? createActiveTranscriptReloadFixture(messages) : null;
+  if (!active) {
+    for (const source of ["saved", "live"] as const) {
+      const witness = witnesses[source];
+      witness.rowKey = `group:assistant:msg:id:${witness.messageId}:0`;
+      let replacements = 0;
+      const content = message.content.map((value) => {
+        if (
+          value.type !== "text" ||
+          typeof value.text !== "string" ||
+          !value.text.includes(originalText)
+        ) {
+          return value;
+        }
+        replacements++;
+        return { ...value, text: value.text.replace(originalText, witness.text) };
+      });
+      if (replacements !== 1) {
+        throw new Error("Transcript witness requires exactly one existing fixture paragraph");
       }
-      replacements++;
-      return { ...value, text: value.text.replace(originalText, witness.text) };
-    });
-    if (replacements !== 1) {
-      throw new Error("Transcript witness requires exactly one existing fixture paragraph");
+      variants[source] = messages.map((value, position) =>
+        position === index
+          ? { ...message, __openclaw: { ...metadata, id: witness.messageId }, content }
+          : value,
+      );
     }
-    variants[source] = messages.map((value, position) =>
-      position === index
-        ? { ...message, __openclaw: { ...metadata, id: witness.messageId }, content }
-        : value,
-    );
+    // Preserve the visible reaction across both IDs; one unused lookup alias remains per phase.
+    const reactions = fixture.scenario.sessionReactions?.[fixture.selectedSessionKey];
+    const reaction = reactions?.[metadata.id];
+    if (reactions && reaction) {
+      reactions[witnesses.saved.messageId] = reaction;
+      reactions[witnesses.live.messageId] = reaction;
+      delete reactions[metadata.id];
+    }
   }
-  // Preserve the visible reaction across both IDs; one unused lookup alias remains per phase.
-  const reactions = fixture.scenario.sessionReactions?.[fixture.selectedSessionKey];
-  const reaction = reactions?.[metadata.id];
-  if (reactions && reaction) {
-    reactions[witnesses.saved.messageId] = reaction;
-    reactions[witnesses.live.messageId] = reaction;
-    delete reactions[metadata.id];
-  }
-  if (active) {
-    const active = createActiveTranscriptReloadFixture(messages);
-    variants.saved = active.saved;
-    variants.live = active.live;
+  if (activeHistory) {
+    variants.saved = activeHistory.saved.slice(-80);
+    variants.live = activeHistory.live.slice(-80);
     for (const source of ["saved", "live"] as const) {
       const id = source === "saved" ? "active-reload-long-reply" : "active-reload-fresh-result";
       witnesses[source] = {
@@ -76,7 +78,10 @@ export function createTranscriptReloadWitness(
         text: source === "saved" ? "Verification 1" : "A fresh synthetic result",
       };
     }
-    fixture.scenario.methodResponses!["chat.message.get"] = { ok: true, message: active.fullReply };
+    fixture.scenario.methodResponses!["chat.message.get"] = {
+      ok: true,
+      message: activeHistory.fullReply,
+    };
   }
   return {
     witnesses,
@@ -84,6 +89,10 @@ export function createTranscriptReloadWitness(
     originalMessageId: active ? "active-reload-long-reply" : metadata.id,
     messageCount: variants.saved.length,
     liveMessageCount: variants.live.length,
+    totalMessages: {
+      saved: activeHistory?.saved.length ?? messages.length,
+      live: activeHistory?.live.length ?? messages.length,
+    },
     // Native persistence retains the last 80 distinct-sequence fixture messages.
     snapshotMessageCount: Math.min(variants.saved.length, 80),
     preparedAt: new Date().toISOString(),
