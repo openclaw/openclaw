@@ -154,10 +154,8 @@ describe("long completed runs", () => {
       const chain = projectHistory(longRun(), { sessionKey: key });
       const frame = onlyFrame(chain);
       const expanded = new Map<string, boolean>();
-      for (const part of frame.parts) {
-        if (part.kind === "work-group") {
-          setExpansionState(expanded, part.key, true);
-        }
+      for (const part of kind(frame.parts, "work-group")) {
+        setExpansionState(expanded, part.key, true);
       }
       const index = indexFor(chain, expanded);
       const rows = index.rows.filter((row) => row.kind === "item");
@@ -167,13 +165,10 @@ describe("long completed runs", () => {
         if (row.item.kind !== "agent-run-frame" || !row.item.fragment) {
           continue;
         }
-        // Edge chrome reads the source run, so only independent middle rows
-        // may restore geometry keyed solely by their own fragment content.
-        if (row.item.fragment.first || row.item.fragment.last) {
-          expect(row.revision).toBeUndefined();
-        } else {
-          expect(row.revision).toBeDefined();
-        }
+        // Only middle fragments can restore geometry without reading source-run edge chrome.
+        expect(row.revision !== undefined).toBe(
+          !row.item.fragment.first && !row.item.fragment.last,
+        );
       }
       expect(index.messageRowKeysById.get("step-0")).not.toBe(
         index.messageRowKeysById.get("step-299"),
@@ -183,12 +178,7 @@ describe("long completed runs", () => {
       for (const row of workRows) {
         const parts = row.item.kind === "agent-run-frame" ? row.item.parts : [];
         const content = parts.filter((part) => part.kind !== "work-group");
-        expect(
-          chatItemGroups({ ...frame, parts: content }).reduce(
-            (count, group) => count + group.messages.length,
-            0,
-          ),
-        ).toBeLessThanOrEqual(1);
+        expect(messagesIn(content).length).toBeLessThanOrEqual(1);
       }
       const summary = rows.find(
         (row) => row.item.kind === "agent-run-frame" && row.item.parts[0]?.kind === "work-group",
@@ -248,9 +238,7 @@ describe("long completed runs", () => {
     const activeFrame = onlyFrame(activeChain);
     expect(activeFrame.outcome.kind).toBe("active");
     expect(indexFor(activeChain).messageRowKeysById.get("canvas")).toBe(activeFrame.key);
-    const chain = projectHistory(messages, {
-      sessionKey: key,
-    });
+    const chain = projectHistory(messages, { sessionKey: key });
     const frame = onlyFrame(chain);
     expect(frame.key).toBe(activeFrame.key);
     expect(
@@ -264,10 +252,7 @@ describe("long completed runs", () => {
       sessionKey: "agent:main:telegram:direct:42",
     });
     const frame = onlyFrame(chain);
-    expect(frame.outcome).toMatchObject({
-      kind: "completed",
-      actionOwner: { message: { __openclaw: { id: "long-answer" } } },
-    });
+    expect(frame.outcome).toMatchObject(completedOutcome({ __openclaw: { id: "long-answer" } }));
     expect(indexFor(chain).messageRowKeysById.get("long-answer")).toBe(frame.key);
     expect(
       indexFor(chain)
@@ -282,10 +267,8 @@ describe("long completed runs", () => {
     expect(frame.outcome).toEqual({ kind: "completed", actionOwner: null });
     const collapsed = indexFor(chain);
     const expanded = new Map<string, boolean>();
-    for (const part of frame.parts) {
-      if (part.kind === "work-group") {
-        setExpansionState(expanded, part.key, true);
-      }
+    for (const part of kind(frame.parts, "work-group")) {
+      setExpansionState(expanded, part.key, true);
     }
     expect(indexFor(chain, expanded).rows.map((row) => row.key)).toEqual(
       collapsed.rows.map((row) => row.key),
@@ -977,10 +960,7 @@ describe("system event presentation", () => {
       runId: "run-b",
       boundaryId: "send:run-b",
     });
-    const searched = chainFor(chatItems({ messages }), {
-      ...chainOptions,
-      searchActive: true,
-    });
+    const searched = projectHistory(messages, { searchActive: true });
     expect(searched.transcriptItems.filter((item) => item.kind === "notice")).toHaveLength(4);
     expect(searched.transcriptItems.some((item) => item.kind === "system-event-group")).toBe(false);
   });
