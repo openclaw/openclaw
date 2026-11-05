@@ -12,14 +12,13 @@ const nativeRead = vi.hoisted(() => ({
     | undefined
     | { signal: AbortSignal; resolve: (context: CodexNativeModelContext) => void },
 }));
-vi.mock("./native-model-context.js", () => {
-  const read = (_resources: unknown, signal?: AbortSignal) =>
+vi.mock("./native-model-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./native-model-context.js")>()),
+  readCodexNativeModelContext: (_resources: unknown, signal: AbortSignal) =>
     new Promise<CodexNativeModelContext | undefined>((resolve) => {
-      nativeRead.pending = { signal: signal ?? new AbortController().signal, resolve };
-    });
-  // Older revisions awaited this name before settling.
-  return { readCodexNativeModelContext: read, recordCodexNativeModelContext: read };
-});
+      nativeRead.pending = { signal, resolve };
+    }),
+}));
 
 afterEach(() => {
   nativeRead.pending = undefined;
