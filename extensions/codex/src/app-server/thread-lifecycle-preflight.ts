@@ -8,6 +8,7 @@ import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { buildCodexUserMcpServersThreadConfigPatchForRun } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { resolveModelServiceTierContextTokens } from "openclaw/plugin-sdk/provider-model-metadata";
+import { deniesCodexNativeDelegation } from "../../native-tool-policy.js";
 import { normalizeCodexAppServerBindingModelProvider } from "./auth-profile.js";
 import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
@@ -498,6 +499,15 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     params.params.scheduledRuntimeAuthority === undefined;
   const imageGenerationDenied =
     params.params.pluginHarnessToolPolicySafeDeniedTools?.includes("image_generate") === true;
+  // A session-tool deny is enforced by disabling native delegation, so managed
+  // requirements must not pin either delegation feature back on.
+  const nativeDelegationDenied = deniesCodexNativeDelegation(
+    params.params.pluginHarnessToolPolicySafeDeniedTools,
+  );
+  const additionalDeniedFeatures = [
+    ...(imageGenerationDenied ? ["image_generation"] : []),
+    ...(nativeDelegationDenied ? ["multi_agent", "multi_agent_v2"] : []),
+  ];
   if (restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
     throw new Error("Codex restricted tool surfaces require native code mode to be disabled");
   }
@@ -519,14 +529,19 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         readCodexInheritedMcpServerNames(params.client, params.cwd, params.signal, effectiveConfig),
       )
     : [];
-  if (restrictedToolSurface || imageGenerationDenied || params.nativeCodeModeEnabled !== false) {
+  if (
+    restrictedToolSurface ||
+    additionalDeniedFeatures.length > 0 ||
+    params.nativeCodeModeEnabled !== false
+  ) {
     await lifecycleTiming.measure("tool-policy-config-requirements-read", () =>
       assertCodexManagedRequirementsDoNotOverrideToolPolicy(
         params.client,
         {
           restrictedToolSurface,
           requiredNativeShell: params.nativeCodeModeEnabled !== false,
-          additionalDeniedFeatures: imageGenerationDenied ? ["image_generation"] : undefined,
+          additionalDeniedFeatures:
+            additionalDeniedFeatures.length > 0 ? additionalDeniedFeatures : undefined,
           allowedManagedRequirementsFingerprint:
             params.params.requireWorkspaceOnly === true
               ? undefined
@@ -555,6 +570,11 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     throw new Error(
       "Codex native code mode requires shell_tool, but the effective shell setting cannot be overridden. Ask your administrator to allow the shell, or select a tool policy that disables native code mode; no automation authority was captured.",
     );
+  }
+  // Legacy managed layers can also pin delegation on outside requirements, as a
+  // boolean, an alias such as collab, or a table such as [features.multi_agent_v2].
+  if (nativeDelegationDenied && isJsonObject(features)) {
+    assertCodexManagedConfigDoesNotPinNativeDelegation(features, effectiveConfig?.origins);
   }
   const ringZeroConfigFingerprint = ringZeroActive
     ? fingerprintJsonObject({
@@ -606,5 +626,30 @@ export async function withCodexThreadWriteCurrent(
     await params.authority.withCurrent(write);
   } else {
     write();
+  }
+}
+
+const CODEX_NATIVE_DELEGATION_FEATURE_KEYS: ReadonlyMap<string, string> = new Map([
+  ["multi_agent", "multi_agent"],
+  ["collab", "multi_agent"],
+  ["multi_agent_v2", "multi_agent_v2"],
+]);
+
+/** Rejects a non-overridable effective setting that enables native delegation. */
+function assertCodexManagedConfigDoesNotPinNativeDelegation(
+  features: JsonObject,
+  origins: Record<string, { name: { type: string } } | undefined> | undefined,
+): void {
+  for (const [key, feature] of CODEX_NATIVE_DELEGATION_FEATURE_KEYS) {
+    const value = features[key];
+    const enabled = value === true || (isJsonObject(value) && value.enabled === true);
+    if (!enabled) {
+      continue;
+    }
+    // Codex reports a table's (and a boolean's) origin on its enabled field.
+    const origin = origins?.[`features.${key}.enabled`] ?? origins?.[`features.${key}`];
+    if (!CODEX_SESSION_OVERRIDABLE_LAYER_TYPES.has(origin?.name.type ?? "")) {
+      throw new Error(`Codex tool policy cannot override managed feature ${feature}`);
+    }
   }
 }

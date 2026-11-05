@@ -168,7 +168,9 @@ export function projectionOperations(
     const document = selected.baseline_ref ? await baselineDocument() : undefined;
     return await selectLocalWorkspaceCanonicalPaths({
       root: owner.worktree.path,
-      admittedPaths: selected.source_paths_json,
+      admittedPaths: preparedInputPaths
+        ? undefined
+        : parseLocalWorkspaceSourcePaths(selected.source_paths_json),
       preparedPaths: preparedInputPaths,
       signal,
       assertCurrent,
@@ -197,9 +199,6 @@ export function projectionOperations(
     return snapshot;
   };
   const scan = async (target: Direction): Promise<LocalWorkspaceManifestCheckpoint> => {
-    if (owner.worktree.snapshotRef) {
-      await buildCacheInputs();
-    }
     await assertLocalWorkspaceDirectory(sourcePath(target));
     const snapshot = await readManifest({
       kind: "scan",
@@ -602,27 +601,21 @@ export function projectionOperations(
           "Workspace integration is pending; finish the original github_publish prepare_pr or refresh_base action before archiving this worktree. Saved files and merge state were preserved.",
         );
       }
-      const baseline = await baselineDocument();
-      const manifest = parseWorkerWorkspaceManifest(
-        baseline.rawManifest,
-        baseline.manifestRef,
-        await buildCacheInputs(),
-      );
-      const accepted = await capture("canonical", new Set(manifest.directories));
-      if (accepted.manifestRef !== baseline.manifestRef) {
-        throw new Error("Local workspace changed before archive capture");
-      }
-      const projection = current().projection_path;
-      const archiveBase = await captureLocalWorkspaceArchiveBaseline({
-        root: owner.worktree.repoRoot,
+      await assertLocalWorkspaceDirectory(sourcePath("canonical"));
+      const archive = await readManifest({
+        kind: "archive",
+        canonicalRoot: owner.worktree.path,
+        archiveRoot: owner.worktree.repoRoot,
         snapshotCommit,
-        manifest,
-        signal,
-        assertCurrent,
       });
-      if (archiveBase.manifestRef === accepted.manifestRef) {
+      const projection = current().projection_path;
+      if (archive.kind !== "archive") {
+        throw new Error("Local workspace archive preparation is missing");
+      }
+      if (!archive.overlay) {
         return;
       }
+      const { base: archiveBase, accepted } = archive.overlay;
       const resultRef = workerWorkspaceResultRef(randomUUID());
       // Keep accepted directory membership until the receipt owns it. Recovery
       // must not mistake derived children for deletion after interrupted staging.

@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   hasNativeBrowserBridge,
   postNativeBrowserMessage,
@@ -18,6 +18,11 @@ const tab = {
   canGoForward: true,
   openedBy: "web",
 };
+function subscribe(listener: Parameters<typeof subscribeNativeBrowserState>[0]) {
+  const stop = subscribeNativeBrowserState(listener);
+  onTestFinished(stop);
+  return stop;
+}
 function install(postMessage = vi.fn().mockResolvedValue({ ok: true })) {
   vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage } } });
   return postMessage;
@@ -39,12 +44,27 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each([
+  [new TypeError("Cannot read properties of undefined"), "Native browser request failed"],
+  [new Error("Permission denied"), "Permission denied"],
+  ["native implementation detail", "Native browser request failed"],
+  [{ message: "native implementation detail" }, "Native browser request failed"],
+])(
+  "formats native exceptions without exposing non-Error rejections: %s",
+  async (error, message) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    install(vi.fn().mockRejectedValue(error));
+
+    expect(await send("reload")).toEqual({ ok: false, error: message });
+  },
+);
+
 it("is inert outside the native host", async () => {
   const listener = vi.fn();
   expect(hasNativeBrowserBridge()).toBe(false);
   expect(readNativeBrowserState()).toBeNull();
   expect(await send("close")).toBeNull();
-  const unsubscribe = subscribeNativeBrowserState(listener);
+  const unsubscribe = subscribe(listener);
   push({ revision: 1, tabs: [tab] });
   unsubscribe();
   expect(listener).not.toHaveBeenCalled();
@@ -103,7 +123,7 @@ it("validates initial state and ignores malformed, duplicate, stale, and unsubsc
   vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 2, tabs: [tab] });
   expect(readNativeBrowserState()).toEqual({ revision: 2, tabs: [tab] });
   const listener = vi.fn();
-  const unsubscribe = subscribeNativeBrowserState(listener);
+  const unsubscribe = subscribe(listener);
   for (const state of [
     { revision: 1, tabs: [tab] },
     { revision: 2, tabs: [] },
@@ -138,99 +158,57 @@ it.each([
   vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", state);
   expect(readNativeBrowserState()).toEqual(accepted ? state : null);
   const listener = vi.fn();
-  const unsubscribe = subscribeNativeBrowserState(listener);
-  try {
-    const next = { ...state, revision: 2 };
-    push(next);
-    expect(listener.mock.calls).toEqual(accepted ? [[next]] : []);
-  } finally {
-    unsubscribe();
-  }
+  subscribe(listener);
+  const next = { ...state, revision: 2 };
+  push(next);
+  expect(listener.mock.calls).toEqual(accepted ? [[next]] : []);
 });
 
 it("shares one state listener and validates each pushed state once across many panels", () => {
   install();
   const add = vi.spyOn(window, "addEventListener");
   const remove = vi.spyOn(window, "removeEventListener");
-  let validationReads = 0;
-  const pushedTab = {
-    ...tab,
-    get loading() {
-      validationReads += 1;
-      return false;
-    },
-  };
+  const readLoading = vi.fn(() => false);
+  const pushedTab = Object.defineProperty({ ...tab }, "loading", { get: readLoading });
   const listeners = Array.from({ length: 20 }, () => vi.fn());
-  const stops = listeners.map(subscribeNativeBrowserState);
-  try {
-    expect(
-      add.mock.calls.filter(([type]) => type === "openclaw:native-browser-state"),
-    ).toHaveLength(1);
-    const state = { revision: 1, tabs: [pushedTab] };
-    push(state);
-    expect(validationReads).toBe(1);
-    expect(listeners.every((listener) => listener.mock.calls[0]?.[0] === state)).toBe(true);
-    stops[0]!();
-    expect(
-      remove.mock.calls.filter(([type]) => type === "openclaw:native-browser-state"),
-    ).toHaveLength(0);
-    push({ revision: 2, tabs: [pushedTab] });
-    expect(listeners[0]).toHaveBeenCalledTimes(1);
-    expect(listeners[1]).toHaveBeenCalledTimes(2);
-  } finally {
-    stops.forEach((stop) => stop());
-    add.mockRestore();
-  }
-  expect(
-    remove.mock.calls.filter(([type]) => type === "openclaw:native-browser-state"),
-  ).toHaveLength(1);
-  remove.mockRestore();
+  const stops = listeners.map(subscribe);
+  expect(add).toHaveBeenCalledTimes(1);
+  const state = { revision: 1, tabs: [pushedTab] };
+  push(state);
+  expect(readLoading).toHaveBeenCalledOnce();
+  expect(listeners.every((listener) => listener.mock.calls[0]?.[0] === state)).toBe(true);
+  stops[0]!();
+  expect(remove).not.toHaveBeenCalled();
+  push({ revision: 2, tabs: [pushedTab] });
+  expect(listeners[0]).toHaveBeenCalledTimes(1);
+  expect(listeners[1]).toHaveBeenCalledTimes(2);
+  stops.forEach((stop) => stop());
+  expect(remove).toHaveBeenCalledTimes(1);
 });
 
 it("keeps revision floors local to each subscription and retires callbacks during dispatch", () => {
   install();
   vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 2, tabs: [tab] });
-  const first = vi.fn();
-  const stopFirst = subscribeNativeBrowserState(first);
-  vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 5, tabs: [tab] });
-  const second = vi.fn();
-  const stopSecond = subscribeNativeBrowserState(second);
-  let stopRetired = () => {};
-  const stopRetiring = subscribeNativeBrowserState(() => stopRetired());
-  const retired = vi.fn();
-  stopRetired = subscribeNativeBrowserState(retired);
-  try {
-    push({ revision: 3, tabs: [tab] });
-    expect(first).toHaveBeenCalledTimes(1);
-    expect(second).not.toHaveBeenCalled();
-    push({ revision: 6, tabs: [tab] });
-    expect(first).toHaveBeenCalledTimes(2);
-    expect(second).toHaveBeenCalledTimes(1);
-    expect(retired).not.toHaveBeenCalled();
-  } finally {
-    stopFirst();
-    stopSecond();
-    stopRetiring();
-    stopRetired();
-  }
-});
-
-it("keeps sibling native state subscriptions live when a listener throws", () => {
-  install();
   const report = vi.fn();
   vi.stubGlobal("reportError", report);
   const failure = new Error("panel failed");
-  const stopFailed = subscribeNativeBrowserState(() => {
+  const first = vi.fn(() => {
     throw failure;
   });
-  const healthy = vi.fn();
-  const stopHealthy = subscribeNativeBrowserState(healthy);
-  try {
-    push({ revision: 1, tabs: [tab] });
-    expect(report).toHaveBeenCalledWith(failure);
-    expect(healthy).toHaveBeenCalledTimes(1);
-  } finally {
-    stopFailed();
-    stopHealthy();
-  }
+  subscribe(first);
+  vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 5, tabs: [tab] });
+  const second = vi.fn();
+  subscribe(second);
+  let stopRetired = () => {};
+  subscribe(() => stopRetired());
+  const retired = vi.fn();
+  stopRetired = subscribe(retired);
+  push({ revision: 3, tabs: [tab] });
+  expect(first).toHaveBeenCalledTimes(1);
+  expect(second).not.toHaveBeenCalled();
+  push({ revision: 6, tabs: [tab] });
+  expect(first).toHaveBeenCalledTimes(2);
+  expect(second).toHaveBeenCalledTimes(1);
+  expect(retired).not.toHaveBeenCalled();
+  expect(report).toHaveBeenCalledWith(failure);
 });

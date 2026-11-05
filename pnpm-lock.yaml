@@ -222,12 +222,12 @@ patchedDependencies:
   baileys@7.0.0-rc14: c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded
   chrome-devtools-mcp@1.12.0: 1512760e206b35bf417387b18d4c1a5d0f68e2ffeef994cb733c9e02ba4eba92
   ghostty-web@0.4.0: d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524
-  matrix-js-sdk@43.0.0: c3ad7f3afbd9ded4643fbfa31f5862d48d4e05d198cb438efbb4fcdaa845b0cc
+  matrix-js-sdk@43.0.0: 823022214a1466879aba6c60460809768e76f747411fd95c8a99d56096100f48
   minizlib@3.1.0: 9669b7a5b10b7831ff19c6066787f9dbed0dca18685d6ea8a17bad8282c3f39c
   playwright-core@1.64.1: eedf680682a6840d82c6ad530a60875857aa8c0372785acf8e8e5df9c2e3ac16
   proper-lockfile@4.1.2: ef83b3d51ecb27f8b06d2a3660d509c3da303d7e1d2074712b0ecc2f6256b7cf
   tar@7.5.22: fd38a2350a01d3eec80c7c393b88647baea164251683cffc481cb3aa5df2a75c
-  vitest@5.0.5: abb35069c56858589f463527013088f26c8da59c6cccfd5c48b35c472caac355
+  vitest@5.0.5: a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6
 
 importers:
 
@@ -291,8 +291,8 @@ importers:
         specifier: workspace:*
         version: link:packages/ai
       '@openclaw/fs-safe':
-        specifier: 0.27.0
-        version: 0.27.0
+        specifier: 0.27.1
+        version: 0.27.1
       '@openclaw/proc-safe':
         specifier: 0.4.2
         version: 0.4.2
@@ -635,7 +635,7 @@ importers:
         version: 8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
       vitest:
         specifier: 5.0.5
-        version: 5.0.5(patch_hash=abb35069c56858589f463527013088f26c8da59c6cccfd5c48b35c472caac355)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+        version: 5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
     optionalDependencies:
       sqlite-vec:
         specifier: 0.1.9
@@ -684,8 +684,8 @@ importers:
         specifier: 2.2.2
         version: 2.2.2
       '@openclaw/fs-safe':
-        specifier: 0.27.0
-        version: 0.27.0
+        specifier: 0.27.1
+        version: 0.27.1
       acpx:
         specifier: 0.21.0
         version: 0.21.0
@@ -1011,8 +1011,8 @@ importers:
         specifier: 0.164.0
         version: 0.164.0
       '@openclaw/fs-safe':
-        specifier: 0.27.0
-        version: 0.27.0
+        specifier: 0.27.1
+        version: 0.27.1
       acorn:
         specifier: 8.19.0
         version: 8.19.0
@@ -1073,8 +1073,8 @@ importers:
   extensions/cua-computer:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.0
-        version: 0.27.0
+        specifier: 0.27.1
+        version: 0.27.1
       '@trycua/cua-driver':
         specifier: 0.37.0
         version: 0.37.0
@@ -1311,8 +1311,8 @@ importers:
   extensions/file-transfer:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.0
-        version: 0.27.0
+        specifier: 0.27.1
+        version: 0.27.1
       minimatch:
         specifier: 10.2.6
         version: 10.2.6
@@ -1518,8 +1518,8 @@ importers:
   extensions/knowledge:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.0
-        version: 0.27.0
+        specifier: 0.27.1
+        version: 0.27.1
       dompurify:
         specifier: 3.4.17
         version: 3.4.17
@@ -1593,8 +1593,8 @@ importers:
   extensions/llama-cpp:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.0
-        version: 0.27.0
+        specifier: 0.27.1
+        version: 0.27.1
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1649,8 +1649,8 @@ importers:
         specifier: 18.9.0
         version: 18.9.0
       '@openclaw/fs-safe':
-        specifier: 0.27.0
-        version: 0.27.0
+        specifier: 0.27.1
+        version: 0.27.1
       fake-indexeddb:
         specifier: 6.2.6
         version: 6.2.6
@@ -1659,7 +1659,7 @@ importers:
         version: 15.0.3
       matrix-js-sdk:
         specifier: 43.0.0
-        version: 43.0.0(patch_hash=c3ad7f3afbd9ded4643fbfa31f5862d48d4e05d198cb438efbb4fcdaa845b0cc)
+        version: 43.0.0(patch_hash=823022214a1466879aba6c60460809768e76f747411fd95c8a99d56096100f48)
       music-metadata:
         specifier: 12.2.3
         version: 12.2.3(supports-color@10.2.2)
@@ -1705,8 +1705,8 @@ importers:
   extensions/memory-core:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.0
-        version: 0.27.0
+        specifier: 0.27.1
+        version: 0.27.1
       '@solidjs/web':
         specifier: 2.0.0-rc.18
         version: 2.0.0-rc.18(patch_hash=6d6b2e52e607edf3c9cfcc1a26f331d013537d051f43bbb4f3e7877ed08fa5cf)(solid-js@2.0.0-rc.18)
@@ -1830,8 +1830,8 @@ importers:
   extensions/migrate-claude:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.0
-        version: 0.27.0
+        specifier: 0.27.1
+        version: 0.27.1
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2094,8 +2094,8 @@ importers:
   extensions/openshell:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.0
-        version: 0.27.0
+        specifier: 0.27.1
+        version: 0.27.1
       p-limit:
         specifier: 7.3.3
         version: 7.3.3
@@ -2175,8 +2175,8 @@ importers:
         specifier: 0.1.31
         version: 0.1.31(patch_hash=87093d75728e71110a39bd4729df86642a7974ebbbd2155fec2e074ce9a90f3d)
       '@openclaw/fs-safe':
-        specifier: 0.27.0
-        version: 0.27.0
+        specifier: 0.27.1
+        version: 0.27.1
       json5:
         specifier: 2.2.3
         version: 2.2.3
@@ -2316,8 +2316,8 @@ importers:
   extensions/signal:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.27.0
-        version: 0.27.0
+        specifier: 0.27.1
+        version: 0.27.1
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -2327,6 +2327,13 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/skill-workshop:
+    dependencies:
+      '@openclaw/gateway-protocol':
+        specifier: workspace:*
+        version: link:../../packages/gateway-protocol
+      typebox:
+        specifier: 1.4.3
+        version: 1.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -3277,7 +3284,7 @@ importers:
         version: 8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
       vitest:
         specifier: 5.0.5
-        version: 5.0.5(patch_hash=abb35069c56858589f463527013088f26c8da59c6cccfd5c48b35c472caac355)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+        version: 5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
 packages:
 
@@ -5036,8 +5043,8 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
-  '@openclaw/fs-safe-darwin-arm64@0.27.0':
-    resolution: {integrity: sha512-l9smB9vo9v38MDzBWVq8203PxaYq7/7D2GIQVOzk5Y9N3SW7OxPkE7wrOSqBedqpzP3TugZcG8RiDJ1TgORc4w==}
+  '@openclaw/fs-safe-darwin-arm64@0.27.1':
+    resolution: {integrity: sha512-RXheLSPD8K0IiJ4p6KW8JVlrLd148OM84Z6wDerEmiF3/RbiiBUerNJ+LIzjyxDesZoCQIr8okq6zLdjSZkvdg==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [darwin]
@@ -5048,8 +5055,8 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  '@openclaw/fs-safe-darwin-x64@0.27.0':
-    resolution: {integrity: sha512-YcqA2Xc/adfrEYjKOXKPA9ECxRgvu84QTszt01zJQNhHIs6Bsqwyo/3jtSai6QwAH5kSggzqfsKBZ1H8DqfEMg==}
+  '@openclaw/fs-safe-darwin-x64@0.27.1':
+    resolution: {integrity: sha512-2CfUUGJc4dwaTuvo4xiKq5zbF9p6p6Cp+zS+M0hTg2E8RLPH/i2+CtF1MOeeMY6q/7FlpS4AOBcf4NNQmLCZFA==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [darwin]
@@ -5060,8 +5067,8 @@ packages:
     cpu: [arm64]
     os: [freebsd]
 
-  '@openclaw/fs-safe-freebsd-arm64@0.27.0':
-    resolution: {integrity: sha512-fpioCi8HyOrHBNbRzsfS+sV2lTZlaGpRI+hkphZ7ukrJ2rLyp83NGMYKCR4ATDhNlB3+61+tYaDY0CcAaMrguA==}
+  '@openclaw/fs-safe-freebsd-arm64@0.27.1':
+    resolution: {integrity: sha512-CVaXcjZd7MAX6HxCeH8R7gybjjv/ZRtVKsMy+qYT9SlMzaQbWyWxQOotZVzuUbzooBUy+LxBFnSP0jq2aP42zg==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [freebsd]
@@ -5072,8 +5079,8 @@ packages:
     cpu: [x64]
     os: [freebsd]
 
-  '@openclaw/fs-safe-freebsd-x64@0.27.0':
-    resolution: {integrity: sha512-CeMbnAWJUHwVyBrkYM3VsqznQV/WFwafbAMPcgqDUwKHVjYP00wTqAOn+I78Sy1DFBpHdGlgnkLUufICcHVUuw==}
+  '@openclaw/fs-safe-freebsd-x64@0.27.1':
+    resolution: {integrity: sha512-at+wt2nbJV3qd358Gy5OuBl9gfdjKmDdQ03RDnzYfa6F591inc5gFgOUoUokjBiVB0YVeYND/LhCPprsQGWoeQ==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [freebsd]
@@ -5085,8 +5092,8 @@ packages:
     os: [linux]
     libc: [glibc]
 
-  '@openclaw/fs-safe-linux-arm64-gnu@0.27.0':
-    resolution: {integrity: sha512-Ag1+ntAl0JS9hWEoInQAhbN2WYqvZpnIHbUZIUxdoqvXSrK7IcoO5t6AH470uYY/bSa4MjTj+TCdIF0g0MtazQ==}
+  '@openclaw/fs-safe-linux-arm64-gnu@0.27.1':
+    resolution: {integrity: sha512-+7/oYqqTlqNGaVgjzqqjI5ZoB2vL8becIFiCKjFywJwD+WPnsU625jzsV8vH+O+ISomjZKYeN1uMzGY9jxoCiA==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
@@ -5099,8 +5106,8 @@ packages:
     os: [linux]
     libc: [musl]
 
-  '@openclaw/fs-safe-linux-arm64-musl@0.27.0':
-    resolution: {integrity: sha512-c9bfMkAfNJLcu0Lgb4xjEDUIqJxa0g715erKQ7AcX7Bk4LdngCqYvpWrgtW52SLc1/IZO5fh7AwMnQRo+zVzNQ==}
+  '@openclaw/fs-safe-linux-arm64-musl@0.27.1':
+    resolution: {integrity: sha512-LmycQm9U6sh8T3CkuUAqaHnL8M1rYRXA4IhnYLNVq9x2q9O60jboTGuYt+50d/bfGIn2Sx5GEsD/549FnSvRMA==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
@@ -5113,8 +5120,8 @@ packages:
     os: [linux]
     libc: [glibc]
 
-  '@openclaw/fs-safe-linux-x64-gnu@0.27.0':
-    resolution: {integrity: sha512-bstOw6XBU6nkCarVs79rXDaZAtroFkeVJZObFHQVWLGgaRJ+h811f/DfBWooxY6n9V0dH2JIik6YQcswY5p5yw==}
+  '@openclaw/fs-safe-linux-x64-gnu@0.27.1':
+    resolution: {integrity: sha512-HujRFeuQ8UWJzqp0utc2P4OKTasHicTNLjcjr8YKC2MqbHozSlktbDdICJbAhnPSFaQXdeVCN1spYVRS79J3Zg==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
@@ -5127,8 +5134,8 @@ packages:
     os: [linux]
     libc: [musl]
 
-  '@openclaw/fs-safe-linux-x64-musl@0.27.0':
-    resolution: {integrity: sha512-jVrpnsJ6HyZLO9S1012Zis8KV3n5Y4z+1IDsHoDpMTXWvaUuYoHIKQN3gx9bzut+YejLj7gfbzb5QmWY+Cr8Fw==}
+  '@openclaw/fs-safe-linux-x64-musl@0.27.1':
+    resolution: {integrity: sha512-PhrLCRz9YKVqOxHTIRfYD3D9CLaMUe/Bhgl9dadAEnwSwo8/bpKRkFJ6AErDoXURWgSqox9ynRnMfFqGxxPh3A==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
@@ -5140,8 +5147,8 @@ packages:
     cpu: [arm64]
     os: [win32]
 
-  '@openclaw/fs-safe-win32-arm64-msvc@0.27.0':
-    resolution: {integrity: sha512-UBhPI9DJKlhSAqS3YJqhb7rAflcvXZ4HS2mNHujAMF3FBliBP+0qTJ8uE3zRu9wRrFDwp7pGeHWXhCDGfWF9vA==}
+  '@openclaw/fs-safe-win32-arm64-msvc@0.27.1':
+    resolution: {integrity: sha512-bFfIB+FhscVaMtBoWJwb0Y/w4+rKHPJ7JuZD0KYBns0ldVqesRbYkYStxFw5bmUs+15X5JbELtDVPKzrVBK74A==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [win32]
@@ -5152,8 +5159,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/fs-safe-win32-x64-msvc@0.27.0':
-    resolution: {integrity: sha512-ffTZwosN0aipK9fUwf8LykC10b75eqZjVTAl1toUO/G6UMF6r8RpnVpnlFrw3k8LtA9lxxUPBEGJAH4TCYHF2w==}
+  '@openclaw/fs-safe-win32-x64-msvc@0.27.1':
+    resolution: {integrity: sha512-/q8qVSBJVo3X3vyGoWFRGP2gf87YUbRChqIyGnJpLJDaiyv6xGzQmPE/+q8EWy9WA72IhkVGgEmdxlzjO1FZ/w==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [win32]
@@ -5162,8 +5169,8 @@ packages:
     resolution: {integrity: sha512-6O0NiLjrEeY8H5wBUmBy5qbIW0qu5ICw5jYvcIswduYkxnqxf+SDzpJMIJVC5L5IXvRlMh8ZZHQYkmjWxVy9DQ==}
     engines: {node: '>=22'}
 
-  '@openclaw/fs-safe@0.27.0':
-    resolution: {integrity: sha512-v9RWszhsnswr7kAg/6ZM1fUxtyY1PItj7uBarnQ2UdeTPgDdUZFS5hXIGUdLtNvSty/JEPJvjE3MWqbKbx9dng==}
+  '@openclaw/fs-safe@0.27.1':
+    resolution: {integrity: sha512-hoAe39XXycBbSMQO0nWRWwf/CDG1XspMo1p7mPcPme3xvqdgAUsTD+0FwchrVSZ7z6KkQDhaMkiJA/Wid/jEEw==}
     engines: {node: '>=22'}
 
   '@openclaw/libterminal@0.3.11':
@@ -12141,7 +12148,7 @@ snapshots:
 
   '@copilotkit/aimock@1.46.0(vitest@5.0.5)':
     optionalDependencies:
-      vitest: 5.0.5(patch_hash=abb35069c56858589f463527013088f26c8da59c6cccfd5c48b35c472caac355)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      vitest: 5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
   '@csstools/color-helpers@6.1.2': {}
 
@@ -13167,61 +13174,61 @@ snapshots:
   '@openclaw/fs-safe-darwin-arm64@0.26.15':
     optional: true
 
-  '@openclaw/fs-safe-darwin-arm64@0.27.0':
+  '@openclaw/fs-safe-darwin-arm64@0.27.1':
     optional: true
 
   '@openclaw/fs-safe-darwin-x64@0.26.15':
     optional: true
 
-  '@openclaw/fs-safe-darwin-x64@0.27.0':
+  '@openclaw/fs-safe-darwin-x64@0.27.1':
     optional: true
 
   '@openclaw/fs-safe-freebsd-arm64@0.26.15':
     optional: true
 
-  '@openclaw/fs-safe-freebsd-arm64@0.27.0':
+  '@openclaw/fs-safe-freebsd-arm64@0.27.1':
     optional: true
 
   '@openclaw/fs-safe-freebsd-x64@0.26.15':
     optional: true
 
-  '@openclaw/fs-safe-freebsd-x64@0.27.0':
+  '@openclaw/fs-safe-freebsd-x64@0.27.1':
     optional: true
 
   '@openclaw/fs-safe-linux-arm64-gnu@0.26.15':
     optional: true
 
-  '@openclaw/fs-safe-linux-arm64-gnu@0.27.0':
+  '@openclaw/fs-safe-linux-arm64-gnu@0.27.1':
     optional: true
 
   '@openclaw/fs-safe-linux-arm64-musl@0.26.15':
     optional: true
 
-  '@openclaw/fs-safe-linux-arm64-musl@0.27.0':
+  '@openclaw/fs-safe-linux-arm64-musl@0.27.1':
     optional: true
 
   '@openclaw/fs-safe-linux-x64-gnu@0.26.15':
     optional: true
 
-  '@openclaw/fs-safe-linux-x64-gnu@0.27.0':
+  '@openclaw/fs-safe-linux-x64-gnu@0.27.1':
     optional: true
 
   '@openclaw/fs-safe-linux-x64-musl@0.26.15':
     optional: true
 
-  '@openclaw/fs-safe-linux-x64-musl@0.27.0':
+  '@openclaw/fs-safe-linux-x64-musl@0.27.1':
     optional: true
 
   '@openclaw/fs-safe-win32-arm64-msvc@0.26.15':
     optional: true
 
-  '@openclaw/fs-safe-win32-arm64-msvc@0.27.0':
+  '@openclaw/fs-safe-win32-arm64-msvc@0.27.1':
     optional: true
 
   '@openclaw/fs-safe-win32-x64-msvc@0.26.15':
     optional: true
 
-  '@openclaw/fs-safe-win32-x64-msvc@0.27.0':
+  '@openclaw/fs-safe-win32-x64-msvc@0.27.1':
     optional: true
 
   '@openclaw/fs-safe@0.26.15':
@@ -13238,18 +13245,18 @@ snapshots:
       '@openclaw/fs-safe-win32-x64-msvc': 0.26.15
       jszip: 3.10.2
 
-  '@openclaw/fs-safe@0.27.0':
+  '@openclaw/fs-safe@0.27.1':
     optionalDependencies:
-      '@openclaw/fs-safe-darwin-arm64': 0.27.0
-      '@openclaw/fs-safe-darwin-x64': 0.27.0
-      '@openclaw/fs-safe-freebsd-arm64': 0.27.0
-      '@openclaw/fs-safe-freebsd-x64': 0.27.0
-      '@openclaw/fs-safe-linux-arm64-gnu': 0.27.0
-      '@openclaw/fs-safe-linux-arm64-musl': 0.27.0
-      '@openclaw/fs-safe-linux-x64-gnu': 0.27.0
-      '@openclaw/fs-safe-linux-x64-musl': 0.27.0
-      '@openclaw/fs-safe-win32-arm64-msvc': 0.27.0
-      '@openclaw/fs-safe-win32-x64-msvc': 0.27.0
+      '@openclaw/fs-safe-darwin-arm64': 0.27.1
+      '@openclaw/fs-safe-darwin-x64': 0.27.1
+      '@openclaw/fs-safe-freebsd-arm64': 0.27.1
+      '@openclaw/fs-safe-freebsd-x64': 0.27.1
+      '@openclaw/fs-safe-linux-arm64-gnu': 0.27.1
+      '@openclaw/fs-safe-linux-arm64-musl': 0.27.1
+      '@openclaw/fs-safe-linux-x64-gnu': 0.27.1
+      '@openclaw/fs-safe-linux-x64-musl': 0.27.1
+      '@openclaw/fs-safe-win32-arm64-msvc': 0.27.1
+      '@openclaw/fs-safe-win32-x64-msvc': 0.27.1
       jszip: 3.10.2
 
   '@openclaw/libterminal@0.3.11':
@@ -14882,7 +14889,7 @@ snapshots:
       '@vitest/mocker': 5.0.5(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       playwright: 1.64.1
       tinyrainbow: 3.2.0
-      vitest: 5.0.5(patch_hash=abb35069c56858589f463527013088f26c8da59c6cccfd5c48b35c472caac355)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      vitest: 5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
     transitivePeerDependencies:
       - bufferutil
       - msw
@@ -14899,7 +14906,7 @@ snapshots:
       pngjs: 7.0.0
       sirv: 3.0.2
       tinyrainbow: 3.2.0
-      vitest: 5.0.5(patch_hash=abb35069c56858589f463527013088f26c8da59c6cccfd5c48b35c472caac355)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      vitest: 5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
@@ -14917,7 +14924,7 @@ snapshots:
       obug: 3.0.0
       std-env: 4.3.0
       tinyrainbow: 3.2.0
-      vitest: 5.0.5(patch_hash=abb35069c56858589f463527013088f26c8da59c6cccfd5c48b35c472caac355)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      vitest: 5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
     optionalDependencies:
       '@vitest/browser': 5.0.5(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(vitest@5.0.5)
 
@@ -14950,7 +14957,7 @@ snapshots:
       pathe: 2.0.3
       sirv: 3.0.2
       tinyrainbow: 3.2.0
-      vitest: 5.0.5(patch_hash=abb35069c56858589f463527013088f26c8da59c6cccfd5c48b35c472caac355)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      vitest: 5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
   '@vitest/utils@5.0.5':
     dependencies:
@@ -15756,8 +15763,7 @@ snapshots:
 
   escape-html@1.0.3: {}
 
-  escape-string-regexp@4.0.0:
-    optional: true
+  escape-string-regexp@4.0.0: {}
 
   escape-string-regexp@5.0.0: {}
 
@@ -17083,7 +17089,7 @@ snapshots:
 
   matrix-events-sdk@0.0.1: {}
 
-  matrix-js-sdk@43.0.0(patch_hash=c3ad7f3afbd9ded4643fbfa31f5862d48d4e05d198cb438efbb4fcdaa845b0cc):
+  matrix-js-sdk@43.0.0(patch_hash=823022214a1466879aba6c60460809768e76f747411fd95c8a99d56096100f48):
     dependencies:
       '@babel/runtime': 8.0.7
       '@matrix-org/matrix-sdk-crypto-wasm': 18.9.0
@@ -18993,7 +18999,7 @@ snapshots:
     optionalDependencies:
       vite: 8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
 
-  vitest@5.0.5(patch_hash=abb35069c56858589f463527013088f26c8da59c6cccfd5c48b35c472caac355)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)):
+  vitest@5.0.5(patch_hash=a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.0.5(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))

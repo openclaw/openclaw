@@ -147,14 +147,21 @@ export function stripMinimaxToolCallXml(
   return result;
 }
 
-export function stripLegacyBracketToolCallBlocks(text: string): string {
-  if (!text || !LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE.test(text)) {
-    return text;
-  }
+export type LegacyBracketBlockScan = {
+  text: string;
+  /** An unclosed candidate can still change what the next append hides. */
+  pending: boolean;
+};
 
-  const codeRegions = findCodeRegions(text);
+export function scanLegacyBracketToolCallBlocks(
+  text: string,
+  codeRegions: ReturnType<typeof findCodeRegions>,
+): LegacyBracketBlockScan {
   let result = "";
   let cursor = 0;
+  // An unfinished header can cross a Markdown checkpoint before its closing bracket.
+  const pendingStart = text.lastIndexOf("[");
+  let pending = pendingStart > text.lastIndexOf("]") && !isInsideCode(pendingStart, codeRegions);
   for (const openMatch of text.matchAll(/\[\s*TOOL_(CALL|RESULT)\s*\]/gi)) {
     const openStart = openMatch.index;
     if (openStart < cursor || isInsideCode(openStart, codeRegions)) {
@@ -175,6 +182,8 @@ export function stripLegacyBracketToolCallBlocks(text: string): string {
         /\b(?:tool|result|output|content)\s*:/i.test(payload)
       : /\btool\s*=>\s*["'][A-Za-z_][A-Za-z0-9_.:-]{0,119}["']/i.test(payload) &&
         /\bargs\s*=>/i.test(payload);
+    // A later close can complete the hidden payload or the payload test.
+    pending ||= !closeMatch;
     if (!isToolPayload) {
       continue;
     }
@@ -184,7 +193,14 @@ export function stripLegacyBracketToolCallBlocks(text: string): string {
       break;
     }
   }
-  return result + text.slice(cursor);
+  return { text: result + text.slice(cursor), pending };
+}
+
+export function stripLegacyBracketToolCallBlocks(text: string): string {
+  if (!text || !LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE.test(text)) {
+    return text;
+  }
+  return scanLegacyBracketToolCallBlocks(text, findCodeRegions(text)).text;
 }
 
 export function stripRelevantMemoriesTags(text: string): string {

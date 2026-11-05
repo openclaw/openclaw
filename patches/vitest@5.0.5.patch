@@ -127,7 +127,7 @@ index ff6e63043ff8fa0b821d4b0b382d1fd998d85dbb..8b527adb355c8e7397939baece62749f
  		});
  	}
 diff --git a/dist/chunks/index.1TqnEahn.js b/dist/chunks/index.1TqnEahn.js
-index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d6401510c 100644
+index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..235714c7cbe244a81c1d6f775443ac36868ffc13 100644
 --- a/dist/chunks/index.1TqnEahn.js
 +++ b/dist/chunks/index.1TqnEahn.js
 @@ -1031,7 +1031,9 @@ class ModuleTransformService {
@@ -141,6 +141,15 @@ index 50dd001b7b24be2eac6f37eeb1929ad4645aa1a9..a4942f2ece3dc13bb54142c9809ae19d
  		const moduleId = moduleGraphModule.id;
  		const memoryCacheKey = this.fsCache.getMemoryCachePath(environment, moduleId);
  		// undefined means there is no key in memory
+@@ -3579,7 +3581,7 @@ class ServerModuleRunner extends ModuleRunner {
+ 				try {
+ 					const result = await transformService.fetch(data[0], data[1], environment, false, data[2]);
+ 					if ("tmp" in result) {
+-						const code = await readFile(result.tmp);
++						const code = await readFile(result.tmp, "utf-8");
+ 						return { result: {
+ 							...result,
+ 							code
 @@ -5136,6 +5138,7 @@ var RunnerState = /* @__PURE__ */ function(RunnerState) {
  	RunnerState["STARTING"] = "starting";
  	RunnerState["STARTED"] = "started";

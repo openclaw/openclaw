@@ -34,7 +34,7 @@ export type FinalizerScenario = {
   ref?: string;
   fullRefresh?: boolean;
   preflightAllowed?: boolean;
-  change?: "glossary" | "canonical";
+  change?: "metadata" | "canonical";
   artifactFault?: "foreign-run" | "path" | "fallback";
   publish?: boolean;
   advanceDuringCheckout?: boolean;
@@ -134,11 +134,7 @@ export function createLocaleFinalizerHarness() {
         fs.mkdirSync(target(directory), { recursive: true });
       }
       for (const file of fs.readdirSync(assets)) {
-        if (
-          file.endsWith(".tm.jsonl") ||
-          file.endsWith(".meta.json") ||
-          file.startsWith("glossary.")
-        ) {
+        if (file.endsWith(".tm.jsonl") || file.endsWith(".meta.json")) {
           fs.copyFileSync(path.join(assets, file), target(path.join(assets, file)));
         }
       }
@@ -387,8 +383,12 @@ export function createLocaleFinalizerHarness() {
       const english = read(at(sourceFile));
       expect(english).toContain(before);
       fs.writeFileSync(at(sourceFile), english.replace(before, after));
-      if (scenario.change === "glossary") {
-        put(root, assets + "/glossary.sv.json", '[{"source":"locale","target":"språk"}]\n');
+      if (scenario.change === "metadata") {
+        const file = at(assets, "sv.meta.json");
+        const metadata = JSON.parse(read(file));
+        metadata.fallbackKeys.push("localeWorkflowProof.keep");
+        metadata.translatedKeys -= 1;
+        fs.writeFileSync(file, JSON.stringify(metadata) + "\n");
       }
       if (scenario.change === "canonical") {
         const packed = JSON.parse(read(path.join(artifacts, "sv.json")));

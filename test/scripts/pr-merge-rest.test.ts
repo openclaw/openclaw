@@ -759,6 +759,8 @@ describePosix("native merge with exhausted GraphQL quota", () => {
 
   it.each([
     evidenceCase({ restChecks: "bound-status" }, true),
+    evidenceCase({ restDuplicate: "manual-event" }, true),
+    evidenceCase({ restChecks: "manual-only" }),
     ...[
       "missing",
       "status-only",

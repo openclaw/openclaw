@@ -8,13 +8,13 @@ import {
   type RuntimeParitySystemPromptReport,
 } from "./harness-parity.js";
 import { escapeTableCell } from "./report.js";
-import {
-  runRuntimeParityScenario,
-  type RuntimeParityCell,
-  type RuntimeParityDrift,
-  type RuntimeParityResult,
-  type RuntimeParityToolCall,
-} from "./runtime-parity.js";
+import { runRuntimeParityScenario } from "./runtime-parity.js";
+import type {
+  RuntimeParityCell,
+  RuntimeParityDrift,
+  RuntimeParityResult,
+  RuntimeParityToolCall,
+} from "./runtime-parity.types.js";
 import { buildTokenEfficiencyReport } from "./token-efficiency-report.js";
 
 type QaConfidenceSelfTestCanary = {

@@ -145,7 +145,9 @@ describe("renderSessionProgressCard", () => {
       expect(container.querySelector("details")).toBe(details);
       expect(container.querySelectorAll(".session-progress-card__step")).toHaveLength(3);
       render({ ...input, runtime: { connected: false, hasActiveSubagentRun: true } }, container);
-      expect(container.querySelector('[role="status"]')?.textContent).toContain("Connection lost");
+      expect(container.querySelector('[role="status"]')?.textContent).toContain(
+        "Disconnected · Activity may be outdated",
+      );
       expect(container.querySelector(".session-run-spinner")).toBeNull();
       render({ ...input, runtime: { known: false } }, container);
       expect(container.querySelector('[role="status"]')?.textContent).toBe("Activity unavailable");
