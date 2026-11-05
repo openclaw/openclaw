@@ -126,7 +126,7 @@ function fixture(content = "") {
           "trap release_pr_operation_lock EXIT",
           'cd "$3"',
           ...(lostLock ? ["release_pr_operation_lock"] : []),
-          'node "$4" 42 "$5" "$6" "$fixture_root" "$lock_ref" "$lock_oid" "$7" "$8" "$3"',
+          'node "$4" 42 "$5" "$6" "$fixture_root" "$lock_ref" "$lock_oid" "$7" "$8"',
         ].join("\n"),
         "recovery-fixture",
         lockOwner,

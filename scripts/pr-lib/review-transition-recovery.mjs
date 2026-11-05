@@ -29,7 +29,6 @@ function recoverReviewTransitionFile(
   lockOid,
   workflow,
   binding,
-  worktree,
 ) {
   const bytes = readRegular(planPath);
   if (!seal.test(planSha) || sha(bytes) !== planSha) {
@@ -88,7 +87,7 @@ function recoverReviewTransitionFile(
   const admin = text("rev-parse", "--absolute-git-dir");
   const indexPath = resolve(text("rev-parse", "--git-path", "index"));
   if (
-    cwd !== fs.realpathSync(worktree) ||
+    cwd !== fs.realpathSync(join(root, ".worktrees", "pr-" + pr)) ||
     cwd !== fs.realpathSync(text("rev-parse", "--show-toplevel")) ||
     indexPath !== join(admin, "index") ||
     fs.realpathSync(text("rev-parse", "--git-common-dir")) !== fs.realpathSync(join(root, ".git"))
@@ -265,7 +264,7 @@ function recoverReviewTransitionFile(
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
-    if (process.argv.length !== 11) {
+    if (process.argv.length !== 10) {
       throw new Error("Review recovery requires the selected plan and native operation owner.");
     }
     console.log(JSON.stringify(recoverReviewTransitionFile(...process.argv.slice(2))));

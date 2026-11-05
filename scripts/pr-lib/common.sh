@@ -374,25 +374,6 @@ common_repo_root() {
   pr_git -C "$base_dir" rev-parse --show-toplevel
 }
 
-# PR review checkouts live at <parent>/pr-<PR>. OPENCLAW_PR_WORKTREE_ROOT moves
-# only that parent, for callers whose file tools cannot reach the canonical
-# .worktrees; locks, workflow bindings, and merge outcomes stay canonical. Use
-# one parent for every command of a PR: other parents do not see its checkout.
-pr_worktree_parent() {
-  local root
-  if [ -z "${OPENCLAW_PR_WORKTREE_ROOT:-}" ]; then
-    root=$(common_repo_root) || return $?
-    printf '%s/.worktrees\n' "$root"
-    return
-  fi
-  # Physical path: provisioning refuses a parent whose resolution changes.
-  case "$OPENCLAW_PR_WORKTREE_ROOT" in
-    /*) resolve_existing_dir_path "$OPENCLAW_PR_WORKTREE_ROOT" && return ;;
-  esac
-  echo "OPENCLAW_PR_WORKTREE_ROOT must name an existing absolute directory: $OPENCLAW_PR_WORKTREE_ROOT" >&2
-  return 1
-}
-
 worktree_path_for_branch() (
   set -o pipefail
   local branch="$1"
@@ -453,16 +434,15 @@ resolve_existing_dir_path() {
 }
 
 pr_worktree_state() {
-  local root common_dir parent
+  local root common_dir
   root=$(common_repo_root) || return $?
-  parent=$(pr_worktree_parent) || return $?
   common_dir=$(pr_git -C "$root" rev-parse --path-format=absolute --git-common-dir) || return $?
   # Git omits damaged admin entries from its listing. Bind the exact backlink
   # separately, and distinguish genuine absence from an unreadable path.
-  node - "$parent" "$common_dir" "$1" "${2:-}" "${3:-cleanup}" "${4:-}" <<'EOF_NODE'
+  node - "$root" "$common_dir" "$1" "${2:-}" "${3:-cleanup}" "${4:-}" <<'EOF_NODE'
 const fs = require("node:fs");
 const path = require("node:path");
-const [worktreeParent, common, requested, previousAdmin, purpose, expectedIdentity] = process.argv.slice(2);
+const [root, common, requested, previousAdmin, purpose, expectedIdentity] = process.argv.slice(2);
 function stat(file) {
   try { return fs.lstatSync(file); } catch (error) {
     if (error.code === "ENOENT") return undefined;
@@ -474,7 +454,8 @@ function read(file) {
   return fs.readFileSync(file, "utf8").trimEnd();
 }
 try {
-  const parent = stat(worktreeParent) ? fs.realpathSync(worktreeParent) : path.resolve(worktreeParent);
+  const canonicalParent = path.join(fs.realpathSync(root), ".worktrees");
+  const parent = stat(canonicalParent) ? fs.realpathSync(canonicalParent) : canonicalParent;
   const input = path.resolve(requested);
   const inputParent = path.dirname(input);
   const resolvedParent = stat(inputParent) ? fs.realpathSync(inputParent) : inputParent;

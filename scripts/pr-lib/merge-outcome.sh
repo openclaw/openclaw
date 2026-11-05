@@ -24,8 +24,8 @@ merge_outcome_stop() {
     ref_status=$?
     [ "$ref_status" -ne 1 ] || ref_state=absent
   fi
-  if root=$(pr_worktree_parent); then
-    local worktree="$root/pr-${MERGE_OUTCOME_REF##*/}"
+  if root=$(repo_root) && [ -d "$root" ]; then
+    local worktree="$root/.worktrees/pr-${MERGE_OUTCOME_REF##*/}"
     if [ ! -e "$worktree" ] || { [ -r "$worktree/.local" ] && [ -x "$worktree/.local" ]; }; then
       capture_state=absent
       if [ -e "$worktree/.local/merge-output.log" ] || [ -L "$worktree/.local/merge-output.log" ]; then
@@ -479,12 +479,12 @@ merge_outcome_write() {
       fi
     fi
     if [ "$#" -eq 0 ] && [ -n "$allowed_new" ]; then
-      root=$(pr_worktree_parent) || return 1
+      root=$(repo_root) || return 1
       pr=$(printf '%s\n' "$record" | jq -er '.pr | select(type == "number" and . > 0 and floor == .) | tostring') || return 1
       [ "$pr" = "${MERGE_OUTCOME_REF##*/}" ] || {
         merge_outcome_stop "merge capture owner does not match the retained outcome"; return 1;
       }
-      worktree="$root/pr-$pr"
+      worktree="$root/.worktrees/pr-$pr"
       [ -d "$worktree/.local" ] && [ ! -L "$worktree" ] && [ ! -L "$worktree/.local" ] || {
         merge_outcome_stop "missing native PR worktree capture owner"; return 1;
       }
@@ -1324,8 +1324,8 @@ merge_outcome_cancel_auto() {
     actor=$(pr_gh_writer_login "$MERGE_REPO_HOST") || return 1
     [ -n "$actor" ] || return 1
     local captures=()
-    root=$(pr_worktree_parent) || return 1
-    for capture in "$root/pr-$pr/.local/merge-output.log" "$root/pr-$pr"/.local/merge-output.*.log; do
+    root=$(repo_root) || return 1
+    for capture in "$root/.worktrees/pr-$pr/.local/merge-output.log" "$root/.worktrees/pr-$pr"/.local/merge-output.*.log; do
       [ -e "$capture" ] || [ -L "$capture" ] || continue
       [ -f "$capture" ] && [ ! -L "$capture" ] || { merge_outcome_stop "cannot retain non-regular capture $capture"; return 1; }
       captures+=("$capture")
@@ -1477,10 +1477,10 @@ merge_outcome_head_branch() {
 
 merge_outcome_require_cleanup_absent() {
   local pr="$1" root worktrees branch ref_status=0
-  root=$(pr_worktree_parent) || return 1
+  root=$(repo_root) || return 1
   worktrees=$(pr_git worktree list --porcelain) || return 1
-  if [ -e "$root/pr-$pr" ] || [ -L "$root/pr-$pr" ] ||
-    printf '%s\n' "$worktrees" | grep -Fxq "worktree $root/pr-$pr"; then
+  if [ -e "$root/.worktrees/pr-$pr" ] || [ -L "$root/.worktrees/pr-$pr" ] ||
+    printf '%s\n' "$worktrees" | grep -Fxq "worktree $root/.worktrees/pr-$pr"; then
     echo "Completion requires the native worktree to be absent; inspect its ownership before cleanup." >&2
     return 1
   fi
@@ -1581,7 +1581,7 @@ merge_outcome_resume() {
     echo "merge-run already complete for PR #$pr; no side effects."
     retire_pr_workflow_binding "$pr" || return 1
   else
-    echo "Merge confirmed; completion pending. Recovery does not repeat comment POST or cleanup. Inspect the completion marker in PR comments and any remaining PR worktree (scripts/pr workspace $pr) or local branches; verify their ownership before manual cleanup."
+    echo "Merge confirmed; completion pending. Recovery does not repeat comment POST or cleanup. Inspect the completion marker in PR comments and any remaining .worktrees/pr-$pr/local branches; verify their ownership before manual cleanup."
     if [ "$phase" != commenting ] || [ -n "$MERGE_COMPLETION_COMMENT_URL" ]; then
       merge_outcome_print_cleanup_guidance "$pr"
     fi
