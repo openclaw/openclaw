@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtraGatewayService } from "../../daemon/inspect.js";
+import { createServiceRuntimeInspectionFailure } from "../../daemon/service-runtime.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
@@ -267,6 +268,25 @@ describe("printDaemonStatus", () => {
     },
   );
 
+  it.each([false, true])("prints unclassified launcher failure details (deep=%s)", (deep) => {
+    const detail =
+      "Launcher line 7: multiple commands. Review the launcher and use literal values with a single Gateway command before retrying.";
+    printDaemonStatus(
+      {
+        service: {
+          label: "Scheduled Task",
+          loadedText: "registered",
+          runtime: createServiceRuntimeInspectionFailure(new Error(detail)),
+        },
+      },
+      { json: false, deep },
+    );
+    expect(output()).toContain("Service: Scheduled Task (registered)");
+    expect(output()).not.toContain(detail);
+    expect(output(runtime.error)).toContain(`Service inspection failed: ${detail}`);
+    expect(output(runtime.error)).toContain("openclaw gateway status --deep");
+  });
+
   it("uses service command env for WSL systemd unavailable hints", () => {
     withMockedPlatform("linux", () => {
       isSystemdUnavailableDetailMock.mockReturnValue(true);
@@ -507,33 +527,33 @@ describe("printDaemonStatus", () => {
     });
   });
 
-  it("prints extra gateways as warnings with cleanup scoped to the detected gateway", () => {
-    const extraService = {
-      platform: "darwin" as const,
-      label: "com.example.openclaw-gateway",
-      scope: "user" as const,
-      detail: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    };
-    renderGatewayServiceCleanupHintsMock.mockReturnValue([
-      "launchctl bootout gui/$UID/com.example.openclaw-gateway",
-      "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    ]);
-
-    printDaemonStatus({
-      service: runningService,
-      extraServices: [extraService],
-    });
-
-    expect(runtime.error).not.toHaveBeenCalled();
-    expectMockLineContains(runtime.log, "Other gateway-like services detected");
-    expect(renderGatewayServiceCleanupHintsMock).toHaveBeenCalledWith([extraService]);
-    expectMockLineContains(
-      runtime.log,
-      "Cleanup hint: launchctl bootout gui/$UID/com.example.openclaw-gateway",
-    );
-    expect(output()).not.toContain("ai.openclaw.gateway");
-  });
-
+  it.each([undefined, "external", " ExTeRnAl "])(
+    "prints extra gateways with scoped cleanup and supervision-appropriate advice (%s)",
+    (mode) =>
+      withEnv({ OPENCLAW_SUPERVISOR_MODE: mode }, () => {
+        const extraService = {
+          platform: "darwin" as const,
+          label: "com.example.openclaw-gateway",
+          scope: "user" as const,
+          detail: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+        };
+        renderGatewayServiceCleanupHintsMock.mockReturnValue([
+          "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+          "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+        ]);
+        printDaemonStatus({ service: runningService, extraServices: [extraService] });
+        expect(runtime.error).not.toHaveBeenCalled();
+        expectMockLineContains(runtime.log, "Other gateway-like services detected");
+        expect(renderGatewayServiceCleanupHintsMock).toHaveBeenCalledWith([extraService]);
+        expectMockLineContains(
+          runtime.log,
+          "Cleanup hint: launchctl bootout gui/$UID/com.example.openclaw-gateway",
+        );
+        expect(output()).not.toContain("ai.openclaw.gateway");
+        expect(output().includes("Recommendation: run a single gateway per machine")).toBe(!mode);
+        expect(output().includes("If you need multiple gateways")).toBe(!mode);
+      }),
+  );
   registerServiceInspectionHintTests({
     renderHints: renderGatewayServiceCleanupHintsMock,
     output,

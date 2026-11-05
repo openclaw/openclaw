@@ -25,7 +25,6 @@ import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../lib/brows
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
-import { refreshSlashCommands } from "../../lib/chat/slash-command-catalog.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
@@ -67,7 +66,6 @@ import {
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import {
-  NewSessionDraftVisibility,
   NewSessionPlusMenu,
   NewSessionSelectionStatus,
   StartControl,
@@ -75,7 +73,6 @@ import {
 import { createComposerPlaceholder } from "./composer-placeholder.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import type { NewSessionComposerTextarea } from "./composer-textarea.ts";
-import type { NewSessionVisibility } from "./create-params.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import { NewSessionModelControlView } from "./model-control-view.tsx";
 import type { NewSessionModelControl } from "./model-control.ts";
@@ -89,6 +86,8 @@ export type NewSessionComposerOptions = {
   draftSource?: ComposerDraftSource;
   context: ApplicationContext | undefined;
   draftOwnerKey: string;
+  /** Registered project whose skills the Gateway may preview before the session exists. */
+  commandProjectId?: string;
   isCatalogTarget: boolean;
   canSubmit: boolean;
   message: string;
@@ -110,14 +109,11 @@ export type NewSessionComposerOptions = {
   onComposerWidthChange?: (value: string | undefined) => void;
   voiceControl?: JSX.Element;
   messageLocked?: boolean;
-  visibility?: NewSessionVisibility;
-  draftAvailable?: boolean;
   capabilityMenu?: ChatComposerCapabilityMenuSource;
   toolOverrides?: SessionToolOverrides | null;
   onInput: (message: string, mentions?: readonly HumanMention[]) => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
-  onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
   onBackgroundSubmit?: () => void;
 };
@@ -150,15 +146,7 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
     getDraft: () => textarea.getTextarea()?.value ?? options.message,
     commitDraft: options.onInput,
     getTextarea: textarea.getTextarea,
-    refreshCommands: commandClient
-      ? () =>
-          refreshSlashCommands({
-            client: commandClient,
-            agentId: options.agentId,
-            shouldApply: () =>
-              textarea.ownsSkillCommands(commandClient, options.agentId, options.draftOwnerKey),
-          })
-      : undefined,
+    refreshCommands: commandClient ? () => textarea.refreshSkillCommands(commandClient) : undefined,
   };
   const slashMenuHost: SlashMenuHost = {
     ...skillMenuHost,
@@ -388,11 +376,12 @@ export function NewSessionComposer(props: {
         frame().commandClient,
         options().agentId,
         options().draftOwnerKey,
+        options().commandProjectId,
         frame().mentionDirectory,
         frame().composerLocked || options().nativeTerminal || textarea.composing,
       ] as const,
-    ([client, agentId, draftOwnerKey, directory, locked]) => {
-      textarea.syncSkillCommandOwner(client, agentId, draftOwnerKey);
+    ([client, agentId, draftOwnerKey, commandProjectId, directory, locked]) => {
+      textarea.syncSkillCommandOwner(client, { agentId, draftOwnerKey, commandProjectId });
       textarea.mentionMenu.syncDirectory(directory);
       if (locked) {
         textarea.emojiMenu.close();
@@ -432,8 +421,8 @@ export function NewSessionComposer(props: {
     <div
       ref={footerControl}
       class="agent-chat__composer-shell new-session-page__composer"
-      onPointerEnter={prepareComposerWidthEdge}
-      onKeyDown={prepareComposerWidthEdge}
+      onPointerEnter={() => void prepareComposerWidthEdge()}
+      onKeyDown={() => void prepareComposerWidthEdge()}
       onDrop={(event) => {
         if (options().nativeTerminal && event.dataTransfer?.files.length) {
           event.preventDefault();
@@ -651,14 +640,6 @@ export function NewSessionComposer(props: {
               />
             </Show>
             {options().permissionControl}
-            <Show
-              when={
-                !options().nativeTerminal &&
-                (options().draftAvailable || options().visibility === "draft")
-              }
-            >
-              <NewSessionDraftVisibility options={options()} />
-            </Show>
             <Show when={!options().nativeTerminal}>
               <NewSessionSelectionStatus options={options()} />
             </Show>

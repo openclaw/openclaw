@@ -40,6 +40,7 @@ import {
   type MaterializedRow,
 } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import { sharingIdentity } from "./session-sharing-policy.js";
 import { createSessionListEntryFilter, resolveSessionVisibility } from "./session-sharing.js";
 import type { GatewaySessionEntryRead } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
@@ -197,6 +198,10 @@ function withControlUiTaskPrTarget(
 }
 
 export type ControlUiSessionPrRead = () => Promise<ControlUiSessionPrTarget | undefined>;
+
+/** Passive sidebar audiences share a receipt-only cell beside the full session target. */
+export const receiptsOnlyTargetIdentity = (identity: string) =>
+  JSON.stringify([identity, "receipts-only"]);
 
 /** Background facts use the Gateway's current row owner, never a completed caller's grant. */
 export async function prepareControlUiSessionPrServiceTarget(
@@ -475,19 +480,17 @@ export function createControlUiSessionPrRead(params: {
         () => {
           const cfg = getRuntimeConfig();
           const isCreator = prepareSessionCreatorProfile(profileInput ?? actorProfile);
-          return (row) =>
-            createSessionListEntryFilter(
-              {
-                cfg,
-                client,
-                membership: projection.readMembership({
-                  key: row.key,
-                  agentId: row.agentId,
-                  storePath: row.storeTarget.storePath,
-                }),
-              },
-              isCreator,
-            )?.(row.key, row.entry) !== false;
+          const filter = createSessionListEntryFilter({ cfg, client }, isCreator);
+          const identity = sharingIdentity(client, resolveGatewayOperatorRoleActor(client));
+          return filter
+            ? (row) =>
+                filter(
+                  row.key,
+                  row.entry,
+                  identity !== undefined &&
+                    projection.hasMembership(row.storeTarget.storePath, row.key, identity.id),
+                )
+            : undefined;
         },
         actorProfile,
       );
@@ -559,7 +562,7 @@ export function createControlUiSessionPrRead(params: {
             ...(params.taskReceiptsOnly
               ? {
                   taskReceiptsOnly: true,
-                  identity: JSON.stringify([target.target.identity, "receipts-only"]),
+                  identity: receiptsOnlyTargetIdentity(target.target.identity),
                 }
               : {}),
             assertCurrent: () => {

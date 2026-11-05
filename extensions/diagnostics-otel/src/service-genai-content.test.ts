@@ -1,7 +1,8 @@
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { expect, test, vi } from "vitest";
-import { MAX_OTEL_CONTENT_ATTRIBUTE_CHARS as MAX } from "./service-content-normalization.js";
 import { assignOtelModelContentAttributes } from "./service-genai-content.js";
+
+const MAX = 128 * 1024;
 
 vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();

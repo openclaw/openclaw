@@ -7,6 +7,8 @@ import { STORAGE_FIELD_HELP } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_HELP } from "./zod-schema.telemetry.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
+  repositoryBranchPrefix:
+    "Prefix for new remote repository session branches. Defaults to openclaw; branches use <prefix>/<workspace GUID>. Existing branches are unchanged.",
   worktreeRoot:
     "Global directory for new managed worktrees. Use an absolute path or ~ for your home directory; defaults to <state-dir>/worktrees. Existing worktrees keep their recorded paths when this changes.",
   worktreeAcceleration:
@@ -33,6 +35,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Opt-in traffic allowlist for requests and CONNECT tunnels. When present, destinations must appear in this list, a per-secret host binding, or bypassHosts. An empty list permits only bound or bypassed hosts. Restart the Gateway after changing it.",
   "secrets.egressProxy.bypassHosts":
     "Exact hostnames that use authenticated blind CONNECT tunnels for certificate-pinned clients. Sentinels remain ciphertext and will fail vendor authentication instead of exposing plaintext.",
+  "security.audit.suppressions":
+    "Accepted security audit findings to omit from the active summary and findings list. Matching findings remain available under suppressedFindings in JSON output.",
+  "security.installPolicy.enabled":
+    "Enable a trusted local policy command for skill and plugin installs and updates. When enabled without a configured command, supported install targets are blocked.",
+  "security.installPolicy.targets":
+    'Apply the install policy to "skill", "plugin", or both. Omit this list to cover every supported target.',
+  "security.installPolicy.exec":
+    'Trusted local command that returns an "allow", "warn", or "block" install decision. Set an absolute executable path; OpenClaw runs it without a shell.',
   wizard:
     "User-owned setup preferences. Machine-owned wizard history and acknowledgement state live in the shared state database.",
   "wizard.accessMode":
@@ -119,6 +129,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Shell executable the operator terminal launches. Leave unset to use the host login shell ($SHELL on Unix, %ComSpec% on Windows), or pin an explicit interpreter for a consistent operator environment.",
   "gateway.terminal.detachedSessionTimeoutSeconds":
     "Seconds a terminal session survives after its connection drops (laptop sleep, page reload), staying reattachable via terminal.attach with its recent output replayed. Set 0 to kill sessions the moment the connection drops. Default: 300 (5 minutes). Detached sessions keep running their commands, so shorten this on shared or exposed hosts.",
+  "gateway.repositoryIntegration":
+    "Plugin ID required to admit worker repository source access, including native, GitHub App, and managed OAuth or PAT credentials. Missing, disabled or unloaded owners deny admission. Omit to use native repository behavior; enabling a plugin alone does not select it.",
   "gateway.auth":
     "Authentication policy for gateway HTTP/WebSocket access including mode, credentials, trusted-proxy behavior, and rate limiting. Keep auth enabled for every non-loopback deployment.",
   "gateway.auth.mode":
@@ -162,7 +174,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.roles.definitions.*.sessions":
     "Session-sharing permissions granted to this role for sessions created by other authenticated people; a person's own sessions remain owner-accessible.",
   "gateway.roles.definitions.*.sessions.others":
-    'Access to other people\'s sessions: "none" hides them, "view" allows reading, "suggest" permits the suggestion flow, and "write" permits participation. Explicit session membership can grant additional access.',
+    'Access to other people\'s sessions: "none" hides them even with explicit session membership, "view" allows reading, "suggest" permits the suggestion flow, and "write" permits participation without membership. Explicit session membership can raise "view" or "suggest" access for a specific session. Session creators and connections holding operator.admin retain their session access.',
   "gateway.roles.definitions.*.sandbox":
     'Execution isolation for newly created sessions: "inherit" (default) uses the agent policy; "required" permanently requires a sandbox, even when the agent sandbox mode is off, and blocks execution if the backend is unavailable.',
   "gateway.roles.definitions.*.agents":
@@ -357,6 +369,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
   "agents.entries.*.reasoningDefault":
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
+  "agents.entries.*.newSessionPermissionMode":
+    "Permission mode saved on new attended, profiled operator sessions when no explicit mode is supplied. Does not change existing, forked, delegated, or autonomous sessions. Full still requires operator.admin.",
   "agents.entries.*.fastModeDefault":
     'Optional per-agent default for fast mode ("auto", "ultrafast", true, or false). Applies when no per-message or session fast-mode override is set.',
   "agents.defaults.fastModeDefault":

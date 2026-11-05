@@ -11,6 +11,7 @@ import {
 } from "../channels/plugins/registry-loaded.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId, normalizeChatChannelId } from "../channels/registry.js";
+import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   prepareChannelOperatorAdmin,
@@ -51,6 +52,8 @@ export type CommandAuthorization = {
   /** Rechecks the host-admitted owner capability after awaited work, when one is present. */
   assertOwnerCurrent?: () => void;
   isAuthorizedSender: boolean;
+  /** Retains command-policy admission independently of owner-only authority. */
+  assertAuthorizedCurrent?: () => void;
   from?: string;
   to?: string;
 };
@@ -252,7 +255,11 @@ function resolveOwnerAllowFromList(
   for (const trimmed of normalizeStringEntries(raw.map((entry) => entry ?? ""))) {
     const separatorIndex = trimmed.indexOf(":");
     const prefix = trimmed.slice(0, separatorIndex);
-    const channel = separatorIndex > 0 ? normalizeAnyChannelId(prefix) : undefined;
+    // Bundled channel metadata names the prefix when its plugin is not loaded in this process.
+    const channel =
+      separatorIndex > 0
+        ? (normalizeAnyChannelId(prefix) ?? normalizeChatChannelId(prefix))
+        : undefined;
     if (!channel) {
       filtered.push(trimmed);
       continue;
@@ -341,6 +348,7 @@ function resolveCommandAuthorizationState(
 ): {
   authorization: CommandAuthorization;
   access: CommandSenderAccess;
+  prepared: CommandAuthorizationPreparation;
 } {
   const { ctx, cfg, commandAuthorized } = params;
   const { providerId, hadResolutionError: providerResolutionError } =
@@ -467,6 +475,46 @@ function resolveCommandAuthorizationState(
       to: to || undefined,
     },
     access,
+    prepared: {
+      provider: { providerId, hadResolutionError: providerResolutionError },
+      allowFrom: resolvedAllowFrom,
+    },
+  };
+}
+
+function retainCommandAuthorization(
+  params: CommandAuthorizationParams,
+  prepared: CommandAuthorizationPreparation | undefined,
+  readConfig: () => OpenClawConfig,
+): CommandAuthorization {
+  const captured = { ...params, ctx: { ...params.ctx }, cfg: readConfig() };
+  const { authorization, prepared: admitted } = resolveCommandAuthorizationState(
+    captured,
+    prepared,
+  );
+  const plugin = authorization.providerId
+    ? getLoadedChannelPluginById(authorization.providerId)
+    : undefined;
+  return {
+    ...authorization,
+    assertAuthorizedCurrent: () => {
+      // Channel admission stays with its prepared worker/channel owner. Reuse
+      // that fact while the command-policy owner evaluates the current config.
+      const current = resolveCommandAuthorizationState(
+        { ...captured, cfg: readConfig() },
+        admitted,
+      ).authorization;
+      if (
+        !authorization.isAuthorizedSender ||
+        !current.isAuthorizedSender ||
+        current.providerId !== authorization.providerId ||
+        current.senderId !== authorization.senderId ||
+        (authorization.providerId &&
+          getLoadedChannelPluginById(authorization.providerId) !== plugin)
+      ) {
+        throw new Error("Your command authorization changed; send a new request.");
+      }
+    },
   };
 }
 
@@ -479,7 +527,7 @@ export function resolveCommandAuthorization(
     method: "resolveCommandAuthorization",
     replacement: "resolveCommandAuthorizationAsync",
   });
-  return resolveCommandAuthorizationState(params).authorization;
+  return retainCommandAuthorization(params, undefined, createRuntimeConfigReader(params.cfg));
 }
 
 async function prepareCommandAuthorization(params: CommandAuthorizationParams) {
@@ -509,8 +557,9 @@ async function prepareCommandAuthorization(params: CommandAuthorizationParams) {
 export async function resolveCommandAuthorizationAsync(
   params: CommandAuthorizationParams,
 ): Promise<CommandAuthorization> {
+  const readConfig = createRuntimeConfigReader(params.cfg);
   const prepared = await prepareCommandAuthorization(params);
-  return resolveCommandAuthorizationState(params, prepared).authorization;
+  return retainCommandAuthorization(params, prepared, readConfig);
 }
 
 /** Configured owners that a turn on this channel account renders; a config fact, not authority. */

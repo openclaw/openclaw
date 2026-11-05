@@ -175,7 +175,10 @@ export function BrowserToolbar(
       case "copy":
         void copyToClipboard(activeUrl(), () => props.controller.host.isConnected).then(
           (copied) => {
-            showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+            showToast({
+              severity: copied ? "success" : "error",
+              message: t(copied ? "common.copied" : "common.copyFailed"),
+            });
           },
         );
         break;
