@@ -89,6 +89,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       authority: connection.authority,
       attemptClientFactory,
       callerOwnedAttemptClient,
+      preparedClient: runtime.toolDiscoveryClient,
       bindingStore,
       runtime: connection.options.runtime,
       appServer: pluginAppServer,

@@ -534,6 +534,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         : resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
             connectionClass: connection.appServer.connectionClass,
             nativeToolSurfaceEnabled,
+            modelListedOnConnection: runtime.toolDiscoveryClient?.modelListedOnConnection,
           }),
       directToolNames: resolveCodexDynamicToolDirectNames(
         params,

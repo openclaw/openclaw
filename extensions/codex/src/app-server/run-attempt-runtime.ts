@@ -7,22 +7,29 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexMcpToolOverridesForAgent } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerAuthAccountCacheKey } from "./auth-bridge.js";
 import {
   resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerPreparedApiKeyCacheKey,
 } from "./auth-cache-key.js";
+import type { CodexAppServerClient } from "./client.js";
 import { isCodexSandboxExecServerEnabled } from "./config.js";
 import {
   resolveCodexAppServerHookChannelId,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
+import {
+  resolveCodexDynamicToolsLoading,
+  shouldDisableCodexToolSearchForModel,
+} from "./dynamic-tool-profile.js";
 import { prepareCodexNativeExecutionPolicyForRun } from "./native-execution-policy.js";
 import {
   assertCodexNativeHookRelayAllowed,
   CodexManagedHooksOnlyError,
 } from "./native-hook-relay.js";
+import { hasCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
 import { isCodexResponsesOAuth } from "./responses-oauth.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
@@ -39,6 +46,11 @@ import {
 } from "./shared-client.js";
 import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
+import {
+  acquireCodexToolDiscoveryClient,
+  createCodexToolDiscoveryRequest,
+  isCodexModelListedOnConnection,
+} from "./tool-discovery.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
 export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnection) {
@@ -276,6 +288,13 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     sandbox,
   });
   let handedOff = false;
+  let toolDiscoveryClient:
+    | {
+        client: CodexAppServerClient;
+        release: () => void;
+        modelListedOnConnection: boolean;
+      }
+    | undefined;
   try {
     connection.assertCurrent();
     let nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
@@ -396,9 +415,71 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     }
     const hookChannelId = resolveCodexAppServerHookChannelId(params, sandboxSessionKey);
     preDynamicStartupStages.mark("context-engine-support");
+    if (
+      !nativeToolSurfaceEnabled &&
+      !usesSupervisionConnection &&
+      !mutable.startupBinding?.preserveNativeModel &&
+      !hasCodexNativeToolCatalog(mutable.startupBinding) &&
+      !isCodexResponsesOAuth(startupPreparedAuth) &&
+      params.disableTools !== true &&
+      params.toolsAllow?.length !== 0 &&
+      supportsModelTools(params.model) &&
+      appServer.connectionClass !== "remote" &&
+      resolveCodexDynamicToolsLoading(pluginConfig) === "searchable" &&
+      !shouldDisableCodexToolSearchForModel(effectiveRuntimeModelId)
+    ) {
+      // This is the startup lease, not a disposable catalog probe. Startup uses
+      // this exact connection; a replacement rebuilds preparation and membership.
+      const assertDiscoveryCurrent = () => {
+        connection.assertCurrent();
+        nativeExecutionPolicy.source?.();
+        connection.authority.assertLegacyCurrent();
+      };
+      const lease = await acquireCodexToolDiscoveryClient({
+        factory: attemptClientFactory,
+        callerOwnedAttemptClient: connection.callerOwnedAttemptClient,
+        options: {
+          ...clientOptions,
+          assertCurrent: assertDiscoveryCurrent,
+          agentId: sessionAgentId,
+        },
+        timeoutMs: resolveCodexStartupTimeoutMs({
+          timeoutMs: params.timeoutMs,
+          requestTimeoutMs: appServer.requestTimeoutMs,
+          timeoutFloorMs: connection.options.startupTimeoutFloorMs,
+        }),
+        signal: runAbortController.signal,
+        onTimeout: () => runAbortController.abort("codex_startup_timeout"),
+      });
+      toolDiscoveryClient = { ...lease, modelListedOnConnection: false };
+      const { client } = lease;
+      connection.assertCurrent();
+      const selection = await resolveCodexAppServerThreadModelSelection({
+        homeScope: appServer.start.homeScope,
+        provider: runtimeParams.provider,
+        model: effectiveRuntimeModelId,
+        binding: mutable.startupBinding,
+        authProfileId: runtimeParams.authProfileId,
+        authProfileStore: runtimeParams.authProfileStore,
+        agentDir,
+        config: params.config,
+      });
+      toolDiscoveryClient.modelListedOnConnection = await isCodexModelListedOnConnection({
+        request: createCodexToolDiscoveryRequest({
+          client,
+          signal: runAbortController.signal,
+          timeoutMs: appServer.requestTimeoutMs,
+          assertCurrent: assertDiscoveryCurrent,
+        }),
+        model: selection.model,
+        signal: runAbortController.signal,
+      });
+      connection.assertCurrent();
+    }
     handedOff = true;
     return {
       connection,
+      toolDiscoveryClient,
       clientOptions,
       preparedAuthBinding,
       runtimeParams,
@@ -423,6 +504,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     };
   } finally {
     if (!handedOff) {
+      toolDiscoveryClient?.release();
       nativeExecutionPolicy.release();
     }
   }
