@@ -688,7 +688,11 @@ describe("external shared-state ownership", () => {
         createDanglingSkillWorkshopReviewIndex(databasePath);
       }
 
-      const originalExec = DatabaseSync.prototype.exec;
+      const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")
+        ?.value as ((this: import("node:sqlite").DatabaseSync, sql: string) => void) | undefined;
+      if (!originalExec) {
+        throw new Error("DatabaseSync.exec descriptor is unavailable");
+      }
       let immediateTransactionCount = 0;
       const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
         this: import("node:sqlite").DatabaseSync,
