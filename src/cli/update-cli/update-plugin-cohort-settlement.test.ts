@@ -6,6 +6,7 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withPluginCohortConfigCapture } from "../../config/plugin-cohort-recovery.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
+import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-paths.js";
 import type { PluginCohortRecovery } from "../../infra/update-plugin-cohort-schema.js";
 import { createUpdateRun, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
 import { inspectPluginCohortRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
@@ -55,10 +56,15 @@ async function supersededCohort(params: {
   installed: { version: string; buildId: string };
   servedCandidate: boolean;
   recorded?: { disposition: "rollback"; settledPublications: 0 | 1 };
+  pendingPackageRecovery?: true;
 }) {
   const stateDir = dirs.make("cohort-settlement-state-");
-  const root = dirs.make("cohort-settlement-install-");
+  const root = path.join(dirs.make("cohort-settlement-install-"), "openclaw");
   installCore(root, params.installed);
+  if (params.pendingPackageRecovery) {
+    // Package recovery artifacts without a settled journal block the next mutable update.
+    fs.mkdirSync(resolvePackageActivationAnchor(root));
+  }
   const options = { env: { HOME: stateDir, OPENCLAW_STATE_DIR: stateDir } };
   const run = createUpdateRun({ trigger: "cli" }, options);
   if (params.servedCandidate) {
@@ -173,6 +179,10 @@ it.each([
 it.each([
   ["the original core is installed", { installed: original, servedCandidate: true }],
   ["the candidate never verified serving", { installed: candidate, servedCandidate: false }],
+  [
+    "package recovery is still pending",
+    { installed: candidate, servedCandidate: true, pendingPackageRecovery: true },
+  ],
   [
     "rollback already settled a publication",
     {

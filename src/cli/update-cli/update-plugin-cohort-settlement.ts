@@ -1,4 +1,5 @@
 import { readPackageVersion } from "../../infra/package-json.js";
+import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
@@ -13,6 +14,15 @@ import {
   assertUpdateRequesterContinuationOwner,
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
+
+function hasPendingPackageRecovery(installKey: string): boolean {
+  try {
+    assertNoPendingPackageActivation(installKey, { dryRun: true });
+    return false;
+  } catch {
+    return true;
+  }
+}
 
 /**
  * Settle an interrupted run's saved plugin cohort under the caller's installation
@@ -54,12 +64,14 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   // verified serving and the original core is no longer installed, rollback would
   // only be converged forward again, and it refuses obligations a later Doctor
   // decided. A rollback that has settled no publication has not changed state.
+  // Pending package recovery could still restore the original core.
   const verification = getUpdateRun(current.cohort.runId, options)?.verification;
   const forward =
     current.cohort.disposition !== "commit" &&
     current.cohort.settledPublications === 0 &&
     version !== null &&
     !installed(from) &&
+    !hasPendingPackageRecovery(current.cohort.installKey) &&
     verification?.serviceRunning === true &&
     verification.versionMatch === true &&
     verification.runningVersion === to.version &&
