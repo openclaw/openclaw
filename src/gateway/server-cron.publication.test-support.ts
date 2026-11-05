@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createRequireRecord } from "../../test/helpers/record.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronServiceState } from "../cron/service/state.js";
@@ -93,6 +94,9 @@ export function registerGatewayCronPublicationTests({
         defaults: { systemAgent: { agentId: "main" } },
         entries: { main: {} },
       };
+      // The session accessor resolves its store from the published runtime
+      // snapshot; the cron service publishes it only once withCronService starts.
+      setRuntimeConfigSnapshot(cfg);
       // The projection hydrates admitted store rows, not a raw sessions.json fixture.
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:probe" },
