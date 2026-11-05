@@ -341,7 +341,10 @@ function SomeAll(value, callback) {
   );
 }
 function Counted(value, callback) {
-  return value.reduce((result, value2, index) => (callback(value2, index) ? ++result : result), 0);
+  return value.reduce(
+    (result, value2, index) => (callback(value2, index) ? result + 1 : result),
+    0,
+  );
 }
 function ShiftLeft(array, true_, false_) {
   return IsEqual(array.length, 0) ? false_() : true_(array[0], array.slice(1));
@@ -3493,7 +3496,7 @@ var External = [
       check_259(value.machineClass)) &&
     (value.os === void 0 || !("os" in value) || check_327(value.os)) &&
     [check_328(value), check_332(value), check_337(value), check_339(value)].reduce(
-      (result, unique_177, _) => (unique_177 === !0 ? ++result : result),
+      (result, unique_177, _) => (unique_177 === !0 ? result + 1 : result),
       0,
     ) === 1,
   check_326 = (value) => typeof value == "boolean" && value === !0,
@@ -8753,7 +8756,7 @@ var External = [
       !("decisionLimit" in value) ||
       check_632(value.decisionLimit)) &&
     [check_1253(value), check_1255(value)].reduce(
-      (result, unique_788, _) => (unique_788 === !0 ? ++result : result),
+      (result, unique_788, _) => (unique_788 === !0 ? result + 1 : result),
       0,
     ) === 1,
   check_1252 = (value) =>
@@ -19308,7 +19311,7 @@ var External = [
     (value.native === void 0 || !("native" in value) || check_2897(value.native)) &&
     (value.baseHash === void 0 || !("baseHash" in value) || check_63(value.baseHash)) &&
     [check_2903(value), check_2905(value)].reduce(
-      (result, unique_1956, _) => (unique_1956 === !0 ? ++result : result),
+      (result, unique_1956, _) => (unique_1956 === !0 ? result + 1 : result),
       0,
     ) === 1,
   check_2896 = (value) =>
@@ -19389,7 +19392,7 @@ var External = [
     (value.constraints === void 0 || !("constraints" in value) || check_2911(value.constraints)) &&
     (value.message === void 0 || !("message" in value) || check_272(value.message)) &&
     [check_2912(value), check_2920(value), check_2926(value)].reduce(
-      (result, unique_1964, _) => (unique_1964 === !0 ? ++result : result),
+      (result, unique_1964, _) => (unique_1964 === !0 ? result + 1 : result),
       0,
     ) === 1,
   check_2909 = (value) =>

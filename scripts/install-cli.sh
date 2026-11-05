@@ -165,6 +165,7 @@ FAQ: https://docs.openclaw.ai/start/faq
   --npm                               Shortcut for --install-method npm
   --git, --github                     Shortcut for --install-method git
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
+  --no-git-update                     Skip rebasing local main (Git fetches can still occur)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
   --node-version <ver>                Node version (default: 24.22.1)
