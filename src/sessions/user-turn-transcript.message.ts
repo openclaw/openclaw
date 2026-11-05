@@ -173,6 +173,10 @@ export function projectRecordedModelPrompt(
   transcript?: AgentMessage,
 ): PersistedUserTurnMessage;
 export function projectRecordedModelPrompt(
+  message: Extract<AgentMessage, { role: "user" }>,
+  transcript?: AgentMessage,
+): Extract<AgentMessage, { role: "user" }>;
+export function projectRecordedModelPrompt(
   message: AgentMessage,
   transcript?: AgentMessage,
 ): AgentMessage;
