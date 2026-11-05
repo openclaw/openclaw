@@ -39,13 +39,12 @@ it.each([false, true])("only verifies saved policy (configDirty=%s)", (configDir
   expect(card.open).toBe(false);
   const summary = card.querySelector("summary");
   if (configDirty) {
-    expect(summary?.textContent).toContain("Unverified");
     expect(card.textContent).not.toContain("Old profile exclusion");
     expect(card.textContent).toContain("Save your changes to refresh the preview.");
     return;
   }
-  expect(summary?.textContent).toContain("Off");
-  expect(summary?.textContent).toContain("Messaging profile");
+  expect(summary?.textContent).not.toContain("Messaging profile");
+  expect(card.textContent).toContain("Messaging profile");
   card.open = true;
   for (const text of ["Session preview", source, "tools.profile", "Active"]) {
     expect(card.querySelector(".agent-tool-policy")?.textContent).toContain(text);
@@ -78,9 +77,10 @@ it("keeps session-denied MCP entries out of the tool preview", () => {
   );
   openToolGroups(container);
   const card = container.querySelector("#agent-tool-terminal__run");
-  expect(card?.querySelector("summary")?.textContent).toContain("Off");
   expect(card?.textContent).toContain("Denied by this session’s tool restrictions.");
   expect(card?.textContent).not.toMatch(/Listed in preview via|Included in preview/);
   expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
-  expect(container.textContent).toContain("No tools are listed in this preview.");
+  expect(container.textContent).toContain(
+    "No tools in this preview. More may become available before a reply.",
+  );
 });

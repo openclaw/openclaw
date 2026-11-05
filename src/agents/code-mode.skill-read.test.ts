@@ -19,6 +19,7 @@ import { createCatalogCodeModeHarness, resetCodeModeTestState } from "./code-mod
 import { bindHostSkillCatalog } from "./harness/host-skills.js";
 import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
+import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
@@ -41,18 +42,20 @@ it("reads local skill companions through the worker without exposing escaped, bi
   await fs.writeFile(path.join(root, "large.md"), "x".repeat(256 * 1024 + 1));
   await fs.writeFile(path.join(root, "binary"), Buffer.from([0, 1, 2]));
   await fs.writeFile(path.join(root, "invalid-utf8"), Buffer.from([0xff]));
+  const skill = createCanonicalFixtureSkill({
+    name: "guide",
+    description: "Guide",
+    filePath,
+    baseDir: root,
+    source: "bundled",
+  });
   const snapshot = {
-    prompt: "",
+    prompt: await resolveSkillsPrompt({
+      workspaceDir: dir,
+      entries: [{ skill, frontmatter: {} }],
+    }),
     skills: [{ name: "guide" }],
-    discoverySkills: [
-      createCanonicalFixtureSkill({
-        name: "guide",
-        description: "Guide",
-        filePath,
-        baseDir: root,
-        source: "bundled",
-      }),
-    ],
+    discoverySkills: [skill],
   };
   let active = true;
   const catalog = prepareInstalledSkillCatalog({
@@ -66,7 +69,16 @@ it("reads local skill companions through the worker without exposing escaped, bi
   });
   const tools = createInstalledSkillTools(catalog);
   const h = createCatalogCodeModeHarness(tools, { codeModeSkills: catalog });
+  const prompt = buildAgentSystemPrompt({
+    workspaceDir: dir,
+    codeModeActive: true,
+    toolNames: ["exec", "wait"],
+    capabilityToolNames: tools.map((tool) => tool.name),
+    skillsPrompt: snapshot.prompt,
+  });
+  expect(prompt).not.toContain("<available_skills>");
   const result = await h.complete(`
+    const found = await skills.search("guide");
     const whole = await skills.read("guide");
     const companion = await skills.read("guide", "references/workflow.md");
     const denied = [];
@@ -91,11 +103,12 @@ it("reads local skill companions through the worker without exposing escaped, bi
       try { await skills.read("guide", relativePath); denied.push(false); }
       catch { denied.push(true); }
     }
-    return { whole, companion, denied };
+    return { found, whole, companion, denied };
   `);
   expect(result).toMatchObject({
     status: "completed",
     value: {
+      found: { skills: [{ name: "guide" }] },
       whole: expect.stringContaining("Read references/workflow.md."),
       companion: "Companion text 😀",
       denied: Array(16).fill(true),

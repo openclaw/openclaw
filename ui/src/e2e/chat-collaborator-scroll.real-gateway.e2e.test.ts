@@ -254,9 +254,7 @@ async function waitForDelta(observed: Observation, text: string, expectedSession
     .toBe(true);
 }
 async function waitForSettlement(page: Page) {
-  await page
-    .getByRole("button", { name: "Stop generating", exact: true })
-    .waitFor({ state: "detached" });
+  await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ state: "detached" });
 }
 async function wheel(page: Page, delta: number) {
   await page.locator(".chat-pane-cache__pane--active .chat-thread").hover();

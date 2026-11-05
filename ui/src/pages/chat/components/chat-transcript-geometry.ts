@@ -2,7 +2,7 @@ import { measureElement, type Virtualizer } from "@tanstack/virtual-core";
 import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptViewportMeasurement } from "./chat-transcript-scroll-events.ts";
 
-export const POSITION_RAIL_MARKER_HEIGHT = 12;
+export const POSITION_RAIL_MARKER_HEIGHT = 10;
 const POSITION_RAIL_MARKER_OVERSCAN = 6;
 
 export function positionRailWindowIndexes(
@@ -189,14 +189,11 @@ export function measureTranscriptRow(
     element.dataset.preparedRow === "true" && !element.hasAttribute("data-preparing-row");
   if (!parked && (entry || !virtualizer.targetWindow?.ResizeObserver)) {
     // Rounded row heights accumulate when skipped overscan uses those measurements.
-    const size =
-      entry?.borderBoxSize?.[0]?.blockSize ?? measureElement(element, entry, virtualizer);
-    // A frame-deferred zero can describe an earlier parked state. Keep its
-    // cached geometry if the row has already returned to layout.
-    if (
-      size !== 0 ||
-      (virtualizer.scrollElement?.clientHeight !== 0 && (!entry || element.offsetHeight === 0))
-    ) {
+    const box = entry?.borderBoxSize?.[0];
+    const size = box?.blockSize ?? measureElement(element, entry, virtualizer);
+    // A deferred zero can describe a hidden pane or an earlier parked row.
+    // Preserve that geometry even if the pane or row is visible again.
+    if (size !== 0 || (box?.inlineSize !== 0 && virtualizer.scrollElement?.clientHeight !== 0)) {
       return size;
     }
   }

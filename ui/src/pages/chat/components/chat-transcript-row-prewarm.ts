@@ -5,11 +5,13 @@ import {
   prewarmSanitizedMarkdown,
   type MarkdownPrewarmMode,
 } from "../../../components/markdown.ts";
-import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
+import {
+  prepareChatMessageRender,
+  resolveMessageDisplayMarkdown,
+} from "../../../lib/chat/message-display.ts";
 import { resolveCappedMessageId } from "../chat-message-recovery.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import { messageMarkdownRenderOptions } from "./chat-message-bubble-presentation.ts";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { prepareMarkdownMediaSource } from "./chat-message-media-markdown.ts";
 import { projectMessageMedia } from "./chat-message-media.ts";
 import type { TranscriptContent, TranscriptRow } from "./chat-transcript-layout.ts";

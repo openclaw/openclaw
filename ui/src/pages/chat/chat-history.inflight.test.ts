@@ -519,7 +519,7 @@ describe("chat history run ownership recovery", () => {
     await handleAbortChat(state, { preserveDraft: true });
 
     expect(abortCalls()).toEqual([
-      ["chat.abort", { sessionKey: "main", runId: "run-missed-terminal" }],
+      ["chat.abort", { sessionKey: "main", runId: "run-missed-terminal", userInitiated: true }],
     ]);
     expect(state.chatRunId).toBe("run-current");
     expect(state.chatStream).toBe("The current response.");
@@ -529,8 +529,8 @@ describe("chat history run ownership recovery", () => {
     await handleAbortChat(state, { preserveDraft: true });
 
     expect(abortCalls()).toEqual([
-      ["chat.abort", { sessionKey: "main", runId: "run-missed-terminal" }],
-      ["chat.abort", { sessionKey: "main", runId: "run-current" }],
+      ["chat.abort", { sessionKey: "main", runId: "run-missed-terminal", userInitiated: true }],
+      ["chat.abort", { sessionKey: "main", runId: "run-current", userInitiated: true }],
     ]);
   });
 

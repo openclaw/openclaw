@@ -3,7 +3,8 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show, useContext } from "solid-js";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { formatCompactTokenCount, formatCost, formatTimeAgo } from "../../../lib/format.ts";
+import { formatCompactTokenCount, formatTimeAgo } from "../../../lib/format.ts";
+import { formatCost } from "../../../lib/reactive/format.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
@@ -36,17 +37,20 @@ const timestampFormats = {
 } satisfies Record<string, Intl.DateTimeFormatOptions>;
 const timestampFormatters = new Map<keyof typeof timestampFormats, Intl.DateTimeFormat>();
 let timestampFormatterMinute: number | undefined;
+let timestampFormatterLocale: string | undefined;
 
 function formatTimestamp(date: Date, format: keyof typeof timestampFormats, nowMs = Date.now()) {
   const minute = Math.floor(nowMs / 60_000);
-  if (timestampFormatterMinute !== minute) {
+  const locale = getLocale();
+  if (timestampFormatterMinute !== minute || timestampFormatterLocale !== locale) {
     timestampFormatters.clear();
-    // Newly mounted rows observe system locale/timezone changes in the next minute.
+    // Locale changes apply immediately; system timezone changes apply in the next minute.
     timestampFormatterMinute = minute;
+    timestampFormatterLocale = locale;
   }
   let formatter = timestampFormatters.get(format);
   if (!formatter) {
-    formatter = new Intl.DateTimeFormat([], timestampFormats[format]);
+    formatter = new Intl.DateTimeFormat(locale, timestampFormats[format]);
     timestampFormatters.set(format, formatter);
   }
   return formatter.format(date);

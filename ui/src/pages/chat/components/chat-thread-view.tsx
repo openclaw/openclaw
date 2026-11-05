@@ -1,4 +1,4 @@
-import { Show, createMemo, onSettled, useContext } from "solid-js";
+import { Show, createMemo, createSignal, onSettled, useContext } from "solid-js";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
   linkReaderPrefetchRef as createLinkReaderPrefetchRef,
@@ -25,6 +25,7 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
+import { usePanePresentation } from "../chat-pane-presentation.ts";
 import {
   getExpandedToolCards,
   getExpandedUserMessages,
@@ -37,6 +38,7 @@ import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
+import { watchChatSearchHighlight } from "./chat-search-highlight.ts";
 import {
   getTranscriptState,
   handleTranscriptContextMenu,
@@ -81,12 +83,13 @@ export function ChatThread(input: {
   historySupplement?: TranscriptHeader;
 }) {
   const mobile = useContext(ChatConversationMobile);
-  let root: HTMLDivElement | undefined;
+  const [root, setRoot] = createSignal<HTMLDivElement>();
   let stopSelectionGesture: (() => void) | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
   const paneId = createMemo(() => input.props.paneId);
   onSettled(() => {
-    const unregister = root && registerTranscriptElement(paneId(), root);
+    const element = root();
+    const unregister = element && registerTranscriptElement(paneId(), element);
     const searchState = getTranscriptState(paneId()).search;
     let query = searchState.snapshot.query.trim();
     const stopSearch = searchState.subscribe(() => {
@@ -102,6 +105,7 @@ export function ChatThread(input: {
       unregister?.();
     };
   });
+  const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
@@ -221,6 +225,12 @@ export function ChatThread(input: {
   });
   return (
     <div class="chat-thread-viewport" ref={[elementRef(input.props.onScrollPortRef)]}>
+      <Show when={isPresented() && root()}>
+        {(element) => {
+          onSettled(() => watchChatSearchHighlight(element(), getTranscriptState(paneId()).search));
+          return null;
+        }}
+      </Show>
       <Show when={input.props.fetchLinkFavicon} keyed>
         {(fetcher) => {
           onSettled(() => retainLinkFaviconCache(fetcher));
@@ -230,7 +240,7 @@ export function ChatThread(input: {
       <div
         ref={[
           elementRef((element: HTMLDivElement) => {
-            root = element;
+            setRoot(element);
             // Retained roots can settle before refs; bind viewport and input together here.
             const releaseViewport = input.bindViewport?.(element);
             const stopHistory = ["wheel", "touchstart", "touchmove"].map((type) =>
@@ -256,6 +266,7 @@ export function ChatThread(input: {
           },
         ]}
         role="log"
+        data-restoring={input.props.restoring ? "" : undefined}
         aria-label={t("chat.sidePanel.conversation")}
         aria-live="off"
         aria-relevant="additions"

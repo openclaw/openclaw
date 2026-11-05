@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fnv1a from "../../../../../src/shared/fnv1a.js";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { resetWorkingProgress } from "../chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
@@ -10,6 +11,7 @@ import {
   projectTranscriptIndex,
   projectTranscriptRows,
 } from "./chat-transcript-message-index.ts";
+import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 
 const sessionKey = "agent:main:dashboard:0f6d5a1c-5a9e-4c1e-9b1a-2f3c4d5e6f70";
 
@@ -126,7 +128,7 @@ describe("long completed runs", () => {
   it.each([1, 2])(
     "windows medium frames only when their combined history is large (%s runs)",
     (runs) => {
-      const messages = Array.from({ length: runs }, (_, run) => longRun([], 199, run)).flat();
+      const messages = Array.from({ length: runs }, (_, run) => longRun([], 99, run)).flat();
       const chain = projectHistory(messages, { sessionKey: "agent:main:telegram:direct:42" });
       const frames = framesOf(chain);
       expect(frames).toHaveLength(runs);
@@ -134,7 +136,7 @@ describe("long completed runs", () => {
       for (const [run, frame] of frames.entries()) {
         const suffix = run === 0 ? "" : `-${run}`;
         const first = index.messageRowKeysById.get(`step-0${suffix}`);
-        const last = index.messageRowKeysById.get(`step-198${suffix}`);
+        const last = index.messageRowKeysById.get(`step-98${suffix}`);
         if (runs === 1) {
           expect(first).toBe(frame.key);
           expect(last).toBe(frame.key);
@@ -339,6 +341,27 @@ it("does not serialize settled history again when a live status changes the row 
   ).rows[0]!;
   expect(during.kind === "item" && during.revision).toBe(before.kind === "item" && before.revision);
   expect(serializations).toBe(1);
+});
+
+it("fingerprints loaded rows once when an older page rebuilds the index", () => {
+  const turn = (id: string, seq: number, content: string) =>
+    makeMessage(id, seq, { role: seq % 2 ? "user" : "assistant", runId: `run-${seq}`, content });
+  const body = "Loaded reply. ".repeat(400);
+  const loaded = Array.from({ length: 20 }, (_, index) =>
+    turn(`loaded-${index}`, 21 + index, body),
+  );
+  const older = Array.from({ length: 20 }, (_, index) =>
+    turn(`older-${index}`, 1 + index, "Older"),
+  );
+  const before = indexFor(projectHistory(loaded)).rows;
+  const hash = vi.spyOn(fnv1a, "fnv1aUtf16");
+  const after = indexFor(projectHistory([...older, ...loaded])).rows;
+  const hashed = hash.mock.calls.reduce((sum, [value]) => sum + value.length, 0);
+  hash.mockRestore();
+  expect(after.slice(-before.length).map((row) => row.kind === "item" && row.revision)).toEqual(
+    before.map((row) => row.kind === "item" && row.revision),
+  );
+  expect(hashed).toBeLessThan(body.length);
 });
 
 it("invalidates only a changed reaction row while retaining other cached footprints", () => {
@@ -973,3 +996,45 @@ it.each([
   ]);
   expect(indexFor(chain).rows[0]?.retainDom).toBe(retained);
 });
+
+it.each([
+  ["work in both runs", true],
+  ["work only in the later run", false],
+] as const)(
+  "keeps a collapsed browser preview after an earlier run's reply: %s",
+  (_name, early) => {
+    const browse = {
+      ...makeMessage("browse", 4, { role: "toolResult", content: "Opened", runId: "run-b" }),
+      toolName: "browser",
+      toolCallId: "browse",
+      details: {
+        browserTab: {
+          profile: "managed",
+          target: "host",
+          targetId: "tab-1",
+          url: "https://example.com",
+          title: "Example",
+        },
+      },
+    };
+    const chain = projectHistory([
+      history[0],
+      ...(early ? [makeTool("work-0", 2, "run-a", 20)] : []),
+      makeMessage("reply-a", 3, { runId: "run-a", stopReason: "stop" }),
+      browse,
+      makeMessage("reply-b", 5, { runId: "run-b", stopReason: "stop" }),
+    ]);
+    // No visible reply owns the rollup, so it stays outside the frames; its preview follows reply A.
+    expect(chain.transcriptItems.map((item) => item.kind)).toEqual([
+      "group",
+      "work-group",
+      "agent-run-frame",
+      "agent-run-frame",
+    ]);
+    const expanded = new Map<string, boolean>();
+    const previews = projectTranscriptWorkPreviews(chain.workGroups, { sessionKey, expanded });
+    const rows = projectTranscriptRows(indexFor(chain, expanded).rows, previews, []);
+    const [firstFrame] = framesOf(chain);
+    expect(rows.map((row) => row.key)).toContain(`work-previews:${firstFrame!.key}`);
+  },
+);

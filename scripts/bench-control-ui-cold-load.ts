@@ -1,5 +1,6 @@
 // Opt-in production-bundle benchmark; real delays model wire delivery, not test synchronization.
 // --cpu-profile: source-mapped reload/live/streaming tables and per-run/median cpu-profile.json.
+// --coverage: separate --untraced run without CPU profiling; retains thread CPU metrics.
 // --thread-cpu-time excludes renderer descheduling from CDP duration metrics.
 // Traces report coarse V8 module parse/compile CPU, not exhaustive compiler CPU.
 // javaScriptResources includes completed modulepreloads absent from V8 coverage.
@@ -285,7 +286,9 @@ const { values } = parseArgs({
     "row-facts": { type: "boolean", default: false },
     "late-row-facts": { type: "boolean", default: false },
     "pane-chrome-probe": { type: "boolean", default: false },
+    "pane-chrome-facts": { type: "boolean", default: false },
     "archived-session": { type: "boolean", default: false },
+    "details-session-facts": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
@@ -427,6 +430,12 @@ const cpuProfile = values["cpu-profile"] || Boolean(values["cpu-profile-compare"
 const performanceTimeDomain = values["thread-cpu-time"] ? "threadTicks" : "timeTicks";
 const allocations = values.allocations;
 const traced = !values.untraced && !values["filmstrip-only"];
+// Coverage and CPU sampling use separate CDP sessions with isolate-global coverage state.
+if (values.coverage && (traced || cpuProfile)) {
+  throw new Error(
+    "coverage requires --untraced without --cpu-profile or --cpu-profile-compare; run CPU sampling separately",
+  );
+}
 if (
   allocations &&
   (!values["live-events"] || !values.untraced || cpuProfile || values["filmstrip-only"])
@@ -728,11 +737,13 @@ if (
     port === sandboxPort ||
     [port, sandboxPort].some(
       (value) =>
-        value === undefined || !Number.isInteger(value) || value < 40_000 || value > 65_535,
+        value === undefined ||
+        !Number.isInteger(value) ||
+        !((value >= 19_600 && value <= 19_699) || (value >= 40_000 && value <= 65_535)),
     ))
 ) {
   throw new Error(
-    "Explicit port and sandbox-port require a built bundle and distinct ports from 40000 to 65535",
+    "Explicit port and sandbox-port require a built bundle and distinct ports in 19600–19699 or 40000–65535",
   );
 }
 if (
@@ -896,6 +907,8 @@ const fixture = createControlUiTeamScaleFixture({
   lateRowFacts: values["late-row-facts"],
   offRosterSession: values["off-roster-route"],
   archivedSession: values["archived-session"],
+  paneChromeFacts: values["pane-chrome-facts"],
+  detailsSessionFacts: values["details-session-facts"],
   transcriptMessages,
   richTranscript: values["long-session"],
   longSessionScenario: values["long-session"] ? longSessionScenario : undefined,
@@ -1502,6 +1515,16 @@ try {
       }
     }
   }
+  await page.addInitScript((entries) => {
+    if (window !== window.top || location.protocol === "about:") {
+      return;
+    }
+    for (const [key, value] of Object.entries(entries)) {
+      if (localStorage.getItem(key) === null) {
+        localStorage.setItem(key, value);
+      }
+    }
+  }, fixture.paneChromeSettings);
   await page.addInitScript(
     ({ key, pins, mode, bootstrap, bootstrapAttribute, fixtureUrl, splitLayout }) => {
       if (window !== window.top || location.protocol === "about:") {

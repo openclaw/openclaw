@@ -25,7 +25,7 @@ type TableOwnerState = {
   closeDialog?: () => void;
 };
 
-type TableBounds = { viewport?: number; table?: number; offset: number };
+type TableBounds = { element: HTMLElement; viewport?: number; table?: number; offset: number };
 
 function tableInteractionsEnabled(env: unknown): boolean {
   return (
@@ -55,7 +55,26 @@ export function installMarkdownTables(markdownParser: MarkdownIt): void {
 
 export function markdownTableCopyText(table: HTMLTableElement): string {
   return [...table.rows]
-    .map((row) => [...row.cells].map((cell) => cell.textContent?.trim() ?? "").join("\t"))
+    .map((row) =>
+      [...row.cells]
+        .map((cell) => {
+          const walker = cell.ownerDocument.createTreeWalker(
+            cell,
+            NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+          );
+          let text = "";
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            if (node.nodeType === Node.TEXT_NODE) {
+              text += node.textContent;
+            } else if (node.nodeName === "BR") {
+              text += "\n";
+            }
+          }
+          text = text.trim();
+          return /[\t\r\n"]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+        })
+        .join("\t"),
+    )
     .join("\n");
 }
 
@@ -67,12 +86,14 @@ function measureTableOverflow(shell: HTMLElement, bounds: TableBounds): (() => v
     return undefined;
   }
   const { viewport, table, offset } = bounds;
+  const position =
+    getComputedStyle(bounds.element).direction === "rtl" ? table - viewport + offset : offset;
   const overflows = table - viewport > 1;
   return () => {
-    shell.classList.toggle("markdown-table--can-scroll-left", overflows && offset > 1);
+    shell.classList.toggle("markdown-table--can-scroll-left", overflows && position > 1);
     shell.classList.toggle(
       "markdown-table--can-scroll-right",
-      overflows && offset + viewport < table - 1,
+      overflows && position + viewport < table - 1,
     );
   };
 }
@@ -112,7 +133,7 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           continue;
         }
         const viewport = entry.target.closest<HTMLElement>(tableViewportSelector)!;
-        const bounds = tableBounds.get(viewport) ?? { offset: 0 };
+        const bounds = tableBounds.get(viewport) ?? { element: viewport, offset: 0 };
         if (entry.target.matches(tableViewportSelector)) {
           bounds.viewport = entry.contentRect.width;
         } else {
@@ -286,7 +307,7 @@ async function showTableDialog(
     try {
       await import("./modal-dialog.tsx");
     } catch (cause) {
-      throw new UserFacingError(`${t("lazyView.errorTitle")}. ${t("lazyView.staleSubtitle")}`, {
+      throw new UserFacingError(`${t("lazyView.errorTitle")} ${t("lazyView.staleSubtitle")}`, {
         cause,
       });
     }

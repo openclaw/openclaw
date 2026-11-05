@@ -1,9 +1,9 @@
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import {
   agentRunFrameActiveStatusParts,
   chatItemGroups,
@@ -300,15 +300,33 @@ function estimateMessageGroupSize(group: MessageGroup): number | undefined {
   return Math.max(CHAT_TRANSCRIPT_ESTIMATED_ROW_PX, size);
 }
 
+// Loaded history messages are immutable. Fingerprint each once, rather than
+// reserializing every loaded row whenever an older page rebuilds the index.
+const messageRevisions = new WeakMap<object, string>();
+function messageRevision(message: object): string {
+  let revision = messageRevisions.get(message);
+  if (revision === undefined) {
+    const identity = nativeHistoryMessageIdentity(message) ?? JSON.stringify(message);
+    revision = `${identity.length}:${fnv1aUtf16(identity)}`;
+    messageRevisions.set(message, revision);
+  }
+  return revision;
+}
+
 export function projectTranscriptIndex(
   chain: TranscriptIndexSource,
   expandedToolCards: Map<string, boolean>,
-  props: Pick<ChatThreadProps, "assistantName" | "userId" | "userName" | "messageReactions">,
+  props: Pick<
+    ChatThreadProps,
+    "assistantName" | "currentAgentId" | "agents" | "userId" | "userName" | "messageReactions"
+  >,
 ): TranscriptIndex {
   const cacheKey = [
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),
     props.assistantName,
+    props.currentAgentId,
+    props.agents,
     props.userId,
     props.userName,
     props.messageReactions,
@@ -353,7 +371,7 @@ export function projectTranscriptIndex(
       const revision = rowRevisions(item, [key, props.messageReactions], () => {
         const messages = groups.flatMap((group) =>
           group.messages.map(({ message }) => [
-            nativeHistoryMessageIdentity(message) ?? message,
+            message && typeof message === "object" ? messageRevision(message) : message,
             props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
           ]),
         );
@@ -424,7 +442,11 @@ export function projectTranscriptIndex(
           transcriptMessageKeys.set(part.key, item.key);
         }
         for (const group of chatItemGroups(part)) {
-          const senderLabel = resolveMessageGroupSenderLabel(firstGroup ?? group, props);
+          const senderLabel = resolveMessageGroupSenderLabel(
+            firstGroup ?? group,
+            props,
+            props.currentAgentId,
+          );
           const rowKey =
             item.kind === "work-group" && expandedToolCards.get(item.key)
               ? item.key + ":" + group.key
@@ -642,7 +664,14 @@ export function projectTranscriptRows(
     const result: TranscriptRow<ChatRenderItem>[] = take(null);
     for (const row of rows) {
       result.push(row);
-      const previews = workPreviews.get(row.key);
+      // Work outside a run frame can anchor its previews to an answer inside
+      // one; that answer renders as part of the frame row.
+      const anchors =
+        row.kind === "item" && row.item.kind === "agent-run-frame"
+          ? [row.key, ...row.item.parts.map((part) => part.key)]
+          : [row.key];
+      const anchored = anchors.flatMap((anchor) => workPreviews.get(anchor) ?? []);
+      const previews = anchored.length > 0 ? anchored : undefined;
       if (previews && !(row.kind === "item" && row.item.kind === "work-group")) {
         const content: NativeTranscriptView = { kind: "work-previews", previews };
         result.push({

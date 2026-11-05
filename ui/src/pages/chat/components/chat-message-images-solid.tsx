@@ -25,7 +25,7 @@ import {
   readCachedManagedImageUrl,
   resolveManagedImageResource,
 } from "./chat-message-image-loading.ts";
-import { openMessageImage } from "./chat-message-image-open.ts";
+import { openMessageImage, withMessageImageGallery } from "./chat-message-image-open.ts";
 import {
   buildAssistantAttachmentUrl,
   isCanonicalInboundMediaSource,
@@ -70,6 +70,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
   const previewWidth = chatImageRenditionWidth("inline");
   let pendingPreview: Promise<unknown> | undefined;
   let imageKey = Symbol("image-presentation");
+  let frameSize: ReturnType<typeof resolveChatImagePreviewSize> | undefined;
   let retainedImage: RetainedInlineImage | { status: "unavailable" } | undefined;
   let admitted = false;
   let stopObserving: (() => void) | undefined;
@@ -236,6 +237,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
         previewElement = undefined;
         admitted = false;
         imageKey = Symbol("image-presentation");
+        frameSize = undefined;
       }
       releaseChatMediaResourceOwner(refreshImage);
     }
@@ -298,8 +300,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
     admitted = true;
     // A pane owns cancellation; this image alone owns its presentation updates.
     const subscriptionOptions = subscribedOptions(options);
-    const observed = subscriptionOptions !== options;
-    if (observed && !isInlineImageSource(image.url)) {
+    if (subscriptionOptions !== options && !isInlineImageSource(image.url)) {
       pendingPreview = undefined;
       observeChatMediaResourceSubscriber(options?.mediaOwner, refreshImage);
     } else {
@@ -314,7 +315,6 @@ function createMessageImagePresentation(props: MessageImageProps) {
     const failure = availability.status === "unavailable" ? availability : undefined;
     // Tickets authorize new reads, not already decoded pixels. Only this
     // mounted image can survive an unconfirmed renewal; denial still clears it.
-    const unconfirmed = availability.status === "checking" || failure?.unconfirmed;
     const displayUrl =
       availability.status === "available"
         ? buildAssistantAttachmentUrl(
@@ -326,7 +326,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
             managed ? undefined : "thumbnail",
             previewWidth,
           )
-        : unconfirmed
+        : availability.status === "checking" || failure?.unconfirmed
           ? loadedElement?.getAttribute("src")
           : undefined;
     if (!displayUrl || decodeFailed) {
@@ -525,16 +525,19 @@ function createMessageImagePresentation(props: MessageImageProps) {
             ...view.actions,
           },
         };
+    const previewSize = resolveChatImagePreviewSize(
+      knownImageSize(image),
+      view.previewUrl && loadedElement
+        ? { width: loadedElement.naturalWidth, height: loadedElement.naturalHeight }
+        : undefined,
+    );
     return {
       image,
       managed,
       key: active ? imageKey : undefined,
-      previewSize: resolveChatImagePreviewSize(
-        knownImageSize(image),
-        view.previewUrl && loadedElement
-          ? { width: loadedElement.naturalWidth, height: loadedElement.naturalHeight }
-          : undefined,
-      ),
+      // Keep an admitted remote frame stable through decode and display-fact writes.
+      // Newly learned dimensions size its next admission; local pastes still adopt their pixels.
+      previewSize: isInlineImageSource(image.url) ? previewSize : (frameSize ??= previewSize),
       ...view,
       ...placeholder,
     };
@@ -624,7 +627,7 @@ export function MessageImages(props: MessageImagesProps): JSX.Element {
       previousImages.map((image, index) => [image.factIndex, slots[index]?.key]),
     );
     // Publish options with the slot key so retiring images keep their previous policy.
-    const imageOptions = { ...options, galleryImages: options?.galleryImages ?? images };
+    const imageOptions = withMessageImageGallery(options, images);
     slots = images.map((image, index) => {
       const slot = slots[index];
       const displayKey = row && chatImageDisplayKey(image, chatImageRenditionWidth("inline"));

@@ -147,6 +147,12 @@ export function createTranscriptPresentation(
       }
       return measureRow(element, entry, virtualizer);
     },
+    measureInitialRows(messages: TranscriptMessageElements) {
+      const applyRows = readConnectedRows();
+      // Bubble reads share the row pass's layout; publish only the accepted range.
+      const applyRail = messages.prepareInitialLayout();
+      return [applyRows?.() ?? false, applyRail] as const;
+    },
     measureRows: () => readConnectedRows()?.() ?? false,
     measureRowsWithoutScrollAdjustment() {
       const adjustScroll = virtualizer.shouldAdjustScrollPositionOnItemSizeChange;

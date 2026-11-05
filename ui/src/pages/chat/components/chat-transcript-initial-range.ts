@@ -242,7 +242,6 @@ export class TranscriptInitialRange {
     // Boot placement can precede the native extent; only reader navigation
     // releases its anchor to subsequent native-offset measurements.
     this.viewportOnly = viewportOnly;
-    this.virtualizer().shouldAdjustScrollPositionOnItemSizeChange = undefined;
     if (!this.tailRows && !changed) {
       return;
     }

@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { prepareGroupedMessage } from "./chat-message-bubble-presentation.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { prepareMessageMarkdown } from "./chat-message-text-preparation.ts";
 import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";

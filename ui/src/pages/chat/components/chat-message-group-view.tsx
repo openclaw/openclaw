@@ -110,11 +110,7 @@ function PreparedMessage(props: {
     const actionDetails = prepared().actions;
     let assistantMessageDisclosure: AssistantMessageDisclosure | undefined;
     const fullMessage = actionDetails?.fullMessage;
-    if (
-      fullMessage &&
-      props.options.loadFullAssistantMessage &&
-      props.options.onToggleAssistantMessageExpanded
-    ) {
+    if (fullMessage) {
       const { messageId, state: expansion } = fullMessage;
       const retriesExhausted =
         expansion?.status === "error" && expansion.revision >= FULL_MESSAGE_RETRY_REVISION_LIMIT;
@@ -266,10 +262,15 @@ function GroupAvatar(props: {
 }) {
   const frame = () => props.frame;
   const options = () => frame().options;
+  // Agent-written openings show their agent like forwarded agent messages do.
+  const agentSenderId = () => {
+    const identity = frame().group.sender?.identity;
+    return identity?.type === "agent" ? identity.id : undefined;
+  };
   return (
     <Show when={frame().hasAvatar}>
       <Show
-        when={frame().isForwarded}
+        when={frame().isForwarded || agentSenderId()}
         fallback={
           <ChatAvatar
             elementRef={props.elementRef}
@@ -292,7 +293,7 @@ function GroupAvatar(props: {
         }
       >
         <ForwardedAvatar
-          agentId={frame().group.senderSession?.agentId}
+          agentId={frame().group.senderSession?.agentId ?? agentSenderId()}
           options={options()}
           elementRef={props.elementRef}
         />
@@ -538,11 +539,7 @@ function FramedMessageGroup(props: {
           when={Boolean(options().activeContinuation)}
           fallback={
             options().turnRecap ? (
-              <TurnRecapRow
-                recap={options().turnRecap!}
-                presentation="continuation"
-                hideDuration={options().hideTurnRecapDuration}
-              />
+              <TurnRecapRow recap={options().turnRecap!} presentation="continuation" />
             ) : undefined
           }
         >

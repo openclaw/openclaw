@@ -15,7 +15,7 @@ import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import { settleGitUpdateCleanup } from "./update-runner-git-cleanup.js";
-import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
+import { gitCleanCheckArgs, resolveGitUpdateCommandEnv } from "./update-runner-git-commands.js";
 import {
   readCurrentGitUpdateRecovery,
   recordGitRollbackOutcome,
@@ -56,7 +56,8 @@ export async function updateGitCheckout(params: {
   timeoutMs: number;
   startedAt: number;
 }): Promise<UpdateRunResult> {
-  const { opts, defaultCommandEnv, timeoutMs, startedAt } = params;
+  const { opts, timeoutMs, startedAt } = params;
+  const defaultCommandEnv = resolveGitUpdateCommandEnv(params.defaultCommandEnv);
   let gitRoot = params.gitRoot;
   const runCommand: CommandRunner = (argv, options) =>
     params.runCommand(argv, {

@@ -1,5 +1,7 @@
 import type { JSX } from "@solidjs/web";
+import { t } from "../../../i18n/index.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import {
   normalizeRoleForGrouping,
   resolveMessageRole,
@@ -23,7 +25,6 @@ import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts"
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
   hasMessageActionButtons,
-  prepareChatMessageRender,
   resolveMessageActionDetails,
 } from "./chat-message-markdown-view.tsx";
 import {
@@ -61,11 +62,13 @@ export function prepareGroupMessage(
   });
   const fullMessage = details?.fullMessage;
   if (fullMessage) {
-    const { messageId, state: expansion } = fullMessage;
+    const { messageId } = fullMessage;
+    const expansion = opts.getAssistantMessageExpansion?.(messageId);
     // Retry transient failures on later renders, bounded so a dead loader cannot hot-loop.
     if (
-      !expansion ||
-      (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT)
+      opts.loadFullAssistantMessage &&
+      (!expansion ||
+        (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT))
     ) {
       opts.onToggleAssistantMessageExpanded?.(messageId);
     }
@@ -142,7 +145,7 @@ export function prepareMessageGroupFrame(
   const sourceOnly = isSourceOnlyUserGroup(group);
   const showAvatar =
     normalizedRole !== "user" || Boolean(group.sender || group.senderLabel?.trim());
-  const assistantName = opts.assistantName ?? "Assistant";
+  const assistantName = opts.assistantName ?? t("chat.messages.agentName");
   const isOwnGroup = isOwnSenderGroup(group, opts.userId);
   const isPeerGroup =
     normalizedRole === "user" && Boolean(opts.userId && group.sender) && !isOwnGroup;

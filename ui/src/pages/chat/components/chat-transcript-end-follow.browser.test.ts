@@ -706,6 +706,8 @@ it("holds the canceled viewport after a smooth journey's automatic final approac
           resolve(canceledOffset);
         } else if (!grewNearEnd && distance() <= thread.clientHeight) {
           grewNearEnd = true;
+          // The journey skips this measurement; the reader has already seen the row's size.
+          earlier.style.height = "442px";
           host.lastRowHeight += 48;
           host.requestRender();
         }

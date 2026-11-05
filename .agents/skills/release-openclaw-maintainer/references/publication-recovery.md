@@ -94,7 +94,11 @@ Repair a stale beta floor through the dist-tag owner and inspect the failed
 parent's exact children before rejecting stale gates or canceling them. Resume
 through the selected route with the same qualified bytes and inputs; direct
 publication uses the successful original core run, while prepared publication
-uses a new button run with the same readiness artifact. Keep the original run
+uses a new button run with the same readiness artifact. For a published core
+version, `pnpm release:candidate` and `pnpm release:publish-preflight` read the
+live registry, identify the original publisher from npm provenance, and print the
+direct command with `-f openclaw_npm_resume_run_id=<run>`; sealed FRV npm
+decisions predate publication and do not decide resume. Keep the original run
 attempts and required approvals. Do not substitute a manual child approval for
 the parent's authorization. See `$release-openclaw-ci` Publish children for
 stale-child cleanup.
@@ -125,9 +129,59 @@ artifacts also require reconciliation; they do not authorize another dispatch.
 If reconciliation proves that a preparation child never existed, dispatch only
 that missing owner from the original protected tooling tag, with the exact source
 SHA as `ref` and `publish_scope=all-publishable`. For Plugin NPM Release, use
-`preflight_only=true`, `trusted_publisher_preflight=false`, and `npm_dist_tag=default`
-(`extended-stable` for that track). For Plugin ClawHub Release, use `dry_run=true`.
+`preflight_only=true` and `npm_dist_tag=default` (`extended-stable` for that
+track); leave `trusted_publisher_preflight` omitted so this artifact-qualification
+run keeps its default and produces the artifacts preparation must adopt. For
+Plugin ClawHub Release, use `dry_run=true`.
 Then supply both verified positive child IDs; adoption dispatches no new workflow.
+
+Before resuming regular plugin npm publication, verify the trusted-publisher
+exchange read-only from that same protected tooling tag for only the packages
+whose recovered immutable publication plan records `npm-oidc`. This check does
+not pack or publish:
+
+```bash
+gh workflow run plugin-npm-release.yml --repo openclaw/openclaw \
+  --ref release-publish/<tooling-sha12>-<epoch> \
+  -f preflight_only=true \
+  -f trusted_publisher_preflight=true \
+  -f publish_scope=selected \
+  -f plugins=<comma-separated-npm-oidc-package-names> \
+  -f ref=<exact-40-character-release-sha> \
+  -f npm_dist_tag=default
+```
+
+Do not pass parent publication run IDs. Require the `Trusted publisher OIDC
+exchange` job to succeed before recovery continues for those selected `npm-oidc`
+packages; its success confirms authentication only, not publication. Keep
+packages recorded as `npm-token-bootstrap` on the approved
+[first-package route](first-package.md); their recovery does not wait on this
+exchange. If no recovered package uses `npm-oidc`, skip this check.
+
+For extended-stable recovery, use the same read-only exchange from protected
+tooling, but preserve that track's full-roster and frozen-source boundaries:
+
+```bash
+gh workflow run plugin-npm-release.yml --repo openclaw/openclaw \
+  --ref release-publish/<trusted-current-main-tooling-sha12>-<epoch> \
+  -f preflight_only=true \
+  -f trusted_publisher_preflight=true \
+  -f publish_scope=all-publishable \
+  -f ref=<exact-canonical-extended-stable-branch-tip-sha> \
+  -f npm_dist_tag=extended-stable
+```
+
+Leave `plugins`, parent publication run IDs, and `release_candidate_branch`
+empty. The source must equal the canonical `extended-stable/YYYY.M.33` branch
+tip and retain its final `YYYY.M.PATCH` version with `PATCH >= 33`. The protected
+tooling tag must resolve to a workflow revision reachable from current `main`.
+The exchange revalidates the current source and protected tooling after acquiring
+the GitHub token and before requesting package-scoped npm credentials. A moved
+source or revoked tooling requires a fresh approved preflight, not a retry of
+the stale exchange.
+
+Require the `Trusted publisher OIDC exchange` job to succeed before following
+[trusted-main npm recovery](extended-stable-publish.md#trusted-main-npm-recovery).
 
 Publication records distinguish `unknown` (no confirmed publisher), `unverified`
 (a returned ID without an observed attempt), and `acknowledged` (verified original

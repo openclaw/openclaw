@@ -38,6 +38,7 @@ import {
   prepareMessageMarkdown,
 } from "./chat-message-text-preparation.ts";
 import { ChatRowDisplayContext } from "./chat-row-display-context.ts";
+import { registerChatSearchTextBlock } from "./chat-search-highlight.ts";
 
 export type { AssistantMessageDisclosure } from "./chat-message-text-preparation.ts";
 
@@ -325,6 +326,7 @@ export function MarkdownText(
           props.elementRef?.(node);
           return () => releaseLinkFavicons(node);
         }),
+        registerElementRef(registerChatSearchTextBlock),
       ]}
     >
       <MarkdownContent {...props} onUpdate={hydrate()} />

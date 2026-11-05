@@ -61,7 +61,7 @@ suite.define(() => {
           await polledCount(page.locator(".agent-chat__composer-status-band")).toBe(0);
           if (message) {
             await polledText(setupBanner).toContain(message);
-            const setupAction = setupBanner.getByRole("button", { name: "Connect an AI provider" });
+            const setupAction = setupBanner.getByRole("button", { name: "Set up a model" });
             await polledVisible(setupAction).toBe(true);
             expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           } else {
@@ -114,7 +114,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await exactButton(page, "Stop generating").waitFor();
+      await exactButton(page, "Stop").waitFor();
       await gateway.emitGatewayEvent("chat", {
         errorDetail: {
           provider: "openai",
@@ -189,8 +189,9 @@ suite.define(() => {
         await visibleTrigger.click();
         // The popup scales while opening; measure its settled viewport bounds.
         await waitForControlUiProofSurface(popup, [page.locator(menu)]);
-        const [controlsBox, menuBox, triggerBox] = await Promise.all([
-          layoutBox(composer.locator(".agent-chat__composer-controls")),
+        const [composerBox, footerBox, menuBox, triggerBox] = await Promise.all([
+          layoutBox(composer),
+          layoutBox(composer.locator(".agent-chat__composer-footer")),
           layoutBox(page.locator(menu)),
           layoutBox(visibleTrigger),
         ]);
@@ -199,9 +200,9 @@ suite.define(() => {
         expect(right(menuBox)).toBeCloseTo(393 - 16, 0);
         expect(menuBox.width).toBeCloseTo(393 - 2 * 16, 0);
         expect(menuBox.y).toBeGreaterThanOrEqual(0);
-        expect(bottom(menuBox)).toBeLessThanOrEqual(controlsBox.y + 1);
+        expect(bottom(menuBox)).toBeLessThanOrEqual(composerBox.y + 1);
         expect(bottom(triggerBox)).toBeLessThanOrEqual(853);
-        expect(bottom(controlsBox)).toBeLessThanOrEqual(853);
+        expect(bottom(footerBox)).toBeLessThanOrEqual(853);
         await page.keyboard.press("Escape");
       }
       const effort = composer.locator('[data-chat-thinking-select="true"]');

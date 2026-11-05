@@ -24,10 +24,10 @@ import {
   createTeamScaleCounts,
   createTeamScaleSessionInventory,
 } from "./control-ui-team-scale-inventory.ts";
+import { prepareTeamScalePaneFixture } from "./control-ui-team-scale-pane-fixture.ts";
 import {
   createTeamScalePeople,
   teamScalePersonAvatar,
-  TEAM_SCALE_AVATAR_ASSET,
   TEAM_SCALE_SELF_INSTANCE_ID,
 } from "./control-ui-team-scale-people.ts";
 import {
@@ -44,7 +44,7 @@ const TEAM_SCALE_LIVE_RUN_ID = "team-scale-live-run";
 type TeamScaleCatalogEvent = { event: "sessions.catalog.host"; payload: SessionsCatalogHostEvent };
 type TeamScaleEvent = TeamScaleCatalogEvent | { event: "presence"; payload: PresencePayload };
 
-type FixtureOptions = {
+type FixtureOptions = Parameters<typeof prepareTeamScalePaneFixture>[0]["options"] & {
   baseUrl?: string;
   now?: number;
   /** Supply the real canvas sandbox fixture for browser/widget measurements. */
@@ -54,7 +54,6 @@ type FixtureOptions = {
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
   sidebarAvatars?: boolean;
-  transcriptAvatars?: boolean;
   sidebarPresentation?: boolean;
   sidebarPersistentChildren?: boolean;
   sessionEventChurn?: boolean;
@@ -65,7 +64,6 @@ type FixtureOptions = {
   largeSnapshot?: boolean;
   historyStateReceipt?: boolean;
   rowFacts?: boolean;
-  lateRowFacts?: boolean;
   offRosterSession?: boolean;
   archivedSession?: boolean;
   transcriptMessages?: number;
@@ -108,7 +106,6 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
     },
   );
   const assets = new Map<string, TeamScaleFixtureAsset>(avatarAssets);
-  const transcriptSender = people[4]!;
   const {
     sessions,
     pinnedRows,
@@ -123,25 +120,21 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
     counts,
     directSelectedSession: options.longSessionScenario === "direct-run",
   });
+  const { transcriptSender, paneMethodResponses, paneChromeSettings } = prepareTeamScalePaneFixture(
+    {
+      options,
+      baseUrl,
+      now,
+      people,
+      profiles,
+      agents,
+      assets,
+      session: pinnedRows[0]!,
+    },
+  );
   const duplicateReads = options.duplicateBootReads
     ? createTeamScaleDuplicateReadFixture(selectedSessionKey, now)
     : undefined;
-  const avatarAsset = {
-    ...TEAM_SCALE_AVATAR_ASSET,
-    headers: { "Cache-Control": "private, max-age=31536000, immutable" },
-  };
-  if (options.transcriptAvatars) {
-    transcriptSender.avatarUrl = `/api/users/${transcriptSender.id}/avatar?v=${now}`;
-    Object.assign(profiles[4]!, { hasAvatar: true, avatarMime: "image/png" });
-    assets.set(`/api/users/${transcriptSender.id}/avatar`, avatarAsset);
-  }
-  if (options.lateRowFacts) {
-    for (const agent of agents.agents) {
-      const path = `/avatar/${agent.id}`;
-      agent.identity = { ...agent.identity, avatarUrl: `${path}?v=${now}` };
-      assets.set(path, avatarAsset);
-    }
-  }
   if (options.richTranscript) {
     // Keep the short comparison transcript in the always-visible pinned roster.
     pinnedRows[0]!.boardFace = "chat";
@@ -220,7 +213,7 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
     models,
     inFlightRun: options.liveRun ? inFlightRun() : undefined,
     attachments: duplicateReads?.attachments,
-    sender: options.transcriptAvatars ? transcriptSender : undefined,
+    sender: options.transcriptAvatars || options.paneChromeFacts ? transcriptSender : undefined,
   });
   const presenceEntries: PresenceEntry[] = people.map((person) => ({
     instanceId: person.instanceId,
@@ -355,7 +348,7 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
     awaitInitialRoster: false,
     authMethod: "trusted-proxy",
     authMode: "trusted-proxy",
-    ...(options.transcriptAvatars
+    ...(options.transcriptAvatars || options.paneChromeFacts
       ? { deviceToken: null, hasMultipleSessionSharingIdentities: true }
       : {}),
     assistantAgentId: "main",
@@ -363,7 +356,7 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
     agentModel: "gpt-5-mini",
     ...(lateRowFacts ? { controlUiLinkReaders: [TEST_LINK_READER] } : {}),
     sessionKey: selectedSessionKey,
-    ...(options.rowFacts ? { sessionInfo: pinnedRows[0]! } : {}),
+    ...(options.rowFacts || options.paneChromeFacts ? { sessionInfo: pinnedRows[0]! } : {}),
     sessions,
     presenceUsers: people,
     bootstrapPreferences: {
@@ -429,6 +422,7 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
         ? { "session.members.listEvidence": { sessionKey: selectedSessionKey, ...sharingMembers } }
         : {}),
       "question.list": { questions: [] },
+      ...paneMethodResponses,
       ...(options.dashboardWidgetFontUrl ? { "mcp.app.discover": { servers: [] } } : {}),
       ...duplicateReads?.methodResponses,
       ...methodResponses,
@@ -675,6 +669,7 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
   return {
     scenario,
     longSessionWorkload,
+    paneChromeSettings,
     board,
     selectedSessionKey,
     sidebarPersistentChildren,

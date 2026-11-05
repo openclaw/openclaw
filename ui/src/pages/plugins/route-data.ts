@@ -5,6 +5,7 @@ import {
   pathForRoute,
   pathForPluginCatalogEntry,
   pluginCatalogIdFromPath,
+  pluginSettingsIdFromPath,
   restoreBridgedRouteLocation,
 } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -52,4 +53,14 @@ export function canonicalPluginsRouteLocation(
     hash: location.hash,
   };
   return hadLegacyTab || pathname !== location.pathname ? canonical : null;
+}
+
+export function pluginIdForRoute(
+  surface: "discovery" | "settings",
+  pathname: string,
+  basePath: string,
+): string | null {
+  return surface === "settings"
+    ? pluginSettingsIdFromPath(pathname, basePath)
+    : pluginCatalogIdFromPath(pathname, basePath);
 }

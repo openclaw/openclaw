@@ -97,6 +97,8 @@ export class SwarmRosterHydrator {
    * re-read keeps it, so it marks when seeded ancestry has been replaced.
    */
   childrenRead = false;
+  /** A settled failed read must not keep cached activity ahead of live parent facts. */
+  childrenUnavailable = false;
   private key = "";
   private generation = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -211,7 +213,7 @@ export class SwarmRosterHydrator {
     // The list keeps one more read queued behind a read already in flight.
     void this.children?.refresh().catch(() => {
       if (generation === this.generation) {
-        this.retry("children");
+        this.childrenFailed();
       }
     });
   }
@@ -276,6 +278,14 @@ export class SwarmRosterHydrator {
     }
     retry.timer = null;
     retry.attempts = 0;
+  }
+
+  private childrenFailed(): void {
+    if (!this.childrenUnavailable) {
+      this.childrenUnavailable = true;
+      this.publish();
+    }
+    this.retry("children");
   }
 
   private retry(owner: SwarmRead): void {
@@ -364,8 +374,8 @@ export class SwarmRosterHydrator {
     this.childrenLoading = snapshot.loading;
     const params = this.params;
     const result = snapshot.result;
-    if (snapshot.error && !snapshot.loading) {
-      this.retry("children");
+    if ((snapshot.error || snapshot.readSucceeded === false) && !snapshot.loading) {
+      this.childrenFailed();
       return;
     }
     if (!params || snapshot.loading || !result || result === this.childResult) {
@@ -461,6 +471,7 @@ export class SwarmRosterHydrator {
         this.childRows = rows;
         this.rows = parent ? mergeSwarmSessionRows(this.childRows, [parent]) : [];
         this.childrenRead = true;
+        this.childrenUnavailable = false;
         this.hydrated = true;
         this.pendingChildRead = childReadVersion < this.requiredChildReadVersion;
         if (!this.pendingChildRead) {
@@ -472,7 +483,7 @@ export class SwarmRosterHydrator {
       })
       .catch(() => {
         if (isCurrent()) {
-          this.retry("children");
+          this.childrenFailed();
         }
       });
   }
@@ -497,6 +508,7 @@ export class SwarmRosterHydrator {
     this.parentRefreshQueued = false;
     this.parentRefreshForced = false;
     this.childrenRead = false;
+    this.childrenUnavailable = false;
     this.requestedChildren.clear();
     this.rows = [];
     this.hydrated = false;

@@ -79,7 +79,7 @@ export function copyPrWrapperSources(destination: string): string[] {
   return components;
 }
 
-export function copyPrRoutingWrapperSources(destination: string) {
+export function copyPrRoutingWrapperSources(destination: string): string[] {
   // Routing and supervision use wrapper tooling; app-import fixtures keep the full inventory.
   // Keep the local-check component for the unanchored fixture's trust-drift assertions.
   const components = [
@@ -94,14 +94,16 @@ export function copyPrRoutingWrapperSources(destination: string) {
     "scripts/lib/windows-taskkill.mjs",
     "scripts/lib/local-check-runtime.mts",
   ];
+  const sources = ["scripts/pr", "scripts/pr-lib", ...components];
   mkdirSync(join(destination, "scripts/lib"), { recursive: true });
-  for (const component of ["scripts/pr", "scripts/pr-lib", ...components]) {
+  for (const component of sources) {
     cpSync(component, join(destination, component), { recursive: true });
   }
   writeFileSync(
     join(destination, "scripts/pr-lib/wrapper-components.txt"),
     `${components.join("\n")}\n`,
   );
+  return sources;
 }
 
 export function linkPrWrapperDependencies(destination: string): void {

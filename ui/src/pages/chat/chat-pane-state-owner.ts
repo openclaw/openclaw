@@ -503,6 +503,7 @@ export abstract class ChatPaneStateOwner {
     return {
       subagentSessions: sessions,
       subagentSessionsHydrated: Boolean(target && this.swarm.hydrator?.hydrated),
+      subagentSessionsUnavailable: Boolean(target && this.swarm.hydrator?.childrenUnavailable),
       subagentSessionsPending: Boolean(target && this.swarm.hydrator?.pendingChildRead),
       // Carry the admitted owner forward; route aliases do not identify child ancestry.
       subagentParentKey: target
@@ -628,7 +629,6 @@ export abstract class ChatPaneStateOwner {
       config: SessionDiscussionPanelConfig;
     }
   >();
-  protected presentationUserId: string | null = null;
   protected readonly retrySessionPlacementStartup = () => {
     const sessionKey = this.state?.sessionKey;
     if (sessionKey) {

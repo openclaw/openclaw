@@ -206,6 +206,8 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     senderLabel: firstAssistant?.senderLabel,
     replyToSender: firstAssistant?.replyToSender ?? streamRun?.replyToSender,
     replyToMessage: firstAssistant?.replyToMessage ?? streamRun?.replyToMessage,
+    replyPreviousMessageId:
+      firstAssistant?.replyPreviousMessageId ?? streamRun?.replyPreviousMessageId,
     replyShared: firstAssistant?.replyShared,
     replyTurnSource: firstAssistant?.replyTurnSource,
     replyCurrentSource: firstAssistant?.replyCurrentSource,
@@ -225,9 +227,12 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     fragment && !fragment.first
       ? NO_REPLY_LINE
       : resolveGroupReplyLine(
-          (sourceActionOwner &&
-            groups.find((group) => group.messages.includes(sourceActionOwner))) ||
-            shell,
+          {
+            ...((sourceActionOwner &&
+              groups.find((group) => group.messages.includes(sourceActionOwner))) ||
+              shell),
+            replyPreviousMessageId: shell.replyPreviousMessageId,
+          },
           opts.renderGroupOptions(shell).resolveReplyPreview,
           groups.flatMap((group) => group.messages),
         );
@@ -252,7 +257,8 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
         .at(0) ?? null);
   const sourcePreviews = actionOwner
     ? extractChatSourcePreviews({
-        groups,
+        // Cited results can sit in an earlier rollup that no visible reply owns.
+        groups: frame.detachedGroups ? [...frame.detachedGroups, ...groups] : groups,
         answer: actionOwner.message,
         runId: frame.runId,
         basePath: opts.basePath,
@@ -292,7 +298,7 @@ function RunFrame(props: FrameProps) {
           (part) => part.kind === "work-group" && part.replyRunId === props.frame.runId,
         );
     // The recap retains this run's terminal timing after the session moves on.
-    // Handoffs have no work summary: their request-wide timing stays in the recap.
+    // Run duration appears only on the Worked summary; turns without one show no timing.
     if (work?.kind !== "work-group") {
       return undefined;
     }
@@ -430,7 +436,6 @@ function RunFrame(props: FrameProps) {
         frameFooter: props.frame.fragment?.last,
         turnRecap:
           !props.frame.fragment || props.frame.fragment.last ? props.options.turnRecap : undefined,
-        hideTurnRecapDuration: timedWork() !== undefined,
       }}
     />
   );

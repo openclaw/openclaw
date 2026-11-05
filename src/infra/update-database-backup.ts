@@ -118,6 +118,10 @@ type BackupInput = {
   /** Native migration owns the stopped Gateway until Doctor takes custody. */
   stopped?: boolean;
   postgresOffline?: boolean;
+  /** Migration exporters may require a physical engine before any server export. */
+  sourceEngine?: "sqlite";
+  /** Manual recovery evidence: live commits after its coherent image change nothing it promises. */
+  originalState?: boolean;
   pluginOwners?: UpdateDatabaseBackup["pluginOwners"];
 };
 type InspectionPlan = z.infer<typeof UpdateStateSchemaInspectionPlanSchema>;
@@ -363,6 +367,14 @@ export async function createUpdateDatabaseBackupInProcess(
               return [file, observation?.engine ?? readBackupEngine(file)];
             }),
         );
+        if (
+          input.sourceEngine === "sqlite" &&
+          [...engines.values()].some((engine) => engine.engine !== "sqlite")
+        ) {
+          throw new Error(
+            "This capture requires physical SQLite sources; no PostgreSQL data was exported.",
+          );
+        }
         const originalCaptureSources = new Set(
           input.originalCaptureSourcePaths?.filter(
             (file) => engines.get(file)?.engine === "sqlite",
@@ -389,7 +401,8 @@ export async function createUpdateDatabaseBackupInProcess(
             });
           }
           const snapshotPath = path.join(directory, archivePath);
-          const retainGeneration = !input.stopped && !originalCaptureSources.has(sourcePath);
+          const retainGeneration =
+            !input.stopped && !input.originalState && !originalCaptureSources.has(sourcePath);
           const before = retainGeneration
             ? await readGeneration(sourcePath, observations.get(sourcePath))
             : undefined;
@@ -424,6 +437,12 @@ export async function createUpdateDatabaseBackupInProcess(
           // Checkpointed stopped stores already have a private image; classify that image
           // instead of copying and comparing the complete source again just for its anchor.
           const engine = engines.get(sourcePath) ?? readBackupEngineImage(snapshotPath, sourcePath);
+          // Stopped, checkpointed stores are classified from the private image, not above.
+          if (input.sourceEngine === "sqlite" && engine.engine !== "sqlite") {
+            throw new Error(
+              "This capture requires physical SQLite sources; no PostgreSQL data was exported.",
+            );
+          }
           if (requestedOriginalSources.has(sourcePath) && engine.engine === "sqlite") {
             originalCaptureSources.add(sourcePath);
           }
@@ -530,7 +549,7 @@ export async function createUpdateDatabaseBackup({
   ...input
 }: BackupInput & {
   acquisition?: UpdateRecoveryCaptureAcquisition;
-  /** Original-state evidence does not need generations while its owner retains every source. */
+  /** Original-state evidence is only ever restored manually, so it never records generations. */
   purpose?: "original-state";
   nodeRunner?: string;
   timeoutMs?: number;
@@ -654,6 +673,7 @@ export async function createUpdateDatabaseBackup({
       );
       const capturedInput = {
         ...workerInput,
+        ...(purpose === "original-state" ? { originalState: true } : {}),
         excludedDatabasePaths,
         postgresOffline: input.postgresOffline || custody,
       };

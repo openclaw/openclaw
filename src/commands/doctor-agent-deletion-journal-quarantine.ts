@@ -9,6 +9,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { invalidateSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -31,7 +32,7 @@ import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-
 import { createAgentSchemaInspectionWorker } from "../state/openclaw-agent-schema-inspection-worker.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -91,7 +92,12 @@ export async function quarantineAgentDeletionJournal(params: {
   env: NodeJS.ProcessEnv;
 }): Promise<{ held: HeldAgentDatabase[]; archives: string[]; warnings: string[] } | undefined> {
   const { env } = params;
-  const source = withExistingOpenClawStateDatabaseReadOnly(readRecoverySource, { env }) ?? {
+  const signal = resolveSqliteInspectionSignal();
+  signal?.throwIfAborted();
+  const source = (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+    readRecoverySource,
+    { env },
+  )) ?? {
     missing: true,
     rows: [],
     invalid: [],
@@ -121,14 +127,15 @@ export async function quarantineAgentDeletionJournal(params: {
             inspectOwnership: true,
             inspectEmptyStore: true,
           };
-          let inspection = await reader.inspect(input);
+          let inspection = await reader.inspect(input, signal);
           if (!inspection) {
             const snapshot = await prepareSqliteReadOnlyLocation(target.path, {
               preserveSourceArtifacts: true,
               requireCleanup: true,
+              signal,
             });
             try {
-              inspection = await reader.inspect(input, undefined, snapshot.location);
+              inspection = await reader.inspect(input, signal, snapshot.location);
             } finally {
               if (!(await snapshot.cleanupAsync())) {
                 inspection = null;
@@ -139,6 +146,7 @@ export async function quarantineAgentDeletionJournal(params: {
             continue;
           }
         } catch {
+          signal?.throwIfAborted();
           // Unreadable or incompatible stores retain the same explicit recovery hold.
         }
       }
@@ -185,7 +193,10 @@ export async function quarantineAgentDeletionJournal(params: {
     );
   }
   const maintenance = getOpenClawDatabaseMaintenanceScope();
-  const assertCurrent = () => maintenance?.assertAdmission();
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    maintenance?.assertAdmission();
+  };
   const archives: string[] = [];
   const warnings: string[] = [];
   const agentIds = new Set(held.map((target) => normalizeAgentId(target.agentId)));
