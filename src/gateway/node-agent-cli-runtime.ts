@@ -16,6 +16,7 @@ import type { NodeInvokeResult } from "./node-registry.js";
 export async function invokeNodeClaudeCliRun(params: {
   assertCurrent?: () => void;
   assertReadable?: () => void | Promise<void>;
+  prepareCredentialUse?: () => Promise<void>;
   nodeId: string;
   argv: string[];
   stdin: string;
@@ -71,6 +72,17 @@ export async function invokeNodeClaudeCliRun(params: {
   }
   params.skillRuntime?.assertCurrent();
   const assertReadable = params.assertReadable;
+  const authorizeDispatch =
+    assertReadable || params.prepareCredentialUse
+      ? async () => {
+          // History authorization awaits before the registry writes the invoke.
+          // Recheck the saved account after that wait, immediately before dispatch.
+          await assertReadable?.();
+          await params.prepareCredentialUse?.();
+          params.assertCurrent?.();
+          return true;
+        }
+      : undefined;
   const invocation: Parameters<typeof context.nodeRegistry.invoke>[0] = {
     nodeId: params.nodeId,
     expectedConnId: node.connId,
@@ -100,13 +112,7 @@ export async function invokeNodeClaudeCliRun(params: {
     idempotencyKey: randomUUID(),
     onProgress: params.onProgress,
     ...(params.signal ? { signal: params.signal } : {}),
-    authorizeDispatch: assertReadable
-      ? async () => {
-          await assertReadable();
-          params.assertCurrent?.();
-          return true;
-        }
-      : undefined,
+    ...(authorizeDispatch ? { authorizeDispatch } : {}),
     isDispatchAuthorized: () => {
       params.assertCurrent?.();
       return true;

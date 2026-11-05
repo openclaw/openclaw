@@ -209,6 +209,9 @@ export async function executeNodeClaudeRun(params: {
                 systemRunPlan: approval.plan,
               }
             : {}),
+          ...(params.prepareCredentialUse
+            ? { prepareCredentialUse: params.prepareCredentialUse }
+            : {}),
           timeoutMs: remainingTimeoutMs,
           idleTimeoutMs: Math.max(
             1_000,
