@@ -3,6 +3,7 @@ import {
   readTemplateReviewRequiredError,
 } from "@openclaw/gateway-protocol";
 import { action, createMemo, createOptimistic, createSignal, onSettled, Show } from "solid-js";
+import { pathForTemplateCatalogEntry } from "../../app-route-paths.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
@@ -34,13 +35,14 @@ import {
 } from "./templates-catalog-client.ts";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplatesCatalogView } from "./templates-catalog-view.tsx";
+import { TemplatesExplore } from "./templates-explore.tsx";
 
 registerEnglishCatalog(registerTemplatesEnglish);
 
 type TemplatesDialogProps = {
   onClose?: () => void;
   onAdded?: () => void;
-  initialPackageName: string;
+  initialPackageName?: string;
 };
 
 class TemplatesCatalogModel {
@@ -55,6 +57,7 @@ class TemplatesCatalogModel {
   installedPluginPackages: ReadonlySet<string> = new Set();
   addError: string | null = null;
   applying = false;
+  reviewing = false;
   consentWarning: string | null = null;
   reviewPlan: TemplateAddReviewPlan | null = null;
   private riskAcknowledged = false;
@@ -162,6 +165,9 @@ class TemplatesCatalogModel {
   }
 
   private resetSelection(selected: TemplateCatalogEntry | null = null) {
+    this.detailRevision += 1;
+    this.reviewing = false;
+    this.applying = false;
     this.cancelDetailRead();
     this.closePreview();
     this.selected = selected;
@@ -180,6 +186,29 @@ class TemplatesCatalogModel {
     this.loadDetail();
   }
 
+  async addEntry(entry: TemplateCatalogEntry) {
+    if (this.applying || this.addedAgentId || !this.canAdd()) {
+      return;
+    }
+    this.resetSelection(entry);
+    await this.add();
+  }
+
+  openDetails(entry: TemplateCatalogEntry) {
+    this.resetSelection();
+    this.context.navigate("templates", {
+      pathname: pathForTemplateCatalogEntry(entry.packageName, this.context.basePath),
+    });
+  }
+
+  private showReview() {
+    if (!this.props.initialPackageName && !this.reviewing) {
+      this.applying = false;
+      this.reviewing = true;
+      this.loadDetail();
+    }
+  }
+
   private close() {
     this.props.onClose?.();
   }
@@ -188,7 +217,11 @@ class TemplatesCatalogModel {
     if (this.applying) {
       return;
     }
-    this.close();
+    if (!this.props.initialPackageName) {
+      this.resetSelection();
+    } else {
+      this.close();
+    }
   }
 
   private openAgentChat(agentId: string, agentName: string, context: ApplicationContext) {
@@ -275,11 +308,13 @@ class TemplatesCatalogModel {
   private async add(reviewPlan: TemplateAddReviewPlan | null = null) {
     const source = this.source();
     const scope = this.gateway.capture();
-    if (!source || !this.detail || !scope || !this.canAdd() || this.applying || this.addedAgentId) {
+    if (!source || !scope || !this.canAdd() || this.applying || this.addedAgentId) {
       return;
     }
     const revision = this.detailRevision;
     const context = this.context;
+    const isCurrent = () =>
+      !this.disposed && this.gateway.isCurrent(scope) && revision === this.detailRevision;
     let resultAgentId: string | null = null;
     this.applying = true;
     this.addError = null;
@@ -293,8 +328,9 @@ class TemplatesCatalogModel {
       } catch (error) {
         const risk = readClawHubRiskAcknowledgementRequiredError(error);
         if (risk) {
-          if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
+          if (isCurrent()) {
             this.consentWarning = risk.warning;
+            this.showReview();
           }
           return;
         }
@@ -308,21 +344,14 @@ class TemplatesCatalogModel {
         ) {
           throw new Error(t("templatesCatalog.addFailed"), { cause: error });
         }
-        if (
-          !this.gateway.isCurrent(scope) ||
-          revision !== this.detailRevision ||
-          this.context !== context
-        ) {
+        if (!isCurrent() || this.context !== context) {
           return;
         }
         this.reviewPlan = plan;
+        this.showReview();
         return;
       }
-      if (
-        !this.gateway.isCurrent(scope) ||
-        revision !== this.detailRevision ||
-        this.context !== context
-      ) {
+      if (!isCurrent() || this.context !== context) {
         return;
       }
       if (!result.agentId || result.status !== "complete") {
@@ -334,15 +363,15 @@ class TemplatesCatalogModel {
       this.addedAgentId = result.agentId;
       resultAgentId = result.agentId;
     } catch (error) {
-      if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
+      if (isCurrent()) {
         this.addError = formatUiError(error);
       }
     } finally {
-      if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
+      if (isCurrent()) {
         this.applying = false;
       }
     }
-    if (resultAgentId && this.addedAgentId === resultAgentId && this.gateway.isCurrent(scope)) {
+    if (resultAgentId && this.addedAgentId === resultAgentId && isCurrent()) {
       await this.finishChatHandoff(resultAgentId, context);
     }
   }
@@ -478,6 +507,9 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
       return;
     }
     const packageName = props.initialPackageName;
+    if (!packageName) {
+      return;
+    }
     let cancelled = false;
     cancelSearch = () => {
       cancelled = true;
@@ -553,19 +585,47 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
   };
   return (
     <openclaw-templates-catalog-dialog>
-      <TemplatesCatalogView
-        {...view()}
-        readEntries={entries}
-        catalogRequest={catalogRequest()}
-        readDetail={detail}
-        detailRequest={detailRequest()}
-        onRetryCatalog={() => loadCatalog()}
-        applying={applying() && view().applying}
-        onConfirm={() => mutate(view().onConfirm)}
-        onConfirmConsent={() => mutate(view().onConfirmConsent)}
-        onConfirmReview={() => mutate(view().onConfirmReview)}
-        onRetryOpenChat={() => mutate(view().onRetryOpenChat)}
-      />
+      <Show
+        when={props.initialPackageName || (view().selected && model.reviewing)}
+        fallback={
+          <TemplatesExplore
+            onSelect={(entry) => model.openDetails(entry)}
+            onAdd={(entry) => void model.addEntry(entry)}
+            addingPackageName={view().applying ? (view().selected?.packageName ?? null) : null}
+            addDisabled={!view().canAdd || view().applying || Boolean(view().addedAgentId)}
+            feedback={
+              <Show when={view().addError}>
+                <div class="callout danger" role="alert">
+                  {view().addError}
+                  <Show when={view().addedAgentId}>
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      onClick={() => void view().onRetryOpenChat()}
+                    >
+                      {t("templatesCatalog.openChat")}
+                    </button>
+                  </Show>
+                </div>
+              </Show>
+            }
+          />
+        }
+      >
+        <TemplatesCatalogView
+          {...view()}
+          readEntries={entries}
+          catalogRequest={catalogRequest()}
+          readDetail={detail}
+          detailRequest={detailRequest()}
+          onRetryCatalog={() => loadCatalog()}
+          applying={applying() && view().applying}
+          onConfirm={() => mutate(view().onConfirm)}
+          onConfirmConsent={() => mutate(view().onConfirmConsent)}
+          onConfirmReview={() => mutate(view().onConfirmReview)}
+          onRetryOpenChat={() => mutate(view().onRetryOpenChat)}
+        />
+      </Show>
       <Show when={preview()}>
         {(current) => (
           <FilePreviewModal
