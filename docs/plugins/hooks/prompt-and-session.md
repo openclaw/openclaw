@@ -297,16 +297,19 @@ When sender identity is available, agent hook contexts also include:
   user ID). Populated when the run originates from a user message with known
   sender metadata.
 - `ctx.chatId` - conversation identifier. On user-triggered runs, embedded hooks
-  and CLI hooks other than `before_prompt_build` receive the transport-native ID
-  (e.g. Feishu `chat_id`, Telegram `chat_id`) when the originating channel
-  provides one. Elsewhere, including the Codex, Copilot, and Agents API
-  harnesses, it can mirror `ctx.channelId` as a compatibility fallback, so do
-  not assume it is native.
+  and CLI hooks other than `agent_turn_prepare` and `before_prompt_build`
+  receive the transport-native ID (e.g. Feishu `chat_id`, Telegram `chat_id`)
+  when the originating channel provides one. Elsewhere, including those two CLI
+  preparation hooks and the Codex, Copilot, and Agents API harnesses, it can
+  mirror `ctx.channelId` as a compatibility fallback, so do not assume it is
+  native.
 - `ctx.channelContext.sender.id` - the same sender ID as `ctx.senderId`, under
   a channel-owned object plugins can extend with channel-specific fields.
 - `ctx.channelContext.chat.id` - the conversation ID under a channel-owned
-  object plugins can extend with channel-specific fields. When the host sets
-  `ctx.chatId` for a user-triggered run, it sets this to the same value.
+  object plugins can extend with channel-specific fields. When the host sets a
+  transport-native `ctx.chatId` for a user-triggered run, it sets this to the
+  same value. CLI `agent_turn_prepare` and `before_prompt_build` contexts omit
+  `ctx.channelContext` entirely.
 
 Core only defines the nested `id` fields. Channel plugins that pass richer
 sender or chat metadata through the inbound helper can augment
