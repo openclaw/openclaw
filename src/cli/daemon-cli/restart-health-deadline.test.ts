@@ -147,7 +147,13 @@ describe("shared restart observation deadline", () => {
     const service = makeGatewayService({ status: "unknown" });
     await expect(
       withCommandProcessScope((onObservation) =>
-        waitForGatewayHealthyRestart({ service, port: 18789, attempts: 99, onObservation }),
+        waitForGatewayHealthyRestart({
+          service,
+          port: 18789,
+          attempts: 99,
+          requireRunningService: true,
+          onObservation,
+        }),
       ),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(service.readRuntime).toHaveBeenCalledOnce();
