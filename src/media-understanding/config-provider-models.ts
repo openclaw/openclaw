@@ -1,6 +1,6 @@
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
-import type { MediaUnderstandingProvider } from "./types.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 
 /** Keeps authored provider IDs so callers can project canonical or execution aliases. */
 export function listImageCapableConfiguredProviders(cfg?: OpenClawConfig): string[] {

@@ -94,6 +94,9 @@ rollback").
 - No `endpointId`: the client dials `binding.body.k_srv` after `verifyBindingForPin`.
 - No `rotations`: a claw's root never changes (owner reset is out of scope, OCF-319).
 - `relay_url` must be https (http only for localhost testbeds). It is a hint.
+- `v` is checked first: a well-formed version this build does not implement is
+  `unsupported_version`. Descriptor v1 is the stable bootstrap old clients read
+  (versioning.md, "Bootstrap").
 - Unknown fields are rejected. On publish, Discovery runs `checkDescriptorConsistency`
   (binding verifies under the descriptor's own root) and refuses a lower binding_seq; neither
   is a security property.

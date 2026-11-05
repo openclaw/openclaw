@@ -49,9 +49,10 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Long-session windowing plus lazy Settings/layout changes preserve boot request counts.
-  // Measured Chat/New are 1,294,100/801,486 B; retain 192 B headroom.
-  chatBootJsGzipBytes: 1_294_292,
+  // Sharing Markdown's parked-block helper removes 441–449 KB gzip from non-Chat routes.
+  // Chat pays 429 B in changed compression; measured 1,294,543 B + 192 B headroom.
+  chatBootJsGzipBytes: 1_294_735,
+  // New Session retains its measured 801,486 B + 192 B headroom.
   newBootJsGzipBytes: 801_678,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
