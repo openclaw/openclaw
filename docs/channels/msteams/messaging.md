@@ -179,7 +179,8 @@ Private/shared channels have their own site scoped to channel members. The bot r
 
 | Context and permission                                                  | Sharing behavior                                          |
 | ----------------------------------------------------------------------- | --------------------------------------------------------- |
-| Channel + `Sites.ReadWrite.All`                                         | Organization-wide sharing link (anyone in org can access) |
+| Standard channel or explicit `sharePointSiteId` + `Sites.ReadWrite.All` | Organization-wide sharing link (anyone in org can access) |
+| Private/shared channel, auto-discovered site + `Sites.ReadWrite.All`    | No sharing link; channel-site membership grants access    |
 | Group chat + `Sites.ReadWrite.All` + a supported chat-member read grant | Per-user sharing link (only chat members can access)      |
 | Group chat without a supported chat-member read grant                   | Send is blocked                                           |
 

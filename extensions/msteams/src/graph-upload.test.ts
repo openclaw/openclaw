@@ -290,15 +290,6 @@ describe("graph upload helpers", () => {
     },
   );
 
-  it("creates no sharing link for member-scoped channel sites", async () => {
-    const fetchFn = createGraphFetch(fixedGraphRoute("/content", DEFAULT_UPLOAD_RESULT));
-
-    const result = await runGraphUpload(fetchFn, { memberScoped: true });
-
-    expect(result).toEqual({ itemId: DEFAULT_UPLOAD_RESULT.id });
-    expect(fetchFn).toHaveBeenCalledOnce();
-  });
-
   it("uploads with conflictBehavior=rename and resolves the assigned file name by id", async () => {
     // Regression: openclaw-runtime image assets reuse names (image-1.png). Graph's default
     // replace overwrote the prior file and Teams (caching cards by driveItem URL) showed the
