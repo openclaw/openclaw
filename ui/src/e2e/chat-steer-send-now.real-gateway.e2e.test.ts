@@ -1,13 +1,12 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { buffer } from "node:stream/consumers";
 import { describe, expect, it } from "vitest";
+import { writeToolCallResponse } from "../../../src/gateway/gateway-provider-fixture.test-support.ts";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../../test/helpers/openai-responses-sse.ts";
+import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.ts";
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
@@ -53,11 +52,7 @@ async function startProvider() {
             response.writeHead(404).end();
             return;
           }
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
-          const body = JSON.parse(Buffer.concat(chunks).toString()) as { input?: unknown };
+          const body = JSON.parse((await buffer(request)).toString()) as { input?: unknown };
           requests++;
           if (requests === 1) {
             const source = `require("node:http").get("http://127.0.0.1:${reserved.claim.port}/held", r => r.resume())`;
@@ -73,35 +68,7 @@ async function startProvider() {
                 timeoutSeconds: 120,
               }),
             };
-            writeOpenAiResponsesSse(response, [
-              {
-                type: "response.output_item.added",
-                output_index: 0,
-                item: { ...item, arguments: "" },
-              },
-              {
-                type: "response.function_call_arguments.delta",
-                output_index: 0,
-                item_id: item.id,
-                delta: item.arguments,
-              },
-              {
-                type: "response.function_call_arguments.done",
-                output_index: 0,
-                item_id: item.id,
-                arguments: item.arguments,
-              },
-              { type: "response.output_item.done", output_index: 0, item },
-              {
-                type: "response.completed",
-                response: {
-                  id: "response_check",
-                  status: "completed",
-                  output: [item],
-                  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-                },
-              },
-            ]);
+            writeToolCallResponse(response, item, "response_check", 1, 1);
             return;
           }
           expect(requests).toBe(2);
