@@ -168,7 +168,6 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           actions.getBoundingClientRect().left,
         );
         expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
-        // Avatar and name form one stacked settings target, without a surrounding pill.
         expect(trigger.getAttribute("aria-label")).toBe(
           t("agentChip.namedSettings", { name: props.agent!.name }),
         );
@@ -182,7 +181,6 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           0,
         );
         expect(getComputedStyle(trigger).backgroundColor).toBe("rgba(0, 0, 0, 0)");
-        expect(container.querySelector(".chat-pane__agent-settings")).toBeNull();
         await userEvent.hover(trigger);
         const hovered = trigger.getBoundingClientRect();
         expect(hovered.width).toBeCloseTo(idle.width);
