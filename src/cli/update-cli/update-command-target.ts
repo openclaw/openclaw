@@ -562,7 +562,9 @@ export async function resolveUpdateCommandTarget(
             });
             if (targetMetadata.error || targetMetadata.version !== targetVersion) {
               const failure = createUpdatePreflightFailure(
-                targetMetadata.error ? "target-registry-metadata" : "target-version-resolution",
+                targetMetadata.error && !targetMetadata.versionMissing
+                  ? "target-registry-metadata"
+                  : "target-version-resolution",
                 `Could not inspect exact package target openclaw@${targetVersion}: ${targetMetadata.error ?? `registry returned version ${targetMetadata.version ?? "unknown"}`}.`,
               );
               await refuseUpdate(

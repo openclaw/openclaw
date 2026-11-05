@@ -94,7 +94,11 @@ Repair a stale beta floor through the dist-tag owner and inspect the failed
 parent's exact children before rejecting stale gates or canceling them. Resume
 through the selected route with the same qualified bytes and inputs; direct
 publication uses the successful original core run, while prepared publication
-uses a new button run with the same readiness artifact. Keep the original run
+uses a new button run with the same readiness artifact. For a published core
+version, `pnpm release:candidate` and `pnpm release:publish-preflight` read the
+live registry, identify the original publisher from npm provenance, and print the
+direct command with `-f openclaw_npm_resume_run_id=<run>`; sealed FRV npm
+decisions predate publication and do not decide resume. Keep the original run
 attempts and required approvals. Do not substitute a manual child approval for
 the parent's authorization. See `$release-openclaw-ci` Publish children for
 stale-child cleanup.
