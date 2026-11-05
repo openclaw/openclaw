@@ -790,7 +790,7 @@ export function buildOpenAIImageGenerationProvider(
           sanitizeConfiguredModelProviderRequest,
         },
         { readOpenAIImageGenerationResponse },
-        { resolveClosestSize, resolveGeneratedMediaMaxBytes },
+        { resolveClosestSize, resolveGeneratedImageDownloadMaxBytes },
       ] = await Promise.all([
         import("openclaw/plugin-sdk/provider-http"),
         import("./image-generation-response.js"),
@@ -884,7 +884,7 @@ export function buildOpenAIImageGenerationProvider(
           timeoutMs,
           maxImages: count,
           maxDownloads: OPENAI_MAX_IMAGE_RESULTS,
-          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+          maxBytes: resolveGeneratedImageDownloadMaxBytes(req.cfg),
           defaultMimeType: resolveOutputMime(req.outputFormat).mimeType,
           allowPrivateNetwork,
           ssrfPolicy: req.ssrfPolicy,

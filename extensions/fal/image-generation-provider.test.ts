@@ -334,19 +334,18 @@ describe("fal image-generation provider", () => {
     expect(releaseDownload).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects generated image downloads that exceed the configured media cap", async () => {
+  it("keeps generated image downloads above the configured media cap", async () => {
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce(
         releasedJson({ images: [{ url: "https://v3.fal.media/files/example/generated.png" }] }),
       )
-      .mockResolvedValueOnce(releasedImage(Buffer.from("too-large")));
+      .mockResolvedValueOnce(releasedImage(Buffer.from("over-cap")));
 
-    await expect(
-      provider.generateImage({
-        ...defaultRequest,
-        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
-      }),
-    ).rejects.toThrow("fal generated image download exceeds 1 bytes");
+    const result = await provider.generateImage({
+      ...defaultRequest,
+      cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+    });
+    expect(result.images[0]?.buffer.toString()).toBe("over-cap");
   });
 
   it("wraps wrong-shape successful fal image responses", async () => {

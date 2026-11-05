@@ -2,7 +2,7 @@ import {
   resolveInlineImageJsonResponseMaxBytes,
   type ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { resolveGeneratedImageDownloadMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -162,7 +162,7 @@ export function buildMinimaxImageGenerationProvider(
           {
             maxBytes: resolveInlineImageJsonResponseMaxBytes(
               MINIMAX_MAX_IMAGE_RESULTS,
-              resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+              resolveGeneratedImageDownloadMaxBytes(req.cfg),
             ),
           },
         );

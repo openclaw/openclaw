@@ -54,14 +54,13 @@ describe("vydra image-generation provider", () => {
     });
   });
 
-  it("rejects generated image downloads that exceed the configured media cap", async () => {
-    stubFetch(completedImage(), binaryResponse("too-large", "image/png"));
-    await expect(
-      provider.generateImage({
-        ...request,
-        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
-      }),
-    ).rejects.toThrow("Vydra image download exceeds 1 bytes");
+  it("keeps generated image downloads above the configured media cap", async () => {
+    stubFetch(completedImage(), binaryResponse("over-cap", "image/png"));
+    const result = await provider.generateImage({
+      ...request,
+      cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+    });
+    expect(result.images[0]?.buffer.toString()).toBe("over-cap");
   });
 
   it("rejects image creation JSON responses that exceed the provider cap", async () => {
