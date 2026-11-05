@@ -113,10 +113,11 @@ export function registerPluginsCli(program: Command) {
     .command("reload")
     .description("Reload one or more plugins in the running Gateway")
     .argument("<ids...>", "Plugin ids")
+    .option("--force", "Interrupt retaining conversations and resume them after reload", false)
     .option("--accept-capabilities", "Accept changed declared capabilities", false)
     .option(
       "--wait",
-      "Wait up to 10 minutes for admitted work; blocks new agent runs; Ctrl-C cancels",
+      "Wait up to 10 minutes for admitted work; blocks new agent runs; Ctrl-C cancels non-force reloads",
       false,
     )
     .option("--json", "Print the applied runtime generation", false)

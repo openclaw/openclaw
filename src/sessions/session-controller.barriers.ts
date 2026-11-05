@@ -74,6 +74,13 @@ function registerReplyRunAdmissionBarrier(
   return entry;
 }
 
+/** Physical producer cleanup, unlike a watchdog's logical slot clear. */
+export function getReplyOperationProducerCompletion(operation: ReplyOperation): Promise<unknown> {
+  return (
+    controllerStorage.producerCompletionByOperation.get(operation) ?? operation.ownerSettlement
+  );
+}
+
 /** Fence successor admission until owner handoff started at slot clear settles. */
 export function registerReplyOperationSuccessorBarrier(params: {
   operation: ReplyOperation;

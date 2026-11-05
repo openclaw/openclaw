@@ -580,6 +580,7 @@ export async function reloadManagedPlugin(
         pluginIds,
         reason: "reload",
         ...(params.waitForDrain ? { waitForDrain: true, drainSignal: params.signal } : {}),
+        ...(params.force !== undefined ? { force: params.force } : {}),
         ...(expected.size ? { expectedSourceDigests: Object.fromEntries(expected) } : {}),
         assertInvokerOwned: beforePersistentApply,
       }),

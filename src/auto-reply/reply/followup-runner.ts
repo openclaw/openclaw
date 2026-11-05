@@ -10,6 +10,7 @@ import { withoutSessionTranscriptReadFence } from "../../config/sessions/session
 import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getCanonicalGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
@@ -94,9 +95,14 @@ function resolveFollowupCompletion(
 export function createFollowupRunner(
   initialDefaults: FollowupRunnerParams,
 ): (queued: FollowupRun) => Promise<void> {
-  const resolveGatewayContext = Object.hasOwn(initialDefaults, "resolveGatewayContext")
+  const capturedGatewayContext = Object.hasOwn(initialDefaults, "resolveGatewayContext")
     ? initialDefaults.resolveGatewayContext
     : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  // Queued work retains its Gateway owner, not a plugin invocation that may retire
+  // before the source is admitted. Its own requester authority is readmitted below.
+  const resolveGatewayContext = capturedGatewayContext
+    ? getCanonicalGatewayContextResolver(capturedGatewayContext)
+    : undefined;
   const defaults = { ...initialDefaults, resolveGatewayContext };
   // Follow-ups retain the host owner, never the invoking turn's transcript or request scope.
   const runFollowup = (queued: FollowupRun): Promise<void> =>

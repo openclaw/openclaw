@@ -7,7 +7,12 @@ import { throwExpectedCliError } from "./expected-cli-error.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { resolvePluginLifecycleGateway } from "./plugins-lifecycle-client.js";
 
-export type PluginsReloadOptions = { json?: boolean; acceptCapabilities?: boolean; wait?: boolean };
+export type PluginsReloadOptions = {
+  json?: boolean;
+  acceptCapabilities?: boolean;
+  wait?: boolean;
+  force?: boolean;
+};
 
 export async function runPluginsReloadCommand(
   ids: string[],
@@ -28,6 +33,7 @@ export async function runPluginsReloadCommand(
     {
       plugins: pluginIds.map((pluginId) => ({ pluginId })),
       ...(opts.wait ? { waitForDrain: true } : {}),
+      ...(opts.force ? { force: true } : {}),
     },
     consent.onCapabilityConsent,
   );

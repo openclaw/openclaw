@@ -980,7 +980,7 @@ var External = [
     /(^source$|^packageName$|^version$)/u,
     /(^catalogId$|^version$)/u,
     /^[A-Za-z0-9_-]+$/u,
-    /(^plugins$|^waitForDrain$|^acknowledgeCapabilities$)/u,
+    /(^plugins$|^waitForDrain$|^force$|^acknowledgeCapabilities$)/u,
     /(^pluginId$|^installHash$|^sourceDigests$)/u,
     /^.*$/u,
     /(^reviewToken$)/u,
@@ -7927,6 +7927,7 @@ var External = [
     (value.waitForDrain === void 0 ||
       !("waitForDrain" in value) ||
       check_181(value.waitForDrain)) &&
+    (value.force === void 0 || !("force" in value) || check_181(value.force)) &&
     (value.acknowledgeCapabilities === void 0 ||
       !("acknowledgeCapabilities" in value) ||
       check_1123(value.acknowledgeCapabilities)),

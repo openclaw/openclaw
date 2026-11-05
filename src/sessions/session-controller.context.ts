@@ -93,6 +93,11 @@ export function withSessionControllerSource<T>(input: SessionControllerInput, ru
   );
 }
 
+/** Exact admitted source, not a diagnostic run-id lookup. */
+export function getCurrentSessionControllerSource(): SessionControllerInput | undefined {
+  return ownerContext.getStore()?.sourceInput;
+}
+
 export function sourceSettlements(
   target: SessionTarget,
   requiredSessionId?: string,

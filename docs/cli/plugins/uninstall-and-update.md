@@ -231,16 +231,41 @@ The ten-minute budget is shared across drain stages. On expiry, the reload fails
 and restores the previous generation without cancelling its admitted work.
 Incoming messages retain their channel's existing queue and replay
 contract; this option does not add durable ingress to channels that lack it.
-Run this maintenance command outside a turn that itself holds the target plugin:
-waiting for that turn while it waits for reload cannot make progress. Agents can
-use the `plugins` tool with `action: "reloadAndResume"` and `pluginId` instead.
-This explicit handoff ends the active turn (not the conversation), lets normal
-cleanup release its plugin leases, then runs the ordinary authorized reload and
-wakes the same session with the result, including failures and cleanup warnings.
-It requires a Gateway-hosted conversation with turn-yield support. Stop cancels
-a pending handoff; it never force-releases leases or rolls back a committed reload.
-The handoff is process-local: if the Gateway exits before delivery, inspect the
-plugin state before retrying. Plain CLI reloads are not intercepted or deferred.
+A non-force CLI reload can wait on itself when an agent calls it while retaining
+the target plugin. An administrator can instead use:
+
+```bash
+openclaw plugins reload <id> --force --wait --accept-capabilities --json
+```
+
+Force validates eligibility and consent before interrupting supported retaining
+conversations. It preserves queued input custody, tries eligible cooperative
+handover first, and waits for physical producer and plugin-lease cleanup. It never
+drops live leases or unloads executing code. Force does not change drain budgets;
+`--wait` still selects ten minutes. Uncooperative cleanup fails safely.
+
+Accepted force maintenance belongs to the Gateway, independently of the CLI
+socket. An external CLI receives final JSON; an agent-owned CLI may be interrupted
+with its turn and receive the actual outcome through a same-conversation
+continuation. Each conversation resumes under its original requester's current
+authority, not the maintenance administrator's privileges. Stop, revocation, reset,
+or replacement invalidates a pending continuation. Completed replies retaining
+cleanup do not get another work turn; unhealthy recovery does not release successors.
+
+Initial support covers mapped native Gateway chat conversations with input custody.
+Cron, ACP, subagents, incognito, and unsupported conversation holders are rejected
+before interruption. Raw service holders retain bounded drain behavior rather than
+being interrupted. Cross-session force requires Gateway administration authority;
+writable conversation access alone is insufficient.
+
+The `plugins` tool also supports `action: "reloadAndResume"` with `pluginId` for an
+explicit same-turn handoff. It ends the tool turn, drains physical cleanup, and
+returns the actual outcome in the same conversation without asking the model to
+stop voluntarily. It requires a Gateway-hosted conversation with turn-yield support.
+
+Both handoffs are process-local, not crash recovery. If the Gateway exits before
+delivery, inspect plugin state before retrying. Neither path retries automatically.
+Plain non-force CLI reloads retain their existing synchronous behavior.
 
 ### Development: reload edited bundled code
 

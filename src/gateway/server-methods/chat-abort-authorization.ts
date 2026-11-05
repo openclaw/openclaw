@@ -210,14 +210,12 @@ export function canRequesterAbortChatRun(
     personal.assertCurrent();
     // The initiating socket may have closed. Its captured identity is a fact;
     // the new request's current access and exact target authorize the effect.
-    if (
+    return (
       initiator.profileId === personal.profileId &&
       entry.sessionKey === personal.target.sessionKey &&
       entry.sessionId === personal.target.sessionId &&
       resolveChatRunOwnerAgentId(entry) === personal.target.agentId
-    ) {
-      return true;
-    }
+    );
   }
   const ownerDeviceId = normalizeOptionalString(entry.requester?.deviceId);
   const ownerConnId = normalizeOptionalString(entry.requester?.connectionId);

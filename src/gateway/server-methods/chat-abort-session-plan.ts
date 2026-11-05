@@ -186,6 +186,11 @@ export function prepareChatSessionAbort(
       ? candidates.effects.filter(
           (effect) =>
             effect.run !== undefined &&
+            (!effect.run.abortAuthority ||
+              canRequesterAbortChatRun(
+                { ...effect.run, ...effect.run.abortAuthority },
+                params.requester,
+              )) &&
             acceptsRequest(effect.run) &&
             (params.requiredSessionId === undefined ||
               (effect.run.sessionKey !== undefined && sessionKeys.includes(effect.run.sessionKey))),

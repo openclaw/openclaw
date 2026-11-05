@@ -62,6 +62,7 @@ export type SessionStopSource =
   | "talk"
   | "mutation"
   | "interrupt"
+  | "maintenance"
   | "restart"
   | "watchdog"
   | "operator-revocation"
@@ -93,6 +94,7 @@ const SESSION_STOP_POLICY = {
   talk: { ...commandStop, cancelQueued: false },
   mutation: ownerStop,
   interrupt: { ...ownerStop, cancelQueued: true },
+  maintenance: ownerStop,
   restart: { ...ownerStop, cancelQueued: true },
   watchdog: ownerStop,
   "operator-revocation": { ...ownerStop, cancelQueued: true },
