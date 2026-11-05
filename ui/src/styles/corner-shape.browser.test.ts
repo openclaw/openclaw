@@ -15,11 +15,7 @@ const CORNER_CASES = [
     "17.5px",
     ".card, .option-card__choice, .exec-approval-card, .agent-chat__search-bar",
   ),
-  ...corners(
-    "20px",
-    "25px",
-    ".option-card, .settings-group, .agent-chat__input, .agent-chat__input .slash-menu",
-  ),
+  ...corners("20px", "25px", ".option-card, .settings-group, .agent-chat__input .slash-menu"),
   // Menu rows share --menu-item-radius at both scales.
   ...corners("10px", "12.5px", ".slash-menu-item, .chat-reply-context-menu button"),
 ];
@@ -27,6 +23,11 @@ const CORNER_CASES = [
 // Neither siblings nor non-opted descendants may inherit scaled radius tokens.
 const ALL_CASES = [
   ...CORNER_CASES,
+  ...corners(
+    "20px",
+    "25px",
+    ".agent-chat__input, .agent-chat__input--dictating::after, .agent-chat__disabled-banner, .agent-chat__composer-notices .chat-composer-neighbor-card, .agent-chat__composer-errors--standalone, .agent-chat__talk-status",
+  ),
   ...corners("9999px", "9999px", ".chip, .statusDot"),
   ...corners("10px", "10px", ".run-inspector__panel, .settings-segmented"),
   ...corners("14px", "17.5px", ".chat"),
@@ -37,7 +38,15 @@ const markup = `<main>
   <div class="chat">Chat</div>
   <button class="btn" type="button">Send</button><div class="card">Surface</div>
   <section class="option-card" role="group"><div class="option-card__choices"><button type="button" class="option-card__choice">Choice</button></div></section>
-  <div class="exec-approval-card">Surface</div><div class="agent-chat__input">Surface</div>
+  <div class="exec-approval-card">Surface</div><div class="agent-chat__input agent-chat__input--dictating">Surface</div>
+  <div class="agent-chat__composer-shell">
+    <div class="agent-chat__disabled-banner callout">Archived session</div>
+    <div class="agent-chat__composer-notices">
+      <div class="chat-composer-neighbor-card">Recovery</div>
+      <div class="agent-chat__composer-errors--standalone">Error</div>
+      <div class="agent-chat__talk-status callout">Connecting</div>
+    </div>
+  </div>
   <div class="sidebar-recent-session">Surface</div><a class="nav-item" href="#/chat">Chat</a>
   <div class="settings-group">Surface</div>
   <div class="slash-menu" role="listbox"><div class="slash-menu__scroll"><div class="slash-menu-group"><div class="slash-menu-item" role="option">Item</div></div></div></div>
@@ -81,11 +90,12 @@ async function probeCorners(supported: boolean) {
     page.evaluate(
       (probes: readonly string[]) =>
         probes.map((selector) => {
-          const element = document.querySelector(selector);
+          const [elementSelector, pseudo] = selector.split("::");
+          const element = document.querySelector(elementSelector!);
           if (!element) {
             throw new Error(`Missing corner fixture element for ${selector}`);
           }
-          const style = getComputedStyle(element);
+          const style = getComputedStyle(element, pseudo ? `::${pseudo}` : null);
           return [style.borderTopLeftRadius, style.getPropertyValue("corner-shape")];
         }),
       ALL_CASES.map((item) => item.selector),
