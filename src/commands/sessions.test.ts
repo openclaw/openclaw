@@ -461,7 +461,7 @@ describe("sessionsCommand", () => {
     ]);
   });
 
-  it("exports session color and subagent lineage metadata in JSON output", async () => {
+  it("exports session color, category, and subagent lineage metadata in JSON output", async () => {
     const lineage = {
       spawnedBy: "agent:main:main",
       spawnedWorkspaceDir: "/workspace/project",
@@ -475,6 +475,7 @@ describe("sessionsCommand", () => {
       lastInteractionAt: Date.now() - 5 * 60_000,
       label: "research helper",
       color: "blue",
+      category: "Research",
       status: "done",
     } satisfies Partial<SessionEntry>;
     const store = await writeStore({
@@ -484,11 +485,19 @@ describe("sessionsCommand", () => {
         model: "test:opus",
       }),
       "agent:main:uncolored": makeSession("uncolored-session"),
+      "agent:main:uncategorized": makeSession("uncategorized-session", {
+        category: "Archive",
+      }),
       "agent:main:cleared": makeSession("cleared-session", { color: "red" }),
     });
     await patchSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:cleared", storePath: store },
       () => ({ color: undefined }),
+      { skipMaintenance: true },
+    );
+    await patchSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:uncategorized", storePath: store },
+      () => ({ category: undefined }),
       { skipMaintenance: true },
     );
 
@@ -501,6 +510,11 @@ describe("sessionsCommand", () => {
       const row = payload.sessions?.find((session) => session.key === key);
       expect(row).toBeDefined();
       expect(row).not.toHaveProperty("color");
+    }
+    for (const key of ["agent:main:uncolored", "agent:main:uncategorized"]) {
+      const row = payload.sessions?.find((session) => session.key === key);
+      expect(row).toBeDefined();
+      expect(row).not.toHaveProperty("category");
     }
   });
 
