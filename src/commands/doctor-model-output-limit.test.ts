@@ -27,27 +27,33 @@ it.each<[string, Record<string, unknown>, number, string]>([
   ["the 8192 default", {}, 8192, providerPath],
   ["provider maxTokens", { maxTokens: 65_536 }, 65_536, providerPath],
   ["model maxTokens", { models: [{ id: "m", name: "m", maxTokens: 131_072 }] }, 131_072, rowPath],
-])("resolves a configured model's output limit from %s", (_label, provider, maxTokens, path) => {
-  const cfg = withLocal(provider);
-  expect(resolveAgentModelOutputLimit({ cfg, agentId: "main" })).toEqual({
-    providerKey: "local",
-    model: "m",
-    maxTokens,
-    path,
-  });
-});
+])(
+  "resolves a configured model's output limit from %s",
+  (_label, provider, maxTokens, configPath) => {
+    const cfg = withLocal(provider);
+    expect(resolveAgentModelOutputLimit({ cfg, agentId: "main" })).toEqual({
+      providerKey: "local",
+      model: "m",
+      maxTokens,
+      path: configPath,
+    });
+  },
+);
 
 it.each([
   [8192, 131_072, 8192, "agents.entries.main.params.maxTokens"],
   [131_072, 8192, 8192, rowPath],
-])("binds the lower of request budget %i and model ceiling %i", (budget, ceiling, max, path) => {
-  const cfg = withLocal({ models: [{ id: "m", name: "m", maxTokens: ceiling }] });
-  cfg.agents!.entries = { main: { params: { max_tokens: budget } } };
-  expect(resolveAgentModelOutputLimit({ cfg, agentId: "main" })).toMatchObject({
-    maxTokens: max,
-    path,
-  });
-});
+])(
+  "binds the lower of request budget %i and model ceiling %i",
+  (budget, ceiling, max, configPath) => {
+    const cfg = withLocal({ models: [{ id: "m", name: "m", maxTokens: ceiling }] });
+    cfg.agents!.entries = { main: { params: { max_tokens: budget } } };
+    expect(resolveAgentModelOutputLimit({ cfg, agentId: "main" })).toMatchObject({
+      maxTokens: max,
+      path: configPath,
+    });
+  },
+);
 
 it("points a catalog-derived limit at the model row, where a raise takes effect", () => {
   const rootDir = path.resolve("extensions/openai");
