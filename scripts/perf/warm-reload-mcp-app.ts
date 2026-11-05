@@ -5,6 +5,53 @@ import { buildSync } from "esbuild";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 
 const require = createRequire(new URL("../../ui/package.json", import.meta.url));
+export const warmReloadMcpViewId = "mcp-app-warm-reload-proof";
+const toolCallId = "warm-reload-dashboard";
+const result = {
+  content: [{ type: "text", text: "Synthetic dashboard result" }],
+  structuredContent: {
+    metrics: [
+      { value: 3000, label: "sessions" },
+      { value: 9, label: "rows" },
+      { value: 11, label: "reloads" },
+    ],
+    charts: [
+      "0,250 150,220 300,230 450,160 600,180 750,100 1000,40",
+      "0,240 150,190 300,210 450,130 600,150 750,70 1000,30",
+    ],
+  },
+};
+
+export function warmReloadMcpMessages(): Record<string, unknown>[] {
+  return [
+    {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: toolCallId, name: "warm-reload__dashboard", arguments: {} },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolCallId,
+      toolName: "warm-reload__dashboard",
+      content: result.content,
+      details: {
+        mcpServer: "warm-reload",
+        mcpTool: "dashboard",
+        structuredContent: result.structuredContent,
+        mcpAppPreview: {
+          mcpApp: {
+            viewId: warmReloadMcpViewId,
+            serverName: "warm-reload",
+            toolName: "dashboard",
+            uiResourceUri: "ui://warm-reload/dashboard",
+            toolCallId,
+          },
+        },
+      },
+    },
+  ];
+}
 
 /** Real stdio MCP server + official App SDK, inside the existing warm reload fixture. */
 export function seedWarmReloadMcpApp(stateDir: string): OpenClawConfig["mcp"] {
@@ -48,12 +95,8 @@ export function seedWarmReloadMcpApp(stateDir: string): OpenClawConfig["mcp"] {
     import { StdioServerTransport } from ${JSON.stringify(require.resolve("@modelcontextprotocol/server/stdio"))};
     const server = new McpServer({name:'warm-reload',version:'1.0.0'});
     const uri = 'ui://warm-reload/dashboard';
-    const tool = server.registerTool('dashboard', {description:'Synthetic KPI dashboard'}, async () => ({
-      content:[{type:'text',text:'Synthetic dashboard result'}],
-      structuredContent:{metrics:[{value:3000,label:'sessions'},{value:9,label:'rows'},{value:11,label:'reloads'}],
-        charts:['0,250 150,220 300,230 450,160 600,180 750,100 1000,40','0,240 150,190 300,210 450,130 600,150 750,70 1000,30']}
-    }));
-    tool.update({_meta:{ui:{resourceUri:uri},'openai/ui':{entrypoints:[{type:'thread'}]}}});
+    const tool = server.registerTool('dashboard', {description:'Synthetic KPI dashboard'}, async () => (${JSON.stringify(result)}));
+    tool.update({_meta:{ui:{resourceUri:uri}}});
     server.registerResource('dashboard',uri,{mimeType:'text/html;profile=mcp-app'},async () => ({contents:[{
       uri,mimeType:'text/html;profile=mcp-app',text:${JSON.stringify(html)}
     }]}));
