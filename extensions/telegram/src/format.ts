@@ -134,13 +134,12 @@ function preserveTelegramListBoundarySpacing(markdown: string): string {
   let previousOffset = 0;
   let offset = 0;
   const lines = markdown.split("\n");
-  const normalizedLines = lines.map((line) => line.replace(/\r$/, ""));
   return lines
     .map((line, index) => {
-      const normalizedLine = normalizedLines[index] ?? "";
+      const normalizedLine = line.replace(/\r$/, "");
       const insertBoundary =
         shouldPreserveTelegramListBoundarySpacing(previousLine, normalizedLine) &&
-        !continuesEnclosingOrderedList(normalizedLines, index) &&
+        !continuesEnclosingOrderedList(lines, index) &&
         !isInsideCode(previousOffset, (codeRegions ??= findCodeRegions(markdown))) &&
         !isInsideCode(offset, codeRegions);
       previousLine = normalizedLine;
