@@ -49,7 +49,7 @@ it("publishes authored selection without reapplying the previous document appear
   mutations.observe(root, { attributes: true });
   const palette = theme.appliedPalette;
   try {
-    theme.recordServerSelection();
+    theme.recordServerSelection("claw", theme.settings.gatewayUrl);
     expect(snapshots).toHaveBeenCalledOnce();
     expect(mutations.takeRecords()).toEqual([]);
     expect(theme.appliedPalette).toBe(palette);
