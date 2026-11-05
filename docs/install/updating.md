@@ -932,10 +932,11 @@ runtime files. When native service discovery misses a live or unverifiable owner
 the update continues with a warning in the terminal, JSON result, and update
 history. The warning names the PID and installation root when known: the Gateway
 keeps running the previous runtime and may fail to load lazily loaded chunks until
-restarted. Restart it through its actual service manager, or press Ctrl+C in its
-original terminal and rerun its Gateway command. Positively identified disjoint
-installations stay silent. Existing managed-service and database-capture refusals
-still apply. The installed update driver must contain this warning behavior; a
+restarted. A Gateway that detects replacement of its runtime may stop itself and
+require relaunch. Restart it through its actual service manager, or press Ctrl+C
+in its original terminal and rerun its Gateway command. Positively identified
+disjoint installations stay silent. Existing managed-service and database-capture
+refusals still apply. The installed update driver must contain this warning behavior; a
 newer candidate cannot change an older driver's publication behavior.
 
 On Linux, unmask a managed systemd unit before updating. A masked unit
