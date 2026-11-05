@@ -124,7 +124,6 @@ export async function materializeSessionArchiveForRead(filePath: string): Promis
     throw error;
   }
   const cachePath = resolveSessionArchiveReadPath(filePath, sourceStat, cacheDir);
-  sweepMaterializedArchiveCache(cacheDir);
   if (fs.existsSync(cachePath)) {
     return cachePath;
   }
@@ -143,6 +142,10 @@ export async function materializeSessionArchiveForRead(filePath: string): Promis
   // Concurrent readers may race to the same identity; last rename wins with
   // identical content, so neither can observe a torn or missing cache file.
   fs.renameSync(tempPath, cachePath);
+  // Sweep after publishing so the new entry is charged against the aggregate
+  // budget in the same call that added it; a hit above returns early because
+  // the entry it would account for already exists.
+  sweepMaterializedArchiveCache(cacheDir);
   return cachePath;
 }
 
@@ -152,19 +155,79 @@ export async function materializeSessionArchiveForRead(filePath: string): Promis
 const MATERIALIZED_ARCHIVE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 let lastMaterializedArchiveCacheSweepMs = 0;
 
+// Aggregate ceiling for the cache directory. Per-entry TTL alone still lets a
+// busy gateway materialize every archive it touches within a day, which is how
+// /tmp filled with hundreds of decompressed copies (#193193). The budget bounds
+// total retained plaintext and evicts least-recently-materialized entries first.
+const DEFAULT_MATERIALIZED_ARCHIVE_CACHE_BUDGET_BYTES = 256 * 1024 * 1024;
+const MATERIALIZED_ARCHIVE_CACHE_BUDGET_ENV = "OPENCLAW_ARCHIVE_CACHE_MAX_BYTES";
+
+function resolveMaterializedArchiveCacheBudgetBytes(): number {
+  const raw = process.env[MATERIALIZED_ARCHIVE_CACHE_BUDGET_ENV]?.trim();
+  if (!raw) {
+    return DEFAULT_MATERIALIZED_ARCHIVE_CACHE_BUDGET_BYTES;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0
+    ? parsed
+    : DEFAULT_MATERIALIZED_ARCHIVE_CACHE_BUDGET_BYTES;
+}
+
 function sweepMaterializedArchiveCache(cacheDir: string): void {
   const now = Date.now();
-  if (now - lastMaterializedArchiveCacheSweepMs < MATERIALIZED_ARCHIVE_CACHE_TTL_MS / 24) {
-    return;
+  // The TTL sweep is rate limited because expired entries stay cold until the
+  // next pass; the aggregate budget is checked on every call, since the
+  // materialization that just published is exactly what can push it over.
+  if (now - lastMaterializedArchiveCacheSweepMs >= MATERIALIZED_ARCHIVE_CACHE_TTL_MS / 24) {
+    lastMaterializedArchiveCacheSweepMs = now;
+    for (const entry of walkDirectorySync(cacheDir, { maxDepth: 1, symlinks: "include" }).entries) {
+      try {
+        if (now - fs.statSync(entry.path).mtimeMs > MATERIALIZED_ARCHIVE_CACHE_TTL_MS) {
+          fs.rmSync(entry.path, { force: true });
+        }
+      } catch {
+        // Another sweep may have removed it first; nothing to do.
+      }
+    }
   }
-  lastMaterializedArchiveCacheSweepMs = now;
+  enforceMaterializedArchiveCacheBudget(cacheDir);
+}
+
+// Evicts least-recently-materialized entries until retained cache bytes fit the
+// aggregate budget. Source identity still gates every hit, so an evicted entry
+// only costs a re-decode, never a wrong read.
+function enforceMaterializedArchiveCacheBudget(cacheDir: string): void {
+  const retained: { path: string; size: number; mtimeMs: number }[] = [];
   for (const entry of walkDirectorySync(cacheDir, { maxDepth: 1, symlinks: "include" }).entries) {
     try {
-      if (now - fs.statSync(entry.path).mtimeMs > MATERIALIZED_ARCHIVE_CACHE_TTL_MS) {
-        fs.rmSync(entry.path, { force: true });
+      // In-flight temp files belong to a concurrent writer; they are charged
+      // once renamed into place.
+      if (entry.name.endsWith(".tmp")) {
+        continue;
       }
+      const stat = fs.statSync(entry.path);
+      retained.push({ path: entry.path, size: stat.size, mtimeMs: stat.mtimeMs });
     } catch {
       // Another sweep may have removed it first; nothing to do.
+    }
+  }
+  let totalBytes = retained.reduce((sum, entry) => sum + entry.size, 0);
+  const budgetBytes = resolveMaterializedArchiveCacheBudgetBytes();
+  if (totalBytes <= budgetBytes) {
+    return;
+  }
+  // Oldest materialization first, so recently read sessions keep a warm cache.
+  retained.sort((a, b) => a.mtimeMs - b.mtimeMs);
+  for (const entry of retained) {
+    if (totalBytes <= budgetBytes) {
+      break;
+    }
+    try {
+      fs.rmSync(entry.path, { force: true });
+      totalBytes -= entry.size;
+    } catch {
+      // Removal is best effort: a live reader may hold the file on some
+      // filesystems. The next call retries the remaining overage.
     }
   }
 }
