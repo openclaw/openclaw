@@ -66,6 +66,19 @@ actor RemoteTunnelManager {
         }
     }
 
+    /// Retire a tunnel opened or opening for an older configuration and wait for its SSH process
+    /// to exit, without opening a replacement.
+    func retireStaleControlTunnel() async {
+        await self.waitForRetirement()
+        guard !self.isShutDown else { return }
+        let current = try? RemotePortTunnel.configuration()
+        let stale = [self.controlTunnel?.configuration, self.createInFlight?.configuration]
+            .contains { $0 != nil && $0 != current }
+        guard stale else { return }
+        self.beginRetirement()
+        await self.waitForRetirement()
+    }
+
     func isCurrentRoute(_ route: Route) async -> Bool {
         await self.controlTunnelRouteIfRunning() == route
     }

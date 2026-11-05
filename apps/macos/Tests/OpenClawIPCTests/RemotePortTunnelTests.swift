@@ -58,14 +58,16 @@ struct RemotePortTunnelTests {
 
     @MainActor
     @Test(arguments: [(18790, 18789), (18789, 28789)])
-    func `split local port reserves nothing once hosting is off`(ports: (gateway: Int, tunnel: Int)) async throws {
+    func `hosting preference rather than a split port decides the reserved ports`(
+        ports: (gateway: Int, tunnel: Int)) async throws
+    {
         let configPath = TestIsolation.tempConfigPath()
         defer { try? FileManager().removeItem(atPath: configPath) }
         try await TestIsolation.withIsolatedState(
             env: ["OPENCLAW_CONFIG_PATH": configPath, "OPENCLAW_GATEWAY_PORT": nil],
             defaults: ["gatewayPort": nil, hostsLocalGatewayWithRemotePrimaryKey: nil])
         {
-            // Hosting on and then off leaves gateway.port separated from the tunnel port.
+            // Hosting repair separates gateway.port from the tunnel port; turning hosting off keeps it.
             try #require(OpenClawConfigFile.saveDict(["gateway": [
                 "mode": "remote", "port": ports.gateway,
                 "remote": [
@@ -73,10 +75,15 @@ struct RemotePortTunnelTests {
                     "url": "ws://127.0.0.1:\(ports.tunnel)", "remotePort": 18789,
                 ],
             ]]))
-            #expect(try RemotePortTunnel.configuration().reservedLocalPorts.isEmpty)
-
             AppDefaults.standard.set(true, forKey: hostsLocalGatewayWithRemotePrimaryKey)
-            #expect(try RemotePortTunnel.configuration().reservedLocalPorts == [ports.gateway, ports.gateway + 1])
+            let hosting = try RemotePortTunnel.configuration()
+            #expect(hosting.reservedLocalPorts == [ports.gateway, ports.gateway + 1])
+
+            AppDefaults.standard.set(false, forKey: hostsLocalGatewayWithRemotePrimaryKey)
+            let notHosting = try RemotePortTunnel.configuration()
+            #expect(notHosting.reservedLocalPorts.isEmpty)
+            // The tunnel manager replaces a running tunnel whose configuration differs.
+            #expect(notHosting != hosting)
         }
     }
 
