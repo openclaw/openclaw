@@ -235,7 +235,24 @@ export function CloudWorkerEnvironmentSheet(
   );
   const phases = createMemo(() => {
     const durations = setup()?.phaseDurationsMs;
-    return (["onCreate", "updateContent", "detectedInstall"] as const).flatMap((name) =>
+    return (
+      [
+        "retainedGit",
+        "retainedManifest",
+        "inspection",
+        "seedPreparation",
+        "seedTransfer",
+        "seedVerification",
+        "seedCheckout",
+        "seedManifest",
+        "gitUpdate",
+        "toolchainPreparation",
+        "onCreate",
+        "updateContent",
+        "detectedInstall",
+        "preparedManifest",
+      ] as const
+    ).flatMap((name) =>
       durations?.[name] !== undefined ? [{ name, durationMs: durations[name] }] : [],
     );
   });

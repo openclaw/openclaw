@@ -122,6 +122,15 @@ An already-admitted capture can finish after reserve-demand expiry within its se
 
 Open **Settings → Connections → Cloud environments**. Each repository has one row showing **Ready**, **Building**, **Cold only**, or **Needs attention**. Select it to inspect its snapshots, recorded setup source, step timings, and failures. **Cloud device → Change** sets the repository's default profile. Inventory refreshes while builds, captures, or ready workers are present, and after deferred plugin activation.
 
+Preparation timings include retained Git identity and manifest checks, inspection, seed path preparation, object import,
+seed verification and checkout, seed manifests, workspace copy or Git update, toolchain preparation,
+recipe commands, and prepared-manifest capture. Skipped steps are absent; repeated steps are summed.
+These timings measure work inside the preparation scripts, excluding provider boot and transport
+round trips. Completed worker-owned Git stores are not scanned again with `git fsck`; incoming
+packs still require size, SHA-256, object and connectivity verification. Reuse still verifies the
+completed workspace manifest and its Git identity. Lazy snapshot storage must still read directory
+and file metadata, changed content, newly transferred objects, and files used by setup or tools.
+
 **Rebuild** prepares the recorded local project's committed `HEAD` without a session. It requires admin access, a local project root, an eligible profile, and pool capacity. Repository-only sources cannot use this action. Rebuild follows normal refresh policy and may reuse a matching build or reserve; it does not force snapshot replacement. Active builds offer **Cancel**, which opens **Cancel this snapshot build?** and waits for provider work and cloud device cleanup. Failed builds offer **Dismiss**, which opens **Dismiss this failed build?** and hides the row until reload while the terminal record remains retained. Orphaned builds still awaiting cleanup cannot be dismissed.
 
 Snapshot overflow actions offer **Pin**, **Unpin**, **Delete**, and, when a previous generation exists, **Roll back**. Pinning protects an image from automatic retirement. Delete opens **Delete this snapshot?** and is unavailable for pinned, held, or capturing images. Roll back opens **Roll back this snapshot?** before restoring the previous snapshot. Pin changes and rollback are unavailable during capture or retirement. Failed deletion remains pending and retries during maintenance.
