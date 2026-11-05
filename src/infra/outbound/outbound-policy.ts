@@ -56,7 +56,11 @@ function isCrossContextTarget(params: {
   );
 }
 
-/** Names the conversation a guarded action reaches when its channel keeps threads in that identity. */
+// The runner delivers send and poll into the thread it resolves. Other actions only hand that
+// thread to the plugin, which may act on the base chat instead (Telegram's topic-create).
+const THREAD_DELIVERY_ACTIONS: ReadonlySet<ChannelMessageActionName> = new Set(["send", "poll"]);
+
+/** Names the conversation an action's thread selects where threads are their own conversations. */
 function resolveThreadedTarget(params: {
   channel: ChannelId;
   target: string;
@@ -219,14 +223,22 @@ export function enforceCrossContextPolicy(params: {
   if (!requestedTarget) {
     return;
   }
-  const target = resolveThreadedTarget({
+  const threadedTarget = resolveThreadedTarget({
     channel: params.channel,
     target: requestedTarget,
     args: params.args,
     toolContext: params.toolContext,
     cfg: params.cfg,
   });
-  if (!isCrossContextTarget({ channel: params.channel, target, toolContext: params.toolContext })) {
+  // An inherited thread is not authority for an effect outside it: other actions must also
+  // request the current conversation, and a thread they carry can only narrow that.
+  const judgedTargets = THREAD_DELIVERY_ACTIONS.has(params.action)
+    ? [threadedTarget]
+    : [requestedTarget, threadedTarget];
+  const target = judgedTargets.find((candidate) =>
+    isCrossContextTarget({ ...params, target: candidate }),
+  );
+  if (!target) {
     return;
   }
 
