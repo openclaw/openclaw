@@ -2232,6 +2232,29 @@ describe("initSessionState RawBody", () => {
       persisted: true,
     },
     {
+      name: "preserves a person-linked account across daily rollover",
+      slug: "linked-account",
+      entry: {
+        authProfileOverride: "openai:linked-person",
+        authProfileOverrideSource: "user-link" as const,
+      },
+      expected: {
+        authProfileOverride: "openai:linked-person",
+        authProfileOverrideSource: "user-link",
+      },
+      persisted: true,
+    },
+    {
+      name: "clears an automatic account pin across daily rollover",
+      slug: "automatic-account",
+      entry: {
+        authProfileOverride: "openai:fallback",
+        authProfileOverrideSource: "auto" as const,
+      },
+      expected: {},
+      absent: ["authProfileOverride", "authProfileOverrideSource"],
+    },
+    {
       name: "preserves usage footer mode across daily rollover",
       slug: "usage",
       entry: { responseUsage: "full" as const },

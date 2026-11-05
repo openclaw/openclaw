@@ -53,6 +53,37 @@ describe("resolveResetPreservedSelection", () => {
     ).toEqual({ modelOverrideSource: "default" });
   });
 
+  it("preserves a person-linked account pin with its link provenance", () => {
+    expect(
+      resolveResetPreservedSelection({
+        entry: {
+          sessionId: "linked",
+          updatedAt: 1,
+          authProfileOverride: "openai:alice",
+          authProfileOverrideSource: "user-link",
+          authProfileOverrideCompactionCount: 3,
+        },
+      }),
+    ).toEqual({
+      authProfileOverride: "openai:alice",
+      authProfileOverrideSource: "user-link",
+      authProfileOverrideCompactionCount: 3,
+    });
+  });
+
+  it.each([undefined, "", " "])("drops an empty linked account (%s)", (profile) => {
+    expect(
+      resolveResetPreservedSelection({
+        entry: {
+          sessionId: "empty-linked",
+          updatedAt: 1,
+          authProfileOverride: profile,
+          authProfileOverrideSource: "user-link",
+        },
+      }),
+    ).toEqual({});
+  });
+
   it("preserves legacy user auth pins while dropping legacy automatic pins", () => {
     expect(
       resolveResetPreservedSelection({

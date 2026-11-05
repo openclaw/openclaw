@@ -27,6 +27,23 @@ type ModelResetEntry = Pick<
 >;
 type ResolvedSessionModel = { modelProvider: string; model: string };
 
+test("sessions.reset preserves a person-linked model account", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const selection = {
+    authProfileOverride: "openai:linked-person",
+    authProfileOverrideSource: "user-link",
+  } satisfies Partial<SessionEntry>;
+  await writeSessionStore({
+    entries: { main: sessionStoreEntry("linked-account", selection) },
+  });
+
+  const reset = await directSessionReq<{ entry: SessionEntry }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry).toMatchObject(selection);
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject(selection);
+});
+
 test("sessions.reset stamps provenance when it materializes a missing row", async () => {
   await createSessionStoreDir();
   const reset = await directSessionReq<{ entry: SessionEntry }>(
