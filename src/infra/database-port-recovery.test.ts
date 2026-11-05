@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readEngineAnchorIdentity } from "./database-engine/physical-store.js";
 import {
   archiveDatabasePortManifest,
   assertDatabasePortRecoveryAllowed,
@@ -13,6 +14,7 @@ import {
   writeDatabasePortManifest,
 } from "./database-port-recovery.js";
 import { makeDatabasePortManifest } from "./database-port-recovery.test-support.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 vi.mock("node:fs", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs")>();
@@ -271,6 +273,36 @@ describe.skipIf(process.platform === "win32")("durable port manifest lifecycle",
 });
 
 describe.skipIf(process.platform === "win32")("manifest-bound recovery admission", () => {
+  it.each(["intended", "original"] as const)(
+    "retains a quoted Team Reports namespace in the %s location and anchor",
+    (side) => {
+      const namespace = "openclaw_team-reports_0123456789abcdef";
+      const target = manifest.targets[0]!;
+      const anchorPath = path.join(stateDir, "team-reports.sqlite");
+      if (side === "original") {
+        manifest.direction = { from: "postgres", to: "sqlite" };
+        target.intended = { engine: "sqlite", path: anchorPath };
+      }
+      target[side] = { engine: "postgres", anchorPath, namespace };
+      using anchor = openNodeSqliteDatabase(":memory:");
+      anchor.exec("CREATE TABLE openclaw_engine_anchor (engine TEXT, store_id TEXT, schema TEXT)");
+      const insert = anchor.prepare("INSERT INTO openclaw_engine_anchor VALUES ('postgres', ?, ?)");
+      insert.run(target.storeId, namespace);
+      expect(readEngineAnchorIdentity(anchor, anchorPath)).toMatchObject({ namespace });
+      write();
+      expect(recover().targets[0]?.[side]).toEqual(target[side]);
+      expect(startup).toThrow(DatabasePortRecoveryError);
+      for (const invalid of ['bad"schema', "schema;DROP", "schema.name", "schema\0name"]) {
+        anchor.prepare("UPDATE openclaw_engine_anchor SET schema = ?").run(invalid);
+        expect(() => readEngineAnchorIdentity(anchor, anchorPath)).toThrow(
+          "Invalid PostgreSQL anchor",
+        );
+        target[side] = { engine: "postgres", anchorPath, namespace: invalid };
+        expect(write).toThrow();
+      }
+    },
+  );
+
   it("admits only the fixed active manifest for the selected root and operation", () => {
     write();
     expect(recover()).toEqual(manifest);

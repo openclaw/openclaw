@@ -418,6 +418,7 @@ src/infra/database-engine/physical-store.ts
 src/infra/database-engine/policy.ts
 src/infra/database-engine/postgres-catalog.ts
 src/infra/database-engine/postgres-index-ordering.ts
+src/infra/database-engine/postgres-namespace.ts
 src/infra/database-engine/postgres-schema.ts
 src/infra/database-engine/postgres-search-schema.ts
 src/infra/database-engine/postgres-search.ts

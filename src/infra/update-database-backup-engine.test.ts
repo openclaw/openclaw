@@ -443,7 +443,7 @@ it.each(["acquisition", "settlement"] as const)(
 
 it("keeps classification errors fatal, including the private image cleanup failure", async () => {
   const f = await fixture();
-  writePostgresAnchor(f.shared, "invalid-schema");
+  writePostgresAnchor(f.shared, "invalid.schema");
   const cleanupFailure = new Error("private image cleanup failed");
   f.generationImages.mockImplementationOnce((file, _staging, ...rest) => {
     const prepared = f.prepare(file, f.stagingRoot, ...rest);

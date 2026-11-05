@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { statRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { z } from "zod";
+import { postgresNamespacePattern } from "./database-engine/postgres-namespace.js";
 import { hasErrnoCode } from "./errno.js";
 
 const count = z.number().int().nonnegative();
@@ -18,7 +19,7 @@ const location = z.discriminatedUnion("engine", [
   z.strictObject({
     engine: z.literal("postgres"),
     anchorPath: absolutePath,
-    namespace: z.string().regex(/^[a-z_][a-z0-9_]*$/),
+    namespace: z.string().regex(postgresNamespacePattern),
   }),
 ]);
 const target = z.strictObject({

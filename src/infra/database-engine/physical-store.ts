@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
 import { readEngineAnchor } from "./open.js";
+import { postgresNamespacePattern } from "./postgres-namespace.js";
 
 export type BackupEngine =
   | { engine: "sqlite" }
@@ -24,7 +25,7 @@ export function readEngineAnchorIdentity(db: DatabaseSync, sourcePath: string): 
     row?.engine !== "postgres" ||
     typeof row.store_id !== "string" ||
     typeof row.schema !== "string" ||
-    !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(row.schema)
+    !postgresNamespacePattern.test(row.schema)
   ) {
     throw new Error(`Invalid PostgreSQL anchor: ${sourcePath}. Restore its matched backup.`);
   }

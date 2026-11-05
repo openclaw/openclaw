@@ -24,6 +24,7 @@ import {
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { agentPortProvider } from "./agent-port.js";
 import * as fixtures from "./port-command.integration.test-support.js";
+import reports from "./team-reports-port.generated.json" with { type: "json" };
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
 describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
@@ -164,6 +165,34 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
     using db = openNodeSqliteDatabase(agent, { readOnly: true });
     const row = db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get();
     expect(row).toEqual({ value_json: '"agent-data"' });
+  }, 120_000);
+
+  it("resumes and reverses Team Reports without renaming its quoted namespace", async () => {
+    const source = state.statePath("plugins", "team-reports", "team-reports.sqlite");
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fixtures.seedPortSqlite(
+      source,
+      reports.sqlite +
+        `; PRAGMA user_version = 2; INSERT INTO team_reports_schema_migrations VALUES ('schema-2', 17); INSERT INTO team_reports_runs VALUES ('retained', 'daily', 9007199254740993, NULL, 'completed', '[]', NULL, NULL)`,
+    );
+    const untouched = hash(workboard);
+    await port({ family: "team-reports", to: "postgres", dryRun: true });
+    interruptPublication();
+    await expect(port({ family: "team-reports", to: "postgres" })).rejects.toThrow();
+    vi.restoreAllMocks();
+    const anchor = readBackupEngine(source);
+    expect(anchor).toMatchObject({
+      engine: "postgres",
+      namespace: expect.stringContaining("_team-reports_"),
+    });
+    await port({ resume: databasePortManifestPath(state.stateDir) });
+    expect(readBackupEngine(source)).toEqual(anchor);
+    await port({ family: "team-reports", to: "sqlite" });
+    using db = openNodeSqliteDatabase(source, { readOnly: true, readBigInts: true });
+    expect(db.prepare("SELECT id, started_at_ms FROM team_reports_runs").all()).toEqual([
+      { id: "retained", started_at_ms: 9007199254740993n },
+    ]);
+    expect(hash(workboard)).toBe(untouched);
   }, 120_000);
 
   describe("interrupted scoped publication", () => {

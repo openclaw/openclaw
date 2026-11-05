@@ -310,7 +310,7 @@ it("refuses a malformed engine anchor from the captured image and cleans up", as
   const database = new DatabaseSync(file);
   database.exec(
     "CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT);" +
-      "INSERT INTO openclaw_engine_anchor VALUES ('test-store', 'postgres', 'invalid-schema');",
+      "INSERT INTO openclaw_engine_anchor VALUES ('test-store', 'postgres', 'invalid.schema');",
   );
   database.close();
   const before = fs.readFileSync(file);

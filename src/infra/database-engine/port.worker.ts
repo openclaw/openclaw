@@ -449,13 +449,16 @@ async function catalogEvidence(
   if (invalid.rowCount) {
     throw new DatabasePortDataError("Port catalog has unvalidated constraints or invalid indexes");
   }
-  return facts.map((f) => ({
-    table: f.table,
-    kind: f.kind,
-    value: JSON.parse(
-      JSON.stringify(f.value).replaceAll(endpoint.namespace, "__port_schema__"),
-    ) as unknown,
-  }));
+  // PostgreSQL deparses hyphenated store namespaces with quotes, unlike the reference.
+  const quotedNamespace = JSON.stringify(quote(endpoint.namespace)).slice(1, -1);
+  for (const fact of facts) {
+    fact.value = JSON.parse(
+      JSON.stringify(fact.value)
+        .replaceAll(`${quotedNamespace}.`, "__port_schema__.")
+        .replaceAll(endpoint.namespace, "__port_schema__"),
+    ) as unknown;
+  }
+  return facts;
 }
 
 async function referenceCatalog(
