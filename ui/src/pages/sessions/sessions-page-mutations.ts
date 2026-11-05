@@ -13,6 +13,7 @@ import {
   withSessionWorkspaceRecovery,
 } from "../../components/session-workspace-recovery.runtime.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccessRequest,
@@ -32,13 +33,12 @@ import { resolveUiSessionRowAgentId } from "../../lib/sessions/session-key.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { sessionAgentId, sessionPathAgentId } from "./agent-scope.ts";
-import {
-  createSessionsMutationRunner,
-  type SessionsPageMutationResult,
-} from "./mutation-runner.ts";
+import type { SessionsPageMutationResult } from "./mutation-runner.ts";
 import type { SessionsPageRequestScope } from "./request-scope.ts";
 import { settleSelectedSession, type SessionDeleteRow } from "./selection.ts";
 import type { SessionsPageState } from "./sessions-page-state.types.ts";
+
+registerSessionOrganizationSharedEnglish();
 
 type SessionsPageMutationHost = {
   application: ApplicationContext;
@@ -67,18 +67,37 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     refresh: refreshSessionList,
     listOptions: sessionListOptions,
   } = host;
-  const sessionMutations = createSessionsMutationRunner({
-    isCurrent: isRequestScopeCurrent,
-    started: () => {
+  let pending = false;
+  const sessionMutations = {
+    get pending() {
+      return pending;
+    },
+    retire() {
+      pending = false;
+    },
+    async run(
+      scope: SessionsPageRequestScope,
+      mutate: () => Promise<SessionsPageMutationResult | void>,
+    ): Promise<SessionsPageMutationResult | void> {
       state.error = null;
-    },
-    settled: (outcome) => {
-      host.reconcile();
-      if (outcome && typeof outcome === "object") {
-        state.error = outcome.error;
+      pending = true;
+      let outcome: SessionsPageMutationResult | void = undefined;
+      try {
+        outcome = await mutate();
+      } catch (error) {
+        outcome = { status: "failed", error };
+      } finally {
+        if (isRequestScopeCurrent(scope)) {
+          pending = false;
+          host.reconcile();
+          if (outcome && typeof outcome === "object") {
+            state.error = outcome.error;
+          }
+        }
       }
+      return isRequestScopeCurrent(scope) ? outcome : "stale";
     },
-  });
+  };
 
   function publishRequestError(
     scope: SessionsPageRequestScope,
@@ -134,13 +153,20 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     if (!scope) {
       return;
     }
-    const message = t(
-      rows.length === 1
-        ? "sessionsView.deleteSelectedConfirmOne"
-        : "sessionsView.deleteSelectedConfirm",
-      { count: String(rows.length) },
-    );
-    if (!(await confirmDelete(message, rows, scope)) || !isRequestScopeCurrent(scope)) {
+    const [only] = rows;
+    const prompt =
+      only && rows.length === 1
+        ? {
+            title: t("sessionsView.deleteSessionTitle", {
+              session: normalizeOptionalString(only.label) ?? only.key,
+            }),
+            message: t("sessionsView.deleteSelectedConfirmOne"),
+          }
+        : {
+            title: t("sessionsView.deleteSessionsTitle", { count: String(rows.length) }),
+            message: t("sessionsView.deleteSelectedConfirm"),
+          };
+    if (!(await confirmDelete(prompt, rows, scope)) || !isRequestScopeCurrent(scope)) {
       return;
     }
     return deleteSessions(rows.filter((row) => state.selectedSessions.get(row.key) === row));
@@ -157,12 +183,12 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
 
   // Bound automations turn the delete confirm into an explicit pause warning.
   function confirmDelete(
-    message: string,
+    prompt: { title: string; message: string },
     rows: readonly SessionDeleteRow[],
     scope: SessionsPageRequestScope,
   ) {
     const options = {
-      message,
+      ...prompt,
       confirmLabel: t("common.delete"),
       danger: true,
       signal: scope.signal,
@@ -184,12 +210,14 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     );
   }
 
-  function confirmMutation(
-    message: string,
-    options: { confirmLabel?: string; signal?: AbortSignal } = {},
-  ) {
+  function confirmMutation(options: {
+    title: string;
+    message: string;
+    details?: string;
+    confirmLabel?: string;
+    signal?: AbortSignal;
+  }) {
     return showConfirmDialog({
-      message,
       confirmLabel: t("common.delete"),
       danger: true,
       ...options,
@@ -302,12 +330,11 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
       return;
     }
     if (
-      !(await confirmMutation(
-        t("sessionsView.deleteAllArchivedConfirm", {
-          count: String(archivedRows.length),
-        }),
-        { signal: scope.signal },
-      )) ||
+      !(await confirmMutation({
+        title: t("sessionsView.deleteAllArchivedTitle", { count: String(archivedRows.length) }),
+        message: t("sessionsView.deleteSessionsConfirm"),
+        signal: scope.signal,
+      })) ||
       !isRequestScopeCurrent(scope)
     ) {
       return;
@@ -321,7 +348,10 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     if (
       !scope ||
       !(await confirmDelete(
-        t("sessionsView.deleteSessionConfirm", { session: label }),
+        {
+          title: t("sessionsView.deleteSessionTitle", { session: label }),
+          message: t("sessionsView.deleteSessionConfirm"),
+        },
         [row],
         scope,
       )) ||
@@ -333,7 +363,6 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
   }
 
   async function stopCloudWorker(row: GatewaySessionRow) {
-    const label = normalizeOptionalString(row.label) ?? row.key;
     const stopAction = resolveCloudWorkerStopAction(row.placement);
     if (!stopAction || (stopAction.blocksActiveRun && row.hasActiveRun === true)) {
       return;
@@ -341,7 +370,14 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     const scope = captureRequestScope();
     if (
       !scope ||
-      !(await confirmMutation(t("sessionsView.stopCloudWorkerConfirm", { session: label }), {
+      !(await confirmMutation({
+        title: t(`${stopAction.copyKey}Confirm`, {
+          session: normalizeOptionalString(row.label) ?? row.key,
+        }),
+        message: t(`${stopAction.copyKey}Description`),
+        details: t("sessionsView.stopCloudWorkerTarget", {
+          session: normalizeOptionalString(row.label) ?? row.key,
+        }),
         confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
         signal: scope.signal,
       })) ||
@@ -383,10 +419,10 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
       return { status: "failed", error: t("sessionsView.actionRequiresConnection") };
     }
     if (typeof patch.archived === "boolean" && !expectedSessionId?.trim()) {
-      state.error = "Session lifecycle action requires a durable session identity.";
+      state.error = t("sessionsView.lifecycleIdentityRequired");
       return {
         status: "failed",
-        error: "Session lifecycle action requires a durable session identity.",
+        error: t("sessionsView.lifecycleIdentityRequired"),
       };
     }
     const agentId = sessionAgentId(key, scope.context);
@@ -464,7 +500,14 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
       ...(fromLastCompleted ? { forkFrom: "last-completed" as const } : {}),
       ...(agentId ? { agentId } : {}),
     };
-    if (mutationAccessError(scope, { method: "sessions.create", params: createParams })) {
+    if (
+      mutationAccessError(scope, {
+        method: "sessions.create",
+        params: createParams,
+        sessionScope: true,
+        session: state.result?.sessions.find((row) => row.key === key),
+      })
+    ) {
       return;
     }
     state.error = null;

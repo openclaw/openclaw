@@ -10,6 +10,8 @@ import {
   inspectUnknownListener,
   makeGatewayService,
   monotonicClock,
+  ownerLease,
+  portUsage,
   callGateway,
   gatewayResponseError,
   readGatewayOwnerLease,
@@ -126,54 +128,19 @@ describe("restart health", () => {
     );
   });
 
-  it.each([{ state: "dead", expired: true }] as const)(
-    "does not classify a $state recorded owner as stale",
-    async ({ state, expired }) => {
-      readGatewayOwnerLease.mockReturnValue({
-        owner: "gateway-owner",
-        pid: 9000,
-        host: "gateway-test-host",
-        startedAt: 1000,
-        port: 18789,
-        mode: "supervised",
-        supervisor: { kind: "schtasks", name: "OpenClaw Gateway" },
-        state,
-        expired,
-      });
-      const snapshot = await inspectGatewayRestartWithSnapshot({
-        runtime: { status: "stopped" },
-        portUsage: {
-          port: 18789,
-          status: "busy",
-          listeners: [{ pid: 9000, commandLine: "openclaw-gateway" }],
-          hints: [],
-        },
-      });
-      expect(snapshot.healthy).toBe(false);
-      expect(snapshot.staleGatewayPids).toEqual([]);
-    },
-  );
-
-  it("does not classify another listener as stale when a different Gateway owns the lifecycle", async () => {
-    readGatewayOwnerLease.mockReturnValue({
-      owner: "gateway-owner",
+  it.each([
+    { name: "dead owner", pid: 9000, state: "dead", runtime: { status: "stopped" } },
+    {
+      name: "different live owner",
       pid: 8000,
-      host: "gateway-test-host",
-      startedAt: 1000,
-      port: 18789,
-      mode: "supervised",
-      supervisor: { kind: "schtasks", name: "OpenClaw Gateway" },
       state: "live",
-      expired: false,
-    });
-    const snapshot = await inspectGatewayRestartWithSnapshot({
       runtime: { status: "running", pid: 8000 },
-      portUsage: {
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 9000, commandLine: "openclaw-gateway" }],
-        hints: [],
-      },
+    },
+  ] as const)("does not mark listeners stale with a $name", async ({ pid, state, runtime }) => {
+    readGatewayOwnerLease.mockReturnValue(ownerLease(pid, state));
+    const snapshot = await inspectGatewayRestartWithSnapshot({
+      runtime,
+      portUsage: portUsage([{ pid: 9000, commandLine: "openclaw-gateway" }]),
     });
     expect(snapshot.healthy).toBe(false);
     expect(snapshot.staleGatewayPids).toEqual([]);
@@ -195,6 +162,7 @@ describe("restart health", () => {
     expect(snapshot.staleGatewayPids).toStrictEqual([]);
     expect(inspectPortUsage).toHaveBeenCalledWith(18789, {
       probeHosts: ["127.0.0.1"],
+      knownRuntimePid: 7000,
     });
   });
 

@@ -327,7 +327,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       panePresentation,
       conversationVisible,
     });
-    const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
+    const discussion = this.sessionDiscussionSource(state, state.sessionKey.trim());
     const discussionState = this.sessionDiscussion.snapshot.states.get(state.sessionKey.trim());
     const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
@@ -337,8 +337,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       ...this.sessionCompanionThreads.view(companionSessionKey, currentAgentId),
     };
     const companionPresented = slotPresentation("companion");
-    // Capture the opening before the lazy rail can yield to newer input intent.
-    this.syncSessionCompanionPresentation(companionPresented.isPresented());
+    // Capture the opening before the lazy rail can yield to newer input intent. A sheet
+    // sliding out only keeps painting its content, so reopening it is a new opening.
+    this.syncSessionCompanionPresentation(companionPresented.isPresented() && !mobileHost?.exiting);
     // Another pane can own keyboard focus while this desktop remains visible.
     const desktopPresented = slotPresentation("desktop");
     const discoveredDesktopSource = this.activeSessionResources.desktopSource(
@@ -470,7 +471,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
           this.desktopFocus = { ...this.desktopFocus, href };
         }
       },
-      dashboard: !this.compact ? this.renderBoardPanel(board, sidebarLayout) : null,
+      dashboard: !this.compact ? this.boardPanelSource(board, sidebarLayout) : null,
       workspace: headerWorkspace,
       workspacePresented: slotPresentation("workspace"),
       detail: {
@@ -637,7 +638,11 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       header: paneHeader,
       notice:
         !conversationVisible && chatProps.error
-          ? { error: chatProps.error, onDismissError: chatProps.onDismissError }
+          ? {
+              error: chatProps.error,
+              errorDetail: chatProps.errorDetail,
+              onDismissError: chatProps.onDismissError,
+            }
           : undefined,
       sessionKey: state.sessionKey,
       agentId: currentAgentId,

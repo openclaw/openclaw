@@ -26,9 +26,11 @@ import {
   canRunPreparedAgentRuntimeAuthAttempt,
   prepareAgentRuntimeAuth,
   preparedAgentRuntimeProfileAttemptHasCandidate,
-  type PreparedAgentRuntimeAuthAttempt,
 } from "./runtime-plan/prepare-auth.js";
-import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
+import type {
+  PreparedAgentRuntimeAuthAttempt,
+  AgentRuntimeAuthPlan,
+} from "./runtime-plan/types.js";
 
 /** A CLI runtime ref canonicalizes to its model provider but keeps the CLI as its explicit owner. */
 export function resolveIsolatedCompletionProvider(params: {

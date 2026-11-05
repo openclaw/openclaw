@@ -8,11 +8,20 @@
  * Run already-built baseline/candidate owners in counterbalanced order:
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/sandbox-start-measure.ts \
  *   --owner <dist/docker-*.mjs exporting ensureSandboxContainer> --iterations 2000
+ * Built owners are preferred; source owners also work through the tsx loader:
+ *   --owner src/agents/sandbox/backend.ts --backend --engine podman --iterations 2000
+ * Record the source revision/diff for source runs; the owner hash covers its entry.
  * Add --allocations for a separate collected-object sampling pass. Setup, warmup
  * and forced GC are outside measurement. Each invocation owns and removes its
- * fixture under .local; never points at a running Gateway or real Docker.
+ * fixture under .local; never points at a running Gateway or real container engine.
  * Timing/GC values from the sampled pass are diagnostic only. Both revisions
  * use the same current-source sandbox config factory, whose hash is reported.
+ * --cold-create makes the synthetic engine report each container absent, measuring
+ * image admission/create/start work without real daemon latency or image pulls.
+ * --backend selects an owner exporting createSandboxBackend instead, including
+ * backend dispatch, daemon identity, filesystem-bridge setup and registry publication.
+ * --engine docker|podman selects the synthetic engine (default: docker); Podman
+ * models a local rootless engine, including its native target-resolution probes.
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
@@ -31,9 +40,14 @@ const { values } = parseArgs({
     owner: { type: "string" },
     iterations: { type: "string", default: "2000" },
     allocations: { type: "boolean", default: false },
+    "cold-create": { type: "boolean", default: false },
+    backend: { type: "boolean", default: false },
+    engine: { type: "string", default: "docker" },
   },
 });
-assert(values.owner, "--owner must select an already-built Docker owner");
+assert(values.owner, "--owner must select a built or source sandbox owner");
+const engine = values.engine;
+assert(engine === "docker" || engine === "podman", "--engine must be docker or podman");
 assert(global.gc, "Run with --expose-gc");
 const iterations = parseStrictIntegerOption({
   raw: values.iterations,
@@ -57,14 +71,44 @@ Object.assign(process.env, {
   SANDBOX_MEASURE_CALLS: callsFile,
   SANDBOX_MEASURE_CONTAINER: path.join(root, "container"),
   SANDBOX_MEASURE_ID: containerId,
+  SANDBOX_MEASURE_COLD: values["cold-create"] ? "1" : "0",
+  SANDBOX_MEASURE_ENGINE: engine,
 });
+for (const name of [
+  "DOCKER_CONTEXT",
+  "DOCKER_HOST",
+  "DOCKER_TLS",
+  "DOCKER_TLS_VERIFY",
+  "DOCKER_CERT_PATH",
+  "CONTAINER_HOST",
+  "CONTAINER_CONNECTION",
+  "CONTAINER_SSHKEY",
+]) {
+  delete process.env[name];
+}
 await fs.writeFile(
-  path.join(bin, "docker"),
+  path.join(bin, engine),
   `#!/bin/sh
+if [ "$1" = --host ]; then shift 2; fi
 printf '%s\n' "$1" >> "$SANDBOX_MEASURE_CALLS"
 case "$1" in
+  context) printf '{"Host":"unix:///synthetic-sandbox.sock"}\n' ;;
+  info)
+    if [ "$SANDBOX_MEASURE_ENGINE" = podman ]; then
+      printf 'true\tfalse\t\t5.0.0\n'
+    else
+      printf 'synthetic-daemon\n'
+    fi ;;
   inspect)
-    if [ ! -f "$SANDBOX_MEASURE_CONTAINER" ]; then
+    if [ "$3" = '{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}' ]; then
+      printf '{"Mounts":[],"Tmpfs":{}}\n'
+      exit 0
+    fi
+    if [ "$3" = '{{json .State}}' ]; then
+      printf '{"Running":true,"Paused":false,"Pid":123,"StartedAt":"2026-01-01T00:00:00Z"}\n'
+      exit 0
+    fi
+    if [ "$SANDBOX_MEASURE_COLD" = 1 ] || [ ! -f "$SANDBOX_MEASURE_CONTAINER" ]; then
       printf 'No such container\n' >&2
       exit 1
     fi
@@ -84,6 +128,7 @@ case "$1" in
       esac
     done
     printf '%s\n' "$SANDBOX_MEASURE_ID" ;;
+  exec) printf '1 0 8:1 / / rw - ext4 /dev/synthetic rw\n' ;;
   image|start) ;;
   *) printf 'Unsupported fixture operation\n' >&2; exit 2 ;;
 esac
@@ -124,9 +169,7 @@ const gc = new PerformanceObserver((list) => {
 });
 try {
   const { resolveSandboxConfigForAgent } = await import("../../src/agents/sandbox/config.js");
-  const owner = (await import(
-    pathToFileURL(path.resolve(values.owner)).href
-  )) as typeof import("../../src/agents/sandbox/docker.js");
+  const owner = await import(pathToFileURL(path.resolve(values.owner)).href);
   const readOnlyResourceMounts: Array<{ hostPath: string; containerPath: string }> = [];
   for (let index = 0; index < 40; index++) {
     const hostPath = path.join(root, `resource-${index}`);
@@ -135,19 +178,41 @@ try {
     readOnlyResourceMounts.push({ hostPath, containerPath: `/resources/skill-${index}` });
   }
   const cfg = resolveSandboxConfigForAgent({
-    agents: { defaults: { sandbox: { mode: "all", scope: "shared", workspaceAccess: "rw" } } },
+    agents: {
+      defaults: {
+        sandbox: { mode: "all", backend: engine, scope: "shared", workspaceAccess: "rw" },
+      },
+    },
   });
-  const invoke = () =>
-    owner.ensureSandboxContainer({
-      engine: owner.DOCKER_SANDBOX_ENGINE,
-      scopeKey: "sandbox-start-measure",
-      workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      readOnlyResourceMounts,
-      cfg,
-    });
+  const params = {
+    scopeKey: "sandbox-start-measure",
+    workspaceDir,
+    agentWorkspaceDir: workspaceDir,
+    readOnlyResourceMounts,
+    cfg,
+  };
+  const invoke = values.backend
+    ? async () => {
+        const { createSandboxBackend } =
+          owner as typeof import("../../src/agents/sandbox/backend.js");
+        const result = await createSandboxBackend({ ...params, sessionKey: params.scopeKey });
+        assert.equal(
+          result.runtimeId,
+          `${cfg.docker.containerPrefix}${engine === "podman" ? "podman-" : ""}shared`,
+        );
+      }
+    : async () => {
+        const { ensureSandboxContainer, DOCKER_SANDBOX_ENGINE, PODMAN_SANDBOX_ENGINE } =
+          owner as typeof import("../../src/agents/sandbox/docker.js");
+        const result = await ensureSandboxContainer({
+          ...params,
+          engine: engine === "podman" ? PODMAN_SANDBOX_ENGINE : DOCKER_SANDBOX_ENGINE,
+        });
+        assert.equal(result.containerId, containerId);
+        assert.equal(result.currentConfig, true);
+      };
   for (let index = 0; index < 10; index++) {
-    assert.equal((await invoke()).containerId, containerId);
+    await invoke();
   }
   await fs.writeFile(callsFile, "");
   global.gc();
@@ -172,10 +237,8 @@ try {
   const durations: number[] = [];
   for (let index = 0; index < iterations; index++) {
     const start = performance.now();
-    const result = await invoke();
+    await invoke();
     durations.push(performance.now() - start);
-    assert.equal(result.containerId, containerId);
-    assert.equal(result.currentConfig, true);
   }
   measuredEnd = performance.now();
   const elapsedMs = measuredEnd - measuredStart;
@@ -194,10 +257,21 @@ try {
     }
   }
   const calls = (await fs.readFile(callsFile, "utf8")).trim().split("\n");
-  assert(
-    calls.every((call) => call === "inspect"),
-    "Warm reuse must not mutate the container",
+  const callsByOperation = Object.fromEntries(
+    ["inspect", "image", "create", "start", "context", "info", "exec"].map((operation) => [
+      operation,
+      calls.filter((call) => call === operation).length / iterations,
+    ]),
   );
+  if (values["cold-create"]) {
+    assert.equal(callsByOperation.create, 1);
+    assert.equal(callsByOperation.start, 1);
+  } else {
+    assert(
+      calls.every((call) => ["inspect", "context", "info", "exec"].includes(call)),
+      "Warm reuse must not mutate the container",
+    );
+  }
   durations.sort((a, b) => a - b);
   console.log(
     JSON.stringify({
@@ -211,12 +285,17 @@ try {
       iterations,
       resourceMounts: readOnlyResourceMounts.length,
       allocations: values.allocations,
+      coldCreate: values["cold-create"],
+      backend: values.backend,
+      engine,
+      callsByOperation,
       timingAndGcDiagnosticOnly: values.allocations,
       postWarmBarrierMs: 100,
       postWarmBarrierElapsedMs,
       measurementStartedAt,
       processAgeAtMeasurementStartMs: measuredStart,
-      inspectCallsPerTurn: calls.length / iterations,
+      inspectCallsPerTurn: callsByOperation.inspect,
+      engineCallsPerTurn: calls.length / iterations,
       elapsedMs,
       cpuUsPerTurn: (used.user + used.system) / iterations,
       sampledBytesPerTurn: sampledBytes === undefined ? undefined : sampledBytes / iterations,

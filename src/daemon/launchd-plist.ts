@@ -308,6 +308,15 @@ export async function resolveLaunchAgentProgramArguments(
         ? "inline-and-file"
         : "file";
   }
+  // Program owns execvp's executable; argv[0] may deliberately name something else.
+  // Only the existing generated wrapper contract exposes its inner executable.
+  const program = plist?.Program === undefined ? args[0] : plist.Program;
+  if (typeof program === "string" && program) {
+    const executable = layout && program === args[0] ? effectiveProgramArguments[0] : program;
+    if (executable) {
+      options?.onEffectiveExecutable?.(executable);
+    }
+  }
   return {
     programArguments: effectiveProgramArguments,
     ...(workingDirectory ? { workingDirectory } : {}),

@@ -104,6 +104,9 @@ The merge is additive, so shared profiles are always available as
 fallbacks. There is no setting that isolates an agent's auth from the shared
 profiles.
 
+A child does not inherit its parent's selected account. See
+[Defaults](/tools/subagents/tool-reference#tool-sessions_spawn).
+
 ### Memory audience inheritance
 
 OpenClaw `sessions_spawn` (including ACP runtimes) and realtime voice consults

@@ -161,7 +161,7 @@ it("keeps recovery and pressure checks running while a Linux footprint read is p
     expect(recover).toHaveBeenCalledWith(
       expect.objectContaining({ operation, allowActiveAbort: true }),
     );
-    expect(critical).toHaveBeenCalledTimes(2);
+    expect(critical).toHaveBeenCalledTimes(4);
     expect(readFile).toHaveBeenCalledTimes(1);
   } finally {
     footprint.resolve("RssAnon:\t1234 kB\nVmSwap:\t0 kB\n");

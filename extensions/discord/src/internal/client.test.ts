@@ -241,7 +241,9 @@ describe("Client gateway event queue", () => {
     return new Client({ clientId: "app1", token: "token", eventQueue }, { listeners });
   }
 
-  it("holds a listener slot until its underlying promise resolves", async () => {
+  it.each([29_999, 30_000])("orders listeners across clock changes (%dms)", async (elapsed) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     const firstStarted = createDeferred<void>();
     const firstSettlement = createDeferred<void>();
     const started: string[] = [];
@@ -254,15 +256,15 @@ describe("Client gateway event queue", () => {
       started.push("second");
     });
     const client = createQueuedClient([first, second]);
-
     const dispatch = client.dispatchGatewayEvent("READY", {});
     await firstStarted.promise;
-
     expect(started).toEqual(["first"]);
-
+    vi.advanceTimersByTime(elapsed);
+    vi.setSystemTime(Date.now() + (elapsed < 30_000 ? 3_600_000 : -3_600_000));
     firstSettlement.resolve();
     await dispatch;
     expect(started).toEqual(["first", "second"]);
+    expect(warning).toHaveBeenCalledTimes(elapsed < 30_000 ? 0 : 1);
   });
 
   it("logs a listener failure when its underlying promise rejects", async () => {

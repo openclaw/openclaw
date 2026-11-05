@@ -1,6 +1,7 @@
 // @vitest-environment node
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
+import { i18n } from "../../i18n/index.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import {
   normalizeChatFastModeInput,
@@ -358,7 +359,6 @@ const alternative = { agentRuntime: runtime("codex"), available: true, supportsF
 it.each<[Partial<ModelCatalogEntry> | null, string, boolean | undefined]>([
   [{}, "openclaw", true],
   [null, "openclaw", undefined],
-  [{ supportsFastMode: false }, "openclaw", undefined],
   [{ serviceTiers: undefined }, "openclaw", undefined],
   [{ available: undefined }, "openclaw", undefined],
   [{ available: false }, "openclaw", undefined],
@@ -392,6 +392,52 @@ it.each<[Partial<ModelCatalogEntry> | null, string, boolean | undefined]>([
     );
   },
 );
+
+it.each<[string, string, Partial<ModelCatalogEntry> | null, FastInput["fastModeTarget"]]>([
+  [
+    "saved Fast on a route that cannot carry it",
+    "openai",
+    { supportsFastMode: false },
+    { fastMode: true },
+  ],
+  ["an inherited default on such a route", "openai", { supportsFastMode: false }, {}],
+  [
+    "saved Ultrafast on such a route",
+    "openai",
+    { supportsFastMode: false },
+    { fastMode: "ultrafast" },
+  ],
+  ["a provider without a Fast mapping", "example-router", null, {}],
+])("does not present Fast as running for %s", (_case, provider, fields, target) => {
+  const input = fastRoute(
+    { ...fields, provider, serviceTiers: ["priority", "ultrafast"] },
+    { modelProvider: provider, fastMode: undefined, effectiveFastMode: true, ...target },
+  );
+  expectFast(
+    {
+      ...input,
+      currentModelOverride: `${provider}/model`,
+      catalog: fields === null ? [] : input.catalog,
+    },
+    {
+      active: false,
+      label: provider === "openai" ? "Standard" : "Default",
+      hint: undefined,
+      nextValue: "",
+      ultrafastSupported: undefined,
+    },
+  );
+});
+
+it("keeps Fast running while the selected route's applicability is unknown", () => {
+  expectFast(
+    fastRoute(
+      { provider: "anthropic", supportsFastMode: undefined },
+      { modelProvider: "anthropic", fastMode: undefined, effectiveFastMode: true },
+    ),
+    { active: true, label: "Fast", supported: true },
+  );
+});
 
 it.each(["ultra", "ultrafast"])("normalizes %s to Ultrafast", (value) => {
   expect(normalizeChatFastModeInput(value)).toBe("ultrafast");
@@ -440,4 +486,19 @@ it("preserves the wire preference without route recovery capability", () => {
     }),
     { currentOverride: "ultrafast", label: "Ultrafast", ultrafastSupported: false },
   );
+});
+
+it("routes the default model fallback through the catalog", () => {
+  const translate = vi.spyOn(i18n, "t");
+  try {
+    const state = resolveChatModelSelectState(
+      modelState({
+        sessionsResult: createSessionsListResult({ defaultsModel: "", defaultsProvider: "" }),
+      }),
+    );
+    expect(translate).toHaveBeenCalledWith("chat.modelControls.defaultModel", undefined);
+    expect(state.defaultLabel).toBe(i18n.t("chat.modelControls.defaultModel"));
+  } finally {
+    translate.mockRestore();
+  }
 });

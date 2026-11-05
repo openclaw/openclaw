@@ -1,4 +1,8 @@
 import type { Serializable, SpawnOptions } from "node:child_process";
+import type {
+  ReadFilePage,
+  ReadFilePageParams,
+} from "../../agents/sessions/tools/read-file-page.js";
 import type { BrokerExecaOptions, BrokerExecaResult } from "./execa-protocol.js";
 
 export type BrokerSpawnOptions = Pick<
@@ -14,12 +18,31 @@ export type BrokerSpawnOptions = Pick<
   | "uid"
   | "gid"
 > & { stdio: ("pipe" | "ignore" | "inherit" | "ipc")[] };
+export type ProcessOutputFile = { path: string; maxBytes?: number };
 export type BrokerRequest =
-  | { type: "read-file"; id: number; filePath: string }
+  | {
+      type: "read-file";
+      id: number;
+      filePath: string;
+      page?: ReadFilePageParams;
+    }
   | { type: "cancel-read-file"; id: number }
-  | { type: "spawn" | "prepare-spawn"; id: number; argv: string[]; options: BrokerSpawnOptions }
+  | {
+      type: "spawn" | "prepare-spawn";
+      id: number;
+      argv: string[];
+      options: BrokerSpawnOptions;
+      execCgroup?: string;
+      outputFile?: ProcessOutputFile;
+    }
   | { type: "launch"; id: number; allowed: boolean }
-  | { type: "spawn-execa"; id: number; argv: string[]; options: BrokerExecaOptions }
+  | {
+      type: "spawn-execa";
+      id: number;
+      argv: string[];
+      options: BrokerExecaOptions;
+      execCgroup?: string;
+    }
   | { type: "kill"; id: number; signal: NodeJS.Signals | number }
   | { type: "ipc"; id: number; sequence: number; message: Serializable }
   | { type: "disconnect"; id: number }
@@ -36,10 +59,11 @@ export type BrokerError = {
   spawnargs?: string[];
 };
 export type BrokerResponse =
+  | ({ type: "file-output"; id: number } & ({ bytes: number } | { error: BrokerError }))
   // Initialization failed before any native resource server or child launch was admitted.
   | { type: "startup-failed"; error: BrokerError }
   | { type: "file-read-chunk"; id: number; bytes: Buffer }
-  | { type: "file-read-result"; id: number; error?: Error; code?: string }
+  | { type: "file-read-result"; id: number; page?: ReadFilePage; error?: Error; code?: string }
   | { type: "prepared"; id: number }
   | { type: "ready"; pid: number }
   | { type: "owned"; id: number; pid: number }

@@ -16,6 +16,7 @@ import { isSignalTimeoutReason } from "../../failover-error.js";
 import { runAgentEndSideEffectsAsync } from "../../harness/agent-end-side-effects.js";
 import { finalizeHarnessContextEngineTurn } from "../../harness/context-engine-lifecycle.js";
 import { bindAgentHarnessHookMessages } from "../../harness/lifecycle-hook-messages.js";
+import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import type { AgentSession, SessionMessageEntry } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import {
@@ -34,6 +35,7 @@ import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import type { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { hasAsyncActivity } from "./attempt-terminal-evidence.js";
+import { captureAgentTerminalSnapshot } from "./attempt-terminal-snapshot.js";
 import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
 import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
@@ -195,13 +197,13 @@ export async function completeEmbeddedAttemptAfterTurn(
   } = input;
   const { withOwnedTranscriptWrite } = input.sessionLock;
   const { effectiveWorkspace, sessionAgentId } = input.setup;
-  const { sessionRuntime, bootstrap, bundleTools, toolBase } = input.prepared;
+  const { sessionRuntime, bootstrap, toolBase, promptToolPolicy } = input.prepared;
   const { sessionManager, cacheTrace, anthropicPayloadLogger } = sessionRuntime;
+  if (attempt.inputAlreadyDelivered) {
+    return;
+  }
   const { diagnosticTrace } = input.diagnostics;
   const { shouldRecordCompletedBootstrapTurn } = bootstrap;
-  const skillWorkshopAvailable = bundleTools.uncompactedEffectiveTools.some(
-    (tool) => tool.name === "skill_workshop",
-  );
   const { hookRunner } = sessionRuntime.agentSession;
   const { promptStartedAt, yieldAborted, transcriptLeafId } = prompt;
   const { sessionIdUsed, promptError, messagesSnapshot } = settled;
@@ -338,7 +340,12 @@ export async function completeEmbeddedAttemptAfterTurn(
   if (
     attempt.operation !== "settled-tool-finalization" &&
     attempt.sessionPersistence !== "detached" &&
-    !beforeAgentFinalizeRevisionReason
+    !beforeAgentFinalizeRevisionReason &&
+    // A refresh continues this logical turn; agent_end fires once, after its final attempt.
+    !(
+      executionState.terminal.kind === "ok" &&
+      captureAgentPluginRuntimeRefresh().continuesAfterAttempt()
+    )
   ) {
     const lifecycleForAgentEnd = projectAgentRunAttemptTerminal(executionState.terminal);
     // Abort outranks failure in terminal-outcome precedence: teardown races can
@@ -358,12 +365,18 @@ export async function completeEmbeddedAttemptAfterTurn(
       entry = entry.parentId ? sessionManager.getEntry(entry.parentId) : undefined;
     }
     const reachedPromptBoundary = transcriptLeafId === null || entry?.id === transcriptLeafId;
+    executionState.agentTerminal = captureAgentTerminalSnapshot({
+      terminalMessage: terminalEntry?.message,
+      reachedPromptBoundary,
+      success: !lifecycleForAgentEnd.aborted && !promptError,
+      hasHookError: agentEndError !== undefined,
+    });
     await runAgentEndSideEffectsAsync({
       [completedTurnMessageAnchor]:
         sourceTarget && terminalEntry && reachedPromptBoundary
           ? captureCompletedTurnMessageAnchor(sessionManager, terminalEntry.id)
           : undefined,
-      skillExperienceReviewSource:
+      completedTurnSource:
         sourceTarget && terminalEntry && reachedPromptBoundary
           ? { ...sourceTarget, entryId: terminalEntry.id }
           : undefined,
@@ -394,7 +407,8 @@ export async function completeEmbeddedAttemptAfterTurn(
           agentDir,
         ),
         authProfileId: attempt.authProfileId,
-        skillWorkshopAvailable,
+        // Prompt hooks can narrow the bundle; report the surface the model could call.
+        toolNames: promptToolPolicy.current.uncompactedEffectiveTools.map((tool) => tool.name),
         compacted: compactionOccurredThisAttempt,
         ...(attempt.config ? { config: attempt.config } : {}),
       },

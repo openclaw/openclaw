@@ -8,7 +8,7 @@ import {
   bindSqliteDatabaseAdmission,
   prepareSqliteDatabaseAdmission,
 } from "./sqlite-database-admission.js";
-import { assertSafeSqliteRuntime, requireNodeSqlite } from "./sqlite-native-runtime.js";
+import { requireNodeSqlite } from "./sqlite-native-runtime.js";
 import { registerSqliteReaderConnection } from "./sqlite-reader-lifecycle.js";
 import { trackSqliteSchema } from "./sqlite-schema-facts.js";
 
@@ -109,7 +109,6 @@ export function openNodeSqliteDatabase(
     {
       DatabaseSync: sqlite.DatabaseSync,
       StatementSync: sqlite.StatementSync,
-      iteratorBehavior: assertSafeSqliteRuntime(sqlite),
     },
     options?.readOnly !== true,
   );

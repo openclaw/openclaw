@@ -183,6 +183,21 @@ public actor GatewayChannelActor {
         return self.acceptedHTTPBearer?.token
     }
 
+    func dashboardAuthContext(
+        ifCurrentConnectionGeneration expectedGeneration: UInt64) -> GatewayChannelDashboardAuthContext?
+    {
+        guard let binding = self.authBinding(ifCurrentConnectionGeneration: expectedGeneration),
+              let options = self.connectOptions
+        else { return nil }
+        return GatewayChannelDashboardAuthContext(
+            binding: binding,
+            options: options,
+            encoder: self.encoder,
+            token: self.token,
+            password: self.password,
+            httpResourceBearer: self.httpResourceBearer(ifCurrentConnectionGeneration: expectedGeneration))
+    }
+
     nonisolated func retireSocketAdmission() {
         self.socketAdmission.withLock { $0 = false }
     }
@@ -711,8 +726,8 @@ extension GatewayChannelActor {
         let explicitToken = self.token?.trimmedNonEmpty
         let explicitBootstrapToken = self.bootstrapToken?.trimmedNonEmpty
         let explicitPassword = self.password?.trimmedNonEmpty
-        let storedEntry: DeviceAuthEntry? = if options.includeDeviceIdentity, options.allowStoredDeviceAuth,
-                                               let deviceId
+        let observedEntry: DeviceAuthEntry? = if options.includeDeviceIdentity, options.allowsDeviceAuthPersistence,
+                                                 let deviceId
         {
             DeviceAuthStore.loadToken(
                 deviceId: deviceId,
@@ -722,6 +737,8 @@ extension GatewayChannelActor {
         } else {
             nil
         }
+        // Fresh ingress may replace a retained credential without presenting it as authority.
+        let storedEntry = options.allowStoredDeviceAuth ? observedEntry : nil
         let storedToken = storedEntry?.token
         let storedScopes = storedEntry?.scopes ?? []
         let requestedScopesExceedStoredToken = Self.requestedScopesExceedStoredToken(
@@ -773,8 +790,8 @@ extension GatewayChannelActor {
             selected.observedTokens = DeviceAuthStore.observeTokens(
                 deviceId: deviceId,
                 gatewayID: options.deviceAuthGatewayID)
-        } else if let storedToken {
-            selected.observedTokens[options.role] = storedToken
+        } else if let observedToken = observedEntry?.token {
+            selected.observedTokens[options.role] = observedToken
         }
         return selected
     }
@@ -1458,7 +1475,8 @@ extension GatewayChannelActor {
             let code = response.error?.code
             let msg = response.error?.message
             let details = gatewayErrorDetails(response.error)
-            throw GatewayResponseError(method: method, code: code, message: msg, details: details)
+            throw GatewayResponseError(
+                method: method, code: code, message: msg, details: details, retryable: response.error?.retryable)
         }
         if let payload = response.payload {
             // Encode back to JSON with Swift's encoder to preserve types and avoid ObjC bridging exceptions.
@@ -1529,6 +1547,7 @@ extension GatewayChannelActor {
         if error is CancellationError ||
             error is OpenClawNativeStateError ||
             error is GatewayConnectAuthError ||
+            error is GatewayExternalAuthorizationError ||
             error is GatewayResponseError ||
             error is GatewayDecodingError ||
             error is GatewayTLSValidationError

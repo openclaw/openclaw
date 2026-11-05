@@ -14,6 +14,7 @@ import {
   prepareClaudeCli,
   recordCredentialBuffers,
   waitForProcessExit,
+  withClaudeCliTestDeadline,
 } from "./cli-runtime.test-support.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
 import { executeClaudeCli } from "./cli.runtime.js";
@@ -95,6 +96,11 @@ const contextForChild = (source: string, signal?: AbortSignal) =>
 
 const failureOf = (running: Promise<unknown>) => running.catch((failure: unknown) => failure);
 
+function expectFailure(error: unknown, message = EXIT_FAILURE) {
+  expect(error).toBeInstanceOf(Error);
+  expect(error).toHaveProperty("message", message);
+}
+
 function expectDiagnostic(error: unknown, included: string[], excluded: string[] = []) {
   const display = formatErrorMessageForDisplay(error);
   for (const text of included) {
@@ -110,11 +116,12 @@ async function transportFor(
   context: CliBackendExecuteContext,
   options: Partial<Parameters<typeof createClaudeCliTransport>[0]> = {},
 ) {
+  const request = withClaudeCliTestDeadline(context);
   const transport = await createClaudeCliTransport({
-    context,
+    context: request,
     args: [...context.args],
     initialize: {},
-    currentContext: () => context,
+    currentContext: () => request,
     onMessage: async () => {},
     onRequest: async () => () => ({}),
     onError: () => {},
@@ -129,11 +136,10 @@ async function transportFor(
   };
 }
 
+type ProcessOwner = ReturnType<typeof cliProcess.createClaudeCliProcessOwner>;
+
 function interceptSpawn(
-  intercept: (
-    owner: ReturnType<typeof cliProcess.createClaudeCliProcessOwner>,
-    spawn: ReturnType<typeof cliProcess.createClaudeCliProcessOwner>["spawn"],
-  ) => ReturnType<typeof cliProcess.createClaudeCliProcessOwner>["spawn"],
+  intercept: (owner: ProcessOwner, spawn: ProcessOwner["spawn"]) => ProcessOwner["spawn"],
 ) {
   const createOwner = cliProcess.createClaudeCliProcessOwner;
   vi.spyOn(cliProcess, "createClaudeCliProcessOwner").mockImplementation((...args) => {
@@ -145,10 +151,7 @@ function interceptSpawn(
 }
 
 function observeChild(
-  observe: (
-    child: OwnedStdioProcess,
-    owner: ReturnType<typeof cliProcess.createClaudeCliProcessOwner>,
-  ) => void | Promise<void>,
+  observe: (child: OwnedStdioProcess, owner: ProcessOwner) => void | Promise<void>,
 ) {
   interceptSpawn((owner, spawn) => async (options) => {
     const child = await spawn(options);
@@ -193,7 +196,7 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       );
       context.env.CLAUDE_FIXTURE_SCENARIO = "cancel";
       const current = attachLiveSession(context);
-      const events = executeClaudeCli(context);
+      const events = executeClaudeCli(withClaudeCliTestDeadline(context));
       const iterator = events[Symbol.asyncIterator]();
       const first = await withinTest(iterator.next(), signal);
       expect(first.value).toMatchObject({ type: "system", subtype: "hook_started", hook_id: "0" });
@@ -274,8 +277,9 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       context.argv0 = "/opt/shims/claude";
       context.env.OPENCLAW_CHILD_OOM_SCORE_ADJ = "1";
       const parentScore = await readFile("/proc/self/oom_score_adj", "utf8");
-      using owner = cliProcess.createClaudeCliProcessOwner(() => context);
-      const child = await owner.spawn(context);
+      const request = withClaudeCliTestDeadline(context);
+      using owner = cliProcess.createClaudeCliProcessOwner(() => request);
+      const child = await owner.spawn({ ...request, signal: request.abortSignal });
       let output = "";
       const consumed = child.consumeStdout((chunk) => {
         output += chunk;
@@ -309,8 +313,7 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       process.exit(1);
     `);
     const error = await failureOf(collect(context));
-    expect(error).toBeInstanceOf(Error);
-    expect(error).toHaveProperty("message", EXIT_FAILURE);
+    expectFailure(error);
     const display = expectDiagnostic(
       error,
       ["exited with code 1", "PermissionError: [Errno 1]", "'/bin/ps' 🦞"],
@@ -340,9 +343,8 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       // Exceed the pipe buffer so the ignored initialization cannot finish writing.
       context.systemPrompt = LARGE_INPUT;
       const error = await failureOf(collect(context));
-      expect(error).toBeInstanceOf(Error);
-      expect(error).toHaveProperty(
-        "message",
+      expectFailure(
+        error,
         exitCode === 0
           ? "Claude CLI live session exited unexpectedly without a terminal result."
           : EXIT_FAILURE,
@@ -363,6 +365,14 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       const diagnosticsStarted = createDeferred<void>();
       const releaseDiagnostics = createDeferred<void>();
       const inputErrors: unknown[] = [];
+      const expectPipeFailures = () => {
+        // A closed write and the queued stream error can both notify the adapter.
+        // Cancellation must survive every pipe failure, not depend on their count.
+        expect(inputErrors.length).toBeGreaterThan(0);
+        for (const error of inputErrors) {
+          expect(error).toMatchObject({ code: "EPIPE" });
+        }
+      };
       observeChild((child, owner) => {
         child.onError((error, source) => {
           if (source === "stdin") {
@@ -391,18 +401,21 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
     `,
       );
       context.systemPrompt = LARGE_INPUT;
-      context.abortSignal = AbortSignal.any([controller.signal, context.abortSignal ?? signal]);
+      context.abortSignal = AbortSignal.any([
+        controller.signal,
+        withClaudeCliTestDeadline(context).abortSignal,
+      ]);
       const result = collect(context);
       void result.catch(() => {});
       try {
         if (stage === "diagnostic drainage") {
           await withinTest(diagnosticsStarted.promise, signal);
-          expect(inputErrors).toMatchObject([{ code: "EPIPE" }]);
+          expectPipeFailures();
           controller.abort(reason);
           releaseDiagnostics.resolve();
         }
         await expect(result).rejects.toBe(reason);
-        expect(inputErrors).toMatchObject([{ code: "EPIPE" }]);
+        expectPipeFailures();
       } finally {
         releaseDiagnostics.resolve();
         await result.catch(() => {});
@@ -435,11 +448,7 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       });
       const error = await failureOf(transport.initialize());
       await transport.waitForExit();
-      expect(error).toBeInstanceOf(Error);
-      expect(error).toHaveProperty(
-        "message",
-        diagnosticsReject ? diagnosticError.message : EXIT_FAILURE,
-      );
+      expectFailure(error, diagnosticsReject ? diagnosticError.message : EXIT_FAILURE);
       if (!lateSend) {
         throw new Error("Expected a send after the native stdin error.");
       }
@@ -471,16 +480,8 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       await using transport = await transportFor(context, {
         onRequest: async (_request, signal) => {
           started.resolve(signal);
-          await new Promise<void>((resolve) => {
-            signal.addEventListener(
-              "abort",
-              () => {
-                aborted.resolve(disposed);
-                resolve();
-              },
-              { once: true },
-            );
-          });
+          signal.addEventListener("abort", () => aborted.resolve(disposed), { once: true });
+          await aborted.promise;
           return () => ({});
         },
       });
@@ -621,7 +622,20 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
   );
 });
 
-async function discoverFromNativeMenu(models: unknown[]) {
+it("discovers native models without a turn, resolving aliases and retaining unmatched defaults", async () => {
+  const models = [
+    ...[
+      ["default", "claude-future[1m]", "Default (recommended)"],
+      ["future", "claude-future[1m]", "Future"],
+      ["opus", "claude-opus-5-5", "Opus"],
+    ].map(([value, resolvedModel, displayName]) => ({
+      value,
+      resolvedModel,
+      displayName,
+      supportedEffortLevels: ["low", "max"],
+    })),
+    { value: "default", resolvedModel: "claude-hidden", displayName: "Default (recommended)" },
+  ];
   const context = await contextForChild(`
     ${PROTOCOL_SETUP}
     createInterface({ input: process.stdin }).on("line", (line) => {
@@ -640,25 +654,7 @@ async function discoverFromNativeMenu(models: unknown[]) {
     expect(options.args).toContain("--tools");
     return spawn({ ...options, command: context.command, args: context.args });
   });
-  return discoverClaudeCliModels({ env: context.env });
-}
-
-it("discovers native models without a turn, resolving aliases and retaining unmatched defaults", async () => {
-  expect(
-    await discoverFromNativeMenu([
-      ...[
-        ["default", "claude-future[1m]", "Default (recommended)"],
-        ["future", "claude-future[1m]", "Future"],
-        ["opus", "claude-opus-5-5", "Opus"],
-      ].map(([value, resolvedModel, displayName]) => ({
-        value,
-        resolvedModel,
-        displayName,
-        supportedEffortLevels: ["low", "max"],
-      })),
-      { value: "default", resolvedModel: "claude-hidden", displayName: "Default (recommended)" },
-    ]),
-  ).toEqual([
+  expect(await discoverClaudeCliModels({ env: context.env })).toEqual([
     expect.objectContaining({
       id: "claude-future[1m]",
       name: "Future",

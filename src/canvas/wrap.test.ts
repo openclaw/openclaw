@@ -108,9 +108,9 @@ it("keeps the wrapped document bytes stable", () => {
     '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
   );
 
-  expect(Buffer.byteLength(html)).toBe(17895);
+  expect(Buffer.byteLength(html)).toBe(17967);
   expect(createHash("sha256").update(html).digest("hex")).toBe(
-    "d24f2ef46f994f7c099512e4b17b03d79cd539b0e11a66e68604c245f9d7be24",
+    "c7d26e46938bab7e73a1902c863092740b44f6a72b7837033e386549abc84d6e",
   );
 });
 // The host side reads port data through the pristine getter, so a widget

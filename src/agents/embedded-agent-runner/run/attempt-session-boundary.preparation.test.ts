@@ -22,7 +22,7 @@ it("freezes foreign input exclusion across reload and provider conversion", asyn
     timestamp: 1,
     idempotencyKey: "foreign:user",
   };
-  const activeSession = { agent: { state: { messages: [foreign] } } };
+  const activeSession = { agent: { state: { messages: [foreign] } }, subscribe: () => () => {} };
 
   const reconcile = await prepareForeignPendingUserTurns({ getSessionTarget: () => target });
   entries.set("foreign-entry", "foreign:user");

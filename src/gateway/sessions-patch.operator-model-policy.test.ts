@@ -1,7 +1,11 @@
 import { assert, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { configFor } from "../agents/model-auth.fixtures.test-support.js";
-import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
+import {
+  captureOperatorModelPolicySnapshot,
+  prepareOperatorModelPolicy,
+  restoreOperatorModelPolicySnapshot,
+} from "../agents/operator-model-policy.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
@@ -83,6 +87,48 @@ function fixture(defaultOnly = false) {
 }
 
 describe("session model patches under operator policy", () => {
+  it("requires explicit Access grants independently of model aliases and keeps clearing safe", async () => {
+    const cfg: OpenClawConfig = { agents: { defaults: { model: "openai/fixture" } } };
+    const revoked = new AbortController();
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "limited-operator",
+      scopes: ["operator.write"],
+      assertCurrent: () => revoked.signal.throwIfAborted(),
+      modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { allow: ["openai/fixture"] } }),
+      rolePolicy: {
+        sessionAccessCap: "none",
+        sandboxRequired: false,
+        agents: "*",
+        accessPrograms: { cyber: ["daybreak_blue"] },
+      },
+    });
+    const project = (cyberAccessProgram: "daybreak_blue" | "daybreak_red" | null) =>
+      projectSessionsPatchEntry({
+        cfg,
+        operatorAuthority,
+        storeKey: key,
+        existingEntry: {
+          sessionId: "access-session",
+          updatedAt: 1,
+          cyberAccessProgram: "daybreak_red",
+        },
+        isLabelInUse: () => false,
+        patch: { key, cyberAccessProgram },
+      });
+    expect(await project("daybreak_red")).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN" },
+    });
+    const blue = await project("daybreak_blue");
+    assert(blue.ok);
+    expect(blue.validateModelSelection?.()).toBeUndefined();
+    const cleared = await project(null);
+    assert(cleared.ok);
+    expect(cleared.entry).not.toHaveProperty("cyberAccessProgram");
+    revoked.abort(new Error("Access role changed"));
+    expect(blue.validateModelSelection?.()).toMatchObject({ code: "FORBIDDEN" });
+  });
+
   it.each<[string | null, "source" | "model-policy" | undefined]>([
     ["fixture/blocked", undefined],
     ["blocked", undefined],
@@ -112,6 +158,53 @@ describe("session model patches under operator policy", () => {
             ? { ...denied, message: expect.stringContaining("operator source changed") }
             : denied,
       });
+    }
+  });
+
+  it("denies the model named by a family wildcard prefix, also from a restored snapshot", async () => {
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: false },
+      agents: { defaults: { model: "fixture/allowed" } },
+      ...configFor("fixture", "https://fixture.invalid/v1", { api: "openai-completions" }),
+    };
+    const entries = ["allowed", "restricted-v1", "restricted-v1-mini"].map((id) => ({
+      provider: "fixture",
+      id,
+      name: id,
+    }));
+    const prepared = prepareOperatorModelPolicy({
+      cfg,
+      policy: { allow: ["fixture/*"], deny: ["fixture/restricted-v1*"] },
+    });
+    const snapshot = captureOperatorModelPolicySnapshot(prepared);
+    assert(snapshot);
+    for (const modelPolicy of [prepared, restoreOperatorModelPolicySnapshot(snapshot)]) {
+      const source = new AbortController();
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "limited-operator",
+        scopes: ["operator.write"],
+        assertCurrent: () => source.signal.throwIfAborted(),
+        modelPolicy,
+      });
+      const project = (model: string) =>
+        projectSessionsPatchEntry({
+          cfg,
+          operatorAuthority,
+          existingEntry: { sessionId: "family-session", updatedAt: 1 },
+          isLabelInUse: () => false,
+          storeKey: key,
+          patch: { key, model },
+          loadGatewayModelCatalogSnapshot: async () => ({ entries, routeVariants: entries }),
+        });
+      expect(await project("fixture/restricted-v1")).toMatchObject({ ok: false, error: denied });
+      expect(await project("fixture/restricted-v1-mini")).toMatchObject({
+        ok: false,
+        error: denied,
+      });
+      const allowed = await project("fixture/allowed");
+      assert(allowed.ok);
+      source.abort(new Error("operator source changed"));
+      expect(allowed.validateModelSelection?.()).toMatchObject({ code: "FORBIDDEN" });
     }
   });
 

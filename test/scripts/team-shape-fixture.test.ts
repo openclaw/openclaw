@@ -8,6 +8,7 @@ import {
   generateTeamShapeFixture,
   parseTeamShapeOptions,
 } from "../../scripts/perf/team-shape-fixture.ts";
+import { validateConfigObject } from "../../src/config/validation-core.js";
 import { flushLogger, resetLogger } from "../../src/logging/logger.js";
 import { captureFullEnv } from "../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -30,6 +31,7 @@ it("rejects unsafe ports and refuses to overwrite existing state", async () => {
     expect(() => parseTeamShapeOptions(["--state-dir", "/unused", "--port", port])).toThrow();
   }
   for (const args of [
+    ["--agents", "0"],
     ["--long-transcript-entries", "1000000"],
     ["--worktree-files", "500001"],
     ["--projects", "0", "--worktree-files", "1"],
@@ -219,8 +221,8 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
       )
       .all();
     expect(mix).toEqual([
-      { execution: "interrupted", delivery: "not_required", n: 2 },
       { execution: "terminal", delivery: "delivered", n: 15 },
+      { execution: "terminal", delivery: "not_required", n: 2 },
       { execution: "terminal", delivery: "pending", n: 3 },
     ]);
   }
@@ -230,6 +232,53 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
     cron: { enabled: false },
   });
 });
+
+it.each(["main", "reviewer"])(
+  "keeps %s session keys consistent across retained runs and automation targets",
+  async (agentId) => {
+    const stateDir = path.join(temporary.make("team-shape-keys-"), "state");
+    const sessionKeys = [
+      `agent:${agentId}:24800000-0000-4000-8000-000000000001`,
+      `agent:${agentId}:dashboard:24800001-0000-4000-8000-000000000001`,
+    ];
+    await generateTeamShapeFixture({
+      ...options(
+        stateDir,
+        `--sessions 3 --agents ${agentId === "main" ? 1 : 2} --runs 1 --settled-runs --approvals 0 --cron 1 --cron-announce-last --projects 0 --transcript-mib 0`,
+      ),
+      agentId,
+      sessionKeys,
+    });
+    expect(validateConfigObject(readJson(path.join(stateDir, "openclaw.json")))).toMatchObject({
+      ok: true,
+    });
+    using agent = openDb(path.join(stateDir, `agents/${agentId}/agent/openclaw-agent.sqlite`));
+    using state = openDb(path.join(stateDir, "state/openclaw.sqlite"));
+    expect(
+      agent
+        .prepare("SELECT session_key FROM session_nodes WHERE entry_valid = 1 ORDER BY session_key")
+        .all(),
+    ).toEqual([
+      { session_key: sessionKeys[0] },
+      { session_key: sessionKeys[1] },
+      { session_key: `agent:${agentId}:team-shape-session-2` },
+    ]);
+    expect(
+      state.prepare("SELECT child_session_key, requester_session_key FROM subagent_runs").all(),
+    ).toEqual([{ child_session_key: sessionKeys[1], requester_session_key: sessionKeys[0] }]);
+    expect(
+      JSON.parse(
+        String(state.prepare("SELECT payload_json FROM subagent_runs").get()?.payload_json),
+      ),
+    ).toMatchObject({ childAgentId: agentId, requesterAgentId: agentId });
+    expect(
+      JSON.parse(String(state.prepare("SELECT job_json FROM cron_jobs").get()?.job_json)),
+    ).toMatchObject({
+      agentId,
+      sessionKey: sessionKeys[1],
+    });
+  },
+);
 
 it("retains settled history and seeds disabled announce/last jobs without delivery routes", async () => {
   const stateDir = path.join(temporary.make("team-shape-settled-"), "state");
@@ -246,7 +295,7 @@ it("retains settled history and seeds disabled announce/last jobs without delive
     settledRuns: true,
     cronJobs: 40,
     cronAnnounceLast: true,
-    retainedRunStates: { successful: 51, failed: 9, pending: 0, interrupted: 0 },
+    retainedRunStates: { successful: 51, failed: 9, pending: 0, cancelled: 0 },
   });
   using state = openDb(path.join(stateDir, "state/openclaw.sqlite"));
   expectCounts(state, {
@@ -273,12 +322,12 @@ it("retains settled history and seeds disabled announce/last jobs without delive
   expect(JSON.parse(String(target?.entry_json))).not.toHaveProperty("deliveryContext");
 });
 
-it("seeds the stress category mix with readable targets and settled unarchived subagents", async () => {
+it("seeds the stress category mix with readable collector parents and settled unarchived children", async () => {
   const stateDir = path.join(temporary.make("team-shape-load-"), "state");
   const { summary } = await generateTeamShapeFixture(
     options(
       stateDir,
-      "--sessions 108 --runs 43 --settled-runs --team-stress --approvals 0 --cron 0 --projects 0 --transcript-mib 1",
+      "--sessions 108 --runs 43 --settled-runs --team-stress --agents 8 --approvals 0 --cron 0 --projects 0 --transcript-mib 1",
     ),
   );
   expect(summary.stressCounts).toMatchObject({
@@ -296,8 +345,17 @@ it("seeds the stress category mix with readable targets and settled unarchived s
     "session_nodes WHERE session_key LIKE 'agent:main:dashboard:%' AND archived_at IS NULL": 4,
   });
   expectCounts(state, {
-    "subagent_runs WHERE child_session_key LIKE 'agent:main:subagent:%' AND json_extract(payload_json, '$.execution.status') = 'terminal' AND json_extract(payload_json, '$.delivery.status') = 'delivered'": 43,
+    "subagent_runs WHERE child_session_key LIKE 'agent:main:subagent:%' AND json_extract(payload_json, '$.execution.status') = 'terminal' AND json_extract(payload_json, '$.delivery.status') = 'not_required' AND json_extract(payload_json, '$.collect') = 1 AND json_extract(payload_json, '$.collectorCompletion.status') IN ('done', 'failed')": 43,
   });
+  expectCounts(state, {
+    "subagent_runs WHERE json_extract(payload_json, '$.swarmRequesterSessionKey') = requester_session_key AND json_extract(payload_json, '$.groupId') IS NOT NULL": 43,
+  });
+  const oldest = state
+    .prepare(
+      "SELECT min(json_extract(payload_json, '$.completion.capturedAt')) AS at FROM subagent_runs",
+    )
+    .get();
+  expect(Number(oldest?.at)).toBeGreaterThan(summary.now - 31 * 60_000);
   expect(summary.stressTargets?.length).toBeGreaterThan(0);
   for (const target of summary.stressTargets ?? []) {
     const row = agent
@@ -311,6 +369,12 @@ it("seeds the stress category mix with readable targets and settled unarchived s
       .get(String(row?.session_id));
     expect(Number(transcript?.n)).toBeGreaterThan(1);
   }
-  const agents = readJson(path.join(stateDir, "openclaw.json")).agents.entries;
-  expect(Object.keys(agents).toSorted()).toEqual(["main", "planner", "researcher", "reviewer"]);
+  const agentConfig = readJson(path.join(stateDir, "openclaw.json")).agents;
+  expect(agentConfig.defaults.subagents.archiveAfterMinutes).toBeGreaterThanOrEqual(120);
+  const agents = agentConfig.entries;
+  expect(Object.keys(agents).join(",")).toBe(
+    "main,reviewer,researcher,planner,agent-5,agent-6,agent-7,agent-8",
+  );
+  expect(summary.agentCount).toBe(8);
+  expect(fs.statSync(agents["agent-8"].workspace).isDirectory()).toBe(true);
 });

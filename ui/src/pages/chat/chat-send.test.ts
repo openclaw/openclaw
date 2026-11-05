@@ -31,6 +31,7 @@ import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient as clientWithRequest } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -53,6 +54,7 @@ import {
   expectNoRpc,
   expectRpc,
   findRequestPayload,
+  historyBudget,
   makeChatHost,
   makeRequestMock,
   requestCalls,
@@ -60,7 +62,12 @@ import {
 } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import { admitHostQueueItems, idleChatHistory, row } from "./chat-outbox-recovery.test-support.ts";
+import {
+  admitHostQueueItems,
+  createQueuedLocalCommand,
+  idleChatHistory,
+  row,
+} from "./chat-outbox-recovery.test-support.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
 import {
   keepVolatileQueuedMessage,
@@ -111,9 +118,7 @@ type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = ReturnType<typeof makeChatHost>;
 
 const startupOptions = { startup: true, awaitHistory: true, deferBranches: true };
-const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
-const storageError =
-  "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
+const storageError = "Couldn’t save this message. Free browser storage or reconnect to send it.";
 
 function admitItem(
   host: TestChatHost,
@@ -194,20 +199,6 @@ function cacheEmptyChatSnapshot(host: ChatHost, sessionKey: string): void {
       sessionId: "cached-session",
     },
   );
-}
-
-function createQueuedLocalCommand(
-  id: string,
-  text: string,
-  options: { createdAt?: number; sessionKey?: string } = {},
-) {
-  const [name, ...args] = text.slice(1).split(" ");
-  return queuedMessage(id, text, {
-    createdAt: options.createdAt ?? 1,
-    localCommandArgs: args.join(" "),
-    localCommandName: name ?? "",
-    sessionKey: options.sessionKey ?? "agent:main",
-  });
 }
 
 const executeSlashCommandMock = vi.fn();
@@ -1436,7 +1427,8 @@ describe("handleSendChat", () => {
 
     expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
     expect(host.chatQueue[0]).toMatchObject({
-      sendError: "Chat settings update was interrupted. Review and retry when ready.",
+      sendError:
+        "Couldn’t update session settings. The update was interrupted. Review the settings before trying again.",
       sendState: "failed",
       text,
     });
@@ -2334,7 +2326,7 @@ describe("handleSendChat", () => {
       .mockImplementationOnce(async () => {
         events.push("think-failed");
         return {
-          content: "Failed to set thinking level: gateway closed during command",
+          content: "Couldn’t change effort. Try again. gateway closed during command",
           failed: true,
         };
       })
@@ -3800,9 +3792,10 @@ describe("handleSendChat", () => {
 
     await resumeStoredChatOutboxes(host);
 
-    // Pre-fix: the failure was recorded on the queue item with no visible outcome.
     expect(host.lastError).toBeNull();
-    await waitForFast(() => expect(document.body.textContent).toContain("Command /think failed."));
+    await toastHost.updateComplete;
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => expect(document.body.textContent).toContain("Command /think failed."));
     expectItems(
       listStoredChatOutboxes(host).flatMap((outbox) => outbox.queue),
       { id: item.id, sendState: "failed" },
@@ -3843,7 +3836,9 @@ describe("handleSendChat", () => {
 
     await resumeStoredChatOutboxes(host);
 
-    await waitForFast(() => expect(document.body.textContent).toContain("gateway auth failed"));
+    await toastHost.updateComplete;
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => expect(document.body.textContent).toContain("gateway auth failed"));
     // Global rows share one key; the toast must borrow the failed agent's label.
     expect(document.body.textContent).toContain("Writer global chat");
     expect(document.body.textContent).not.toContain("Main global chat");

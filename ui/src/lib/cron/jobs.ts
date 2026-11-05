@@ -11,6 +11,7 @@ import type { CronCompactJob, CronJob, CronJobsListResult } from "../../api/type
 import { formatUiError } from "../format-error.ts";
 import { usesCronInventoryEvents } from "./inventory-connection.ts";
 import { cronInventoryHasJob, readCronInventory } from "./inventory.ts";
+import type { DEFAULT_CRON_JOBS_FILTERS } from "./state.ts";
 import type { CronJobsState } from "./types.ts";
 
 function clearCronJobsSnapshot(state: CronJobsState<unknown>) {
@@ -51,6 +52,7 @@ type CronRuntimeState = Pick<
   | "lastStatus"
   | "runningAtMs"
   | "autoDisabled"
+  | "admissionDeferred"
   | "lastError"
   | "lastDurationMs"
   | "lastMeaningfulResult"
@@ -79,7 +81,11 @@ export type CronJobsProjection<Row extends CronInventoryJob> = {
 
 const cronInventoryScopes = new WeakMap<
   CronJobsState<unknown>,
-  { scope: CronJobsState["cronAgentId" | "cronSessionFilter"]; query?: string }
+  {
+    scope: CronJobsState["cronAgentId" | "cronSessionFilter"];
+    query?: string;
+    requestedQuery: string;
+  }
 >();
 const cronInventoryRequests = new WeakMap<CronJobsState<unknown>, object>();
 
@@ -110,6 +116,7 @@ const compactCronJobsProjection: CronJobsProjection<CronCompactJob> = {
       lastRunStatus: lastRunStatus ?? lastStatus ?? null,
       runningAtMs,
       autoDisabled,
+      admissionDeferred: runtime.admissionDeferred,
       lastDurationMs: runtime.lastDurationMs,
       lastMeaningfulResult: runtime.lastMeaningfulResult,
       lastTriggerEvalAtMs: runtime.lastTriggerEvalAtMs,
@@ -171,6 +178,7 @@ function applyLegacyCronJobsEvent<Row extends CronInventoryJob>(
       lastStatus,
       runningAtMs,
       autoDisabled,
+      admissionDeferred: runtime.admissionDeferred,
       lastDurationMs: runtime.lastDurationMs,
       lastMeaningfulResult: runtime.lastMeaningfulResult,
       lastTriggerEvalAtMs: runtime.lastTriggerEvalAtMs,
@@ -192,6 +200,33 @@ export function loadCompactCronJobsPage(
   return loadCronJobsProjectionPage(state, compactCronJobsProjection, opts);
 }
 
+export function buildCronJobsListParams(
+  state: Pick<
+    CronJobsState,
+    keyof typeof DEFAULT_CRON_JOBS_FILTERS | "cronAgentId" | "cronSessionFilter"
+  >,
+  options: { offset?: number; tableFilters?: boolean } = {},
+): Omit<CronListParams, "compact"> {
+  return {
+    ...(state.cronSessionFilter ?? (state.cronAgentId ? { agentId: state.cronAgentId } : {})),
+    includeDisabled: state.cronJobsEnabledFilter === "all",
+    includeDeliveryPreviews: false,
+    limit: state.cronJobsLimit,
+    offset: options.offset ?? 0,
+    query: state.cronJobsQuery.trim() || undefined,
+    enabled: state.cronJobsEnabledFilter,
+    ...(options.tableFilters
+      ? {
+          scheduleKind: state.cronJobsScheduleKindFilter,
+          lastRunStatus: state.cronJobsLastStatusFilter,
+          trigger: state.cronJobsTriggerFilter,
+        }
+      : {}),
+    sortBy: state.cronJobsSortBy,
+    sortDir: state.cronJobsSortDir,
+  };
+}
+
 export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
   state: CronJobsState<Row>,
   projection: CronJobsProjection<Row>,
@@ -202,24 +237,7 @@ export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
   }
   const append = opts?.append === true;
   const offset = append ? Math.max(0, state.cronJobsNextOffset ?? state.cronJobs.length) : 0;
-  const params: Omit<CronListParams, "compact"> = {
-    ...(state.cronSessionFilter ?? (state.cronAgentId ? { agentId: state.cronAgentId } : {})),
-    includeDisabled: state.cronJobsEnabledFilter === "all",
-    includeDeliveryPreviews: false,
-    limit: state.cronJobsLimit,
-    offset,
-    query: state.cronJobsQuery.trim() || undefined,
-    enabled: state.cronJobsEnabledFilter,
-    ...(opts?.tableFilters
-      ? {
-          scheduleKind: state.cronJobsScheduleKindFilter,
-          lastRunStatus: state.cronJobsLastStatusFilter,
-          trigger: state.cronJobsTriggerFilter,
-        }
-      : {}),
-    sortBy: state.cronJobsSortBy,
-    sortDir: state.cronJobsSortDir,
-  };
+  const params = buildCronJobsListParams(state, { offset, tableFilters: opts?.tableFilters });
   if (opts?.event) {
     if (usesCronInventoryEvents(state.client)) {
       if (
@@ -255,6 +273,7 @@ export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
   cronInventoryScopes.set(state, {
     scope,
     query: previous?.scope === scope ? previous.query : undefined,
+    requestedQuery: query,
   });
   if (state.cronLoading || state.cronJobsLoadingMore) {
     if (!append) {
@@ -276,7 +295,8 @@ export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
       refresh: opts?.refresh,
       canRead: state.canRefresh,
     });
-    if (!isCurrentScope()) {
+    // A queued filter owns the next page. Keep the accepted rows until it arrives.
+    if (!isCurrentScope() || cronInventoryScopes.get(state)?.requestedQuery !== query) {
       return;
     }
     const page = readCanonicalCronListPage<Row>(res, params.limit ?? state.cronJobsLimit);
@@ -291,7 +311,7 @@ export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
       return;
     }
     resolveCronListPageNextOffset(page, offset);
-    cronInventoryScopes.set(state, { scope, query });
+    cronInventoryScopes.set(state, { scope, query, requestedQuery: query });
     state.cronJobs = append ? [...state.cronJobs, ...page.jobs] : page.jobs;
     state.cronJobsSnapshotRevision = page.snapshotRevision;
     state.cronJobsTotal = page.total;

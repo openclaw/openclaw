@@ -164,7 +164,7 @@ export function buildWidgetDocument(
     'const host={};define(host,"controlUiBaseUrl",{enumerable:true,get:()=>controlUiBaseUrl});freeze(host);' +
     "const api=freeze({host," +
     'prompt:freeze({send:sendPrompt}),state:freeze({emit:payload=>request("state.emit",{payload})}),' +
-    'data:freeze({read:(bindingId,params)=>request("data.read",{bindingId:stringify(bindingId),params})}),' +
+    'data:freeze({read:(bindingId,params)=>request("data.read",{bindingId:stringify(bindingId),params}),query:queryName=>request("data.query",{queryName:stringify(queryName)})}),' +
     'action:freeze({run:(action,params)=>request("action.run",{action:stringify(action),params:params===undefined?{}:params})}),' +
     'cron:freeze({trigger:jobId=>request("cron.trigger",{jobId:stringify(jobId)})})});' +
     'define(window,"openclaw",{value:api,writable:false,configurable:false});' +

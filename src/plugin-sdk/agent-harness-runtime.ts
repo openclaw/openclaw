@@ -26,6 +26,10 @@ import {
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
 import { queueDetachedEmbeddedAgentMessage } from "../agents/embedded-agent-runner/runs.message-injection.js";
+import {
+  buildDeprecatedSkillWorkshopPromptSection,
+  DEPRECATED_SKILL_WORKSHOP_TOOL_NAME,
+} from "../agents/harness/deprecated-skill-workshop-prompt.js";
 import { runStructuredInput } from "../agents/harness/structured-input-execution.js";
 import {
   compileStructuredInputForm,
@@ -172,6 +176,7 @@ export const agentHarnessAttemptTerminal = {
 };
 export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
 export { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
+export { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 export { restorePreparedUserTurnOperationalMetaForRuntime } from "../sessions/user-turn-transcript.metadata.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
@@ -306,8 +311,10 @@ export {
 } from "../agents/embedded-agent-tool-results.js";
 export {
   formatToolExecutionErrorMessage,
-  isToolResultError,
   resolveToolExecutionErrorKind,
+} from "../agents/tool-execution-error.js";
+export {
+  isToolResultError,
   resolveToolResultFailureKind,
   type ToolResultFailureKind,
 } from "../agents/tool-result-error.js";
@@ -340,10 +347,17 @@ export const agentHarnessStructuredInput = Object.freeze({
   run: runStructuredInput,
   snapshot: snapshotStructuredInput,
 });
-export {
-  buildSkillWorkshopPromptSection,
-  SKILL_WORKSHOP_TOOL_NAME,
-} from "../agents/skill-workshop-prompt.js";
+export { listToolPromptGuidance } from "../agents/tool-prompt-guidance.js";
+/**
+ * @deprecated Pass the run's callable tool names to listToolPromptGuidance; it includes
+ * this section while `skill_workshop` is callable.
+ */
+export const SKILL_WORKSHOP_TOOL_NAME = DEPRECATED_SKILL_WORKSHOP_TOOL_NAME;
+/**
+ * @deprecated Pass the run's callable tool names to listToolPromptGuidance; it includes
+ * this section while `skill_workshop` is callable.
+ */
+export const buildSkillWorkshopPromptSection = buildDeprecatedSkillWorkshopPromptSection;
 export {
   buildDelegationGuidanceSection,
   resolveMainSessionDelegationMode,
@@ -535,7 +549,8 @@ export const mcpStdioRuntime = Object.freeze({
   },
 });
 
-export type { McpToolCatalog, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
+export type { McpToolCatalog } from "../agents/agent-bundle-mcp-catalog.types.js";
+export type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 export { assignSafeServerNames as assignMcpCatalogSafeServerNames } from "../agents/agent-bundle-mcp-names.js";
 
 /**
