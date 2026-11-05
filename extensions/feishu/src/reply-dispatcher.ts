@@ -355,7 +355,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     const rest = text
       .slice(from.length)
-      .replace(from.endsWith("\n") ? /^\s*\n/u : /^\s*\n|^[^\S\n]+/u, "");
+      .replace(/[\r\n]$/u.test(from) ? /^\s*[\r\n]/u : /^\s*[\r\n]|^[^\S\r\n]+/u, "");
     const opener = rest && openFence(from);
     const at = text.length - rest.length;
     const lineEnd = at + text.slice(at).search(/[\r\n]|$/u);

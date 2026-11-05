@@ -1079,6 +1079,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["partial base", ["A. B.", "A", 2, "B.", true, false, "B. C."], ["A\n\nB.", "B. C."]],
     ["partial start", ["A. X.", true, "A. X. E.", 2, "N.", false], ["A. X.", "A. X. E.\n\nN."]],
     ["idle start", ["A. X.", null, "A. X. E.", 2, "N."], ["A. X.", "E.\n\nN."]],
+    ["fence cr indent", ["~~~\rx\r", null, "~~~\rx\r  y"], ["~~~\rx\r", "~~~\n  y"]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1401,7 +1402,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
     }
   });
-
   it("retains a failed visible close for media-delayed finalization registration", async () => {
     const { options, media, pending } = await holdMediaFinal("accepted card");
     expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
