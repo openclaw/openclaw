@@ -305,8 +305,7 @@ describe("session menu", () => {
         "Rename…",
         "Mark as unread",
         "Copy link",
-        "Open in new tab",
-        "Open in new window",
+        "Open in",
         "Move to group",
         "Add to section",
         "Archive session",
@@ -339,9 +338,9 @@ describe("session menu", () => {
   );
 
   it("navigates compact groups without side flyouts", async () => {
-    const menu = await mountMenu({ compact: true, groups: ["Research"], splitAllowed: true });
+    const menu = await mountMenu({ compact: true, groups: ["Research"] });
     for (const view of ["copy", "open-in", "icon", "group"] as const) {
-      const advanced = view !== "group";
+      const advanced = view === "copy" || view === "icon";
       if (advanced) {
         await selectMenuValue(menu, "compact:open-advanced");
       }
@@ -366,6 +365,7 @@ describe("session menu", () => {
     expect(menuItemLabels(menu)).toContain(label);
     if ("selectionCount" in options) {
       expect(menuItemLabels(menu)).not.toContain("Advanced");
+      expect(menuItemLabels(menu)).not.toContain("Open in");
       expect(menuItemLabels(menu)).not.toContain("Pin session");
     }
   });
@@ -589,6 +589,8 @@ describe("session menu", () => {
     ["editor", { pullRequestUrl: null, worktreePath: "/work/trees/demo" }],
   ] as const)("opens resolved workspace destinations: %s", async (_name, work) => {
     const { menu, onAction } = await actionMenu({ work });
+    const openIn = menuItem(menu, "Open in");
+    expect(menuItemLabels(openIn)).toContain(work?.worktreePath ? "VS Code" : "New tab");
     if (work?.pullRequestUrl) {
       const openPr = menuItem(menu, "Open PR");
       openPr.focus();
@@ -599,7 +601,7 @@ describe("session menu", () => {
       expect(menuItemLabels(menu)).not.toContain("Open PR");
     }
     if (work?.worktreePath) {
-      await openAdvanced(menu, "Open in");
+      await openSubmenu(menu, "Open in");
       await selectMenuValue(menu, "open-in:vscode");
       expect(onAction).toHaveBeenCalledWith({
         kind: "open-in",

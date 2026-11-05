@@ -182,12 +182,8 @@ it("retains focused session menu controls through header refresh and restores fo
   const menu = mounted.container.querySelector("openclaw-chat-header-session-menu")!;
   await menu.updateComplete;
   const trigger = menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!;
-  await selectNativeMenu(menu, "submenu:advanced");
-  await waitForSolid(() =>
-    expect(menu.querySelector('[data-value="submenu:open-in"]')).not.toBeNull(),
-  );
-  const openIn = menu.querySelector<HTMLButtonElement>('[data-value="submenu:open-in"]')!;
   await selectNativeMenu(menu, "submenu:open-in");
+  const openIn = menu.querySelector<HTMLButtonElement>('[data-value="submenu:open-in"]')!;
   await waitForSolid(() => expect(menu.querySelector('[data-value="split-right"]')).not.toBeNull());
   const split = menu.querySelector<HTMLButtonElement>('[data-value="split-right"]')!;
   split.focus();

@@ -183,7 +183,6 @@ describe("chat pane header", () => {
     expect(menu.querySelector('[data-value="layout:side-panel"]')).toBeNull();
     await selectNativeMenu(menu, "layout:close-pane");
     expect(onClosePane).toHaveBeenCalledExactlyOnceWith("pane-1");
-    await selectNativeMenu(menu, "compact:open-advanced");
     await selectNativeMenu(menu, "compact:open-open-in");
     await selectNativeMenu(menu, "split-below");
     expect(onSplitDown).toHaveBeenCalledExactlyOnceWith("pane-1");
