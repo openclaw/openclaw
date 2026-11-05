@@ -569,7 +569,9 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
               registerPluginHttpRoute({
                 path: routePath,
                 auth: "plugin",
-                match: "exact",
+                // The JSON-RPC prefix owns its whole namespace: an unknown descendant must
+                // reach this handler's JSON 404 instead of the Control UI document.
+                match: routePath === "/a2a/v1" ? "prefix" : "exact",
                 pluginId: "a2a",
                 source: "a2a-gateway",
                 accountId: account.accountId,
