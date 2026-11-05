@@ -153,7 +153,7 @@ describe("Templates discovery", () => {
     );
     expect(result).toEqual({ type: "notFound", data: undefined });
     expect(ensureConfigLoaded).toHaveBeenCalledOnce();
-    expect(page.textContent).toContain("Templates is disabled");
+    expect(page.textContent).toContain("Templates is turned off");
     expect(page.querySelector("[data-templates-explore]")).toBeNull();
     expect(page.querySelector("[data-templates-confirm]")).toBeNull();
     expect(request.mock.calls.some(([method]) => method.startsWith("templates."))).toBe(false);
@@ -164,7 +164,7 @@ describe("Templates discovery", () => {
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
     setTemplatesEnabled(false);
     await vi.waitFor(() => expect(page.querySelector("[data-templates-explore]")).toBeNull());
-    expect(page.textContent).toContain("Templates is disabled");
+    expect(page.textContent).toContain("Templates is turned off");
   });
 
   it("shows official Templates and opens their dedicated route", async () => {

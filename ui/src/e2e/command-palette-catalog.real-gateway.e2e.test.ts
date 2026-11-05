@@ -456,7 +456,7 @@ suite.define(() => {
     if (typeof browserUrl !== "string") {
       throw new Error("Dashboard did not return a browser handoff");
     }
-    const warning = "Some models could not be refreshed. Open Models to try again.";
+    const warning = "Couldn’t refresh some models. Open Models to try again.";
     try {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         await page.goto(browserUrl);
@@ -685,7 +685,7 @@ suite.define(() => {
           await expect.poll(() => rejectedCatalogReplies).toBeGreaterThan(0);
           const status = page
             .locator(".cmd-palette [role=status]")
-            .filter({ hasText: "Model search unavailable" });
+            .filter({ hasText: "Couldn’t search models" });
           await status.waitFor({ state: "visible" });
           expect(await published.count()).toBe(1);
           if (captureEnabled) {

@@ -70,7 +70,8 @@ async function fixture(page: Page, supported = true) {
   await row(held.name).waitFor();
   const settled = () => details.locator('.chat-summary__automations[aria-busy="false"]').waitFor();
   await settled();
-  await page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).waitFor();
+  const childRoster = { source: "chat-pane", spawnedBy: sessionKey };
+  await gateway.waitForRequest("sessions.list", { match: childRoster });
   return { page, gateway, details, row, settled };
 }
 
@@ -205,11 +206,10 @@ suite.define(() => {
       await row(retargeted.name).waitFor({ state: "detached" });
       await row(held.name).waitFor();
       await settled();
-      expect(
-        (await gateway.getRequests()).filter(({ method }) =>
-          ["cron.add", "cron.update", "cron.remove", "cron.run"].includes(method),
-        ),
-      ).toEqual([]);
+      const writes = (await gateway.getRequests()).filter(({ method: rpc }) =>
+        ["cron.add", "cron.update", "cron.remove", "cron.run"].includes(rpc),
+      );
+      expect(writes).toHaveLength(0);
     });
   });
 });

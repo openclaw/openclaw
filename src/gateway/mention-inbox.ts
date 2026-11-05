@@ -611,27 +611,34 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
 
   return {
     async mentionable(client, input, publish, displayProfileIds) {
-      let preparationFailure: Result<never, ErrorShape> | undefined;
       try {
         // A committed profile change can invalidate preparation before this continuation runs.
         while (policy.needsDirectoryPreparation()) {
           await policy.prepareDirectory();
         }
       } catch {
-        preparationFailure = mentionInboxUnavailable(log);
+        publish(mentionInboxUnavailable(log));
+        return;
       }
+      let prepared: Awaited<ReturnType<typeof policy.prepareContext>>;
       try {
+        // Legacy synchronous recipient validation consumes the lookup’s prepared target cache.
         if ("sessionKey" in input) {
           await prepareTarget(input.sessionKey, input.agentId);
         }
+        prepared = await policy.prepareContext(input, true);
       } catch {
-        preparationFailure = mentionInboxUnavailable(log);
+        publish(mentionInboxUnavailable(log));
+        return;
       }
-      // Current policy selection and response publication must not cross another await.
-      publish(
-        preparationFailure ??
-          readOperation(() => policy.mentionable(client, input, undefined, displayProfileIds)),
-      );
+      try {
+        // Current policy selection and response publication must not cross another await.
+        publish(
+          readOperation(() => policy.mentionable(client, input, prepared, displayProfileIds)),
+        );
+      } finally {
+        prepared.release();
+      }
     },
     validateRecipients(client, input, profileIds) {
       warnMentionInboxDeprecation("validateRecipients");

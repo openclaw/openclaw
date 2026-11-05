@@ -74,7 +74,7 @@ it.each(["user", "generation", "access", "binding"] as const)(
       expect(viewCalls(request)[1]?.[1]).toEqual(replacement);
     }
     if (change === "access") {
-      expect(view.querySelector(".error")?.textContent).toContain("gateway unavailable");
+      expect(view.querySelector(".error")?.textContent).toContain("Couldn’t connect this app.");
     }
   },
 );

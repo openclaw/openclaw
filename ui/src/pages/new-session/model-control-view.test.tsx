@@ -341,7 +341,7 @@ it("retains accepted rows and search through failed refresh, then retires them o
     expect(container.querySelector("[data-chat-model-search]")).toBe(input);
     refresh.reject(new Error("Fixture metadata unavailable"));
     await waitForSolid(() =>
-      expect(container.textContent).toContain("Some models could not be refreshed"),
+      expect(container.textContent).toContain("Couldn’t refresh some models"),
     );
     expect(current()).toBe(row);
     expect(input.value).toBe("current");
@@ -354,7 +354,7 @@ it("retains accepted rows and search through failed refresh, then retires them o
     );
     retry.resolve(initial);
     await waitForSolid(() => {
-      expect(container.textContent).not.toContain("Some models could not be refreshed");
+      expect(container.textContent).not.toContain("Couldn’t refresh some models");
       expect(container.querySelector("[data-chat-model-refresh]")).toBeNull();
     });
     expect(current()).toBe(row);

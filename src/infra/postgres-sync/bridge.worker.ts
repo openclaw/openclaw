@@ -72,9 +72,13 @@ function createStatementCache(client: pg.Client) {
   }
 
   return {
-    async query(sql: string, parameters: readonly unknown[]): Promise<QueryResult | QueryResult[]> {
-      // Parameterless SQL keeps the simple protocol, which multi-statement batches need.
-      if (parameters.length === 0) {
+    async query(
+      sql: string,
+      parameters: readonly unknown[],
+      singleStatement = false,
+    ): Promise<QueryResult | QueryResult[]> {
+      // Writers retain simple-protocol batches; reader queries cannot end their enclosing transaction.
+      if (parameters.length === 0 && !singleStatement) {
         return client.query(sql);
       }
       let name = names.get(sql);
@@ -184,6 +188,9 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
         "set_config('statement_timeout', $2, false), set_config('search_path', $3, false)",
       [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`, searchPath],
     );
+    if (data.readOnly) {
+      await client.query("SET default_transaction_read_only = on");
+    }
     schema = namespace;
   }
 
@@ -215,6 +222,33 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
     } catch {
       // No user statement ran; discard the failed setup before opening a fresh transport.
       await connect(namespace);
+    }
+  }
+
+  async function query(sql: string, parameters: readonly unknown[]) {
+    if (!data.readOnly) {
+      return statements.query(sql, parameters);
+    }
+    // These are the native transaction owner's exact snapshot/settlement commands.
+    // Other SQL runs as one extended-protocol statement inside a sealed read-only transaction.
+    if (
+      /^\s*BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY\s*;?\s*$/i.test(sql) ||
+      /^\s*(?:COMMIT|ROLLBACK(?: TO SAVEPOINT openclaw_tx_nested)?)\s*;?\s*$/i.test(sql)
+    ) {
+      return statements.query(sql, parameters, true);
+    }
+    const ownTransaction = client.getTransactionStatus() === "I";
+    try {
+      if (ownTransaction) {
+        await client.query("BEGIN READ ONLY");
+      }
+      // Taking a snapshot prevents SET TRANSACTION from upgrading this reader to a writer.
+      await client.query("SELECT 1");
+      return await statements.query(sql, parameters, true);
+    } finally {
+      if (ownTransaction && client.getTransactionStatus() !== "I") {
+        await client.query("ROLLBACK");
+      }
     }
   }
 
@@ -269,7 +303,7 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
             request.reconnectIfIdle === true,
             request.validateIfIdle === true,
           );
-          const results = await statements.query(request.sql, request.parameters);
+          const results = await query(request.sql, request.parameters);
           const result: QueryResult = Array.isArray(results) ? results.at(-1)! : results;
           // A trailing SELECT must not hide an earlier write in the same SQL batch.
           const commands = (Array.isArray(results) ? results : [results]).map(

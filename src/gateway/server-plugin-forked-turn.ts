@@ -106,7 +106,10 @@ export async function runPluginForkedTurn<T>(
           );
         }
         // Lazy: the fork runtime stays out of the Gateway startup chunk.
-        const [{ readActiveTranscriptEntryAnchorAsync }, sessionFork] = await Promise.all([
+        const [
+          { readActiveTranscriptEntryAnchorAsync },
+          { readSessionForkTurn, prepareSessionFork, runSessionFork },
+        ] = await Promise.all([
           import("../config/sessions/session-transcript-anchor-read.js"),
           import("../agents/session-fork-run.js"),
         ]);
@@ -124,7 +127,7 @@ export async function runPluginForkedTurn<T>(
           );
         }
         // The anchored turn supplies its own requester and model, never the plugin.
-        const turn = await sessionFork.readSessionForkTurn(source, params.signal);
+        const turn = await readSessionForkTurn(source, params.signal);
         assertCurrent();
         if (!turn) {
           // Without the turn's own requester, sender-specific policy cannot be checked.
@@ -136,13 +139,20 @@ export async function runPluginForkedTurn<T>(
         const turnModel = turn.model ?? sessionModel;
         const override =
           params.provider && params.model ? splitTrailingAuthProfile(params.model) : undefined;
+        // On the session's own provider the fork runs on the credential the session's turns
+        // use (a user pin or an automatic rotation): its internal session has no stored
+        // selection, so without this it could bill another profile and miss the turn's cache.
+        const sessionProfile =
+          turnModel.provider === sessionModel.provider
+            ? target.entry.authProfileOverride?.trim()
+            : undefined;
         const model = override
           ? {
               provider: expectDefined(params.provider, "override provider"),
               model: override.model,
               ...(override.profile ? { authProfileId: override.profile } : {}),
             }
-          : turnModel;
+          : { ...turnModel, ...(sessionProfile ? { authProfileId: sessionProfile } : {}) };
         // Running on the turn's or session's own model needs no override trust.
         const ownModel =
           !override?.profile &&
@@ -153,7 +163,7 @@ export async function runPluginForkedTurn<T>(
           deps.authorizeModelOverride(model, override.profile);
         }
         assertOperatorModelAllowed(execution.operatorAuthority, model);
-        const prepared = await sessionFork.prepareSessionFork({
+        const prepared = await prepareSessionFork({
           config: cfg,
           source,
           tools,
@@ -168,7 +178,7 @@ export async function runPluginForkedTurn<T>(
         }
         let admitted: SubagentForkedTurnSource | undefined;
         const value = await execution.run(() =>
-          sessionFork.runSessionFork(
+          runSessionFork(
             {
               config: cfg,
               source,
