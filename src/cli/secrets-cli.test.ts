@@ -134,6 +134,11 @@ function createAuditReport(options: {
   plaintextCount?: number;
   unresolvedRefCount?: number;
   refsChecked?: number;
+  shadowedRefCount?: number;
+  storeResidueCount?: number;
+  legacyResidueCount?: number;
+  skippedExecRefs?: number;
+  resolvabilityComplete?: boolean;
 }) {
   return {
     version: 1,
@@ -142,14 +147,14 @@ function createAuditReport(options: {
     summary: {
       plaintextCount: options.plaintextCount ?? 0,
       unresolvedRefCount: options.unresolvedRefCount ?? 0,
-      shadowedRefCount: 0,
-      storeResidueCount: 0,
-      legacyResidueCount: 0,
+      shadowedRefCount: options.shadowedRefCount ?? 0,
+      storeResidueCount: options.storeResidueCount ?? 0,
+      legacyResidueCount: options.legacyResidueCount ?? 0,
     },
     resolution: {
       refsChecked: options.refsChecked ?? 0,
-      skippedExecRefs: 0,
-      resolvabilityComplete: true,
+      skippedExecRefs: options.skippedExecRefs ?? 0,
+      resolvabilityComplete: options.resolvabilityComplete ?? true,
     },
     findings: [],
   };
@@ -302,6 +307,46 @@ describe("secrets CLI", () => {
 
     await runSecrets(["secrets", "audit", "--allow-exec"]);
     expect(mockFirstObjectArg(runSecretsAudit).allowExec).toBe(true);
+  });
+
+  it("marks the audit header UNMEASURED when exec refs are skipped (#147341)", async () => {
+    runSecretsAudit.mockResolvedValue(
+      createAuditReport({
+        status: "findings",
+        plaintextCount: 7,
+        shadowedRefCount: 4,
+        refsChecked: 2,
+        skippedExecRefs: 11,
+        resolvabilityComplete: false,
+      }),
+    );
+    resolveSecretsAuditExitCode.mockReturnValue(0);
+
+    await runSecrets(["secrets", "audit"]);
+    expect(runtimeLogs[0]).toContain("UNMEASURED");
+    expect(runtimeLogs[0]).toContain("11 exec resolvability check(s) skipped");
+    expect(runtimeLogs[0]).toContain("--allow-exec");
+    expect(runtimeLogs[0]).toContain("unresolved=0");
+    expect(runtimeLogs.some((line) => line.startsWith("Audit note: skipped 11"))).toBe(true);
+  });
+
+  it("keeps the complete-audit header unchanged when nothing is skipped", async () => {
+    runSecretsAudit.mockResolvedValue(
+      createAuditReport({
+        status: "findings",
+        plaintextCount: 7,
+        shadowedRefCount: 4,
+        refsChecked: 13,
+        skippedExecRefs: 0,
+        resolvabilityComplete: true,
+      }),
+    );
+    resolveSecretsAuditExitCode.mockReturnValue(0);
+
+    await runSecrets(["secrets", "audit", "--allow-exec"]);
+    expect(runtimeLogs[0]).toBe(
+      "Secrets audit: findings. plaintext=7, unresolved=0, shadowed=4, storeResidue=0, legacy=0.",
+    );
   });
 
   it("shows the irreversibility warning before applying configured targets (#83883)", async () => {
