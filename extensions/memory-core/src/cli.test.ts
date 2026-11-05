@@ -43,6 +43,7 @@ const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const forgetMemoryEntries = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
+const resolveAgentOperationAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   vi.fn(async ({ config }: { config: unknown }) => ({
     resolvedConfig: config,
@@ -93,6 +94,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOrigina
 }));
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>()),
+  resolveAgentOperationAgentId,
   resolveDefaultAgentId,
 }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
@@ -127,6 +129,7 @@ beforeEach(() => {
   getMemorySearchManager.mockReset();
   forgetMemoryEntries.mockReset();
   getRuntimeConfig.mockReset().mockReturnValue({});
+  resolveAgentOperationAgentId.mockReset().mockReturnValue("main");
   resolveDefaultAgentId.mockReset().mockReturnValue("main");
   resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
