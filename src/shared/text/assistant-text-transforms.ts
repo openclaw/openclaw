@@ -160,7 +160,8 @@ export function scanLegacyBracketToolCallBlocks(
   let result = "";
   let cursor = 0;
   // An unfinished header can cross a Markdown checkpoint before its closing bracket.
-  let pending = text.lastIndexOf("[") > text.lastIndexOf("]");
+  const pendingStart = text.lastIndexOf("[");
+  let pending = pendingStart > text.lastIndexOf("]") && !isInsideCode(pendingStart, codeRegions);
   for (const openMatch of text.matchAll(/\[\s*TOOL_(CALL|RESULT)\s*\]/gi)) {
     const openStart = openMatch.index;
     if (openStart < cursor || isInsideCode(openStart, codeRegions)) {

@@ -453,7 +453,7 @@ it.each(["fenced", "indented", "lazy", "prefixed", "inline", "paragraph", "legac
         : `${prefix}(no output)\n`;
     const transcript =
       shape === "legacy"
-        ? '```text\n[TOOL_CALL] tool => "read", args => {}[/TOOL_CALL]\n```\n'
+        ? '```text\n[TOOL_CALL] tool => "read", args => {}[/TOOL_CALL]\n[TOOL_RESULT\n```\n'
         : shape === "downgraded"
           ? "`[Tool Call: read]` and `[Historical context: example]`\n"
           : "";
