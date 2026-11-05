@@ -142,7 +142,9 @@ it("mirrors chart/table substance into recovery without an authored fallback", (
     recoverText([
       {
         text: "Quarterly results",
-        presentation: { blocks: [{ type: "table", caption: "Sales", headers: ["Region", "Total"], rows: [["North", 10]] }] },
+        presentation: {
+          blocks: [{ type: "table", caption: "Sales", headers: ["Region", "Total"], rows: [["North", 10]] }],
+        },
       },
     ]),
   ).toBe("Quarterly results\n\nSales (table)\n- Region: North; Total: 10");
@@ -150,7 +152,9 @@ it("mirrors chart/table substance into recovery without an authored fallback", (
     recoverText([
       {
         text: "Shares",
-        presentation: { blocks: [{ type: "chart", chartType: "pie", title: "Split", segments: [{ label: "A", value: 1 }] }] },
+        presentation: {
+          blocks: [{ type: "chart", chartType: "pie", title: "Split", segments: [{ label: "A", value: 1 }] }],
+        },
       },
     ]),
   ).toBe("Shares\n\nSplit (pie chart)\n- A: 1");
@@ -161,14 +165,19 @@ it("preserves presentation titles, text, and context during recovery", () => {
     recoverText([
       {
         text: "Summary",
-        presentation: { title: "Report", blocks: [{ type: "text", text: "Actual answer" }, { type: "context", text: "Context note" }] },
+        presentation: {
+          title: "Report",
+          blocks: [{ type: "text", text: "Actual answer" }, { type: "context", text: "Context note" }],
+        },
       },
     ]),
   ).toBe("Summary\n\nReport\n\nActual answer\n\nContext note");
 });
 
 it("does not duplicate presentation content already present in text", () => {
-  expect(recoverText([{ text: "Answer", presentation: { blocks: [{ type: "text", text: "Answer" }] } }])).toBe("Answer");
+  expect(
+    recoverText([{ text: "Answer", presentation: { blocks: [{ type: "text", text: "Answer" }] } }]),
+  ).toBe("Answer");
   expect(
     recoverText([{ text: "Intro\n\nAnswer", presentation: { blocks: [{ type: "text", text: "Answer" }] } }]),
   ).toBe("Intro\n\nAnswer");
@@ -186,7 +195,9 @@ it("trusts text as complete with an authored fallback presentation", () => {
       {
         text: "North: 10",
         presentationTextMode: "fallback",
-        presentation: { blocks: [{ type: "table", caption: "Sales", headers: ["Region", "Total"], rows: [["North", 10]] }] },
+        presentation: {
+          blocks: [{ type: "table", caption: "Sales", headers: ["Region", "Total"], rows: [["North", 10]] }],
+        },
       },
     ]),
   ).toBe("North: 10");
