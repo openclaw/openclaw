@@ -6,7 +6,7 @@ import {
   SqliteSourceChangedError,
 } from "../sqlite-readonly-location.js";
 import type { SqliteReadOnlyOperationExecutionContext } from "../sqlite-readonly-operation-types.js";
-import type { DatabaseStoreDiagnostic } from "./diagnostic-record.js";
+import type { DatabaseStoreLiveReadOperations } from "./database-store-live-read.worker-contract.js";
 import { inspectSqliteStoreImage } from "./sqlite-store-inspection.js";
 
 function isLiveWalSource(pathname: string): boolean {
@@ -23,12 +23,14 @@ function isLiveWalSource(pathname: string): boolean {
   }
 }
 
+type LiveRead = DatabaseStoreLiveReadOperations["databaseStore.inspectLive"];
+
 export const databaseStoreLiveReadOperations = {
   /** Descriptor-free inspection only: the host keeps descriptor checks on its private copy. */
   "databaseStore.inspectLive": (
-    input: { diagnostic: DatabaseStoreDiagnostic },
+    input: LiveRead["input"],
     context: SqliteReadOnlyOperationExecutionContext,
-  ) => {
+  ): LiveRead["output"] => {
     context.assertCurrent();
     // Only a verified live owner proves its WAL index is current; this reader never rebuilds it.
     if (!isLiveWalSource(context.path) || !hasVerifiedLiveSqliteOwner(context.path)) {

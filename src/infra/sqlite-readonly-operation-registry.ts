@@ -4,18 +4,18 @@ import {
   createWorkerOperationRegistry,
   type WorkerOperations,
 } from "../state/worker-operation-registry.js";
-import type { databaseStoreLiveReadOperations } from "./database-engine/database-store-live-read.worker.js";
+import type { DatabaseStoreLiveReadOperations } from "./database-engine/database-store-live-read.worker-contract.js";
 import type { DeferredSessionTranscriptReadOperations } from "./deferred-plugin-session-source-recovery.worker-contract.js";
 import type { immutableInstallReadOperations } from "./package-update-activation-immutable.js";
 import type { pageCacheReadOperations } from "./sqlite-page-cache.worker.js";
 import type { SqliteReadOnlyOperationExecutionContext } from "./sqlite-readonly-operation-types.js";
 
 export type SqliteReadOnlyOperations = WorkerOperations<
-  typeof databaseStoreLiveReadOperations &
-    typeof immutableInstallReadOperations &
+  typeof immutableInstallReadOperations &
     typeof pageCacheReadOperations &
     typeof startupMetadataReadOperations
 > &
+  DatabaseStoreLiveReadOperations &
   DeferredSessionTranscriptReadOperations &
   AgentDeletionSessionStoreAbsentReadOperations;
 
