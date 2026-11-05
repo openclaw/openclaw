@@ -18,6 +18,10 @@ When an agent schema needs an upgrade, Doctor defers legacy session-entry
 inspection until its stopped-writer schema repair finishes. This applies to
 PostgreSQL as well as SQLite.
 
+For channel-owned legacy session keys, Doctor prepares the selected plugin setup
+entry before resolving its migration behavior. The same preparation runs in the
+candidate Doctor during an update; the installed updater needs no change.
+
 Before rewriting stored auth profiles, Doctor saves a verified backup of the
 owning database. SQLite stores keep a single-file backup; PostgreSQL stores keep
 an exact export directory with its matching anchor and original credential rows.

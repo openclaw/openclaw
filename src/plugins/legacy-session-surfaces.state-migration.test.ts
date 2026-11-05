@@ -7,6 +7,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { prepareLegacySessionSurfaces } from "./legacy-session-surfaces.js";
 import { clearPluginRegistryLoadCache } from "./loader.js";
+import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -96,6 +97,7 @@ function writeSessionSurfacePlugin(params: {
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
       id: params.pluginId,
+      doctorContract: { stateMigrations: [] },
       channels: [params.channelId],
       configSchema: { type: "object" },
     }),
@@ -160,7 +162,7 @@ export function hasAuth() { return false; }
 }
 
 describe("installed channel legacy session surfaces", () => {
-  it("loads an eligible bundled migration owner without probing its authentication", () => {
+  it("loads an eligible bundled migration owner without probing its authentication", async () => {
     const rootDir = makeTrackedTempDir("openclaw-session-surface-bundled", tempDirs);
     const stateDir = path.join(rootDir, "state");
     fs.mkdirSync(stateDir);
@@ -183,7 +185,7 @@ describe("installed channel legacy session surfaces", () => {
       OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
       VITEST: "true",
     } as NodeJS.ProcessEnv;
-    const prepared = prepareLegacySessionSurfaces({ config: {}, env });
+    const prepared = await prepareLegacySessionSurfaces({ config: {}, env });
 
     expect(prepared.failures).toEqual([]);
     expect(prepared.surfaces).toHaveLength(1);
@@ -304,7 +306,7 @@ export function hasAuth() { return false; }
       setupSource: fs.realpathSync(path.join(selected.pluginDir, "dist", "setup-entry.js")),
       packageManifest: { setupFeatures: { legacySessionSurfaces: true } },
     });
-    const prepared = prepareLegacySessionSurfaces({ config, env });
+    const prepared = await prepareLegacySessionSurfaces({ config, env });
     expect(fs.existsSync(authProbeMarker)).toBe(false);
     expect(prepared.failures).toEqual([]);
     expect(prepared.surfaces).toHaveLength(1);
@@ -329,7 +331,7 @@ export function hasAuth() { return false; }
     expect(fs.existsSync(blocked.marker("full"))).toBe(false);
   });
 
-  it("loads an explicitly enabled owner without a channel presence signal", async () => {
+  it("prepares an enabled owner's setup source under Doctor custody", async () => {
     const rootDir = makeTrackedTempDir("openclaw-session-surface-enabled-only", tempDirs);
     const stateDir = path.join(rootDir, "state");
     const bundledDir = path.join(rootDir, "bundled-disabled");
@@ -337,15 +339,12 @@ export function hasAuth() { return false; }
     const fixture = writeSessionSurfacePlugin({
       stateDir,
       rootDir,
-      pluginId: "enabled-only-session-owner",
-      channelId: "enabled-only-chat",
+      pluginId: "enabled",
+      channelId: "enabled-chat",
     });
     const env = createManagedEnv(rootDir, stateDir, bundledDir);
     const config = {
-      plugins: {
-        allow: ["enabled-only-session-owner"],
-        entries: { "enabled-only-session-owner": { enabled: true } },
-      },
+      plugins: { allow: ["enabled"], entries: { enabled: { enabled: true, config: {} } } },
     } as OpenClawConfig;
     await refreshPersistedInstalledPluginIndex({
       stateDir,
@@ -353,23 +352,23 @@ export function hasAuth() { return false; }
       config,
       reason: "source-changed",
       installRecords: {
-        "enabled-only-session-owner": {
+        enabled: {
           source: "npm",
-          spec: "@fixture/enabled-only-session-owner@1.0.0",
+          spec: "@fixture/enabled@1.0.0",
           installPath: fixture.pluginDir,
         },
       },
     });
     clearPluginMetadataLifecycleCaches();
-    const { result, store: migrated } = await migrateSessionFixture(config, env, {
-      "fixture-group:Enabled-Only": { sessionId: "enabled-only-group", updatedAt: 1 },
-    });
+    const { result, store: migrated } = await withPluginGenerationSourceCustody(() =>
+      migrateSessionFixture(config, env, {
+        "fixture-group:Enabled": { sessionId: "group", updatedAt: 1 },
+      }),
+    );
 
     expect(result.warnings).toEqual([]);
-    expect(migrated["fixture-group:Enabled-Only"]).toBeUndefined();
-    expect(migrated["agent:main:enabled-only-chat:group:enabled-only"]).toMatchObject({
-      sessionId: "enabled-only-group",
-    });
+    expect(migrated["fixture-group:Enabled"]).toBeUndefined();
+    expect(migrated["agent:main:enabled-chat:group:enabled"]).toMatchObject({ sessionId: "group" });
     expect(fs.existsSync(fixture.marker("sidecar"))).toBe(true);
     expect(fs.existsSync(fixture.marker("setup-plugin"))).toBe(false);
     expect(fs.existsSync(fixture.marker("full"))).toBe(false);
