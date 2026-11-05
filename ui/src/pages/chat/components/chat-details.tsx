@@ -125,13 +125,12 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     setChoice((previous) => ({ ...previous, intent: nextIntent }));
   };
   // Seed once; data publications must not replace subsequently measured geometry.
-  const [wideEnough, setWideEnough] = createSignal<boolean>((previous) => {
-    if (previous !== undefined) {
-      return previous;
-    }
-    const docking = props.chat?.cachedDetails?.docking;
-    return docking?.layout === props.dockingLayout ? docking?.wide === true : false;
-  });
+  const [wideEnough, setWideEnough] = createSignal<boolean>(
+    (previous) =>
+      previous ??
+      (props.chat?.cachedDetails?.docking?.layout === props.dockingLayout &&
+        props.chat?.cachedDetails?.docking?.wide === true),
+  );
   const canDock = () => !isMobile() && isConversationAnchor() && wideEnough();
   const opened = () =>
     isPresented() &&
@@ -214,8 +213,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     if (mobileHost) {
       return;
     }
-    const pane = elements?.pane;
-    const frame = elements?.frame;
+    const { pane, frame } = elements ?? {};
     const bounds = (
       mobile ? (pane ?? frame) : conversationVisible ? frame : (pane ?? host)
     )?.getBoundingClientRect();
@@ -497,13 +495,10 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         "--chat-details-space",
         dock ? `${DETAILS_WIDTH + (isDesktop ? DETAILS_DESKTOP_INLINE_INSET : 0)}px` : "0px",
       );
-      if (open && isDesktop) {
+      if (open && (isDesktop || (!dock && !mobileHost))) {
         position(layout);
       }
       if (open && (!isDesktop || !conversationVisible) && !dock && !mobileHost) {
-        if (!isDesktop) {
-          position(layout);
-        }
         // Keep native Tab entry beside its header trigger after portaling the content.
         if (!panel.matches(":popover-open")) {
           panel.showPopover({
