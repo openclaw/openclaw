@@ -53,6 +53,14 @@ backup.
 
 ## Update implementation contract
 
+Plugin updates preserve authored environment references when a replacement
+plugin moves their settings, including single-file includes. The candidate
+plugin-update command must contain this repair; the installed updater needs no
+new marker or schema migration. Existing config and plugin-index records remain
+readable. Previously flattened literals are preserved, not guessed back into
+references. Config publication, backup, rollback, and deferred data-migration
+guidance keep their existing owners.
+
 Candidate Gateway rehearsal can prepare strictly valid config in its complete
 private update namespace even when a newer release wrote the config. It preserves
 the source writer stamp for installed-updater capture checks; the target's normal

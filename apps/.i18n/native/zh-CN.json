@@ -1743,6 +1743,7 @@
     "native.android.e541942ff77b53eb": "正在聆听 (PTT)",
     "native.android.e54941cceace936d": "回退到此处",
     "native.android.e54afc3de5a87a03": "开启语音",
+    "native.android.e559007177ac681d": "无法刷新聊天元数据。请点按“刷新”重试。",
     "native.android.e5799ce1b2df6f8c": "在手机上打开 OpenClaw",
     "native.android.e587a3bd7b40ceed": "已配置 $count 个模型",
     "native.android.e5ad8016516600bb": "从最后一条已完成的消息创建分支",

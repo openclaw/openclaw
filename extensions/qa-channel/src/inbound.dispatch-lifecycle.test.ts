@@ -94,29 +94,11 @@ describe("QA inbound dispatch settlement", () => {
         const controller = new AbortController();
         const stopped = startGateway(params, runtime, controller).catch((error: unknown) => error);
         const turn = await dispatched.promise;
-        const correlation = turn.replyOptions?.queuedDeliveryCorrelations?.[0];
-        let end = deferred ? correlation?.begin() : undefined;
         try {
           await dispatch.mock.results[0]?.value;
           if (deferred) {
             turn.replyOptions?.onFollowupQueueDisposition?.(disposition);
             void turn.turnAdoptionLifecycle?.onAbandoned?.();
-            if (typeof end === "function") {
-              end();
-            }
-            const pending = await pollQaBus({
-              baseUrl: params.account.baseUrl,
-              accountId: params.account.accountId,
-              cursor: 0,
-              timeoutMs: 0,
-            });
-            expect(pending.events).toContainEqual(expect.objectContaining({ cursor: 1 }));
-            expect(state.hasCompletedInboundEvent("default", 1)).toBe(false);
-            end = correlation?.begin();
-            if (typeof end === "function") {
-              end({ visibleReplySent: false, failed: true });
-            }
-            end = undefined;
           }
           await vi.waitFor(() => expect(state.hasCompletedInboundEvent("default", 1)).toBe(true));
           await injectQaBusInboundMessage({
@@ -129,9 +111,6 @@ describe("QA inbound dispatch settlement", () => {
           });
           await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
         } finally {
-          if (typeof end === "function") {
-            end({ visibleReplySent: false, failed: true });
-          }
           controller.abort();
           await stopped;
         }

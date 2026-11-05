@@ -22,7 +22,10 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-d
 import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
-import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import {
+  trackDoctorPreflightCache,
+  useDoctorConfigPreflightHome,
+} from "./doctor-config-preflight.test-support.js";
 import { prepareLegacyConfigMigrationRuntime } from "./doctor/shared/legacy-config-migrate.test-support.js";
 
 const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
@@ -127,8 +130,10 @@ function makeFixture(home: string, pluginId: string) {
   };
 }
 
-function doctor(options: Parameters<typeof runDoctorConfigPreflight>[0] = {}) {
-  return runDoctorConfigPreflight({ ...doctorOptions, ...options });
+async function doctor(options: Parameters<typeof runDoctorConfigPreflight>[0] = {}) {
+  return trackDoctorPreflightCache(
+    await runDoctorConfigPreflight({ ...doctorOptions, ...options }),
+  );
 }
 
 function expectPending(pluginId: string, details: Record<string, unknown> = {}) {

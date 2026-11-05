@@ -45,6 +45,8 @@ const researchTemplate = {
   displayName: "Release Scout",
 };
 const soulExcerpt = "Keep the owner informed about approved workflows. ".repeat(24);
+const skillExcerpt =
+  "Research trips and compare destinations against the approved itinerary. ".repeat(24);
 const config = { gateway: { controlUi: { experimental: { templates: true } } } };
 const agentsList = makeBootRoster({ agents: [{ id: "main", name: "Main" }] });
 
@@ -111,7 +113,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
                 { name: "SOUL.md", source: "workspace/SOUL.md", excerpt: soulExcerpt },
                 { name: "AGENTS.md", source: "workspace/AGENTS.md" },
               ],
-              skills: [{ name: "Trip research", excerpt: "Research trips." }],
+              skills: [{ name: "Trip research", excerpt: skillExcerpt }],
               integrations: [
                 { name: "@openclaw/workflow-tools", kind: "plugin", version: "1.2.0" },
               ],
@@ -216,8 +218,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         scrollHeight: element.scrollHeight,
       };
     });
-    expect(layout.clamp).toBe("2");
-    expect(layout.height).toBeLessThanOrEqual(layout.lineHeight * 2 + 1);
+    expect(layout.clamp).toBe("1");
+    expect(layout.height).toBeLessThanOrEqual(layout.lineHeight + 1);
     expect(layout.scrollHeight).toBeGreaterThan(layout.height);
   }
 
@@ -319,7 +321,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       const fileDescriptions = workspace.locator(".settings-row__desc");
       expect(await fileDescriptions.allTextContents()).toEqual([soulExcerpt]);
       await expectClamped(fileDescriptions.first());
-      expect(await detail.getByText("Research trips.", { exact: true }).count()).toBe(1);
+      await expectClamped(detail.getByText(skillExcerpt, { exact: true }));
       expect(await detail.getByRole("heading", { name: "Integrations" }).count()).toBe(1);
       expect(await detail.getByRole("heading", { name: "Automations" }).count()).toBe(0);
       await detail.getByText("Installed", { exact: true }).waitFor();

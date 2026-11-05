@@ -34,6 +34,11 @@ exclusive ownership through manager and worker cleanup. The provider health
 returned by `memory.status` RPC is different from the CLI's aggregate index,
 source, embedding, and dreaming diagnostics and repair options.
 
+For Memory Core, `memory.status` reports coverage from the stored index. A clean,
+complete or empty index can be ready before that request initializes embeddings.
+Dirty, incomplete, unverified, or known degraded state still produces a warning.
+Use `doctor.memory.status` with `probe: true` to check the live embedding provider.
+
 When another plugin owns the memory slot and `memory-core` runs only as the
 dreaming consolidation sidecar:
 
@@ -48,7 +53,9 @@ dreaming consolidation sidecar:
   searching the sidecar index.
 - `index`, `reset`, `forget`, `promote`, and the REM commands keep working on
   Memory Core's sidecar index and print a notice saying so (on stderr with
-  `--json`).
+  `--json`). `forget --json` also adds `"provider"` (the slot owner) and
+  `"memoryCore":"consolidation-sidecar"` to its report: the selected plugin's
+  memories were not deleted.
 
 Related: [Memory](/concepts/memory) concept, [Dreaming](/concepts/dreaming),
 [Memory config reference](/reference/memory-config), [Memory Wiki](/plugins/memory-wiki),
