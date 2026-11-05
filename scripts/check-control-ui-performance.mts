@@ -49,9 +49,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Sharing Markdown's parked-block helper removes 441–449 KB gzip from non-Chat routes.
-  // Chat pays 429 B in changed compression; measured 1,294,543 B + 192 B headroom.
-  chatBootJsGzipBytes: 1_294_735,
+  // CPU-backed theme readback cuts Appearance latency 7–20% across both engines.
+  // Chat adds 354 B gzip; measured 1,295,190 B + 192 B generated-name headroom.
+  chatBootJsGzipBytes: 1_295_382,
   // New Session retains its measured 801,486 B + 192 B headroom.
   newBootJsGzipBytes: 801_678,
   startupCssRequests: 1,
