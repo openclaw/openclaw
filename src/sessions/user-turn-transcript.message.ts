@@ -183,12 +183,17 @@ export function projectRecordedModelPrompt(
   if (!isUserMessage(message)) {
     return message;
   }
-  const text = readModelPromptProjection(transcript) ?? readModelPromptProjection(message);
-  if (text === undefined) {
-    return message;
+  let text: string | undefined;
+  try {
+    text = readModelPromptProjection(transcript) ?? readModelPromptProjection(message);
+    if (text === undefined) {
+      return message;
+    }
+  } catch {
+    // An unreadable historical hint must not hide the original user input.
   }
   let content = message.content;
-  if (Array.isArray(content)) {
+  if (text !== undefined && Array.isArray(content)) {
     let replaced = false;
     content = content.map((block) => {
       if (block.type !== "text" || replaced) {
@@ -200,7 +205,7 @@ export function projectRecordedModelPrompt(
     if (!replaced) {
       content = [{ type: "text", text }, ...content];
     }
-  } else {
+  } else if (text !== undefined) {
     content = text;
   }
   const metadata = { ...message["__openclaw"] };

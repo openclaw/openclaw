@@ -33,9 +33,14 @@ registerAgentSessionLoopTestLifecycle();
 afterEach(() => clearEmbeddedSessionPromptStates([sessionId]));
 const provider = { id: "fixture", label: "Fixture", auth: [] };
 
-it.each(["openai-completions", "anthropic-messages", "google-generative-ai"] as const)(
-  "keeps an unanswered user in the provider request across an error-row retry: %s",
-  async (api) => {
+it.each([
+  ["openai-completions", false],
+  ["anthropic-messages", false],
+  ["google-generative-ai", false],
+  ["openai-completions", true],
+] as const)(
+  "keeps an unanswered user across an error-row retry: %s (unsupported projection: %s)",
+  async (api, unsupportedProjection) => {
     await withOpenClawTestState({ label: "orphan-provider-retry" }, async (state) => {
       const target = {
         agentId: "main",
@@ -50,6 +55,9 @@ it.each(["openai-completions", "anthropic-messages", "google-generative-ai"] as 
         content: "ORPHAN: remember CEDAR",
         timestamp: 1_717_570_800_000,
         idempotencyKey: "orphan:user",
+        ...(unsupportedProjection
+          ? { __openclaw: { modelPromptProjection: { version: 99, text: "unreadable hint" } } }
+          : {}),
       };
       await seed.appendMessageAsync(orphan);
       const model = { ...testModel, api };

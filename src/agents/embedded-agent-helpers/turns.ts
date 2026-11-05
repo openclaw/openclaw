@@ -283,13 +283,13 @@ export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
 }
 
 function mergeConsecutiveUserTurns(
-  previous: Extract<AgentMessage, { role: "user" }>,
-  current: Extract<AgentMessage, { role: "user" }>,
+  previous: PersistedUserTurnMessage,
+  current: PersistedUserTurnMessage,
 ): Extract<AgentMessage, { role: "user" }> {
   // Materialize each row before merging so the newest projection cannot replace
   // the first text block of the combined turn on later replay.
-  const previousMessage = projectUserTurnForMerge(previous);
-  const currentMessage = projectUserTurnForMerge(current);
+  const previousMessage = projectRecordedModelPrompt(previous);
+  const currentMessage = projectRecordedModelPrompt(current);
   const mergedContent = [
     ...normalizeUserContentForMerge(previousMessage.content),
     ...normalizeUserContentForMerge(currentMessage.content),
@@ -300,17 +300,6 @@ function mergeConsecutiveUserTurns(
     content: mergedContent,
     timestamp: currentMessage.timestamp ?? previousMessage.timestamp,
   };
-}
-
-function projectUserTurnForMerge(message: PersistedUserTurnMessage) {
-  try {
-    return projectRecordedModelPrompt(message);
-  } catch {
-    // An unreadable old projection must not discard the row's original content.
-    const fallback = { ...message, __openclaw: { ...message["__openclaw"] } };
-    delete fallback["__openclaw"].modelPromptProjection;
-    return fallback;
-  }
 }
 
 function normalizeUserContentForMerge(content: unknown): UserContentBlock[] {
