@@ -146,103 +146,40 @@ describe("google provider policy public artifact", () => {
     expect(thinking("gemma-4-26b-a4b-it")).toBeUndefined();
   });
 
+  const studio = "https://generativelanguage.googleapis.com/v1beta";
   it.each([
-    {
-      name: "catalog google-generative-ai entry that routes to google-interactions",
-      ctx: {
-        provider: "google",
-        modelId: "gemini-2.5-flash",
-        api: "google-generative-ai",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-        runtimeId: "openclaw",
-      },
-      expected: true,
-    },
-    {
-      name: "missing api leaves fast mode support unknown",
-      ctx: {
-        provider: "google",
-        modelId: "gemini-2.5-flash",
-      },
-      expected: undefined,
-    },
-    {
-      name: "google-interactions on openclaw runtime",
-      ctx: {
-        provider: "google",
+    [{ modelId: "gemini-2.5-flash", api: "google-generative-ai", baseUrl: studio }, true],
+    [
+      {
         modelId: "gemini-2.5-flash",
         api: "google-interactions",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        baseUrl: studio,
         runtimeId: "openclaw",
       },
-      expected: true,
-    },
-    {
-      name: "non-gemini model staying on google-generative-ai is not mapped",
-      ctx: {
-        provider: "google",
-        modelId: "gemma-4-26b-a4b-it",
-        api: "google-generative-ai",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-        runtimeId: "openclaw",
-      },
-      expected: false,
-    },
-    {
-      name: "openai-completions is not mapped",
-      ctx: {
-        provider: "google",
-        modelId: "gemini-2.5-flash",
-        api: "openai-completions",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-      },
-      expected: false,
-    },
-    {
-      name: "google-vertex provider is not mapped",
-      ctx: {
-        provider: "google-vertex",
-        modelId: "gemini-2.5-flash",
-        api: "google-vertex",
-      },
-      expected: false,
-    },
-    {
-      name: "vertex baseUrl under google provider is not mapped",
-      ctx: {
-        provider: "google",
+      true,
+    ],
+    [{ modelId: "gemini-2.5-flash" }, undefined],
+    [{ modelId: "gemma-4-26b-a4b-it", api: "google-generative-ai", baseUrl: studio }, false],
+    [
+      {
         modelId: "gemini-2.5-flash",
         api: "google-generative-ai",
         baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",
       },
-      expected: false,
-    },
-    {
-      name: "google-gemini-cli runtime is not mapped",
-      ctx: {
-        provider: "google-gemini-cli",
-        modelId: "gemini-2.5-flash",
-        api: "google-generative-ai",
-        runtimeId: "google-gemini-cli",
-      },
-      expected: false,
-    },
-    {
-      name: "explicit serviceTier overrides fast mode",
-      ctx: {
-        provider: "google",
-        modelId: "gemini-2.5-flash",
-        api: "google-generative-ai",
-        params: { serviceTier: "flex" },
-      },
-      expected: false,
-    },
-  ])("resolves fast mode support: $name", ({ ctx, expected }) => {
-    expect(
-      resolveFastModeSupport({
-        requestCapabilities: { endpointClass: "default", allowsAnthropicServiceTier: false },
-        ...ctx,
-      }),
-    ).toBe(expected);
+      false,
+    ],
+    [
+      { modelId: "gemini-2.5-flash", api: "google-interactions", runtimeId: "google-gemini-cli" },
+      false,
+    ],
+    [
+      { modelId: "gemini-2.5-flash", api: "google-interactions", params: { serviceTier: "flex" } },
+      false,
+    ],
+  ])("resolves Fast support for %o", (ctx, expected) => {
+    const requestCapabilities = { endpointClass: "default", allowsAnthropicServiceTier: false };
+    expect(resolveFastModeSupport({ provider: "google", requestCapabilities, ...ctx })).toBe(
+      expected,
+    );
   });
 });

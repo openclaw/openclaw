@@ -192,6 +192,7 @@ export function resolveGoogleServiceTier(
   }
   const rawFastMode = extraParams?.fastMode ?? extraParams?.fast_mode;
   const resolvedFastMode = normalizeFastMode(
+    // SAFETY: the runtime passes per-request Fast mode as a zero-argument resolver.
     typeof rawFastMode === "function" ? (rawFastMode as () => unknown)() : rawFastMode,
   );
   return resolvedFastMode === true || resolvedFastMode === "ultrafast" ? "priority" : undefined;

@@ -1,10 +1,7 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { normalizeGoogleProviderConfig } from "./provider-policy.js";
 
-export {
-  resolveGoogleThinkingProfile,
-  resolveGoogleThinkingProfile as resolveThinkingProfile,
-} from "./provider-policy.js";
+export { resolveGoogleThinkingProfile as resolveThinkingProfile } from "./provider-policy.js";
 export { resolveGoogleFastModeSupport as resolveFastModeSupport } from "./provider-policy.js";
 
 export function normalizeConfig(params: { provider: string; providerConfig: ModelProviderConfig }) {

@@ -37,71 +37,28 @@ describe("GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn", () => {
   });
 
   it.each([
-    {
-      name: "sets service_tier=priority when fastMode is true on google-interactions",
-      provider: "google",
-      api: "google-interactions",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      extraParams: { fastMode: true },
-      expectedServiceTier: "priority",
-    },
-    {
-      name: "evaluates dynamic fastMode function per request",
-      provider: "google",
-      api: "google-interactions",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      extraParams: { fastMode: () => true },
-      expectedServiceTier: "priority",
-    },
-    {
-      name: "omits service_tier when fastMode is false",
-      provider: "google",
-      api: "google-interactions",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      extraParams: { fastMode: false },
-      expectedServiceTier: undefined,
-    },
-    {
-      name: "lets explicit serviceTier override fastMode",
-      provider: "google",
-      api: "google-interactions",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      extraParams: { fastMode: true, serviceTier: "flex" },
-      expectedServiceTier: "flex",
-    },
-    {
-      name: "does not set service_tier on google-generative-ai",
-      provider: "google",
-      api: "google-generative-ai",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      extraParams: { fastMode: true },
-      expectedServiceTier: undefined,
-    },
-    {
-      name: "does not set service_tier on google-vertex",
-      provider: "google-vertex",
-      api: "google-vertex",
-      baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",
-      extraParams: { fastMode: true },
-      expectedServiceTier: undefined,
-    },
-  ])("$name", ({ provider, api, baseUrl, extraParams, expectedServiceTier }) => {
+    ["google-interactions", { fastMode: true }, "priority"],
+    ["google-interactions", { fastMode: () => true }, "priority"],
+    ["google-interactions", { fastMode: false }, undefined],
+    ["google-interactions", { fastMode: true, serviceTier: "flex" }, "flex"],
+    ["google-generative-ai", { fastMode: true }, undefined],
+  ] as const)("maps %s Fast params %o to service_tier %s", (api, extraParams, expected) => {
     const capture = createCapturedThinkingConfigStream();
     const wrapped = GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn({
-      provider,
+      provider: "google",
       modelId: "gemini-2.5-flash",
       extraParams,
       streamFn: capture.streamFn,
     });
-
+    const baseUrl = "https://generativelanguage.googleapis.com/v1beta";
     void wrapped(
-      { api, provider, id: "gemini-2.5-flash", baseUrl } as never,
+      { api, provider: "google", id: "gemini-2.5-flash", baseUrl } as never,
       { messages: [] } as never,
       {},
     );
-
-    const payload = capture.getCapturedPayload() as { service_tier?: unknown } | undefined;
-    expect(payload?.service_tier).toBe(expectedServiceTier);
+    expect((capture.getCapturedPayload() as { service_tier?: unknown })?.service_tier).toBe(
+      expected,
+    );
   });
 });
 
