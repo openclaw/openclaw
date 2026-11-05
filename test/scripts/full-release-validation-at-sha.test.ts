@@ -305,9 +305,7 @@ describe("full-release-validation-at-sha", () => {
     const callsBefore = fixture.calls().length;
     const reopened = fixture.run(["--reconcile-request", fixture.requestPath()], true);
     expect(reopened.status, reopened.stderr).toBe(0);
-    expect(reopened.stdout).toContain(
-      "release_profile=stable rerun_group=all soak=true telegram_waiver=omitted",
-    );
+    expect(reopened.stdout).toContain("release_profile=stable rerun_group=all soak=true");
     expect(readFileSync(fixture.requestPath())).toEqual(before);
     expect(
       fixture
@@ -1199,7 +1197,7 @@ describe("full-release-validation-at-sha", () => {
         wireInputs: { run_release_soak: "false", fail_fast: "false", reuse_evidence: "true" },
       });
       expect(result.stdout).toContain(
-        `release_profile=${profile} rerun_group=all soak=${effectiveSoak} telegram_waiver=omitted`,
+        `release_profile=${profile} rerun_group=all soak=${effectiveSoak}`,
       );
       expect(record.run).toEqual({ id: 123, attempt: 1 });
       expect(record.error).toBe("none");
@@ -1225,18 +1223,9 @@ describe("full-release-validation-at-sha", () => {
 
   it("does not retain or mutate a request in dry-run mode", () => {
     const fixture = createDispatchFixture();
-    const result = fixture.run([
-      "--dry-run",
-      "-f",
-      "release_profile=stable",
-      "-f",
-      "telegram_waiver=private-waiver-selection",
-    ]);
+    const result = fixture.run(["--dry-run", "-f", "release_profile=stable"]);
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain(
-      "release_profile=stable rerun_group=all soak=true telegram_waiver=selected (redacted)",
-    );
-    expect(result.stdout).not.toContain("private-waiver-selection");
+    expect(result.stdout).toContain("release_profile=stable rerun_group=all soak=true");
     expect(result.stdout).toContain("(dry run; not written)");
     expect(result.stdout).toContain(`Validation SHA fetchable by bare SHA: ${fixture.targetSha}`);
     expect(result.stdout).not.toContain("validation/target-");
@@ -1600,6 +1589,23 @@ describe("full-release-validation-at-sha", () => {
     expect(calls.some((args) => args.includes("cancel") || args.includes("watch"))).toBe(false);
     expect(fixture.refs()).toHaveLength(1);
   });
+
+  it.each(["failure", "cancelled"])(
+    "keeps terminal %s authoritative over retained diagnostic-pending evidence",
+    (conclusion) => {
+      const fixture = createDispatchFixture({
+        parentRunStates: [
+          { conclusion, status: "completed", decisionState: "blocked_diagnostics_running" },
+        ],
+      });
+      const result = fixture.run();
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(`Full Release Validation concluded ${conclusion}`);
+      expect(result.stdout).not.toContain("remains active");
+      expect(fixture.readWaits()).toEqual([]);
+      expect(fixture.refs()).toHaveLength(1);
+    },
+  );
 
   it("does not redownload a validated decision or adopt a newer parent attempt", () => {
     const fixture = createDispatchFixture({

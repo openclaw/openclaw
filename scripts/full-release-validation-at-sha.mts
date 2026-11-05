@@ -1825,7 +1825,20 @@ function waitForWorkflowRun(
       }
       if (decision.state === "ready") {
         const releaseDecision = tryReadReleaseDecision(parentRunId, attempt, workflowSha);
-        if (releaseDecision?.state === "blocked_diagnostics_running") {
+        if (
+          releaseDecision?.state === "blocked_diagnostics_running" &&
+          suite.status === "completed" &&
+          stringValue(suite.conclusion) &&
+          suite.conclusion !== "success"
+        ) {
+          throw new Error(
+            `Full Release Validation concluded ${stringValue(suite.conclusion).toLowerCase()}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+          );
+        }
+        if (
+          releaseDecision?.state === "blocked_diagnostics_running" &&
+          suite.status !== "completed"
+        ) {
           console.log(formatReleaseStateOutcome(releaseDecision));
           console.log(
             `Full Release Validation remains active: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,

@@ -2179,12 +2179,13 @@ async function main() {
   if (androidVersionCheck) {
     console.log(androidVersionCheck.message);
   }
-  const { releaseNotesCheck, releaseNotesProvenance } = validateCandidateChangelog({
-    rootDir: targetRoot,
-    repository: options.repo,
-    tag: options.tag,
-    targetSha,
-  });
+  const { releaseNotesCheck, releaseNotesProvenance, releaseNotesText } =
+    validateCandidateChangelog({
+      rootDir: targetRoot,
+      repository: options.repo,
+      tag: options.tag,
+      targetSha,
+    });
   const windowsNodeSourceRelease = options.windowsNodeTag
     ? await validateWindowsSourceRelease(options.windowsNodeTag)
     : undefined;
@@ -2416,7 +2417,7 @@ async function main() {
   const releaseNoteOmissions = findPluginSdkApiReleaseNoteOmissions({
     evidence: npmManifest.pluginSdkApi,
     npmDistTag: options.npmDistTag,
-    releaseNotes: releaseChangelog.section,
+    releaseNotes: releaseNotesText,
   });
   if (releaseNoteOmissions.missing.length > 0) {
     console.warn(
