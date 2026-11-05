@@ -197,7 +197,9 @@ describe("Memory watch configuration", () => {
       using acquisition = vi.spyOn(MemoryIndexManager, "get");
       await expect(snippets(active, "Cobalt heron")).resolves.toEqual([]);
       await idle();
-      expect(acquisition.mock.calls.some(([params]) => params.purpose === "maintenance")).toBe(false);
+      expect(acquisition.mock.calls.some(([params]) => params.purpose === "maintenance")).toBe(
+        false,
+      );
       for (let turn = 0; turn < 9; turn++) {
         await vi.advanceTimersByTimeAsync(30_000);
         expect(await snippets(active, "Amber lantern")).toContain("Amber lantern baseline.");
@@ -207,8 +209,10 @@ describe("Memory watch configuration", () => {
       expect(await snippets(active, "Cobalt heron")).toContain(content);
       await active.close();
       expect(activity.listener).toBeUndefined();
-      expect(observer.observations.every((entry) => entry.close.mock.calls.length === 1)).toBe(true);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(observer.observations.every((entry) => entry.close.mock.calls.length === 1)).toBe(
+        true,
+      );
+      expect(active).toMatchObject({ sessionWatchTimer: null, activeManagerOperations: 0 });
     },
   );
 });

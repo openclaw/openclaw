@@ -494,7 +494,12 @@ describe("memory index", () => {
     await writeMemory("search-sync.md", content);
     markDirty(manager);
     const maintenance = pauseMaintenance(true);
-    const recovery = searchSync(manager);
+    const lifecycle = manager as unknown as {
+      sessionRecoveryAt: number;
+      processSessionUpdateBatch(): Promise<void>;
+    };
+    lifecycle.sessionRecoveryAt = performance.now();
+    const recovery = lifecycle.processSessionUpdateBatch();
 
     try {
       const firstSearch = manager.search("zebra", { maxResults: 5, minScore: 0 });

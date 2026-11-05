@@ -336,9 +336,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   protected async syncPublishedIndexInBackground(params: { reason: string }): Promise<void> {
-    if (this.syncing) {
-      await this.syncing.catch(() => undefined);
-    }
+    await this.syncing?.catch(() => undefined);
     if (this.reindexProgress) {
       return await this.syncAdmitted(params);
     }
