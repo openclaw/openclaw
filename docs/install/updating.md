@@ -53,6 +53,13 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor prepares plugin setup sources asynchronously before resolving
+legacy session migrations. Configured external channels can then finish
+post-plugin Doctor without an unprepared-source refusal blocking later state
+repairs. Existing plugin selection, activation, and source checks still apply.
+The candidate must contain this fix; published updaters need no new marker or
+schema change.
+
 Plugin updates preserve authored environment references when a replacement
 plugin moves their settings, including single-file includes. The candidate
 plugin-update command must contain this repair; the installed updater needs no
