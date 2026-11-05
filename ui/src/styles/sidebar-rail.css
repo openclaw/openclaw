@@ -231,14 +231,16 @@
 
 .sidebar-rail__create .sidebar-new-session:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-hover-bg);
+  color: var(--accent-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:active:not(:disabled, [aria-disabled="true"]) {
   background: var(--sidebar-rail-action-active-bg);
+  color: var(--accent-foreground);
 }
 
 .sidebar-rail__create .sidebar-new-session:focus-visible {
-  outline-color: var(--accent-foreground);
+  outline-color: var(--ring);
 }
 
 .sidebar-rail__create .sidebar-new-session:is(:disabled, [aria-disabled="true"]) {
@@ -521,12 +523,6 @@
   fill: currentColor;
 }
 
-.sidebar-pages__heading {
-  padding: 6px 8px;
-  color: var(--muted);
-  font-size: var(--font-size-sm);
-}
-
 /* Match the 44px session toolbar centerline without changing drawer or native clearance. */
 .shell:not(.shell--mobile-nav) .sidebar-rail {
   padding-top: calc((44px - var(--sidebar-rail-control-size)) / 2);
@@ -632,14 +628,14 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
 
 @media (hover: none), (pointer: coarse) {
   .shell:not(.shell--mobile-nav) .sidebar-rail {
-    --sidebar-rail-control-size: 44px;
-    --sidebar-rail-action-size: 44px;
+    --sidebar-rail-control-size: 38px;
+    --sidebar-rail-action-size: 38px;
     flex-basis: 52px;
   }
 
   .sidebar-pages__pin {
     opacity: 1;
-    height: 44px;
+    height: 38px;
   }
 }
 
@@ -713,14 +709,6 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   gap: 6px;
 }
 
-.sidebar-session-toolbar__collapse {
-  margin-inline-start: auto;
-}
-
-.sidebar-session-toolbar .sidebar-session-toolbar__collapse {
-  margin-inline-start: 0;
-}
-
 /* A growing section toggle would cover the row's empty space, which must stay
    non-interactive so native hosts can drag the window from it. */
 .sidebar-panel-header > .sidebar-session-group-toggle {
@@ -761,13 +749,6 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 
 .sidebar-session-owner-filter .picker-select__copy {
   flex: 0 1 auto;
-}
-
-.sidebar-session-owner-filter .picker-select__label {
-  color: var(--text-strong);
-  font-size: calc(13px * var(--control-ui-text-scale));
-  font-weight: 550;
-  letter-spacing: -0.005em;
 }
 
 .sidebar-session-owner-filter .picker-select__chevron {

@@ -37,6 +37,12 @@ const linkSchema = json.object({
   ),
 });
 export const chatRowDisplaySchema = json.object({
+  recoveredMessage: json.optional(
+    json.object({
+      source: json.text,
+      message: json.unknown,
+    }),
+  ),
   links: json.optional(boundedRecord(linkSchema, 8, 4096)),
   images: json.optional(
     boundedRecord(

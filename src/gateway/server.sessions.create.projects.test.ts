@@ -37,10 +37,13 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createChatRunState } from "./server-chat-state.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
 import {
   controlUiClient,
   initializeRepository,
+  publishRepositoryFixtureCheckpoint,
   removeOwnedSessionWorktree,
   settleWorkspaceRuns,
   successfulSessionRequest as request,
@@ -50,6 +53,8 @@ import {
   directSessionReq,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
+import * as repositoryCheckpoints from "./worker-environments/session-repository-checkpoints.js";
+import { workerWorkspaceResultStaging } from "./worker-environments/workspace-result-staging.js";
 
 const projectCloneMocks = vi.hoisted(() => ({
   assertSelected: vi.fn(),
@@ -860,3 +865,163 @@ test("sessions.create reports an unavailable registered project with truthful re
     /; update the agent workspace path or re-register the project$/u,
   );
 });
+
+test.each([false, true])(
+  "repository children inherit independent sources (initialized: %s)",
+  async (initialized) => {
+    await withSessionTestState(
+      { layout: "state-only", prefix: "openclaw-repository-child-" },
+      async (state) => {
+        const workspace = path.join(state.root, "non-git");
+        await fs.mkdir(workspace);
+        testState.agentConfig = { workspace };
+        const { storePath } = await createSessionStoreDir();
+        const connect: GatewayClient["connect"] = {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
+          scopes: ["operator.admin"],
+        };
+        const parentKey = "agent:main:dashboard:repository-parent";
+        const parent = await createSession(
+          {
+            key: parentKey,
+            repository: { url: "https://github.com/example/spawn-fixture.git", ref: "main" },
+          },
+          { client: { connect } },
+        );
+        const store = getSessionRepositoryWorkspaceStore();
+        let original = (await store.get(parent.entry.repositoryWorkspaceId!))!;
+        if (initialized) {
+          original = await publishRepositoryFixtureCheckpoint(store, original, workspace);
+        }
+        const client = {
+          connect: { ...connect, scopes: ["operator.write"] },
+          internal: {
+            syntheticClient: true as const,
+            sessionCreation: {
+              via: "spawn" as const,
+              actor: { type: "agent" as const, id: "main" },
+              requesterSessionKey: parentKey,
+              inheritedToolPolicy: { version: 1 as const, allow: ["read"], deny: [] },
+            },
+          },
+        };
+        const selection = {
+          parentSessionKey: parentKey,
+          spawnDepth: 1,
+          worktree: true,
+          label: "Repository child",
+        };
+        const child = await createSession(selection, { client });
+        expect(child.entry.repositoryWorkspaceId).not.toBe(original.workspaceId);
+        expect(child.entry.worktree).toBeUndefined();
+        expect(readEntry(storePath, child.key)?.pendingWorktree).toBeUndefined();
+        const childWorkspace = await store.get(child.entry.repositoryWorkspaceId!);
+        expect(childWorkspace).toMatchObject({
+          agentId: "main",
+          sessionKey: child.key,
+          url: original.url,
+          requestedRef: original.requestedRef,
+          baseCommit: original.baseCommit,
+          checkpointRef: initialized ? expect.any(String) : null,
+          runSetupScript: false,
+        });
+        expect(childWorkspace?.diskAuthority).toBeUndefined();
+        expect(await store.get(original.workspaceId)).toEqual(original);
+        expect(projectCloneMocks.materialize).not.toHaveBeenCalled();
+        for (const options of [
+          { worktreeName: "override" },
+          { worktreeBaseRef: "main" },
+          { message: "Run locally" },
+        ]) {
+          const result = await directSessionReq(
+            "sessions.create",
+            { ...selection, ...options },
+            { client },
+          );
+          expect(result).toMatchObject({
+            ok: false,
+            error: {
+              code: "INVALID_REQUEST",
+              message:
+                "message" in options
+                  ? "Create the repository helper without an initial turn, dispatch it with sessions.dispatch, then send the message with sessions.send."
+                  : "Inherited repository helpers use the accepted base; omit worktreeName and worktreeBaseRef.",
+            },
+          });
+        }
+        if (initialized) {
+          const copied = await repositoryCheckpoints.readSessionRepositoryArtifacts({
+            store,
+            workspaceId: child.entry.repositoryWorkspaceId!,
+            previewPath: "parent.txt",
+            assertCurrent() {},
+          });
+          expect(copied.preview).toEqual(new Uint8Array(Buffer.from("accepted parent bytes\n")));
+          for (const phase of [
+            "forbidden",
+            "before-copy",
+            "after-copy",
+            "before-binding",
+            "source",
+          ] as const) {
+            let current = phase !== "forbidden";
+            const key = `agent:main:subagent:repository-${phase}`;
+            let completedCopies = 0;
+            const stage = workerWorkspaceResultStaging.stageWorkerWorkspaceResult;
+            const copy = vi
+              .spyOn(workerWorkspaceResultStaging, "stageWorkerWorkspaceResult")
+              .mockImplementation(async (params) => {
+                current &&= phase !== "before-copy";
+                if (phase === "source") {
+                  await replaceSessionEntry(
+                    { agentId: "main", sessionKey: parentKey, storePath },
+                    { ...parent.entry, sessionId: "reassigned-parent" },
+                  );
+                }
+                const result = await stage(params);
+                completedCopies++;
+                current &&= phase !== "after-copy";
+                return result;
+              });
+            const fork = repositoryCheckpoints.forkSessionRepositoryWorkspace;
+            const prepared = vi
+              .spyOn(repositoryCheckpoints, "forkSessionRepositoryWorkspace")
+              .mockImplementation(async (params) => {
+                const result = await fork(params);
+                current &&= phase !== "before-binding";
+                return result;
+              });
+            try {
+              const denied = await directSessionReq(
+                "sessions.create",
+                { ...selection, key },
+                { client, hasCurrentClientAuthority: () => current },
+              ).catch((error: unknown) => ({ ok: false, error }));
+              expect(denied, phase).toMatchObject({
+                ok: false,
+                error: {
+                  message:
+                    phase === "source"
+                      ? "Spawn parent repository changed; retry from its current session"
+                      : "Gateway requester authority changed",
+                },
+              });
+              expect(readEntry(storePath, key), phase).toBeUndefined();
+              expect(await store.find({ agentId: "main", sessionKey: key }), phase).toBeUndefined();
+              expect(await store.get(original.workspaceId), phase).toEqual(original);
+              expect(copy).toHaveBeenCalledTimes(phase === "forbidden" ? 0 : 1);
+              expect(completedCopies).toBe(
+                phase === "after-copy" || phase === "before-binding" ? 1 : 0,
+              );
+            } finally {
+              copy.mockRestore();
+              prepared.mockRestore();
+            }
+          }
+        }
+      },
+    );
+  },
+);

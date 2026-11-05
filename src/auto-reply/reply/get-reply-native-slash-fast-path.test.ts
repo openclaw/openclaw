@@ -738,6 +738,8 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       };
       expect(params.sessionEntry).toMatchObject(initialized);
       expect(persisted).toMatchObject(initialized);
+      // The retired channel field stays out of new session state (#190213).
+      expect(persisted).not.toHaveProperty("channel");
       return { shouldContinue: false, reply: { text: "ok" } };
     });
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(100);

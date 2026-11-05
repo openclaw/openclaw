@@ -3353,9 +3353,9 @@ operator_assert_unchanged() {
 
 operator_assert_predecessor() {
 	local stop_budget
-	# The existing system owner must stop the whole old process group with a finite budget.
+	# Both modes kill the whole cgroup on timeout; mixed lets the main process drain first.
 	stop_budget="$(system_systemctl show openclaw-gateway.service --property=TimeoutStopUSec --value)" || return 1
-	[[ "$(system_systemctl show openclaw-gateway.service --property=KillMode --value)" == control-group &&
+	[[ "$(system_systemctl show openclaw-gateway.service --property=KillMode --value)" == @(control-group|mixed) &&
 	"$(system_systemctl show openclaw-gateway.service --property=SendSIGKILL --value)" == yes &&
 	"$stop_budget" =~ ^[1-9][0-9]*(us|ms|s|min)([[:space:]].*)?$ ]] || {
 		fail 'operator restart requires bounded system-unit process-group shutdown'

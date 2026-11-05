@@ -34,7 +34,7 @@ const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
 const serialGatewayFiles =
-  `chat-steer-deferred-custody deepseek-search desktop-resize plugin-inline-view`
+  `chat-steer-deferred-custody deepseek-search desktop-resize plugin-inline-view session-management.new-nested`
     .split(/\s+/u)
     .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
     .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
@@ -50,6 +50,7 @@ const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecyc
   chat-reconnect-continuity.real-gateway chat-stop-finished-run.real-gateway
   chat-stop-long-turn.real-gateway
   chat-thinking-metadata.real-gateway chat-widget-sandbox.real-gateway
+  chat-incognito-send.real-gateway
   chat-stop-owned-exec.real-gateway chat-wait-clock.real-gateway
   command-palette-catalog.real-gateway command-palette-search.real-gateway
   control-ui-auth-transports cron-duration-save.real-gateway cron-human-owner.real-gateway
@@ -58,6 +59,7 @@ const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecyc
   provider-browser-login.real-gateway quota-reset-status.real-gateway
   session-progress-hovercard.real-gateway session-roster-request-rate.real-gateway
   session-pr-reader-lifetime.real-gateway sidebar-running-counts.real-gateway task-pull-requests.real-gateway
+  skill-workshop-plugin-enable.real-gateway
   stale-build-recovery.production
   usage-sessions-owner-attribution worker-initial-setup.real-gateway`
   .split(/\s+/u)
@@ -132,6 +134,7 @@ function probeOwnership(
   fs.writeFileSync(
     resourceFile,
     `
+    import { EventEmitter } from "node:events";
     import fs from "node:fs";
     export const resolvePlaywrightChromiumExecutablePath = () => "/fixture/chromium";
     export const canRunPlaywrightChromium = () => ${options.available !== false};
@@ -139,7 +142,12 @@ function probeOwnership(
       executablePath: () => "/fixture/chromium",
       launchServer: async () => {
         if (!canRunPlaywrightChromium()) throw new Error("fixture Chromium is unavailable");
-        return { wsEndpoint: () => "ws://fixture/chromium", close: async () => {} };
+        const browserProcess = Object.assign(new EventEmitter(), { stderr: null });
+        return {
+          process: () => browserProcess,
+          wsEndpoint: () => "ws://fixture/chromium",
+          close: async () => { browserProcess.emit("exit", 0, null); },
+        };
       },
     };
     export const assertUiE2ePreflight = async () => {
@@ -412,6 +420,15 @@ describe("Control UI E2E resource ownership", () => {
     expect(skipped.admissions).toEqual([]);
   });
 
+  it("isolates native paste from parallel browser clipboard writers", () => {
+    const file = "ui/src/e2e/chat-pasted-text-show-in-text-field.e2e.test.ts";
+    const result = probeOwnership({ filters: [file] });
+    expectInventory(result, [file]);
+    expect(result.files).toEqual([
+      expect.objectContaining({ file, project: "ui-e2e-serial", phase: 1, workers: 1 }),
+    ]);
+  });
+
   it("routes production deployment fixtures exactly once with or without artifact reuse", async () => {
     const { uiE2eProductionArtifactTestFiles } = await import("./vitest/vitest.ui-e2e.config.ts");
     const files = uiE2eProductionArtifactTestFiles.toSorted();
@@ -478,7 +495,7 @@ describe("Control UI E2E resource ownership", () => {
         ].toSorted((left, right) => left.file.localeCompare(right.file)),
       );
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(53);
+      expect(parallel).toHaveLength(55);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {

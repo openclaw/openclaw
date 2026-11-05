@@ -1152,7 +1152,8 @@ extension DashboardWindowController {
         // An in-flight load counts as usable so opening mid-preload does not
         // cancel and restart it — unless the in-flight document is the failure
         // page, which must always be replaced.
-        currentURL != newURL || currentAuth != newAuth || isShowingFailurePage || !hasUsableDocument
+        currentURL != newURL || !currentAuth.hasSameDocumentIdentity(as: newAuth) ||
+            isShowingFailurePage || !hasUsableDocument
     }
 
     func dispatchNativeCommand(_ command: DashboardNativeCommand) {
@@ -1466,7 +1467,7 @@ extension DashboardWindowController {
 
     func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
         if self.nativeBrowser.owns(webView) {
-            self.nativeBrowser.navigationDidFail(for: webView)
+            self.nativeBrowser.navigationDidFail(for: webView, error: error)
             return
         }
         guard webView === self.webView else { return }

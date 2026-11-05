@@ -17,7 +17,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { CodexCatalogIndexRow } from "../../extensions/codex/src/session-catalog-index-row.js";
 import { CodexCatalogRolloutScanner } from "../../extensions/codex/src/session-catalog-rollout-scanner.js";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -99,16 +99,11 @@ const run = async () => {
   assert.equal(owner.observedFiles.size, sessionCount);
 };
 const profilePath = path.join(stateDir, "allocation.heapprofile");
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
 if (values["gc-log"]) {
   assert(global.gc, "Tracing requires --expose-gc for isolate identification before warmup");
-  marker("identify-start");
+  writeGatewayGcTraceMarker("identify-start", profilePath);
   global.gc();
-  marker("identify-stop");
+  writeGatewayGcTraceMarker("identify-stop", profilePath);
 }
 function distribution(samples: number[]) {
   const sorted = samples.toSorted((a, b) => a - b);
@@ -172,7 +167,7 @@ try {
   const memoryStart = process.memoryUsage();
   const latencies: number[] = [];
   loop.reset();
-  marker("heap-start");
+  writeGatewayGcTraceMarker("heap-start", profilePath);
   const actualStartAt = Date.now();
   measuredStart = performance.now();
   for (let i = 0; i < operations; i++) {
@@ -181,7 +176,7 @@ try {
     latencies.push(performance.now() - start);
   }
   measuredEnd = performance.now();
-  marker("heap-stop");
+  writeGatewayGcTraceMarker("heap-stop", profilePath);
   const usedCpu = process.cpuUsage(cpu);
   loop.disable();
   await nextTurn();

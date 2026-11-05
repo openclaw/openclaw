@@ -181,7 +181,6 @@ async function runClientCredentialTaskAsync(
           runtime.pool ??= new WorkerTaskPool({
             workerUrl: resolveRuntimeProcessEntrypointUrl("clientCredentials"),
             workerClass: "singleton",
-            idleTimeoutMs: 0,
           });
           const result = await runtime.pool.run(
             { root, operation, admission: admission.port },

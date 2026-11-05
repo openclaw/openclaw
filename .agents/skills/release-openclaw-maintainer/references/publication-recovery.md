@@ -171,6 +171,11 @@ Leave `plugins`, parent publication run IDs, and `release_candidate_branch`
 empty. The source must equal the canonical `extended-stable/YYYY.M.33` branch
 tip and retain its final `YYYY.M.PATCH` version with `PATCH >= 33`. The protected
 tooling tag must resolve to a workflow revision reachable from current `main`.
+The exchange revalidates the current source and protected tooling after acquiring
+the GitHub token and before requesting package-scoped npm credentials. A moved
+source or revoked tooling requires a fresh approved preflight, not a retry of
+the stale exchange.
+
 Require the `Trusted publisher OIDC exchange` job to succeed before following
 [trusted-main npm recovery](extended-stable-publish.md#trusted-main-npm-recovery).
 

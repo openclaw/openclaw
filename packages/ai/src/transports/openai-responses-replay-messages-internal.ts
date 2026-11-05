@@ -266,7 +266,7 @@ export function buildResponsesInputMessage(
 
 export { createAssistantOutput as createOpenAIResponsesAssistantOutput } from "./assistant-output.js";
 
-type ConvertResponsesMessagesOptions = {
+export type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
@@ -284,7 +284,7 @@ const responsesMessageProjections = new WeakMap<
 >();
 
 /** Detach hook-editable JSON containers while retaining scalar strings. */
-function cloneResponsesInputForPayloadHook<T>(value: T): T {
+export function cloneResponsesInputForPayloadHook<T>(value: T): T {
   if (!value || typeof value !== "object") {
     return value;
   }
@@ -675,16 +675,17 @@ function convertResponsesMessagesWithStyle(
       continue;
     }
     // Prepared suffix results resolve IDs against the current request's call map.
-    // Images already have prepared scalar facts. Caching their composed data URLs
-    // would retain a second large base64 string alongside each source image.
+    // Retained projections already prove source immutability. Images retain their own scalar facts.
+    let projections = responsesMessageProjections.get(msg);
     const reusable =
       immutable &&
       !preparedRequestSuffix.has(context) &&
-      immutable.isDeeplyFrozenPlainData(msg) &&
-      (typeof msg.content === "string" || !msg.content.some((block) => block.type === "image"));
+      (projections ||
+        (immutable.isDeeplyFrozenPlainData(msg) &&
+          (typeof msg.content === "string" ||
+            !msg.content.some((block) => block.type === "image"))));
     const key = `${projectionKey}:${msgIndex}`;
-    let projections = reusable ? responsesMessageProjections.get(msg) : undefined;
-    let output = projections?.get(key);
+    let output = reusable ? projections?.get(key) : undefined;
     if (!output) {
       output = convertMessage(msg, msgIndex);
       if (reusable) {

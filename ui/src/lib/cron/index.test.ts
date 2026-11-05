@@ -292,19 +292,23 @@ it("commits authoritative toggle state and advances an open editor revision", as
   state.cronForm.name = "Unsaved rename";
 
   const toggle = toggleCronJob(state, loadedJob, false);
-  await vi.waitFor(() => expect(request).toHaveBeenCalledWith("cron.list", expect.anything()));
-  expect(sent(request, "cron.update")).toMatchObject({
-    id: loadedJob.id,
-    expectedConfigRevision: "revision-loaded",
-    patch: { enabled: false },
-  });
-  expect(state).toMatchObject({
-    cronJobs: [updatedJob],
-    cronEditingJob: updatedJob,
-    cronForm: { name: "Unsaved rename" },
-  });
-
-  listResponse.resolve(jobsPage([updatedJob]));
+  try {
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("cron.list", expect.anything()));
+    expect(request).toHaveBeenCalledWith("cron.status", {});
+    expect(sent(request, "cron.update")).toMatchObject({
+      id: loadedJob.id,
+      expectedConfigRevision: "revision-loaded",
+      patch: { enabled: false },
+    });
+    expect(state).toMatchObject({
+      cronJobs: [updatedJob],
+      cronEditingJob: updatedJob,
+      cronForm: { name: "Unsaved rename" },
+    });
+  } finally {
+    listResponse.resolve(jobsPage([updatedJob]));
+    await toggle;
+  }
   await expect(toggle).resolves.toBe(true);
   await addCronJob(state);
   const updateCalls = request.mock.calls.filter(([method]) => method === "cron.update");

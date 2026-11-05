@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtraGatewayService } from "../../daemon/inspect.js";
+import { createServiceRuntimeInspectionFailure } from "../../daemon/service-runtime.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
@@ -266,6 +267,25 @@ describe("printDaemonStatus", () => {
       });
     },
   );
+
+  it.each([false, true])("prints unclassified launcher failure details (deep=%s)", (deep) => {
+    const detail =
+      "Launcher line 7: multiple commands. Review the launcher and use literal values with a single Gateway command before retrying.";
+    printDaemonStatus(
+      {
+        service: {
+          label: "Scheduled Task",
+          loadedText: "registered",
+          runtime: createServiceRuntimeInspectionFailure(new Error(detail)),
+        },
+      },
+      { json: false, deep },
+    );
+    expect(output()).toContain("Service: Scheduled Task (registered)");
+    expect(output()).not.toContain(detail);
+    expect(output(runtime.error)).toContain(`Service inspection failed: ${detail}`);
+    expect(output(runtime.error)).toContain("openclaw gateway status --deep");
+  });
 
   it("uses service command env for WSL systemd unavailable hints", () => {
     withMockedPlatform("linux", () => {
