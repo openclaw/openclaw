@@ -49,6 +49,7 @@ import {
   isGatewayServerTestFile,
 } from "../test/vitest/vitest.gateway-server-paths.mjs";
 import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
+import { markdownTestFiles } from "../test/vitest/vitest.markdown-paths.mjs";
 import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
 import { isSharedVitestExcludedPath } from "../test/vitest/vitest.pattern-file.ts";
 import {
@@ -134,10 +135,10 @@ import {
   resolveLocalFullSuiteProfile,
   type VitestHostInfo,
 } from "./lib/vitest-local-scheduling.mts";
+import { resolveVitestNodeArgs } from "./lib/vitest-node-args.mts";
 import {
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
   resolveDefaultVitestNoOutputTimeoutMs,
-  resolveVitestNodeArgs,
 } from "./lib/vitest-process-env.mts";
 import {
   estimateVitestTestFileSeconds,
@@ -333,6 +334,7 @@ const LOGGING_VITEST_CONFIG = "test/vitest/vitest.logging.config.ts";
 const PLUGIN_SDK_LIGHT_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk-light.config.ts";
 const PLUGIN_SDK_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk.config.ts";
 const PLUGINS_VITEST_CONFIG = "test/vitest/vitest.plugins.config.ts";
+const MARKDOWN_VITEST_CONFIG = "test/vitest/vitest.markdown.config.ts";
 const UNIT_FAST_VITEST_CONFIG = "test/vitest/vitest.unit-fast.config.ts";
 const UNIT_FAST_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.unit-fast-isolated.config.ts";
 const UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG = "test/vitest/vitest.unit-fast-fake-timers.config.ts";
@@ -527,6 +529,7 @@ const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const FAILED_SHARD_DIGEST_LIMIT = 12;
 const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND: Record<string, string> = {
+  markdown: MARKDOWN_VITEST_CONFIG,
   unitFast: UNIT_FAST_VITEST_CONFIG,
   unitFastIsolated: UNIT_FAST_ISOLATED_VITEST_CONFIG,
   unitFastFakeTimers: UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG,
@@ -4708,6 +4711,7 @@ function resolveBoundedChangedTestTargetPlan(
           createTestInputFingerprint(cwd, changedPaths),
           adaptiveMarkdownQualification,
           options.adaptiveMarkdown.isIndependentCompanion,
+          cwd,
         )
       : (owners: string[]) => owners;
   const graphOptions = {
@@ -5085,6 +5089,12 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   if (isCliProcessTestFile(relative)) {
     return "cliProcess";
   }
+  if (
+    markdownTestFiles.includes(relative) ||
+    markdownTestFiles.includes(relative.replace(/\.ts$/u, ".test.ts"))
+  ) {
+    return "markdown";
+  }
   if (resolveUnitFastTimerTestIncludePattern(relative)) {
     return "unitFastFakeTimers";
   }
@@ -5238,6 +5248,12 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
 
 function resolveLightLaneIncludePatterns(kind: string, targetArg: string, cwd: string) {
   const relative = toRepoRelativeTarget(targetArg, cwd);
+  if (kind === "markdown") {
+    const test = markdownTestFiles.includes(relative)
+      ? relative
+      : relative.replace(/\.ts$/u, ".test.ts");
+    return markdownTestFiles.includes(test) ? [test] : null;
+  }
   if (kind === "unitFast") {
     const includePattern = resolveUnitFastTestIncludePattern(relative);
     return includePattern ? [includePattern] : null;

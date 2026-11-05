@@ -181,7 +181,7 @@ type CronSaveResult = { saved: false } | { saved: true; jobId: string };
 
 export async function addCronJob(state: CronState): Promise<CronSaveResult> {
   let result: CronSaveResult = { saved: false };
-  await withCronBusy(state, undefined, async (client, _reportFeedback, isCurrent) => {
+  await withCronBusy(state, undefined, async (client, reportFeedback, isCurrent) => {
     const form = normalizeCronFormState(state.cronForm);
     if (form !== state.cronForm) {
       state.cronForm = form;
@@ -355,6 +355,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         state.cronCreateOpen = false;
       }
       result = { saved: true, jobId: ("job" in response ? response.job : response).id };
+      if (response.warning) {
+        reportFeedback(response.warning, "cronNotice");
+      }
     }
     await reloadCronJobsSnapshot(state);
     if (!isCurrent()) {
