@@ -20,7 +20,7 @@ vi.mock("node:timers/promises", { spy: true });
 const tailscaleBin = "tailscale";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function useTailscaleSudoFixture(mode: "password" | "conflict") {
+function useTailscaleSudoFixture(mode: "password" | "conflict" | "must-be-root") {
   const fixture = fileURLToPath(
     new URL("../../test/fixtures/tailscale-sudo-fixture.mjs", import.meta.url),
   );
@@ -226,10 +226,10 @@ describe("tailscale helpers", () => {
       expect(info).toHaveBeenCalledTimes(1);
     });
   });
-
   it.runIf(process.platform !== "win32").each([
     ["password", 18791, /sudo: a password is required[\s\S]*sudo tailscale set --operator=\$USER/],
     ["conflict", 18789, "ownership OpenClaw cannot prove; it was not modified"],
+    ["must-be-root", 18791, /sudo: a password is required/],
   ] as const)("preserves %s diagnostics", async (mode, port, diagnostic) => {
     useTailscaleSudoFixture(mode);
     await expect(claimTailscaleRoute("serve", port, port, vi.fn())).rejects.toThrow(diagnostic);
