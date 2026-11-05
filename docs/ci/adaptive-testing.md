@@ -330,3 +330,36 @@ scenario inputs, not invoice predictions; credits, discounts, minimums and
 storage charges need separate accounting. Workflow critical-path savings stay
 unknown until a dependency timeline is available. Do not label summed job time
 as developer wait time.
+
+## Declared file inputs
+
+Prefer module imports for JSON fixtures so Vitest records their dependencies
+without additional rules. Binary fixtures read through `node:fs` use the exact
+test-to-input mapping in `test/vitest/vitest.declared-inputs.ts`. The shared Vite
+plugin registers these inputs with native dependency recording and related-test
+selection. It does not intercept file reads or change the scheduled inventory.
+Undeclared file reads remain a graph coverage gap.
+
+## Optional Jev ranking experiment
+
+`node scripts/ci-adaptive-jev.mjs --request selection-request.json --output jev-ranking.json`
+accepts the existing selector request fields `version`, `context`, `files`, and
+`changedFiles`. Supply `TYPESAFE_API_KEY` only to this trusted command. Without
+it, the command writes null scores and keeps every scheduled file without making
+a request. Ordinary CI does not invoke this command or receive this credential.
+
+With a key, the command sends only changed paths and test identities to the
+[TypeSafe System One endpoint](https://docs.typesafe.ai/api/system-one), using
+the pinned `jev-1.14.0` model. It does not send source, outcomes, logs, environment
+values or conversation history. Each batch contains at most 25 opaque question
+IDs; requests and streamed responses are limited to 64 KiB, with a single
+ten-second deadline and no retries or redirects. At most 1,000 tests and 600
+changed paths are accepted. Invalid or incomplete responses discard all scores
+and preserve the full inventory.
+
+These are path-only experimental scores, not calibrated regression probabilities.
+The artifact records its actual inference time, input hash and reported token
+usage. A failed request can leave total usage unknown; `usage.complete` makes
+that explicit. Keep this artifact separate from frozen pre-execution decisions:
+a later replay must never be presented as a prospective prediction. Live model
+quality and billing need a key-backed experiment before any scheduling decision.

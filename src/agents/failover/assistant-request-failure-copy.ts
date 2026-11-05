@@ -296,6 +296,13 @@ export function renderRecordedAssistantFailureCopy(
     return `⚠️ ${approvalMessage}`;
   }
   const raw = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
+  // Terminal lifecycle errors can already contain our safe copy without the original auth facts.
+  for (const reason of ["auth", "auth_permanent"] as const) {
+    const copy = ASSISTANT_REQUEST_FAILURE_COPY[reason];
+    if (raw === copy || raw === `⚠️ ${copy}`) {
+      return `⚠️ ${copy}`;
+    }
+  }
   if (raw === "Worker inference result exceeds the transcript message limit.") {
     return "The worker could not save the model response because it exceeded the message size limit. Retry with a smaller response or continue on the Gateway. Earlier actions may have completed; verify their results before continuing.";
   }
