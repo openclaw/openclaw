@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
@@ -32,7 +33,7 @@ async function archive() {
     .file("repo-main/skills/guide/SKILL.md", content)
     .file("repo-main/skills/guide/notes.md", "Companion notes")
     .file("repo-main/skills/guide/nested/data.bin", Buffer.from([0, 255, 128]))
-    .generateAsync({ type: "nodebuffer" });
+    .generateAsync({ type: "arraybuffer" });
 }
 it.each([
   ["/team/repo/tree/main/skills/guide", "/team/repo/archive/main.zip"],
@@ -214,12 +215,16 @@ it("validates only exact HTTPS operator grant origins and retains the strict def
     skills: { library: { import: { allowedOrigins: [origin] } } },
   });
   expect(OpenClawSchema.safeParse(config("https://forge.corp.example:8443/")).success).toBe(true);
+  // Fresh test-only material preserves rejection coverage without storing credential-shaped URIs.
+  const credentialedOrigin = new URL("https://forge.corp.example");
+  credentialedOrigin.username = randomUUID();
+  credentialedOrigin.password = randomUUID();
   for (const origin of [
     "http://forge.corp.example",
     "https://*.corp.example",
     "https://forge.corp.example/path",
     "https://forge.corp.example?token=x",
-    "https://user:password@forge.corp.example",
+    credentialedOrigin.href,
   ]) {
     expect(OpenClawSchema.safeParse(config(origin)).success).toBe(false);
   }

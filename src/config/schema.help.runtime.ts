@@ -545,6 +545,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Restrict video understanding by channel, chat type, or source key. Keep this narrow in busy or untrusted channels to control processing.",
   "tools.media.video.attachments":
     "Choose which matching video attachments are processed. Use first-only handling unless multi-video analysis is intentional.",
+  "skills.library.import.allowedOrigins":
+    "Exact HTTPS origins the operator allows for skill imports from approved private services. Empty keeps private origins blocked. Include the scheme, host, and port. Redirects are checked independently; explicit loopback IP literals also permit loopback access.",
   "skills.load.extraDirs":
     "Additional shared skill roots to scan at lowest precedence. Use this for sibling repos or shared skill packs that should be available without copying them into the OpenClaw workspace.",
   "skills.load.allowSymlinkTargets":
