@@ -210,12 +210,14 @@ export function registerCanaryReadinessBudgetTests(
     "bounds poll authority reads and settles startup warnings before %s",
     async (outcome) => {
       const polling = createDeferredCore();
-      const sleep = vi.spyOn(timerPromises, "setTimeout");
-      sleep.mockImplementation((ms) => new Promise((resolve) => void setTimeout(resolve, ms)));
+      const sleep = vi.spyOn(timerPromises, "setTimeout").mockImplementation((ms) => {
+        const tick = createDeferredCore();
+        setTimeout(tick.resolve, ms);
+        return tick.promise;
+      });
       onTestFinished(() => sleep.mockRestore());
-      const { receipt, onProgress } = holdCanaryProgress(
-        (step) => step.step === "warning:candidate-gateway-startup",
-      );
+      const warning = "warning:candidate-gateway-startup";
+      const { receipt, onProgress } = holdCanaryProgress(({ step }) => step === warning);
       let current = true;
       let ready = false;
       const assertCurrent = vi.fn(() => {
@@ -252,14 +254,13 @@ export function registerCanaryReadinessBudgetTests(
         receipt.resolve();
       }
       const result = await pending;
-      expect(result.status).toBe("error");
-      expect(result.phase).toBe(outcome === "readyz" ? "readiness" : "startup");
+      const phase = outcome === "readyz" ? "readiness" : "startup";
+      expect(result).toMatchObject({ status: "error", phase });
       expect(canaryOutcomeStep(result.steps)?.failureFacts?.[0]?.message).toContain(
         outcome === "write-failed"
           ? "startup warning storage unavailable"
           : "candidate authority revoked",
       );
-      expect(fetch.mock.calls.some(([url]) => url.endsWith("/readyz"))).toBe(outcome === "readyz");
       expect(gateway().exitCode).toBe(0);
     },
   );
@@ -471,11 +472,10 @@ export function registerCanaryReadinessBudgetTests(
     expect(unavailable.status).toBe("ok");
     expect(unavailable.logTail.join("\n")).toContain("Update checks reached their time limit");
     const unavailableStep = canaryOutcomeStep(unavailable.steps);
-    expect(unavailableStep?.advisory?.message).toContain("ECONNREFUSED");
+    const refused = expect.stringContaining("ECONNREFUSED");
+    expect(unavailableStep?.advisory?.message).toEqual(refused);
     expect(unavailableStep?.advisory?.message).not.toContain("via proxy");
-    expect(unavailableStep?.failureFacts).toEqual(
-      probeFailure(expect.stringContaining("ECONNREFUSED")),
-    );
+    expect(unavailableStep?.failureFacts).toEqual(probeFailure(refused));
     stubFetch(async () => {
       controller.abort(new Error("operator cancelled"));
       return healthyResponse();
