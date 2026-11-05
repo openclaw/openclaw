@@ -17,6 +17,7 @@ import {
 import type { CodexConfigReadResponse } from "./protocol.js";
 import type { CodexBindingAuthority } from "./session-binding.js";
 import { createClientHarness, stubCodexInferenceTransportEnv } from "./test-support.js";
+import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
 
 const clients: ReturnType<typeof createClientHarness>[] = [];
 beforeEach(() => {
@@ -93,6 +94,40 @@ async function prepare(
 }
 
 describe("managed inference route ownership", () => {
+  it("keeps proxy restarts equivalent without losing inference policy identity", async () => {
+    const fingerprint = async (modelPolicyEnforced: boolean) => {
+      const h = harness({
+        onWrite(line, send) {
+          const request = JSON.parse(line);
+          expect(request.method).toBe("account/read");
+          send({ id: request.id, result: { account: { type: "apiKey" } } });
+        },
+      });
+      ownCodexInferenceClient(h.client);
+      const prepared = await prepareCodexInferenceThreadConfig({
+        client: h.client,
+        binding: undefined,
+        clientId: "fixture-native-client",
+        cwd: "/workspace",
+        effectiveConfig: { config: {}, origins: {} },
+        assertCurrent: () => {},
+        modelPolicyEnforced,
+      });
+      if (!prepared) {
+        throw new Error("expected owned route");
+      }
+      return fingerprintCodexThreadConfig(
+        { config: prepared.config },
+        undefined,
+        undefined,
+        undefined,
+        { inferenceRoute: prepared.route, inferenceProviderRoutes: prepared.providers },
+      );
+    };
+    const enforced = await fingerprint(true);
+    expect(await fingerprint(true)).toBe(enforced);
+    expect(await fingerprint(false)).not.toBe(enforced);
+  });
   it.each(["thread/closed", "thread/archived", "thread/deleted"] as const)(
     "releases bounded thread provenance on %s without revoking peers",
     async (method) => {

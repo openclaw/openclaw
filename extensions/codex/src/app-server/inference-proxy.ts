@@ -62,6 +62,7 @@ type ResidentTicket = {
 /** Private, fixed-destination relay. Upstream credentials are never retained. */
 export async function createCodexInferenceProxy(params: {
   upstream: URL;
+  configurationIdentity?: string;
   assertCurrent: () => void;
   oauth?: CodexResponsesOAuth;
   preserveAzureUrlFeatures?: boolean;
@@ -716,6 +717,7 @@ export async function createCodexInferenceProxy(params: {
     return {
       context,
       upstream: upstream.toString(),
+      configurationIdentity: params.configurationIdentity ?? upstream.toString(),
       baseUrl: "http://127.0.0.1:" + address.port + pathPrefix,
       assertCurrent,
       close,

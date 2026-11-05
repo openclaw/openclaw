@@ -66,6 +66,7 @@ export function isRestrictedThreadConfigCompatible(
         params.params,
         context.hostSystemAgentActive,
         context.binding,
+        params,
       )
   );
 }
@@ -88,5 +89,6 @@ export function buildRestrictedThreadConfigFingerprint(
     params.params,
     context.hostSystemAgentActive,
     selection,
+    params,
   );
 }

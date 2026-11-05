@@ -1,6 +1,10 @@
 import * as crypto from "node:crypto";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import {
+  resolveCodexThreadFingerprintConfig,
+  type CodexThreadFingerprintInference,
+} from "./inference-provider-config.js";
+import {
   isJsonObject,
   type CodexTurn,
   type CodexTurnEnvironmentParams,
@@ -66,6 +70,7 @@ export function fingerprintCodexThreadConfig(
     modelProvider?: string | null;
     preserveNativeModel?: boolean;
   },
+  inference?: CodexThreadFingerprintInference,
 ): string {
   let { model, requestedModel, modelProvider, requestedModelProvider } = initialRequest;
   if (selection) {
@@ -103,7 +108,10 @@ export function fingerprintCodexThreadConfig(
       permissions: initialRequest.permissions ?? null,
       baseInstructions: initialRequest.baseInstructions ?? null,
       developerInstructions: initialRequest.developerInstructions ?? null,
-      config: initialRequest.config ?? {},
+      config: resolveCodexThreadFingerprintConfig(
+        isJsonObject(initialRequest.config) ? initialRequest.config : {},
+        inference,
+      ),
     }),
   );
 }
@@ -124,6 +132,7 @@ export function fingerprintRestrictedThreadConfig(
   },
   hostSystemAgentActive: boolean,
   selection?: Parameters<typeof fingerprintCodexThreadConfig>[3],
+  inference?: CodexThreadFingerprintInference,
 ): string {
   return hashCodexAppServerBindingFingerprint(
     fingerprintJsonObject({
@@ -137,6 +146,7 @@ export function fingerprintRestrictedThreadConfig(
         authProfileId,
         dynamicToolsFingerprint,
         selection,
+        inference,
       ),
       hostSystemAgentActive,
       toolsAllow:

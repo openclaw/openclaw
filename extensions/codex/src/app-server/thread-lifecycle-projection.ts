@@ -46,6 +46,7 @@ export async function canRetainCodexProjectionBackgroundWork(
       authProfileId,
       context.dynamicToolsFingerprint,
       binding,
+      params,
     ),
   );
 }
