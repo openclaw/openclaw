@@ -46,7 +46,7 @@ export type TeamScaleFixtureAsset = {
 };
 
 /** A saved reply and unfinished tool group, followed by work completed while away. */
-export function createActiveTranscriptReloadFixture(prefix: unknown[] = []) {
+export function createActiveTranscriptReloadFixture(prefix: unknown[] = [], appendedPairs = 1) {
   const message = (role: string, content: unknown, id: string, offset: number, runId?: string) => ({
     role,
     content,
@@ -89,10 +89,16 @@ export function createActiveTranscriptReloadFixture(prefix: unknown[] = []) {
     ),
   ];
   const saved = projectChatDisplayMessages(rawSaved);
-  const fresh = [
-    message("user", "A fresh synthetic prompt", "active-reload-fresh-prompt", 6),
-    message("assistant", "A fresh synthetic result", "active-reload-fresh-result", 7),
-  ];
+  const fresh = Array.from({ length: appendedPairs * 2 }, (_, index) => {
+    const part = index % 2 ? "result" : "prompt";
+    const turn = Math.floor(index / 2);
+    return message(
+      part === "result" ? "assistant" : "user",
+      `A fresh synthetic ${part}`,
+      `active-reload-fresh-${part}${turn ? `-${turn}` : ""}`,
+      6 + index,
+    );
+  });
   const intermediate = projectChatDisplayMessages([...rawSaved, ...fresh]);
   const live = projectChatDisplayMessages([
     ...rawSaved,

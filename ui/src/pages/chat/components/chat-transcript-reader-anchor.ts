@@ -2,6 +2,7 @@ import type { Virtualizer, VirtualItem } from "@tanstack/virtual-core";
 import { isIosBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
+import type { ChatTranscriptRenderer } from "./chat-transcript-layout-solid.tsx";
 import type { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 import { focusedTranscriptRowKey } from "./chat-transcript-range.ts";
 
@@ -11,10 +12,7 @@ type ReaderAnchorHost = {
   readonly virtualizer: TranscriptVirtualizer;
   readonly layout: TranscriptLayoutOwner;
   readonly offsetState: TranscriptOffsetState;
-  readonly renderer: {
-    readonly columnElement: HTMLElement | undefined;
-    queueAfterCommit(effect: () => void): void;
-  };
+  readonly renderer: Pick<ChatTranscriptRenderer, "columnElement" | "queueAfterCommit">;
   readonly initialRange: { readonly pending: boolean };
   readonly prependAnchor: { readonly messageKey: string | null };
   readonly headerHeight: number;
@@ -67,20 +65,25 @@ export class TranscriptReaderAnchor {
     private readonly onRowsMeasured: () => void,
   ) {}
 
-  get endReady(): boolean {
-    const { initialRange, offsetState } = this.host;
-    return !offsetState.pendingScrollOffset && (initialRange.pending || this.rowsMeasured);
-  }
-
   /** Native receipts and the active range must describe the same measurement batch. */
-  get rowsMeasured(): boolean {
-    return this.host.virtualizer.getVirtualItems().every(({ key, size }) => {
-      const row = this.host.virtualizer.elementsCache.get(key);
+  rowsMeasured(indexes?: readonly number[]): boolean {
+    const { virtualizer } = this.host;
+    const rows = virtualizer.getVirtualItems();
+    const required = indexes
+      ? indexes.map((index) => rows.find((row) => row.index === index))
+      : rows;
+    return required.every((item) => {
+      if (!item) {
+        return false;
+      }
+      const row = virtualizer.elementsCache.get(item.key);
       if (row?.dataset.preparedRow === "true") {
-        return true;
+        return indexes === undefined;
       }
       const height = row && this.heights.get(row);
-      return row?.isConnected === true && height !== undefined && Math.abs(height - size) < 0.5;
+      return (
+        row?.isConnected === true && height !== undefined && Math.abs(height - item.size) < 0.5
+      );
     });
   }
 

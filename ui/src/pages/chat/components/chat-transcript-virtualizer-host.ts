@@ -92,7 +92,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     if (this.connected && !this.offsetState.pendingInteractionAnchor) {
       if (
         !this.offsetState.touchActive &&
-        this.prependAnchor.update(this.virtualizer, this.readerAnchor.rowsMeasured)
+        this.prependAnchor.messageKey !== null &&
+        this.prependAnchor.update(this.virtualizer, this.readerAnchor.rowsMeasured())
       ) {
         this.offsetState.syncNativeOffset?.();
         this.presentation.commitChange(this.invalidate, true);
@@ -163,7 +164,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   readonly prependAnchor = new TranscriptPrependAnchor(
     this.messageElements.elements,
     this.recordEndLayoutCorrection,
-    () => (this.canAutoFollow() && this.endAnchor.atEnd ? this.rowKeys.at(-1) : null),
   );
   private candidateMessageRowKeysById: ReadonlyMap<string, string> = new Map();
   private candidateMessageRowsByKey: ReadonlyMap<string, string> = new Map();
@@ -188,6 +188,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       (element, entry) => this.presentation.measureElement(element, entry),
       (effect) => this.renderer.queueAfterCommit(effect),
       () => this.presentation.measureRowsWithoutScrollAdjustment(),
+      (indexes) => this.readerAnchor.rowsMeasured(indexes),
       (index, mode) => this.renderer.prewarmRow(index, mode),
       // Coalesce completion with measured geometry instead of mounting a second
       // range in the ResizeObserver delivery's microtask checkpoint.
@@ -618,9 +619,11 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   scrollToEnd({ source = "manual", behavior = "auto" }: ChatScrollToEndOptions = {}): boolean {
     // Hydration/resize follow cannot replace a saved reader. A new latest
     // command intentionally supersedes restoration.
-    const positioning = this.initialRange.preparingEnd || !this.readerAnchor.endReady;
-    if (source === "auto" && (positioning || !this.canAutoFollow())) {
-      return false;
+    const allowed =
+      source !== "auto" || (!this.offsetState.pendingScrollOffset && this.canAutoFollow());
+    // An accepted end command may still be measuring its destination.
+    if (!allowed || (source === "auto" && this.initialRange.preparingEnd)) {
+      return allowed;
     }
     if (source !== "auto") {
       // End-follow must not let speculative history measurements move its target.

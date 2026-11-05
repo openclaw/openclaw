@@ -14,7 +14,6 @@ export class TranscriptPrependAnchor {
   constructor(
     private readonly messageElements: ReadonlyMap<string, HTMLElement>,
     private readonly onLayoutCorrection: (before: number, after: number) => void,
-    private readonly endRowKey?: () => string | null | undefined,
   ) {}
 
   /** Stable message identity used to resolve its row in the committed projection. */
@@ -33,11 +32,7 @@ export class TranscriptPrependAnchor {
       (messageKey === null ? null : this.committedMessageRows.get(messageKey)) ??
       this.pending?.rowKey ??
       null;
-    return extractTranscriptRange(range, indexes, [
-      focusedRowKey,
-      rowKey,
-      this.endRowKey?.() ?? null,
-    ]);
+    return extractTranscriptRange(range, indexes, [focusedRowKey, rowKey]);
   }
 
   /** Whether the next projection inserts history before the committed first message. */

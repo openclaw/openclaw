@@ -91,7 +91,6 @@ export function createTranscriptReloadWitness(
   return {
     witnesses,
     variants,
-    originalMessageId: active ? "active-reload-long-reply" : metadata.id,
     messageCount: variants.saved.length,
     liveMessageCount: variants.live.length,
     totalMessages: {

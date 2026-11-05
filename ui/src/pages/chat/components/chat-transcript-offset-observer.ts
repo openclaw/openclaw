@@ -97,8 +97,12 @@ export function scrollTranscriptToEnd(
   cancelScroll: (preserveEnd?: boolean) => void,
   measureSkippedRows: () => void,
   endAnchor: TranscriptEndAnchor,
-  prepareEnd: (ready: () => void, isCurrent: () => boolean) => void,
+  prepareEnd: (ready: () => void, isCurrent: () => boolean, native: boolean) => void,
 ): void {
+  // A settled end needs no preparation or additional mounted rows.
+  if (source === "auto" && endAnchor.capture(instance.scrollElement)) {
+    return;
+  }
   // Retargeting automatic follow must not insert an instant stop.
   if (source !== "auto" || state.scrollCommand?.target !== "end") {
     cancelScroll();
@@ -126,10 +130,9 @@ export function scrollTranscriptToEnd(
       endAnchor.capture(element);
     }
   };
-  if (source !== "auto" && behavior === "smooth") {
-    // Measure the bounded destination before native motion. A late estimate
-    // contraction otherwise clamps the journey backward.
-    prepareEnd(scroll, () => state.scrollCommand === command);
+  if (source === "auto" || behavior === "smooth") {
+    // Automatic following joins native measurements; manual motion prepares synchronously.
+    prepareEnd(scroll, () => state.scrollCommand === command, source === "auto");
   } else {
     scroll();
   }
@@ -498,16 +501,7 @@ export function observeTranscriptOffset(
       owner.state.scrollCommand?.target === "end" &&
       Math.abs((maxTranscriptScrollOffset(element) ?? 0) - element.scrollTop) <= (scrolling ? 0 : 1)
     ) {
-      if (owner.state.scrollCommand.behavior === "smooth") {
-        owner.cancelScroll(true);
-      } else {
-        owner.state.scrollCommand = null;
-        // Arrival can precede the queued reconciliation frame. Retire its
-        // index target too, without cancelling the reader’s end-follow intent.
-        // The notification can lag a newer native write; hold the current viewport.
-        instance.scrollToOffset(element.scrollTop, { behavior: "instant" });
-        owner.endAnchor.capture(element);
-      }
+      owner.cancelScroll(true);
     }
   });
   return () => {
