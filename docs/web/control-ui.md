@@ -125,6 +125,10 @@ This does not copy the parent conversation or start an agent run. Use
 Gateway checks your write access to the parent before creating either kind of
 child.
 
+Imported conversations can remain grouped under their original session source,
+such as Beam. After conversion, they use the normal session controls, including
+rename, pin, and archive; the source group does not require another import.
+
 ## Automatic session names
 
 New Dashboard conversations receive a title from their opening task. Later messages
