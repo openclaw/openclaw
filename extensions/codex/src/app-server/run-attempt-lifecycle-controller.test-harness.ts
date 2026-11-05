@@ -156,6 +156,7 @@ export function createTerminalReleaseHarness(options?: {
     });
   return {
     async [Symbol.asyncDispose]() {
+      steeringQueue.cancel();
       completeTurn();
       await yieldImmediate();
     },

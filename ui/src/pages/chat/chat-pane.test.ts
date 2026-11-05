@@ -232,7 +232,10 @@ describe("chat pane header state", () => {
       await pending;
 
       expect(patch).not.toHaveBeenCalled();
-      expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.newGroupMoveSkipped") });
+      expect(showToast).toHaveBeenCalledWith({
+        severity: "error",
+        message: t("sessionsView.newGroupMoveSkipped"),
+      });
     } finally {
       document.body.replaceChildren();
       restoreDialogPolyfill();
@@ -253,7 +256,7 @@ describe("chat pane header state", () => {
     await runPaneHeaderAction(pane, { kind: "move-to-group", category: "Projects" }, session);
 
     expect(patch).not.toHaveBeenCalled();
-    expect(showToast).toHaveBeenCalledWith({ message: t("common.refresh") });
+    expect(showToast).toHaveBeenCalledWith({ severity: undefined, message: t("common.refresh") });
   });
 
   it("copies the resolved workspace path and branch", async () => {
@@ -276,9 +279,12 @@ describe("chat pane header state", () => {
 
     pane.handleHeaderMenuAction("copy-path", workspaceSession, "/src/openclaw", "feature/header");
 
-    await vi.waitFor(() => expect(state.chatError).toBe("Copy failed"));
+    await vi.waitFor(() => expect(state.chatError).toBe("Couldn’t copy. Try again."));
     flush();
-    expect(errors()).toEqual({ lastError: "Copy failed", chatError: "Copy failed" });
+    expect(errors()).toEqual({
+      lastError: "Couldn’t copy. Try again.",
+      chatError: "Couldn’t copy. Try again.",
+    });
   });
 
   it("does not query gateway-local branches for exec-node sessions", async () => {

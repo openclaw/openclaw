@@ -9,7 +9,7 @@ import {
   type SkillsLibraryReadResult,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { evaluateSkillInstallPolicy } from "../../plugins/install-security-scan.js";
-import type { InstallPolicyOrigin, InstallPolicySource } from "../../security/install-policy.js";
+import type { InstallPolicySource } from "../../security/install-policy.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import {
   assertSkillBundleHasNoLiteralSecrets,
@@ -25,6 +25,8 @@ import {
 } from "./bundle.js";
 import { captureSkillLibraryAccess } from "./store-access.js";
 import { assertSkillLibraryRevision, type SkillLibraryAuthority } from "./store.js";
+export type SkillLibraryImportPolicy = { source: InstallPolicySource; requestedSpecifier: string };
+
 export { skillLibraryReceipt } from "./receipt.js";
 /** Prepared at human ingress without host database access. */
 export async function resolveSkillLibraryPresentation(
@@ -82,8 +84,7 @@ export async function saveSkillLibrary(
   params: SkillsLibrarySaveParams,
   options: OpenClawStateDatabaseOptions = {},
   uploadId?: string,
-  // Host-resolved provenance only; this is deliberately outside the RPC params schema.
-  installSource?: { origin: InstallPolicyOrigin; source: InstallPolicySource },
+  importPolicy?: SkillLibraryImportPolicy,
 ): Promise<SkillsLibraryReceipt> {
   if (!validateSkillsLibrarySaveParams(params)) {
     throw new SkillLibraryError("INVALID_BUNDLE", "Invalid skill save parameters.");
@@ -119,22 +120,25 @@ export async function saveSkillLibrary(
       "Skill security scan found critical issues. Review the instructions and support files before publishing.",
     );
   }
-  const staged = await stageSkillLibraryBundle(skillId, bundle, access.options.env, () => {
-    access.assertCurrent();
-    authority.assertFileMutationAllowed?.();
-  });
+  const staged = await stageSkillLibraryBundle(
+    skillId,
+    bundle,
+    access.options.env,
+    authority.assertFileMutationAllowed,
+  );
   try {
     const policy = await evaluateSkillInstallPolicy({
       config: authority.getConfig(),
       installId: "library",
       logger: {},
-      origin: installSource?.origin ?? { type: "skill-library" },
-      source: installSource?.source ?? {
+      origin: { type: "skill-library" },
+      source: importPolicy?.source ?? {
         kind: "local-path",
         authority: "user",
         mutable: false,
         network: false,
       },
+      requestedSpecifier: importPolicy?.requestedSpecifier,
       skillName: params.slug,
       sourceDir: staged.staging,
       mode: previous ? "update" : "install",

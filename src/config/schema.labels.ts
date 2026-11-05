@@ -345,6 +345,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "broadcast.*.mentionGating": "Agent Group Mention Selection",
   "broadcast.*.maxRounds": "Agent Group Maximum Rounds",
   "broadcast.*.maxTurns": "Agent Group Maximum Turns",
+  "skills.library.import.allowedOrigins": "Private Skill Import Origins",
   "skills.load.extraDirs": "Extra Skill Directories",
   "skills.load.allowSymlinkTargets": "Allowed Skill Symlink Targets",
   "skills.load.watch": "Watch Skills",

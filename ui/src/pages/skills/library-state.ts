@@ -15,9 +15,9 @@ import {
   type SkillsLibraryListResult,
   type SkillsLibraryReadResult,
   type SkillsLibraryReceipt,
-  type SkillsLibraryImportParams,
   type SkillsLibraryMutateParams,
   type SkillsLibraryUploadResult,
+  type SkillsLibraryImportParams,
   SKILL_LIBRARY_MAX_BUNDLE_BYTES,
   SKILL_LIBRARY_MAX_FILE_BYTES,
   SKILL_LIBRARY_MAX_FILES,
@@ -25,6 +25,7 @@ import {
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSkillLibraryEnglish } from "../../i18n/locales/en-skill-library.ts";
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
@@ -58,6 +59,16 @@ export type LibraryDraft = {
   rollbackRevision: string;
   dirty: boolean;
 };
+
+// The in-app dialog, not window.confirm: webviews without a dialog bridge answer that silently.
+function confirmDiscard(): Promise<boolean> {
+  return showConfirmDialog({
+    title: t("skillLibrary.discard"),
+    message: t("skillLibrary.discardBody"),
+    confirmLabel: t("skillLibrary.discardAction"),
+    danger: true,
+  });
+}
 
 function libraryDraft(read?: SkillsLibraryReadResult): LibraryDraft {
   return {
@@ -95,8 +106,9 @@ export function createSkillLibrary(
     importSlug: string;
     importSource: { slug: string; version?: string } | null;
     importSelection: File[];
-    importMethod: "files" | "github";
     importUrl: string;
+    importPath: string;
+    importRef: string;
   }>({
     list: null,
     listRead: null,
@@ -110,8 +122,9 @@ export function createSkillLibrary(
     importSlug: "",
     importSource: null,
     importSelection: [],
-    importMethod: "files",
     importUrl: "",
+    importPath: "",
+    importRef: "",
   });
   const data = observation.state;
   const [local, setLocal] = createStore({ importOpen: false, newFilePath: "", query: "" });
@@ -179,8 +192,9 @@ export function createSkillLibrary(
       data.importSlug = "";
       data.importSource = null;
       data.importSelection = [];
-      data.importMethod = "files";
       data.importUrl = "";
+      data.importPath = "";
+      data.importRef = "";
     }
   }
   function canWrite() {
@@ -378,8 +392,8 @@ export function createSkillLibrary(
         state.query = "";
       });
     },
-    close() {
-      if (data.busy || (data.draft?.dirty && !window.confirm(t("skillLibrary.discard")))) {
+    async close() {
+      if (data.busy || (data.draft?.dirty && !(await confirmDiscard()))) {
         return;
       }
       data.draft = null;
@@ -390,7 +404,7 @@ export function createSkillLibrary(
       });
     },
     async open(skillId: string) {
-      if (data.draft?.dirty && !window.confirm(t("skillLibrary.discard"))) {
+      if (data.draft?.dirty && !(await confirmDiscard())) {
         return;
       }
       const connection = gateway.capture();
@@ -474,7 +488,13 @@ export function createSkillLibrary(
       }
       if (
         (operation === "remove" || operation === "transfer") &&
-        !window.confirm(t(`skillLibrary.confirm.${operation}`, { slug: draft.slug }))
+        (!(await showConfirmDialog({
+          title: t(`skillLibrary.confirm.${operation}`, { slug: draft.slug }),
+          message: t(`skillLibrary.confirmBody.${operation}`),
+          confirmLabel: t(`skillLibrary.${operation}`),
+          danger: operation === "remove",
+        })) ||
+          data.draft !== draft)
       ) {
         return;
       }
@@ -633,7 +653,7 @@ export function createSkillLibrary(
         }
       }, true);
     },
-    async importRemote(slug: string, source: SkillsLibraryImportParams["source"]) {
+    async importSource(source: SkillsLibraryImportParams["source"]) {
       const connection = gateway.capture();
       if (!connection || !data.list?.profileId || !canWrite()) {
         return;
@@ -641,7 +661,7 @@ export function createSkillLibrary(
       await perform(async () => {
         const receipt = await connection.client.request<SkillsLibraryReceipt>(
           "skills.library.import",
-          { slug, source },
+          { slug: data.importSlug, source },
         );
         if (gateway.isCurrent(connection)) {
           setImportOpen(false);

@@ -525,6 +525,31 @@ export const OpenClawSchemaShape = {
     .strictObject({
       /** Optional bundled-skill allowlist (only affects bundled skills). */
       allowBundled: z.array(z.string()).optional(),
+      library: z
+        .strictObject({
+          import: z
+            .strictObject({
+              // Operator-owned private-address exceptions, not a public-target allowlist.
+              allowedOrigins: z
+                .array(
+                  z.string().refine((value) => {
+                    const origin = URL.parse(value);
+                    return (
+                      origin?.protocol === "https:" &&
+                      !origin.username &&
+                      !origin.password &&
+                      !origin.hostname.includes("*") &&
+                      origin.pathname === "/" &&
+                      !origin.search &&
+                      !origin.hash
+                    );
+                  }, "Expected an exact HTTPS origin without credentials, wildcard, path, query, or fragment."),
+                )
+                .optional(),
+            })
+            .optional(),
+        })
+        .optional(),
       load: z
         .strictObject({
           /**

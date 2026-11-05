@@ -80,8 +80,10 @@ export const SkillsLibraryImportParamsSchema = closedObject({
       version: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
     }),
     closedObject({
-      kind: Type.Literal("github"),
-      url: Type.String({ minLength: 1, maxLength: 2048 }),
+      kind: Type.Literal("url"),
+      url: Type.String({ minLength: 1, maxLength: 4096 }),
+      path: Type.Optional(Type.String({ maxLength: 512 })),
+      ref: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
     }),
   ]),
 });

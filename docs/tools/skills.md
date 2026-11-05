@@ -54,6 +54,10 @@ workspace, `skills/` wins over `.agents/skills/`. Both directories participate i
 snapshot refresh and sandbox synchronization. Sandboxed runs read the
 materialized copies, not the original host paths.
 
+After a Gateway restart, sandbox skill synchronization compares existing copies
+with the current source content. Unchanged files are retained; changed or removed
+instructions and supporting files are reconciled before the turn uses them.
+
 Managed worktree sessions keep their recorded source workspace as the skill
 source. That source is read and watched on the Gateway, even when a File Transfer
 plugin serves the agent workspace from a paired node. The node reads its configured
@@ -145,20 +149,39 @@ bundled, extra, and state-owned managed skills continue to load normally.
 
 On a shared Gateway, identified operators can keep a personal skill library
 without receiving permission to change everybody's workspace skills or Gateway
-configuration. Open **Plugins → Skills → My skills** to create a skill, import a
-`SKILL.md` or ZIP bundle, or add a skill from ClawHub. In **Import skill**, choose
-**GitHub URL** to import a public repository skill folder or its `SKILL.md`,
-including supporting scripts, references, and assets in that folder. For example:
-`https://github.com/owner/repo/tree/main/skills/my-skill` or
-`https://github.com/owner/repo/blob/main/skills/my-skill/SKILL.md`.
+configuration. Open **Plugins → Skills** to create a skill, import a `SKILL.md`
+or ZIP bundle, or add a skill from ClawHub. The editor keeps supporting scripts,
+references, and assets with the instructions.
 
-Repository imports support public `github.com` links only; they do not use GitHub
-credentials or execute repository scripts. The first segment after `tree` or
-`blob` is the branch, tag, or commit. Encode slashes in a ref as `%2F` (for example,
-`tree/feature%2Fskills/skills/my-skill`), or use a commit URL to avoid ambiguity.
-The repository archive must fit within the 32 MiB download limit; the selected
-skill must fit within the normal bundle limits. Imports use the same validation, security scans, and
-personal ownership rules as uploaded bundles.
+URL imports download on the Gateway, not in your browser. Paste an HTTPS raw
+`SKILL.md` or archive URL, or a GitHub-, GitLab-, Gitea-, or Forgejo-style folder
+link. Recognized URL shapes work on self-hosted forges too. For other folder
+webpages, provide a direct archive URL and the directory relative to its unpacked
+root. The optional ref override and directory fields handle ambiguous branch
+names without probing remote refs. Imports keep companion files and nested paths;
+fetched scripts are never executed.
+
+Repository archive downloads may include the whole repository. They share the
+existing upload and extraction limits, including 1 MiB per file and 8 MiB per
+bundle, so a small selected skill in a large repository can still exceed them.
+Use a smaller skill-only archive or upload the files instead. Publicly reachable
+self-hosted forges can use these URL forms. Private/internal-address HTTPS
+sources are blocked by default. An operator can grant exact origins through
+`skills.library.import.allowedOrigins`, for example `https://forge.corp.example:8443`.
+This is an additional private-address grant for all admitted personal URL-import
+callers, not a public-target allowlist or path restriction. HTTPS, DNS pinning,
+per-redirect origin checks, and metadata/link-local protections remain in force.
+A redirect to another private origin or port requires its own grant. Policy changes
+during an import abort it rather than settling an old grant. Request parameters
+cannot supply this permission.
+
+The Gateway itself needs corporate DNS/VPN reachability and normal TLS trust.
+Operator install-policy approval does not grant network access. Browser cookies
+and private-auth sessions are not forwarded; this option supplies no credentials.
+Authenticated private forges still need separately authorized host-bound
+authentication or a usable direct/presigned bundle URL. Explicit loopback origins
+follow the shared guard's existing exception; a non-loopback hostname that
+rebinds to loopback remains blocked. Operator source policy and scanning still apply.
 
 The ordinary single-admin setup stays unchanged: workspace authoring still
 uses `<workspace>/skills`, and existing file-backed skills are not moved into

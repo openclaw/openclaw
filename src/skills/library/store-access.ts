@@ -46,15 +46,8 @@ export function captureSkillLibraryAccess(
     config: { gateway: { roles } },
   };
   const pinned = { path: context.admission.databasePath, env: { ...env, ...context.environment } };
-  let writeProfileCurrent: (() => boolean) | undefined;
   const assertCurrent = () => {
     context.admission.assertCurrent();
-    if (writeProfileCurrent && !writeProfileCurrent()) {
-      throw new SkillLibraryError(
-        "CONFLICT",
-        "Profile authority changed during library access. Retry.",
-      );
-    }
     authority.assertCurrent();
     if (
       !isDeepStrictEqual(roles, authority.getConfig().gateway?.roles) ||
@@ -128,10 +121,6 @@ export function captureSkillLibraryAccess(
         }
       };
       check();
-      // Keep the owner-authorized writer live across network and filesystem waits.
-      if (kind === "profile") {
-        writeProfileCurrent = profileCurrent;
-      }
       if (cacheKey !== undefined && !cached) {
         library.remember(cacheKey, reply, profileCurrent);
       }

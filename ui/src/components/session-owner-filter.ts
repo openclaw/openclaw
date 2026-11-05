@@ -19,6 +19,7 @@ export class SessionOwnerFilter {
   };
   private userIntent = false;
   private ownerFacet: { agentId: string; multiple: boolean } | null = null;
+  private admittedHello: ApplicationGateway["snapshot"]["hello"] = null;
 
   constructor(
     private readonly getGateway: () => ApplicationGateway | undefined,
@@ -27,27 +28,49 @@ export class SessionOwnerFilter {
 
   get selfUserId(): string | undefined {
     const gateway = this.getGateway();
+    if (gateway?.snapshot.phase === "connected") {
+      const viewerId = gateway.snapshot.hello?.auth?.profileActivityViewerId;
+      if (viewerId !== undefined) {
+        return viewerId ?? undefined;
+      }
+    }
     return gateway ? gatewayPresentationScope(gateway).displayUser?.id.trim() : undefined;
   }
 
   read() {
     const gateway = this.getGateway();
     const selfUserId = this.selfUserId;
+    const hello = gateway?.snapshot.phase === "connected" ? gateway.snapshot.hello : undefined;
+    const viewerId = hello?.auth?.profileActivityViewerId;
     const scope =
       gateway && selfUserId ? JSON.stringify([gateway.connection.gatewayUrl, selfUserId]) : null;
-    if (scope !== this.value.scope) {
-      this.userIntent = false;
-      this.ownerFacet = null;
-      this.value = {
+    const scopeChanged = scope !== this.value.scope;
+    let value = this.value;
+    if (scopeChanged) {
+      value = {
         ...(gateway && selfUserId
           ? loadStoredSidebarSessionOwnerFilter(gateway.connection.gatewayUrl, selfUserId, {
-              guest: isRestrictedSessionGuest(gateway.snapshot.hello?.auth ?? null),
+              guest: typeof viewerId === "string" || isRestrictedSessionGuest(hello?.auth ?? null),
             })
           : { ownerId: null, involvingMe: false }),
         scope,
       };
     }
-    return this.value;
+    // Admit restored/prior-authority choices once per authenticated hello. Explicit
+    // choices within that hello retain their visible server denial instead of resetting.
+    if (gateway && hello && (scopeChanged || hello !== this.admittedHello)) {
+      this.admittedHello = hello;
+      if (typeof viewerId === "string" && value.ownerId && value.ownerId !== viewerId) {
+        value = { ownerId: null, involvingMe: true, scope };
+        storeSidebarSessionOwnerFilter(gateway.connection.gatewayUrl, viewerId, value);
+      }
+    }
+    if (value !== this.value) {
+      this.userIntent = false;
+      this.ownerFacet = null;
+      this.value = value;
+    }
+    return value;
   }
 
   hasMultipleOwners(agentId: string): boolean {
@@ -148,12 +171,16 @@ export function createSessionOwnerFilterQuery(
         !facet.startupPending &&
         !facet.error &&
         facet.readSucceeded !== false &&
-        facet.result?.owners &&
-        filter.read().ownerId &&
-        filter.read().ownerId !== filter.selfUserId &&
-        !facet.result.owners.some((owner) => owner.id === filter.read().ownerId)
+        facet.result?.owners
       ) {
-        filter.set(null, false, { automatic: true });
+        const ownerId = filter.read().ownerId;
+        if (
+          ownerId &&
+          ownerId !== filter.selfUserId &&
+          !facet.result.owners.some((owner) => owner.id === ownerId)
+        ) {
+          filter.set(null, false, { automatic: true });
+        }
       }
     },
   );

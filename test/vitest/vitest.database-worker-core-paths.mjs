@@ -129,6 +129,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/postgres-text-search-schema.postgres.test.ts",
   "src/infra/database-engine/postgres-vector-search-schema.postgres.test.ts",
   "src/infra/database-engine/search-extension.postgres.test.ts",
+  "src/infra/database-engine/readonly-admission.postgres.test.ts",
   "src/infra/database-engine/multi-namespace.postgres.test.ts",
   "src/infra/database-engine/usage-cost-partitions.postgres.test.ts",
   "src/infra/worker-task-pool.sqlite-idle.test.ts",
@@ -835,7 +836,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/state-migrations.audit-logs.windows.test.ts",
   "src/infra/state-migrations.cold-navigation.test.ts",
   "src/infra/state-migrations.workspace-setup.windows.test.ts",
-  "src/skills/library/import-policy.test.ts",
   "src/skills/library/service.test.ts",
   "src/skills/library/selection-authority.test.ts",
   "src/skills/library/service-roles.test.ts",
@@ -1392,6 +1392,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/auth-profile-shared-usage.worker.test.ts",
   "src/agents/embedded-agent-runner/run/auth-controller.test.ts",
   "src/agents/embedded-agent-runner/run/auth-controller.request-auth.test.ts",
+  "src/agents/embedded-agent-runner/run/auth-controller.request-auth-peer-refresh.test.ts",
   "src/agents/auth-profiles.markauthprofilefailure.test.ts",
 
   "src/node-host/node-worker-launch-store.test.ts",
