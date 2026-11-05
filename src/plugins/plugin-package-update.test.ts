@@ -1,4 +1,6 @@
-import { assert, describe, expect, it } from "vitest";
+import path from "node:path";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
@@ -12,6 +14,8 @@ import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixtur
 const beforeRoot = "/packages/pack-v1";
 const afterRoot = "/packages/pack-v2";
 const enabled = (...ids: string[]) => Object.fromEntries(ids.map((id) => [id, { enabled: true }]));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
 
 function record(
   pluginId: string,
@@ -78,6 +82,36 @@ function reconcile(
 }
 
 describe("plugin package update policy reconciliation", () => {
+  it("detects and reconciles home-relative paths for a retired child while retaining shared paths", () => {
+    const home = tempDirs.make("openclaw-package-update-home-");
+    vi.stubEnv("OPENCLAW_HOME", home);
+    const rootDir = path.join(home, "plugins", "pack");
+    const before = index(rootDir, [record("pack/one", rootDir), record("pack/old", rootDir)]);
+    const after = index(rootDir, [record("pack/one", rootDir)]);
+    const snapshot = captureSnapshot(before);
+    const retained = [
+      "~/plugins/pack",
+      "~/plugins/pack/one.js",
+      "~/plugins/pack/old.js/child",
+      "~/plugins/pack/old.js-other",
+      "~/other",
+    ];
+    const config: OpenClawConfig = {
+      plugins: { load: { paths: ["~/plugins/pack/old.js", ...retained] } },
+    };
+    expect(pluginPackageUpdateMayMutateConfig({ config, index: before, snapshot })).toBe(true);
+    expect(
+      pluginPackageUpdateMayMutateConfig({
+        config: { plugins: { load: { paths: retained.slice(2) } } },
+        index: before,
+        snapshot,
+      }),
+    ).toBe(false);
+    const result = reconcile(config, before, after, { snapshot });
+    assert(result.ok);
+    expect(result.config.plugins?.load?.paths).toEqual(retained);
+  });
+
   it.each([false, true])(
     "cleans a retired engine unless ownership transferred: %s",
     (transferred) => {

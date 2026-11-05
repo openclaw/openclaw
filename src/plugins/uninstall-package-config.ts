@@ -2,6 +2,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { CHANNEL_CONFIG_METADATA_KEYS } from "../channels/config-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizePluginId, normalizePluginTargetConfig } from "./config-state.js";
 import { resetPluginSlotsToDefaults, resolveRetainedContextEngineIds } from "./slots.js";
@@ -62,7 +63,8 @@ export function resolveUninstallChannelConfigKeys(
 function loadPathMatchesInstallPath(loadPath: string, installPath: string): boolean {
   return (
     loadPath === installPath ||
-    resolveRealpathOrAbsolute(loadPath) === resolveRealpathOrAbsolute(installPath)
+    resolveRealpathOrAbsolute(resolveUserPath(loadPath)) ===
+      resolveRealpathOrAbsolute(resolveUserPath(installPath))
   );
 }
 

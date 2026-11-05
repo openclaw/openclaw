@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -10,12 +10,14 @@ import {
 import { applyPluginUninstallDirectoryRemoval, planPluginUninstall } from "./uninstall.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
 
 describe("plugin uninstall load-path lifecycle", () => {
   it.each(["package", "entry"])(
     "removes the owned %s alias before deletion and preserves later config edits",
     async (aliasTarget) => {
       const root = await fs.realpath(tempDirs.make("openclaw-uninstall-alias-"));
+      vi.stubEnv("OPENCLAW_HOME", root);
       const sourcePath = path.join(root, "source");
       const extensionsDir = path.join(root, "extensions");
       const installPath = path.join(extensionsDir, "demo");
@@ -38,7 +40,7 @@ describe("plugin uninstall load-path lifecycle", () => {
         plugins: {
           entries: { demo: { enabled: true, config: { retainedUntilRemoval: true } } },
           installs: { demo: { source: "path", sourcePath, installPath } },
-          load: { paths: [aliasPath, unrelatedPath] },
+          load: { paths: ["~/alias", unrelatedPath] },
         },
       };
       const planFor = (currentConfig: OpenClawConfig) =>
@@ -87,6 +89,36 @@ describe("plugin uninstall load-path lifecycle", () => {
       expect(final.config.plugins?.installs).toBeUndefined();
       expect((await fs.stat(sourcePath)).isDirectory()).toBe(true);
       expect((await fs.stat(unrelatedPath)).isDirectory()).toBe(true);
+    },
+  );
+
+  it.each(["absolute", "home-relative"])(
+    "removes home-relative load paths against %s install records without pruning nearby paths",
+    (recordForm) => {
+      const home = tempDirs.make("openclaw-uninstall-home-");
+      vi.stubEnv("OPENCLAW_HOME", home);
+      const installPath = path.join(home, "plugins", "demo");
+      const recordedPath = recordForm === "absolute" ? installPath : "~/plugins/demo";
+      const retained = ["~/plugins", "~/plugins/demo/child", "~/plugins/demo-other", "~/other"];
+      const plan = planPluginUninstall({
+        config: {
+          plugins: {
+            entries: { demo: { enabled: true } },
+            installs: {
+              demo: { source: "path", sourcePath: recordedPath, installPath: recordedPath },
+            },
+            load: { paths: ["~/plugins/demo", installPath, ...retained] },
+          },
+        },
+        pluginId: "demo",
+      });
+      if (!plan.ok) {
+        throw new Error(plan.error);
+      }
+      expect(plan.config.plugins?.load?.paths).toEqual(retained);
+      expect(plan.config.plugins?.installs).toBeUndefined();
+      expect(plan.actions.loadPath).toBe(true);
+      expect(plan.directoryRemoval).toBeNull();
     },
   );
 });
