@@ -87,6 +87,7 @@ export async function createInitialSubagentSession(input: {
   spawnedCwd?: string;
   worktree?: Pick<SpawnSubagentParams, "projectId" | "worktreeName" | "worktreeBaseRef" | "task">;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
+  spawnMode?: SessionEntry["spawnMode"];
   admissionPatch?: Extract<
     ReturnType<typeof resolveSpawnAdmission>,
     { ok: true }
@@ -118,7 +119,8 @@ export async function createInitialSubagentSession(input: {
   const initialChildSessionPatch: Partial<InternalSessionEntry> = {
     ...admissionPatch,
     ...(subagentRole ? { subagentRole } : {}),
-    // Explicit undefined keeps a reused child key from inheriting an earlier blind spawn.
+    // Explicit undefined keeps a reused child key from inheriting an earlier mode or blind spawn.
+    spawnMode: params.spawnMode,
     blindPrompt: params.blind ? true : undefined,
     inheritedToolPolicyVersion: 1,
     ...(params.delegatedToolPolicy ? { delegatedToolPolicy: params.delegatedToolPolicy } : {}),

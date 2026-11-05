@@ -391,6 +391,8 @@ type SessionEntryCore = SessionEntryProvenance &
     forkedFromParent?: boolean;
     /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */
     spawnDepth?: number;
+    /** Subagent spawn mode; outlives the child's swept run record. */
+    spawnMode?: "run" | "session";
     /** Explicit role assigned at spawn time for subagent tool policy/control decisions. */
     subagentRole?: "orchestrator" | "leaf";
     /** Explicit control scope assigned at spawn time for subagent control decisions. */

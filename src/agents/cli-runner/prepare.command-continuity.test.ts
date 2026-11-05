@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createThrowingTestRuntime } from "../../commands/test-runtime-config-helpers.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CliBackendPreparedExecution } from "../../plugins/cli-backend.types.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import * as runtimeConfig from "../agent-runtime-config.js";
 import { AgentSelectionRequiredError } from "../agent-scope.js";
@@ -16,6 +17,7 @@ import {
 } from "../cli-runner.test-helpers.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { prepareAgentCommandExecution } from "../command/prepare.js";
+import { buildSubagentSpawnEnvelope } from "../subagents/spawn/subagent-system-prompt.js";
 import { createCliMcpTool } from "./prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
@@ -61,6 +63,168 @@ describe("direct CLI command continuity", () => {
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
     vi.restoreAllMocks();
+  });
+
+  it("retains the child standing role when a follow-up omits the launch prompt", async () => {
+    const sessionKey = "agent:main:subagent:standing-role";
+    const { dir, sessionTarget: fixtureTarget } = cli.session;
+    const sessionTarget = { ...fixtureTarget, sessionKey };
+    const config: OpenClawConfig = {
+      session: { store: sessionTarget.storePath },
+      agents: { defaults: { workspace: dir, subagents: { maxSpawnDepth: 2 } } },
+      plugins: { enabled: false },
+    };
+    const sessionEntry = { sessionId: sessionTarget.sessionId, updatedAt: 0, spawnDepth: 2 };
+    await replaceSessionEntry(sessionTarget, sessionEntry);
+    const launch = buildSubagentSpawnEnvelope({
+      task: "Inspect the report",
+      spawnMode: "run",
+      completionMode: "collector",
+      childSessionKey: sessionKey,
+      childDepth: 2,
+      maxSpawnDepth: 2,
+    });
+    const common = { config, sessionKey, sessionTarget };
+    const prepared: PreparedCliRunContext[] = [];
+    try {
+      const first = await cli.prepare({
+        ...common,
+        sessionEntry,
+        prompt: launch.message,
+        extraSystemPrompt: launch.systemPrompt,
+      });
+      prepared.push(first);
+      const resumed = await cli.prepare({
+        ...common,
+        prompt: "Continue the report",
+        cliSessionBinding: nativeBinding(first),
+      });
+      prepared.push(resumed);
+      expect(first.systemPrompt).toContain("Leaf worker: cannot spawn. Assigned task only.");
+      expect(first.systemPrompt).toContain("Ephemeral: termination after completion is normal.");
+      expect(first.systemPrompt).not.toContain("Collector run: no completion notification");
+      expect(first.params.prompt).toContain("Collector run: no completion notification");
+      expect(resumed.systemPrompt).toBe(first.systemPrompt);
+      expect(resumed.systemPrompt?.match(/# Subagent Context/g)).toHaveLength(1);
+      expect(resumed.extraSystemPromptHash).toBe(first.extraSystemPromptHash);
+      expect(resumed.reusableCliSession).toEqual({
+        mode: "reuse",
+        sessionId: "native-cli-session",
+      });
+    } finally {
+      for (const context of prepared) {
+        await context.preparedBackend.cleanup?.();
+      }
+    }
+  });
+
+  it("keeps persistent mode after its run record is swept, honoring current policy", async () => {
+    // No registry record exists: the completed session-mode record has been swept.
+    const sessionKey = "agent:main:subagent:persistent-role";
+    const config: OpenClawConfig = {
+      agents: { defaults: { workspace: cli.session.dir, subagents: { maxSpawnDepth: 2 } } },
+      plugins: { enabled: false },
+    };
+    const launch = buildSubagentSpawnEnvelope({
+      task: "Inspect the report",
+      spawnMode: "session",
+      completionMode: "thread-direct",
+      childSessionKey: sessionKey,
+      childDepth: 2,
+      maxSpawnDepth: 2,
+    });
+    const common = {
+      config,
+      sessionKey,
+      sessionEntry: {
+        sessionId: "session-test",
+        updatedAt: 0,
+        spawnDepth: 2,
+        spawnMode: "session" as const,
+      },
+    };
+    const callerInstructions = "Preserve source citations in this report.";
+    const prepared: PreparedCliRunContext[] = [];
+    try {
+      const first = await cli.prepare({
+        ...common,
+        prompt: launch.message,
+        cleanupBundleMcpOnRunEnd: false,
+        extraSystemPrompt: `${launch.systemPrompt}\n\n${callerInstructions}`,
+      });
+      prepared.push(first);
+      const resumed = await cli.prepare({
+        ...common,
+        extraSystemPrompt: callerInstructions,
+        cliSessionBinding: nativeBinding(first),
+      });
+      prepared.push(resumed);
+      expect(resumed.systemPrompt).toBe(first.systemPrompt);
+      expect(resumed.systemPrompt?.match(/# Subagent Context/g)).toHaveLength(1);
+      expect(resumed.systemPrompt).not.toContain("Ephemeral: termination");
+      expect(resumed.systemPrompt).toContain(callerInstructions);
+      expect(resumed.reusableCliSession).toEqual({
+        mode: "reuse",
+        sessionId: "native-cli-session",
+      });
+
+      const updated = await cli.prepare({
+        ...common,
+        config: {
+          ...config,
+          agents: { defaults: { ...config.agents?.defaults, subagents: { maxSpawnDepth: 3 } } },
+        },
+        extraSystemPrompt: "Use the updated report format.",
+        cliSessionBinding: nativeBinding(resumed),
+      });
+      prepared.push(updated);
+      expect(updated.systemPrompt).toContain("May delegate descendants");
+      expect(updated.systemPrompt).not.toContain("Leaf worker: cannot spawn");
+      expect(updated.systemPrompt).toContain("Use the updated report format.");
+      expect(updated.systemPrompt).not.toContain(callerInstructions);
+      expect(updated.extraSystemPromptHash).not.toBe(resumed.extraSystemPromptHash);
+    } finally {
+      for (const context of prepared) {
+        await context.preparedBackend.cleanup?.();
+      }
+    }
+  });
+
+  it.each<{
+    name: string;
+    options: Partial<RunCliAgentParams>;
+  }>([
+    { name: "main sessions", options: { sessionKey: "agent:main:main" } },
+    { name: "side questions", options: { executionMode: "side-question" } },
+    { name: "control operations", options: { controlOperation: "compact" } },
+    { name: "isolated completions", options: { isolatedCompletion: true } },
+  ])("does not add a child role to $name", async ({ options }) => {
+    if (options.isolatedCompletion) {
+      const backend = buildDefaultTestCliBackend();
+      backend.prepareExecution = async (): Promise<
+        CliBackendPreparedExecution & { isolatedCompletionEnforced: true }
+      > => ({ isolatedCompletionEnforced: true });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [backend],
+      });
+    }
+    const context = await cli.prepare({
+      sessionKey: "agent:main:subagent:isolated-role",
+      sessionEntry: { sessionId: "session-test", updatedAt: 0, spawnDepth: 2 },
+      extraSystemPrompt: "Return only the requested output.",
+      ...options,
+    });
+    try {
+      expect(context.systemPrompt).not.toContain("# Subagent Context");
+      if (options.controlOperation) {
+        expect(context.systemPrompt).toBe("");
+      } else {
+        expect(context.systemPrompt).toContain("Return only the requested output.");
+      }
+    } finally {
+      await context.preparedBackend.cleanup?.();
+    }
   });
 
   it.each([

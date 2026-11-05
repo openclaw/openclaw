@@ -235,15 +235,21 @@ it("rejects replaced parent incarnations and never retains a reused child grant"
     ).toMatchObject({ status: "error", error: expect.stringContaining("Parent session changed") });
     expect(child()).toBeUndefined();
     expect(
-      await spawn({ expectedParentSessionId: "parent-first", senderIsOwner: true }),
+      await spawn({
+        expectedParentSessionId: "parent-first",
+        senderIsOwner: true,
+        spawnMode: "session",
+      }),
     ).toMatchObject({ status: "ok" });
     expect(child()).toMatchObject({
+      spawnMode: "session",
       spawnedBySessionId: "parent-first",
       parentSessionLifecycleRevision: "first",
       spawnedBySenderIsOwner: true,
     });
     expect(await spawn({ senderIsOwner: false })).toMatchObject({ status: "ok" });
     expect(child()).toMatchObject({ spawnedBySenderIsOwner: false });
+    expect(child()?.spawnMode).toBeUndefined();
   });
 });
 
