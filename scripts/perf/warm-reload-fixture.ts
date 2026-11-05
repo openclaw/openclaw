@@ -9,7 +9,11 @@ import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import { generateTeamShapeFixture, parseTeamShapeOptions } from "./team-shape-fixture.ts";
 import type { startWarmReloadAdmission } from "./warm-reload-admission.ts";
-import { seedWarmReloadMcpApp } from "./warm-reload-mcp-app.ts";
+import {
+  seedWarmReloadMcpApp,
+  warmReloadMcpMessages,
+  warmReloadMcpViewId,
+} from "./warm-reload-mcp-app.ts";
 import { seedWarmReloadPlugins } from "./warm-reload-plugins.ts";
 
 type RequestGateway = (method: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -40,6 +44,7 @@ function transcript(
   longMarkdown = false,
   endAnchor = false,
   activityTail = false,
+  mcpApp = false,
 ) {
   const events: unknown[] = [];
   let parentId: string | null = null;
@@ -56,6 +61,9 @@ function transcript(
     });
     parentId = id;
   };
+  if (mcpApp) {
+    warmReloadMcpMessages().forEach((message, index) => append(message, `mcp-${index}`));
+  }
   const lastRow = endAnchor ? 32 : 8;
   for (let row = 0; row <= lastRow; row++) {
     const runId = `warm-proof-run-${session}-${row}`;
@@ -539,6 +547,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               options.transcriptLatePaint,
               options.dashboardEndAnchor,
               options.dashboardPaneChrome && index === 1,
+              options.dashboardMcpApp && index === 1,
             ),
           );
           reactions.setSessionReactionInDatabase(owner, target.key, {
@@ -730,21 +739,12 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
           sectionOrder: sidebarSectionOrder,
         });
         if (options.dashboardMcpApp) {
-          const launched = await request("mcp.app.launch", {
-            sessionKey: targets[1]!.key,
-            serverName: "warm-reload",
-            toolName: "dashboard",
-            entrypointType: "thread",
-          });
-          if (!launched || typeof launched !== "object" || !("viewId" in launched)) {
-            throw new Error("Synthetic dashboard MCP App did not launch");
-          }
           await request("board.widget.put", {
             sessionKey: targets[1]!.key,
             name: "warm-reload-verification",
             title: "Synthetic reload dashboard",
             placement: { size: "full" },
-            content: { kind: "mcp-app", viewId: launched.viewId },
+            content: { kind: "mcp-app", viewId: warmReloadMcpViewId },
           });
           await request("board.update", {
             sessionKey: targets[1]!.key,
