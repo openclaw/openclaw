@@ -1,6 +1,4 @@
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture, createCronRunsResult } from "../test-helpers/cron.ts";
 import {
@@ -15,7 +13,10 @@ const suite = createControlUiE2eSuite({
 });
 const startedAt = Date.UTC(2026, 9, 22, 23, 41, 34);
 const failure =
-  "No answer was returned. Some tool actions may already have completed; review before retrying.";
+  "The provider stopped returning output after downloading the current release checklist. Authentication completed, the checklist was read, and the request was accepted, but the final response never arrived. Some tool actions may already have completed; inspect the saved execution record before retrying to avoid repeating those actions.";
+const diagnostic =
+  "The request reached the provider, then exceeded the response deadline after 604 seconds. Delivery was not requested; no final answer was recorded. Trace: " +
+  "providertrace".repeat(24);
 const desktop = { width: 1280, height: 900 };
 
 suite.define(() => {
@@ -31,7 +32,6 @@ suite.define(() => {
   ])(
     "explains the failed run on arrival and while editing on $name",
     async ({ name, viewport, colorScheme, maxHeight }) => {
-      const artifactDir = createControlUiE2eArtifactDir("cron-attention-" + name);
       await suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport, colorScheme },
         async ({ page }) => {
@@ -50,6 +50,7 @@ suite.define(() => {
               lastRunAtMs: startedAt,
               lastRunStatus: "error",
               lastError: failure,
+              lastDiagnosticSummary: diagnostic,
               lastDurationMs: 604282,
               autoDisabled: {
                 reason: "consecutive-failures",
@@ -63,20 +64,24 @@ suite.define(() => {
               "cron.list": cronListResponseFixture(cronList([job], "attention-snapshot")),
               "cron.get": job,
               "cron.status": { enabled: true, jobs: 1, triggersEnabled: true },
-              "cron.runs": createCronRunsResult([
-                {
-                  jobId: job.id,
-                  jobName: job.name,
-                  ts: startedAt + 604282,
-                  action: "finished",
-                  status: "error",
-                  runId: "recorded-failure",
-                  runAtMs: startedAt,
-                  durationMs: 604282,
-                  error: failure,
-                  deliveryStatus: "not-requested",
-                },
-              ]),
+              "cron.runs": createCronRunsResult(
+                name === "phone"
+                  ? []
+                  : [
+                      {
+                        jobId: job.id,
+                        jobName: job.name,
+                        ts: startedAt + 604282,
+                        action: "finished",
+                        status: "error",
+                        runId: "recorded-failure",
+                        runAtMs: startedAt,
+                        durationMs: 604282,
+                        error: failure,
+                        deliveryStatus: "not-requested",
+                      },
+                    ],
+              ),
             },
           });
           // Same job-only deep link used by the session Details attention row.
@@ -86,27 +91,38 @@ suite.define(() => {
           const attention = page.locator(".cron-failure-details");
           await attention.waitFor();
           const review = attention.locator("[data-test-id=cron-review-failed-run]");
-          expect(await attention.locator(".cron-failure-details__cause").textContent()).toBe(
-            failure,
-          );
-          // The selected history entry is already the review target.
+          const cause = attention.locator(".cron-failure-details__cause");
+          const clipped = () =>
+            cause.evaluate((element) => element.scrollHeight > element.clientHeight);
+          const fitsViewport = () =>
+            page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+          expect(await cause.textContent()).toContain(failure);
+          expect(await cause.textContent()).toContain(diagnostic);
+          expect(await clipped()).toBe(false);
+          expect(
+            await cause.evaluate((element) => element.scrollWidth <= element.clientWidth),
+          ).toBe(true);
+          expect(await fitsViewport()).toBe(true);
+          // History already exposes the saved job's full cause, even without a retained run.
           expect(await review.count()).toBe(0);
-          expect((await attention.boundingBox())?.height).toBeLessThan(maxHeight);
           expect(await page.locator(".cron-detail-header").textContent()).not.toContain("Paused");
-          expect(await page.locator(".cron-run-entry").textContent()).toContain(failure);
-          await page.screenshot({ path: path.join(artifactDir, "arrival.png") });
+          if (name === "phone") {
+            expect(await page.locator(".cron-run-entry").count()).toBe(0);
+          } else {
+            expect(await page.locator(".cron-run-entry").textContent()).toContain(failure);
+          }
           await page.locator("[data-test-id=cron-detail-tab-settings]").click();
           const prompt = page.locator(".cron-tab-panel textarea").first();
           const draft = "Keep this unsaved release instruction while reviewing the failure.";
           await prompt.fill(draft);
-          await page.screenshot({ path: path.join(artifactDir, "settings.png") });
+          expect(await clipped()).toBe(true);
+          expect((await attention.boundingBox())?.height).toBeLessThan(maxHeight);
           await review.click();
           await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
+          expect(await clipped()).toBe(false);
           await page.locator("[data-test-id=cron-detail-tab-settings]").click();
           expect(await prompt.inputValue()).toBe(draft);
-          expect(
-            await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-          ).toBe(true);
+          expect(await fitsViewport()).toBe(true);
           expect(await gateway.getRequests("cron.run")).toHaveLength(0);
           expect(await gateway.getRequests("cron.update")).toHaveLength(0);
         },

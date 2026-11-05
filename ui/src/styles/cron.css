@@ -189,8 +189,11 @@
   line-height: 1.45;
 }
 
-/* The selected run history entry carries the complete error. */
 .cron-failure-details__cause {
+  overflow-wrap: anywhere;
+}
+
+.cron-failure-details__cause--preview {
   display: -webkit-box;
   overflow: hidden;
   -webkit-line-clamp: 2;

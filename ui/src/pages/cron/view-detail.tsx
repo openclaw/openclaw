@@ -63,9 +63,10 @@ export function DetailView(
           <DetailHeader {...props} mode={props.mode} selectedJob={selectedJob()} />
           <Show when={failedJob()}>
             {(job) => (
-              // History already presents the selected failed run.
+              // History exposes the full saved-job cause without requiring a retained run.
               <FailureDetails
                 job={job()}
+                fullCause={showHistory()}
                 onReviewRun={showHistory() ? undefined : () => props.onSelectJob(job())}
               />
             )}

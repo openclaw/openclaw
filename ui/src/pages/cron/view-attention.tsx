@@ -4,8 +4,12 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { createMsFormatter } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
-/** Compact failure summary; the run history entry owns the complete record. */
-export function FailureDetails(props: { job: CronJob; onReviewRun?: () => void }) {
+/** Saved-job diagnostics remain available even when the run is no longer retained. */
+export function FailureDetails(props: {
+  job: CronJob;
+  fullCause?: boolean;
+  onReviewRun?: () => void;
+}) {
   const formatTimestamp = () => createMsFormatter(undefined, t("common.na"));
   const cause = () => {
     const error = formatUiExternalText(props.job.state.lastError, t("cron.attention.causeUnknown"));
@@ -51,7 +55,13 @@ export function FailureDetails(props: { job: CronJob; onReviewRun?: () => void }
           </>
         ) : undefined}
       </div>
-      <div class="muted cron-failure-details__cause" title={cause()}>
+      <div
+        class={[
+          "muted cron-failure-details__cause",
+          { "cron-failure-details__cause--preview": !props.fullCause },
+        ]}
+        title={cause()}
+      >
         {cause()}
       </div>
     </div>
