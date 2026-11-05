@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceRevision": "8c411658c18b2787937e75db8c56faad10532590",
+  "sourceRevision": "de671a2b5dedee6a2265e63f320b4af4de500335",
   "common": [
     ".npmrc",
     "node-version.mjs",
@@ -21,7 +21,7 @@
     "test/vitest/zod-runtime.ts",
     "tsconfig.json"
   ],
-  "commonHash": "46b0a2b70ccaf5448c505f95e824a99226eea91c5c1865e164f198e50e9cb8a6",
+  "commonHash": "bd7ef2d5e99d0446ee978f02d3901eeca737735fa95f5ec580a6a2f559f0a255",
   "tests": {
     "packages/markdown-core/src/chunk-text.test.ts": "9d0f0659316a70d09775199d8fe4fbc89439fee93dfe70871cd7bfd884e1ccc3",
     "packages/markdown-core/src/code-spans.test.ts": "28f4dfb0c23ca7753576e07d41a7dd52d30dc59453219906522928a34298b0b6",
