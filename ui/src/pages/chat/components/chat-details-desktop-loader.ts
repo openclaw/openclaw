@@ -1,15 +1,11 @@
-let composition: Promise<typeof import("./chat-details-session.tsx")> | undefined;
+import { createIdleImport } from "../../../lib/idle-import.ts";
 
-export function loadChatDetailsDesktopComposition() {
-  return (composition ??= import("./chat-details-session.tsx").then(
-    (module) => {
-      // Cached sections can render while the independent Environment body warms.
-      void module.preloadChatDetailsEnvironment().catch(() => undefined);
-      return module;
-    },
-    (error: unknown) => {
-      composition = undefined;
-      throw error;
-    },
-  ));
-}
+const composition = createIdleImport(
+  () => import("./chat-details-session.tsx"),
+  (module) => {
+    // Cached sections can render while the independent Environment body warms.
+    void module.preloadChatDetailsEnvironment().catch(() => undefined);
+  },
+);
+
+export const loadChatDetailsDesktopComposition = composition.load;
