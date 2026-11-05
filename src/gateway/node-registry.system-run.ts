@@ -161,9 +161,11 @@ export class NodeSystemRunEvents {
     if (params.terminal) {
       this.authorizedSystemRunEvents.delete(match);
       clearTimeout(event?.expiryTimer);
-      if (event?.resultDelivered) {
-        return { resultDelivered: true };
-      }
+    }
+    if (event?.resultDelivered) {
+      return { resultDelivered: true };
+    }
+    if (params.terminal) {
       // The node reports completion before its result; a still-waiting caller receives that output.
       waiting = [...this.pendingInvokes.values()].find(
         (pending) =>

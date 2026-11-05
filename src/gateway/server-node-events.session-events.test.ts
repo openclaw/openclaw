@@ -43,9 +43,11 @@ function nodeFixture(nodeId: string, overrides: Partial<NodeEventContext> = {}) 
     handleNodeEvent(ctx, nodeId, { event, payloadJSON: JSON.stringify(payload) }, opts);
 }
 
-it.each(["live", "revoked", "inline", "unscoped"])(
+it.each(["live", "revoked", "inline", "unscoped", "result-live", "result-revoked"])(
   "keeps original caller custody and delivery for remote exec: %s",
   async (mode) => {
+    const resultFirst = mode.startsWith("result-");
+    const delivered = mode === "inline" || resultFirst;
     // Late notices exist only after the Gateway stops waiting; the deadline settles those modes.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     onTestFinished(() => {
@@ -121,7 +123,7 @@ it.each(["live", "revoked", "inline", "unscoped"])(
           runId: "guest-run",
           ...(mode !== "unscoped" && { sessionKey }),
         },
-        timeoutMs: mode === "inline" ? 0 : 60_000,
+        timeoutMs: delivered ? 0 : 60_000,
         turnSourceChannel: deliveryContext.channel,
         turnSourceTo: deliveryContext.to,
         turnSourceAccountId: deliveryContext.accountId,
@@ -138,14 +140,25 @@ it.each(["live", "revoked", "inline", "unscoped"])(
         payloadJSON: JSON.stringify({ exitCode: 0, stdout: "inline result" }),
       });
     };
-    if (mode !== "inline") {
+    if (resultFirst) {
+      finish();
+    } else if (mode !== "inline") {
       vi.advanceTimersByTime(60_000);
     }
-    current = mode !== "revoked";
+    current = mode !== "revoked" && mode !== "result-revoked";
     const emit = nodeFixture(nodeId, {
       authorizeNodeSystemRunEvent: (params) =>
-        registry.authorizeSystemRunEventWithState({ ...params, terminal: true }) ?? false,
+        registry.authorizeSystemRunEventWithState({
+          ...params,
+          terminal: params.event !== "exec.started",
+        }) ?? false,
     });
+    if (resultFirst) {
+      await expect(
+        emit("exec.started", { sessionKey, runId: "guest-run" }, { connId: "guest-conn" }),
+      ).resolves.toBeUndefined();
+      expectNoCalls(enqueue, handoff);
+    }
     const completion = emit(
       "exec.finished",
       {
@@ -161,7 +174,7 @@ it.each(["live", "revoked", "inline", "unscoped"])(
       expectNoCalls(enqueue, handoff);
     } else {
       await completion;
-      if (mode === "inline") {
+      if (delivered) {
         expectNoCalls(enqueue, handoff);
       } else {
         expect(handoff).toHaveBeenCalledExactlyOnceWith(
@@ -175,7 +188,7 @@ it.each(["live", "revoked", "inline", "unscoped"])(
       }
     }
     finish();
-    expect((await invocation).mock.calls[0]?.[0]).toBe(mode === "inline");
+    expect((await invocation).mock.calls[0]?.[0]).toBe(delivered);
     expect(captureTarget).toHaveBeenCalledExactlyOnceWith(
       "main",
       sessionKey,
