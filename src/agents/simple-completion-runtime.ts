@@ -34,6 +34,7 @@ import { createAgentRuntimeMetadataPluginIdScope } from "./harness/runtime-plugi
 import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
 import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
 import {
+  applyAuthHeaderOverride,
   applySecretRefHeaderSentinels,
   applyLocalNoAuthHeaderOverride,
   formatMissingAuthError,
@@ -426,8 +427,9 @@ async function prepareSimpleCompletionModelCore(
   assertCurrent?.();
   params.signal?.throwIfAborted();
   const modelRuntime = getModelRegistryRuntime(resolved.modelRegistry);
-  const model = applySecretRefHeaderSentinels(
+  const model = applyAuthHeaderOverride(
     applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
+    resolvedAuth,
     params.cfg,
   );
   const providerRuntimeHandle = resolveProviderRuntimePluginHandle({

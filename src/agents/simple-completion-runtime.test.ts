@@ -89,7 +89,8 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal)
   getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshotMock,
 }));
 
-vi.mock("./model-auth.js", () => ({
+vi.mock("./model-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth.js")>()),
   applySecretRefHeaderSentinels: (model: unknown) => model,
   formatMissingAuthError: vi.fn(
     (auth: { source: string; mode: string }, provider: string) =>
@@ -479,6 +480,91 @@ describe("prepareSimpleCompletionModel", () => {
     expect(result.model.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/anthropic");
     expect(looksLikeSecretSentinel(result.auth.apiKey ?? "")).toBe(true);
     expect(resolveSecretSentinel(result.auth.apiKey ?? "")).toBe("bedrock-runtime-token");
+  });
+
+  it("applies the provider authHeader bearer on the simple-completion path", async () => {
+    // Utility-model helpers run through this preparation instead of
+    // run-attempt-dispatch, so a provider with authHeader:true must get the
+    // same Authorization: Bearer header here or a Bearer-only gateway 401s
+    // every helper call while agent turns succeed (#192866).
+    const cfg = {
+      models: {
+        providers: {
+          "my-gateway": {
+            baseUrl: "https://gateway.example/ai",
+            api: "anthropic-messages" as const,
+            apiKey: "gateway-token",
+            authHeader: true,
+            models: [{ id: "anthropic/claude-haiku-5-5" }],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: makeProviderModelFixture({
+        provider: "my-gateway",
+        id: "anthropic/claude-haiku-5-5",
+        api: "anthropic-messages",
+        baseUrl: "https://gateway.example/ai",
+      }),
+      ...modelStores(),
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "gateway-token",
+      source: "models.providers.my-gateway.apiKey",
+      mode: "api-key",
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
+      cfg,
+      provider: "my-gateway",
+      modelId: "anthropic/claude-haiku-5-5",
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expectPreparedModelResult(result);
+    expect(result.model.headers?.Authorization).toBe("Bearer gateway-token");
+  });
+
+  it("leaves the headers alone without authHeader on the provider", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          "my-gateway": {
+            baseUrl: "https://gateway.example/ai",
+            api: "anthropic-messages" as const,
+            apiKey: "gateway-token",
+            models: [{ id: "anthropic/claude-haiku-5-5" }],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: makeProviderModelFixture({
+        provider: "my-gateway",
+        id: "anthropic/claude-haiku-5-5",
+        api: "anthropic-messages",
+        baseUrl: "https://gateway.example/ai",
+      }),
+      ...modelStores(),
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "gateway-token",
+      source: "models.providers.my-gateway.apiKey",
+      mode: "api-key",
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      preparedModelRuntime,
+      cfg,
+      provider: "my-gateway",
+      modelId: "anthropic/claude-haiku-5-5",
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expectPreparedModelResult(result);
+    expect(result.model.headers?.Authorization).toBeUndefined();
   });
 });
 
