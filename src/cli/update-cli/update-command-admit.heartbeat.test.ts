@@ -275,6 +275,9 @@ it.each<Scenario>([
 
 it.each([
   "supported",
+  "reported defaults",
+  "unsafe TMPDIR",
+  "invalid projected model policy",
   "retired July reasoning",
   "unrelated invalid field",
   "invalid heartbeat",
@@ -283,23 +286,44 @@ it.each([
   "included",
   "changed source",
 ] as const)("inspects %s heartbeat config without changing live data", async (kind) => {
-  const f = fixture({ name: kind, scratch: source }, false);
-  const agents = {
-    entries: {
-      main: {
-        heartbeat: {
-          every: kind === "invalid heartbeat" ? "private-invalid-value" : "30m",
-          ...(kind === "retired July reasoning" ? { includeReasoning: true } : {}),
-          target: "none",
+  const f = fixture({ name: kind, scratch: source }, kind === "unsafe TMPDIR");
+  const reported = [
+    "reported defaults",
+    "unsafe TMPDIR",
+    "invalid projected model policy",
+  ].includes(kind);
+  const agents = reported
+    ? {
+        defaults: {
+          heartbeat: {
+            every: "1h",
+            activeHours: { start: "08:00", end: "22:00", timezone: "local" },
+            model: "deepseek/deepseek-v4-flash",
+            lightContext: true,
+            isolatedSession: true,
+          },
+          ...(kind === "invalid projected model policy"
+            ? { modelPolicy: { allow: ["private-invalid-value"] } }
+            : {}),
         },
-      },
-    },
-  };
+      }
+    : {
+        entries: {
+          main: {
+            heartbeat: {
+              every: kind === "invalid heartbeat" ? "private-invalid-value" : "30m",
+              ...(kind === "retired July reasoning" ? { includeReasoning: true } : {}),
+              target: "none",
+            },
+          },
+        },
+      };
   if (kind === "included") {
     writeFixtureJsonSync(path.join(path.dirname(f.configPath), "agents.json"), agents);
   }
   writeFixtureJsonSync(f.configPath, {
     agents: kind === "included" ? { $include: "agents.json" } : agents,
+    ...(reported ? { meta: { lastTouchedVersion: "2026.10.10" } } : {}),
     ...(kind === "retired July reasoning"
       ? { meta: { lastTouchedVersion: "2026.7.1-beta.1" } }
       : {}),
@@ -308,6 +332,12 @@ it.each([
   });
   vi.stubEnv("OPENCLAW_CONFIG_READONLY", kind === "read-only" ? "1" : undefined);
   vi.stubEnv("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS", undefined);
+  if (kind === "unsafe TMPDIR") {
+    const tmp = path.join(path.dirname(f.configPath), "unsafe-tmp");
+    fs.mkdirSync(tmp);
+    fs.chmodSync(tmp, 0o777);
+    vi.stubEnv("TMPDIR", tmp);
+  }
   fs.writeFileSync(`${f.configPath}.bak`, "retained pre-upgrade backup\n");
   let before = f.snapshot();
   if (kind === "changed source") {
@@ -327,7 +357,11 @@ it.each([
 
   expect(output).toHaveBeenCalledOnce();
   const verdict = parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0]);
-  const admitted = kind === "supported" || kind === "retired July reasoning";
+  const admitted =
+    kind === "supported" ||
+    kind === "retired July reasoning" ||
+    kind === "reported defaults" ||
+    kind === "unsafe TMPDIR";
   expect(verdict).toMatchObject(
     admitted
       ? {
@@ -347,10 +381,16 @@ it.each([
         },
   );
   expect(process.exitCode).toBe(admitted ? 0 : 3);
+  if (!admitted) {
+    expect(verdict?.facts.checks.map(({ name }) => name)).toEqual(["config", "node-runtime"]);
+  }
+  if (kind === "invalid projected model policy") {
+    expect(verdict?.reasons[0]?.message).toContain("agents.defaults.modelPolicy.allow.0");
+  }
   expect(JSON.stringify(output.mock.calls)).not.toContain("private-invalid-value");
   expect(errors).not.toHaveBeenCalled();
   expect(f.snapshot()).toEqual(before);
-  expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
+  expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(kind === "unsafe TMPDIR");
 });
 
 it.each([

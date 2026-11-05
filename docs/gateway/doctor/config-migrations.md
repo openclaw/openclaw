@@ -275,6 +275,8 @@ not read the recreated file or follow its symlink.
 Unrelated invalid fields, unsupported legacy shapes, and heartbeat repairs in
 read-only, future-written, or included configuration still require operator
 repair before admission.
+If Doctor's projected configuration still fails validation, admission reports
+the remaining validation paths so you can correct them before retrying.
 
 ### Memory flush model selection
 

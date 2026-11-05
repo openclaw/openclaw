@@ -12,6 +12,7 @@ import {
 } from "../../../config/deferred-plugin-migration-config.js";
 import { stampConfigWriteMetadata } from "../../../config/io.meta.js";
 import { containsConfigIncludeDirective } from "../../../config/io.read-helpers.js";
+import { createConfigValidationFailedError } from "../../../config/io.write-errors.js";
 import { prepareConfigWriteTopology } from "../../../config/io.write-topology.js";
 import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
@@ -84,7 +85,15 @@ async function prepareAutomaticConfigRepairWrite(
 
 async function planConfigRepair(
   snapshot: ConfigFileSnapshot,
-  { pluginContracts, backupDiscovery }: { pluginContracts: boolean; backupDiscovery?: true },
+  {
+    pluginContracts,
+    backupDiscovery,
+    reportValidationFailure,
+  }: {
+    pluginContracts: boolean;
+    backupDiscovery?: true;
+    reportValidationFailure?: true;
+  },
   additionalMigration?: { config: OpenClawConfig; changes: string[]; pendingStateMigration?: true },
 ): Promise<AutomaticConfigRepairPlan | null> {
   if (!canPlanAutomaticConfigRepair(snapshot, additionalMigration?.pendingStateMigration)) {
@@ -146,6 +155,12 @@ async function planConfigRepair(
       validationConfig,
       validationConfig,
     );
+    if (reportValidationFailure && (!validated.ok || issues.length > 0)) {
+      throw createConfigValidationFailedError([
+        ...(!validated.ok ? validated.issues : []),
+        ...issues,
+      ]);
+    }
     return validated.ok && issues.length === 0 ? validated : null;
   });
   if (!validation) {
@@ -190,7 +205,13 @@ export async function projectAutomaticConfigRepair(
   additionalMigration: { config: OpenClawConfig; changes: string[]; pendingStateMigration?: true },
   { pluginContracts }: { pluginContracts: boolean },
 ): Promise<OpenClawConfig | undefined> {
-  return (await planConfigRepair(snapshot, { pluginContracts }, additionalMigration))?.config;
+  return (
+    await planConfigRepair(
+      snapshot,
+      { pluginContracts, reportValidationFailure: true },
+      additionalMigration,
+    )
+  )?.config;
 }
 
 /**
