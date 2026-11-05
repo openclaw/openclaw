@@ -30,6 +30,47 @@ afterEach(() => {
   container.remove();
 });
 
+function activityProps(personId: string | null): SessionActivityTestProps {
+  return {
+    context: {
+      basePath: "",
+      navigate: vi.fn(),
+      gateway: {
+        snapshot: { hello: null, client: null, phase: "stopped" },
+        subscribe: () => () => {},
+        subscribeEvents: () => () => {},
+      },
+      agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
+      agentSelection: { state: { selectedId: "main" } },
+      sessions: { state: { result: { sessions: [] } } },
+    } as unknown as ApplicationContext,
+    filters: { personId, query: "", time: "7d" },
+    presenceViewers: [],
+    loading: false,
+    retrying: false,
+    result: {
+      ts: 1,
+      path: "",
+      count: 0,
+      sessions: [],
+      defaults: { model: null, modelProvider: null, contextTokens: null },
+      people: [{ identity: { type: "profile", id: "person" }, label: "Person", sessionCount: 0 }],
+      activityPulse: {
+        since: new Date(2026, 8, 20).getTime(),
+        until: new Date(2026, 8, 28).getTime(),
+        buckets: Array.from({ length: 8 }, () => 0),
+        sessions: 0,
+        started: 0,
+        running: 0,
+      },
+    },
+    expandedAutomationDays: new Set(),
+    onRetry: vi.fn(),
+    onAutomationDayToggle: vi.fn(),
+    onFiltersChange: vi.fn(),
+  };
+}
+
 it.each([
   { personId: null, width: 900 },
   { personId: "person", width: 900 },
@@ -39,44 +80,7 @@ it.each([
   "keeps content stable through passive refresh and explicit Retry ($personId, $width px)",
   async ({ personId, width }) => {
     await page.viewport(width, 700);
-    const props: SessionActivityTestProps = {
-      context: {
-        basePath: "",
-        navigate: vi.fn(),
-        gateway: {
-          snapshot: { hello: null, client: null, phase: "stopped" },
-          subscribe: () => () => {},
-          subscribeEvents: () => () => {},
-        },
-        agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-        agentSelection: { state: { selectedId: "main" } },
-        sessions: { state: { result: { sessions: [] } } },
-      } as unknown as ApplicationContext,
-      filters: { personId, query: "", time: "7d" },
-      presenceViewers: [],
-      loading: false,
-      retrying: false,
-      result: {
-        ts: 1,
-        path: "",
-        count: 0,
-        sessions: [],
-        defaults: { model: null, modelProvider: null, contextTokens: null },
-        people: [{ identity: { type: "profile", id: "person" }, label: "Person", sessionCount: 0 }],
-        activityPulse: {
-          since: new Date(2026, 8, 20).getTime(),
-          until: new Date(2026, 8, 28).getTime(),
-          buckets: Array.from({ length: 8 }, () => 0),
-          sessions: 0,
-          started: 0,
-          running: 0,
-        },
-      },
-      expandedAutomationDays: new Set(),
-      onRetry: vi.fn(),
-      onAutomationDayToggle: vi.fn(),
-      onFiltersChange: vi.fn(),
-    };
+    const props = activityProps(personId);
     renderSessionActivityViewSolid(props, container);
     const main = container.querySelector<HTMLElement>(".activity-feed__main")!;
     const content = main.querySelector<HTMLElement>(
@@ -163,3 +167,21 @@ it.each([
     ).toContain("Loading");
   },
 );
+
+it("returns focus to the People trigger once a person is chosen", async () => {
+  await page.viewport(900, 700);
+  const props = activityProps(null);
+  renderSessionActivityViewSolid(props, container);
+  const trigger = container.querySelector<HTMLButtonElement>(".activity-feed__people-trigger")!;
+  trigger.click();
+  await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+  await expect
+    .poll(() => document.activeElement?.className)
+    .toContain("activity-feed__people-popover");
+  container.querySelector<HTMLButtonElement>('[data-activity-person="person"]')?.click();
+  await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+  expect(props.onFiltersChange).toHaveBeenCalledWith(
+    expect.objectContaining({ personId: "person" }),
+  );
+  await expect.poll(() => document.activeElement, { timeout: 1500 }).toBe(trigger);
+});
