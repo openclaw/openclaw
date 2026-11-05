@@ -7,9 +7,10 @@ import { withPluginCohortConfigCapture } from "../config/plugin-cohort-recovery.
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { pluginCohortPublicationContext } from "../infra/update-plugin-cohort-context.js";
 import type { PluginCohortRecovery } from "../infra/update-plugin-cohort-schema.js";
-import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { createUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
 import type { UpdateRecoveryRecord } from "../infra/update-run-recovery-schema.js";
 import * as recoveryStore from "../infra/update-run-recovery-store.js";
+import { updateRunWarningMessages } from "../infra/update-run-step.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
@@ -396,7 +397,7 @@ it.each(["records", "same-record", "successor"] as const)(
   },
 );
 
-it.each(["record", "artifact", "chain"] as const)(
+it.each(["artifact", "chain"] as const)(
   "preserves a conflicting %s before cumulative index restore",
   async (conflict) => {
     await withOpenClawTestState(
@@ -416,33 +417,65 @@ it.each(["record", "artifact", "chain"] as const)(
           };
         }
         f.begin();
-        const current =
-          conflict === "record"
-            ? { fixture: { ...f.latest.record, version: "independent" }, later: f.later }
-            : f.current;
-        if (conflict === "record") {
-          await seedInstalledPluginIndex(current, { config, env: state.env });
-        }
         if (conflict === "artifact") {
           fs.appendFileSync(path.join(f.latest.packageDir, "package.json"), "\n");
         }
         const commit = vi.spyOn(recordCommit, "commitPluginInstallRecordsOnly");
         await expect(f.settle()).rejects.toThrow(
-          conflict === "artifact"
-            ? "artifact changed"
-            : conflict === "chain"
-              ? "between update publications"
-              : "changed after the update",
+          conflict === "artifact" ? "artifact changed" : "between update publications",
         );
         expect(commit).not.toHaveBeenCalled();
         expect(
           await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
-        ).toEqual(current);
+        ).toEqual(f.current);
         expect(recoveryStore.loadPluginCohortRecovery(f.runId, { env: state.env })).toBeDefined();
       },
     );
   },
 );
+
+it("keeps a later install record, restores matching ones and completes rollback", async () => {
+  await withOpenClawTestState(
+    { label: "cohort-later-record", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+    async (state) => {
+      const f = await fixture(state);
+      const local = (name: string): PluginInstallRecord => {
+        const installPath = state.statePath(name);
+        fs.mkdirSync(installPath, { recursive: true });
+        return { source: "path", installPath, sourcePath: installPath };
+      };
+      const localBefore = local("local-before");
+      const localAfter = local("local-after");
+      f.cohort.publications.push({
+        kind: "records",
+        records: [{ pluginId: "local", before: localBefore, after: localAfter }],
+      });
+      f.begin();
+      // A later install replaced the fixture after this update published it.
+      const independent = { ...f.latest.record, version: "independent" };
+      await seedInstalledPluginIndex(
+        { fixture: independent, later: f.later, local: localAfter },
+        { config, env: state.env },
+      );
+      const warnings: string[] = [];
+      await settleUpdatePluginCohort({
+        runId: f.runId,
+        env: state.env,
+        fence,
+        action: "rollback",
+        onLaterDecisionsKept: (warning) => warnings.push(warning),
+      });
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual({ fixture: independent, later: f.later, local: localBefore });
+      expect(recoveryStore.loadPluginCohortRecovery(f.runId, { env: state.env })).toBeUndefined();
+      expect(warnings).toEqual([expect.stringContaining("plugin fixture install record")]);
+      expect(
+        updateRunWarningMessages(getUpdateRun(f.runId, { env: state.env })?.steps ?? []),
+      ).toEqual(warnings);
+    },
+  );
+});
 
 it("retires an inactive intermediate generation instead of making it discoverable after rollback", async () => {
   await withOpenClawTestState(

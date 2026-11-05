@@ -7,6 +7,7 @@ import {
   inspectPluginCohortRecoveryAdmission,
 } from "../../infra/update-run-recovery-admission.js";
 import { assertPluginCohortRecoveryContinuation } from "../../infra/update-run-recovery.js";
+import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db-contract.js";
 import {
   assertUpdateRequesterContinuationOwner,
@@ -57,6 +58,7 @@ export async function settleInterruptedUpdatePluginCohort(params: {
     action: current.cohort.disposition === "commit" ? "commit" : "rollback",
     env: options.env,
     fence: { assertCurrent },
+    onLaterDecisionsKept: (warning) => defaultRuntime.error(`Warning: ${warning}`),
   });
   assertCurrent();
   // The plugin reservation is gone before ordinary history reconciliation.

@@ -1,0 +1,4 @@
+# Best-effort plugin cohort rollback (migrations and install records).
+# A real install-index fixture keeps a later install record, restores a matching
+# one, completes the rollback and records the kept change as an update warning.
+33
