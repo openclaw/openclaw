@@ -50,8 +50,10 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Profile's zero-CLS reservation changes only hashed import names in boot code.
-  // Measured Chat/New are 1,287,605/800,599 B; retain 192 B headroom.
-  chatBootJsGzipBytes: 1_287_797,
+  // Bounded lazy LaTeX adds 1,578 gzip B vs eb904 on matched production builds.
+  // Chat measures 1,288,627 B; retain the existing 192 B build-variance headroom.
+  // New retains its separately measured 800,599 B + 192 B allowance.
+  chatBootJsGzipBytes: 1_288_819,
   newBootJsGzipBytes: 800_791,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.

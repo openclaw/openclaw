@@ -4,7 +4,7 @@ summary: "Composer controls, transcript rendering, side chat, and hosted embeds"
 read_when:
   - Using the composer, tool cards, or session panels
   - Finding and installing capabilities from chat
-  - Rendering tables, Mermaid diagrams, or hosted embeds
+  - Rendering tables, LaTeX math, Mermaid diagrams, or hosted embeds
   - Adjusting transcript layout or message width
 title: "Chat"
 sidebarTitle: "Chat"
@@ -319,6 +319,23 @@ of the exact auto-compaction point. **Compact** uses the existing
 compaction command and appears only with the required permissions; it is
 disabled while a run is active. Latest input/output token counts appear in the
 same panel. Compaction preserves the composer draft.
+
+## Math rendering
+
+The Control UI renders inline LaTeX written as `$x^2$` or `\(x^2\)`.
+Use `$$...$$` or `\[...\]` for display equations. Wide display equations
+scroll horizontally inside the message instead of widening the page. Focus a
+display equation to scroll it with the keyboard.
+
+The math engine and fonts load only when a supported expression is displayed.
+The source stays readable while they load. If loading fails, readable source
+remains; the usual Control UI chunk-recovery flow may perform a bounded reload.
+
+Code, escaped delimiters, currency ranges, and dollar signs in web URLs remain
+literal. Unmatched or overly long expressions also remain readable as source.
+Each message renders at most 200 expressions, including while it is streaming.
+Dense math can still take noticeable time to typeset: lazy loading defers the
+download, not the rendering work.
 
 ## Image viewing
 

@@ -3,6 +3,18 @@ import { renderToString } from "katex";
 import { markdownMathSanitizer } from "./markdown-math-sanitizer.ts";
 import mathStyles from "katex/dist/katex.min.css?inline";
 
+const displayMathLayout = `
+openclaw-markdown-math[data-display="true"] {
+  display: block;
+  max-width: 100%;
+  overflow: auto hidden;
+}
+openclaw-markdown-math[data-display="true"] > .katex-display {
+  width: max-content;
+  min-width: 100%;
+}
+`;
+
 // One lazy sheet serves light-DOM Markdown and shadow-root file previews.
 // Inline CSS stays in the async chunk; adopting it synchronously precedes typesetting.
 let stylesheet: CSSStyleSheet | undefined;
@@ -10,7 +22,8 @@ let stylesheet: CSSStyleSheet | undefined;
 export function applyMarkdownMathStyles(root: Node): void {
   if (!stylesheet) {
     stylesheet = new CSSStyleSheet();
-    stylesheet.replaceSync(mathStyles);
+    // Intrinsic display width keeps both ends reachable; short equations stay centered.
+    stylesheet.replaceSync(mathStyles + displayMathLayout);
   }
   for (const target of root instanceof ShadowRoot ? [document, root] : [document]) {
     if (!target.adoptedStyleSheets.includes(stylesheet)) {
