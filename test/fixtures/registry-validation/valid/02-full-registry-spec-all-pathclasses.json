@@ -1,0 +1,69 @@
+{
+  "schema": {
+    "schemaId": "openclaw.registry-specification",
+    "version": "1.0.0",
+    "compatibilityPolicy": "exact"
+  },
+  "components": [
+    {
+      "componentId": "native-state-dir",
+      "pathClass": "NATIVE_RUNTIME",
+      "logicalName": "Native State Directory",
+      "declarationRule": null,
+      "declaredValue": null,
+      "declarationSource": "src/config/paths.ts",
+      "lifecycle": "persistent",
+      "startupRequirementRule": true,
+      "capabilityDependencies": [],
+      "taskDependencyRules": [],
+      "fallbackPolicy": null,
+      "validationPolicy": { "requireExists": true },
+      "notes": "Native runtime component."
+    },
+    {
+      "componentId": "configured-workspace",
+      "pathClass": "CONFIGURED_WORKSPACE",
+      "logicalName": "Configured Workspace",
+      "declarationRule": "agents.defaults.workspace",
+      "declaredValue": "C:\\Users\\maicon\\.openclaw\\workspace",
+      "declarationSource": "openclaw.json",
+      "lifecycle": "configurable",
+      "startupRequirementRule": true,
+      "capabilityDependencies": ["joint-methodology"],
+      "taskDependencyRules": [],
+      "fallbackPolicy": null,
+      "validationPolicy": { "requireExists": true, "requireReadable": true },
+      "notes": "Configured workspace component."
+    },
+    {
+      "componentId": "joint-architecture-reports",
+      "pathClass": "JOINT_OPERATIONAL",
+      "logicalName": "Architecture Reports Directory",
+      "declarationRule": "path.join(workspace, 'outputs/architecture-reports')",
+      "declaredValue": null,
+      "declarationSource": "registry-entry",
+      "lifecycle": "derived",
+      "startupRequirementRule": false,
+      "capabilityDependencies": [],
+      "taskDependencyRules": ["phase-4e-specification"],
+      "fallbackPolicy": null,
+      "validationPolicy": { "requireExists": true },
+      "notes": "JOINT operational path for architecture reports."
+    },
+    {
+      "componentId": "n8n-service",
+      "pathClass": "EXTERNAL_SERVICE",
+      "logicalName": "n8n Automation Service",
+      "declarationRule": null,
+      "declaredValue": "http://localhost:5678",
+      "declarationSource": "registry-spec",
+      "lifecycle": "runtime",
+      "startupRequirementRule": false,
+      "capabilityDependencies": ["workflow-automation"],
+      "taskDependencyRules": [],
+      "fallbackPolicy": { "allowed": true, "approved": false },
+      "validationPolicy": { "probeType": "http", "timeout": 5000 },
+      "notes": "External n8n service endpoint."
+    }
+  ]
+}

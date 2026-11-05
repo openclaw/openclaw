@@ -1,0 +1,10 @@
+{
+  "componentId": "capability-as-resolution",
+  "declaredValue": null,
+  "observedValue": null,
+  "effectiveValue": null,
+  "resolutionStatus": "HEALTHY",
+  "conflictStatus": null,
+  "evidenceSufficient": false,
+  "notes": "HEALTHY is a CapabilityStatus used as resolutionStatus — must be rejected."
+}

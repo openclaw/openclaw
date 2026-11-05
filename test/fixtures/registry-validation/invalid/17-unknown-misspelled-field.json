@@ -1,0 +1,16 @@
+{
+  "componentId": "misspelled-field",
+  "pathClass": "NATIVE_RUNTIME",
+  "logicalName": "Misspelled Field",
+  "declarationRule": null,
+  "declaredValue": null,
+  "declarationSource": "test",
+  "lifecycle": "test",
+  "startupRequirementRule": false,
+  "capabilityDependencies": [],
+  "taskDependencyRules": [],
+  "fallbackPolicy": null,
+  "validationPolicy": {},
+  "notes": "Has a misspelled field.",
+  "declaredValu": "typo"
+}

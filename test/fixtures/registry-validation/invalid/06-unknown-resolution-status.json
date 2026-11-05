@@ -1,0 +1,10 @@
+{
+  "componentId": "bad-resolution",
+  "declaredValue": null,
+  "observedValue": null,
+  "effectiveValue": null,
+  "resolutionStatus": "HEALTHY",
+  "conflictStatus": null,
+  "evidenceSufficient": false,
+  "notes": "HEALTHY is a CapabilityStatus, not a ResolutionStatus."
+}

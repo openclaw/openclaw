@@ -1,0 +1,9 @@
+{
+  "evidenceType": "UNKNOWN_TYPE",
+  "source": "test",
+  "collectedAt": "2026-07-18T18:00:00.000Z",
+  "collector": "test",
+  "confidence": "HIGH",
+  "valueHash": null,
+  "notes": "Unknown EvidenceType."
+}

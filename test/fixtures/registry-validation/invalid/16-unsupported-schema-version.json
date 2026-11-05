@@ -1,0 +1,24 @@
+{
+  "schema": {
+    "schemaId": "openclaw.registry-specification",
+    "version": "999.0.0",
+    "compatibilityPolicy": "exact"
+  },
+  "components": [
+    {
+      "componentId": "unsupported-version",
+      "pathClass": "NATIVE_RUNTIME",
+      "logicalName": "Unsupported Version",
+      "declarationRule": null,
+      "declaredValue": null,
+      "declarationSource": "test",
+      "lifecycle": "test",
+      "startupRequirementRule": false,
+      "capabilityDependencies": [],
+      "taskDependencyRules": [],
+      "fallbackPolicy": null,
+      "validationPolicy": {},
+      "notes": "Schema version 999.0.0 is unsupported."
+    }
+  ]
+}
