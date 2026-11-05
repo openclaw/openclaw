@@ -3,12 +3,15 @@ import { createMemo, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { ConnectingSplash } from "../solid/loading-skeleton.tsx";
 import { BrowserPanelHost } from "./browser-panel.ts";
 import { readBrowserTabTarget } from "./browser-target.ts";
+
+registerEnglishCatalog(registerBrowserEnglish);
 
 export type BrowserDocumentViewProps = {
   context: ApplicationContext;
@@ -26,6 +29,12 @@ export function BrowserDocumentContent(props: { value: BrowserDocumentViewProps 
         const snapshot = () => gateway.read().snapshot;
         const connected = () => snapshot().phase === "connected";
         const tab = createMemo(() => readBrowserTabTarget(value.target.tab));
+        // Session tab lists include only tracked or referenced tabs; a tool result
+        // may name an untracked tab, such as a reused startup tab.
+        const referencedTabs = createMemo(() => {
+          const current = tab();
+          return current ? [current] : [];
+        });
         const available = () => Boolean(tab() && isBrowserPanelAvailable(snapshot()));
         return (
           <>
@@ -37,6 +46,7 @@ export function BrowserDocumentContent(props: { value: BrowserDocumentViewProps 
               remoteAvailable={available()}
               presented={true}
               sessionKey={value.target.sessionKey}
+              sessionTabs={referencedTabs()}
               fixedTab={tab() ?? undefined}
               resourceBasePath={value.context.resourceBasePath}
               authToken={resolveControlUiAuthToken({
@@ -73,13 +83,11 @@ declare global {
   }
 }
 
-if (!customElements.get("openclaw-browser-document")) {
-  defineSolidBridge<{ props: BrowserDocumentProps | null }>(
-    "openclaw-browser-document",
-    (props, host) => {
-      host.style.display = "contents";
-      return <BrowserDocumentContent value={props.props} />;
-    },
-    { properties: { props: { default: null, attribute: false } } },
-  );
-}
+export const BrowserDocument = defineSolidBridge<{ props: BrowserDocumentProps | null }>(
+  "openclaw-browser-document",
+  (props, host) => {
+    host.style.display = "contents";
+    return <BrowserDocumentContent value={props.props} />;
+  },
+  { properties: { props: { default: null, attribute: false } } },
+);

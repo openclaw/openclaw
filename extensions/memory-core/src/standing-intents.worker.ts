@@ -13,6 +13,7 @@ import {
   runSqliteImmediateTransactionSync,
   withSqlitePostCommitPublications,
   type SqliteWorkerBackend,
+  type SynchronousSqliteCallback,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import {
   cancelStandingIntentInDatabase,
@@ -37,7 +38,7 @@ export function bindSqliteWorkerBackend(
   },
 ): SqliteWorkerBackend<StandingIntentWorkerOperations> {
   const db = context.database;
-  const transact = <T>(run: () => T): T => {
+  const transact = <T>(run: SynchronousSqliteCallback<T>): T => {
     try {
       return runSqliteImmediateTransactionSync(db, run, {
         withCommit(commit) {

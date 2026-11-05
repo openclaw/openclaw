@@ -85,7 +85,6 @@ export function formatToolDetail(display: ToolDisplay): string | undefined {
   return display.detail || undefined;
 }
 
-/** Infers compact display metadata for a tool invocation from its arguments. */
 export function inferToolMetaFromArgsCore(
   toolName: string,
   args: unknown,

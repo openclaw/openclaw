@@ -59,7 +59,9 @@ export {
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 export {
+  applyProviderPayloadHook,
   createEmptyTransportUsage,
+  mergeTransportHeaders,
   createProviderWaitObserver,
   failTransportStream,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,

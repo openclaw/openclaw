@@ -61,7 +61,10 @@ export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions &
     signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
     prepareAgentRunStart: () => void | Promise<void>;
     notifyAgentRunStart: (transcriptStart?: PreparedReplyTranscriptStart | null) => void;
-    hasAgentRunStarted: () => boolean;
+    notifyScheduledExecutionStarted: (
+      lifecycleBackstop: AgentLifecycleTerminalBackstop,
+      resolveSessionKey: () => string | undefined,
+    ) => Promise<void>;
     preserveProgressCallbackStartOrder: boolean;
     onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => void;
     deferredLifecycle: DeferredEmbeddedRunLifecycleManager;
@@ -69,7 +72,7 @@ export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions &
 
 export type AgentFallbackCycleState = {
   /** Canonical current-source message-tool delivery completed during this logical turn. */
-  completedSourceReplyDelivered?: boolean;
+  hasCompletedSourceReply?: () => boolean;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   sessionWriter?: Extract<AgentTurnInternalResult, { kind: "settled" }>["sessionWriter"];
   compactionRequestBudget?: CompactionRequestBudget;
@@ -90,24 +93,17 @@ export type AgentFallbackCycleState = {
   };
 };
 
-type CompletedFallbackCycle = {
-  kind: "completed";
-  runResult: EmbeddedAgentRunResult;
-  fallbackProvider: string;
-  fallbackModel: string;
-  fallbackExhausted: boolean;
-  fallbackAttempts: RuntimeFallbackAttempt[];
-  terminalRunFailed: boolean;
-};
-
 export type AgentFallbackCycleResult =
-  | CompletedFallbackCycle
+  | {
+      kind: "completed";
+      runResult: EmbeddedAgentRunResult;
+      fallbackProvider: string;
+      fallbackModel: string;
+      fallbackExhausted: boolean;
+      fallbackAttempts: RuntimeFallbackAttempt[];
+      terminalRunFailed: boolean;
+    }
   | Extract<AgentTurnInternalResult, { kind: "final" | "aborted" }>;
-
-type AgentFallbackModelPatch = {
-  captureFallbackFailure: (attempts: RuntimeFallbackAttempt[]) => boolean | undefined;
-  captureFailure: (error: unknown) => void;
-};
 
 export type AgentFallbackCycleParams = AgentFallbackRunContext & {
   effectiveRun: FollowupRun["run"];
@@ -119,13 +115,13 @@ export type AgentFallbackCycleParams = AgentFallbackRunContext & {
   directBlockDeliveries: DirectBlockDelivery[];
   createAgentRunStartCallbacks: () => Pick<
     AgentFallbackCandidateCommonParams,
-    | "prepareAgentRunStart"
-    | "notifyAgentRunStart"
-    | "hasAgentRunStarted"
-    | "signalExecutionPhaseForTyping"
-  > & { close: () => void };
+    "prepareAgentRunStart" | "notifyAgentRunStart" | "signalExecutionPhaseForTyping"
+  > & { hasAgentRunStarted: () => boolean; close: () => void };
   notifyUserAboutCompaction: boolean;
-  modelPatch: AgentFallbackModelPatch;
+  modelPatch: {
+    captureFallbackFailure: (attempts: RuntimeFallbackAttempt[]) => boolean | undefined;
+    captureFailure: (error: unknown) => void;
+  };
   shouldSurfaceToControlUi: boolean;
   commitTerminalOutcome: () => void;
   clearRecoveredAutoFallbackPrimaryProbe: (candidate: {

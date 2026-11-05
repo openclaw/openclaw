@@ -3,13 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
-import {
-  dedupePreserveOrder,
-  resolveAllowFromAccountId,
-  safeAccountKey,
-} from "../pairing/pairing-store-keys.js";
+import { resolveAllowFromAccountId, safeAccountKey } from "../pairing/pairing-store-keys.js";
 import { updateChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.js";
 import type { PairingRequest } from "../pairing/pairing-store.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
@@ -78,7 +75,7 @@ export function detectLegacyChannelPairingState(params: {
     !accountDiscoveryDeferred && files.some((filename) => filename.endsWith(ALLOW_FROM_SUFFIX))
       ? params.resolveAccounts?.()
       : undefined;
-  const knownChannelIds = dedupePreserveOrder([
+  const knownChannelIds = normalizeUniqueStringEntries([
     ...CHANNEL_IDS,
     ...configuredChannelIds,
     ...pairedChannelIds,
@@ -91,7 +88,9 @@ export function detectLegacyChannelPairingState(params: {
     accountIds: Object.fromEntries(
       Object.entries(accounts?.accountIds ?? {}).map(([channel, accountIds]) => [
         channel,
-        dedupePreserveOrder(accountIds.map((accountId) => resolveAllowFromAccountId(accountId))),
+        normalizeUniqueStringEntries(
+          accountIds.map((accountId) => resolveAllowFromAccountId(accountId)),
+        ),
       ]),
     ),
     accountDiscoveryDeferred,
@@ -268,7 +267,7 @@ function readLegacyAllowFrom(
     if (!values) {
       return null;
     }
-    return dedupePreserveOrder(
+    return normalizeUniqueStringEntries(
       values.map((value) => normalizeAllowEntry(channel, value)).filter(Boolean),
     );
   } catch (error) {
@@ -376,7 +375,7 @@ export function migrateLegacyChannelPairingState(params: {
     const accountId = resolveAllowFromAccountId(allowTarget.target.accountId);
     updateChannelPairingStateSnapshot(allowTarget.target.channel, params.env, (state) => {
       state.allowFrom ??= {};
-      state.allowFrom[accountId] = dedupePreserveOrder([
+      state.allowFrom[accountId] = normalizeUniqueStringEntries([
         ...(state.allowFrom[accountId] ?? []),
         ...entries,
       ]);

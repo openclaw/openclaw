@@ -22,6 +22,7 @@ function setup(
   } as unknown as MatrixClient);
   return {
     lookup,
+    resolver,
     info: (includeAliases?: true) =>
       resolver.getRoomInfo(room, includeAliases ? { includeAliases } : undefined),
     member: (user = alice) => resolver.getMemberDisplayName(room, user),
@@ -120,29 +121,27 @@ describe("createMatrixRoomInfoResolver", () => {
 
   it("serves the current name of a renamed room only when asked for it", async () => {
     let roomName = "Original Room";
-    const lookup = vi.fn(async (roomId: string, eventType: string) => {
+    const { lookup, resolver } = setup(async (roomId, eventType) => {
       if (eventType === "m.room.name") {
-        return { name: roomId === "!room:example.org" ? roomName : "Other Room" };
+        return { name: roomId === room ? roomName : "Other Room" };
       }
       return { alias: "#room:example.org" };
     });
-    const resolver = createMatrixRoomInfoResolver({
-      getRoomStateEvent: lookup,
-    } as unknown as MatrixClient);
-
-    await resolver.getRoomInfo("!room:example.org", { includeAliases: true });
+    const info = (currentName = false) =>
+      resolver.getRoomInfo(room, { includeAliases: true, currentName });
+    await info();
     await resolver.getRoomInfo("!other:example.org");
-
     roomName = "Renamed Room";
-    resolver.invalidateRoomName("!room:example.org");
-
-    await expect(
-      resolver.getRoomInfo("!room:example.org", { includeAliases: true, currentName: true }),
-    ).resolves.toMatchObject({ name: "Renamed Room", canonicalAlias: "#room:example.org" });
+    resolver.invalidateRoomName(room);
+    await expect(info(true)).resolves.toMatchObject({
+      name: "Renamed Room",
+      canonicalAlias: "#room:example.org",
+    });
     // Without currentName (the lookup DM promotion uses) the first resolved name is kept.
-    await expect(
-      resolver.getRoomInfo("!room:example.org", { includeAliases: true }),
-    ).resolves.toMatchObject({ name: "Original Room", canonicalAlias: "#room:example.org" });
+    await expect(info()).resolves.toMatchObject({
+      name: "Original Room",
+      canonicalAlias: "#room:example.org",
+    });
     await expect(
       resolver.getRoomInfo("!other:example.org", { currentName: true }),
     ).resolves.toMatchObject({ name: "Other Room" });

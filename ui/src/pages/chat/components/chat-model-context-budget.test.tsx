@@ -3,6 +3,7 @@
 import { expect, it, vi } from "vitest";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../../api/types.ts";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
+import { installModelPickerLayout } from "../../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatModelControls } from "./chat-model-controls.tsx";
@@ -27,6 +28,7 @@ async function pickerRows(
   selectedSession: GatewaySessionRow | undefined,
   catalog = catalogRows(872_000, 272_000),
 ) {
+  installModelPickerLayout();
   const sessions = createSessionsListResult({
     model: "astra",
     modelProvider: "example",

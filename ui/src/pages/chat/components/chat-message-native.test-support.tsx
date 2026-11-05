@@ -118,6 +118,7 @@ export function createChatThreadHarness(container: HTMLElement, transcript: Chat
   let update: (props: ChatThreadProps) => void;
   return {
     render(props: ChatThreadProps) {
+      transcript.start();
       const next = { ...props };
       if (root) {
         update(next);
@@ -134,6 +135,7 @@ export function createChatThreadHarness(container: HTMLElement, transcript: Chat
       if (!getOwner()) {
         flush();
       }
+      transcript.update();
     },
     unmount() {
       root?.unmount();

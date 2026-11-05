@@ -80,6 +80,22 @@ For multiple bots, put account-specific values under
 `channels.x.accounts.<accountId>`. Root fields are shared defaults; the default
 account ID is `default`.
 
+## Requester identity and credit
+
+X polling and Activity streams obtain immutable `author_id` values from the
+authenticated X API. An allowlist entry admits work; it does not identify a
+Gateway person. An administrator must [link the channel sender](/concepts/user-model#channel-identity-links)
+to their existing profile with `users.linkChannelIdentity`, using `channelId: "x"`,
+the exact configured account ID, and that immutable sender ID. Handles and
+display names are not identity evidence.
+
+After linking, subsequent turns carry the host-verified requester profile. New
+visible work sessions default to that requester when the source has no different
+human owner. Their contribution is eligible for the profile's existing verified
+GitHub credit preference, including delegated work. Linking does not rewrite
+historical creators, reassign existing sessions, change sharing, or grant an
+operator role. Unlinked senders remain channel identities, not Gateway profiles.
+
 ## Public work sessions
 
 Set `channels.x.accounts.<accountId>.autoPublishWorkSessions: true` (or the
@@ -222,10 +238,10 @@ The page also shows this account's estimated X API spend for today and the
 current billing cycle against its limits. Select **Refresh** to update the
 read-only totals. The same spend snapshot is included in `x.allowlist.list`.
 
-A locally linked installation uses the [Custom plugin UI setting](/plugins/feature-plugins#enable-custom-plugin-ui).
-Enable **Settings → Labs → Custom plugin UI**, then use the Control UI served by
-the Gateway over HTTPS or trusted loopback. Bundled installations do not need
-that setting.
+A locally linked installation can use native UI by default once the plugin is
+enabled. Open the Control UI served by the Gateway over HTTPS or trusted
+loopback. An existing advanced native UI opt-out still applies to separately
+installed plugins; see [Custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui).
 
 The Gateway methods `x.allowlist.list`, `x.allowlist.add`, and
 `x.allowlist.remove` require `operator.admin`. Authorize senders by numeric ID,
@@ -487,7 +503,10 @@ keep-alives and intentionally ignored event types do not count toward this
 warning. It includes the event type and top-level keys, without post content.
 The next parseable mention event clears the warning.
 
-In `auto` mode, any subscription setup failure switches to polling. In `stream`
+Stopping or reloading an account cancels subscription setup and event reception
+cleanly, without reporting caller cancellation as a transport failure.
+
+In `auto` mode, subscription setup failures switch to polling. In `stream`
 mode, subscription HTTP `403` switches to polling; other setup errors stop the
 event source. A stream HTTP `401` or `403` switches either mode to polling. The
 channel status `message` includes the failed endpoint, HTTP status, and first X

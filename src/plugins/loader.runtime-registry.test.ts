@@ -11,6 +11,7 @@ import { drainSystemEvents } from "../infra/system-events.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { pluginFixtureConfig } from "./loader-fixture-builders.test-support.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import {
   resolveNativePluginModelAuth,
@@ -394,13 +395,7 @@ it("reuses discovered registrations through prepared load options until invalida
     body: 'module.exports = { id: "prepared-cache", register() {} };',
   });
   const options = {
-    config: {
-      plugins: {
-        allow: [plugin.id],
-        load: { paths: [plugin.file] },
-        slots: { memory: "none" },
-      },
-    },
+    config: pluginFixtureConfig(plugin),
   };
   const first = loadPluginRegistryHandle(options);
   expect(first.plugins).toContainEqual(
@@ -438,13 +433,7 @@ describe("cached plugin load failures", () => {
       body: 'module.exports = { id: "cached-load-failure", register() { throw new Error("cached registration failed"); } };',
     });
     const options = {
-      config: {
-        plugins: {
-          allow: [plugin.id],
-          load: { paths: [plugin.file] },
-          slots: { memory: "none" },
-        },
-      },
+      config: pluginFixtureConfig(plugin),
     };
     const cached = await load(options);
     expect(cached.plugins).toContainEqual(
@@ -588,19 +577,20 @@ describe("clearPluginRegistryLoadCache", () => {
     (action) => {
       const original = createEmptyPluginRegistry();
       const candidate = createEmptyPluginRegistry();
-      getPluginLoaderCacheState().set("original", original);
-      getPluginLoaderCacheState().set("original-alias", original);
-      getPluginLoaderCacheState().set("candidate", candidate);
-      getPluginLoaderCacheState().set("candidate-alias", candidate);
+      const cache = getPluginLoaderCacheState();
+      cache.set("original", original);
+      cache.set("original-alias", original);
+      cache.set("candidate", candidate);
+      cache.set("candidate-alias", candidate);
       setActivePluginRegistry(original, "original");
       const snapshot = captureActivePluginRegistrySnapshot();
 
       stageActivePluginRegistry(candidate, "candidate", "default");
-      expect(getPluginLoaderCacheState().get("original") === original).toBe(true);
-      expect(getPluginLoaderCacheState().get("candidate") === candidate).toBe(true);
+      expect(cache.get("original")).toBe(original);
+      expect(cache.get("candidate")).toBe(candidate);
       // Reusing a key must not let the old value's retirement evict its successor.
-      getPluginLoaderCacheState().set("reused-key", original);
-      getPluginLoaderCacheState().set("reused-key", candidate);
+      cache.set("reused-key", original);
+      cache.set("reused-key", candidate);
 
       if (action === "commit") {
         commitStagedPluginRegistry(original, candidate);
@@ -610,10 +600,10 @@ describe("clearPluginRegistryLoadCache", () => {
 
       const committed = action === "commit";
       for (const key of ["original", "original-alias"]) {
-        expect(getPluginLoaderCacheState().get(key) === original).toBe(!committed);
+        expect(cache.get(key) === original).toBe(!committed);
       }
       for (const key of ["candidate", "candidate-alias", "reused-key"]) {
-        expect(getPluginLoaderCacheState().get(key) === candidate).toBe(committed);
+        expect(cache.get(key) === candidate).toBe(committed);
       }
     },
   );
@@ -651,13 +641,7 @@ describe("clearPluginRegistryLoadCache", () => {
         }),
       );
       const options = {
-        config: {
-          plugins: {
-            allow: [plugin.id],
-            load: { paths: [plugin.file] },
-            slots: { memory: "none" },
-          },
-        },
+        config: pluginFixtureConfig(plugin),
       };
       const resolveTool = (registry: ReturnType<typeof loadOpenClawPlugins>) => {
         const tool = registry.tools[0]!.factory({ config: options.config });
@@ -670,6 +654,7 @@ describe("clearPluginRegistryLoadCache", () => {
         await resolveTool(registry).execute("probe", {});
       const original = loadOpenClawPlugins(options);
       const retainedTool = resolveTool(original);
+      const cache = getPluginLoaderCacheState();
       const originalKey = resolvePluginLoadCacheContext(options).cacheKey;
       expect(loadOpenClawPlugins(options)).toBe(original);
       expect(await read(original)).toMatchObject({ content: [{ text: "live" }] });
@@ -683,14 +668,12 @@ describe("clearPluginRegistryLoadCache", () => {
         expect(await read(replacement)).toMatchObject({ content: [{ text: "live" }] });
         await vi.waitFor(() => expect(cleanup).toHaveBeenCalledTimes(1));
         expect(loadOpenClawPlugins(replacementOptions)).toBe(replacement);
-        expect(
-          getPluginLoaderCacheState().get(
-            resolvePluginLoadCacheContext(replacementOptions).cacheKey,
-          ),
-        ).toBe(replacement);
+        expect(cache.get(resolvePluginLoadCacheContext(replacementOptions).cacheKey)).toBe(
+          replacement,
+        );
       }
 
-      expect(getPluginLoaderCacheState().get(originalKey) === undefined).toBe(true);
+      expect(cache.get(originalKey)).toBeUndefined();
       expect(cleanup).toHaveBeenCalledTimes(1);
       await expect(read(original)).rejects.toThrow(/reloaded or disabled/);
       expect(() => retainedTool.execute("probe", {})).toThrow(/reloaded or disabled/);

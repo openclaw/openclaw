@@ -53,6 +53,7 @@ export type SessionCapability = Pick<
   | "createResult"
   | "patch"
   | "patchMany"
+  | "acknowledgeHiddenRuns"
   | "archiveVisibility"
   | "beginArchive"
   | "assignOwner"
@@ -81,6 +82,8 @@ export type SessionCapability = Pick<
     readonly state: SessionState;
     /** Broad observer outage, independent of query and operation errors. */
     readonly eventSubscriptionError: string | null;
+    /** Current primary list failure, excluding mutation and observer errors. */
+    readonly canonicalListError: string | null;
     /** Advances for every publication, including pending facts outside state. */
     readonly revision: number;
     /** Memory-only presentation; never authority for mutations or live row observations. */

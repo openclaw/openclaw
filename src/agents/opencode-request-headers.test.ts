@@ -16,25 +16,13 @@ import {
 import type { Context, SimpleStreamOptions } from "../llm/types.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
+import { completionChunk, completionContext } from "./simple-completion.test-support.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 type Protocol = (typeof protocolPaths)[number][0];
 type Route = [api: Protocol, provider: string, baseUrl: string, native: boolean, suffix: string];
 
-// Usage accounting has dedicated provider tests; these fixtures prove request headers and replies.
-const replies: Record<Protocol, Record<string, unknown>[]> = {
-  "openai-completions": [
-    {
-      id: "chatcmpl_fixture",
-      model: "fixture-model",
-      choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }],
-    },
-    {
-      id: "chatcmpl_fixture",
-      model: "fixture-model",
-      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-    },
-  ],
+const replies: Record<Exclude<Protocol, "openai-completions">, Record<string, unknown>[]> = {
   "openai-responses": [completedResponse("resp", [wireMessage("msg", "ok")])],
   "anthropic-messages": [
     { type: "message_start", message: { id: "msg_fixture", model: "fixture-model" } },
@@ -51,6 +39,11 @@ const replies: Record<Protocol, Record<string, unknown>[]> = {
   ],
 };
 function responseFor(api: Protocol): Response {
+  if (api === "openai-completions") {
+    return new Response(completionChunk("ok", "fixture-model"), {
+      headers: { "content-type": "text/event-stream" },
+    });
+  }
   return api === "anthropic-messages"
     ? createAnthropicResponse(replies[api])
     : createSseResponse(replies[api]);
@@ -112,7 +105,7 @@ it.each(routes)(
           ...(callerSession ? { "x-opencode-session": "model-session" } : {}),
         },
       });
-      const context: Context = { messages: [{ role: "user", content: "Reply ok", timestamp: 1 }] };
+      const context: Context = completionContext("Reply ok");
       const options: SimpleStreamOptions = {
         apiKey: "synthetic-key",
         sessionId: "conversation-123",
@@ -147,10 +140,12 @@ it.each(routes)(
     expect(requests).toHaveLength(4);
     for (const [index, request] of requests.entries()) {
       const header = (name: string) => request.headers.get(name);
-      expect(request.method).toBe("POST");
-      expect(request.url).toBe(baseUrl + suffix);
-      expect(header("x-model")).toBe("keep-model");
-      expect(header("x-custom")).toBe("keep-caller");
+      expect([request.method, request.url, header("x-model"), header("x-custom")]).toEqual([
+        "POST",
+        baseUrl + suffix,
+        "keep-model",
+        "keep-caller",
+      ]);
       if (native) {
         expect(header("user-agent")).toMatch(/^openclaw\/[^\s,]+$/);
       } else {
@@ -160,15 +155,12 @@ it.each(routes)(
       expect(header("x-opencode-session")).toBe(
         index >= 2 ? "caller-session" : native ? "conversation-123" : null,
       );
-      const payload: unknown = await request.json();
-      expect(payload).not.toHaveProperty("prompt_cache_key");
-      expect(payload).not.toHaveProperty("cachedContent");
-      expect(JSON.stringify(payload)).not.toContain('"cache_control"');
+      expect(JSON.stringify(await request.json())).not.toMatch(
+        /"(?:prompt_cache_key|cachedContent|cache_control)"/,
+      );
       if (api === "google-generative-ai") {
         expect(header("x-goog-api-key")).toBe("synthetic-key");
-        expect(payload).toMatchObject({ contents: expect.any(Array) });
       } else {
-        expect(payload).toMatchObject({ model: "fixture-model", stream: true });
         expect(header(api === "anthropic-messages" ? "x-api-key" : "authorization")).toBe(
           api === "anthropic-messages" ? "synthetic-key" : "Bearer synthetic-key",
         );

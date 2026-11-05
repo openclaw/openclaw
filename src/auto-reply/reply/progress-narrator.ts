@@ -33,9 +33,7 @@ const MAX_VISIBILITY_RETRIES = 30;
 const PREAMBLE_RETRY_EPSILON_MS = 1;
 const MAX_NARRATIONS_PER_TURN = 30;
 const MAX_CONSECUTIVE_FAILURES = 2;
-type ToolStartPayload = Parameters<NonNullable<InternalGetReplyOptions["onToolStart"]>>[0];
 type CommandOutputPayload = Parameters<NonNullable<InternalGetReplyOptions["onCommandOutput"]>>[0];
-type ItemEventPayload = Parameters<NonNullable<InternalGetReplyOptions["onItemEvent"]>>[0];
 
 function normalizeNarrationText(raw: string): string {
   const collapsed = raw
@@ -321,7 +319,7 @@ export function attachProgressNarratorToReplyOptions(params: {
   const narrator = {
     beginTurn: resetTurnState,
     stopTurn,
-    noteToolStart(payload: ToolStartPayload) {
+    noteToolStart(payload: Parameters<NonNullable<InternalGetReplyOptions["onToolStart"]>>[0]) {
       if (payload.phase !== "start" || !isChannelProgressDraftWorkToolName(payload.name)) {
         return;
       }
@@ -357,7 +355,7 @@ export function attachProgressNarratorToReplyOptions(params: {
         { immediate: true },
       );
     },
-    noteItemEvent(payload: ItemEventPayload) {
+    noteItemEvent(payload: Parameters<NonNullable<InternalGetReplyOptions["onItemEvent"]>>[0]) {
       if (payload.kind === "preamble") {
         const preambleText = sanitizeProgressStatusText(payload.progressText ?? "")
           .replace(/\s+/g, " ")

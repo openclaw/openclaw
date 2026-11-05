@@ -33,52 +33,43 @@ describe("codex conversation turn collector", () => {
   });
 
   it.each([
-    {
-      scenario: "commentary after an answer",
-      metadata: { phase: "commentary", delivery: null },
-      replyText: "real answer",
-    },
-    {
-      scenario: "async-only",
-      metadata: { phase: "final_answer", delivery: "async" },
-      replyText: "",
-    },
-  ])("does not promote progress to a final answer ($scenario)", async ({ metadata, replyText }) => {
-    const collector = createCollector();
-    if (replyText) {
-      collector.item("answer", replyText, { phase: "final_answer" });
-    }
-    collector.delta({ itemId: "progress", delta: "progress" });
-    collector.item("progress", "completed progress", metadata);
-    collector.end({
-      items: [{ type: "agentMessage", id: "progress", text: "completed progress", ...metadata }],
-    });
+    ["commentary after an answer", { phase: "commentary", delivery: null }, "real answer"],
+    ["async-only", { phase: "final_answer", delivery: "async" }, ""],
+  ] as const)(
+    "does not promote progress to a final answer (%s)",
+    async (_, metadata, replyText) => {
+      const collector = createCollector();
+      if (replyText) {
+        collector.item("answer", replyText, { phase: "final_answer" });
+      }
+      collector.delta({ itemId: "progress", delta: "progress" });
+      collector.item("progress", "completed progress", metadata);
+      collector.end({
+        items: [{ type: "agentMessage", id: "progress", text: "completed progress", ...metadata }],
+      });
 
-    await expect(collector.wait({ timeoutMs: 100 })).resolves.toEqual({
-      replyText,
-    });
-  });
+      await expect(collector.wait({ timeoutMs: 100 })).resolves.toEqual({ replyText });
+    },
+  );
 
   it.each([
-    {
-      scenario: "empty terminal summary",
-      phase: "final_answer",
-      items: [],
-      replyText: "second answer",
+    ["empty terminal summary", "final_answer", [], "second answer"],
+    [
+      "terminal override",
+      null,
+      [{ type: "agentMessage", id: "answer", text: "terminal answer" }],
+      "terminal answer",
+    ],
+  ] satisfies [string, string | null, JsonObject[], string][])(
+    "uses the last final answer with %s",
+    async (_, phase, items, replyText) => {
+      const collector = createCollector();
+      collector.item("answer", "first answer", phase ? { phase } : {});
+      collector.item("later", "second answer", phase ? { phase } : {});
+      collector.end({ items });
+      await expect(collector.wait({ timeoutMs: 100 })).resolves.toEqual({ replyText });
     },
-    {
-      scenario: "terminal override",
-      phase: null,
-      items: [{ type: "agentMessage", id: "answer", text: "terminal answer" }],
-      replyText: "terminal answer",
-    },
-  ])("uses the last final answer with $scenario", async ({ phase, items, replyText }) => {
-    const collector = createCollector();
-    collector.item("answer", "first answer", phase ? { phase } : {});
-    collector.item("later", "second answer", phase ? { phase } : {});
-    collector.end({ items });
-    await expect(collector.wait({ timeoutMs: 100 })).resolves.toEqual({ replyText });
-  });
+  );
 
   it("ignores notifications for other threads or turns", async () => {
     const collector = createCollector();

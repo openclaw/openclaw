@@ -35,12 +35,17 @@ suite.define(() => {
         const row = createControlUiSessionRow("agent:main:main", "Deployment checklist", now, {
           sessionId: "goal-checklist-session",
           goal,
+          status: "queued",
+          hasActiveRun: true,
+          activeRunIds: ["waiting-human-input"],
         });
         const gateway = await installMockGateway(page, {
           sessionKey: "agent:main:main",
           heldMethods: [method],
           historyMessages: [textMessage("assistant", "The deployment checklist is verified.")],
           sessions: [row],
+          sessionInfo: row,
+          inFlightRun: { runId: "waiting-human-input", text: "" },
         });
         await page.goto(`${suite.server.baseUrl}chat/main`);
         const card = page.locator(".agent-chat__goal");
@@ -57,6 +62,32 @@ suite.define(() => {
             ]);
           }
         };
+        await capture("waiting-input-goal.png");
+        expect(await resume.isDisabled()).toBe(true);
+        expect(await resume.evaluate((button) => getComputedStyle(button).opacity)).toBe("0.5");
+        expect(await exactButton(card, "Clear goal").isEnabled()).toBe(true);
+        const idle = {
+          ...row,
+          status: "done",
+          hasActiveRun: false,
+          activeRunIds: [],
+          lastRunId: "waiting-human-input",
+          updatedAt: now + 1,
+        };
+        await gateway.setSessionsListResponse({ sessions: [idle] });
+        await gateway.setMethodResponse("chat.history", {
+          sessionId: row.sessionId,
+          sessionInfo: idle,
+          messages: [textMessage("assistant", "The deployment checklist is verified.")],
+        });
+        await gateway.emitGatewayEvent("chat", {
+          sessionKey: row.key,
+          runId: "waiting-human-input",
+          state: "final",
+          message: textMessage("assistant", "The queued check has settled."),
+        });
+        await gateway.emitGatewayEvent("sessions.changed", { ...idle, reason: "lifecycle" });
+        await expect.poll(() => resume.isEnabled()).toBe(true);
         await capture("achieved-goal.png");
         await resume.click();
         const params = requireRecord((await gateway.waitForRequest(method)).params);

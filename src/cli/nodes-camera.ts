@@ -73,7 +73,7 @@ export function parseCameraSnapPayload(value: unknown, opts: { expectedHost?: st
     validateCameraPayloadUrl(url, requireNodeRemoteIp(opts.expectedHost));
   }
   if (base64) {
-    validateCameraPayloadBase64(base64, MAX_CAMERA_BASE64_BYTES);
+    validateCameraPayloadBase64(base64);
   }
   return { format, ...(base64 ? { base64 } : {}), ...(url ? { url } : {}), width, height };
 }
@@ -240,9 +240,9 @@ async function writeUrlToFile(filePath: string, url: string, opts: { expectedHos
   }
 }
 
-function validateCameraPayloadBase64(base64: string, maxBytes: number): string {
-  if (estimateBase64DecodedBytes(base64) > maxBytes) {
-    throw new Error(`writeBase64ToFile: decoded payload exceeds max ${maxBytes}`);
+function validateCameraPayloadBase64(base64: string): string {
+  if (estimateBase64DecodedBytes(base64) > MAX_CAMERA_BASE64_BYTES) {
+    throw new Error(`writeBase64ToFile: decoded payload exceeds max ${MAX_CAMERA_BASE64_BYTES}`);
   }
   const canonicalBase64 = canonicalizeBase64(base64);
   if (!canonicalBase64) {
@@ -252,16 +252,13 @@ function validateCameraPayloadBase64(base64: string, maxBytes: number): string {
 }
 
 /** Decode a base64 media payload to disk with preflight and post-decode size checks. */
-export async function writeBase64ToFile(
-  filePath: string,
-  base64: string,
-  opts: { maxBytes?: number } = {},
-) {
-  const maxBytes = opts.maxBytes ?? MAX_CAMERA_BASE64_BYTES;
-  const canonicalBase64 = validateCameraPayloadBase64(base64, maxBytes);
+export async function writeBase64ToFile(filePath: string, base64: string) {
+  const canonicalBase64 = validateCameraPayloadBase64(base64);
   const buf = Buffer.from(canonicalBase64, "base64");
-  if (buf.length > maxBytes) {
-    throw new Error(`writeBase64ToFile: decoded ${buf.length} bytes, exceeds max ${maxBytes}`);
+  if (buf.length > MAX_CAMERA_BASE64_BYTES) {
+    throw new Error(
+      `writeBase64ToFile: decoded ${buf.length} bytes, exceeds max ${MAX_CAMERA_BASE64_BYTES}`,
+    );
   }
   await fs.stat(path.dirname(filePath));
   await publishOutputFileAtomically({

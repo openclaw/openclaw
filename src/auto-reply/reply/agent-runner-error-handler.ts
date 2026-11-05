@@ -39,7 +39,6 @@ import {
 import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.types.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import {
-  buildRestartLifecycleReplyText,
   resolveReplyOperationAbortReason,
   resolveReplyOperationTerminationFields,
   resolveRestartLifecycleError,
@@ -126,7 +125,6 @@ export async function handleAgentExecutionError(params: {
       return undefined;
     }
     if (reason === "restart") {
-      // Backend-owned drain aborts must retain reply recovery custody through cleanup.
       turn.replyOperation?.abortForRestart();
     }
     if (isCliPartialOutputRejected(abortError)) {
@@ -154,7 +152,7 @@ export async function handleAgentExecutionError(params: {
   if (replyOperationAbortAction) {
     return replyOperationAbortAction;
   }
-  if (params.state.completedSourceReplyDelivered) {
+  if (params.state.hasCompletedSourceReply?.()) {
     return await settleFailure({ text: SILENT_REPLY_TOKEN });
   }
   if (err instanceof WorkerNodeLostError) {
@@ -262,9 +260,12 @@ export async function handleAgentExecutionError(params: {
       : undefined;
   const restartLifecycleError = resolveRestartLifecycleError(err);
   if (restartLifecycleError instanceof GatewayDrainingError) {
-    takePendingLifecycleTerminal().emit("error", restartLifecycleError);
-    turn.replyOperation?.fail("gateway_draining", restartLifecycleError);
-    return finalFailure(buildRestartLifecycleReplyText());
+    turn.replyOperation?.abortForRestart();
+    takePendingLifecycleTerminal().emit("end", undefined, {
+      aborted: true,
+      stopReason: "restart",
+    });
+    return { kind: "aborted", reason: "restart" };
   }
   if (isCompactionFailure) {
     takePendingLifecycleTerminal().emit("error", err);

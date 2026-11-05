@@ -33,6 +33,7 @@ export type CronRunExecutionParams = Pick<
   | "agentPayload"
   | "useSubagentFallbacks"
   | "inheritDefaultFallbacksForAgentStringModel"
+  | "sessionModelOverrideSource"
   | "modelFallbacksOverride"
   | "liveSelection"
   | "cronSession"

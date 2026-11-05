@@ -64,7 +64,7 @@ export type SubscribeEmbeddedAgentSessionParams = Pick<
   /** Reports source delivery observed through bridged tool lifecycle events. */
   onDeliveredMessageToolOnlySourceReply?: () => void;
   /** Reports canonical completion after middleware publishes the final delivery receipt. */
-  onCompletedMessageToolOnlySourceReply?: () => void;
+  onCompletedMessageToolOnlySourceReply?: (isCurrent?: () => boolean) => void;
   /** Assistant fragment usage before queued delivery; fragments may be intermediate. */
   onModelUsage?: (
     usage: NormalizedUsage | undefined,

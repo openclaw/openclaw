@@ -5,7 +5,6 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
-import { loadSettings } from "../../app/settings.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { disposeSidebarContextLifecycles } from "../../test-helpers/app-sidebar-context-lifecycle.ts";
@@ -13,6 +12,7 @@ import { createContext } from "../../test-helpers/app-sidebar.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
+  activitySettings,
   activityHello,
   activityResponse,
   activityRoster,
@@ -21,13 +21,7 @@ import {
 
 it("keeps the current query loading when superseded requests settle", async () => {
   const { gateway: source, current } = createGatewayStoreTestStore({
-    settings: {
-      ...loadSettings(),
-      gatewayUrl: "wss://activity.example.test",
-      token: "",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-    },
+    settings: activitySettings(),
   });
   const sessions = createTestSessionCapability(source);
   try {

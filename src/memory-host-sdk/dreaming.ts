@@ -10,6 +10,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { DoctorMemoryDreamingPayload } from "../../packages/gateway-protocol/src/doctor-memory.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -134,22 +135,7 @@ export type RepairShortTermPromotionArtifactsResult = {
   removedStaleLock: boolean;
 };
 
-export type ShortTermDreamingStatsEntry = {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  recallCount: number;
-  dailyCount: number;
-  groundedCount: number;
-  totalSignalCount: number;
-  lightHits: number;
-  remHits: number;
-  phaseHitCount: number;
-  promotedAt?: string;
-  lastRecalledAt?: string;
-};
+export type ShortTermDreamingStatsEntry = DoctorMemoryDreamingPayload["shortTermEntries"][number];
 
 export type ShortTermDreamingStats = {
   shortTermCount: number;
@@ -338,8 +324,16 @@ export function resolveMemoryDreamingPluginConfig(
   const plugins = asNullableRecord(root?.plugins);
   const entries = asNullableRecord(plugins?.entries);
   const pluginId = resolveMemoryDreamingPluginId(cfg);
-  const memoryPlugin = asNullableRecord(entries?.[pluginId]);
-  return asNullableRecord(memoryPlugin?.config) ?? undefined;
+  const pluginConfig = asNullableRecord(asNullableRecord(entries?.[pluginId])?.config);
+  if (pluginConfig?.dreaming !== undefined || pluginId === DEFAULT_MEMORY_DREAMING_PLUGIN_ID) {
+    return pluginConfig ?? undefined;
+  }
+  // A slot owner without dreaming settings leaves the documented Memory Core settings in charge,
+  // so its explicit opt-out still stops the sidecar.
+  const engineConfig = asNullableRecord(
+    asNullableRecord(entries?.[DEFAULT_MEMORY_DREAMING_PLUGIN_ID])?.config,
+  );
+  return (engineConfig?.dreaming !== undefined ? engineConfig : pluginConfig) ?? undefined;
 }
 
 export function resolveMemoryDreamingConfig(params: {
@@ -500,9 +494,7 @@ export function formatMemoryDreamingDay(epochMs: number, timezone?: string): str
     const year = values.get("year");
     const month = values.get("month");
     const day = values.get("day");
-    if (year && month && day) {
-      return `${year}-${month}-${day}`;
-    }
+    return `${year}-${month}-${day}`;
   } catch {
     // Fall back to host-local day for invalid or unsupported timezones.
   }

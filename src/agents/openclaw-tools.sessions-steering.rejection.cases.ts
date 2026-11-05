@@ -96,6 +96,7 @@ export function registerSessionsSendRejectedSteeringTests({
           abortSignal: expect.any(AbortSignal),
           toolAuthorityFingerprint: expect.any(String),
           steeringMode: "all",
+          isInboundUserReply: false,
           debounceMs: 0,
           deliveryTimeoutMs: undefined,
           waitForTranscriptCommit: true,

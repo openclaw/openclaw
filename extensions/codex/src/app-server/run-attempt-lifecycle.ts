@@ -9,8 +9,10 @@ import {
   runAgentCleanupStep,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { collectTerminalAssistantText } from "./attempt-results.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
+import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 
 const CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN = 4;
@@ -73,6 +75,51 @@ export function emitCodexAppServerEvent(
     label: "codex app-server",
     log: embeddedAgentLog,
   });
+}
+
+/** Schedule the accepted terminal snapshot through the existing attempt event owner. */
+export function emitCodexTerminalAssistantSnapshot(
+  params: EmbeddedRunAttemptParams,
+  result: EmbeddedRunAttemptResult,
+  snapshot: {
+    streamState: CodexAttemptActiveTurn["streamState"];
+    finalAborted: boolean;
+    finalPromptError: unknown;
+    assistantTranscriptIdempotencyKey?: string;
+    terminalSourceKey?: string;
+  },
+): void {
+  const {
+    streamState,
+    finalAborted,
+    finalPromptError,
+    assistantTranscriptIdempotencyKey,
+    terminalSourceKey,
+  } = snapshot;
+  const terminalAssistantText = collectTerminalAssistantText(result);
+  const terminalAssistantItemId = assistantTranscriptIdempotencyKey ?? terminalSourceKey;
+  if (
+    terminalAssistantText &&
+    (assistantTranscriptIdempotencyKey ||
+      ((!streamState.eventEmitted || streamState.needsTerminalSnapshot) &&
+        !finalAborted &&
+        !finalPromptError))
+  ) {
+    void emitCodexAppServerEvent(params, {
+      stream: "assistant",
+      data: {
+        text: terminalAssistantText,
+        // Source identity survives a receipt wait timeout without claiming durability.
+        ...(terminalAssistantItemId
+          ? {
+              itemId: terminalAssistantItemId,
+              replace: true,
+              replaceable: true,
+            }
+          : {}),
+      },
+    });
+  }
 }
 
 type CodexAgentEndHookParams = Parameters<typeof runAgentEndSideEffectsAsync>[0];

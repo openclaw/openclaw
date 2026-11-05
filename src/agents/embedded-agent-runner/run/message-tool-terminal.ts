@@ -1,5 +1,10 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  getInternalToolTurnCompletion,
+  getInternalToolTurnInputScope,
+  setInternalToolTurnCompletion,
+} from "../../../../packages/agent-core/src/internal-hooks.js";
+import {
   getAgentToolInputScope,
   resolveAgentAssistantTurnId,
 } from "../../../../packages/agent-core/src/tool-execution-context.js";
@@ -17,10 +22,6 @@ import {
 import type { MessagingToolSourceReplyPayload } from "../../embedded-agent-messaging.types.js";
 import { captureToolAuthoredSourceReply } from "../../embedded-agent-tool-authored-source-reply.js";
 import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
-import {
-  getInternalToolTurnCompletion,
-  setInternalToolTurnCompletion,
-} from "../../runtime/internal-hooks.js";
 import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import { isToolResultError, readToolResultDetails } from "../../tool-result-error.js";
 import { createSourceReplyBatchCompletion } from "../../tool-source-reply-completion.js";
@@ -118,7 +119,7 @@ export function installMessageToolTerminalHook(
   params: MessageToolTerminalRoute & {
     agent: Agent;
     onDeliveredSourceReply?: () => void;
-    onCompletedSourceReply?: () => void;
+    onCompletedSourceReply?: (isCurrent?: () => boolean) => void;
   },
 ): void {
   const finalReplyInputs = new Set<object>();
@@ -137,6 +138,7 @@ export function installMessageToolTerminalHook(
   const previousAfterToolCall = params.agent.afterToolCall?.bind(params.agent);
   params.agent.afterToolCall = async (context, signal) => {
     const inputScope = getAgentToolInputScope(context);
+    const completionOwner = getInternalToolTurnCompletion(params.agent);
     // Capture private cell identity before presentation can replace or reject its result.
     nestedCompletion.observe(context.result);
     const toolName = context.toolCall.name;
@@ -181,7 +183,13 @@ export function installMessageToolTerminalHook(
         }
         params.onDeliveredSourceReply?.();
         if (completed || isCompletedMessageToolOnlySourceReply({ context, hookResult, final })) {
-          params.onCompletedSourceReply?.();
+          params.onCompletedSourceReply?.(
+            () =>
+              !inputScope ||
+              Boolean(
+                completionOwner && getInternalToolTurnInputScope(completionOwner) === inputScope,
+              ),
+          );
         }
       }
     }

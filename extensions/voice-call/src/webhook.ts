@@ -661,9 +661,22 @@ export class VoiceCallWebhookServer {
           };
         }
 
-        const realtimeParams = this.getRealtimeTwimlParams(ctx);
-        if (realtimeParams) {
-          const direction = realtimeParams.get("Direction");
+        const realtimeParams =
+          this.realtimeHandler && this.provider.name === "twilio"
+            ? new URLSearchParams(ctx.rawBody)
+            : null;
+        const direction = realtimeParams?.get("Direction");
+        const callStatus = realtimeParams?.get("CallStatus");
+        // Only initial TwiML fetches without gathered input enter realtime handling.
+        if (
+          realtimeParams &&
+          (!direction || direction === "inbound" || direction.startsWith("outbound")) &&
+          ctx.query?.type !== "status" &&
+          ctx.query?.type !== "amd" &&
+          (!callStatus || !isProviderStatusTerminal(callStatus)) &&
+          !realtimeParams.get("SpeechResult") &&
+          !realtimeParams.get("Digits")
+        ) {
           const isInboundRealtimeRequest = !direction || direction === "inbound";
           if (
             isInboundRealtimeRequest &&
@@ -819,33 +832,6 @@ export class VoiceCallWebhookServer {
     );
   }
 
-  private getRealtimeTwimlParams(ctx: WebhookContext): URLSearchParams | null {
-    if (!this.realtimeHandler || this.provider.name !== "twilio") {
-      return null;
-    }
-
-    const params = new URLSearchParams(ctx.rawBody);
-    const direction = params.get("Direction");
-    const isSupportedDirection =
-      !direction || direction === "inbound" || direction.startsWith("outbound");
-    if (!isSupportedDirection) {
-      return null;
-    }
-
-    if (ctx.query?.type === "status" || ctx.query?.type === "amd") {
-      return null;
-    }
-
-    const callStatus = params.get("CallStatus");
-    if (callStatus && isProviderStatusTerminal(callStatus)) {
-      return null;
-    }
-
-    // Initial TwiML fetches without gathered input may enter realtime handling.
-    // Replay checks run before this helper so retries cannot mint new stream tokens.
-    return !params.get("SpeechResult") && !params.get("Digits") ? params : null;
-  }
-
   private async processParsedEvents(events: NormalizedEvent[]): Promise<boolean> {
     let replayable = false;
     for (const event of events) {
@@ -887,26 +873,20 @@ export class VoiceCallWebhookServer {
       return;
     }
 
-    if (!this.coreConfig) {
-      this.logger.warn("Core config missing; skipping auto-response");
-      return;
-    }
-    if (!this.agentRuntime) {
-      this.logger.warn("Agent runtime missing; skipping auto-response");
+    if (!this.coreConfig || !this.agentRuntime) {
+      this.logger.warn("Core config or agent runtime missing; skipping auto-response");
       return;
     }
 
     const response = this.manager.createAutoResponseGuard(call);
+    let delivered = false;
     const speakResponse = async (text: string): Promise<boolean> => {
-      if (!response.isCurrent()) {
-        this.logger.info(`Discarding superseded automatic reply ${callId}`);
-        return false;
-      }
       this.logger.info(`AI response queued ${callId} chars=${text.length}`);
       const result = await this.manager.speak(callId, text, {
         listenAfterPlayback: true,
         isCurrent: response.isCurrent,
       });
+      delivered ||= result.success;
       return result.success;
     };
     try {
@@ -932,8 +912,7 @@ export class VoiceCallWebhookServer {
       });
 
       if (result.error) {
-        this.logger.error(`Response generation error: ${result.error}`);
-        return;
+        throw new Error(result.error);
       }
 
       if (result.text && !result.deliveredEarly) {
@@ -941,6 +920,9 @@ export class VoiceCallWebhookServer {
       }
     } catch (err) {
       this.logger.error(`Auto-response error: ${String(err)}`);
+      if (!delivered) {
+        await speakResponse("Sorry, I hit a problem working out a response. Please try again.");
+      }
     } finally {
       response.release();
     }

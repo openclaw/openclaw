@@ -1,4 +1,5 @@
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
+import { parseSidebarSessionReference } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
 import type { RouteId } from "./app-route-paths.ts";
 import type {
   NativeDeviceSettingsCapability,
@@ -18,7 +19,7 @@ type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtit
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 // Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
-  "claws",
+  "templates",
   "dashboards",
   "usage",
   "cron",
@@ -43,8 +44,7 @@ export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
   return routeId === "sessions" || routeId === "worktrees";
 }
 
-export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
-export type PersistedSidebarRoute = SidebarNavRoute;
+export type PersistedSidebarRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
 function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute {
   return SIDEBAR_NAV_ROUTES.includes(value as PersistedSidebarRoute);
@@ -86,11 +86,11 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
     return { type: "person", profileId };
   }
   if (value.startsWith("session-rail:")) {
-    const key = value.slice("session-rail:".length).trim();
+    const key = parseSidebarSessionReference(value);
     return key ? { type: "session", key, rail: true } : null;
   }
   if (value.startsWith("session:")) {
-    const key = value.slice("session:".length).trim();
+    const key = parseSidebarSessionReference(value);
     return key ? { type: "session", key } : null;
   }
   if (value.startsWith("workboard:")) {
@@ -307,7 +307,7 @@ function navigationPresentation(icon: IconName, key: string): NavigationPresenta
 
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
   settings: ["settings", "nav.settings", "common.settingsSections"],
-  claws: navigationPresentation("bot", "claws"),
+  templates: navigationPresentation("blobster", "templates"),
   agents: navigationPresentation("bot", "agents"),
   activity: navigationPresentation("activity", "activity"),
   meetings: navigationPresentation("book", "meetings"),
@@ -379,6 +379,16 @@ export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
 export function titleForRoute(routeId: NavigationRouteId, translate = t): string {
   const [, titleKey] = NAVIGATION_PRESENTATION[routeId];
   return translate(titleKey);
+}
+
+/** The title a route's own page shows, which names the actual device on the device route. */
+export function pageTitleForRoute(
+  routeId: NavigationRouteId,
+  deviceSnapshot?: NativeDeviceSettingsSnapshot | null,
+): string {
+  return routeId === "device"
+    ? t(deviceSettingsGroupLabelKey(deviceSnapshot))
+    : titleForRoute(routeId);
 }
 
 /** Window/tab title, attention leftmost because tabs truncate from the right.

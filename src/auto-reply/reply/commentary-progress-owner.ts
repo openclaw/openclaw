@@ -1,17 +1,15 @@
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 
-type CommentaryProgressOwnerOptions = Pick<
-  GetReplyOptions,
-  | "onVerboseProgressVisibility"
-  | "onVerboseProgressVisibilityAsync"
-  | "shouldDeliverCommentaryPayloads"
->;
-
 /** Freezes and registers one commentary owner for the current agent turn. */
 export async function resolveTurnCommentaryProgressOwner(params: {
   commentaryPayloadsEnabled: boolean;
-  options?: CommentaryProgressOwnerOptions;
+  options?: Pick<
+    GetReplyOptions,
+    | "onVerboseProgressVisibility"
+    | "onVerboseProgressVisibilityAsync"
+    | "shouldDeliverCommentaryPayloads"
+  >;
   resolveVerboseProgressVisibility: () => boolean;
   resolveVerboseProgressVisibilityAsync: () => Promise<boolean>;
 }): Promise<{

@@ -129,7 +129,6 @@ export function relaunchGatewayScheduledTask(env: NodeJS.ProcessEnv = process.en
     return {
       ok: true,
       method: "schtasks",
-      tried: [`schtasks /Run /TN "${taskName}"`, `${cmdExePath} /d /s /c ${quotedScriptPath}`],
     };
   } catch (err) {
     try {
@@ -141,7 +140,6 @@ export function relaunchGatewayScheduledTask(env: NodeJS.ProcessEnv = process.en
       ok: false,
       method: "schtasks",
       detail: formatErrorMessage(err),
-      tried: [`schtasks /Run /TN "${taskName}"`],
     };
   }
 }

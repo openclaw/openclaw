@@ -36,13 +36,11 @@ import type { CronServiceDeps } from "../cron/service/state.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { isAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { getPluginInstanceCodeIdentity } from "../plugins/plugin-code-identity.js";
 import { pluginCommandSupportsChannel } from "../plugins/plugin-command-metadata.js";
 import { listRegisteredPluginCommands } from "../plugins/plugin-command-registry.js";
 import * as commandRuntime from "../plugins/plugin-command-runtime.js";
-import {
-  getPluginInstanceIncarnation,
-  getPluginInstanceSourceDigest,
-} from "../plugins/plugin-instance-scope.js";
+import { getPluginInstanceIncarnation } from "../plugins/plugin-instance-scope.js";
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { PluginCommandResult } from "../plugins/types.js";
@@ -144,7 +142,7 @@ export function assertPluginCommandScheduleRegistry(
     !plugin ||
     getPluginInstanceIncarnation(plugin) !== pluginIncarnation ||
     (binding.sourceDigest !== undefined &&
-      getPluginInstanceSourceDigest(plugin) !== binding.sourceDigest) ||
+      getPluginInstanceCodeIdentity(plugin) !== binding.sourceDigest) ||
     plugin.status !== "loaded" ||
     !plugin.enabled ||
     plugin.source !== schedule.pluginSource ||
@@ -419,7 +417,7 @@ export async function runPluginCommandScheduledTurn(params: {
               runId,
               runSessionKey: schedule.parent.sessionKey,
               toolsAllow,
-              operatorAuthorityRestored: true,
+              operatorAuthority,
             }),
             admissionSource: request.admissionSource,
             cfg,

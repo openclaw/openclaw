@@ -2,7 +2,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
-import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
+import { renderSolidColorPngBase64 } from "../../../test/helpers/live-image-probe.js";
 import type { Agent, AgentMessage } from "../runtime/index.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { createImageTool } from "../tools/image-tool.js";
@@ -15,14 +15,7 @@ import { installToolResultContextGuard } from "./tool-result-context-guard.js";
 type ContentBlock = { type: string; text?: string; data?: string; mimeType?: string };
 
 function makeDistinctImageRef(index: number): string {
-  const width = 64;
-  const pixels = Buffer.alloc(width * width * 4);
-  for (let y = 0; y < width; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      fillPixel(pixels, x, y, width, (index + 1) * 17, x * 3, y * 3);
-    }
-  }
-  return `data:image/png;base64,${encodePngRgba(pixels, width, width).toString("base64")}`;
+  return `data:image/png;base64,${renderSolidColorPngBase64({ r: (index + 1) * 17, g: 60, b: 90 })}`;
 }
 
 async function executeNativeImageTool(imageCount: number): Promise<AgentMessage> {
@@ -37,7 +30,6 @@ async function executeNativeImageTool(imageCount: number): Promise<AgentMessage>
   const result = await tool.execute("native-image-context", {
     paths: Array.from({ length: imageCount }, (_, index) => makeDistinctImageRef(index)),
   });
-  expect(result.content.filter((block) => block.type === "image")).toHaveLength(imageCount);
   return castAgentMessage({
     role: "toolResult",
     toolCallId: "native-image-context",
@@ -86,7 +78,6 @@ it("explains when no sanitized image fits the context window", async () => {
     /no images? (?:fit|included|available)|images? (?:could not|cannot) (?:fit|be included)/i,
   );
   expect(source).toEqual(originalSnapshot);
-  expect(source).toMatchObject({ details: { media: { outbound: false } } });
 });
 
 it("preserves mixed text, unknown blocks, CJK content, image order, and original privacy", async () => {

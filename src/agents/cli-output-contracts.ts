@@ -14,19 +14,6 @@ import type { ToolSummaryTrace } from "./embedded-agent-runner/types.js";
 
 export type CliUsage = CliBackendJsonlUsage;
 
-type CliProcessDiagnostics = {
-  backendId: string;
-  processReason: string;
-  exitCode: number | null;
-  exitSignal: NodeJS.Signals | number | null;
-  durationMs: number;
-  stdoutBytes: number;
-  stdoutHash: string;
-  stderrBytes: number;
-  stderrHash: string;
-  useResume: boolean;
-};
-
 export type CliTerminalFailure =
   | {
       reason: "max_turns";
@@ -69,7 +56,18 @@ export type CliOutput = {
   /** A caller interruption that ended the turn after usable assistant text was streamed. */
   terminalInterruption?: CliTerminalInterruption;
   diagnostics?: {
-    process?: CliProcessDiagnostics;
+    process?: {
+      backendId: string;
+      processReason: string;
+      exitCode: number | null;
+      exitSignal: NodeJS.Signals | number | null;
+      durationMs: number;
+      stdoutBytes: number;
+      stdoutHash: string;
+      stderrBytes: number;
+      stderrHash: string;
+      useResume: boolean;
+    };
   };
   finalPromptText?: string;
   didSendViaMessagingTool?: boolean;
@@ -96,10 +94,14 @@ export type CliStreamingDelta = Pick<CliOutput, "text" | "sessionId" | "usage"> 
 /** Incremental thinking text emitted while parsing a streaming CLI response. */
 export type CliThinkingDelta = Pick<CliStreamingDelta, "text" | "delta"> & {
   isReasoningSnapshot?: boolean;
+  /** New parser-owned content, not a replay; absence permits display but no watchdog credit. */
+  modelProgress?: true;
 };
 
 export type CliThinkingProgress = {
   progressTokens: number;
+  /** Positive parser-owned token evidence; absence permits display but no watchdog credit. */
+  modelProgress?: true;
 };
 
 export type CliCompactionDelta = { phase: "start" } | { phase: "end"; completed: boolean };

@@ -64,16 +64,13 @@ it.each`
 
 describe("active-memory recall query limits", () => {
   it.each([
-    ["message", "current question"],
-    [
-      "recent",
-      "Recent conversation tail:\nuser: older question\nassistant: previous reply\n\nLatest user message:\ncurrent question",
-    ],
-    [
-      "full",
-      "Full conversation context:\nuser: older question\nassistant: previous reply\n\nLatest user message:\ncurrent question",
-    ],
-  ] as const)("preserves under-limit %s query formatting", (queryMode, expected) => {
+    ["message", ""],
+    ["recent", "Recent conversation tail:"],
+    ["full", "Full conversation context:"],
+  ] as const)("preserves under-limit %s query formatting", (queryMode, queryHeader) => {
+    const expected = queryHeader
+      ? `${queryHeader}\nuser: older question\nassistant: previous reply\n\nLatest user message:\ncurrent question`
+      : "current question";
     expect(
       recallQuery(queryMode, " current question ", [
         { role: "user", text: " older   question " },
@@ -92,22 +89,19 @@ describe("active-memory recall query limits", () => {
     },
   );
 
-  it.each(["message", "recent", "full"] as const)(
-    "retains quoted context and the final question in an oversized %s request",
-    (queryMode) => {
-      const head = '[Replying to: "QUOTED_REPLY_SENTINEL"]\n';
-      const question = "What is my synthetic access phrase?";
-      const query = recallQuery(queryMode, head + "🦞".repeat(15_000) + question, [
-        { role: "user", text: "old history" },
-      ]);
-      expect(query.length).toBeLessThanOrEqual(4_000);
-      expect(query.startsWith(head)).toBe(true);
-      expect(query.endsWith(question)).toBe(true);
-      expect(query).toContain("[Middle of current request omitted]");
-      expect(query).not.toContain("old history");
-      expect(query).not.toMatch(UNPAIRED_SURROGATE);
-    },
-  );
+  it("retains quoted context and the final question in an oversized request", () => {
+    const head = '[Replying to: "QUOTED_REPLY_SENTINEL"]\n';
+    const question = "What is my synthetic access phrase?";
+    const query = recallQuery("full", head + "🦞".repeat(15_000) + question, [
+      { role: "user", text: "old history" },
+    ]);
+    expect(query.length).toBeLessThanOrEqual(4_000);
+    expect(query.startsWith(head)).toBe(true);
+    expect(query.endsWith(question)).toBe(true);
+    expect(query).toContain("[Middle of current request omitted]");
+    expect(query).not.toContain("old history");
+    expect(query).not.toMatch(UNPAIRED_SURROGATE);
+  });
 
   it("keeps the newest history without changing the current message", () => {
     const latest = '[Replying to: "quoted context"]\nWhat was the decision?';

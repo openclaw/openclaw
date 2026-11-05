@@ -1,12 +1,15 @@
 // Coverage for provider replay tool-call sanitization.
 
+import type { Context } from "@openclaw/llm-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import * as pairing from "../../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
+import { transformTransportMessages } from "../../transport-message-transform.js";
 import { createFakeStream } from "./attempt-stream.test-helpers.js";
 import {
-  sanitizeOpenAIResponsesReplayForStream,
   sanitizeReplayToolCallIdsForStream,
   shouldApplyReplayToolCallIdSanitizer,
   wrapStreamFnSanitizeMalformedToolCalls,
@@ -82,6 +85,51 @@ function captureStream(content: string | unknown[] = []) {
     createFakeStream({ events: [], resultMessage: { role: "assistant", content } }),
   );
 }
+
+function forwardedMessages(baseFn: ReturnType<typeof captureStream>, index = 0): AgentMessage[] {
+  const call = baseFn.mock.calls[index];
+  if (!call) {
+    throw new Error("expected replay to reach the stream");
+  }
+  return (call[1] as { messages: AgentMessage[] }).messages;
+}
+
+function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
+  const baseFn = captureStream();
+  const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never);
+  void wrapped({ api: "openai-responses" } as never, { messages } as never);
+  return forwardedMessages(baseFn, 0);
+}
+
+it("classifies paired replay once across sanitization and transport, rechecking mutations", () => {
+  const classify = vi.spyOn(pairing, "classifyToolUseResultPairing");
+  const extract = vi.spyOn(pairing, "extractToolCallsFromAssistant");
+  try {
+    const messages = [
+      imageCall("call_a"),
+      replayResult("call_a", "image_generate", "saved output"),
+    ];
+    const model = makeProviderModelFixture({
+      api: "openai-responses",
+      provider: "openai",
+      id: "synthetic",
+      baseUrl: "https://example.test",
+    });
+    const prepared = sanitizeOpenAIResponsesReplayForStream(messages);
+    expect(transformTransportMessages(prepared as Context["messages"], model)).toEqual(prepared);
+    expect(classify).toHaveBeenCalledTimes(1);
+    expect(prepared).toBe(messages);
+    expect(extract).not.toHaveBeenCalled();
+    requireToolResultMessage(prepared[1]).toolCallId = "orphan";
+    const repaired = transformTransportMessages(prepared as Context["messages"], model);
+    expect(classify).toHaveBeenCalledTimes(2);
+    expect(repaired[1]).toMatchObject({ toolCallId: "call_a", isError: true });
+    expect(JSON.stringify(repaired)).not.toContain("saved output");
+  } finally {
+    classify.mockRestore();
+    extract.mockRestore();
+  }
+});
 
 describe("sanitizeReplayToolCallIdsForStream", () => {
   it("skips strict stream id sanitization when provider policy opts out", () => {
@@ -228,15 +276,48 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
 });
 
 describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
+  it("classifies unchanged replay once and rechecks the next request after in-place changes", () => {
+    const assistant = imageCall("call_image");
+    const stopReason = vi.fn(() => "toolUse");
+    Object.defineProperty(assistant, "stopReason", { get: stopReason });
+    const messages = [assistant, textToolResult("call_image", "image_generate", "done")];
+    const baseFn = captureStream();
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never);
+
+    void wrapped({ api: "openai-responses" } as never, { messages } as never);
+    expect(forwardedMessages(baseFn, 0)).toBe(messages);
+    expect(stopReason).toHaveBeenCalledTimes(1);
+
+    messages.pop();
+    stopReason.mockClear();
+    void wrapped({ api: "openai-responses" } as never, { messages } as never);
+    expect(forwardedMessages(baseFn, 1)[1]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call_image",
+      isError: true,
+      content: [{ type: "text", text: "aborted" }],
+    });
+    expect(stopReason).toHaveBeenCalledTimes(1);
+
+    // Changed replay inputs must not reuse facts from the removed tool call.
+    const call = requireAssistantMessage(assistant).content[0];
+    if (!call || call.type !== "toolCall") {
+      throw new Error("expected image tool call");
+    }
+    call.name = "";
+    void wrapped({ api: "openai-responses" } as never, { messages } as never);
+    expect(forwardedMessages(baseFn, 2)).toEqual([]);
+  });
+
   it.each(["openai-responses"])(
     "preserves completed removed-tool history without advertising it to %s",
     (api) => {
       const assistant = {
         role: "assistant",
         stopReason: "toolUse",
-        content: [{ type: "toolCall", id: "old_call", name: "removed_plugin", arguments: {} }],
+        content: [{ type: "toolCall", id: "call_old", name: "removed_plugin", arguments: {} }],
       };
-      const result = textToolResult("old_call", "removed_plugin", "completed-action-id", {
+      const result = textToolResult("call_old", "removed_plugin", "completed-action-id", {
         isError: false,
       });
       const tools = [{ name: "read", parameters: { type: "object", properties: {} } }];

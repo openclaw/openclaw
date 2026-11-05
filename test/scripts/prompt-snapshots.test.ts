@@ -88,7 +88,7 @@ describe("happy path prompt snapshots", () => {
   it("reconstructs complete Codex tool catalogs from readable full-tool overrides", async () => {
     const scenarios = [
       { name: "telegram-direct", replacements: [] },
-      { name: "discord-group", replacements: ["sessions_spawn"] },
+      { name: "discord-group", replacements: ["message", "sessions_spawn"] },
     ];
 
     for (const { name, replacements } of scenarios) {

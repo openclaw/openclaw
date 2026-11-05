@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import type {
   CompactionAccountingFact,
   RunEmbeddedAgentInternalParams,
@@ -9,6 +9,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import { resolveGroupSessionKey } from "../../config/sessions.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { logVerbose } from "../../globals.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "../../sessions/session-controller.js";
@@ -25,6 +26,7 @@ import {
 } from "./agent-runner-event-handler.js";
 import type { CompletedAgentAuthSelection } from "./agent-runner-execution.types.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
+import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { buildFallbackCandidateTurnParams } from "./agent-runner-run-params.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
@@ -129,6 +131,42 @@ export async function runEmbeddedFallbackCandidate(
     const result = await params.timing.measure("embedded_run", () => {
       const embeddedRunParams: RunEmbeddedAgentInternalParams = {
         ...runBaseParams,
+        beforeRecoveryCompaction: async (recovery) => {
+          if (turn.recoveryMemoryFlushAttempted) {
+            return "skipped: already attempted this turn";
+          }
+          turn.recoveryMemoryFlushAttempted = true;
+          const entry =
+            turn.sessionKey && turn.storePath
+              ? await readSessionEntryInWorker({
+                  storePath: turn.storePath,
+                  sessionKey: turn.sessionKey,
+                })
+              : turn.getActiveSessionEntry();
+          if (entry?.sessionId !== recovery.sessionId) {
+            return "skipped: source session changed";
+          }
+          const flushed = await runMemoryFlushIfNeeded({
+            cfg: params.runtimeConfig,
+            followupRun: {
+              ...turn.followupRun,
+              abortSignal: params.runAbortSignal ?? turn.followupRun.abortSignal,
+              run: { ...candidateRun, ...recovery },
+            },
+            recoveryContextTokenBudget: recovery.contextTokenBudget,
+            defaultModel: recovery.model,
+            resolvedVerboseLevel: turn.resolvedVerboseLevel,
+            sessionEntry: entry,
+            sessionStore: turn.activeSessionStore,
+            sessionKey: turn.sessionKey,
+            runtimePolicySessionKey: turn.runtimePolicySessionKey,
+            storePath: turn.storePath,
+            replyOperation: turn.replyOperation,
+            abortSignal: params.runAbortSignal,
+            opts: { runId: params.runId },
+          });
+          return flushed.outcome;
+        },
         ...params.scheduledInference?.runParams,
         lifecycleGeneration: params.getLifecycleGeneration(),
         allowGatewaySubagentBinding: true,
@@ -142,6 +180,7 @@ export async function runEmbeddedFallbackCandidate(
         groupSpace: normalizeOptionalString(turn.sessionCtx.GroupSpace),
         ...buildFallbackCandidateTurnParams(params),
         contextWindow: turn.getActiveSessionEntry()?.contextWindow,
+        sessionPromptDelivery: turn.getActiveSessionEntry()?.delivery,
         provider: params.provider,
         agentHarnessId: resolveSessionPinnedHarnessId(turn.getActiveSessionEntry()),
         agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
@@ -163,6 +202,14 @@ export async function runEmbeddedFallbackCandidate(
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
         assistantErrorTranscript: params.assistantErrorTranscript,
         authProfileFailurePolicy: params.authProfileFailurePolicy,
+        ...(params.cyberAccessProgram
+          ? {
+              cyberAccessProgram: params.cyberAccessProgram,
+              ...(params.authProfileId
+                ? { authProfileId: params.authProfileId, authProfileIdSource: "user" as const }
+                : {}),
+            }
+          : {}),
         onAutoCompactionSucceeded: (count) => {
           attemptCompactionCount = Math.max(attemptCompactionCount, count);
         },
@@ -194,33 +241,10 @@ export async function runEmbeddedFallbackCandidate(
             await params.prepareAgentRunStart();
           }
           if (turn.followupRun.run.scheduledAutomation) {
-            try {
-              await turn.followupRun.run.internalEventExecution?.beforeScheduledStart?.(
-                params.runId,
-              );
-              params.runAbortSignal?.throwIfAborted();
-              turn.followupRun.run.internalEventExecution?.assertCurrent?.();
-              const automation = turn.followupRun.run.scheduledAutomation;
-              const sessionKey = turn.sessionKey ?? turn.followupRun.run.sessionKey;
-              if (automation && sessionKey) {
-                automation.onExecutionStarted?.({
-                  runId: params.runId,
-                  sessionId: turn.followupRun.run.sessionId,
-                  sessionKey,
-                  provider: params.provider,
-                  model: params.model,
-                  ...(params.isFallbackRetry ? { isFallback: true } : {}),
-                });
-              }
-            } catch (error) {
-              if (!params.hasAgentRunStarted()) {
-                lifecycleBackstop.note({
-                  stream: "lifecycle",
-                  data: { phase: "finishing", executionStarted: false, providerStarted: false },
-                });
-              }
-              throw error;
-            }
+            await params.notifyScheduledExecutionStarted(
+              lifecycleBackstop,
+              () => turn.sessionKey ?? turn.followupRun.run.sessionKey,
+            );
           }
         },
         onExecutionPhase: (info) => {
@@ -349,10 +373,7 @@ export async function runEmbeddedFallbackCandidate(
     // Plugin harnesses return the same canonical receipt as the built-in runner,
     // but do not receive host-private completion callbacks. Project their settled
     // current-source delivery before the fallback owner selects another candidate.
-    if (
-      result.sourceReplyDelivered === true &&
-      resolveExplicitFinalSourceReplyDeliveryEvidence(result) !== false
-    ) {
+    if (result.sourceReplyDelivered === true && hasCompletedSourceReplyDeliveryEvidence(result)) {
       params.onCompletedSourceReplyDelivered();
     }
     const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);

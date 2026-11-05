@@ -113,7 +113,7 @@ it.each(["chip", "roster"] as const)(
     find<HTMLButtonElement>(".sidebar-rail .sidebar-brand__search")?.click();
     expect(onToggleSidebar).toHaveBeenCalledOnce();
     expect(onOpenPalette).toHaveBeenCalledOnce();
-    expect(newSessionLink?.getAttribute("aria-label")).toBe("New conversation");
+    expect(newSessionLink?.getAttribute("aria-label")).toBe("New session");
     expect(newSessionLink).toBeInstanceOf(HTMLAnchorElement);
     expect(newSessionLink?.getAttribute("aria-disabled")).toBe("true");
     expect(newSessionLink?.hasAttribute("href")).toBe(false);
@@ -124,7 +124,7 @@ it.each(["chip", "roster"] as const)(
     sidebar.connected = true;
     await sidebar.updateComplete;
     const link = find<HTMLAnchorElement>(".sidebar-rail .sidebar-new-session")!;
-    expect(link.getAttribute("aria-label")).toBe("New conversation");
+    expect(link.getAttribute("aria-label")).toBe("New session");
     expect(link.getAttribute("href")).toBe("/control/new?agent=research");
     expect(link.hasAttribute("aria-disabled")).toBe(false);
     for (const modifiers of [
@@ -439,7 +439,7 @@ it("keeps main-session activity on its agent header without duplicate main or su
   expect(findAll('[data-agent-id="main"][href="/chat/main"]')).toHaveLength(1);
   expect(find(`[data-session-key="${key}"]`)).toBeNull();
   expect(find(`[data-child-session-toggle="${key}"]`)).toBeNull();
-  expect(find("[data-session-key=CHILD]")).toBeNull();
+  expect(find(`[data-session-key="${CHILD}"]`)).toBeNull();
   expect(find(`${header} .session-glyph__ring[aria-label="Active run"]`)).not.toBeNull();
 
   const result = harness.sessions.state.result!;
@@ -466,13 +466,5 @@ it("keeps main-session activity on its agent header without duplicate main or su
   expect(findAll(header)).toHaveLength(1);
   expect(find(`[data-session-key="${key}"]`)).toBeNull();
   expect(find(`${header} .session-glyph__ring`)).toBeNull();
-  const attention = find(`${header} [data-session-attention="error"]`)!;
-  expect(attention).not.toBeNull();
-  await attention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
-    .updateComplete;
-  const description = (attention.getAttribute("aria-describedby") ?? "")
-    .split(/\s+/u)
-    .map((id) => attention.ownerDocument.getElementById(id)?.textContent ?? "")
-    .join(" ");
-  expect(description).toContain("Child session Spawned thread failed: Review failed");
+  expect(find(`${header} [data-session-attention="error"]`)).toBeNull();
 });

@@ -5,7 +5,7 @@ import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-sup
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
-import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import { textContent, chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -168,12 +168,9 @@ suite.define(() => {
             { role: "user", content: [{ type: "text", text: "Review the navigation changes." }] },
             {
               role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: "The sidebar is ready. Use its button or keyboard shortcut to open and close it.",
-                },
-              ],
+              content: textContent(
+                "The sidebar is ready. Use its button or keyboard shortcut to open and close it.",
+              ),
             },
           ],
           methodResponses: { "sessions.list": chatSessionListResponse() },
@@ -534,6 +531,7 @@ suite.define(() => {
               "chat.startup",
               "device.scopes.requestUpgrade",
               "device.scopes.waitUpgrade",
+              "sessions.companion.state",
               "sessions.create",
             ],
             methodResponses: { "sessions.list": chatSessionListResponse() },
@@ -607,7 +605,7 @@ suite.define(() => {
     await attr(navigation, "inert", "");
     await count(page.locator(".shell-nav-backdrop"), 1);
     await visible(dialog, false);
-    await page.locator(".shell-skip-link").focus();
+    await page.locator('.shell-skip-link[href="#control-ui-main"]').focus();
     await page.keyboard.press("Tab");
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.closest(".shell-nav") !== null))
@@ -701,7 +699,7 @@ suite.define(() => {
     await count(debugOverlay, 0);
 
     await trigger.click();
-    await page.mouse.click(899, 450);
+    await page.locator(".shell-nav-backdrop").click();
     await visible(dialog, false);
     await expectFocused(trigger);
 
@@ -752,11 +750,13 @@ suite.define(() => {
       await toast.waitFor();
       await expect.poll(() => toast.textContent()).toContain("Codex hidden");
       const drawerToastGeometry = await host.evaluate((node) => {
-        const toastElement = node.querySelector<HTMLElement>(".app-toast");
+        // Toasts stack inside a fixed lane container; that container owns placement.
+        let lane = node.querySelector<HTMLElement>(".app-toast");
+        while (lane && getComputedStyle(lane).position !== "fixed") {
+          lane = lane.parentElement;
+        }
         return {
-          computedTop: toastElement
-            ? Math.round(Number.parseFloat(getComputedStyle(toastElement).top))
-            : null,
+          computedTop: lane ? Math.round(Number.parseFloat(getComputedStyle(lane).top)) : null,
           placement: node.dataset.toastPlacement,
         };
       });

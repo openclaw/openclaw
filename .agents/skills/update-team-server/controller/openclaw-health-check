@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $# == 1 ]] || { echo "health-check: a pinned CLI path is required" >&2; exit 1; }
+if (( EUID == 0 )) || [[ "$(</proc/self/cgroup)" != "0::/system.slice/openclaw-hourly-health-check.service" ]]; then
+  echo "health-check: use the system health service and its runtime account" >&2
+  exit 1
+fi
+readonly OPENCLAW_CLI="$1"
+
+/usr/bin/curl --fail --silent --show-error --max-time 10 http://127.0.0.1:18789/healthz
+/usr/bin/curl --fail --silent --show-error --max-time 10 http://127.0.0.1:18789/readyz
+"${OPENCLAW_CLI}" gateway call health --params '{}' --json
+"${OPENCLAW_CLI}" update status --json

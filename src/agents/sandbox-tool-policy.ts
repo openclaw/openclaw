@@ -16,7 +16,6 @@ type SandboxToolPolicyConfig = {
   deny?: string[];
 };
 
-/** Picks the effective sandbox tool policy from allow/alsoAllow/deny config. */
 export function pickSandboxToolPolicy(
   config?: SandboxToolPolicyConfig,
 ): SandboxToolPolicy | undefined {

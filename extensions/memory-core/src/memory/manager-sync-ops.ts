@@ -22,7 +22,7 @@ import {
 import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 import { MemoryManagerReindexOps } from "./manager-reindex-ops.js";
 import {
-  resolveConfiguredScopeHash,
+  canUpgradeMemoryIndexProviderKey,
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexIdentityState,
 } from "./manager-reindex-state.js";
@@ -100,6 +100,19 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
       ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
       ...request,
     });
+  }
+
+  protected resolveConfiguredFallbackProvider() {
+    const currentProviderId = resolveFallbackCurrentProviderId({
+      provider: this.provider,
+      lifecycle: this.providerLifecycle,
+    });
+    const fallbackRequest = resolveMemoryFallbackProviderRequest({
+      cfg: this.cfg,
+      settings: this.settings,
+      currentProviderId,
+    });
+    return { currentProviderId, fallbackRequest };
   }
 
   private createSyncProgress(
@@ -213,7 +226,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         : null;
       const targetArchiveFiles = targetSessionSync?.targetArchiveFiles ?? null;
       hasTargetArchiveFiles = targetArchiveFiles !== null;
-      if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
+      if (
+        (params?.reason === "cli" || params?.reason === "cli-search") &&
+        !params.force &&
+        !hasTargetArchiveFiles
+      ) {
         await this.markSessionStartupCatchupDirtyFiles();
       }
       const syncProviderKey = this.syncProviderGeneration
@@ -229,11 +246,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         providerKey: syncProviderKey ?? undefined,
         providerAliases: syncProviderIdentities.slice(1),
         configuredSources: resolveConfiguredSourcesForMeta(this.sources),
-        configuredScopeHash: resolveConfiguredScopeHash({
-          workspaceDir: this.workspaceDir,
-          extraPaths: this.settings.extraPaths,
-          multimodal: this.settings.multimodal,
-        }),
+        configuredScopeHash: this.resolveConfiguredMemoryScopeHash(),
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
         vectorReady,
@@ -241,14 +254,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         ftsTokenizer: this.settings.store.fts.tokenizer,
       });
       if (
-        indexIdentity.status === "valid" &&
-        syncProvider &&
-        meta?.model === syncProvider.model &&
-        meta.providerKey &&
+        meta &&
         syncProviderKey &&
-        meta.providerKey !== syncProviderKey
+        canUpgradeMemoryIndexProviderKey(indexIdentity, meta, syncProviderIdentities)
       ) {
-        // Validate the full legacy identity before retiring its credential-dependent key.
+        // Retire the legacy cache namespace atomically before any chunking rebuild.
         const database = this.database;
         const upgraded = await database.updateIndexStructure(
           { type: "index.upgradeProviderKey", input: { meta, providerKey: syncProviderKey } },
@@ -309,7 +319,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         (!params?.force || params.reason === "embedding-bootstrap-recovery") &&
         // A semantic failure must still allow the distinct keyword-only publication.
         !(this.fullReindexRetryBackoff.failedWithEmbeddings && !syncProvider) &&
-        Date.now() < this.fullReindexRetryBackoff.retryAt;
+        performance.now() < this.fullReindexRetryBackoff.retryAt;
       const deferAutomaticFullReindex = retryFullReindexBackedOff && !needsExplicitIdentityReindex;
       if (deferAutomaticFullReindex && !hasTargetArchiveFiles) {
         // Automatic identity repair honors the failure cooldown. An explicit
@@ -414,7 +424,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
       throw err;
     } finally {
       // Ordinary sync exits retain live cleanup, including preflight/no-op exits.
-      // Full rebuild failures (including forced preflight) leave the primary alone.
+      // Full rebuilds finalize their cache with the shadow; preflight failures have no shadow work.
       if (!needsFullReindex) {
         await this.pruneEmbeddingCacheIfNeeded();
       }
@@ -503,15 +513,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
   }
 
   private async activateFallbackProviderOnce(reason: string): Promise<boolean> {
-    const currentProviderId = resolveFallbackCurrentProviderId({
-      provider: this.provider,
-      lifecycle: this.providerLifecycle,
-    });
-    const fallbackRequest = resolveMemoryFallbackProviderRequest({
-      cfg: this.cfg,
-      settings: this.settings,
-      currentProviderId,
-    });
+    const { currentProviderId, fallbackRequest } = this.resolveConfiguredFallbackProvider();
     if (!fallbackRequest || !currentProviderId) {
       return false;
     }
