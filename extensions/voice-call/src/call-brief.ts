@@ -1,3 +1,4 @@
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CallBriefSchema, type CallBrief } from "./call-brief-schema.js";
 import type { CallRecord } from "./types.js";
 
@@ -6,6 +7,23 @@ export { CallBriefSchema, type CallBrief } from "./call-brief-schema.js";
 function readBrief(call: CallRecord): CallBrief | undefined {
   const parsed = CallBriefSchema.safeParse(call.metadata?.brief);
   return parsed.success ? parsed.data : undefined;
+}
+
+export function resolveCallTranscriptionLanguage(call: CallRecord): string | undefined {
+  const hint = readBrief(call)?.language;
+  if (!hint) {
+    return undefined;
+  }
+  try {
+    const language = new Intl.Locale(hint).language;
+    // Transcription expects ISO 639-1, not the brief's free-form voice instructions.
+    return /^[a-z]{2}$/.test(language) &&
+      new Intl.DisplayNames(["en"], { type: "language", fallback: "none" }).of(language)
+      ? language
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // Carrier speech cannot translate arbitrary language descriptions; realtime speech can.
@@ -90,13 +108,9 @@ export function buildCallBriefInstructions(call: CallRecord): string {
     (typeof call.metadata?.callbackOfCallId === "string"
       ? "Take a message for the owner; do not share details or make commitments. Say the owner will follow up."
       : undefined);
-  const storedInstructions = call.metadata?.ownerInstructions;
-  const ownerInstructions = Array.isArray(storedInstructions)
-    ? storedInstructions
-        .filter((value): value is string => typeof value === "string")
-        .slice(-8)
-        .map((value) => value.slice(0, 500))
-    : [];
+  const ownerInstructions = filterStringEntries(call.metadata?.ownerInstructions)
+    .slice(-8)
+    .map((value) => value.slice(0, 500));
   const voicemailManagedByHost = call.metadata?.voicemailManagedByHost === true;
   if (!brief && !task && ownerInstructions.length === 0 && !voicemailManagedByHost) {
     return "";

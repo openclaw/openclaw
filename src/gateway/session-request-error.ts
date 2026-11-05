@@ -26,3 +26,16 @@ export function invalidSessionRequest(
 ): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message, options) };
 }
+
+/** A caller-selected directory is named so the caller can correct it; the default workspace is not. */
+export function nonGitWorktreeSourceMessage(
+  requestedWorkspace?: string | { kind: "empty" },
+): string {
+  return typeof requestedWorkspace === "string"
+    ? `requested working directory is not a git checkout: ${requestedWorkspace}`
+    : "agent workspace is not a git checkout";
+}
+
+export function unavailableSessionRequest(message: string): { ok: false; error: ErrorShape } {
+  return { ok: false, error: errorShape(ErrorCodes.UNAVAILABLE, message) };
+}

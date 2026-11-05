@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Parses poll command parameters into validated polling options.
 import { readSnakeCaseParamRaw } from "./param-key.js";
 
 type PollCreationParamKind = "string" | "stringArray" | "positiveInteger" | "boolean";

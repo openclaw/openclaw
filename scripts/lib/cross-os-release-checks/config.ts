@@ -185,46 +185,22 @@ const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
   "talk-voice",
 ];
 
-function buildCrossOsReleaseSmokePluginAllowlist(
-  providerMeta: Pick<ProviderConfig, "extensionId">,
-) {
-  return [...new Set([providerMeta.extensionId, ...RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE])];
-}
-
-function buildCrossOsReleaseSmokeMemorySlotConfigArgs() {
-  return ["config", "set", "plugins.slots.memory", JSON.stringify("none"), "--strict-json"];
-}
-
-function shouldSeedProviderConfigModels(providerMeta: ProviderConfig) {
-  return (
-    typeof providerMeta.baseUrl === "string" || typeof providerMeta.timeoutSeconds === "number"
-  );
-}
-
-function buildReleaseProviderConfigOverride(providerMeta: ProviderConfig) {
-  if (!shouldSeedProviderConfigModels(providerMeta)) {
-    return null;
-  }
-  return {
-    ...(typeof providerMeta.baseUrl === "string" ? { baseUrl: providerMeta.baseUrl } : {}),
-    ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "openclaw" } } : {}),
-    models: [],
-    ...(typeof providerMeta.timeoutSeconds === "number"
-      ? { timeoutSeconds: providerMeta.timeoutSeconds }
-      : {}),
-  };
-}
-
 // Yield between awaited commands so failed setup does not inspect later configuration.
 export function* buildReleaseModelConfigCommands(providerMeta: ProviderConfig) {
   yield ["models", "set", providerMeta.model];
-  const providerConfigOverride = buildReleaseProviderConfigOverride(providerMeta);
-  if (providerConfigOverride) {
+  if (typeof providerMeta.baseUrl === "string" || typeof providerMeta.timeoutSeconds === "number") {
     yield [
       "config",
       "set",
       `models.providers.${providerMeta.extensionId}`,
-      JSON.stringify(providerConfigOverride),
+      JSON.stringify({
+        ...(typeof providerMeta.baseUrl === "string" ? { baseUrl: providerMeta.baseUrl } : {}),
+        ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "openclaw" } } : {}),
+        models: [],
+        ...(typeof providerMeta.timeoutSeconds === "number"
+          ? { timeoutSeconds: providerMeta.timeoutSeconds }
+          : {}),
+      }),
       "--strict-json",
       "--merge",
     ];
@@ -233,10 +209,12 @@ export function* buildReleaseModelConfigCommands(providerMeta: ProviderConfig) {
     "config",
     "set",
     "plugins.allow",
-    JSON.stringify(buildCrossOsReleaseSmokePluginAllowlist(providerMeta)),
+    JSON.stringify([
+      ...new Set([providerMeta.extensionId, ...RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE]),
+    ]),
     "--strict-json",
   ];
-  yield buildCrossOsReleaseSmokeMemorySlotConfigArgs();
+  yield ["config", "set", "plugins.slots.memory", JSON.stringify("none"), "--strict-json"];
   yield ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"];
   yield ["config", "set", "tools.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE];
 }
@@ -253,9 +231,9 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
-export function managedGatewayRestartCommandTimeoutMs(platform = process.platform) {
-  // The CLI performs its own restart health loop. Keep the outer release
-  // harness alive long enough to receive that result plus service-manager overhead.
+export function managedGatewayStartupCommandTimeoutMs(platform = process.platform) {
+  // Start and restart both wait for readiness. Share the existing bounded release
+  // startup allowance, including service-manager overhead, across both commands.
   return gatewayReadyDeadlineMs(platform) + 60_000;
 }
 const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
@@ -396,13 +374,13 @@ export function resolveRunnerMatrix(params: {
     {
       os_id: "windows",
       display_name: "Windows",
-      runner: pick(params.windowsRunner, params.varWindowsRunner, "blacksmith-32vcpu-windows-2025"),
+      runner: pick(params.windowsRunner, params.varWindowsRunner, "windows-2025"),
       artifact_name: "windows",
     },
     {
       os_id: "macos",
       display_name: "macOS",
-      runner: pick(params.macosRunner, params.varMacosRunner, "blacksmith-6vcpu-macos-15"),
+      runner: pick(params.macosRunner, params.varMacosRunner, "xcode-27"),
       artifact_name: "macos",
     },
   ];
@@ -410,13 +388,10 @@ export function resolveRunnerMatrix(params: {
     suites
       .filter((suite) => suiteFilter.matches(runner.os_id, suite))
       .flatMap((suite) => {
-        // Windows packaged-fresh retains the validated version before the
-        // Node 24.19 libuv fs-event crash on Windows Server 2025 RUNNER~1 paths.
-        const node24Version =
-          runner.os_id === "windows" && suite === "packaged-fresh" ? "24.16.0" : "24.21.0";
+        const node24Version = "24.22.1";
         const nodeVersions =
           suite === "packaged-fresh" || suite === "packaged-upgrade"
-            ? [node24Version, "26.1.0"]
+            ? [node24Version, "26.12.1"]
             : [node24Version];
         return nodeVersions.map((nodeVersion) =>
           Object.assign({}, runner, {
@@ -445,14 +420,8 @@ export function resolveRunnerMatrix(params: {
 }
 
 export function readRunnerOverrideEnv(env = process.env) {
-  const preferNonEmptyEnv = (primary: string | undefined, legacy: string | undefined) => {
-    const primaryValue = primary?.trim();
-    if (primaryValue) {
-      return primaryValue;
-    }
-    const legacyValue = legacy?.trim();
-    return legacyValue || "";
-  };
+  const preferNonEmptyEnv = (primary: string | undefined, legacy: string | undefined) =>
+    primary?.trim() || legacy?.trim() || "";
 
   return {
     varUbuntuRunner: preferNonEmptyEnv(
@@ -619,13 +588,17 @@ export function resolvePackagedUpgradeTimeouts(
   if (platform !== "win32") {
     return { stepTimeoutSeconds: 1200, wrapperTimeoutMs: 20 * 60_000 };
   }
-  // Allow 50% registry/runner variance per install, bounded to 10–20 minutes.
-  // The updater installs and rehearses; give both steps their full budget plus
-  // two minutes for shutdown/reporting (wrapper floor 22m, ceiling 42m).
+  // The baseline updater treats --timeout as its whole activation budget, and
+  // hosted Windows candidate updates take ~17–19 minutes even after a fast
+  // baseline install. Floor at the 20-minute non-Windows budget and scale 1.5x
+  // the measured install up to the updater's 30-minute default
+  // (DEFAULT_UPDATE_STEP_TIMEOUT_MS). The updater installs and rehearses; give
+  // both steps their full budget plus two minutes for shutdown/reporting
+  // (wrapper floor 42m, ceiling 62m).
   const measuredSeconds = Number.isFinite(baselineInstallDurationMs)
     ? Math.ceil((baselineInstallDurationMs * 1.5) / 1000)
     : 0;
-  const stepTimeoutSeconds = Math.min(20 * 60, Math.max(10 * 60, measuredSeconds));
+  const stepTimeoutSeconds = Math.min(30 * 60, Math.max(20 * 60, measuredSeconds));
   return { stepTimeoutSeconds, wrapperTimeoutMs: (2 * stepTimeoutSeconds + 120) * 1000 };
 }
 

@@ -20,9 +20,18 @@ import {
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
 
 export async function prepareUpdateRestart(
-  params: UpdateRestartParams & { assertCurrent: () => void },
+  input: UpdateRestartParams & { assertCurrent: () => void },
   restartConfigSnapshot: ConfigFileSnapshot,
 ) {
+  let params = input;
+  const original = params.originalManagedServiceRuntime;
+  if (original && !original.definition.runtimePin && params.preManagedServiceStop) {
+    params = {
+      ...params,
+      result: { ...params.result, root: original.root },
+      preManagedServiceStop: { ...params.preManagedServiceStop, ...original.service },
+    };
+  }
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
   let gatewayServiceInstallEnv: NodeJS.ProcessEnv | null | undefined;
@@ -128,14 +137,13 @@ export async function prepareUpdateRestart(
         gatewayServiceEnv = serviceStateReadEnv;
         serviceMutationAllowed = false;
         serviceMutationSkipMessage = `SERVICE-DEFINITION: ${refusal.message} The updated installation is kept; after resolving the service hold, run \`${formatCliCommand("openclaw gateway start", serviceStateReadEnv)}\`. Gateway readiness remains unverified.`;
+      } else if (params.preManagedServiceStop?.stopped) {
+        const message =
+          err instanceof GatewayServiceUpdateOwnershipError
+            ? formatErrorMessage(err)
+            : "Stopped gateway service could not be revalidated; inspect it before restarting manually.";
+        throw new GatewayServiceUpdateOwnershipError(message, err);
       } else {
-        if (params.preManagedServiceStop?.stopped) {
-          const message =
-            err instanceof GatewayServiceUpdateOwnershipError
-              ? formatErrorMessage(err)
-              : "Stopped gateway service could not be revalidated; inspect it before restarting manually.";
-          throw new GatewayServiceUpdateOwnershipError(message, err);
-        }
         serviceMutationAllowed = false;
         serviceMutationSkipMessage =
           "Code update completed; gateway service management skipped because its current ownership could not be inspected. " +

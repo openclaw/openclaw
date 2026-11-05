@@ -1,12 +1,17 @@
 /** MCP SDK OAuth provider backed by canonical OpenClaw state. */
 import { randomUUID } from "node:crypto";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type {
+  OAuthClientProvider,
+  OAuthClientMetadata,
+  OAuthTokens,
+  FetchLike,
+} from "@modelcontextprotocol/client";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawStateAsyncLeaseContext } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
+import type { McpOAuthRefreshBoundary } from "./mcp-oauth-refresh-boundary.js";
+import { mcpOAuthAuthorizationRequiredError } from "./mcp-oauth-store.authorization.js";
 import { readMcpOAuthStore, mutateMcpOAuthStore, type McpOAuthStore } from "./mcp-oauth-store.js";
 import { MCP_OAUTH_DEFAULT_REDIRECT_URL } from "./mcp-oauth-store.mutations.js";
 import type { McpOAuthMutation } from "./mcp-oauth-store.types.js";
@@ -25,11 +30,28 @@ export type McpOAuthLoginLifecycle = {
   onTokensSaved: () => void;
 };
 
+export class McpOAuthCredentialsRetainedError extends Error {
+  constructor() {
+    super("Existing authentication was retained. Use the CLI sign-in flow.");
+    this.name = "McpOAuthCredentialsRetainedError";
+  }
+}
+
 function resolveTokenExpiresAt(tokens: OAuthTokens): number | undefined {
   const expiresIn = tokens.expires_in;
   return typeof expiresIn === "number" && Number.isFinite(expiresIn)
     ? Date.now() + expiresIn * 1000
     : undefined;
+}
+
+function canReuseStoredTokens(store: McpOAuthStore): boolean {
+  const discoveredIssuer = store.discoveryState?.authorizationServerUrl;
+  return (
+    !store.tokens?.refresh_token ||
+    discoveredIssuer === undefined ||
+    (store.tokensAuthorizationServerUrl !== undefined &&
+      discoveredIssuer === store.tokensAuthorizationServerUrl)
+  );
 }
 
 function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = {}): string {
@@ -38,6 +60,22 @@ function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = 
     normalizeOptionalString(store.redirectUrl) ??
     MCP_OAUTH_DEFAULT_REDIRECT_URL
   );
+}
+
+function hasRegisteredOAuthRedirect(redirectUris: string[], redirectUrl: string): boolean {
+  if (redirectUris.includes(redirectUrl)) {
+    return true;
+  }
+  const loopback = URL.parse(redirectUrl);
+  if (
+    !loopback ||
+    loopback.protocol !== "http:" ||
+    !["127.0.0.1", "[::1]", "localhost"].includes(loopback.hostname)
+  ) {
+    return false;
+  }
+  // RFC 8252 exempts the port, not other callback bytes changed by URL serialization.
+  return redirectUris.includes(redirectUrl.replace(/^(http:\/\/[^/?#]+):\d+(?=[/?#]|$)/iu, "$1"));
 }
 
 /** Bind OAuth network work to the lease that fences its persisted side effects. */
@@ -63,37 +101,24 @@ export async function createMcpOAuthClientProvider(params: {
   config?: McpOAuthConfig;
   allowAuthorizationRedirect?: boolean;
   suppressStoredTokens?: boolean;
+  replaceAuthorization?: boolean;
   lease: OpenClawStateAsyncLeaseContext;
   login?: McpOAuthLoginLifecycle;
   storeContext: OpenClawStateWorkerContext;
+  refreshBoundary?: McpOAuthRefreshBoundary;
 }): Promise<OAuthClientProvider> {
   const config = params.config ?? {};
   const storeKey = params.identity.storeKey;
   const storeContext = params.storeContext;
   let preparedVerifier: string | undefined;
   let prepared: { redirectUrl?: string } | { error: unknown } = {};
-  let preparation = 0;
-  let nextWrite = 0;
-  let lastSettledWrite = 0;
-  const settleWrite = (write: number, value: typeof prepared) => {
-    if (write < lastSettledWrite) {
-      return;
-    }
-    lastSettledWrite = write;
-    // Reads dispatched before settlement may still carry the pre-write snapshot.
-    preparation++;
-    prepared = value;
-  };
   const readStore = async () => {
     params.login?.assertCurrent();
-    const currentPreparation = ++preparation;
     const store = await readMcpOAuthStore(storeKey, storeContext);
     params.login?.assertCurrent();
     await params.lease.assertOwned();
     params.login?.assertCurrent();
-    if (currentPreparation === preparation) {
-      prepared = { redirectUrl: store.redirectUrl };
-    }
+    prepared = { redirectUrl: store.redirectUrl };
     return store;
   };
   await readStore();
@@ -103,8 +128,6 @@ export async function createMcpOAuthClientProvider(params: {
     options: { beforeCommit?: () => void; onAcknowledged?: () => void } = {},
   ) => {
     params.login?.assertCurrent();
-    preparation++;
-    const write = ++nextWrite;
     const authority = params.login
       ? { assertCurrent: params.login.assertCurrent, beforeCommit: options.beforeCommit }
       : undefined;
@@ -117,11 +140,11 @@ export async function createMcpOAuthClientProvider(params: {
       // Record acknowledged persistence before a later authority loss can reject publication.
       options.onAcknowledged?.();
       params.login?.assertCurrent();
-      settleWrite(write, { redirectUrl: store.redirectUrl });
+      prepared = { redirectUrl: store.redirectUrl };
       return store;
     } catch (error) {
-      // A possible commit invalidates earlier reads until a new read is acknowledged.
-      settleWrite(write, { error });
+      // Failed writes leave metadata unavailable until a new read is acknowledged.
+      prepared = { error };
       throw error;
     }
   };
@@ -134,9 +157,7 @@ export async function createMcpOAuthClientProvider(params: {
   const assertAuthorizationRedirectAllowed = () => {
     params.login?.assertCurrent();
     if (params.allowAuthorizationRedirect !== true) {
-      throw new Error(
-        `MCP server "${params.identity.serverName}" requires OAuth authorization. Run openclaw mcp login ${params.identity.serverName}.`,
-      );
+      throw mcpOAuthAuthorizationRequiredError(params.identity, storeContext.admission);
     }
   };
   return {
@@ -163,6 +184,9 @@ export async function createMcpOAuthClientProvider(params: {
         params.login.assertCurrent();
         if (
           store.tokens?.access_token &&
+          // Only an earlier attempt's fenced claim makes these tokens unusable; this attempt's own
+          // failed refresh still reports instead of starting authorization.
+          (!store.refreshClaim || store.refreshClaim === params.refreshBoundary?.claim) &&
           store.pendingAuthorizationChallenge?.requiresAuthorization !== true &&
           (store.tokenExpiresAt === undefined || store.tokenExpiresAt > Date.now())
         ) {
@@ -177,6 +201,12 @@ export async function createMcpOAuthClientProvider(params: {
     async clientInformation() {
       const store = await readStore();
       params.login?.assertCurrent();
+      // The SDK can replace a mismatched client before requesting authorization.
+      // Background refresh must preserve the original registration and tokens;
+      // only an explicit login may start registration with another issuer.
+      if (!canReuseStoredTokens(store)) {
+        assertAuthorizationRedirectAllowed();
+      }
       const clientInformation = store.clientInformation;
       // Re-register an unused client when the callback changes. Saved tokens remain
       // bound to their original client; metadata-document clients have no redirect list.
@@ -185,7 +215,10 @@ export async function createMcpOAuthClientProvider(params: {
         clientInformation &&
         "redirect_uris" in clientInformation &&
         Array.isArray(clientInformation.redirect_uris) &&
-        !clientInformation.redirect_uris.includes(resolveOAuthRedirectUrl(config, store))
+        !hasRegisteredOAuthRedirect(
+          clientInformation.redirect_uris,
+          resolveOAuthRedirectUrl(config, store),
+        )
       ) {
         return undefined;
       }
@@ -204,18 +237,24 @@ export async function createMcpOAuthClientProvider(params: {
       }
       const store = await readStore();
       params.login?.assertCurrent();
-      const discoveredAuthorizationServerUrl = store.discoveryState?.authorizationServerUrl;
-      if (!store.tokens?.refresh_token || discoveredAuthorizationServerUrl === undefined) {
-        return store.tokens;
+      if (store.refreshClaim && store.refreshClaim !== params.refreshBoundary?.claim) {
+        if (params.allowAuthorizationRedirect) {
+          return undefined;
+        }
+        throw new Error("MCP OAuth refresh outcome is uncertain; sign in again.");
       }
-      return store.tokensAuthorizationServerUrl !== undefined &&
-        discoveredAuthorizationServerUrl === store.tokensAuthorizationServerUrl
-        ? store.tokens
-        : undefined;
+      return canReuseStoredTokens(store) ? store.tokens : undefined;
     },
     async saveTokens(tokens) {
+      params.refreshBoundary?.assertTokens(tokens);
       await updateStore(
-        { kind: "tokens", tokens, tokenExpiresAt: resolveTokenExpiresAt(tokens) },
+        {
+          kind: "tokens",
+          tokens,
+          tokenExpiresAt: resolveTokenExpiresAt(tokens),
+          ...(params.replaceAuthorization ? { replaceAuthorization: true } : {}),
+          ...(params.refreshBoundary?.claim ? { refreshClaim: params.refreshBoundary.claim } : {}),
+        },
         {
           beforeCommit: params.login?.beforeTokensSaved,
           onAcknowledged: params.login?.onTokensSaved,
@@ -269,8 +308,9 @@ export async function createMcpOAuthClientProvider(params: {
     },
     async invalidateCredentials(scope) {
       params.login?.assertCurrent();
+      params.refreshBoundary?.assertCanInvalidate();
       if (params.login) {
-        throw new Error("Existing authentication was retained. Use the CLI sign-in flow.");
+        throw new McpOAuthCredentialsRetainedError();
       }
       await updateStore({
         kind: "invalidate",

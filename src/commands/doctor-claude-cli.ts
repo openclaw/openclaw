@@ -32,7 +32,10 @@ type ClaudeCliDiscoveryApi = {
   ) => { executable: string } | undefined;
 };
 
-function isClaudeCliAuthenticated(commandPath: string, env: NodeJS.ProcessEnv): boolean {
+function readClaudeCliAuthentication(
+  commandPath: string,
+  env: NodeJS.ProcessEnv,
+): boolean | undefined {
   const result = spawnSync(commandPath, ["auth", "status", "--json"], {
     encoding: "utf8",
     env,
@@ -40,25 +43,25 @@ function isClaudeCliAuthenticated(commandPath: string, env: NodeJS.ProcessEnv): 
     timeout: 3_000,
     windowsHide: true,
   });
-  if (result.error || result.status !== 0) {
-    return false;
+  if (result.error || result.status === null) {
+    return undefined;
   }
   try {
     const parsed: unknown = JSON.parse(result.stdout);
-    return isRecord(parsed) && parsed.loggedIn === true;
+    if (!isRecord(parsed) || typeof parsed.loggedIn !== "boolean") {
+      return undefined;
+    }
+    return parsed.loggedIn ? (result.status === 0 ? true : undefined) : false;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
 function usesClaudeCliModelSelection(cfg: OpenClawConfig): boolean {
-  const primary = resolvePrimaryStringValue(cfg.agents?.defaults?.model);
-  if (normalizeOptionalLowercaseString(primary)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`)) {
-    return true;
-  }
-  return Object.keys(cfg.agents?.defaults?.models ?? {}).some((key) =>
-    normalizeOptionalLowercaseString(key)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`),
-  );
+  return [
+    resolvePrimaryStringValue(cfg.agents?.defaults?.model),
+    ...Object.keys(cfg.agents?.defaults?.models ?? {}),
+  ].some((key) => normalizeOptionalLowercaseString(key)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`));
 }
 
 function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
@@ -70,35 +73,14 @@ function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
   } catch (error) {
     return hasErrnoCode(error, "ENOENT") ? "missing" : "unreadable";
   }
-  try {
-    fs.accessSync(dirPath, fs.constants.R_OK);
-  } catch {
-    return "unreadable";
-  }
-  try {
-    fs.accessSync(dirPath, fs.constants.W_OK);
-  } catch {
-    return "readonly";
+  for (const mode of [fs.constants.R_OK, fs.constants.W_OK]) {
+    try {
+      fs.accessSync(dirPath, mode);
+    } catch {
+      return mode === fs.constants.R_OK ? "unreadable" : "readonly";
+    }
   }
   return "present";
-}
-
-function formatDirectoryProblemLine(
-  dirPath: string,
-  health: ClaudeCliDirHealth,
-  label: string,
-): string | null {
-  const display = shortenHomePath(dirPath);
-  if (health === "present" || health === "missing") {
-    return null;
-  }
-  if (health === "not_directory") {
-    return `- ${label}: ${display} exists but is not a directory.`;
-  }
-  if (health === "unreadable") {
-    return `- ${label}: ${display} is not readable by this user.`;
-  }
-  return `- ${label}: ${display} is not writable by this user.`;
 }
 
 function resolveClaudeCliAgentIds(cfg: OpenClawConfig): string[] {
@@ -116,39 +98,6 @@ function resolveClaudeCliAgentIds(cfg: OpenClawConfig): string[] {
   return [];
 }
 
-type ClaudeCliWorkspaceTarget = {
-  agentId: string;
-  workspaceDir: string;
-  projectDir: string;
-  workspaceHealth: ClaudeCliDirHealth;
-  projectDirHealth: ClaudeCliDirHealth;
-};
-
-function resolveClaudeCliWorkspaceTargets(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-}): ClaudeCliWorkspaceTarget[] {
-  const agentIds = resolveClaudeCliAgentIds(params.cfg);
-  const defaultAgentId = tryResolveDefaultAgentId(params.cfg);
-  return agentIds.map((agentId) => {
-    const workspaceDir =
-      params.workspaceDir && agentIds.length === 1 && agentId === defaultAgentId
-        ? params.workspaceDir
-        : resolveAgentWorkspaceDir(params.cfg, agentId, params.env);
-    const projectDir = resolveClaudeCliProjectDirForWorkspace({
-      workspaceDir,
-    });
-    return {
-      agentId,
-      workspaceDir,
-      projectDir,
-      workspaceHealth: probeDirectoryHealth(workspaceDir),
-      projectDirHealth: probeDirectoryHealth(projectDir),
-    };
-  });
-}
-
 export function noteClaudeCliHealth(
   cfg: OpenClawConfig,
   deps?: {
@@ -157,10 +106,24 @@ export function noteClaudeCliHealth(
   },
 ) {
   const env = process.env;
-  const workspaceTargets = resolveClaudeCliWorkspaceTargets({
-    cfg,
-    env,
-    workspaceDir: deps?.workspaceDir,
+  const requestedWorkspaceDir = deps?.workspaceDir;
+  const agentIds = resolveClaudeCliAgentIds(cfg);
+  const workspaceDefaultAgentId = tryResolveDefaultAgentId(cfg);
+  const workspaceTargets = agentIds.map((agentId) => {
+    const workspaceDir =
+      requestedWorkspaceDir && agentIds.length === 1 && agentId === workspaceDefaultAgentId
+        ? requestedWorkspaceDir
+        : resolveAgentWorkspaceDir(cfg, agentId, env);
+    const projectDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir,
+    });
+    return {
+      agentId,
+      directories: [
+        [workspaceDir, probeDirectoryHealth(workspaceDir), "workspace"],
+        [projectDir, probeDirectoryHealth(projectDir), "Claude project dir"],
+      ] as const,
+    };
   });
   if (workspaceTargets.length === 0) {
     return;
@@ -184,7 +147,7 @@ export function noteClaudeCliHealth(
   for (const envName of backend?.config.clearEnv ?? []) {
     delete authEnv[envName];
   }
-  const authenticated = commandPath ? isClaudeCliAuthenticated(commandPath, authEnv) : false;
+  const authenticated = commandPath ? readClaudeCliAuthentication(commandPath, authEnv) : undefined;
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const showAgentLabels =
     workspaceTargets.length > 1 ||
@@ -202,47 +165,41 @@ export function noteClaudeCliHealth(
     lines.push(`- Binary: found at ${shortenHomePath(commandPath)} (not on service PATH).`);
   }
 
-  if (commandPath && !authenticated) {
+  if (commandPath && authenticated === undefined) {
+    lines.push("- Claude auth: status check unavailable.");
+    fixHints.push(
+      `- Fix: run ${formatCliCommand("claude auth status --json")} to check Claude CLI authentication.`,
+    );
+  } else if (commandPath && !authenticated) {
     lines.push("- Claude auth: not logged in.");
     fixHints.push(`- Fix: run ${formatCliCommand("claude auth login")}.`);
   }
 
   for (const target of workspaceTargets) {
     const agentLabel = showAgentLabels ? target.agentId : undefined;
-    const workspaceProblem = formatDirectoryProblemLine(
-      target.workspaceDir,
-      target.workspaceHealth,
-      agentLabel ? `Agent ${agentLabel} workspace` : "Workspace",
-    );
-    if (workspaceProblem) {
-      lines.push(workspaceProblem);
-    }
-    if (
-      target.workspaceHealth === "readonly" ||
-      target.workspaceHealth === "unreadable" ||
-      target.workspaceHealth === "not_directory"
-    ) {
-      fixHints.push(
-        `- Fix: make ${
-          agentLabel ? `agent ${agentLabel}'s workspace` : "the workspace"
-        } a readable, writable directory for the gateway user.`,
-      );
-    }
-
-    const projectDirProblem = formatDirectoryProblemLine(
-      target.projectDir,
-      target.projectDirHealth,
-      agentLabel ? `Agent ${agentLabel} Claude project dir` : "Claude project dir",
-    );
-    if (projectDirProblem) {
-      lines.push(projectDirProblem);
-    }
-    if (target.projectDirHealth === "unreadable" || target.projectDirHealth === "not_directory") {
-      fixHints.push(
-        `- Fix: make ${
-          agentLabel ? `agent ${agentLabel}'s Claude project dir` : "the Claude project dir"
-        } readable, or remove the broken path and let Claude recreate it.`,
-      );
+    for (const [dirPath, health, subject] of target.directories) {
+      const workspace = subject === "workspace";
+      const label = agentLabel
+        ? `Agent ${agentLabel} ${subject}`
+        : workspace
+          ? "Workspace"
+          : subject;
+      const display = shortenHomePath(dirPath);
+      if (health === "present" || health === "missing") {
+        continue;
+      }
+      const problem =
+        health === "not_directory"
+          ? "exists but is not a directory."
+          : `is not ${health === "unreadable" ? "readable" : "writable"} by this user.`;
+      lines.push(`- ${label}: ${display} ${problem}`);
+      if (workspace || health !== "readonly") {
+        const targetLabel = agentLabel ? `agent ${agentLabel}'s ${subject}` : `the ${subject}`;
+        const remedy = workspace
+          ? "a readable, writable directory for the gateway user."
+          : "readable, or remove the broken path and let Claude recreate it.";
+        fixHints.push(`- Fix: make ${targetLabel} ${remedy}`);
+      }
     }
   }
 
@@ -255,12 +212,9 @@ export function noteClaudeCliHealth(
     );
   }
 
-  if (lines.length === 0 && fixHints.length === 0) {
+  if (lines.length === 0) {
     return;
   }
-  if (fixHints.length > 0) {
-    lines.push(...fixHints);
-  }
 
-  (deps?.noteFn ?? note)(lines.join("\n"), "Claude CLI");
+  (deps?.noteFn ?? note)([...lines, ...fixHints].join("\n"), "Claude CLI");
 }

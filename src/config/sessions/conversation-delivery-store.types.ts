@@ -1,3 +1,5 @@
+import type { ConversationAuthority } from "./conversation-authority.types.js";
+
 export type ConversationDeliveryStatus =
   | "created"
   | "queued"
@@ -48,6 +50,7 @@ export type ConversationDeliveryInput = {
 export type ConversationDeliveryBegin = ConversationDeliveryInput & {
   operationId: string;
   preparedMessageId?: string;
+  authority?: ConversationAuthority;
 };
 
 export type ConversationDeliveryTransition = {

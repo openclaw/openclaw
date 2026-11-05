@@ -10,21 +10,24 @@ import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import type { DummyRuleMap, OxlintConfig } from "oxlint";
 import { ensureKyselyTypes } from "./generate-kysely-types.mts";
-import { limitsAreAdvisory, reportLimitViolations } from "./lib/check-limits.mts";
+import {
+  limitsAreAdvisory,
+  releaseBranchForChecks,
+  reportLimitViolations,
+} from "./lib/check-limits.mts";
 import { parseStaticDiagnostics } from "./lib/ci-static-check-evidence.mjs";
+import { resolveDevTool } from "./lib/dev-tool.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   distArtifactEntryArgs,
   resolveDistArtifactLockPath,
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
-import {
-  applyLocalOxlintPolicy,
-  resolveLocalCheckEnv,
-  resolveRepoToolBinPath,
-} from "./lib/local-check-runtime.mts";
+import { checkLintParity } from "./lib/lint-parity.mts";
+import { applyLocalOxlintPolicy, resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolveUntouchedOxlintExclusions } from "./lib/oxlint-changed-scope.mts";
+import { isCiEnvironment } from "./lib/pinned-bun.mts";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
@@ -60,6 +63,7 @@ const OXLINT_BOUNDARY_FREE_TS_CONFIGS = new Set([
   "config/tsconfig/oxlint.core.json",
   "config/tsconfig/oxlint.scripts.json",
   "test/tsconfig/tsconfig.test.root.json",
+  "tsconfig.ui.json",
 ]);
 const OPENCLAW_FOCUSED_CONFIG_FLAG = "--openclaw-focused-config";
 const LIMIT_RULES = new Set([
@@ -116,13 +120,18 @@ function oxlintOption(args: string[], name: string, short: string) {
   };
 }
 
-function advisoryLimitRules(rules: DummyRuleMap | undefined, onlyMaxLines = false) {
+function advisoryLimitRules(
+  rules: DummyRuleMap | undefined,
+  onlyMaxLines = false,
+  release = false,
+) {
   const overrides: DummyRuleMap = {};
   const originalRules: DummyRuleMap = {};
   let enabled = false;
   for (const [name, rule] of Object.entries(rules ?? {})) {
     const id = name.startsWith("eslint/") ? name.slice("eslint/".length) : name;
-    if (!LIMIT_RULES.has(id) || (onlyMaxLines && id !== "max-lines")) {
+    const releaseLineLimit = release && (id === "max-lines" || id === "max-lines-per-function");
+    if (!LIMIT_RULES.has(id) || (onlyMaxLines && id !== "max-lines" && !releaseLineLimit)) {
       continue;
     }
     originalRules[name] = rule;
@@ -140,6 +149,8 @@ function advisoryLimitRules(rules: DummyRuleMap | undefined, onlyMaxLines = fals
     ) {
       continue;
     }
+    // Keep rules enabled as warnings so existing size suppressions remain used.
+    // Turning them off makes strict unused-directive checks reject release backports.
     overrides[name] = Array.isArray(rule) ? ["warn", ...rule.slice(1)] : "warn";
     enabled = true;
   }
@@ -160,18 +171,26 @@ async function runWithAdvisoryLimits(
     env,
     requireProcessTreeExit: process.platform !== "win32",
   };
+  const writesOutput = args.some((arg) =>
+    /^(?:--output-file|--fix(?:-suggestions|-dangerously)?)(?:=|$)/u.test(arg),
+  );
   const evidenceId = env.OPENCLAW_CI_STATIC_EVIDENCE_ID;
   const evidenceEnabled =
     env.OPENCLAW_CI_STATIC_EVIDENCE === "1" &&
     typeof evidenceId === "string" &&
     /^[\w:-]{1,160}$/u.test(evidenceId) &&
-    !args.some((arg) => /^(?:--output-file|--fix(?:-suggestions|-dangerously)?)(?:=|$)/u.test(arg));
+    !writesOutput;
   const githubAdvisory = limitsAreAdvisory(env);
-  let untouchedExclusions = githubAdvisory
-    ? undefined
-    : resolveUntouchedOxlintExclusions(configPath, env);
+  const release = Boolean(releaseBranchForChecks(process.cwd(), env));
+  // Windows has no automatic fork staging; an explicit executable still enables parity.
+  const parity =
+    isCiEnvironment(env) &&
+    !writesOutput &&
+    (process.platform !== "win32" || Boolean(env.OPENCLAW_BUN_PATH?.trim()));
+  let untouchedExclusions =
+    githubAdvisory || release ? undefined : resolveUntouchedOxlintExclusions(configPath, env);
   if (
-    (!githubAdvisory && !untouchedExclusions && !evidenceEnabled) ||
+    (!githubAdvisory && !release && !untouchedExclusions && !evidenceEnabled && !parity) ||
     args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg.replace(/[=][\s\S]*$/u, ""))) ||
     !fs.existsSync(configPath)
   ) {
@@ -182,7 +201,7 @@ async function runWithAdvisoryLimits(
   if (!githubAdvisory && config.extends?.length) {
     untouchedExclusions = undefined;
   }
-  const rootRules = advisoryLimitRules(config.rules, !githubAdvisory);
+  const rootRules = advisoryLimitRules(config.rules, !githubAdvisory, release);
   let enabled = rootRules.enabled;
   const overrides: NonNullable<OxlintConfig["overrides"]> = [];
   if (untouchedExclusions && rootRules.enabled) {
@@ -193,7 +212,7 @@ async function runWithAdvisoryLimits(
     });
   }
   for (const scope of config.overrides ?? []) {
-    const scopedRules = advisoryLimitRules(scope.rules, !githubAdvisory);
+    const scopedRules = advisoryLimitRules(scope.rules, !githubAdvisory, release);
     enabled ||= scopedRules.enabled;
     if (Object.keys(scopedRules.rules).length === 0) {
       continue;
@@ -213,8 +232,8 @@ async function runWithAdvisoryLimits(
       rules: scopedRules.rules,
     });
   }
-  enabled &&= githubAdvisory || Boolean(untouchedExclusions);
-  if (!enabled && !evidenceEnabled) {
+  enabled &&= githubAdvisory || release || Boolean(untouchedExclusions);
+  if (!enabled && !evidenceEnabled && !parity) {
     return { status: await runManagedCommand(command) };
   }
 
@@ -241,7 +260,7 @@ async function runWithAdvisoryLimits(
       advisoryConfig,
       JSON.stringify({
         extends: [configPath],
-        rules: githubAdvisory ? rootRules.rules : undefined,
+        rules: githubAdvisory || release ? rootRules.rules : undefined,
         overrides,
         plugins: config.plugins,
         categories: config.categories,
@@ -270,7 +289,7 @@ async function runWithAdvisoryLimits(
   };
   try {
     const configuredArgs = advisoryConfig ? configOption.replace(advisoryConfig) : args;
-    if (!githubAdvisory && !evidenceEnabled) {
+    if (!githubAdvisory && !evidenceEnabled && !parity) {
       return { status: await runManagedCommand({ ...command, args: configuredArgs }) };
     }
     const format = oxlintOption(configuredArgs, "--format", "-f");
@@ -337,6 +356,10 @@ async function runWithAdvisoryLimits(
           env,
         );
       }
+      if (parity) {
+        console.error("[lint] parity failed: oxlint report exceeded capture limit.");
+        return { status: 1 };
+      }
       return { status };
     }
     if (status !== 0 && status !== 1) {
@@ -357,6 +380,17 @@ async function runWithAdvisoryLimits(
     const limits = report.diagnostics.filter((diagnostic) =>
       LIMIT_RULES.has(/^eslint\(([^)]+)\)$/u.exec(diagnostic.code ?? "")?.[1] ?? ""),
     );
+    if (
+      parity &&
+      !(await checkLintParity(
+        format.replace("json"),
+        env,
+        { status, stdout: output },
+        MAX_REPORT_BYTES,
+      ))
+    ) {
+      return { status: 1 };
+    }
     reportLimitViolations(
       limits.map((diagnostic) => ({
         file: diagnostic.filename.startsWith("file://")
@@ -443,7 +477,7 @@ export function shouldPrepareExtensionPackageBoundaryArtifacts(args: string[]) {
     }
     return arg.startsWith("--tsconfig=") ? [arg.slice("--tsconfig=".length)] : [];
   });
-  // Core, script, and root-test lint resolve sources through the root tsconfig;
+  // Core, script, root-test, and UI lint resolve sources through the root tsconfig;
   // generated plugin package declarations are only an extension-lint input.
   return (
     tsconfigs.length === 0 ||
@@ -615,7 +649,7 @@ async function prepareExtensionPackageBoundaryArtifacts(env: NodeJS.ProcessEnv) 
   });
 
   if (status !== 0) {
-    throw new Error(`prepare-extension-package-boundary-artifacts failed with exit code ${status}`);
+    throw new Error(`Boundary preparation failed (${status}). If deps changed, run pnpm install.`);
   }
 }
 
@@ -643,8 +677,12 @@ export async function runOxlint(
         platform: process.platform,
       });
   const sparseTargets = filterSparseMissingOxlintTargets(policyArgs);
-  const finalArgs = sparseTargets.args;
-  const oxlintPath = resolveRepoToolBinPath("oxlint");
+  const tool = resolveDevTool(
+    "lint",
+    isCiEnvironment(env) ? { ...env, OPENCLAW_LINT_TOOL: "oxlint" } : env,
+  );
+  const finalArgs = [...tool.args, ...sparseTargets.args];
+  const oxlintPath = tool.command;
   const needsArtifactPreparation =
     !focusedConfig &&
     env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
@@ -678,7 +716,7 @@ export async function runOxlint(
     return await runWithAdvisoryLimits(
       oxlintPath,
       finalArgs,
-      resolveOxlintToolchainEnv(oxlintPath, env),
+      resolveOxlintToolchainEnv(oxlintPath, tool.env),
       ownedDirectory,
     );
   };

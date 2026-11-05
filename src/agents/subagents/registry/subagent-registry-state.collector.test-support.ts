@@ -5,10 +5,7 @@ import {
 } from "../../../sessions/session-lifecycle-events.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import { persistRegistryFixture } from "./subagent-registry-state.fixture.test-support.js";
-import {
-  getSubagentRunsSnapshotForRead,
-  publishSubagentRunsAfterAtomicStore,
-} from "./subagent-registry-state.js";
+import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function registerSubagentCollectorPublicationCases(params: {
@@ -86,37 +83,6 @@ export function registerSubagentCollectorPublicationCases(params: {
       );
       expect(received).toHaveBeenCalledExactlyOnceWith({
         sessionKey: "global",
-        agentId: "ops",
-        reason: "swarm",
-        scope: "runtime",
-      });
-    } finally {
-      unsubscribe();
-    }
-  });
-
-  it("defers atomic collector notifications until all owner snapshots are published", async () => {
-    const run: SubagentRunRecord = {
-      ...createRun("atomic"),
-      collect: true,
-      swarmRequesterSessionKey: "agent:ops:parent",
-      requesterAgentId: "ops",
-      groupId: "batch",
-    };
-    const received = vi.fn();
-    const unsubscribe = onSessionLifecycleEvent(received);
-    try {
-      const deferred: Array<() => void> = [];
-      params.mockRestoredRows(new Map());
-      await restoreSubagentRunsFromDisk({ runs: new Map() });
-      publishSubagentRunsAfterAtomicStore(new Map([[run.runId, run]]), [run.runId], deferred);
-      expect(received).not.toHaveBeenCalled();
-      expect(getSubagentRunsSnapshotForRead(new Map()).get(run.runId)?.groupId).toBe("batch");
-      for (const publish of deferred) {
-        publish();
-      }
-      expect(received).toHaveBeenCalledExactlyOnceWith({
-        sessionKey: "agent:ops:parent",
         agentId: "ops",
         reason: "swarm",
         scope: "runtime",

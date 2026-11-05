@@ -27,26 +27,20 @@ import {
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
-import { listUpdateRuns } from "../infra/update-run-reader.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+  getActiveOpenClawStateDatabaseReadSnapshotAsync,
+  withCurrentOpenClawStateReadScope,
+} from "../state/openclaw-state-db-readonly.js";
+import type { RecoveryInventoryScan } from "./recovery-inventory-scan.js";
+import {
+  collectUpdateCaptureInventory,
+  readCompletedUpdateHistory,
+} from "./update-capture-cleanup.js";
+import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 
-type Outcome =
-  | "candidate"
-  | "verification-required"
-  | "protected"
-  | "blocked"
-  | "removed"
-  | "disposed"
-  | "failed";
-type RecoveryCleanupArtifact = {
-  path: string;
-  runs: string[];
-  bytes: number;
-  outcome: Outcome;
-  reason: string;
-  detail?: string;
-  consequence?: string;
-  removedBytes?: number;
-};
+type Outcome = RecoveryCleanupArtifact["outcome"];
 export type RecoveryCleanupReport = ReturnType<typeof summarizeRecoveryCleanup>;
 export type RecoveryArtifactReference = {
   run: ActiveSessionSqliteMigrationRun;
@@ -65,7 +59,14 @@ export function resolveRecoveryArtifact(
   );
 }
 
-export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }) {
+export function collectRecoveryInventory(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  scan?: RecoveryInventoryScan;
+  readHistory?: boolean;
+}) {
+  const entries = (directory: string) =>
+    params.scan?.directory(directory) ?? fs.readdirSync(directory, { withFileTypes: true });
   const stateDir = canonicalMigrationFilePath(path.join(resolveStateDir(params.env), "anchor"));
   const root = path.dirname(stateDir);
   const stores = new Set<string>();
@@ -73,7 +74,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
   const agentIds = new Set(listAgentIds(params.cfg));
   const agentsRoot = path.join(root, "agents");
   if (statMigrationPath(agentsRoot)?.isDirectory() && !hasSymbolicLinkInDirectoryPath(agentsRoot)) {
-    for (const item of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
+    for (const item of entries(agentsRoot)) {
       if (item.isDirectory()) {
         agentIds.add(item.name);
         stores.add(path.join(agentsRoot, item.name, "sessions", "sessions.json"));
@@ -96,8 +97,12 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     }
   }
   const references = new Map<string, RecoveryArtifactReference[]>();
-  const manifestPaths: string[] = [];
+  let manifestPaths: string[] = [];
   const artifacts: RecoveryCleanupArtifact[] = [];
+  const missingOriginals = new Set<string>();
+  const protectUnmanifested = (filePath: string, bytes: number, reason: string) => {
+    artifacts.push({ path: filePath, runs: [], bytes, outcome: "protected", reason });
+  };
   let laterUpdateStartedAt = 0;
   const manifestsDir = resolveSessionSqliteMigrationRunsDir(params.env);
   if (hasSymbolicLinkInDirectoryPath(manifestsDir)) {
@@ -109,8 +114,15 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       reason: "manifest-directory-alias",
     });
   } else {
-    manifestPaths.push(...listSessionSqliteMigrationManifestPaths(params.env));
+    manifestPaths = params.scan
+      ? [...params.scan.directory(manifestsDir)]
+          .filter((entry) => entry.name.endsWith(".json") && !entry.name.endsWith(".failure.json"))
+          .map((entry) => path.join(manifestsDir, entry.name))
+      : listSessionSqliteMigrationManifestPaths(params.env);
     for (const manifestPath of manifestPaths) {
+      if (params.scan && !params.scan.metadata(manifestPath)) {
+        continue;
+      }
       const stat = statMigrationPath(manifestPath);
       const manifest =
         stat?.isFile() && stat.nlink === 1
@@ -129,6 +141,9 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       const run = { manifest, manifestPath };
       const consumed = collectRecordedConsumedArchives(manifest);
       for (const target of manifest.targets) {
+        if (params.scan && !params.scan.available()) {
+          break;
+        }
         const expected = resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath);
         const trusted =
           isPathInside(root, target.sqlitePath) &&
@@ -154,54 +169,58 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       }
     }
   }
-  if ([...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity))) {
-    try {
-      laterUpdateStartedAt = Math.max(
-        0,
-        ...listUpdateRuns({ limit: 100 }, { env: params.env })
-          .filter((run) => run.status === "succeeded" && run.finishedAtMs !== null)
-          .map((run) => run.createdAtMs),
-      );
-    } catch {
-      // Missing/unreadable update history cannot release rollback originals.
-    }
+  if (
+    params.readHistory !== false &&
+    [...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity))
+  ) {
+    laterUpdateStartedAt = readCompletedUpdateHistory(params.env)?.latestCompletedStartedAt ?? 0;
   }
   for (const [archivePath, refs] of references) {
     const evidence = resolveRecoveryArtifact(refs);
     const stat = refs.every((ref) => ref.trusted)
-      ? fs.lstatSync(archivePath, { bigint: true, throwIfNoEntry: false })
+      ? statMigrationPath(archivePath, { bigint: true })
       : undefined;
     const claim =
       refs.every((ref) => ref.trusted) && evidence?.disposal.state === "pending-disposal"
-        ? fs.lstatSync(evidence.disposal.claimPath, { bigint: true, throwIfNoEntry: false })
+        ? statMigrationPath(evidence.disposal.claimPath, { bigint: true })
         : undefined;
     const current = stat ?? claim;
+    if (
+      refs.every((ref) => ref.trusted) &&
+      !current &&
+      evidence?.disposal.state !== "pending-disposal"
+    ) {
+      missingOriginals.add(archivePath);
+    }
     const item: RecoveryCleanupArtifact = {
       path: archivePath,
       runs: [...new Set(refs.map((ref) => ref.run.manifest.runId))],
-      bytes: current?.isFile() ? Number(current.size) : (evidence?.identity.size ?? 0),
+      bytes: current?.isFile() ? Number(current.size) : 0,
       outcome: "candidate",
       reason: "producer-verified-original",
       consequence:
         "Permanently loses rollback to this original, including pre-repair branches and metadata.",
     };
+    const classify = (outcome: Outcome, reason: string) => {
+      item.outcome = outcome;
+      item.reason = reason;
+    };
     if (refs.some((ref) => !ref.trusted)) {
-      item.outcome = "protected";
-      item.reason = "unsupported-target-ownership";
+      classify("protected", "unsupported-target-ownership");
     } else if (refs.every((ref) => ref.move.artifact?.disposal.state === "disposed")) {
-      item.outcome = stat ? "protected" : "disposed";
-      item.reason = stat ? "recreated-after-disposal" : "intentionally-disposed";
+      classify(
+        stat ? "protected" : "disposed",
+        stat ? "recreated-after-disposal" : "intentionally-disposed",
+      );
     } else if (refs.some((ref) => ref.consumedByRestore)) {
-      item.outcome = "protected";
-      item.reason = "archive-consumed-by-restore";
+      classify("protected", "archive-consumed-by-restore");
     } else if (
       hasSymbolicLinkInDirectoryPath(path.dirname(archivePath)) ||
       (stat &&
         (!stat.isFile() ||
           (stat.nlink !== 1n && !isPendingMigrationArtifactClaim(archivePath, evidence))))
     ) {
-      item.outcome = "blocked";
-      item.reason = "artifact-alias-or-nonregular";
+      classify("blocked", "artifact-alias-or-nonregular");
     } else if (
       refs.some(
         ({ run, target }) =>
@@ -210,13 +229,13 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
           target.issues.some((issue) => !isSessionSqliteMigrationWarning(issue)),
       )
     ) {
-      item.outcome = "protected";
-      item.reason = "incomplete-recovery-operation";
+      classify("protected", "incomplete-recovery-operation");
     } else if (refs.some(({ move }) => move.artifact?.classification === "protected")) {
-      item.outcome = "protected";
-      item.reason = refs.find(
-        (ref) => ref.move.artifact?.classification === "protected",
-      )!.move.artifact!.reason;
+      classify(
+        "protected",
+        refs.find((ref) => ref.move.artifact?.classification === "protected")!.move.artifact!
+          .reason,
+      );
     } else if (
       refs.some(
         ({ target, run }) =>
@@ -224,11 +243,9 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
           !(laterUpdateStartedAt > Date.parse(run.manifest.completedAt!)),
       )
     ) {
-      item.outcome = "protected";
-      item.reason = "awaiting-later-completed-update";
+      classify("protected", "awaiting-later-completed-update");
     } else if (refs.some(({ move }) => !move.artifact)) {
-      item.outcome = "verification-required";
-      item.reason = "historical-manifest-without-import-proof";
+      classify("verification-required", "historical-manifest-without-import-proof");
     } else if (
       current &&
       evidence &&
@@ -237,13 +254,11 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       )
     ) {
       // Preview can reject changed metadata without reading history; apply still verifies content.
-      item.outcome = "blocked";
-      item.reason = "artifact-metadata-changed";
+      classify("blocked", "artifact-metadata-changed");
     } else if (
       refs.some(({ move }) => !sameMigrationArtifact(move.artifact!.identity, evidence!.identity))
     ) {
-      item.outcome = "blocked";
-      item.reason = "conflicting-artifact-identities";
+      classify("blocked", "conflicting-artifact-identities");
     } else if (
       refs.some(({ move }) => {
         const receipt = move.artifact?.disposal;
@@ -254,8 +269,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
         );
       })
     ) {
-      item.outcome = "blocked";
-      item.reason = "conflicting-disposal-claims";
+      classify("blocked", "conflicting-disposal-claims");
     } else if (
       !stat &&
       !refs.every(
@@ -264,8 +278,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
           move.artifact?.disposal.state === "disposed",
       )
     ) {
-      item.outcome = "blocked";
-      item.reason = "unexpectedly-missing-artifact";
+      classify("blocked", "unexpectedly-missing-artifact");
     } else if (refs.some(({ move }) => move.artifact?.disposal.state === "pending-disposal")) {
       item.reason = "resume-pending-disposal";
     }
@@ -289,11 +302,18 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     ) {
       continue;
     }
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    for (const entry of entries(directory)) {
       if (
         !isMigrationArchiveArtifactName(entry.name) &&
         !entry.name.includes(".pre-doctor-") &&
-        !/^.+\.pre-startup-migration-.+\.bak$/.test(entry.name)
+        !/^.+\.pre-startup-migration-.+\.bak$/.test(entry.name) &&
+        // Older cron repairs had no manifest. Naming reveals an original, never completion.
+        !(
+          directory === path.join(root, "state") &&
+          /^openclaw\.sqlite\.doctor-cron-\d{13}-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.bak$/.test(
+            entry.name,
+          )
+        )
       ) {
         continue;
       }
@@ -301,43 +321,38 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       if (references.has(filePath)) {
         continue;
       }
-      artifacts.push({
-        path: filePath,
-        runs: [],
-        bytes: entry.isFile() ? fs.lstatSync(filePath).size : 0,
-        outcome: "protected",
-        reason: "unmanifested-recovery-original",
-      });
+      protectUnmanifested(
+        filePath,
+        entry.isFile() ? fs.lstatSync(filePath).size : 0,
+        "unmanifested-recovery-original",
+      );
     }
   }
   // Unknown files in known archive directories are visible, with no authority inferred from names.
+  const knownArchivePaths = new Set(artifacts.map((item) => item.path));
+  const pendingClaims = new Set<string>();
+  for (const refs of references.values()) {
+    for (const { move } of refs) {
+      if (move.artifact?.disposal.state === "pending-disposal") {
+        pendingClaims.add(move.artifact.disposal.claimPath);
+      }
+    }
+  }
   for (const directory of archiveDirs) {
     if (!statMigrationPath(directory)?.isDirectory() || hasSymbolicLinkInDirectoryPath(directory)) {
       continue;
     }
-    for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
+    for (const item of entries(directory)) {
       const filePath = path.join(directory, item.name);
-      if (references.has(filePath) || artifacts.some((artifact) => artifact.path === filePath)) {
+      if (knownArchivePaths.has(filePath) || pendingClaims.has(filePath)) {
         continue;
       }
-      if (
-        [...references.values()].some((refs) =>
-          refs.some(
-            ({ move }) =>
-              move.artifact?.disposal.state === "pending-disposal" &&
-              move.artifact.disposal.claimPath === filePath,
-          ),
-        )
-      ) {
-        continue;
-      }
-      artifacts.push({
-        path: filePath,
-        runs: [],
-        bytes: item.isFile() ? fs.lstatSync(filePath).size : 0,
-        outcome: "protected",
-        reason: "unmanifested-artifact",
-      });
+      knownArchivePaths.add(filePath);
+      protectUnmanifested(
+        filePath,
+        item.isFile() ? fs.lstatSync(filePath).size : 0,
+        "unmanifested-artifact",
+      );
     }
   }
   if (
@@ -352,11 +367,28 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       }
     }
   }
+  if (params.scan?.incomplete) {
+    // A skipped manifest may protect an original already seen in another run.
+    // Diagnostics retain observed bytes, never infer eligibility from a partial graph.
+    for (const item of artifacts) {
+      if (item.outcome === "candidate" || item.outcome === "verification-required") {
+        item.outcome = "protected";
+        item.reason = "incomplete-recovery-inventory";
+      }
+    }
+  }
   protectRecoveryDependencies(artifacts, references);
   return {
+    // Doctor still needs absent receipts to reconcile interrupted duplicate retirement.
+    artifacts,
     references,
     manifestPaths,
-    report: summarizeRecoveryCleanup(root, artifacts, "preview"),
+    report: summarizeRecoveryCleanup(
+      root,
+      artifacts.filter((item) => !missingOriginals.has(item.path)),
+      "preview",
+      missingOriginals.size,
+    ),
   };
 }
 
@@ -439,6 +471,7 @@ export function summarizeRecoveryCleanup(
   stateDir: string,
   artifacts: RecoveryCleanupArtifact[],
   status: "preview" | "refused" | "complete" | "blocked",
+  missingOriginals = 0,
 ) {
   const totals = {
     candidateBytes: 0,
@@ -448,30 +481,75 @@ export function summarizeRecoveryCleanup(
     removedBytes: 0,
     removedFiles: 0,
   };
+  const byteTotals: Partial<Record<Outcome, keyof typeof totals>> = {
+    candidate: "candidateBytes",
+    "verification-required": "verificationRequiredBytes",
+    protected: "protectedBytes",
+    blocked: "blockedBytes",
+    failed: "blockedBytes",
+  };
   for (const item of artifacts) {
-    if (item.outcome === "candidate") {
-      totals.candidateBytes += item.bytes;
-    }
-    if (item.outcome === "verification-required") {
-      totals.verificationRequiredBytes += item.bytes;
-    }
-    if (item.outcome === "protected") {
-      totals.protectedBytes += item.bytes;
-    }
-    if (item.outcome === "blocked" || item.outcome === "failed") {
-      totals.blockedBytes += item.bytes;
+    const total = byteTotals[item.outcome];
+    if (total) {
+      totals[total] += item.bytes;
     }
     if (item.removedBytes !== undefined) {
       totals.removedBytes += item.removedBytes;
       totals.removedFiles += 1;
     }
   }
-  return { stateDir, artifacts, totals, status };
+  return { stateDir, artifacts, totals, status, missingOriginals };
 }
 
-export function inspectSessionSqliteRecovery(params: {
+/** Update cleanup also reviews original-state captures; Doctor's session repair does not. */
+function readUpdateCleanupInventory(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): RecoveryCleanupReport {
-  return collectRecoveryInventory(params).report;
+  scan?: RecoveryInventoryScan;
+  readHistory?: boolean;
+}) {
+  const inventory = collectRecoveryInventory(params);
+  const captures = collectUpdateCaptureInventory({
+    stateDir: inventory.report.stateDir,
+    env: params.env,
+    scan: params.scan,
+    readHistory: params.readHistory,
+  });
+  return {
+    ...inventory,
+    captureIdentities: captures.identities,
+    report: summarizeRecoveryCleanup(
+      inventory.report.stateDir,
+      [...inventory.report.artifacts, ...captures.artifacts],
+      "preview",
+      inventory.report.missingOriginals,
+    ),
+  };
+}
+
+/** Descriptive reads share their image; effect guards request current rows outside that image. */
+export async function collectUpdateCleanupInventoryAsync(
+  params: Parameters<typeof readUpdateCleanupInventory>[0] & { current?: true },
+) {
+  if (params.readHistory === false) {
+    return readUpdateCleanupInventory(params);
+  }
+  const read = () =>
+    withArtifactPreservingStateReads(() =>
+      withOpenClawStateDatabaseReadSnapshot(
+        async () => {
+          await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env: params.env });
+          return readUpdateCleanupInventory(params);
+        },
+        { env: params.env },
+      ),
+    );
+  return params.current ? withCurrentOpenClawStateReadScope({ env: params.env }, read) : read();
+}
+
+export async function inspectSessionSqliteRecovery(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<RecoveryCleanupReport> {
+  return (await collectUpdateCleanupInventoryAsync({ ...params, current: true })).report;
 }

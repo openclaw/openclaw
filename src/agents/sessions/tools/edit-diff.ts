@@ -2,13 +2,153 @@
 
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
-import { normalizeToLF } from "../../line-endings.js";
-import {
-  applyReplacements,
-  applyReplacementsPreservingLineEndings,
-  type TextReplacement,
-} from "./edit-replacements.js";
+import { countNewlines, detectLineEnding, normalizeToLF } from "../../line-endings.js";
+import { ToolInputError } from "../../tool-input-error.js";
 import { prepareFileDiff, type FileDiff } from "./file-diff.js";
+
+interface TextReplacement {
+  matchIndex: number;
+  matchLength: number;
+  newText: string;
+}
+
+interface LineSpan {
+  start: number;
+  end: number;
+}
+
+function getLineSpans(content: string): LineSpan[] {
+  let offset = 0;
+  return (content.match(/[^\n]*\n|[^\n]+/g) ?? []).map((line) => {
+    const span = { start: offset, end: offset + line.length };
+    offset = span.end;
+    return span;
+  });
+}
+
+function findReplacementLine(lines: LineSpan[], offset: number, includeEnd: boolean): number {
+  let lower = 0;
+  let upper = lines.length;
+  while (lower < upper) {
+    const middle = Math.floor((lower + upper) / 2);
+    const line = lines[middle]!;
+    if (line.end < offset || (!includeEnd && line.end === offset)) {
+      lower = middle + 1;
+    } else {
+      upper = middle;
+    }
+  }
+  return lower;
+}
+
+function getReplacementLineRange(lines: LineSpan[], replacement: TextReplacement) {
+  const startLine = findReplacementLine(lines, replacement.matchIndex, false);
+  const endLine = findReplacementLine(
+    lines,
+    replacement.matchIndex + replacement.matchLength,
+    true,
+  );
+  if (
+    !lines[startLine] ||
+    replacement.matchIndex < lines[startLine].start ||
+    endLine >= lines.length
+  ) {
+    throw new Error("Replacement range is outside the base content.");
+  }
+  return { startLine, endLine: endLine + 1 };
+}
+
+function applyReplacements(content: string, replacements: TextReplacement[]): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const replacement of replacements) {
+    const matchIndex = replacement.matchIndex;
+    parts.push(content.slice(cursor, matchIndex), replacement.newText);
+    cursor = matchIndex + replacement.matchLength;
+  }
+  parts.push(content.slice(cursor));
+  return parts.join("");
+}
+
+type LineTerminator = "\r\n" | "\r" | "\n";
+
+function getLineTerminator(line: string | undefined): LineTerminator | undefined {
+  if (line === undefined) {
+    return undefined;
+  }
+  if (line.endsWith("\r\n")) {
+    return "\r\n";
+  }
+  if (line.endsWith("\n")) {
+    return "\n";
+  }
+  return line.endsWith("\r") ? "\r" : undefined;
+}
+
+function restoreNormalizedLineEndings(
+  normalizedContent: string,
+  sourceLines: string[],
+  fallback: LineTerminator,
+): string {
+  let sourceIndex = 0;
+  return normalizedContent.replace(/\n/g, () => {
+    const source = sourceLines[sourceIndex] ?? sourceLines.at(-1);
+    sourceIndex++;
+    return getLineTerminator(source) ?? fallback;
+  });
+}
+
+function applyReplacementsPreservingLineEndings(
+  originalContent: string,
+  baseContent: string,
+  replacements: TextReplacement[],
+): string {
+  const originalLines = originalContent.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+/g) ?? [];
+  const baseLines = getLineSpans(baseContent);
+  if (originalLines.length !== baseLines.length) {
+    throw new Error(
+      "Cannot preserve original line endings because the base content has a different line count.",
+    );
+  }
+
+  const fileFallback = detectLineEnding(originalContent);
+  const originalOffsets = [0];
+  for (const line of originalLines) {
+    originalOffsets.push(originalOffsets.at(-1)! + line.length);
+  }
+  const restoredReplacements = replacements.map((replacement) => {
+    const { startLine, endLine } = getReplacementLineRange(baseLines, replacement);
+    const matchEnd = replacement.matchIndex + replacement.matchLength;
+    const restoredStart =
+      originalOffsets[startLine]! + replacement.matchIndex - baseLines[startLine]!.start;
+    // A consumed newline includes the whole original terminator, including CRLF's extra byte.
+    const restoredEnd =
+      matchEnd === baseLines[endLine - 1]!.end
+        ? originalOffsets[endLine]!
+        : originalOffsets[endLine - 1]! + matchEnd - baseLines[endLine - 1]!.start;
+    const replacementSource = originalLines.slice(startLine, endLine);
+    const replacementFallback =
+      getLineTerminator(replacementSource[0]) ??
+      getLineTerminator(originalLines[startLine - 1]) ??
+      fileFallback;
+    const consumedTerminatorCount = countNewlines(
+      baseContent.slice(replacement.matchIndex, matchEnd),
+    );
+    const replacementTerminatorCount = countNewlines(replacement.newText);
+    const terminatorSources = replacementSource.slice(0, Math.max(1, consumedTerminatorCount));
+    const sourceOffset = Math.max(0, terminatorSources.length - replacementTerminatorCount);
+    return {
+      matchIndex: restoredStart,
+      matchLength: restoredEnd - restoredStart,
+      newText: restoreNormalizedLineEndings(
+        replacement.newText,
+        terminatorSources.slice(sourceOffset),
+        replacementFallback,
+      ),
+    };
+  });
+  return applyReplacements(originalContent, restoredReplacements);
+}
 
 interface FuzzyBoundary {
   /** Original offset when the normalized boundary begins a replacement. */
@@ -272,7 +412,7 @@ function getCandidateHint(content: string, oldText: string): string {
 
 function getUnsafeFuzzyBoundaryError(path: string, editIndex: number, totalEdits: number): Error {
   const target = totalEdits === 1 ? "The fuzzy match" : `The fuzzy match for edits[${editIndex}]`;
-  return new Error(
+  return new ToolInputError(
     `${target} in ${path} crosses an ambiguous Unicode-normalization or trimmed-whitespace boundary. Copy the exact source text or use a span whose normalized boundaries map cleanly.`,
   );
 }
@@ -292,7 +432,7 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string) {
 
   for (const [i, edit] of normalizedEdits.entries()) {
     if (edit.oldText.length === 0) {
-      throw new Error(
+      throw new ToolInputError(
         normalizedEdits.length === 1
           ? `oldText must not be empty in ${path}.`
           : `edits[${i}].oldText must not be empty in ${path}.`,
@@ -315,16 +455,19 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string) {
       matchIndex = searchContent.indexOf(searchText);
     }
 
-    const occurrences = searchText ? searchContent.split(searchText).length - 1 : 0;
+    if (!searchText) {
+      throw getUnsafeFuzzyBoundaryError(path, i, normalizedEdits.length);
+    }
+    let occurrences = 0;
+    for (let at = matchIndex; at !== -1; at = searchContent.indexOf(searchText, at + 1)) {
+      occurrences++;
+    }
     if (occurrences > 1) {
-      throw new Error(
+      throw new ToolInputError(
         normalizedEdits.length === 1
           ? `Found ${occurrences} occurrences of the text in ${path}. The text must be unique. Please provide more context to make it unique.`
           : `Found ${occurrences} occurrences of edits[${i}] in ${path}. Each oldText must be unique. Please provide more context to make it unique.`,
       );
-    }
-    if (!searchText) {
-      throw getUnsafeFuzzyBoundaryError(path, i, normalizedEdits.length);
     }
     if (matchIndex === -1) {
       const prefix =
@@ -332,7 +475,7 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string) {
           ? "Could not find the exact text"
           : `Could not find edits[${i}]`;
       const hint = getCandidateHint(normalizedContent, edit.oldText);
-      throw new Error(
+      throw new ToolInputError(
         `${prefix} in ${path}. The old text must match exactly including all whitespace and newlines.${hint}`,
       );
     }
@@ -361,7 +504,7 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string) {
     const previous = matchedEdits[i - 1]!;
     const current = matchedEdits[i]!;
     if (previous.matchIndex + previous.matchLength > current.matchIndex) {
-      throw new Error(
+      throw new ToolInputError(
         `edits[${previous.editIndex}] and edits[${current.editIndex}] overlap in ${path}. Merge them into one edit or target disjoint regions.`,
       );
     }

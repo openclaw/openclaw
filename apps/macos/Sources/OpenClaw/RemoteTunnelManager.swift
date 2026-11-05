@@ -23,13 +23,16 @@ actor RemoteTunnelManager {
         let route: Route
     }
 
+    private struct TunnelCreation {
+        let token: UUID
+        let configuration: RemotePortTunnel.Configuration
+        let lifecycleGeneration: UInt64
+        let task: Task<RemotePortTunnel, Error>
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "remote-tunnel")
     private var controlTunnel: ActiveTunnel?
-    private var createInFlight: (
-        token: UUID,
-        configuration: RemotePortTunnel.Configuration,
-        lifecycleGeneration: UInt64,
-        task: Task<RemotePortTunnel, Error>)?
+    private var createInFlight: TunnelCreation?
     private var retirementInFlight: (token: UUID, task: Task<Void, Never>)?
     private var tunnelGeneration: UInt64 = 0
     private var lifecycleGeneration: UInt64 = 0
@@ -190,23 +193,13 @@ actor RemoteTunnelManager {
             let task = Task {
                 try await RemotePortTunnel.create(configuration: configuration)
             }
-            self.createInFlight = (
+            let create = TunnelCreation(
                 token: token,
                 configuration: configuration,
                 lifecycleGeneration: lifecycleGeneration,
                 task: task)
-            let tunnel: RemotePortTunnel
-            do {
-                tunnel = try await task.value
-            } catch {
-                if self.createInFlight?.token == token { self.createInFlight = nil }
-                throw error
-            }
-            return try await self.installCreatedTunnel(
-                tunnel,
-                token: token,
-                configuration: configuration,
-                lifecycleGeneration: lifecycleGeneration)
+            self.createInFlight = create
+            return try await self.finishCreation(create)
         }
     }
 
@@ -231,20 +224,7 @@ actor RemoteTunnelManager {
         }
 
         self.logger.info("control tunnel create in flight; joining")
-        let tunnel: RemotePortTunnel
-        do {
-            tunnel = try await create.task.value
-        } catch {
-            if self.createInFlight?.token == create.token {
-                self.createInFlight = nil
-            }
-            throw error
-        }
-        return try await .route(self.installCreatedTunnel(
-            tunnel,
-            token: create.token,
-            configuration: configuration,
-            lifecycleGeneration: create.lifecycleGeneration))
+        return try await .route(self.finishCreation(create))
     }
 
     @discardableResult
@@ -278,20 +258,22 @@ actor RemoteTunnelManager {
         }
     }
 
-    private func installCreatedTunnel(
-        _ tunnel: RemotePortTunnel,
-        token: UUID,
-        configuration: RemotePortTunnel.Configuration,
-        lifecycleGeneration: UInt64) async throws -> Route
-    {
-        guard self.lifecycleGeneration == lifecycleGeneration else {
+    private func finishCreation(_ create: TunnelCreation) async throws -> Route {
+        let tunnel: RemotePortTunnel
+        do {
+            tunnel = try await create.task.value
+        } catch {
+            if self.createInFlight?.token == create.token { self.createInFlight = nil }
+            throw error
+        }
+        guard self.lifecycleGeneration == create.lifecycleGeneration else {
             await self.waitForRetirement()
             throw CancellationError()
         }
         if let active = controlTunnel, active.tunnel === tunnel {
             return active.route
         }
-        guard self.createInFlight?.token == token else {
+        guard self.createInFlight?.token == create.token else {
             await self.waitForRetirement()
             throw CancellationError()
         }
@@ -303,7 +285,7 @@ actor RemoteTunnelManager {
             await self.waitForRetirement()
             throw error
         }
-        guard currentConfiguration == configuration else {
+        guard currentConfiguration == create.configuration else {
             let replacementGeneration = self.beginRetirement()
             await self.waitForRetirement()
             try Task.checkCancellation()
@@ -319,7 +301,7 @@ actor RemoteTunnelManager {
         let route = Route(localPort: resolvedPort, generation: tunnelGeneration)
         self.controlTunnel = ActiveTunnel(
             tunnel: tunnel,
-            configuration: configuration,
+            configuration: create.configuration,
             route: route)
         self.logger.info(
             "ssh tunnel ready localPort=\(resolvedPort, privacy: .public) " +

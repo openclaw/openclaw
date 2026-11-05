@@ -1,14 +1,13 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
-import { safeRealpathSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
+import { compileExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import {
   resolveExecutablePath as resolveExecutableCandidatePath,
   resolveExecutablePathCandidate,
+  tryResolveFilesystemRealPath as tryResolveRealpath,
 } from "./executable-path.js";
 
 export type ExecutableResolution = {
@@ -28,18 +27,6 @@ export type CommandResolution = {
   policyBlocked?: boolean;
   blockedWrapper?: string;
 };
-
-function tryResolveRealpath(filePath: string | undefined): string | undefined {
-  if (filePath && process.platform !== "win32" && filePath.split("/").includes("..")) {
-    try {
-      // Node's ordinary realpath folds parents before following symlinks; bind the OS target.
-      return fs.realpathSync.native(filePath);
-    } catch {
-      return undefined;
-    }
-  }
-  return filePath ? (safeRealpathSync(filePath) ?? undefined) : undefined;
-}
 
 function buildExecutableResolution(
   rawExecutable: string,
@@ -125,19 +112,13 @@ export function resolveExecutableTrustPath(
 export function resolveExecutionTargetResolution(
   resolution: CommandResolution | ExecutableResolution | null,
 ): ExecutableResolution | null {
-  if (!resolution) {
-    return null;
-  }
-  return resolution.kind === "command" ? resolution.execution : resolution;
+  return resolution?.kind === "command" ? resolution.execution : (resolution ?? null);
 }
 
 export function resolvePolicyTargetResolution(
   resolution: CommandResolution | ExecutableResolution | null,
 ): ExecutableResolution | null {
-  if (!resolution) {
-    return null;
-  }
-  return resolution.kind === "command" ? resolution.policy : resolution;
+  return resolution?.kind === "command" ? resolution.policy : (resolution ?? null);
 }
 
 export function resolveExecutionTargetCandidatePath(
@@ -145,7 +126,7 @@ export function resolveExecutionTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    resolution?.kind === "command" ? resolution.execution : resolution,
+    resolveExecutionTargetResolution(resolution),
     cwd,
   );
 }
@@ -154,10 +135,7 @@ export function resolveExecutionTargetTrustPath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
 ): string | undefined {
-  return resolveExecutableTrustPath(
-    resolution?.kind === "command" ? resolution.execution : resolution,
-    cwd,
-  );
+  return resolveExecutableTrustPath(resolveExecutionTargetResolution(resolution), cwd);
 }
 
 export function resolvePolicyTargetCandidatePath(
@@ -165,7 +143,7 @@ export function resolvePolicyTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    resolution?.kind === "command" ? resolution.policy : resolution,
+    resolvePolicyTargetResolution(resolution),
     cwd,
   );
 }
@@ -174,10 +152,7 @@ export function resolvePolicyTargetTrustPath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
 ): string | undefined {
-  return resolveExecutableTrustPath(
-    resolution?.kind === "command" ? resolution.policy : resolution,
-    cwd,
-  );
+  return resolveExecutableTrustPath(resolvePolicyTargetResolution(resolution), cwd);
 }
 
 export function resolveApprovalAuditTrustPath(
@@ -202,11 +177,9 @@ export function isCwdBoundHashedArgPattern(value: string | null | undefined): bo
   return typeof value === "string" && value.startsWith(CWD_BOUND_HASHED_ARG_PATTERN_PREFIX);
 }
 
-export type ExecAllowlistScope = "command text" | "argv+cwd" | "argv" | "any args" | "inactive";
-
 export function classifyExecAllowlistScope(
   entry: Pick<ExecAllowlistEntry, "pattern" | "source" | "argPattern">,
-): ExecAllowlistScope {
+): "command text" | "argv+cwd" | "argv" | "any args" | "inactive" {
   const pattern = entry.pattern.trim();
   const generated = entry.source === "allow-always";
   // Reserved command markers require generated source; manual patterns remain executable globs.
@@ -253,8 +226,13 @@ export function buildCwdBoundHashedArgPattern(
   return `${CWD_BOUND_HASHED_ARG_PATTERN_PREFIX}${digest}`;
 }
 
-function matchArgPattern(argPattern: string, argv: string[], platform?: string | null): boolean {
-  if (argPattern.startsWith(LEGACY_HASHED_ARG_PATTERN_PREFIX)) {
+function matchArgPattern(
+  argPattern: string,
+  regex: RegExp | null,
+  argv: string[],
+  platform?: string | null,
+): boolean {
+  if (!regex) {
     return false;
   }
   // Patterns built by buildArgPatternFromArgv use \x00 as the argument separator and
@@ -274,15 +252,11 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
   const argsString =
     sep === "\x00" ? renderGeneratedArgPatternSubject(argv) : argv.slice(1).join(sep);
   try {
-    const regex = new RegExp(argPattern);
     if (regex.test(argsString)) {
       return true;
     }
-    // On Windows, LLMs may use forward slashes (`C:/path`) or backslashes
-    // (`C:\path`) interchangeably.  Normalize to backslashes and retry so
-    // that an argPattern built from one style still matches the other.
-    // Use the caller-supplied target platform so Linux gateways evaluating
-    // Windows node commands also perform the normalization.
+    // On Windows, LLMs may use either slash style. Also normalize when a Linux
+    // gateway evaluates a Windows node command, using its target platform.
     const effectivePlatform = normalizeLowercaseStringOrEmpty(platform ?? process.platform);
     if (effectivePlatform.startsWith("win")) {
       const normalized = argsString.replace(/\//g, "\\");
@@ -290,32 +264,54 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
         return true;
       }
     }
-    return false;
   } catch {
     return false;
   }
+  return false;
 }
 
 function hasPathSelector(value: string): boolean {
   return value.includes("/") || value.includes("\\") || value.includes("~");
 }
 
-function matchesExecutableBasenamePattern(
-  pattern: string,
-  resolution: ExecutableResolution,
-): boolean {
-  // Bare command-name allowlist entries are for PATH-resolved commands. A raw
-  // path such as ./rg or /tmp/rg must use a path allowlist entry so a workspace
-  // binary cannot inherit trust from a global command-name entry.
-  if (hasPathSelector(resolution.rawExecutable)) {
-    return false;
+// Policy revisions own their entries. Weak keys retire matchers with those snapshots;
+// compare patterns too because SDK callers can still edit their private copies.
+const compiledAllowlistEntries = new WeakMap<
+  ExecAllowlistEntry,
+  {
+    pattern: string;
+    argPattern: string | undefined;
+    platform: NodeJS.Platform;
+    matches: (target: string) => boolean;
+    argRegex: RegExp | null;
   }
-  return Boolean(
-    (resolution.executableName &&
-      matchesExecAllowlistPattern(pattern, resolution.executableName)) ||
-    (resolution.resolvedPath &&
-      matchesExecAllowlistPattern(pattern, path.basename(resolution.resolvedPath))),
-  );
+>();
+
+function prepareAllowlistEntry(entry: ExecAllowlistEntry, pattern: string) {
+  let prepared = compiledAllowlistEntries.get(entry);
+  if (
+    prepared?.pattern !== pattern ||
+    prepared.argPattern !== entry.argPattern ||
+    prepared.platform !== process.platform
+  ) {
+    let argRegex: RegExp | null = null;
+    if (entry.argPattern && !isGeneratedHashedArgPattern(entry.argPattern)) {
+      try {
+        argRegex = new RegExp(entry.argPattern);
+      } catch {
+        // Invalid argument patterns remain non-matching for this revision.
+      }
+    }
+    prepared = {
+      pattern,
+      argPattern: entry.argPattern,
+      platform: process.platform,
+      matches: compileExecAllowlistPattern(pattern),
+      argRegex,
+    };
+    compiledAllowlistEntries.set(entry, prepared);
+  }
+  return prepared;
 }
 
 export function matchAllowlist(
@@ -331,16 +327,21 @@ export function matchAllowlist(
   // A bare "*" wildcard allows any parsed executable command.
   // Check it before the resolvedPath guard so unresolved PATH lookups still
   // match (for example platform-specific executables without known extensions).
-  const bareWild = entries.find(
-    (e) => e.pattern?.trim() === "*" && !e.argPattern && e.source !== "allow-always",
-  );
-  if (bareWild && resolution) {
-    return bareWild;
+  for (const entry of entries) {
+    if (entry.pattern?.trim() === "*" && !entry.argPattern && entry.source !== "allow-always") {
+      if (resolution) {
+        return entry;
+      }
+      break;
+    }
   }
   if (!resolution?.resolvedPath) {
     return null;
   }
   const trustPath = resolution.resolvedRealPath?.trim() || resolution.resolvedPath;
+  // Basename grants apply only to PATH lookups, never ./tool or /tmp/tool.
+  const allowBasename = !hasPathSelector(resolution.rawExecutable);
+  let resolvedBasename: string | undefined;
   let pathOnlyMatch: ExecAllowlistEntry | null = null;
   let cwdBoundHash: string | undefined;
   for (const entry of entries) {
@@ -348,9 +349,15 @@ export function matchAllowlist(
     if (!pattern) {
       continue;
     }
-    const patternMatches = hasPathSelector(pattern)
-      ? matchesExecAllowlistPattern(pattern, trustPath)
-      : pattern !== "*" && matchesExecutableBasenamePattern(pattern, resolution);
+    const pathSelector = hasPathSelector(pattern);
+    if (!pathSelector && (pattern === "*" || !allowBasename)) {
+      continue;
+    }
+    const { matches, argRegex } = prepareAllowlistEntry(entry, pattern);
+    const patternMatches = pathSelector
+      ? matches(trustPath)
+      : (resolution.executableName && matches(resolution.executableName)) ||
+        matches((resolvedBasename ??= path.basename(resolution.resolvedPath)));
     if (!patternMatches) {
       continue;
     }
@@ -378,7 +385,7 @@ export function matchAllowlist(
       }
     } else if (
       entry.source !== "allow-always" &&
-      matchArgPattern(entry.argPattern, argv, platform)
+      matchArgPattern(entry.argPattern, argRegex, argv, platform)
     ) {
       return entry;
     }

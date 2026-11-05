@@ -17,25 +17,27 @@ export async function prepareManagedServiceParentPreloads(params: {
     "terminalParentExitProbe" | "expireParentWhileStopPending"
   >;
 }): Promise<NodeJS.ProcessEnv> {
-  const {
-    root,
-    scriptPath,
-    statePath,
-    parentPid,
-    parentStartIdentity,
-    logPath,
-    parentExitTimeoutMs,
-    stopSettlementPath,
-    options,
-  } = params;
   let helperEnv = params.env;
-  if (options?.terminalParentExitProbe) {
-    const preloadPath = path.join(root, "terminal-parent-exit-preload.cjs");
+  async function preload(name: string, source: string) {
+    const preloadPath = path.join(params.root, `${name}-preload.cjs`);
     await fs.writeFile(
       preloadPath,
-      `if (process.argv[1] === ${JSON.stringify(scriptPath)}) {
+      `if (process.argv[1] === ${JSON.stringify(params.scriptPath)}) {
         const fs = require("node:fs"), children = require("node:child_process");
-        const spawn = children.spawn, execFile = children.execFileSync;
+        const spawn = children.spawn;
+${source}
+      }`,
+    );
+    helperEnv = {
+      ...helperEnv,
+      NODE_OPTIONS: `${helperEnv.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim(),
+    };
+  }
+  if (params.options?.terminalParentExitProbe) {
+    await preload(
+      "terminal-parent-exit",
+      `
+        const execFile = children.execFileSync;
         const kill = process.kill, read = fs.readFileSync;
         let parked = false, probes = 0;
         children.spawn = function(command, args, ...rest) {
@@ -44,43 +46,34 @@ export async function prepareManagedServiceParentPreloads(params: {
           return child;
         };
         process.kill = function(pid, signal) {
-          if (!parked || pid !== ${parentPid} || signal !== 0) return kill.call(this, pid, signal);
+          if (!parked || pid !== ${params.parentPid} || signal !== 0) return kill.call(this, pid, signal);
           probes += 1;
           if (probes === 2) {
-            fs.appendFileSync(${JSON.stringify(logPath)}, "terminal parent exit observed\\n");
+            fs.appendFileSync(${JSON.stringify(params.logPath)}, "terminal parent exit observed\\n");
             throw Object.assign(new Error("parent exited"), { code: "ESRCH" });
           }
-          if (probes > 2) fs.appendFileSync(${JSON.stringify(logPath)}, "parent probed after terminal exit\\n");
+          if (probes > 2) fs.appendFileSync(${JSON.stringify(params.logPath)}, "parent probed after terminal exit\\n");
           return true;
         };
         fs.readFileSync = function(file, ...args) {
-          if (parked && file === ${JSON.stringify(`/proc/${parentPid}/status`)}) return "State:\\tS\\nThreads:\\t1\\n";
-          if (parked && file === ${JSON.stringify(`/proc/${parentPid}/stat`)}) return ${JSON.stringify(`${parentPid} (parent) S ${"0 ".repeat(18)}${parentStartIdentity}`)};
+          if (parked && file === ${JSON.stringify(`/proc/${params.parentPid}/status`)}) return "State:\\tS\\nThreads:\\t1\\n";
+          if (parked && file === ${JSON.stringify(`/proc/${params.parentPid}/stat`)}) return ${JSON.stringify(`${params.parentPid} (parent) S ${"0 ".repeat(18)}${params.parentStartIdentity}`)};
           return read.call(this, file, ...args);
         };
         children.execFileSync = function(command, args, ...rest) {
-          if (parked && command === "/bin/ps" && args[1] === "lstart=" && args[3] === ${JSON.stringify(String(parentPid))})
-            return ${JSON.stringify(new Date(parentStartIdentity * 1000).toUTCString().replace(/ GMT$/, ""))};
+          if (parked && command === "/bin/ps" && args[1] === "lstart=" && args[3] === ${JSON.stringify(String(params.parentPid))})
+            return ${JSON.stringify(new Date(params.parentStartIdentity * 1000).toUTCString().replace(/ GMT$/, ""))};
           return execFile.call(this, command, args, ...rest);
         };
-        require("node:module").syncBuiltinESMExports();
-      }`,
+        require("node:module").syncBuiltinESMExports();`,
     );
-    helperEnv = {
-      ...helperEnv,
-      NODE_OPTIONS: `${helperEnv.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim(),
-    };
   }
-  if (options?.expireParentWhileStopPending) {
+  if (params.options?.expireParentWhileStopPending) {
     // Advance only the helper after native dispatch; the stop subprocess keeps real time.
     // Observe close before failure handling as well as terminal cleanup, which may be slower.
-    const preloadPath = path.join(root, "parent-expiry-preload.cjs");
-    await fs.writeFile(
-      preloadPath,
-      `if (process.argv[1] === ${JSON.stringify(scriptPath)}) {
-        const fs = require("node:fs");
-        const children = require("node:child_process");
-        const spawn = children.spawn;
+    await preload(
+      "parent-expiry",
+      `
         const now = Date.now;
         const append = fs.appendFileSync;
         const kill = process.kill.bind(process);
@@ -97,28 +90,23 @@ export async function prepareManagedServiceParentPreloads(params: {
           return child;
         };
         process.kill = (pid, signal) => {
-          if (pid === ${parentPid} && signal === "SIGKILL") parentKilledWhileStopPending = stop && !stop.closed;
+          if (pid === ${params.parentPid} && signal === "SIGKILL") parentKilledWhileStopPending = stop && !stop.closed;
           return kill(pid, signal);
         };
         Date.now = () => {
           let parked = false;
-          try { parked = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8")).parked === true; } catch {}
-          return now() + (parked ? ${parentExitTimeoutMs + 1} : 0);
+          try { parked = JSON.parse(fs.readFileSync(${JSON.stringify(params.statePath)}, "utf8")).parked === true; } catch {}
+          return now() + (parked ? ${params.parentExitTimeoutMs + 1} : 0);
         };
         fs.appendFileSync = (pathname, data, ...args) => {
-          if (pathname === ${JSON.stringify(logPath)}) {
+          if (pathname === ${JSON.stringify(params.logPath)}) {
             if (String(data).includes("managed update activation failed:")) failedWhileStopPending = stop && !stop.closed;
             if (String(data).includes("managed update helper completed code="))
-              fs.writeFileSync(${JSON.stringify(stopSettlementPath)}, JSON.stringify({ ...stop, parentKilledWhileStopPending, failedWhileStopPending }));
+              fs.writeFileSync(${JSON.stringify(params.stopSettlementPath)}, JSON.stringify({ ...stop, parentKilledWhileStopPending, failedWhileStopPending }));
           }
           return append(pathname, data, ...args);
-        };
-      }`,
+        };`,
     );
-    helperEnv = {
-      ...helperEnv,
-      NODE_OPTIONS: `${helperEnv.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim(),
-    };
   }
   return helperEnv;
 }

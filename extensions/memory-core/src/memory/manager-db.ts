@@ -5,27 +5,28 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
+  isPostgresSqlConnection,
   loadSqliteVecExtension,
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   openOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
+  openOpenClawAgentSqliteWorkerStoreV2,
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
+  tableExists as admittedTableExists,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
-import {
-  MEMORY_INDEX_STATE_ID,
-  memoryDatabaseTableExists as tableExists,
-  readMemoryDatabaseRevision,
-} from "./manager-db-kernel.js";
-import { withMemoryIndexPublishGeneration } from "./manager-index-generation-lease.js";
+import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
+import { MEMORY_INDEX_STATE_ID, readMemoryDatabaseRevision } from "./manager-db-kernel.js";
+import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
+import type { MemoryPublicationOperations } from "./manager-publication-task.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 
 const MEMORY_DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
-const MEMORY_REINDEX_ENTRY_SUFFIXES = ["-wal", "-shm", "-journal", ""] as const;
 const MEMORY_REINDEX_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MEMORY_REINDEX_ORPHAN_MIN_AGE_MS = 24 * 60 * 60_000;
@@ -34,20 +35,14 @@ function resolveMemoryReindexBaseName(
   databaseBaseName: string,
   entryName: string,
 ): string | undefined {
-  for (const suffix of MEMORY_REINDEX_ENTRY_SUFFIXES) {
-    if (!entryName.endsWith(suffix)) {
-      continue;
-    }
-    const baseName = entryName.slice(0, entryName.length - suffix.length);
-    const prefix = `${databaseBaseName}.memory-reindex-`;
-    if (
-      baseName.startsWith(prefix) &&
-      MEMORY_REINDEX_UUID_PATTERN.test(baseName.slice(prefix.length))
-    ) {
-      return baseName;
-    }
-  }
-  return undefined;
+  const matchedSuffix =
+    MEMORY_DATABASE_FILE_SUFFIXES.find((suffix) => suffix && entryName.endsWith(suffix)) ?? "";
+  const baseName = entryName.slice(0, entryName.length - matchedSuffix.length);
+  const prefix = `${databaseBaseName}.memory-reindex-`;
+  return baseName.startsWith(prefix) &&
+    MEMORY_REINDEX_UUID_PATTERN.test(baseName.slice(prefix.length))
+    ? baseName
+    : undefined;
 }
 
 async function isRegularFile(filePath: string): Promise<boolean> {
@@ -69,6 +64,50 @@ function hasSqliteVecExtension(db: DatabaseSync): boolean {
   }
 }
 
+/** PostgreSQL reset borrows the existing agent owner without creating a missing index. */
+export async function resetPostgresMemoryDatabase(params: {
+  agentId: string;
+  dbPath: string;
+  workspaceDir: string;
+}): Promise<boolean> {
+  const lock = await waitForMemoryReindexLock(params.dbPath);
+  try {
+    return await withMemoryWorkspaceLock(params.workspaceDir, () =>
+      withMemoryIndexGeneration(params.dbPath, "write", async () => {
+        const worker = await openOpenClawAgentSqliteWorkerStoreV2<MemoryPublicationOperations>(
+          { agentId: params.agentId, path: params.dbPath },
+          { version: 2, assertCurrent() {} },
+          {
+            moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
+            input: { kind: "agent" },
+          },
+        );
+        try {
+          const receipt = await worker.executeExisting(
+            { type: "database.reset", input: undefined },
+            () => {},
+          );
+          if (!receipt) {
+            return false;
+          }
+          const result = receipt.value;
+          if (!result.ok) {
+            throw Object.assign(new Error(result.error.message), result.error, {
+              entered: result.entered,
+              committed: result.committed,
+            });
+          }
+          return result.value;
+        } finally {
+          await worker.close();
+        }
+      }),
+    );
+  } finally {
+    await lock.release();
+  }
+}
+
 /** Reset derived content without replacing the shared agent database or its schema. */
 export async function resetMemoryDatabase(params: {
   targetDb: DatabaseSync;
@@ -80,8 +119,8 @@ export async function resetMemoryDatabase(params: {
   const lock = await waitForMemoryReindexLock(params.dbPath);
   try {
     return await withMemoryWorkspaceLock(params.workspaceDir, async () =>
-      withMemoryIndexPublishGeneration(params.dbPath, async () => {
-        if (tableExists(db, "main", MEMORY_INDEX_VECTOR_TABLE) && !hasSqliteVecExtension(db)) {
+      withMemoryIndexGeneration(params.dbPath, "write", async () => {
+        if (admittedTableExists(db, MEMORY_INDEX_VECTOR_TABLE) && !hasSqliteVecExtension(db)) {
           const loaded = await loadSqliteVecExtension({
             db,
             extensionPath: params.vectorExtensionPath,
@@ -94,7 +133,7 @@ export async function resetMemoryDatabase(params: {
         }
         return runSqliteImmediateTransactionSync(db, () => {
           const tables = MEMORY_INDEX_DERIVED_TABLES.filter((table) =>
-            tableExists(db, "main", table),
+            admittedTableExists(db, table),
           );
           if (
             !tables.some(
@@ -179,19 +218,18 @@ export async function cleanupAgedMemoryReindexTempFiles(dbPath: string): Promise
     const filePaths = MEMORY_DATABASE_FILE_SUFFIXES.map((suffix) =>
       path.join(dir, `${shadowBaseName}${suffix}`),
     );
-    const stats: Stats[] = [];
-    let hasUnknownFileState = false;
+    let stats: Stats[] | undefined = [];
     for (const filePath of filePaths) {
       try {
         stats.push(await fs.stat(filePath));
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-          hasUnknownFileState = true;
+          stats = undefined;
           break;
         }
       }
     }
-    if (hasUnknownFileState || stats.length === 0) {
+    if (!stats?.length) {
       continue;
     }
     if (nowMs - Math.max(...stats.map((stat) => stat.mtimeMs)) < MEMORY_REINDEX_ORPHAN_MIN_AGE_MS) {
@@ -228,14 +266,8 @@ export function openMemoryDatabaseAtPath(
 }
 
 function openUninitializedMemoryDatabase(allowExtension: boolean) {
-  const database = openNodeSqliteDatabase(":memory:", { allowExtension });
-  try {
-    database.exec("PRAGMA query_only = ON");
-    return { db: database, release: () => database.close(), hasIndex: false };
-  } catch (error) {
-    database.close();
-    throw error;
-  }
+  const database = openNodeSqliteDatabase(":memory:", { readOnly: true, allowExtension });
+  return { db: database, release: () => database.close(), hasIndex: false };
 }
 
 /** Open an existing memory index through the agent database query-only owner. */
@@ -244,7 +276,10 @@ export function openMemoryDatabaseReadOnlyAtPath(
   allowExtension: boolean,
   agentId: string,
 ) {
-  const opened = openOpenClawAgentDatabaseReadOnly({ agentId, path: dbPath }, { allowExtension });
+  const opened = openOpenClawAgentDatabaseReadOnly(
+    { agentId, path: dbPath },
+    { allowExtension, lifecycle: "agent" },
+  );
   if (!opened.found) {
     if (opened.reason === "database-missing") {
       return openUninitializedMemoryDatabase(allowExtension);
@@ -252,11 +287,16 @@ export function openMemoryDatabaseReadOnlyAtPath(
     throw new Error(`Memory index database schema is missing: ${dbPath}`);
   }
   const { database } = opened;
-  if (!tableExists(database.db, "main", MEMORY_INDEX_STATE_TABLE)) {
+  const db = database.db;
+  if (!admittedTableExists(db, MEMORY_INDEX_STATE_TABLE)) {
     database.close();
     return openUninitializedMemoryDatabase(allowExtension);
   }
-  return { db: database.db, release: database.close, hasIndex: true };
+  if (isPostgresSqlConnection(db)) {
+    database.close();
+    throw new Error("PostgreSQL memory reads require the asynchronous worker API.");
+  }
+  return { db, release: database.close, hasIndex: true };
 }
 
 export function closeMemoryDatabase(db: DatabaseSync): void {

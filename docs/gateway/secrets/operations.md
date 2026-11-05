@@ -10,11 +10,25 @@ This page covers day-to-day secrets operation: the supported credential surface,
 
 ## Supported credential surface
 
-Canonical supported and unsupported credentials are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
+Supported and unsupported credentials are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 
 <Note>
 Runtime-minted or rotating credentials and OAuth refresh material are intentionally excluded from read-only SecretRef resolution.
 </Note>
+
+Config secret-target lookup follows config ownership. Core owns roots other than
+`channels` and `plugins`; plugin manifest secret inputs are relative to
+`plugins.entries.<plugin-id>.config`. Channel secret contracts can describe
+credentials under `channels` and their own plugin config schema, including
+contracts shared by multiple channel owners. They do not extend core config schemas.
+
+Secret-target lookup for ordinary core config paths does not discover plugin
+metadata. An explicit plugin config path tries that plugin's manifest targets,
+then its channel contract on a miss.
+Channel lookups try the channel contract first, then use broader discovery on a
+miss so external owners can extend even bundled channel IDs. Audit and
+configuration still include disabled plugins; runtime activation keeps its
+existing enablement rules.
 
 ## Required behavior and precedence
 
@@ -30,7 +44,7 @@ Warning and audit signals:
 - `STORE_PLAINTEXT_RESIDUE` (audit finding when a stored name still has an equivalent plaintext config value)
 - `PLACEHOLDER_VALUE` (audit error when a resolved credential or store entry contains a known redaction placeholder; counted as unresolved)
 
-Google Chat `serviceAccount` accepts inline JSON or a SecretRef. Doctor moves the retired sibling `serviceAccountRef` into this canonical field when it is unset.
+Google Chat `serviceAccount` accepts inline JSON or a SecretRef. Doctor moves the retired sibling `serviceAccountRef` into this current field when it is unset.
 
 ## Activation triggers
 
@@ -68,6 +82,7 @@ Behavior:
 - A strict startup failure never emits a degraded event, because runtime never became active. A successful startup with cold owners logs the owner degradation but does not emit a reloader event.
 - Ref-scoped startup and reload failures emit a structured `SECRETS_DEGRADED` warning for each affected owner. Provider-scoped outages emit one `SECRETS_PROVIDER_DEGRADED` warning with the provider and complete affected-owner list instead of repeating the provider failure per owner. Warnings include a redacted reason, `cold` or `stale` owner state, and the `openclaw secrets reload` retry hint. They never include resolved values or SecretRef ids.
 - `openclaw doctor` lists cold and stale owners with their affected config paths, redacted reason, and retry guidance.
+- Retired auth-profile files that require migration report `auth profile migration required` in Gateway warnings and Doctor, with `openclaw doctor --fix` as the repair command. Doctor owns the verified import and archival; reloading secrets does not migrate these files.
 - Channel health and status keep cold accounts visible as configured but unavailable, alongside healthy accounts. Read-only inspection does not resolve inactive credentials or check cold accounts. `/healthz` still reports Gateway liveness; `/readyz` may report the affected channel as failing until it recovers. Restore the secret, then run `openclaw secrets reload`.
 
 ## Command-path resolution
@@ -91,7 +106,7 @@ Command paths can opt into supported SecretRef resolution via a gateway snapshot
   </Tab>
 </Tabs>
 
-Agent turns using the matching prepared Gateway snapshot do not re-resolve every model and tool credential at turn startup. A configured-unavailable provider therefore does not block a turn using a healthy provider. Selecting the unavailable provider still fails closed before environment or auth-profile fallback, and explicitly targeted channel/account credentials remain strict.
+Agent turns using the matching prepared Gateway snapshot do not re-resolve every model and tool credential at turn startup. A configured-unavailable provider therefore does not block a turn using a healthy provider. Selecting the unavailable provider still stops with an error before environment or auth-profile fallback, and explicitly targeted channel/account credentials remain strict.
 
 Standalone agent commands without config-ref preparation and calls with a different config retain strict command-scoped resolution. A local non-delivery agent command does not resolve unrelated channel or Gateway credentials.
 
@@ -206,6 +221,6 @@ For static credentials, runtime no longer depends on plaintext legacy auth stora
 
 ## Control UI
 
-Open **Settings → Secrets** to list, add, edit, bulk-import, or soft-delete team-scoped entries. Choose **Protected secret** for write-only values used by SecretRefs or destination-bound Gateway egress. Choose **Agent-readable environment** only when Gateway-hosted agent commands must receive plaintext and the agent may print, transmit, or persist it. Bulk Add accepts dotenv `NAME=VALUE` assignments, including quoted multiline values. **Protect credential-like names automatically** defaults credential-shaped names to protected mode.
+Open **Settings → Secrets** to list, add, edit, bulk-import, or soft-delete team-scoped entries. Only admins can manage secrets. Use **Bulk add** to import multiple entries; partial saves report how many entries were saved separately from the failure detail. Deleting an entry asks for confirmation because the stored value can’t be recovered. Choose **Protected secret** for write-only values used by SecretRefs or destination-bound Gateway egress. Choose **Agent-readable environment** only when Gateway-hosted agent commands must receive plaintext and the agent may print, transmit, or persist it. Bulk add accepts dotenv `NAME=VALUE` assignments, including quoted multiline values. **Protect names that look like API keys automatically** defaults credential-shaped names to protected mode.
 
 This store page manages values only. Configure the corresponding `store` SecretRef on a supported field through its settings form or the raw editor. Identity-scoped entries are reserved for a later release and are not exposed by this page.

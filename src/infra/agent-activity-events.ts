@@ -6,7 +6,6 @@ import {
   projectAgentActivityItem,
   resolveCompletedActivityWrappers,
 } from "../agents/agent-activity-presentation.js";
-import { isProcessPollResultDetails } from "../agents/bash-tools.process-schema.js";
 import { unwrapToolCallForDisplay } from "../agents/tool-display-call.js";
 import {
   inferToolMetaFromArgsCore,
@@ -50,7 +49,7 @@ export type AgentCommandOutputEventFields = {
 export type AgentCommandOutputEventData = Record<string, unknown> & AgentCommandOutputEventFields;
 
 /** Patch summary payload emitted after an agent applies file changes. */
-export type AgentPatchSummaryEventData = Record<string, unknown> & {
+type AgentPatchSummaryEventData = Record<string, unknown> & {
   itemId: string;
   phase: "end";
   title: string;
@@ -125,9 +124,7 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
       kind: "tool",
       phase: tool.phase === "result" ? "end" : tool.phase,
       title: meta ? `${label} ${meta}` : label,
-      ...(status
-        ? { status }
-        : { summary: "Outcome unknown", title: `${label} — outcome unknown` }),
+      ...(status ? { status } : { summary: "Outcome unknown" }),
       ...(approval
         ? {
             approvalId: normalizeOptionalString(details?.approvalId),
@@ -147,6 +144,20 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
   );
   // Outcome and visibility still belong to the original execution facts.
   return { ...activity, name: call.name };
+}
+
+/** Poll is the only process action that returns an aggregate for one session. */
+function isProcessPollResultDetails(value: unknown): boolean {
+  const details = asOptionalRecord(value);
+  return Boolean(
+    details &&
+    typeof details.sessionId === "string" &&
+    (details.status === "running" || details.status === "completed") &&
+    (typeof details.aggregated === "string" ||
+      (details.persistedDetailsTruncated === true &&
+        Array.isArray(details.originalDetailKeys) &&
+        details.originalDetailKeys.includes("aggregated"))),
+  );
 }
 
 export type AgentHistoryActivity = { messageId: string; items: AgentActivityItem[] };
@@ -270,6 +281,7 @@ export function projectAgentHistoryActivity(
       if (isToolCallContentType(block.type)) {
         const name =
           normalizeOptionalString(block.name) ?? normalizeOptionalString(block.toolName) ?? "Tool";
+        const args = executedArgs ?? block.arguments ?? block.args ?? block.input;
         // A transcript call is not live authority. Its result may be absent or
         // outside this page; only live events can establish running activity.
         facts.set(key, {
@@ -280,10 +292,10 @@ export function projectAgentHistoryActivity(
           name,
           presentationName: unwrapToolCallForDisplay({
             name,
-            args: executedArgs ?? block.arguments ?? block.args ?? block.input,
+            args,
           }).name,
           phase: "result",
-          args: executedArgs,
+          args,
         });
       }
     }
@@ -346,6 +358,7 @@ export function projectAgentHistoryActivity(
     });
     if (fact.result === undefined) {
       activity.unpairedCall = true;
+      delete activity.summary;
     }
     return {
       key,

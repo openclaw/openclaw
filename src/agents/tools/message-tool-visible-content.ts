@@ -8,10 +8,7 @@ import {
   getBootEchoContextForSession,
   stripBootEchoFromOutboundText,
 } from "../../gateway/boot-echo-guard.js";
-import {
-  parseInteractiveParam,
-  parseJsonMessageParam,
-} from "../../infra/outbound/message-action-params.js";
+import { parseJsonMessageParam } from "../../infra/outbound/message-action-params.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
@@ -169,17 +166,14 @@ function sanitizePresentationTextFields(
           return sanitizedButton;
         });
       }
-      if (Array.isArray(sanitizedBlock.options)) {
-        sanitizedBlock.options = sanitizeRecordArray(sanitizedBlock.options, "label");
-      }
-      if (Array.isArray(sanitizedBlock.categories)) {
-        sanitizedBlock.categories = sanitizeStrings(sanitizedBlock.categories);
-      }
-      if (Array.isArray(sanitizedBlock.segments)) {
-        sanitizedBlock.segments = sanitizeRecordArray(sanitizedBlock.segments, "label");
-      }
-      if (Array.isArray(sanitizedBlock.series)) {
-        sanitizedBlock.series = sanitizeRecordArray(sanitizedBlock.series, "name");
+      for (const field of ["options", "categories", "segments", "series"]) {
+        const entries = sanitizedBlock[field];
+        if (Array.isArray(entries)) {
+          sanitizedBlock[field] =
+            field === "categories"
+              ? sanitizeStrings(entries)
+              : sanitizeRecordArray(entries, field === "series" ? "name" : "label");
+        }
       }
       return sanitizedBlock;
     });
@@ -249,7 +243,7 @@ export function sanitizeMessageToolVisiblePayload(
     return trim ? sanitized.text.trim() : sanitized.text;
   };
   parseJsonMessageParam(params, "presentation");
-  parseInteractiveParam(params);
+  parseJsonMessageParam(params, "interactive");
   for (const field of [
     "text",
     "content",

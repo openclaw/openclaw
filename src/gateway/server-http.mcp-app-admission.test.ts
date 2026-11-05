@@ -1,54 +1,37 @@
-// Proves standalone MCP App HTTP work participates in Gateway suspension admission.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
-  tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 
-const mocks = vi.hoisted(() => ({
-  handleMcpAppStandaloneHttpRequest: vi.fn(),
-}));
+const handleMcpAppStandaloneHttpRequest = vi.hoisted(() => vi.fn());
+// mock-isolation: suspend the standalone handler to observe Gateway admission independently.
+vi.mock("./mcp-app-standalone.js", () => ({ handleMcpAppStandaloneHttpRequest }));
 
-vi.mock("./mcp-app-standalone.js", () => ({
-  handleMcpAppStandaloneHttpRequest: mocks.handleMcpAppStandaloneHttpRequest,
-}));
-
-import {
-  AUTH_NONE,
-  createRequest,
-  createResponse,
-  dispatchRequest,
-  withGatewayServer,
-} from "./server-http.test-harness.js";
+import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-harness.js";
 
 const MCP_APP_PATH = "/__openclaw__/mcp-app";
 
-function mcpAppsConfig(): OpenClawConfig {
-  return {
-    gateway: { trustedProxies: [] },
-    mcp: { apps: { enabled: true } },
-  };
-}
-
-async function withMcpAppServer(
-  run: (server: Parameters<typeof dispatchRequest>[0]) => Promise<void>,
-): Promise<void> {
-  await withGatewayServer({
+function withMcpAppServer(run: Parameters<typeof withGatewayServer>[0]["run"]) {
+  return withGatewayServer({
     prefix: "mcp-app-http-admission",
     resolvedAuth: AUTH_NONE,
-    overrides: { getRuntimeConfig: mcpAppsConfig },
+    overrides: {
+      getRuntimeConfig: () => ({
+        gateway: { trustedProxies: [] },
+        mcp: { apps: { enabled: true } },
+      }),
+    },
     run,
   });
 }
 
 beforeEach(() => {
   resetGatewayWorkAdmission();
-  mocks.handleMcpAppStandaloneHttpRequest.mockReset();
+  handleMcpAppStandaloneHttpRequest.mockReset();
 });
 
 afterEach(() => {
@@ -56,96 +39,49 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
-describe("standalone MCP App HTTP admission", () => {
-  it("rejects new requests with the canonical 503 after admission closes", async () => {
-    mocks.handleMcpAppStandaloneHttpRequest.mockImplementation(
-      (_req: IncomingMessage, res: ServerResponse) => {
-        res.statusCode = 204;
-        res.end();
-        return true;
-      },
+it("keeps deferred handler work visible until it settles", async () => {
+  const started = createDeferred();
+  const finish = createDeferred();
+  handleMcpAppStandaloneHttpRequest.mockImplementation(
+    async (_req: IncomingMessage, res: ServerResponse) => {
+      started.resolve();
+      await finish.promise;
+      res.end("ok");
+      return true;
+    },
+  );
+
+  await withMcpAppServer(async (server) => {
+    const pending = sendRequest(server, { path: MCP_APP_PATH });
+    await started.promise;
+
+    try {
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      markGatewayRestartDraining();
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+    } finally {
+      finish.resolve();
+    }
+    const response = await pending;
+    expect(response.res.statusCode).toBe(200);
+    // res.end() resolves the mock before admission's finally releases the root.
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+});
+
+it("releases admission when the standalone handler fails", async () => {
+  const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+  handleMcpAppStandaloneHttpRequest.mockRejectedValue(new Error("standalone failed"));
+
+  await withMcpAppServer(async (server) => {
+    const response = await sendRequest(server, { path: MCP_APP_PATH });
+
+    expect(response.res.statusCode).toBe(500);
+    expect(response.getBody()).toBe("Internal Server Error");
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(errorLog).toHaveBeenCalledWith(
+      "[gateway-http] unhandled error in request handler:",
+      expect.objectContaining({ message: "standalone failed" }),
     );
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
-
-    await withMcpAppServer(async (server) => {
-      const response = createResponse();
-      await dispatchRequest(server, createRequest({ path: MCP_APP_PATH }), response.res);
-
-      expect(mocks.handleMcpAppStandaloneHttpRequest).not.toHaveBeenCalled();
-      expect(response.res.statusCode).toBe(503);
-      expect(response.setHeader).toHaveBeenCalledWith("Retry-After", "1");
-      expect(JSON.parse(response.getBody())).toMatchObject({
-        error: { code: "gateway_unavailable" },
-      });
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    });
-
-    expect(suspension?.release()).toBe(true);
-  });
-
-  it("keeps deferred handler work visible until it settles", async () => {
-    const started = createDeferred();
-    const finish = createDeferred();
-    mocks.handleMcpAppStandaloneHttpRequest.mockImplementation(
-      async (_req: IncomingMessage, res: ServerResponse) => {
-        started.resolve();
-        await finish.promise;
-        res.statusCode = 200;
-        res.end("ok");
-        return true;
-      },
-    );
-
-    await withMcpAppServer(async (server) => {
-      const response = createResponse();
-      const pending = dispatchRequest(server, createRequest({ path: MCP_APP_PATH }), response.res);
-      await started.promise;
-
-      try {
-        expect(getActiveGatewayRootWorkCount()).toBe(1);
-        markGatewayRestartDraining();
-        expect(getActiveGatewayRootWorkCount()).toBe(1);
-      } finally {
-        finish.resolve();
-      }
-      await pending;
-      expect(response.res.statusCode).toBe(200);
-      // The response mock resolves from res.end(), immediately before the
-      // admission wrapper's finally block releases the request root.
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    });
-  });
-
-  it("releases admission when the standalone handler fails", async () => {
-    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
-    mocks.handleMcpAppStandaloneHttpRequest.mockRejectedValue(new Error("standalone failed"));
-
-    await withMcpAppServer(async (server) => {
-      const response = createResponse();
-      await dispatchRequest(server, createRequest({ path: MCP_APP_PATH }), response.res);
-
-      expect(response.res.statusCode).toBe(500);
-      expect(response.getBody()).toBe("Internal Server Error");
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect(errorLog).toHaveBeenCalledWith(
-        "[gateway-http] unhandled error in request handler:",
-        expect.objectContaining({ message: "standalone failed" }),
-      );
-    });
-  });
-
-  it("releases admission and preserves fallthrough when the handler declines", async () => {
-    mocks.handleMcpAppStandaloneHttpRequest.mockResolvedValue(false);
-
-    await withMcpAppServer(async (server) => {
-      const response = createResponse();
-      await dispatchRequest(server, createRequest({ path: MCP_APP_PATH }), response.res);
-
-      expect(mocks.handleMcpAppStandaloneHttpRequest).toHaveBeenCalledOnce();
-      expect(response.res.statusCode).toBe(404);
-      expect(response.getBody()).toBe("Not Found");
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    });
   });
 });

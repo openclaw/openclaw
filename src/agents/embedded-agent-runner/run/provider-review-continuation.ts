@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { bindResponsesInputMessage, responsesRequestLifecycle } from "@openclaw/ai/internal/openai";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasRuntimeContextMarker } from "../../../llm/types.js";
 import {
@@ -11,13 +12,10 @@ import {
 import type { StreamFn } from "../../runtime/index.js";
 
 function countUserInputSlots(input: readonly unknown[]): number {
-  let count = 0;
-  for (const item of input) {
-    if (isRecord(item) && item.role === "user") {
-      count += 1;
-    }
-  }
-  return count;
+  return input.reduce<number>(
+    (count, item) => count + (isRecord(item) && item.role === "user" ? 1 : 0),
+    0,
+  );
 }
 
 /** Acknowledgment decorates one request; later tool calls retain ordinary transport behavior. */
@@ -148,16 +146,9 @@ export function wrapStreamFnWithProviderReviewContinuation(params: {
         const rawTurnMetadata = metadata["x-codex-turn-metadata"];
         let turnMetadata: Record<string, unknown> = {};
         if (rawTurnMetadata !== undefined) {
-          if (typeof rawTurnMetadata !== "string") {
-            throw new Error("Provider continuation turn metadata is malformed");
-          }
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(rawTurnMetadata);
-          } catch {
-            throw new Error("Provider continuation turn metadata is malformed");
-          }
-          if (!isRecord(parsed)) {
+          const parsed =
+            typeof rawTurnMetadata === "string" ? safeParseJsonRecord(rawTurnMetadata) : undefined;
+          if (!parsed) {
             throw new Error("Provider continuation turn metadata is malformed");
           }
           turnMetadata = parsed;
@@ -223,11 +214,7 @@ export function wrapStreamFnWithProviderReviewContinuation(params: {
       model,
       {
         ...context,
-        messages: [
-          ...context.messages.slice(0, latestIndex),
-          continuationInput,
-          ...context.messages.slice(latestIndex + 1),
-        ],
+        messages: context.messages.with(latestIndex, continuationInput),
       },
       requestOptions,
     );

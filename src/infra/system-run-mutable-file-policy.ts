@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
-import { safeRealpathSync, safeStatSync } from "@openclaw/fs-safe/path";
+import { safeStatSync } from "@openclaw/fs-safe/path";
+import { resolveFilesystemPathCandidate, tryResolveFilesystemRealPath } from "./executable-path.js";
 
 function pathComponentsFromRootSync(targetPath: string): string[] {
   const parts: string[] = [];
-  let cursor = path.resolve(targetPath);
+  let cursor = resolveFilesystemPathCandidate(targetPath);
   while (true) {
     parts.unshift(cursor);
     const parent = path.dirname(cursor);
@@ -49,23 +50,20 @@ export function hasMutableSymlinkPathComponentSync(targetPath: string): boolean 
   return false;
 }
 
-export function pathLooksMutableForShellPayloadSync(targetPath: string): boolean {
-  if (
+function isMutableShellPathSync(targetPath: string): boolean {
+  return (
     isMutableByCurrentProcessSync(targetPath) ||
     isMutableByCurrentProcessSync(path.dirname(targetPath)) ||
     hasMutableSymlinkPathComponentSync(targetPath)
-  ) {
-    return true;
-  }
-  const realPath = safeRealpathSync(targetPath);
-  if (!realPath) {
-    return true;
-  }
-  return (
-    isMutableByCurrentProcessSync(realPath) ||
-    isMutableByCurrentProcessSync(path.dirname(realPath)) ||
-    hasMutableSymlinkPathComponentSync(realPath)
   );
+}
+
+export function pathLooksMutableForShellPayloadSync(targetPath: string): boolean {
+  if (isMutableShellPathSync(targetPath)) {
+    return true;
+  }
+  const realPath = tryResolveFilesystemRealPath(targetPath);
+  return !realPath || isMutableShellPathSync(realPath);
 }
 
 export function looksLikePathToken(token: string): boolean {
@@ -87,7 +85,7 @@ export function resolvesToExistingFileSync(rawOperand: string, cwd: string | und
     return false;
   }
   try {
-    return fs.statSync(path.resolve(cwd ?? process.cwd(), rawOperand)).isFile();
+    return fs.statSync(resolveFilesystemPathCandidate(rawOperand, cwd)).isFile();
   } catch {
     return false;
   }

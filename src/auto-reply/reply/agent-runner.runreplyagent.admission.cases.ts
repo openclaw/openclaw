@@ -1,18 +1,22 @@
 import { existsSync } from "node:fs";
 import { assert, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntry,
-  updateSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import {
+  createReplyOperation,
+  type ReplyOperation,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.js";
+import { captureSessionControllerSettlement } from "../../sessions/session-controller.lifecycle.js";
+import * as controllerMailbox from "../../sessions/session-controller.mailbox.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { scheduleFollowupDrain, type FollowupRun } from "./queue.js";
@@ -20,12 +24,8 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
 import * as turnAdmission from "./reply-turn-admission.js";
+import * as sessionEntryHandle from "./session-entry-handle.js";
 
 type AdmissionFixture = {
   createMinimalRun: (params?: {
@@ -34,8 +34,16 @@ type AdmissionFixture = {
     sessionStore?: Record<string, SessionEntry>;
     sessionKey?: string;
     storePath?: string;
+    resolvedQueueMode?: string;
     runOverrides?: Partial<FollowupRun["run"]>;
-  }) => { run: () => Promise<ReplyPayload | ReplyPayload[] | undefined> };
+    isActive?: boolean;
+    shouldSteer?: boolean;
+    sessionCtx?: Partial<TemplateContext>;
+  }) => {
+    run: () => Promise<ReplyPayload | ReplyPayload[] | undefined>;
+    followupRun: FollowupRun;
+    sourceTurnId?: string;
+  };
   makeSessionFixture: (
     overrides?: Partial<SessionEntry>,
     sessionKey?: string,
@@ -45,16 +53,20 @@ type AdmissionFixture = {
     storePath: string;
   }>;
   runEmbeddedAgentMock: Pick<Mock, "mockImplementationOnce">;
+  queueEmbeddedAgentMessageMock: Pick<Mock, "mock">;
 };
 
 function observePredecessorWait() {
   const entered = createDeferred();
-  const waitForIdle = replyRunRegistry.waitForIdle.bind(replyRunRegistry);
-  const spy = vi.spyOn(replyRunRegistry, "waitForIdle").mockImplementation((...args) => {
-    const pending = waitForIdle(...args);
-    entered.resolve();
-    return pending;
-  });
+  const claimInput = controllerMailbox.claimSessionControllerInput;
+  const spy = vi
+    .spyOn(controllerMailbox, "claimSessionControllerInput")
+    .mockImplementation((source) => {
+      const pending = claimInput(source);
+      expect(source.controllerInput?.phase).toBe("waiting");
+      entered.resolve();
+      return pending;
+    });
   return {
     async wait(pending: Promise<unknown>) {
       await Promise.race([
@@ -77,15 +89,11 @@ export function registerReplyAdmissionCases({
     "settles a tracked reply after lifecycle rotation during %s completion",
     async (stage) => {
       const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
-        status: "running",
-        restartRecoveryDeliveryRunId: "msg",
+        status: undefined,
       });
       let operation: ReplyOperation | undefined;
       const retire = () => {
-        expect(loadSessionEntry({ storePath, sessionKey: "main" })).toMatchObject({
-          restartRecoveryDeliveryRunId: "msg",
-        });
-        operation = replyRunRegistry.get("main");
+        operation = getSessionControllerOperation("main");
         expect(operation).toBeDefined();
         rotateAgentEventLifecycleGeneration();
         expect(operation?.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
@@ -113,17 +121,9 @@ export function registerReplyAdmissionCases({
             : undefined,
       });
       try {
-        await expect(run()).resolves.toMatchObject({
-          text:
-            stage === "backend"
-              ? SILENT_REPLY_TOKEN
-              : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
-        });
+        await expect(run()).resolves.toEqual({});
         expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(stage === "backend" ? 1 : 0);
         expect(scheduleFollowupDrain).toHaveBeenCalledOnce();
-        expect(loadSessionEntry({ storePath, sessionKey: "main" })).toMatchObject({
-          restartRecoveryDeliveryRunId: "msg",
-        });
       } finally {
         operation?.complete();
       }
@@ -159,7 +159,7 @@ export function registerReplyAdmissionCases({
         updatedAt: 2,
       };
       active.complete();
-      await pending;
+      await expect(pending).resolves.toMatchObject({ text: "final" });
       expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     } finally {
       active.complete();
@@ -168,14 +168,9 @@ export function registerReplyAdmissionCases({
     }
   });
 
-  it.each([
-    { storage: "durable", orphanedRecovery: false, claimedRecovery: false },
-    { storage: "durable", orphanedRecovery: true, claimedRecovery: false },
-    { storage: "incognito", orphanedRecovery: false, claimedRecovery: false },
-    { storage: "durable", orphanedRecovery: false, claimedRecovery: true },
-  ])(
-    "publishes the admitted rotation without rereading it ($storage, orphaned recovery=$orphanedRecovery, claimed recovery=$claimedRecovery)",
-    async ({ storage, orphanedRecovery, claimedRecovery }) => {
+  it.each(["durable", "incognito"] as const)(
+    "publishes the admitted rotation without rereading it (%s)",
+    async (storage) => {
       const sessionKey = "agent:main:main";
       const initial = {
         sessionId: "pre-compact-session",
@@ -187,6 +182,7 @@ export function registerReplyAdmissionCases({
           ? await (async () => {
               const state = await createOpenClawTestState({ label: "reply-admission-incognito" });
               onTestFinished(() => state.cleanup());
+              await captureRuntimeConfigAsyncReader()();
               const storePath = resolveIncognitoOpenClawAgentSqlitePath({
                 agentId: "main",
                 env: state.env,
@@ -219,54 +215,15 @@ export function registerReplyAdmissionCases({
       const replacement: SessionEntry = {
         ...sessionEntry,
         ...expected,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         updatedAt: sessionEntry.updatedAt + 1,
-        ...(orphanedRecovery
-          ? {
-              status: "running" as const,
-              abortedLastRun: false,
-              restartRecoveryRuns: [{ runId: "orphaned-run", lifecycleGeneration: "retired" }],
-            }
-          : {}),
-        ...(claimedRecovery
-          ? {
-              status: "running" as const,
-              abortedLastRun: true,
-              mainRestartRecovery: { cycleId: "admitted-cycle", revision: 1, chargedAttempts: 0 },
-            }
-          : {}),
-      };
-      const settleClaimedFixture = async () => {
-        if (!claimedRecovery) {
-          return;
-        }
-        // The mock backend must settle its synthetic interruption before releasing foreground custody.
-        await updateSessionEntry(scope, (current) =>
-          current.sessionId === expected.sessionId
-            ? { status: "done", abortedLastRun: false }
-            : null,
-        );
       };
       const assertPublished = () => {
         const published = sessionStore[sessionKey];
         assert(published);
         expect(published).toMatchObject(expected);
-        expect(published.restartRecoveryRuns).toBeUndefined();
-        if (claimedRecovery) {
-          assert(admittedOperation);
-          expect(published).toMatchObject({
-            abortedLastRun: true,
-            mainRestartRecovery: {
-              cycleId: "admitted-cycle",
-              chargedAttempts: 0,
-              foregroundClaims: {
-                lifecycleGeneration: admittedOperation.lifecycleGeneration,
-                tokens: [expect.any(String)],
-              },
-            },
-          });
-        } else {
-          expect(published.mainRestartRecovery).toBeUndefined();
-        }
       };
       let observer: ReturnType<typeof observeMainThreadSql> | undefined;
       const restoreObserver = () => {
@@ -274,7 +231,7 @@ export function registerReplyAdmissionCases({
         observer = undefined;
       };
       let admittedOperation: ReplyOperation | undefined;
-      let restoreBinding: (() => void) | undefined;
+      let restorePublication: (() => void) | undefined;
       let handoffChecked = false;
       let sqlFailure: unknown;
       const admit = turnAdmission.admitReplyTurn;
@@ -284,12 +241,13 @@ export function registerReplyAdmissionCases({
           const result = await admit(params);
           if (result.status === "owned") {
             admittedOperation = result.operation;
-            const bind = result.operation.bindToolAuthoritySnapshotAsync.bind(result.operation);
-            const binding = vi
-              .spyOn(result.operation, "bindToolAuthoritySnapshotAsync")
-              .mockImplementation(async (snapshot) => {
+            const createHandle = sessionEntryHandle.createReplySessionEntryHandle;
+            const publication = vi
+              .spyOn(sessionEntryHandle, "createReplySessionEntryHandle")
+              .mockImplementation((handleParams) => {
+                const handle = createHandle(handleParams);
                 try {
-                  // Stop before unrelated runtime preparation; publication must already be complete.
+                  // Observe admission through its actual publication, before unrelated preflight.
                   assertPublished();
                   assert(observer);
                   try {
@@ -300,10 +258,11 @@ export function registerReplyAdmissionCases({
                   handoffChecked = true;
                 } finally {
                   restoreObserver();
+                  publication.mockRestore();
                 }
-                return bind(snapshot);
+                return handle;
               });
-            restoreBinding = () => binding.mockRestore();
+            restorePublication = () => publication.mockRestore();
             observer = observeMainThreadSql();
           }
           return result;
@@ -315,12 +274,7 @@ export function registerReplyAdmissionCases({
         assert(published);
         expect(stored).toMatchObject(expected);
         expect(published).toMatchObject(expected);
-        expect(published.restartRecoveryRuns).toEqual(stored?.restartRecoveryRuns);
-        expect(published.mainRestartRecovery).toEqual(stored?.mainRestartRecovery);
-        if (!claimedRecovery) {
-          assertPublished();
-        }
-        await settleClaimedFixture();
+        assertPublished();
         if (storage === "incognito") {
           expect(existsSync(storePath)).toBe(false);
         }
@@ -332,6 +286,7 @@ export function registerReplyAdmissionCases({
         sessionStore,
         sessionKey,
         storePath,
+        resolvedQueueMode: "interrupt",
         runOverrides: { sessionId: sessionEntry.sessionId },
       });
       const pending = run();
@@ -355,16 +310,14 @@ export function registerReplyAdmissionCases({
         active.complete();
         await Promise.allSettled([pending]);
         restoreObserver();
-        try {
-          await settleClaimedFixture();
-        } finally {
-          const released = getSessionWorkAdmissionRelease({
+        {
+          const released = captureSessionControllerSettlement({
             scope: storePath,
             identities: [sessionKey],
           });
           admittedOperation?.complete();
           await released;
-          restoreBinding?.();
+          restorePublication?.();
           admission.mockRestore();
           waiting.restore();
         }

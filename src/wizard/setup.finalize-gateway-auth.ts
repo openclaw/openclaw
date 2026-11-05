@@ -1,4 +1,3 @@
-import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import type { GatewayWizardSettings } from "./setup.types.js";
@@ -25,26 +24,4 @@ export async function resolveGatewayLocalPassword(params: {
     params.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ??
     ""
   );
-}
-
-export function buildSessionGatewayAuthOverride(params: {
-  nextConfig: OpenClawConfig;
-  settings: GatewayWizardSettings;
-  resolvedGatewayPassword: string;
-}): GatewayAuthConfig | undefined {
-  if (params.settings.authMode === "token" && params.settings.gatewayToken) {
-    return {
-      ...params.nextConfig.gateway?.auth,
-      mode: "token",
-      token: params.settings.gatewayToken,
-    };
-  }
-  if (gatewayAuthUsesLocalPassword(params.settings.authMode) && params.resolvedGatewayPassword) {
-    return {
-      ...params.nextConfig.gateway?.auth,
-      mode: params.settings.authMode,
-      password: params.resolvedGatewayPassword,
-    };
-  }
-  return params.nextConfig.gateway?.auth;
 }

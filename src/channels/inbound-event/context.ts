@@ -65,7 +65,7 @@ export type ChannelInboundSupplementalResolutionOptions = {
 };
 type BuildChannelInboundEventAccess = {
   commands?: Pick<ChannelIngressCommandAccess, "authorized">;
-  /** Channel-configured policy resolved at the trusted ingress boundary. */
+  /** @deprecated Resolve policy through security.resolveDirectToolPolicy or groups.resolveToolPolicy. Retained for the original external request until a later stable release after an announced deprecation window and explicit maintainer approval; no removal date is set. */
   toolPolicy?: GroupToolPolicyConfig;
   mentions?: {
     canDetectMention: boolean;
@@ -171,23 +171,23 @@ export type FinalizeChannelInboundContextResult<T extends Record<string, unknown
   threadHidden: boolean;
 };
 
-function filterSupplementalContext<T extends { senderAllowed?: boolean }>(params: {
-  mode?: ContextVisibilityMode;
-  kind: "quote" | "forwarded" | "thread";
-  context: T | undefined;
-}): T | undefined {
-  if (!params.mode || params.mode === "all") {
-    return params.context;
+function filterSupplementalContext<T extends { senderAllowed?: boolean }>(
+  mode: ContextVisibilityMode | undefined,
+  kind: "quote" | "forwarded" | "thread",
+  context: T | undefined,
+): T | undefined {
+  if (!mode || mode === "all") {
+    return context;
   }
-  if (params.context?.senderAllowed === undefined) {
+  if (context?.senderAllowed === undefined) {
     return undefined;
   }
   return shouldIncludeSupplementalContext({
-    mode: params.mode,
-    kind: params.kind,
-    senderAllowed: params.context.senderAllowed,
+    mode,
+    kind,
+    senderAllowed: context.senderAllowed,
   })
-    ? params.context
+    ? context
     : undefined;
 }
 
@@ -201,21 +201,13 @@ export function filterChannelInboundSupplementalContext(params: {
   }
   return {
     ...supplemental,
-    quote: filterSupplementalContext({
-      mode: params.contextVisibility,
-      kind: "quote",
-      context: supplemental.quote,
-    }),
-    forwarded: filterSupplementalContext({
-      mode: params.contextVisibility,
-      kind: "forwarded",
-      context: supplemental.forwarded,
-    }),
-    thread: filterSupplementalContext({
-      mode: params.contextVisibility,
-      kind: "thread",
-      context: supplemental.thread,
-    }),
+    quote: filterSupplementalContext(params.contextVisibility, "quote", supplemental.quote),
+    forwarded: filterSupplementalContext(
+      params.contextVisibility,
+      "forwarded",
+      supplemental.forwarded,
+    ),
+    thread: filterSupplementalContext(params.contextVisibility, "thread", supplemental.thread),
   };
 }
 
@@ -236,109 +228,7 @@ export function filterChannelInboundQuoteContext(
   contextVisibility: ContextVisibilityMode | undefined,
   quote: SupplementalContextFacts["quote"] | undefined,
 ): SupplementalContextFacts["quote"] | undefined {
-  return filterSupplementalContext({ mode: contextVisibility, kind: "quote", context: quote });
-}
-
-function resolveChannelInboundSupplementalForFinalizer(params: {
-  supplemental?: SupplementalContextFacts | ChannelInboundSupplementalFacts;
-  contextVisibility?: ContextVisibilityMode;
-  media?: readonly InboundMediaFacts[];
-  resolveSupplementalMedia?: true;
-  suppressSelfQuoteBody?: boolean;
-  suppressSelfQuoteMedia?: boolean;
-}): MaybePromise<{
-  rawSupplemental?: SupplementalContextFacts | ChannelInboundSupplementalFacts;
-  supplemental?: SupplementalContextFacts;
-  media?: readonly InboundMediaFacts[];
-}> {
-  const rawSupplemental = params.supplemental;
-  const filtered = filterChannelInboundSupplementalContext({
-    supplemental: rawSupplemental,
-    contextVisibility: params.contextVisibility,
-  });
-  const media = [...(params.media ?? [])];
-  if (!rawSupplemental?.quote || !filtered?.quote) {
-    return { rawSupplemental, supplemental: filtered, media };
-  }
-
-  const quote = filtered.quote as ChannelInboundSupplementalQuoteFacts;
-  const selfQuote = quote.isSelf === true;
-  const suppressSelfQuoteBody = params.suppressSelfQuoteBody ?? false;
-  const suppressSelfQuoteMedia = params.suppressSelfQuoteMedia ?? true;
-  const finalizeQuote = (quoteMedia?: readonly InboundMediaFacts[] | null) => {
-    if (!(selfQuote && suppressSelfQuoteMedia)) {
-      media.push(...(quoteMedia ?? []));
-    }
-    const { media: _media, isSelf: _isSelf, ...stripped } = quote;
-    const visibleQuote =
-      selfQuote && suppressSelfQuoteBody
-        ? (({ body: _body, ...withoutBody }) => withoutBody)(stripped)
-        : stripped;
-    return {
-      rawSupplemental,
-      supplemental: {
-        ...filtered,
-        quote: visibleQuote,
-      },
-      media,
-    };
-  };
-
-  if (selfQuote && suppressSelfQuoteMedia) {
-    return finalizeQuote(undefined);
-  }
-  if (!params.resolveSupplementalMedia) {
-    return finalizeQuote(Array.isArray(quote.media) ? quote.media : undefined);
-  }
-  if (typeof quote.media !== "function") {
-    return finalizeQuote(quote.media);
-  }
-  const resolved = quote.media();
-  return isPromiseLike(resolved) ? resolved.then(finalizeQuote) : finalizeQuote(resolved);
-}
-
-function finalizePreparedChannelInboundContext<T extends Record<string, unknown>>(params: {
-  originalContext: T;
-  rawSupplemental?: SupplementalContextFacts | ChannelInboundSupplementalFacts;
-  supplemental?: SupplementalContextFacts;
-  media?: readonly InboundMediaFacts[];
-  finalize?: FinalizeInboundContextFn;
-  finalizeOptions?: FinalizeInboundContextOptions;
-}): FinalizeChannelInboundContextResult<T> {
-  const mediaPayload = params.media
-    ? Object.fromEntries(
-        Object.entries(buildChannelInboundMediaPayload(params.media)).filter(
-          ([, value]) => value !== undefined,
-        ),
-      )
-    : {};
-  const baseContext = {
-    ...params.originalContext,
-    SupplementalContext: params.supplemental,
-    ...(params.media ? { media: [...params.media] } : {}),
-    ...mediaPayload,
-  };
-  const channelStructuredContext = resolveChannelStructuredContext({
-    supplemental: params.supplemental,
-    extra: baseContext,
-  });
-  const finalize = params.finalize ?? finalizeCoreInboundContext;
-  const context = finalize(
-    {
-      ...baseContext,
-      ...(channelStructuredContext !== undefined
-        ? { ChannelStructuredContext: channelStructuredContext }
-        : {}),
-    },
-    params.finalizeOptions,
-  ) as T & FinalizedMsgContext;
-  return {
-    context,
-    supplemental: params.supplemental,
-    quoteHidden: Boolean(params.rawSupplemental?.quote && !params.supplemental?.quote),
-    forwardedHidden: Boolean(params.rawSupplemental?.forwarded && !params.supplemental?.forwarded),
-    threadHidden: Boolean(params.rawSupplemental?.thread && !params.supplemental?.thread),
-  };
+  return filterSupplementalContext(contextVisibility, "quote", quote);
 }
 
 /**
@@ -357,21 +247,118 @@ export function finalizeChannelInboundContext<T extends Record<string, unknown>>
 ): MaybePromise<FinalizeChannelInboundContextResult<T>> {
   const contextSupplemental = (params.context as { SupplementalContext?: SupplementalContextFacts })
     .SupplementalContext;
-  const prepared = resolveChannelInboundSupplementalForFinalizer({
-    supplemental: params.supplemental ?? contextSupplemental,
-    contextVisibility: params.contextVisibility,
-    media: params.media,
-    resolveSupplementalMedia: params.resolveSupplementalMedia,
-    suppressSelfQuoteBody: params.suppressSelfQuoteBody,
-    suppressSelfQuoteMedia: params.suppressSelfQuoteMedia,
-  });
-  const finish = (result: Awaited<typeof prepared>) =>
-    finalizePreparedChannelInboundContext({
-      originalContext: params.context,
-      finalize: params.finalize,
-      finalizeOptions: params.finalizeOptions,
-      ...result,
+  const prepareSupplemental = () => {
+    const rawSupplemental = params.supplemental ?? contextSupplemental;
+    const {
+      contextVisibility,
+      media: inputMedia,
+      resolveSupplementalMedia,
+      suppressSelfQuoteBody: suppressSelfQuoteBodyOption,
+      suppressSelfQuoteMedia: suppressSelfQuoteMediaOption,
+    } = params;
+    const filtered = filterChannelInboundSupplementalContext({
+      supplemental: rawSupplemental,
+      contextVisibility,
     });
+    const media = [...(inputMedia ?? [])];
+    if (!rawSupplemental?.quote || !filtered?.quote) {
+      return { rawSupplemental, supplemental: filtered, media };
+    }
+
+    const quote = filtered.quote as ChannelInboundSupplementalQuoteFacts;
+    const selfQuote = quote.isSelf === true;
+    const suppressSelfQuoteBody = suppressSelfQuoteBodyOption ?? false;
+    const suppressSelfQuoteMedia = suppressSelfQuoteMediaOption ?? true;
+    const finalizeQuote = (quoteMedia?: readonly InboundMediaFacts[] | null) => {
+      if (!(selfQuote && suppressSelfQuoteMedia)) {
+        media.push(...(quoteMedia ?? []));
+      }
+      const { media: _media, isSelf: _isSelf, ...stripped } = quote;
+      const visibleQuote =
+        selfQuote && suppressSelfQuoteBody
+          ? (({ body: _body, ...withoutBody }) => withoutBody)(stripped)
+          : stripped;
+      return {
+        rawSupplemental,
+        supplemental: {
+          ...filtered,
+          quote: visibleQuote,
+        },
+        media,
+      };
+    };
+
+    if (selfQuote && suppressSelfQuoteMedia) {
+      return finalizeQuote(undefined);
+    }
+    if (!resolveSupplementalMedia) {
+      return finalizeQuote(Array.isArray(quote.media) ? quote.media : undefined);
+    }
+    if (typeof quote.media !== "function") {
+      return finalizeQuote(quote.media);
+    }
+    const resolved = quote.media();
+    return isPromiseLike(resolved) ? resolved.then(finalizeQuote) : finalizeQuote(resolved);
+  };
+  const prepared = prepareSupplemental();
+  const finish = (result: Awaited<typeof prepared>): FinalizeChannelInboundContextResult<T> => {
+    const { context: originalContext, finalize: customFinalize, finalizeOptions } = params;
+    const { rawSupplemental, supplemental, media } = result;
+    const mediaPayload = Object.fromEntries(
+      Object.entries(buildChannelInboundMediaPayload(media)).filter(
+        ([, value]) => value !== undefined,
+      ),
+    );
+    const baseContext = {
+      ...originalContext,
+      SupplementalContext: supplemental,
+      media: [...media],
+      ...mediaPayload,
+    };
+    const entries: ChannelStructuredContextEntries = [];
+    const extraEntries =
+      baseContext.ChannelStructuredContext ?? baseContext.UntrustedStructuredContext;
+    if (Array.isArray(extraEntries)) {
+      entries.push(...(extraEntries as ChannelStructuredContextEntries));
+    }
+    const supplementalEntries =
+      supplemental?.channelStructuredContext ?? supplemental?.untrustedContext;
+    if (supplementalEntries !== undefined) {
+      entries.push(...supplementalEntries);
+    }
+
+    // User-controlled group prompt metadata must stay out of GroupSystemPrompt.
+    // Keeping it with untrusted context preserves its user-role boundary.
+    const groupPrompt = normalizeUntrustedGroupPrompt(supplemental?.untrustedGroupSystemPrompt);
+    if (groupPrompt) {
+      entries.push({
+        label: "Group prompt context",
+        type: "group_prompt_context",
+        payload: { text: groupPrompt },
+      });
+    }
+
+    const contextProvided =
+      extraEntries !== undefined || supplementalEntries !== undefined || groupPrompt !== undefined;
+    const channelStructuredContext = contextProvided ? entries : undefined;
+    const finalize = customFinalize ?? finalizeCoreInboundContext;
+    const context = finalize(
+      {
+        ...baseContext,
+        ...(channelStructuredContext !== undefined
+          ? { ChannelStructuredContext: channelStructuredContext }
+          : {}),
+      },
+      finalizeOptions,
+    ) as T & FinalizedMsgContext;
+    return {
+      context,
+      supplemental,
+      quoteHidden: Boolean(rawSupplemental?.quote && !supplemental?.quote),
+      forwardedHidden: Boolean(rawSupplemental?.forwarded && !supplemental?.forwarded),
+      threadHidden: Boolean(rawSupplemental?.thread && !supplemental?.thread),
+    };
+  };
   if (params.resolveSupplementalMedia) {
     return Promise.resolve(prepared).then(finish);
   }
@@ -384,40 +371,6 @@ function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
   }
   const normalized = normalizeInboundTextNewlines(value);
   return normalized.trim().length > 0 ? normalized : undefined;
-}
-
-function resolveChannelStructuredContext(params: {
-  supplemental?: SupplementalContextFacts;
-  extra?: Record<string, unknown>;
-}): ChannelStructuredContextEntries | undefined {
-  const entries: ChannelStructuredContextEntries = [];
-  const extraEntries =
-    params.extra?.ChannelStructuredContext ?? params.extra?.UntrustedStructuredContext;
-  if (Array.isArray(extraEntries)) {
-    entries.push(...(extraEntries as ChannelStructuredContextEntries));
-  }
-  const supplementalEntries =
-    params.supplemental?.channelStructuredContext ?? params.supplemental?.untrustedContext;
-  if (supplementalEntries !== undefined) {
-    entries.push(...supplementalEntries);
-  }
-
-  // User-controlled group prompt metadata must stay out of GroupSystemPrompt.
-  // Keeping it with untrusted context preserves its user-role boundary.
-  const groupPrompt = normalizeUntrustedGroupPrompt(
-    params.supplemental?.untrustedGroupSystemPrompt,
-  );
-  if (groupPrompt) {
-    entries.push({
-      label: "Group prompt context",
-      type: "group_prompt_context",
-      payload: { text: groupPrompt },
-    });
-  }
-
-  const contextProvided =
-    extraEntries !== undefined || supplementalEntries !== undefined || groupPrompt !== undefined;
-  return contextProvided ? entries : undefined;
 }
 
 function resolveChannelCommandContext(params: {
@@ -536,7 +489,6 @@ function buildChannelInboundEventContextValue(
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
     NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
     ConversationAvatar: params.conversation.avatar,
-    ConversationLink: params.conversation.link,
     ChannelContext: params.channelContext,
     OriginatingChannel: params.channel,
     OriginatingTo: params.reply.originatingTo ?? params.reply.to,

@@ -1,19 +1,10 @@
-// Shared by the QA mock providers and the fixtures that consume their debug logs.
-function parseQaDebugRequestCursor(value: string): number | null {
-  if (!/^(?:0|[1-9]\d*)$/u.test(value)) {
-    return null;
-  }
-  const cursor = Number(value);
-  return Number.isSafeInteger(cursor) ? cursor : null;
-}
-
 export function resolveQaDebugRequestCursor(
   value: string,
   oldestCursor: number,
   latestCursor: number,
 ) {
-  const after = parseQaDebugRequestCursor(value);
-  if (after === null) {
+  const after = Number(value);
+  if (!/^(?:0|[1-9]\d*)$/u.test(value) || !Number.isSafeInteger(after)) {
     return { status: 400, body: { error: "after must be a non-negative safe integer" } };
   }
   if (after > latestCursor) {

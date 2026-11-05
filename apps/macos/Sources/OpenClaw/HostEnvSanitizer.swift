@@ -76,16 +76,9 @@ enum HostEnvSanitizer {
 
     private static func normalizeOverrideKey(_ rawKey: String) -> String? {
         let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return nil }
-        guard let first = key.unicodeScalars.first, self.isPortableHead(first) else {
-            return nil
-        }
-        for scalar in key.unicodeScalars.dropFirst() {
-            if self.isPortableTail(scalar) || scalar == "(" || scalar == ")" {
-                continue
-            }
-            return nil
-        }
+        guard let first = key.unicodeScalars.first, self.isPortableHead(first),
+              key.unicodeScalars.dropFirst().allSatisfy({ self.isPortableTail($0) || $0 == "(" || $0 == ")" })
+        else { return nil }
         return key
     }
 
@@ -108,7 +101,11 @@ enum HostEnvSanitizer {
         return safeProtocols.joined(separator: ":")
     }
 
-    static func sanitize(overrides: [String: String]?, shellWrapper: Bool = false) -> [String: String] {
+    static func sanitize(
+        searchPaths: [String],
+        overrides: [String: String]?,
+        shellWrapper: Bool = false) -> [String: String]
+    {
         var merged: [String: String] = [:]
         for (rawKey, value) in ProcessInfo.processInfo.environment {
             let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -133,6 +130,9 @@ enum HostEnvSanitizer {
             if self.isBlockedInherited(upper) { continue }
             merged[key] = value
         }
+
+        // Approval and execution share the app-owned PATH, independent of how the app launched.
+        merged["PATH"] = searchPaths.joined(separator: ":")
 
         let effectiveOverrides = shellWrapper
             ? self.filterOverridesForShellWrapper(overrides)

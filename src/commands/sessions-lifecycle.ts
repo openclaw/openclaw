@@ -6,12 +6,13 @@ import type {
   SessionsPatchResult,
   WorktreePreservationReason,
 } from "../../packages/gateway-protocol/src/index.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { SESSION_ARCHIVE_REQUEST_TIMEOUT_MS } from "../shared/session-archive-timeout.js";
@@ -57,12 +58,14 @@ type SessionsDescribeResult = {
 
 type SessionsLifecycleRpcOptions = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
-function resolveLifecycleAgentId(rawAgent: string | undefined): string | undefined {
+async function resolveLifecycleAgentId(rawAgent: string | undefined): Promise<string | undefined> {
   const requested = rawAgent?.trim();
   if (rawAgent !== undefined && !requested) {
     throw new Error("--agent must not be blank");
   }
-  return requested ? resolveConfiguredAgentId(getRuntimeConfig(), requested) : undefined;
+  return requested
+    ? resolveConfiguredAgentId(await captureRuntimeConfigAsyncReader()(), requested)
+    : undefined;
 }
 
 function listHint(agent?: string): string {
@@ -148,45 +151,48 @@ function outputLifecycleResults(
     );
   } else {
     for (const result of results) {
+      const key = sanitizeTerminalText(result.key);
       switch (result.status) {
         case "archived":
-          runtime.log(`Archived session ${result.key}.`);
+          runtime.log(`Archived session ${key}.`);
           break;
         case "already_archived":
-          runtime.log(`Session ${result.key} is already archived.`);
+          runtime.log(`Session ${key} is already archived.`);
           break;
         case "deleted": {
-          runtime.log(`Deleted session ${result.key}.`);
+          runtime.log(`Deleted session ${key}.`);
           const archivedTranscripts = result.archived ?? [];
           for (const archived of archivedTranscripts) {
-            runtime.log(`Archived transcript: ${archived}`);
+            runtime.log(`Archived transcript: ${sanitizeTerminalText(archived)}`);
           }
           if (archivedTranscripts.length > 0) {
             const agentId = deletedSessions?.get(result)?.agentId;
             runtime.log("Archived transcripts can remain eligible for memory search.");
             runtime.log(
               agentId
-                ? `To remove indexed memories for this session, run openclaw memory forget --agent ${quoteCliArg(agentId)} --session ${quoteCliArg(result.key)} on the Gateway host or container using its state and configuration.`
+                ? `To remove indexed memories for this session, run openclaw memory forget --agent ${quoteCliArg(sanitizeTerminalText(agentId))} --session ${quoteCliArg(key)} on the Gateway host or container using its state and configuration.`
                 : "Run openclaw memory forget on the Gateway host or container using its state and configuration; select the owning agent with --agent and this session with --session.",
             );
           }
           if (result.worktreePreserved) {
             const preserved = result.worktreePreserved;
             runtime.error(
-              `Worktree ${preserved.branch} at ${preserved.path} needs attention: ${WORKTREE_PRESERVATION_REASON_COPY[preserved.reason]}. Inspect it with ${formatCliCommand("openclaw worktrees list")}.`,
+              `Worktree ${sanitizeTerminalText(preserved.branch)} at ${sanitizeTerminalText(preserved.path)} needs attention: ${WORKTREE_PRESERVATION_REASON_COPY[preserved.reason]}. Inspect it with ${formatCliCommand("openclaw worktrees list")}.`,
             );
           }
           break;
         }
         case "would_archive":
-          runtime.log(`[dry-run] archive session ${result.key}`);
+          runtime.log(`[dry-run] archive session ${key}`);
           break;
         case "would_delete":
-          runtime.log(`[dry-run] delete session ${result.key} and its live transcript state`);
+          runtime.log(`[dry-run] delete session ${key} and its live transcript state`);
           break;
         case "not_found":
         case "failed":
-          runtime.error(`${operation} ${result.key}: ${result.error ?? "Unknown failure."}`);
+          runtime.error(
+            `${operation} ${key}: ${sanitizeTerminalText(result.error ?? "Unknown failure.")}`,
+          );
           break;
       }
     }
@@ -196,7 +202,7 @@ function outputLifecycleResults(
   }
 }
 
-async function runSessionsLifecycleCommand(
+export async function sessionsLifecycleCommand(
   operation: SessionsLifecycleOperation,
   opts: SessionsLifecycleCliOptions,
   runtime: RuntimeEnv,
@@ -214,7 +220,7 @@ async function runSessionsLifecycleCommand(
   try {
     // The not-found hint points at `sessions list --agent <id>`, which rejects an unconfigured id
     // locally. Validating here keeps that suggestion runnable instead of handing back a dead end.
-    agent = resolveLifecycleAgentId(opts.agent);
+    agent = await resolveLifecycleAgentId(opts.agent);
     requested = await listRequestedSessions(keys, agent, rpcOptions);
   } catch (error) {
     rethrowExpectedCliError(error);
@@ -292,35 +298,30 @@ async function runSessionsLifecycleCommand(
         };
         continue;
       }
+      const rawResponse = await callGatewayFromCliWithTransport(
+        operation === "archive" ? "sessions.patch" : "sessions.delete",
+        rpcOptions,
+        {
+          key: keys[index],
+          ...(agent ? { agentId: agent } : {}),
+          ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
+          ...(operation === "archive"
+            ? { archived: true }
+            : {
+                deleteTranscript: true,
+                ...(session.archived === true ? { archivedOnly: true } : {}),
+              }),
+        },
+        { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
+      );
       if (operation === "archive") {
-        const response = (await callGatewayFromCliWithTransport(
-          "sessions.patch",
-          rpcOptions,
-          {
-            key: session.key,
-            ...(agent ? { agentId: agent } : {}),
-            ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
-            archived: true,
-          },
-          { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
-        )) as SessionsPatchResult;
+        const response = rawResponse as SessionsPatchResult;
         if (!response?.ok || response.entry?.archivedAt === undefined) {
           throw new Error("Gateway did not confirm that the session was archived.");
         }
         results[index] = { key: response.key ?? session.key, ok: true, status: "archived" };
       } else {
-        const response = (await callGatewayFromCliWithTransport(
-          "sessions.delete",
-          rpcOptions,
-          {
-            key: session.key,
-            ...(agent ? { agentId: agent } : {}),
-            ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
-            deleteTranscript: true,
-            ...(session.archived === true ? { archivedOnly: true } : {}),
-          },
-          { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
-        )) as SessionsDeleteResult;
+        const response = rawResponse as SessionsDeleteResult;
         if (!response.deleted) {
           results[index] = notFoundResult(session.key, agent);
           continue;
@@ -354,20 +355,4 @@ async function runSessionsLifecycleCommand(
     Boolean(opts.json),
     deletedSessions,
   );
-}
-
-/** Archive one or more stored sessions through the same Gateway patch used by Control UI. */
-export async function sessionsArchiveCommand(
-  opts: SessionsLifecycleCliOptions,
-  runtime: RuntimeEnv,
-): Promise<void> {
-  await runSessionsLifecycleCommand("archive", opts, runtime);
-}
-
-/** Delete one or more stored sessions through the same Gateway lifecycle owner used by Control UI. */
-export async function sessionsDeleteCommand(
-  opts: SessionsLifecycleCliOptions,
-  runtime: RuntimeEnv,
-): Promise<void> {
-  await runSessionsLifecycleCommand("delete", opts, runtime);
 }

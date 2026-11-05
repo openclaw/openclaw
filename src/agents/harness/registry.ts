@@ -15,6 +15,7 @@ import {
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { AgentHarnessSessionCleanupError } from "./errors.js";
+import type { ReplyQueueInputAdapter } from "./host-private-capabilities.js";
 import type {
   AgentHarness,
   AgentHarnessNativeCompaction,
@@ -72,15 +73,13 @@ export function registerAgentHarness(
     },
   };
   const existingIndex = harnesses.findIndex((registration) => registration.harness.id === id);
-  if (existingIndex !== -1) {
+  if (existingIndex === -1) {
+    harnesses.push(entry);
+  } else {
     assertDirectPluginRegistrationReplacement(
       harnesses[existingIndex]?.pluginId,
       `agent harness ${id}`,
     );
-  }
-  if (existingIndex === -1) {
-    harnesses.push(entry);
-  } else {
     harnesses.splice(existingIndex, 1, entry);
   }
 }
@@ -103,6 +102,28 @@ export function resolveAgentHarnessOwnerPluginId(harness: AgentHarness): string 
     throw new Error(`Agent harness ${harness.id} changed during owner resolution.`);
   }
   return registration.ownerPluginId ?? "core";
+}
+
+/** Bundled sinks migrate with this host; external sinks retain the shipped question projection. */
+export function resolveAgentHarnessQueueInputAdapter(
+  harness: AgentHarness,
+): ReplyQueueInputAdapter {
+  const registry = getPluginRegistryForContext();
+  const registration = getAgentHarnesses().find((entry) => entry.harness.id === harness.id);
+  if (registration?.harness !== harness) {
+    throw new Error(`Agent harness ${harness.id} changed during input adapter resolution.`);
+  }
+  // Direct facade registrations have no loader-owned bundle provenance.
+  const owner =
+    registration.source !== "runtime"
+      ? registry?.plugins.find(
+          (plugin) =>
+            plugin.id === registration.pluginId &&
+            plugin.source === registration.source &&
+            plugin.rootDir === registration.rootDir,
+        )
+      : undefined;
+  return owner?.origin === "bundled" ? "human-and-question-permission" : "legacy-question-category";
 }
 
 /** Resolves the private Codex compaction bridge from exact registry-owned capability state. */

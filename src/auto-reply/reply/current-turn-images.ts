@@ -13,7 +13,6 @@ import {
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
 import type { MediaAttachment } from "../../media-understanding/types.js";
-import { normalizeMediaFacts } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import {
@@ -39,9 +38,7 @@ export type CurrentTurnImages = {
 
 function collectCurrentImageAttachments(ctx: MsgContext): MediaAttachment[] {
   const hydrationSuppressedIndexes = new Set(
-    normalizeMediaFacts(ctx.media).flatMap((fact, index) =>
-      fact.hydrationSuppressed === true ? [index] : [],
-    ),
+    (ctx.media ?? []).flatMap((fact, index) => (fact.hydrationSuppressed === true ? [index] : [])),
   );
   return normalizeAttachments(ctx).filter(
     (attachment) =>
@@ -59,21 +56,19 @@ function appendOrderedImages(params: {
 }) {
   const images = params.images ?? [];
   let inlineIndex = 0;
-  for (const imageOrder of params.imageOrder ?? []) {
+  const appendImage = (imageOrder: PromptImageOrderEntry) => {
     params.entries.push({
       image: imageOrder === "inline" ? images[inlineIndex++] : undefined,
       imageOrder,
       sourceIndex: params.sourceIndex,
       sequence: params.entries.length,
     });
+  };
+  for (const imageOrder of params.imageOrder ?? []) {
+    appendImage(imageOrder);
   }
   while (inlineIndex < images.length) {
-    params.entries.push({
-      image: images[inlineIndex++],
-      imageOrder: "inline",
-      sourceIndex: params.sourceIndex,
-      sequence: params.entries.length,
-    });
+    appendImage("inline");
   }
 }
 

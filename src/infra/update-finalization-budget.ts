@@ -12,7 +12,6 @@ export async function resolveUpdateFinalizationTimeoutMs(
   options: {
     env?: NodeJS.ProcessEnv;
     databases?: readonly { path: string }[];
-    observedStartupMs?: number;
     pluginCount?: number;
     nodeRunner?: string;
   } = {},
@@ -32,11 +31,7 @@ export async function resolveUpdateFinalizationTimeoutMs(
     }),
   );
   return (
-    Math.max(
-      perStepTimeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
-      stateBudgetMs,
-      options.observedStartupMs ?? 0,
-    ) *
+    Math.max(perStepTimeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS, stateBudgetMs) *
     (FINALIZE_PROCESS_STEP_BUDGET_MULTIPLIER + (options.pluginCount ?? 0))
   );
 }

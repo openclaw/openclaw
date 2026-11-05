@@ -5,7 +5,9 @@ import {
   type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
 import { gatewayWebSocketTransportUrl, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
+import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { listen } from "../lib/reactive/listener.ts";
 
 const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR";
 export const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
@@ -21,28 +23,15 @@ export function formatBrowserWebSocketConstructorError(err: unknown, url: string
     message.includes("mixed content") ||
     message.includes("insecure websocket");
   const isPlaintextWs = url.trim().toLowerCase().startsWith("ws://");
-  const details = {
-    code: securityError
-      ? BROWSER_WEBSOCKET_SECURITY_ERROR_CODE
-      : BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE,
-    browserErrorName,
-    browserMessage,
-  };
-  if (securityError) {
-    return {
-      code: BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
-      message:
-        "Browser refused the Gateway WebSocket for security reasons." +
-        (isPlaintextWs
-          ? " Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789."
-          : " Check the Gateway WebSocket URL and browser security policy."),
-      details,
-    };
-  }
+  const code = securityError
+    ? BROWSER_WEBSOCKET_SECURITY_ERROR_CODE
+    : BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE;
   return {
-    code: BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE,
-    message: `Could not create the Gateway WebSocket: ${browserMessage}`,
-    details,
+    code,
+    message: securityError
+      ? t(isPlaintextWs ? "runtimeErrors.socketInsecure" : "runtimeErrors.socketRefused")
+      : t("runtimeErrors.socketCreateFailed", { message: browserMessage }),
+    details: { code, browserErrorName, browserMessage },
   };
 }
 
@@ -60,6 +49,7 @@ export async function probeGatewayReachability(url: string, signal: AbortSignal)
     const response = await fetch(probe, {
       cache: "no-store",
       credentials: "same-origin",
+      headers: { "X-OpenClaw-Reachability-Probe": "1" },
       redirect: "error",
       signal,
     });
@@ -83,11 +73,11 @@ export async function probeGatewayReachability(url: string, signal: AbortSignal)
 export function createBrowserGatewaySocket(
   url: string,
   handlers: GatewayProtocolSocketHandlers,
-  maxPayloadBytes?: () => number | undefined,
 ): GatewayProtocolSocket {
   const socket = new WebSocket(gatewayWebSocketTransportUrl(url));
+  const listeners = new AbortController();
+  const listenerOptions = { signal: listeners.signal };
   let opening = true;
-  let openingTimeoutReason: string | undefined;
   let openingTimer: ReturnType<typeof setTimeout> | undefined;
   const finishOpening = () => {
     opening = false;
@@ -96,23 +86,36 @@ export function createBrowserGatewaySocket(
       openingTimer = undefined;
     }
   };
-
-  socket.addEventListener("open", () => {
-    finishOpening();
-    handlers.open();
-  });
-  socket.addEventListener("message", (event) => handlers.message(String(event.data ?? "")));
-  socket.addEventListener("close", (event) => {
-    finishOpening();
-    // Browsers erase locally initiated close reasons before the handshake finishes.
-    handlers.close(event.code, event.reason || openingTimeoutReason || "");
-  });
-  socket.addEventListener("error", () => {
-    finishOpening();
-    if (!openingTimeoutReason) {
-      handlers.error(new Error("websocket error"));
+  const finishClose = (code: number, reason: string) => {
+    if (listeners.signal.aborted) {
+      return;
     }
-  });
+    finishOpening();
+    // The protocol owner can reconnect synchronously from this terminal callback.
+    listeners.abort();
+    handlers.close(code, reason);
+  };
+
+  listen(
+    socket,
+    "open",
+    () => {
+      finishOpening();
+      handlers.open();
+    },
+    listenerOptions,
+  );
+  listen(socket, "message", (event) => handlers.message(String(event.data ?? "")), listenerOptions);
+  listen(socket, "close", (event) => finishClose(event.code, event.reason), listenerOptions);
+  listen(
+    socket,
+    "error",
+    () => {
+      finishOpening();
+      handlers.error(new Error("websocket error"));
+    },
+    listenerOptions,
+  );
 
   // The protocol challenge timer starts after `open`. Bound the browser's
   // opening phase to the same default preauth budget used by the Node client.
@@ -122,36 +125,30 @@ export function createBrowserGatewaySocket(
       return;
     }
     opening = false;
-    openingTimeoutReason = `gateway websocket opening timed out after ${DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS}ms`;
+    const reason = t("runtimeErrors.socketTimeout", {
+      milliseconds: String(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS),
+    });
     try {
-      handlers.error(new Error(openingTimeoutReason));
+      handlers.error(new Error(reason));
     } finally {
       socket.close();
+      finishClose(1006, reason);
     }
   }, DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
 
   return {
-    isOpen: () => socket.readyState === WebSocket.OPEN,
-    send: (data) => {
-      const limit = maxPayloadBytes?.();
-      if (limit !== undefined && new TextEncoder().encode(data).byteLength > limit) {
-        throw new GatewayPayloadLimitError();
-      }
-      socket.send(data);
-    },
+    isOpen: () => !listeners.signal.aborted && socket.readyState === WebSocket.OPEN,
+    send: (data) => socket.send(data),
     close: (code, reason) => {
+      if (listeners.signal.aborted) {
+        return;
+      }
       finishOpening();
       // Browser-initiated closes reject the shared protocol's 1008 policy code.
       socket.close(code === 1008 ? 4008 : code, reason);
+      // A dead peer may never finish the native closing handshake. Retire locally,
+      // preserving the owner's code rather than the browser-only wire translation.
+      finishClose(code ?? 1000, reason ?? "");
     },
   };
-}
-
-export class GatewayPayloadLimitError extends Error {
-  constructor() {
-    super(
-      "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
-    );
-    this.name = "GatewayPayloadLimitError";
-  }
 }

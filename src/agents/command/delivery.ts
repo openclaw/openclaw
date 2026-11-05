@@ -14,12 +14,12 @@ import {
   type NormalizeReplySkipReason,
 } from "../../auto-reply/reply/normalize-reply.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
-import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
+import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.js";
 import {
   filterMessagingToolMediaDuplicates,
   hasEnabledDeliveryOperation,
   resolveMessagingToolPayloadDedupe,
-} from "../../auto-reply/reply/reply-payloads-dedupe.runtime.js";
+} from "../../auto-reply/reply/reply-payloads-dedupe.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
@@ -30,6 +30,7 @@ import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
 import {
@@ -48,7 +49,7 @@ import {
 } from "../../infra/outbound/payloads.js";
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { normalizeSentMediaUrlsForDelivery } from "../delivery-evidence-values.js";
 import { isNestedAgentLane } from "../lanes.js";
@@ -69,8 +70,6 @@ import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatchCore>>;
-
-const NESTED_LOG_PREFIX = "[agent:nested]";
 
 type FreshSessionEntryForDeliveryResolver = () => Promise<SessionEntry | undefined>;
 
@@ -95,262 +94,11 @@ type DeliverAgentCommandResultParams = {
   payloads: ReplyPayload[] | undefined;
   /** Channel plugin already selected and bootstrapped by the caller. */
   preparedPlugin?: ChannelPlugin;
-  assertDeliveryCurrent?: () => void;
-  onDeliveryResult?: (result: AgentCommandDeliveryResult) => void;
+  assertDeliveryCurrent?: SessionSourceAssertion;
+  onDeliveryResult?: (result: AgentCommandDeliveryResult, payloads: ReplyPayload[]) => void;
 } & FreshSessionDeliveryRefreshParams;
 
-function isFreshDeliverySessionMatch(
-  freshSessionEntry: SessionEntry,
-  expectedSessionId: string | undefined,
-): boolean {
-  const normalizedExpected = expectedSessionId?.trim();
-  return Boolean(normalizedExpected && freshSessionEntry.sessionId === normalizedExpected);
-}
-
-function formatNestedLogPrefix(opts: AgentCommandOpts, sessionKey?: string): string {
-  const parts = [NESTED_LOG_PREFIX];
-  const session = sessionKey ?? opts.sessionKey ?? opts.sessionId;
-  if (session) {
-    parts.push(`session=${session}`);
-  }
-  if (opts.runId) {
-    parts.push(`run=${opts.runId}`);
-  }
-  const channel = opts.messageChannel ?? opts.channel;
-  if (channel) {
-    parts.push(`channel=${channel}`);
-  }
-  if (opts.to) {
-    parts.push(`to=${opts.to}`);
-  }
-  if (opts.accountId) {
-    parts.push(`account=${opts.accountId}`);
-  }
-  return parts.join(" ");
-}
-
-function logNestedOutput(
-  runtime: RuntimeEnv,
-  opts: AgentCommandOpts,
-  output: string,
-  sessionKey?: string,
-) {
-  const prefix = formatNestedLogPrefix(opts, sessionKey);
-  for (const line of output.split(/\r?\n/)) {
-    if (!line) {
-      continue;
-    }
-    runtime.log(`${prefix} ${line}`);
-  }
-}
-
-async function normalizeReplyMediaPathsForDelivery(params: {
-  cfg: OpenClawConfig;
-  payloads: ReplyPayload[];
-  sessionKey?: string;
-  outboundSession: OutboundSessionContext | undefined;
-  deliveryChannel: string;
-  accountId?: string;
-}): Promise<{
-  payloads: ReplyPayload[];
-  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
-}> {
-  if (params.payloads.length === 0) {
-    return { payloads: params.payloads };
-  }
-  const agentId =
-    params.outboundSession?.agentId ??
-    resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
-  const workspaceDir = agentId ? resolveAgentWorkspaceDir(params.cfg, agentId) : undefined;
-  if (!workspaceDir) {
-    return { payloads: params.payloads };
-  }
-  const normalizeMediaPaths = createReplyMediaPathNormalizer({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId,
-    workspaceDir,
-    messageProvider: params.deliveryChannel,
-    accountId: params.accountId,
-  });
-  const result: ReplyPayload[] = [];
-  for (const payload of params.payloads) {
-    result.push(await normalizeMediaPaths(payload));
-  }
-  return { payloads: result, normalizeMediaPaths };
-}
-
 const UNRESOLVED_RESPONSE_PREFIX_VAR_PATTERN = /\{[a-zA-Z][a-zA-Z0-9.]*\}/;
-
-async function filterAlreadyDeliveredReplyPayloads(params: {
-  cfg: OpenClawConfig;
-  payloads: ReplyPayload[];
-  result: RunResult;
-  deliveryChannel: string;
-  deliveryTarget: string;
-  accountId?: string;
-  sourceAccountId?: string;
-  defaultAccountId?: string;
-  threadId?: string | number;
-  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
-  normalizeSentTexts?: (sentTexts: readonly string[]) => string[];
-}): Promise<ReplyPayload[]> {
-  const sentTexts = params.result.messagingToolSentTexts ?? [];
-  const sentMediaUrls = params.result.messagingToolSentMediaUrls ?? [];
-  // The message tool injects the run account after telemetry captures its
-  // original args. Preserve that source route before falling back to default.
-  const implicitToolAccountId = params.sourceAccountId ?? params.defaultAccountId;
-  const sentTargets = (params.result.messagingToolSentTargets ?? []).flatMap((target) => {
-    if (target.accountId || !params.accountId) {
-      return [target];
-    }
-    return implicitToolAccountId ? [{ ...target, accountId: implicitToolAccountId }] : [];
-  });
-  if (sentTexts.length === 0 && sentMediaUrls.length === 0 && sentTargets.length === 0) {
-    return params.payloads;
-  }
-
-  const decision = resolveMessagingToolPayloadDedupe({
-    config: params.cfg,
-    messageProvider: params.deliveryChannel,
-    messagingToolSentTargets: sentTargets,
-    originatingTo: params.deliveryTarget,
-    originatingThreadId: params.threadId,
-    accountId: params.accountId,
-  });
-  if (!decision.matchingRoute) {
-    return params.payloads;
-  }
-  const routeSentMediaUrls = decision.useGlobalSentMediaUrlEvidenceFallback
-    ? sentMediaUrls
-    : decision.routeSentMediaUrls;
-  const rawRouteSentTexts = decision.useGlobalSentTextEvidenceFallback
-    ? sentTexts
-    : decision.routeSentTexts;
-  const routeSentTexts = params.normalizeSentTexts?.(rawRouteSentTexts) ?? rawRouteSentTexts;
-  const exactRouteSentTexts = new Set(routeSentTexts.filter((text) => Boolean(text.trim())));
-  const normalizedSentMediaUrls = await normalizeSentMediaUrlsForDelivery({
-    sentMediaUrls: routeSentMediaUrls,
-    normalizeMediaPaths: params.normalizeMediaPaths,
-  });
-  const mediaFiltered = filterMessagingToolMediaDuplicates({
-    payloads: params.payloads,
-    sentMediaUrls: normalizedSentMediaUrls,
-  });
-
-  const filteredPayloads: ReplyPayload[] = [];
-  for (const candidate of mediaFiltered) {
-    if (hasEnabledDeliveryOperation(candidate)) {
-      filteredPayloads.push(candidate);
-      continue;
-    }
-    const effectiveCandidateText =
-      formatBtwTextForExternalDelivery(candidate) ?? candidate.text ?? "";
-    if (!effectiveCandidateText.trim() || !exactRouteSentTexts.has(effectiveCandidateText)) {
-      filteredPayloads.push(candidate);
-      continue;
-    }
-    const withoutDuplicateText = copyReplyPayloadMetadata(candidate, {
-      ...candidate,
-      text: undefined,
-    });
-    if (
-      hasReplyPayloadContent(withoutDuplicateText, {
-        trimText: true,
-        extraContent: withoutDuplicateText.location != null,
-      })
-    ) {
-      filteredPayloads.push(withoutDuplicateText);
-    }
-  }
-  return filteredPayloads;
-}
-
-function normalizeAgentCommandReplyPayloads(params: {
-  cfg: OpenClawConfig;
-  opts: AgentCommandOpts;
-  outboundSession: OutboundSessionContext | undefined;
-  payloads: ReplyPayload[] | undefined;
-  result: RunResult;
-  deliveryChannel?: string;
-  plugin?: ChannelPlugin;
-  accountId?: string;
-  applyChannelTransforms?: boolean;
-  includeRunModelContext?: boolean;
-}): NormalizeReplyOutcome<ReplyPayload[]> {
-  const payloads = params.payloads ?? [];
-  if (payloads.length === 0) {
-    return { kind: "suppress", reason: "empty" };
-  }
-  const channel =
-    params.deliveryChannel && !isInternalMessageChannel(params.deliveryChannel)
-      ? (normalizeChannelId(params.deliveryChannel) ?? params.deliveryChannel)
-      : undefined;
-  if (!channel) {
-    return { kind: "deliver", payload: payloads };
-  }
-  const applyChannelTransforms = params.applyChannelTransforms ?? true;
-  const deliveryPlugin = applyChannelTransforms ? params.plugin : undefined;
-
-  const sessionKey = params.outboundSession?.key ?? params.opts.sessionKey;
-  const agentId =
-    params.outboundSession?.agentId ??
-    resolveSessionAgentId({
-      sessionKey,
-      config: params.cfg,
-    });
-  const replyPrefix = createReplyPrefixContext({
-    cfg: params.cfg,
-    agentId,
-    channel,
-    accountId: params.accountId,
-  });
-  const modelUsed = params.result.meta.agentMeta?.model;
-  const providerUsed = params.result.meta.agentMeta?.provider;
-  if (params.includeRunModelContext !== false && providerUsed && modelUsed) {
-    replyPrefix.onModelSelected({
-      provider: providerUsed,
-      model: modelUsed,
-      thinkLevel: undefined,
-    });
-  }
-  const responsePrefixContext = replyPrefix.responsePrefixContextProvider();
-  const resolvedResponsePrefix = resolveResponsePrefixTemplate(
-    replyPrefix.responsePrefix,
-    responsePrefixContext,
-  );
-  const responsePrefix =
-    params.includeRunModelContext === false &&
-    resolvedResponsePrefix &&
-    UNRESOLVED_RESPONSE_PREFIX_VAR_PATTERN.test(resolvedResponsePrefix)
-      ? undefined
-      : replyPrefix.responsePrefix;
-  const deliveryMessaging = deliveryPlugin?.messaging;
-  const transformReplyPayload = createChannelReplyTransform({
-    messaging: deliveryMessaging,
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-
-  const normalizedPayloads: ReplyPayload[] = [];
-  let suppressionReason: NormalizeReplySkipReason | undefined;
-  for (const payload of payloads) {
-    const outcome = normalizeReplyPayloadOutcome(payload, {
-      responsePrefix,
-      applyChannelTransforms,
-      responsePrefixContext,
-      transformReplyPayload,
-    });
-    if (outcome.kind === "deliver") {
-      normalizedPayloads.push(outcome.payload);
-    } else if (suppressionReason === undefined || outcome.reason === "channel_transform") {
-      suppressionReason = outcome.reason;
-    }
-  }
-  return normalizedPayloads.length > 0
-    ? { kind: "deliver", payload: normalizedPayloads }
-    : { kind: "suppress", reason: suppressionReason ?? "empty" };
-}
 
 export async function deliverAgentCommandResult(
   params: DeliverAgentCommandResultParams,
@@ -434,7 +182,7 @@ export async function deliverAgentCommandResult(
     const resolvedAccountId = deliveryPlan.resolvedAccountId ?? defaultAccountId;
     const resolved =
       deliver && isDeliveryChannelKnown && deliveryChannel
-        ? resolveAgentOutboundTarget({
+        ? await resolveAgentOutboundTarget({
             cfg,
             plan: {
               ...deliveryPlan,
@@ -498,12 +246,14 @@ export async function deliverAgentCommandResult(
   if (routingFailure && routingFailure !== "unknown_channel") {
     const freshSessionEntry = await params.resolveFreshSessionEntryForDelivery?.();
     params.assertDeliveryCurrent?.();
-    const expectedFreshSessionId =
-      params.expectedSessionIdForFreshDelivery ?? sessionEntry?.sessionId;
+    const expectedFreshSessionId = (
+      params.expectedSessionIdForFreshDelivery ?? sessionEntry?.sessionId
+    )?.trim();
     if (
       freshSessionEntry &&
       freshSessionEntry !== sessionEntry &&
-      isFreshDeliverySessionMatch(freshSessionEntry, expectedFreshSessionId)
+      expectedFreshSessionId &&
+      freshSessionEntry.sessionId === expectedFreshSessionId
     ) {
       const freshRouting = await resolveDeliveryRouting(freshSessionEntry);
       params.assertDeliveryCurrent?.();
@@ -533,10 +283,7 @@ export async function deliverAgentCommandResult(
   const logDeliveryError = (err: unknown) => {
     deliveryLoggedError = true;
     const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
-    runtime.error?.(message);
-    if (!runtime.error) {
-      runtime.log(message);
-    }
+    runtime.error(message);
   };
   let strictPreDeliveryError: unknown;
   let deliveryStatus: AgentCommandDeliveryStatus | undefined;
@@ -569,19 +316,79 @@ export async function deliverAgentCommandResult(
   const normalizeReplyPayloads = (
     replyPayloads: ReplyPayload[] | undefined,
     includeRunModelContext = true,
-  ) =>
-    normalizeAgentCommandReplyPayloads({
+  ): NormalizeReplyOutcome<ReplyPayload[]> => {
+    const inputPayloads = replyPayloads ?? [];
+    if (inputPayloads.length === 0) {
+      return { kind: "suppress", reason: "empty" };
+    }
+    const channel =
+      deliveryChannel && !isInternalMessageChannel(deliveryChannel)
+        ? (normalizeChannelId(deliveryChannel) ?? deliveryChannel)
+        : undefined;
+    if (!channel) {
+      return { kind: "deliver", payload: inputPayloads };
+    }
+    const normalizationPlugin = deliver ? deliveryPlugin : undefined;
+
+    const sessionKey = outboundSession?.key ?? opts.sessionKey;
+    const agentId =
+      outboundSession?.agentId ??
+      resolveSessionAgentId({
+        sessionKey,
+        config: cfg,
+      });
+    const replyPrefix = createReplyPrefixContext({
       cfg,
-      opts,
-      outboundSession,
-      payloads: replyPayloads,
-      result,
-      deliveryChannel,
-      plugin: deliveryPlugin,
+      agentId,
+      channel,
       accountId: resolvedAccountId,
-      applyChannelTransforms: deliver,
-      includeRunModelContext,
     });
+    const modelUsed = result.meta.agentMeta?.model;
+    const providerUsed = result.meta.agentMeta?.provider;
+    if (includeRunModelContext && providerUsed && modelUsed) {
+      replyPrefix.onModelSelected({
+        provider: providerUsed,
+        model: modelUsed,
+        thinkLevel: undefined,
+      });
+    }
+    const responsePrefixContext = replyPrefix.responsePrefixContextProvider();
+    const resolvedResponsePrefix = resolveResponsePrefixTemplate(
+      replyPrefix.responsePrefix,
+      responsePrefixContext,
+    );
+    const responsePrefix =
+      !includeRunModelContext &&
+      resolvedResponsePrefix &&
+      UNRESOLVED_RESPONSE_PREFIX_VAR_PATTERN.test(resolvedResponsePrefix)
+        ? undefined
+        : replyPrefix.responsePrefix;
+    const deliveryMessaging = normalizationPlugin?.messaging;
+    const transformReplyPayload = createChannelReplyTransform({
+      messaging: deliveryMessaging,
+      cfg,
+      accountId: resolvedAccountId,
+    });
+
+    const normalizedReplies: ReplyPayload[] = [];
+    let suppressionReason: NormalizeReplySkipReason | undefined;
+    for (const payload of inputPayloads) {
+      const outcome = normalizeReplyPayloadOutcome(payload, {
+        responsePrefix,
+        applyChannelTransforms: deliver,
+        responsePrefixContext,
+        transformReplyPayload,
+      });
+      if (outcome.kind === "deliver") {
+        normalizedReplies.push(outcome.payload);
+      } else if (suppressionReason === undefined || outcome.reason === "channel_transform") {
+        suppressionReason = outcome.reason;
+      }
+    }
+    return normalizedReplies.length > 0
+      ? { kind: "deliver", payload: normalizedReplies }
+      : { kind: "suppress", reason: suppressionReason ?? "empty" };
+  };
   const replyNormalization = normalizeReplyPayloads(payloads);
   const normalizedReplyPayloads =
     replyNormalization.kind === "deliver" ? replyNormalization.payload : [];
@@ -602,27 +409,77 @@ export async function deliverAgentCommandResult(
       payload.text?.trim() ? [payload.text] : [],
     );
   };
-  const filterDeliveredPayloads = (
+  const filterDeliveredPayloads = async (
     replyPayloads: ReplyPayload[],
     normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>,
-  ) => {
+  ): Promise<ReplyPayload[]> => {
     if (!shouldFilterDeliveredPayloads || !deliveryTarget) {
-      return Promise.resolve(replyPayloads);
+      return replyPayloads;
     }
-    return filterAlreadyDeliveredReplyPayloads({
-      cfg,
-      payloads: replyPayloads,
-      result,
-      deliveryChannel,
-      deliveryTarget,
-      accountId: resolvedAccountId,
-      sourceAccountId: turnSourceAccountId,
-      defaultAccountId,
+    const sentTexts = result.messagingToolSentTexts ?? [];
+    const sentMediaUrls = result.messagingToolSentMediaUrls ?? [];
+    // The message tool injects the run account after telemetry captures its
+    // original args. Preserve that source route before falling back to default.
+    const implicitToolAccountId = turnSourceAccountId ?? defaultAccountId;
+    const sentTargets = (result.messagingToolSentTargets ?? []).flatMap((target) => {
+      if (target.accountId || !resolvedAccountId) {
+        return [target];
+      }
+      return implicitToolAccountId ? [{ ...target, accountId: implicitToolAccountId }] : [];
+    });
+    if (sentTexts.length === 0 && sentMediaUrls.length === 0 && sentTargets.length === 0) {
+      return replyPayloads;
+    }
+
+    const decision = resolveMessagingToolPayloadDedupe({
+      config: cfg,
+      messageProvider: deliveryChannel,
+      messagingToolSentTargets: sentTargets,
+      originatingTo: deliveryTarget,
       // Command delivery projects payloads onto one batch route below, so
       // per-payload reply metadata does not change the destination here.
-      threadId: resolvedThreadTarget ?? resolvedReplyToId ?? undefined,
+      originatingThreadId: resolvedThreadTarget ?? resolvedReplyToId ?? undefined,
+      accountId: resolvedAccountId,
+    });
+    if (!decision.matchingRoute) {
+      return replyPayloads;
+    }
+    const routeSentMediaUrls = decision.useGlobalSentMediaUrlEvidenceFallback
+      ? sentMediaUrls
+      : decision.routeSentMediaUrls;
+    const rawRouteSentTexts = decision.useGlobalSentTextEvidenceFallback
+      ? sentTexts
+      : decision.routeSentTexts;
+    const routeSentTexts = normalizeSentTexts(rawRouteSentTexts);
+    const exactRouteSentTexts = new Set(routeSentTexts.filter((text) => Boolean(text.trim())));
+    const normalizedSentMediaUrls = await normalizeSentMediaUrlsForDelivery({
+      sentMediaUrls: routeSentMediaUrls,
       normalizeMediaPaths,
-      normalizeSentTexts,
+    });
+    const mediaFiltered = filterMessagingToolMediaDuplicates({
+      payloads: replyPayloads,
+      sentMediaUrls: normalizedSentMediaUrls,
+    });
+
+    return mediaFiltered.flatMap((candidate) => {
+      if (hasEnabledDeliveryOperation(candidate)) {
+        return [candidate];
+      }
+      const effectiveCandidateText =
+        formatBtwTextForExternalDelivery(candidate) ?? candidate.text ?? "";
+      if (!effectiveCandidateText.trim() || !exactRouteSentTexts.has(effectiveCandidateText)) {
+        return [candidate];
+      }
+      const withoutDuplicateText = copyReplyPayloadMetadata(candidate, {
+        ...candidate,
+        text: undefined,
+      });
+      return hasReplyPayloadContent(withoutDuplicateText, {
+        trimText: true,
+        extraContent: withoutDuplicateText.location != null,
+      })
+        ? [withoutDuplicateText]
+        : [];
     });
   };
   // Remove exact raw media matches before blocked-path normalization can turn
@@ -633,17 +490,37 @@ export async function deliverAgentCommandResult(
   // outbound loader unresolved and `assertLocalMediaAllowed` fails with
   // "Local media path is not under an allowed directory". Mirrors the
   // normalizer wiring in `src/auto-reply/reply/agent-runner.ts`.
-  const mediaNormalization =
-    deliver && !deliveryStatus && !isInternalMessageChannel(deliveryChannel)
-      ? await normalizeReplyMediaPathsForDelivery({
-          cfg,
-          payloads: rawFilteredReplyPayloads,
-          sessionKey: effectiveSessionKey,
-          outboundSession,
-          deliveryChannel,
-          accountId: resolvedAccountId,
-        })
-      : { payloads: rawFilteredReplyPayloads };
+  const mediaNormalization: {
+    payloads: ReplyPayload[];
+    normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
+  } = { payloads: rawFilteredReplyPayloads };
+  if (
+    deliver &&
+    !deliveryStatus &&
+    !isInternalMessageChannel(deliveryChannel) &&
+    rawFilteredReplyPayloads.length > 0
+  ) {
+    const agentId =
+      outboundSession?.agentId ??
+      resolveSessionAgentId({ sessionKey: effectiveSessionKey, config: cfg });
+    const workspaceDir = agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined;
+    if (workspaceDir) {
+      const normalizeMediaPaths = createReplyMediaPathNormalizer({
+        cfg,
+        sessionKey: effectiveSessionKey,
+        agentId,
+        workspaceDir,
+        messageProvider: deliveryChannel,
+        accountId: resolvedAccountId,
+      });
+      const normalizedMediaPayloads: ReplyPayload[] = [];
+      for (const payload of rawFilteredReplyPayloads) {
+        normalizedMediaPayloads.push(await normalizeMediaPaths(payload));
+      }
+      mediaNormalization.payloads = normalizedMediaPayloads;
+      mediaNormalization.normalizeMediaPaths = normalizeMediaPaths;
+    }
+  }
   const mediaNormalizedReplyPayloads = await filterDeliveredPayloads(
     mediaNormalization.payloads,
     mediaNormalization.normalizeMediaPaths,
@@ -655,6 +532,9 @@ export async function deliverAgentCommandResult(
     status?: AgentCommandDeliveryStatus,
     deliverySucceeded?: boolean,
   ): AgentCommandDeliveryResult => {
+    if (!opts.json && result.meta.requestShaping?.thinkingClamp) {
+      runtime.log(result.meta.requestShaping.thinkingClamp);
+    }
     if (opts.json) {
       const meta = result.meta;
       writeRuntimeJson(runtime, {
@@ -670,7 +550,10 @@ export async function deliverAgentCommandResult(
       deliverySucceeded,
       deliveryStatus: status,
     });
-    params.onDeliveryResult?.(deliveryResult);
+    params.onDeliveryResult?.(
+      deliveryResult,
+      projectOutboundPayloadPlanForDelivery(outboundPayloadPlan),
+    );
     return deliveryResult;
   };
   if (strictPreDeliveryError) {
@@ -690,23 +573,19 @@ export async function deliverAgentCommandResult(
   }
 
   let deliverySucceeded = false;
-  const logPayload = (payload: NormalizedOutboundPayload) => {
-    if (opts.json) {
+  const printPayload = (payload: NormalizedOutboundPayload) => {
+    if (opts.json || isNestedAgentLane(opts.lane)) {
       return;
     }
     const output = formatOutboundPayloadLog(payload);
     if (!output) {
       return;
     }
-    if (isNestedAgentLane(opts.lane)) {
-      logNestedOutput(runtime, opts, output, effectiveSessionKey);
-      return;
-    }
-    runtime.log(output);
+    writeRuntimeStdout(runtime, output);
   };
   if (!deliver) {
     for (const payload of deliveryPayloads) {
-      logPayload(payload);
+      printPayload(payload);
     }
     // Retain the final in the transcript/result, but do not cross the transport
     // boundary. This receipt distinguishes policy suppression from an empty or
@@ -714,12 +593,8 @@ export async function deliverAgentCommandResult(
     return deliveryRequested && suppressAutomaticDelivery
       ? completeDelivery(
           {
-            requested: true,
-            attempted: false,
-            status: "suppressed",
-            succeeded: true,
+            ...noVisiblePayloadStatus(),
             reason: "message_tool_only",
-            resultCount: 0,
           },
           true,
         )
@@ -767,14 +642,15 @@ export async function deliverAgentCommandResult(
           durability: bestEffortDeliver ? "best_effort" : "required",
           signal: restartAbort.signal,
           onDeliveryIntent: restartAbort.dispose,
-          onPlatformSendDispatch: async () => assertPlatformSendCurrent(),
+          onPlatformSendDispatch: assertPlatformSendCurrent.prepare,
           assertDirectAdapterHandoff: assertPlatformSendCurrent,
           onError: logDeliveryError,
-          onPayload: logPayload,
+          onPayload: printPayload,
           deps: createOutboundSendDeps(deps),
         });
       } finally {
         restartAbort.dispose();
+        await assertPlatformSendCurrent.release();
       }
       if (restartAbort.signal?.aborted && send.status === "failed") {
         throw restartAbort.signal.reason;
@@ -796,12 +672,8 @@ export async function deliverAgentCommandResult(
       `(reason=${deliveryStatus?.reason ?? "none"} session=${effectiveSessionKey ?? "unknown"} ` +
       `channel=${deliveryChannel ?? "none"} target=${deliveryTarget ?? "none"} ` +
       `payloads=${deliveryPayloads.length})`;
-    runtime.error?.(message);
-    if (!runtime.error) {
-      runtime.log(message);
-    }
+    runtime.error(message);
   }
 
   return completeDelivery(deliveryStatus, deliverySucceeded);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

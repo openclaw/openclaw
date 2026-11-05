@@ -22,8 +22,8 @@ RAW_SKIP_ONBOARDING="${OPENCLAW_SKIP_ONBOARDING:-}"
 SKIP_ONBOARDING=""
 DOCKER_PULL_TIMEOUT="${OPENCLAW_DOCKER_SETUP_PULL_TIMEOUT:-600s}"
 OFFLINE_MODE=""
-DEFAULT_SANDBOX_IMAGE="openclaw-sandbox:bookworm-slim"
-DEFAULT_SANDBOX_BROWSER_IMAGE="openclaw-sandbox-browser:bookworm-slim"
+DEFAULT_SANDBOX_IMAGE="openclaw-sandbox:trixie-slim"
+DEFAULT_SANDBOX_BROWSER_IMAGE="openclaw-sandbox-browser:trixie-slim"
 SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH="2026-05-12-cdp-relay-auth"
 
 fail() {
@@ -556,7 +556,6 @@ export OTEL_SEMCONV_STABILITY_OPT_IN="${OTEL_SEMCONV_STABILITY_OPT_IN:-}"
 export OPENCLAW_OTEL_PRELOADED="${OPENCLAW_OTEL_PRELOADED:-}"
 export OPENCLAW_SKIP_ONBOARDING="$SKIP_ONBOARDING"
 
-# Detect Docker socket GID for sandbox group_add.
 DOCKER_GID=""
 if [[ -n "$SANDBOX_ENABLED" && -S "$DOCKER_SOCKET_PATH" ]]; then
   DOCKER_GID="$(stat -c '%g' "$DOCKER_SOCKET_PATH" 2>/dev/null || stat -f '%g' "$DOCKER_SOCKET_PATH" 2>/dev/null || echo "")"
@@ -860,7 +859,6 @@ echo ""
 echo "==> Starting gateway"
 run_gateway_up current
 
-# --- Sandbox setup (opt-in via OPENCLAW_SANDBOX=1) ---
 if [[ -n "$SANDBOX_ENABLED" ]]; then
   echo ""
   echo "==> Sandbox setup"
@@ -919,7 +917,6 @@ YAML
 fi
 
 if [[ -n "$SANDBOX_ENABLED" ]]; then
-  # Enable sandbox in OpenClaw config.
   sandbox_config_ok=true
   for sandbox_setting in mode:non-main scope:agent workspaceAccess:none; do
     sandbox_path="agents.defaults.sandbox.${sandbox_setting%%:*}"

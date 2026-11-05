@@ -27,13 +27,8 @@ export function collectEntrySpoolPaths(
   payloads: readonly ReplyPayload[],
   stateDir?: string,
 ): string[] {
-  const paths: string[] = [];
-  for (const payload of payloads) {
-    for (const source of payloadMediaSources(payload)) {
-      if (path.isAbsolute(source) && spoolRelativePath(source, stateDir)) {
-        paths.push(path.resolve(source));
-      }
-    }
-  }
-  return paths;
+  return payloads
+    .flatMap(payloadMediaSources)
+    .filter((source) => path.isAbsolute(source) && spoolRelativePath(source, stateDir))
+    .map((source) => path.resolve(source));
 }

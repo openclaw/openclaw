@@ -1,18 +1,22 @@
-// Cron-owned session retention preserves transcripts owned by running jobs.
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  resolveAllAgentSessionStoreTargetsSync,
   resolveConfiguredAgentDatabaseTargets,
   runSessionRegistryMaintenanceForStore,
 } from "../config/sessions.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveAllAgentSessionStoreTargetsAsync } from "../config/sessions/targets-runtime.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  listAgentDatabaseAdmissionRefusals,
+  readAgentDatabaseAdmissionRefusal,
+  type AgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
 import { createRetainedAgentDatabaseMatcherFromSnapshot } from "../state/agent-deletion-discovery.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../state/agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import { loadCronJobsStore, resolveCronJobsStorePath } from "./store.js";
+import { loadCronJobsStoreWithConfigJobsReadOnly } from "./store/read-only.js";
 
 const log = createSubsystemLogger("cron/maintenance");
 
@@ -25,13 +29,15 @@ type SessionRegistryMaintenanceStoreIdentity = {
 
 type SessionRegistryMaintenanceStoreSummary =
   | (SessionRegistryMaintenanceStoreIdentity & {
-      beforeCount: number;
-      afterCount: number;
       pruned: number;
       preservedRunning: number;
+      nextSweepAtMs: number | null;
     })
   | (SessionRegistryMaintenanceStoreIdentity & {
-      skippedReason: "agent-deletion-complete";
+      skippedReason:
+        | "agent-deletion-pending"
+        | "agent-deletion-complete"
+        | AgentDatabaseAdmissionRefusal["code"];
     })
   | (SessionRegistryMaintenanceStoreIdentity & {
       skippedReason: "agent-store-held";
@@ -44,7 +50,8 @@ type SessionRegistryMaintenanceSummary = {
   pruned: number;
   skippedStores: number;
   stores: SessionRegistryMaintenanceStoreSummary[];
-  /** Set when the sweep did not run; pruning without cron facts would archive live transcripts. */
+  nextSweepAtMs: number | null;
+  /** Set when missing cron or child inventory facts prevent safe pruning. */
   skippedReason?: string;
 };
 
@@ -57,12 +64,11 @@ type RunningCronJobIds =
   | { ok: true; ids: Set<string>; count: number }
   | { ok: false; reason: string };
 
-async function readRunningCronJobIds(): Promise<RunningCronJobIds> {
+async function readRunningCronJobIds(cronStorePath: string): Promise<RunningCronJobIds> {
   try {
-    const cronStorePath = resolveCronJobsStorePath();
-    const runningJobs = (await loadCronJobsStore(cronStorePath)).jobs.filter(
-      (job) => typeof job.state?.runningAtMs === "number",
-    );
+    const runningJobs = (
+      await loadCronJobsStoreWithConfigJobsReadOnly(cronStorePath)
+    ).store.jobs.filter((job) => typeof job.state?.runningAtMs === "number");
     // A running detached job may have been retargeted after its session was created. Keep its
     // explicit session segment because the registry has no producer metadata for the transcript.
     const ids = new Set<string>();
@@ -90,11 +96,12 @@ async function readRunningCronJobIds(): Promise<RunningCronJobIds> {
 
 export async function runSessionRegistryMaintenance(params: {
   apply: boolean;
+  cronStorePath: string;
   assertCurrent?: () => void;
 }): Promise<SessionRegistryMaintenanceSummary> {
   params.assertCurrent?.();
   const cfg = getRuntimeConfig();
-  const runningCronJobs = await readRunningCronJobIds();
+  const runningCronJobs = await readRunningCronJobIds(params.cronStorePath);
   params.assertCurrent?.();
   if (!runningCronJobs.ok) {
     return {
@@ -103,13 +110,24 @@ export async function runSessionRegistryMaintenance(params: {
       pruned: 0,
       skippedStores: 0,
       stores: [],
+      nextSweepAtMs: Date.now() + 60_000,
       skippedReason: `cron store unreadable: ${runningCronJobs.reason}`,
     };
   }
   const env = process.env;
   return await prepareAgentDatabaseDeletionSnapshotRead({ env }).withCurrentSnapshot(
     async (snapshot, assertSnapshotCurrent) => {
-      const stores: SessionRegistryMaintenanceStoreSummary[] = [];
+      const stores: SessionRegistryMaintenanceStoreSummary[] = listAgentDatabaseAdmissionRefusals({
+        env,
+      })
+        .filter((refusal) => readAgentDatabaseAdmissionRefusal(refusal.agentId, { env }))
+        .flatMap((refusal) =>
+          refusal.paths.map((storePath) => ({
+            agentId: refusal.agentId,
+            storePath,
+            skippedReason: refusal.code,
+          })),
+        );
       const assertCurrent = () => {
         params.assertCurrent?.();
         assertSnapshotCurrent();
@@ -126,10 +144,12 @@ export async function runSessionRegistryMaintenance(params: {
       const deletedAgents = new Map(
         snapshot?.deletedAgents.map(({ agentId, status }) => [agentId, status]),
       );
-      for (const target of resolveAllAgentSessionStoreTargetsSync(cfg, {
+      const targets = await resolveAllAgentSessionStoreTargetsAsync(cfg, {
         env,
         registeredDatabases,
-      })) {
+      });
+      const eligibleTargets: typeof targets = [];
+      for (const target of targets) {
         assertCurrent();
         const deletion = deletedAgents.get(target.agentId) ?? "absent";
         const databasePath =
@@ -142,17 +162,14 @@ export async function runSessionRegistryMaintenance(params: {
               }).path;
         const retained =
           deletion === "absent" ? isRetained(databasePath, target.agentId) : undefined;
-        if (deletion === "complete" || typeof retained === "object") {
-          // Completed tombstones intentionally keep retired stores unavailable.
-          // Record that lifecycle outcome instead of reopening the fenced database.
-          stores.push({ ...target, skippedReason: "agent-deletion-complete" });
+        if (deletion !== "absent" || typeof retained === "object") {
+          // Deletion owns these stores until cleanup settles and retains its tombstone afterward.
+          stores.push({
+            ...target,
+            skippedReason:
+              deletion === "pending" ? "agent-deletion-pending" : "agent-deletion-complete",
+          });
           continue;
-        }
-        if (deletion === "pending") {
-          // The former writable listing refused incomplete deletion; read-only workers must too.
-          throw new Error(
-            `OpenClaw agent database is unavailable while agent ${target.agentId} is deleted.`,
-          );
         }
         if (retained) {
           const reason =
@@ -164,24 +181,50 @@ export async function runSessionRegistryMaintenance(params: {
           stores.push({ ...target, skippedReason: "agent-store-held", warning });
           continue;
         }
+        eligibleTargets.push(target);
+      }
+      // Unavailable stores can still own live children of otherwise eligible parents.
+      const incompleteInventory = stores.some(
+        (store) =>
+          "skippedReason" in store &&
+          store.skippedReason !== "agent-deletion-pending" &&
+          store.skippedReason !== "agent-deletion-complete" &&
+          !deletedAgents.has(store.agentId),
+      );
+      for (const target of incompleteInventory ? [] : eligibleTargets) {
+        assertCurrent();
         const result = await runSessionRegistryMaintenanceForStore({
           ...target,
           apply: params.apply,
           retentionMs: SESSION_REGISTRY_RETENTION_MS,
           runningCronJobIds: runningCronJobs.ids,
+          childStores: eligibleTargets,
           assertCurrent,
         });
         assertCurrent();
         stores.push({
           agentId: target.agentId,
           storePath: target.storePath,
-          beforeCount: result.beforeCount,
-          afterCount: result.afterCount,
           pruned: result.pruned,
           preservedRunning: result.preservedRunning,
+          nextSweepAtMs: result.nextSweepAtMs,
         });
       }
+      const deadlines = stores.flatMap((store) =>
+        "nextSweepAtMs" in store
+          ? store.nextSweepAtMs === null
+            ? []
+            : [store.nextSweepAtMs]
+          : store.skippedReason === "agent-deletion-pending"
+            ? [Date.now() + 60_000]
+            : [],
+      );
+      if (incompleteInventory) {
+        deadlines.push(Date.now() + 60_000);
+      }
       return {
+        nextSweepAtMs: deadlines.length > 0 ? Math.min(...deadlines) : null,
+        ...(incompleteInventory ? { skippedReason: "session child inventory incomplete" } : {}),
         retentionMs: SESSION_REGISTRY_RETENTION_MS,
         runningCronJobs: runningCronJobs.count,
         pruned: stores.reduce((total, store) => total + ("pruned" in store ? store.pruned : 0), 0),

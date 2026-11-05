@@ -25,15 +25,12 @@ enum SessionActions {
 
     @MainActor
     static func openSessionLogInCode(sessionId: String, storePath: String?) {
-        let candidates: [URL] = {
-            var urls: [URL] = []
-            if let storePath, !storePath.isEmpty {
-                let dir = URL(fileURLWithPath: storePath).deletingLastPathComponent()
-                urls.append(dir.appendingPathComponent("\(sessionId).jsonl"))
-            }
-            urls.append(OpenClawPaths.stateDirURL.appendingPathComponent("sessions/\(sessionId).jsonl"))
-            return urls
-        }()
+        var candidates: [URL] = []
+        if let storePath, !storePath.isEmpty {
+            let dir = URL(fileURLWithPath: storePath).deletingLastPathComponent()
+            candidates.append(dir.appendingPathComponent("\(sessionId).jsonl"))
+        }
+        candidates.append(OpenClawPaths.stateDirURL.appendingPathComponent("sessions/\(sessionId).jsonl"))
 
         let existing = candidates.first(where: { FileManager().fileExists(atPath: $0.path) })
         guard let url = existing else {

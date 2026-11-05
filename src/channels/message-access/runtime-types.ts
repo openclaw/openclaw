@@ -5,6 +5,7 @@ import type {
   AccessGroupMembershipFact,
   AccessGraphGate,
   ChannelIngressChannelId,
+  ChannelIngressMatchContext,
   ChannelIngressDecision,
   ChannelIngressEventInput,
   ChannelIngressIdentifierKind,
@@ -56,7 +57,7 @@ export type ChannelIngressIdentityDescriptor = {
   matchEntry?: (params: {
     subject: InternalChannelIngressSubject;
     entry: InternalNormalizedEntry;
-    context: "dm" | "group" | "route" | "command";
+    context: ChannelIngressMatchContext;
   }) => boolean | undefined;
   /** Generates stable redacted entry ids for diagnostics. */
   resolveEntryId?: (params: {
@@ -180,6 +181,19 @@ export type ResolveChannelMessageIngressParams = {
   event: ChannelIngressEventInput;
   /** Exact finalized host context this result may enter; omit for decision-only checks. */
   contextBinding?: ChannelIngressContextBinding;
+  /** Opted-in public ingress: publish fresh isolated visible children of this invocation.
+   * The plugin must verify every supplied context post is public; unknown audiences deny.
+   * Recheck current account policy and delivery ownership synchronously at use time.
+   */
+  childSessionPublication?: {
+    audience: "public";
+    assertCurrent: () => void;
+    /** Renew source authorization at run admission; return its synchronous use-time guard.
+     * Return null if the original route, access tier, or public audience is no longer valid.
+     * Throw for operational failures so the runner reports a retryable verification failure.
+     */
+    prepare?: () => Promise<(() => void) | null>;
+  };
   policy: ChannelIngressPolicyInput;
   /** Raw direct-message allowlist entries. */
   allowFrom?: Array<string | number> | null;

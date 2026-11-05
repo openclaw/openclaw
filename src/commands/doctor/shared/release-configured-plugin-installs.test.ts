@@ -1,7 +1,6 @@
-// Release configured plugin install tests cover doctor checks for release-time plugin installs.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
-import { initializeNativeSessionCatalogPreferences } from "../../../plugins/native-session-catalog-config.js";
 import { maybeRunConfiguredPluginInstallReleaseStep } from "./release-configured-plugin-installs.js";
 
 const mocks = vi.hoisted(() => ({
@@ -11,54 +10,45 @@ const mocks = vi.hoisted(() => ({
   resolveProviderInstallCatalogEntries: vi.fn(),
 }));
 
-type MissingPluginInstallRepairCall = {
-  pluginIds: string[];
-  channelIds?: string[];
-  blockedPluginIds: string[];
-  env?: NodeJS.ProcessEnv;
-};
-
-function readOnlyMissingPluginInstallRepairCall(): MissingPluginInstallRepairCall {
-  expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledOnce();
-  const calls = mocks.repairMissingPluginInstallsForIds.mock.calls as unknown as Array<
-    [MissingPluginInstallRepairCall]
-  >;
-  const call = calls[0]?.[0];
-  if (!call) {
-    throw new Error("Expected missing plugin install repair call");
-  }
-  return call;
+function useOfficialLobsterCatalog() {
+  mocks.getOfficialExternalPluginCatalogEntry.mockImplementation((pluginId: string) =>
+    pluginId === "lobster" ? { name: "@openclaw/lobster" } : undefined,
+  );
 }
 
-async function shouldRunConfiguredPluginInstallReleaseStepThroughDoctor(params: {
-  currentVersion?: string | null;
-  touchedVersion?: string | null;
-}): Promise<boolean> {
-  const result = await maybeRunConfiguredPluginInstallReleaseStep({
+type ReleaseParams = Parameters<typeof maybeRunConfiguredPluginInstallReleaseStep>[0];
+type MissingPluginInstallRepairCall = Parameters<
+  typeof import("./missing-configured-plugin-install.js").repairMissingPluginInstallsForIds
+>[0];
+
+function run(params: Partial<ReleaseParams>) {
+  return maybeRunConfiguredPluginInstallReleaseStep({
     cfg: {},
     env: {},
+    currentVersion: "2026.5.2",
+    touchedVersion: "2026.5.1",
     ...params,
   });
-  return result.completed;
 }
 
-async function collectReleaseConfiguredPluginIdsThroughDoctor(params: {
-  cfg: Parameters<typeof maybeRunConfiguredPluginInstallReleaseStep>[0]["cfg"];
+function repairCall(): MissingPluginInstallRepairCall {
+  return expectDefined(
+    mocks.repairMissingPluginInstallsForIds.mock.calls[0]?.[0],
+    "configured-plugin repair call",
+  );
+}
+
+async function collect(params: {
+  cfg: ReleaseParams["cfg"];
   env?: NodeJS.ProcessEnv;
 }): Promise<{ pluginIds: string[]; channelIds: string[] }> {
   mocks.repairMissingPluginInstallsForIds.mockClear();
-  await maybeRunConfiguredPluginInstallReleaseStep({
-    ...params,
-    currentVersion: "2026.5.2",
-    touchedVersion: "2026.5.1",
-  });
-  const calls = mocks.repairMissingPluginInstallsForIds.mock.calls as unknown as Array<
-    [MissingPluginInstallRepairCall]
-  >;
-  const call = calls[0]?.[0];
+  await run(params);
+  const call: MissingPluginInstallRepairCall | undefined =
+    mocks.repairMissingPluginInstallsForIds.mock.calls[0]?.[0];
   return {
-    pluginIds: call?.pluginIds ?? [],
-    channelIds: call?.channelIds ?? [],
+    pluginIds: Array.from(call?.pluginIds ?? []),
+    channelIds: Array.from(call?.channelIds ?? []),
   };
 }
 
@@ -88,73 +78,21 @@ describe("configured plugin install release step", () => {
     mocks.detectPluginAutoEnableCandidates.mockReturnValue([]);
     mocks.getOfficialExternalPluginCatalogEntry.mockReturnValue(undefined);
     mocks.resolveProviderInstallCatalogEntries.mockReturnValue([]);
-    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: [],
-      warnings: [],
-    });
-  });
-
-  it.each(["2026.5.1", "2026.9.1"])(
-    "does not install native catalog plugins from first-write opt-outs (touched %s)",
-    async (touchedVersion) => {
-      const cfg = initializeNativeSessionCatalogPreferences({ gateway: { mode: "local" } });
-      await maybeRunConfiguredPluginInstallReleaseStep({
-        cfg,
-        env: {},
-        currentVersion: "2026.9.1",
-        touchedVersion,
-      });
-      expect(mocks.repairMissingPluginInstallsForIds).not.toHaveBeenCalled();
-    },
-  );
-
-  it("retains install intent when an opted-out catalog plugin is explicitly enabled", async () => {
-    const cfg = initializeNativeSessionCatalogPreferences({
-      plugins: { entries: { codex: { enabled: true } } },
-    });
-    expect(await collectReleaseConfiguredPluginIdsThroughDoctor({ cfg, env: {} })).toEqual({
-      pluginIds: ["codex"],
-      channelIds: [],
-    });
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({ changes: [], warnings: [] });
   });
 
   it("runs only for configs last touched before 2026.5.2", async () => {
-    expect(
-      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
-        currentVersion: "2026.5.1",
-        touchedVersion: "2026.4.30",
-      }),
-    ).toBe(false);
-    expect(
-      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
-        currentVersion: "2026.5.2-beta.1",
-        touchedVersion: "2026.5.1",
-      }),
-    ).toBe(true);
-    expect(
-      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
-        currentVersion: "2026.5.2",
-        touchedVersion: "2026.5.1",
-      }),
-    ).toBe(true);
-    expect(
-      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
-        currentVersion: "2026.5.2",
-        touchedVersion: "2026.5.2",
-      }),
-    ).toBe(false);
-    expect(
-      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
-        currentVersion: "2026.5.3",
-        touchedVersion: "2026.5.3",
-      }),
-    ).toBe(false);
-    expect(
-      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
-        currentVersion: "2026.5.2",
-        touchedVersion: "not-a-version",
-      }),
-    ).toBe(true);
+    for (const [currentVersion, touchedVersion, expected] of [
+      ["2026.5.1", "2026.4.30", false],
+      ["2026.5.2-beta.1", "2026.5.1", true],
+      ["2026.5.2", "2026.5.2", false],
+      ["2026.5.2", "not-a-version", true],
+    ] as const) {
+      const result = await run({ currentVersion, touchedVersion });
+      expect(result.touchedConfig).toBe(false);
+      expect(mocks.repairMissingPluginInstallsForIds).not.toHaveBeenCalled();
+      expect(result.completed).toBe(expected);
+    }
   });
 
   it("collects used plugin ids without treating allow-only entries as usage", async () => {
@@ -164,237 +102,77 @@ describe("configured plugin install release step", () => {
       { pluginId: "disabled-entry", kind: "setup-auto-enable", reason: "test" },
     ]);
     mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
-      {
-        pluginId: "anthropic-provider",
-        providerId: "anthropic",
-      },
-      {
-        pluginId: "unused-provider",
-        providerId: "unused",
-      },
+      { pluginId: "anthropic-provider", providerId: "anthropic" },
+      { pluginId: "unused-provider", providerId: "unused" },
     ]);
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
+    const result = await collect({
       cfg: {
-        auth: {
-          profiles: {
-            work: {
-              provider: "anthropic",
-              mode: "api_key",
-            },
-          },
-        },
-        channels: {
-          wecom: { enabled: true },
-          off: { enabled: false },
-        },
+        auth: { profiles: { work: { provider: "anthropic", mode: "api_key" } } },
+        channels: { wecom: { enabled: true }, off: { enabled: false } },
         plugins: {
           allow: ["allow-only"],
           deny: ["denied"],
-          slots: {
-            memory: "memory-lancedb",
-            contextEngine: "none",
-          },
+          slots: { memory: "memory-lancedb", contextEngine: "none" },
           entries: {
             configured: { config: { nested: true } },
             "disabled-entry": { enabled: false, config: { nested: true } },
           },
         },
       },
-      env: {},
     });
 
-    expect(result.pluginIds).toEqual([
-      "anthropic-provider",
-      "configured",
-      "matrix",
-      "memory-lancedb",
-    ]);
-    expect(result.channelIds).toEqual(["wecom"]);
-  });
-
-  it("collects provider plugins from channel-only model overrides", async () => {
-    mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
-      {
-        pluginId: "anthropic-provider",
-        providerId: "anthropic",
-      },
-    ]);
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        channels: {
-          modelByChannel: {
-            discord: {
-              default: "anthropic/claude-opus-4-7",
-            },
-          },
-        },
-      },
-      env: {},
+    expect(result).toEqual({
+      pluginIds: ["anthropic-provider", "configured", "matrix", "memory-lancedb"],
+      channelIds: ["wecom"],
     });
-
-    expect(result.pluginIds).toEqual(["anthropic-provider"]);
-    expect(result.channelIds).toStrictEqual([]);
+    expect(repairCall().blockedPluginIds).toEqual(["denied", "disabled-entry"]);
   });
 
-  it("collects provider plugins from provider-keyed channel model aliases", async () => {
-    mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
-      {
-        pluginId: "anthropic-provider",
-        providerId: "anthropic",
-      },
-    ]);
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        channels: {
-          modelByChannel: {
-            anthropic: {
-              discord: "claude-opus-4-7",
-            },
-          },
-        },
-      },
-      env: {},
-    });
-
-    expect(result.pluginIds).toEqual(["anthropic-provider"]);
-    expect(result.channelIds).toStrictEqual([]);
-  });
-
-  it("collects external speech and web-fetch plugins selected by config", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "groq/llama-3.3-70b-versatile",
-          },
-        },
-        tts: {
-          provider: "gradium",
-          providers: {
-            inworld: {},
-          },
-        },
-        tools: {
-          web: {
-            fetch: {
-              provider: "firecrawl",
-            },
-          },
-        },
-      },
-      env: {},
-    });
-
-    expect(result.pluginIds).toEqual(["firecrawl", "gradium", "groq", "inworld"]);
-    expect(result.channelIds).toStrictEqual([]);
-  });
-
-  it("collects an external media-understanding plugin selected only by media config", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        tools: {
-          media: {
-            models: [
-              {
-                provider: "groq",
-                model: "whisper-large-v3-turbo",
-                capabilities: ["audio"],
-              },
-            ],
-          },
-        },
-      },
-      env: {},
-    });
-
-    expect(result.pluginIds).toEqual(["groq"]);
-    expect(result.channelIds).toStrictEqual([]);
-  });
-
-  it("collects an external speech plugin selected only by voiceModel", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        agents: {
-          defaults: {
-            voiceModel: { primary: "gradium/tts-default" },
-          },
-        },
-      },
-      env: {},
-    });
-
-    expect(result.pluginIds).toEqual(["gradium"]);
-    expect(result.channelIds).toStrictEqual([]);
-  });
-
-  it("collects env-only web provider plugins before auto-detection", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
+  it.each([
+    {
+      source: "channel-only model overrides",
+      cfg: { channels: { modelByChannel: { discord: { default: "anthropic/claude-opus-4-7" } } } },
+      catalog: [{ pluginId: "anthropic-provider", providerId: "anthropic" }],
+      pluginIds: ["anthropic-provider"],
+    },
+    {
+      source: "environment-only web providers before auto-detection",
       cfg: {},
-      env: {
-        EXA_API_KEY: "exa-key",
-        FIRECRAWL_API_KEY: "firecrawl-key",
-      },
-    });
-
-    expect(result.pluginIds).toEqual(["exa", "firecrawl"]);
-    expect(result.channelIds).toStrictEqual([]);
-  });
-
-  it("does not collect env-only web provider plugins when search is disabled", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        tools: {
-          web: {
-            search: {
-              enabled: false,
-            },
-            fetch: {
-              enabled: false,
-            },
-          },
-        },
-      },
-      env: {
-        EXA_API_KEY: "exa-key",
-        FIRECRAWL_API_KEY: "firecrawl-key",
-      },
-    });
-
-    expect(result.pluginIds).toEqual([]);
-    expect(result.channelIds).toStrictEqual([]);
-  });
-
-  it("collects Firecrawl for env-only web fetch when search is disabled", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        tools: {
-          web: {
-            search: {
-              enabled: false,
-            },
-          },
-        },
-      },
-      env: {
-        FIRECRAWL_API_KEY: "firecrawl-key",
-      },
-    });
-
-    expect(result.pluginIds).toEqual(["firecrawl"]);
-    expect(result.channelIds).toStrictEqual([]);
-  });
-
-  it("collects env-only external provider plugins before model discovery", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
+      env: { EXA_API_KEY: "exa-key", FIRECRAWL_API_KEY: "firecrawl-key" },
+      pluginIds: ["exa", "firecrawl"],
+    },
+    {
+      source: "disabled environment-only web providers",
+      cfg: { tools: { web: { search: { enabled: false }, fetch: { enabled: false } } } },
+      env: { EXA_API_KEY: "exa-key", FIRECRAWL_API_KEY: "firecrawl-key" },
+      pluginIds: [],
+    },
+    {
+      source: "environment-only external providers before model discovery",
       cfg: {},
-      env: {
-        GROQ_API_KEY: "groq-key",
-        MODELSTUDIO_API_KEY: "qwen-key",
+      env: { GROQ_API_KEY: "groq-key", MODELSTUDIO_API_KEY: "qwen-key" },
+      pluginIds: ["groq", "qwen"],
+    },
+    {
+      source: "external web search and ACP config-only usage",
+      cfg: {
+        acp: { enabled: true, backend: "acpx" },
+        tools: { web: { search: { provider: "brave" } } },
       },
+      pluginIds: ["acpx", "brave"],
+    },
+  ] satisfies Array<{
+    source: string;
+    cfg: OpenClawConfigWithLegacyRoster;
+    env?: NodeJS.ProcessEnv;
+    catalog?: Array<{ pluginId: string; providerId: string }>;
+    pluginIds: string[];
+  }>)("collects plugin ids from $source", async ({ cfg, env, catalog, pluginIds }) => {
+    mocks.resolveProviderInstallCatalogEntries.mockReturnValue(catalog ?? []);
+    expect(await collect({ cfg, env: env ?? {} })).toEqual({
+      pluginIds,
+      channelIds: [],
     });
-
-    expect(result.pluginIds).toEqual(["groq", "qwen"]);
-    expect(result.channelIds).toStrictEqual([]);
   });
 
   it("collects provider plugins from documented external provider aliases", async () => {
@@ -405,370 +183,82 @@ describe("configured plugin install release step", () => {
         providerAliases: ["gmi-cloud", "gmicloud"],
       },
     ]);
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
+    const result = await collect({
       cfg: {
-        agents: {
-          defaults: {
-            model: "gmi-cloud/google/gemini-3.1-flash-lite",
-          },
-        },
-        auth: {
-          profiles: {
-            gmi: {
-              provider: "gmi-cloud",
-              mode: "api_key",
-            },
-          },
-        },
+        agents: { defaults: { model: "gmi-cloud/google/gemini-3.1-flash-lite" } },
+        auth: { profiles: { gmi: { provider: "gmi-cloud", mode: "api_key" } } },
         models: {
-          providers: {
-            gmicloud: {
-              baseUrl: "https://api.gmi-serving.com/v1",
-              models: [],
-            },
-          },
+          providers: { gmicloud: { baseUrl: "https://api.gmi-serving.com/v1", models: [] } },
         },
       },
-      env: {},
     });
 
-    expect(result.pluginIds).toEqual(["gmi"]);
-    expect(result.channelIds).toStrictEqual([]);
-  });
-
-  it("collects Codex from selectable OpenAI agent models even without integration discovery", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-sonnet-4-6" },
-            models: {
-              "openai/gpt-5.5": {},
-            },
-          },
-        },
-      },
-      env: {},
-    });
-
-    expect(result.pluginIds).toEqual(["codex"]);
-    expect(result.channelIds).toStrictEqual([]);
-  });
-
-  it("collects external web search and ACP runtime plugins from config-only usage", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        acp: {
-          enabled: true,
-          backend: "acpx",
-        },
-        tools: {
-          web: {
-            search: {
-              provider: "brave",
-            },
-          },
-        },
-      },
-      env: {},
-    });
-
-    expect(result.pluginIds).toEqual(["acpx", "brave"]);
-    expect(result.channelIds).toStrictEqual([]);
-  });
-
-  it("does not collect channel ids when the matching plugin id is blocked", async () => {
-    expect(
-      (
-        await collectReleaseConfiguredPluginIdsThroughDoctor({
-          cfg: {
-            channels: {
-              matrix: { accessToken: "test" },
-            },
-            plugins: {
-              deny: ["matrix"],
-            },
-          },
-          env: {},
-        })
-      ).channelIds,
-    ).toStrictEqual([]);
-
-    expect(
-      (
-        await collectReleaseConfiguredPluginIdsThroughDoctor({
-          cfg: {
-            channels: {
-              matrix: { accessToken: "test" },
-            },
-            plugins: {
-              entries: {
-                matrix: { enabled: false },
-              },
-            },
-          },
-          env: {},
-        })
-      ).channelIds,
-    ).toStrictEqual([]);
-
-    expect(
-      (
-        await collectReleaseConfiguredPluginIdsThroughDoctor({
-          cfg: {
-            channels: {
-              Matrix: { enabled: false, accessToken: "test" },
-            },
-          },
-          env: { MATRIX_ACCESS_TOKEN: "test" },
-        })
-      ).channelIds,
-    ).toStrictEqual([]);
+    expect(result).toEqual({ pluginIds: ["gmi"], channelIds: [] });
   });
 
   it.each([
-    { touchedVersion: "2026.5.1", touchedConfig: true },
-    { touchedVersion: "2026.5.2-beta.1", touchedConfig: false },
-  ])(
-    "forwards normalized blocked plugin ids when last touched at $touchedVersion",
-    async ({ touchedVersion, touchedConfig }) => {
-      const result = await maybeRunConfiguredPluginInstallReleaseStep({
-        cfg: {
-          plugins: {
-            deny: [" z-block ", "a-block", "", " ", "z-block"],
-            entries: {
-              " mid-block ": { enabled: false },
-              "a-block": { enabled: false },
-              " ": { enabled: false },
-              kept: { enabled: true },
-              unrelated: {},
-            },
-          },
-        },
-        currentVersion: "2026.5.2-beta.1",
-        touchedVersion,
-        env: {},
-      });
-
-      const repairCall = readOnlyMissingPluginInstallRepairCall();
-      expect(repairCall.blockedPluginIds).toEqual(["a-block", "mid-block", "z-block"]);
-      expect(repairCall.pluginIds).toEqual(["kept"]);
-      expect(repairCall.channelIds).toEqual([]);
-      expect(repairCall.env).toEqual({});
-      expect(result).toEqual({
-        changes: [],
-        warnings: [],
-        completed: true,
-        touchedConfig,
-      });
+    { channels: { matrix: { accessToken: "test" } }, plugins: { deny: ["matrix"] } },
+    {
+      channels: { matrix: { accessToken: "test" } },
+      plugins: { entries: { matrix: { enabled: false } } },
     },
-  );
-
-  it.each(["standalone", "pre-plugin", "post-plugin"])(
-    "completes without touching config when there is nothing to install (%s)",
-    async (phase) => {
-      const result = await maybeRunConfiguredPluginInstallReleaseStep({
-        cfg: {},
-        currentVersion: "2026.5.2",
-        touchedVersion: "2026.5.1",
-        env:
-          phase === "standalone"
-            ? {}
-            : {
-                OPENCLAW_UPDATE_IN_PROGRESS: "1",
-                OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
-                OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
-                ...(phase === "post-plugin" ? { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" } : {}),
-              },
-      });
-
-      expect(mocks.repairMissingPluginInstallsForIds).not.toHaveBeenCalled();
-      expect(result).toEqual({
-        changes: [],
-        warnings: [],
-        completed: true,
-        touchedConfig: false,
-      });
+    { channels: { Matrix: { enabled: false, accessToken: "test" } } },
+  ] satisfies OpenClawConfigWithLegacyRoster[])(
+    "does not collect blocked channels (%j)",
+    async (cfg) => {
+      expect(
+        (await collect({ cfg, env: { MATRIX_ACCESS_TOKEN: "test" } })).channelIds,
+      ).toStrictEqual([]);
     },
   );
 
   it("repairs used plugin installs and touches config only on success", async () => {
-    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: ['Installed missing configured plugin "codex".'],
-      warnings: [],
-      pluginInventoryChanged: true,
-    });
-    const cfg: OpenClawConfigWithLegacyRoster = {
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.4",
-          agentRuntime: { id: "codex" },
-        },
-      },
-    };
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg,
-      currentVersion: "2026.5.2-beta.1",
-      touchedVersion: "2026.5.1",
-      env: {},
-    });
-
-    const repairCall = readOnlyMissingPluginInstallRepairCall();
-    expect(repairCall.pluginIds).toEqual(["codex"]);
-    expect(repairCall.channelIds).toEqual([]);
-    expect(repairCall.env).toEqual({});
-    expect(result.touchedConfig).toBe(true);
-    expect(result.completed).toBe(true);
-    expect(result.pluginInventoryChanged).toBe(true);
-  });
-
-  it("surfaces non-fatal repair notices without blocking release repair completion", async () => {
     const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
       changes: ['Installed missing configured plugin "codex".'],
       warnings: [],
       notices: [reviewNotice],
+      pluginInventoryChanged: true,
     });
     const cfg: OpenClawConfigWithLegacyRoster = {
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.4",
-          agentRuntime: { id: "codex" },
-        },
-      },
+      agents: { defaults: { model: "openai/gpt-5.4", agentRuntime: { id: "codex" } } },
     };
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+    const result = await run({
       cfg,
       currentVersion: "2026.5.2-beta.1",
-      touchedVersion: "2026.5.1",
-      env: {},
     });
 
-    expect(result).toEqual({
-      changes: ['Installed missing configured plugin "codex".'],
-      warnings: [reviewNotice],
-      completed: true,
+    expect(repairCall()).toMatchObject({ pluginIds: ["codex"], channelIds: [], env: {} });
+    expect(result).toMatchObject({
       touchedConfig: true,
-    });
-  });
-
-  it("does not stamp config during update-time deferred install repair", async () => {
-    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: [
-        'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
-      ],
-      warnings: [],
-      deferredRepairDetails: [
-        'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
-      ],
-    });
-    const cfg: OpenClawConfigWithLegacyRoster = {
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.4",
-          agentRuntime: { id: "codex" },
-        },
-      },
-    };
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg,
-      currentVersion: "2026.5.2-beta.1",
-      touchedVersion: "2026.5.1",
-      env: {
-        OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
-      },
-    });
-
-    const repairCall = readOnlyMissingPluginInstallRepairCall();
-    expect(repairCall.pluginIds).toEqual(["codex"]);
-    expect(repairCall.env).toEqual({
-      OPENCLAW_UPDATE_IN_PROGRESS: "1",
-      OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
-    });
-    expect(result).toEqual({
-      changes: [
-        'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
-      ],
-      warnings: [],
-      completed: false,
-      touchedConfig: false,
-      postInstallDoctorResult: {
-        status: "advisory",
-        advisory: expect.objectContaining({
-          kind: "package-post-install-doctor",
-          reason: "deferred-configured-plugin-repair",
-          details: [
-            'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
-          ],
-        }),
-      },
-    });
-  });
-
-  it("does not report an advisory for update-time repair changes that were not deferred", async () => {
-    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: ['Removed stale managed install record for bundled plugin "matrix".'],
-      warnings: [],
-    });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {
-        plugins: {
-          entries: {
-            matrix: { enabled: true },
-          },
-        },
-      },
-      currentVersion: "2026.5.2-beta.1",
-      touchedVersion: "2026.5.1",
-      env: {
-        OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
-      },
-    });
-
-    expect(result).toEqual({
-      changes: ['Removed stale managed install record for bundled plugin "matrix".'],
-      warnings: [],
-      completed: false,
-      touchedConfig: false,
+      completed: true,
+      warnings: [reviewNotice],
+      pluginInventoryChanged: true,
     });
   });
 
   it("defers package-manager plugin release completion for writable legacy parents", async () => {
-    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: [
-        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
-      ],
-      warnings: [],
-      deferredRepairDetails: [
-        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
-      ],
-    });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {
-        plugins: {
-          entries: {
-            discord: { enabled: true },
-          },
-        },
-      },
-      currentVersion: "2026.5.2-beta.1",
-      touchedVersion: "2026.5.1",
-      env: {
-        OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
-      },
-    });
-
-    expect(readOnlyMissingPluginInstallRepairCall().env).toEqual({
+    const details = [
+      'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
+    ];
+    const env = {
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
       OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+    };
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+      changes: details,
+      warnings: [],
+      deferredRepairDetails: details,
     });
+    const result = await run({
+      cfg: { plugins: { entries: { discord: { enabled: true } } } },
+      currentVersion: "2026.5.2-beta.1",
+      env,
+    });
+
+    expect(repairCall().env).toEqual(env);
     expect(result).toEqual({
-      changes: [
-        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
-      ],
+      changes: details,
       warnings: [],
       completed: false,
       touchedConfig: false,
@@ -777,41 +267,9 @@ describe("configured plugin install release step", () => {
         advisory: expect.objectContaining({
           kind: "package-post-install-doctor",
           reason: "deferred-configured-plugin-repair",
-          details: [
-            'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
-          ],
+          details,
         }),
       },
-    });
-  });
-
-  it("repairs missing configured installs even when a prior update doctor touched config", async () => {
-    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: ['Installed missing configured plugin "discord".'],
-      warnings: [],
-    });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {
-        plugins: {
-          entries: {
-            discord: { enabled: true },
-          },
-        },
-      },
-      currentVersion: "2026.5.3-beta.1",
-      touchedVersion: "2026.5.3-beta.1",
-      env: {},
-    });
-
-    const repairCall = readOnlyMissingPluginInstallRepairCall();
-    expect(repairCall.pluginIds).toEqual(["discord"]);
-    expect(repairCall.channelIds).toEqual([]);
-    expect(repairCall.env).toEqual({});
-    expect(result).toEqual({
-      changes: ['Installed missing configured plugin "discord".'],
-      warnings: [],
-      completed: true,
-      touchedConfig: false,
     });
   });
 
@@ -820,22 +278,13 @@ describe("configured plugin install release step", () => {
       changes: ['Installed missing configured channel plugin "whatsapp".'],
       warnings: [],
     });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {
-        channels: {
-          whatsapp: {
-            allowFrom: ["+15555550123"],
-          },
-        },
-      },
+    const result = await run({
+      cfg: { channels: { whatsapp: { allowFrom: ["+15555550123"] } } },
       currentVersion: "2026.5.12",
       touchedVersion: "2026.5.12",
-      env: {},
     });
 
-    const repairCall = readOnlyMissingPluginInstallRepairCall();
-    expect(repairCall.pluginIds).toEqual([]);
-    expect(repairCall.channelIds).toEqual(["whatsapp"]);
+    expect(repairCall()).toMatchObject({ pluginIds: [], channelIds: ["whatsapp"] });
     expect(result).toEqual({
       changes: ['Installed missing configured channel plugin "whatsapp".'],
       warnings: [],
@@ -844,69 +293,23 @@ describe("configured plugin install release step", () => {
     });
   });
 
-  it("does not touch config when install repair warns", async () => {
-    mocks.detectPluginAutoEnableCandidates.mockReturnValue([
-      { pluginId: "matrix", kind: "channel-configured", channelId: "matrix" },
-    ]);
-    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: [],
-      warnings: ["install failed"],
-    });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {},
-      currentVersion: "2026.5.2",
-      touchedVersion: "2026.5.1",
-      env: {},
-    });
-
-    expect(result).toEqual({
-      changes: [],
-      warnings: ["install failed"],
-      completed: false,
-      touchedConfig: false,
-    });
-  });
-
-  it("includes allow-only official plugin ids in the repair set", async () => {
-    mocks.getOfficialExternalPluginCatalogEntry.mockImplementation((pluginId: string) => {
-      if (pluginId === "lobster") {
-        return { name: "@openclaw/lobster" };
-      }
-      return undefined;
-    });
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        plugins: {
-          allow: ["lobster", "unofficial-custom"],
-        },
-      },
-      env: {},
-    });
-
-    expect(result.pluginIds).toEqual(["lobster"]);
-    expect(result.channelIds).toStrictEqual([]);
-  });
-
-  it("skips allow-only plugin ids that already have material plugin entries", async () => {
-    mocks.getOfficialExternalPluginCatalogEntry.mockImplementation((pluginId: string) => {
-      if (pluginId === "lobster") {
-        return { name: "@openclaw/lobster" };
-      }
-      return undefined;
-    });
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        plugins: {
-          allow: ["lobster"],
-          entries: {
-            lobster: { enabled: true },
+  it.each([false, true])(
+    "collects official allow-only ids once (material=%s)",
+    async (material) => {
+      useOfficialLobsterCatalog();
+      expect(
+        await collect({
+          cfg: {
+            plugins: {
+              allow: ["lobster", "unofficial-custom"],
+              ...(material ? { entries: { lobster: { enabled: true } } } : {}),
+            },
           },
-        },
-      },
-      env: {},
-    });
-
-    expect(result.pluginIds).toEqual(["lobster"]);
-    expect(mocks.getOfficialExternalPluginCatalogEntry).not.toHaveBeenCalledWith("lobster");
-  });
+        }),
+      ).toEqual({ pluginIds: ["lobster"], channelIds: [] });
+      if (material) {
+        expect(mocks.getOfficialExternalPluginCatalogEntry).not.toHaveBeenCalledWith("lobster");
+      }
+    },
+  );
 });

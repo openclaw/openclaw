@@ -58,8 +58,7 @@ extension BundledRuntime {
         if !fileManager.fileExists(atPath: target.path) {
             let partial = directory.appendingPathComponent("\(buildID).partial-\(UUID().uuidString)")
             defer { try? fileManager.removeItem(at: partial) }
-            // copyItem uses clone-on-write on APFS; publication stays on the same volume.
-            try fileManager.copyItem(at: source.root, to: partial)
+            try self.cloneRuntimeTree(from: source.root, to: partial)
             let staged = try self.resolve(root: partial, bundle: bundle)
             let result = await ShellExecutor.runDetailed(
                 command: [staged.bun.path, "--version"],
@@ -83,7 +82,7 @@ extension BundledRuntime {
             }
             try self.replaceBuildLink("current", target: buildID, in: directory)
         }
-        let runtime = try self.resolve(root: target, bundle: bundle)
+        let runtime = Self(root: target)
         let allowsPersistentIntegration = await ApplicationRelocator.currentBundleAllowsPersistentIntegration(
             bundle: bundle)
         runtime.installCLI(
@@ -92,6 +91,56 @@ extension BundledRuntime {
             homeDirectory: homeDirectory,
             allowsPersistentIntegration: allowsPersistentIntegration)
         return runtime
+    }
+
+    static func cloneRuntimeTree(
+        from source: URL,
+        to destination: URL,
+        clone: (String, String, UInt32) -> Int32 = { clonefile($0, $1, $2) }) throws
+    {
+        // Clone the directory in one syscall; copyItem clones each file separately.
+        guard clone(source.path, destination.path, UInt32(CLONE_NOFOLLOW)) != 0 else { return }
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: destination.path) {
+            try fileManager.removeItem(at: destination)
+        }
+        try fileManager.copyItem(at: source, to: destination)
+    }
+
+    /// Publishes this build's Bun at `serviceBun` with an atomic rename; a running service keeps its
+    /// old inode. Call the result with whether the installed service now runs this build: if it does
+    /// not, the previous clone comes back so that service never restarts on another build's Bun.
+    /// Without a previous clone the new one stays; nothing else names the path, and deleting it could
+    /// strand a service the installer published before failing.
+    @concurrent
+    func stageServiceBun() async throws -> @Sendable (_ published: Bool) -> Void {
+        let fileManager = FileManager.default
+        let target = self.serviceBun
+        if fileManager.contentsEqual(atPath: target.path, andPath: self.bun.path) { return { _ in } }
+        let directory = target.deletingLastPathComponent()
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let staged = directory.appendingPathComponent(".bun-\(UUID().uuidString)")
+        defer { try? fileManager.removeItem(at: staged) }
+        try Self.cloneRuntimeTree(from: self.bun, to: staged)
+        let backup: URL? = if fileManager.fileExists(atPath: target.path) {
+            directory.appendingPathComponent(".bun-previous-\(UUID().uuidString)")
+        } else {
+            nil
+        }
+        if let backup { try Self.cloneRuntimeTree(from: target, to: backup) }
+        guard rename(staged.path, target.path) == 0 else {
+            let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            if let backup { try? fileManager.removeItem(at: backup) }
+            throw error
+        }
+        return { published in
+            guard let backup else { return }
+            if published {
+                try? FileManager.default.removeItem(at: backup)
+            } else {
+                _ = rename(backup.path, target.path)
+            }
+        }
     }
 
     /// Call only after readiness confirms the replacement Gateway is healthy.
@@ -104,7 +153,8 @@ extension BundledRuntime {
         // A recovered missing current link needs one successful update cycle to reestablish retention.
         guard let current = try self.buildLink("current", in: directory),
               let previous = try self.buildLink("previous", in: directory),
-              let liveExecutables = self.liveExecutablePaths()
+              let liveExecutables = self.liveExecutablePaths(
+                  serviceBun: directory.appendingPathComponent("service/bun"))
         else { return }
         let retained = Set([current, previous])
         for entry in try FileManager.default.contentsOfDirectory(
@@ -112,7 +162,6 @@ extension BundledRuntime {
         {
             let name = entry.lastPathComponent
             guard self.isBuildDirectoryName(name), !retained.contains(name),
-                  name != "current", name != "previous", !name.contains(".partial-"),
                   let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
                   values.isDirectory == true, values.isSymbolicLink != true,
                   let data = try? Data(contentsOf: entry
@@ -126,7 +175,7 @@ extension BundledRuntime {
     }
 
     private static func isBuildDirectoryName(_ name: String) -> Bool {
-        !name.isEmpty && name != "." && name != ".." && name != "current" && name != "previous"
+        !name.isEmpty && name != "." && name != ".." && name != "current" && name != "previous" && name != "service"
             && !name.contains("/") && !name.contains("\0") && !name.contains(".partial-")
     }
 
@@ -150,7 +199,9 @@ extension BundledRuntime {
         }
     }
 
-    private static func liveExecutablePaths() -> [String]? {
+    /// A service on the stable Bun loads its build only through argv, so those paths count as live too.
+    private static func liveExecutablePaths(serviceBun: URL) -> [String]? {
+        let serviceBun = serviceBun.resolvingSymlinksInPath().path
         let capacity = proc_listpids(UInt32(PROC_UID_ONLY), getuid(), nil, 0)
         guard capacity > 0 else { return nil }
         var pids = [pid_t](repeating: 0, count: Int(capacity) / MemoryLayout<pid_t>.size + 64)
@@ -169,8 +220,11 @@ extension BundledRuntime {
                 } catch { return nil }
                 // An app or package-manager update can unlink a still-running executable.
                 // KERN_PROCARGS2 retains its launch path when proc_pidpath reports ENOENT.
-                if let path = ProcessArguments.read(pid: pid)?.executablePath, path.hasPrefix("/") {
-                    paths.append(path)
+                if let process = ProcessArguments.read(pid: pid), process.executablePath.hasPrefix("/") {
+                    paths.append(process.executablePath)
+                    if Self.isServiceBun(process.executablePath, serviceBun) {
+                        paths += process.arguments.filter { $0.hasPrefix("/") }
+                    }
                     continue
                 }
                 // An unreadable live process defers collection.
@@ -179,9 +233,17 @@ extension BundledRuntime {
             guard let path = String(bytes: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, encoding: .utf8)
             else { return nil }
             paths.append(path)
+            if Self.isServiceBun(path, serviceBun) {
+                guard let arguments = ProcessArguments.read(pid: pid)?.arguments else { return nil }
+                paths += arguments.filter { $0.hasPrefix("/") }
+            }
         }
         // Foundation canonicalizes /private/var to /var, unlike proc_pidpath. Match both sides identically.
         return paths.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+    }
+
+    private static func isServiceBun(_ path: String, _ serviceBun: String) -> Bool {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().path == serviceBun
     }
 }
 

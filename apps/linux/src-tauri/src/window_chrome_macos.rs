@@ -213,10 +213,18 @@ fn sync_visibility(window: &NSWindow) {
             }
         }
     }
-    let title_visibility = if unified {
-        NSWindowTitleVisibility::Hidden
+    let (title_visibility, toolbar_style, separator_style) = if unified {
+        (
+            NSWindowTitleVisibility::Hidden,
+            NSWindowToolbarStyle::Unified,
+            NSTitlebarSeparatorStyle::None,
+        )
     } else {
-        NSWindowTitleVisibility::Visible
+        (
+            NSWindowTitleVisibility::Visible,
+            NSWindowToolbarStyle::Automatic,
+            NSTitlebarSeparatorStyle::Automatic,
+        )
     };
     if window.titleVisibility() != title_visibility {
         window.setTitleVisibility(title_visibility);
@@ -224,19 +232,9 @@ fn sync_visibility(window: &NSWindow) {
     if window.titlebarAppearsTransparent() != unified {
         window.setTitlebarAppearsTransparent(unified);
     }
-    let toolbar_style = if unified {
-        NSWindowToolbarStyle::Unified
-    } else {
-        NSWindowToolbarStyle::Automatic
-    };
     if window.toolbarStyle() != toolbar_style {
         window.setToolbarStyle(toolbar_style);
     }
-    let separator_style = if unified {
-        NSTitlebarSeparatorStyle::None
-    } else {
-        NSTitlebarSeparatorStyle::Automatic
-    };
     if window.titlebarSeparatorStyle() != separator_style {
         window.setTitlebarSeparatorStyle(separator_style);
     }

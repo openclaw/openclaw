@@ -56,7 +56,7 @@ export function requireClickClackSetupApiBaseUrl(value: string, label: string): 
 
   const canonical = parsed.origin + basePath;
   if (value !== canonical) {
-    throw new Error(`ClickClack ${label} is not canonical`);
+    throw new Error(`ClickClack ${label} is not in the expected URL format`);
   }
   return canonical;
 }
@@ -83,7 +83,7 @@ export function requireClickClackSetupClaimUrl(value: string): {
   );
   const claimUrl = apiBaseUrl + CLICKCLACK_SETUP_CODE_CLAIM_PATH;
   if (value !== claimUrl) {
-    throw new Error("ClickClack setup URL has a non-canonical claim endpoint.");
+    throw new Error("ClickClack setup URL has a claim endpoint in an unexpected URL format.");
   }
   return { claimUrl, apiBaseUrl };
 }

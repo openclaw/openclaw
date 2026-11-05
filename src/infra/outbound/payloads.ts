@@ -15,7 +15,6 @@ import {
   hasLegacyInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
   hasReplyChannelData,
-  hasReplyPayloadContent,
   normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationChartFallbackText,
@@ -76,23 +75,15 @@ function appendBlockMirrorText(lines: string[], blocks: readonly MirrorTextBlock
   for (const block of blocks) {
     if ((block.type === "text" || block.type === "context") && block.text.trim()) {
       lines.push(block.text.trim());
-      continue;
-    }
-    if (block.type === "buttons") {
+    } else if (block.type === "buttons") {
       for (const button of block.buttons) {
         lines.push(button.label);
       }
-      continue;
-    }
-    if (block.type === "chart") {
+    } else if (block.type === "chart") {
       lines.push(renderMessagePresentationChartFallbackText(block));
-      continue;
-    }
-    if (block.type === "table") {
+    } else if (block.type === "table") {
       lines.push(renderMessagePresentationTableFallbackText(block));
-      continue;
-    }
-    if (block.type === "select") {
+    } else if (block.type === "select") {
       if (block.placeholder) {
         lines.push(block.placeholder);
       }
@@ -134,24 +125,12 @@ export function resolveOutboundPayloadMirrorText(payload: ReplyPayload): string 
   return lines.join("\n");
 }
 
-function isSuppressedRelayStatusText(text: string): boolean {
-  const normalized = text.trim();
-  // Prevent relay housekeeping text from leaking into user-visible channels.
-  return (
-    /^no channel reply\.?$/i.test(normalized) ||
-    /^replied in-thread\.?$/i.test(normalized) ||
-    /^replied in #[-\w]+\.?$/i.test(normalized) ||
-    /^updated\s+\[[^\]]*wiki\/[^\]]+\](?:\([^)]+\))?(?:\s+with\b[\s\S]*)?(?:\.\s*)?(?:no channel reply\.?)?$/i.test(
-      normalized,
-    )
-  );
-}
-
 function normalizeRawOutboundPayload(
   payload: ReplyPayload,
   context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
+  admittedReasoning?: true,
 ): ReplyPayload | null {
-  if (shouldSuppressReasoningPayload(payload)) {
+  if (!admittedReasoning && shouldSuppressReasoningPayload(payload)) {
     return null;
   }
   const parsed = parseReplyDirectives(stripLeadingInboundMetadata(payload.text ?? ""), {
@@ -168,13 +147,10 @@ function normalizeRawOutboundPayload(
   const strippedParsed =
     strippedText === (parsed.text ?? "") ? parsed : parseReplyDirectives(strippedText);
   const parsedText = strippedParsed.text ?? "";
-  const suppressedText = strippedParsed.isSilent || isSuppressedRelayStatusText(parsedText);
   const normalizedPayload: ReplyPayload = applyReplyPayloadTargetPolicy(
     copyReplyPayloadMetadata(payload, {
       ...payload,
-      text:
-        formatBtwTextForExternalDelivery({ ...payload, text: suppressedText ? "" : parsedText }) ??
-        "",
+      text: formatBtwTextForExternalDelivery({ ...payload, text: parsedText }) ?? "",
       mediaUrls,
       mediaUrl: explicitMediaUrl,
       ...(payload.attachments
@@ -197,38 +173,7 @@ function normalizeRawOutboundPayload(
     ...(parsed.mediaFailures ?? []),
     ...(strippedParsed === parsed ? [] : (strippedParsed.mediaFailures ?? [])),
   ]);
-  return suppressedText && !hasReplyPayloadContent(normalizedPayload) ? null : normalizedPayload;
-}
-
-function createStructuredOutboundPayloadPlanEntry(
-  payload: ReplyPayload,
-): Omit<OutboundPayloadPlan, "sourceIndex"> | null {
-  const mediaEntries = indexFirstByKey(collectReplyMediaEntries(payload), ({ url }) => url.trim());
-  mediaEntries.delete("");
-  const mediaUrls = [...mediaEntries.keys()];
-  const attachments = payload.attachments
-    ? [...mediaEntries.values()].map(({ attachment }) => attachment ?? {})
-    : undefined;
-  const normalizedPayload = applyReplyPayloadTargetPolicy(
-    copyReplyPayloadMetadata(payload, {
-      ...payload,
-      text: payload.text ?? "",
-      mediaUrls: mediaUrls.length ? mediaUrls : undefined,
-      mediaUrl: mediaUrls.length > 1 ? undefined : payload.mediaUrl,
-      ...(attachments ? { attachments } : {}),
-    }),
-  );
-  if (!isRenderablePayload(normalizedPayload)) {
-    return null;
-  }
-  const hasChannelData = hasReplyChannelData(normalizedPayload.channelData);
-  return {
-    payload: normalizedPayload,
-    parts: resolveSendableOutboundReplyParts(normalizedPayload),
-    hasPresentation: hasMessagePresentationBlocks(normalizedPayload.presentation),
-    hasInteractive: hasLegacyInteractiveReplyBlocks(normalizedPayload.interactive),
-    hasChannelData,
-  };
+  return normalizedPayload;
 }
 
 function buildOutboundPayloadPlan(
@@ -244,11 +189,34 @@ function buildOutboundPayloadPlan(
     if (!prepared) {
       continue;
     }
-    const entry = createStructuredOutboundPayloadPlanEntry(prepared);
-    if (!entry) {
+    const mediaEntries = indexFirstByKey(collectReplyMediaEntries(prepared), ({ url }) =>
+      url.trim(),
+    );
+    mediaEntries.delete("");
+    const mediaUrls = [...mediaEntries.keys()];
+    const attachments = prepared.attachments
+      ? [...mediaEntries.values()].map(({ attachment }) => attachment ?? {})
+      : undefined;
+    const normalizedPayload = applyReplyPayloadTargetPolicy(
+      copyReplyPayloadMetadata(prepared, {
+        ...prepared,
+        text: prepared.text ?? "",
+        mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+        mediaUrl: mediaUrls.length > 1 ? undefined : prepared.mediaUrl,
+        ...(attachments ? { attachments } : {}),
+      }),
+    );
+    if (!isRenderablePayload(normalizedPayload)) {
       continue;
     }
-    plan.push({ sourceIndex, ...entry });
+    plan.push({
+      sourceIndex,
+      payload: normalizedPayload,
+      parts: resolveSendableOutboundReplyParts(normalizedPayload),
+      hasPresentation: hasMessagePresentationBlocks(normalizedPayload.presentation),
+      hasInteractive: hasLegacyInteractiveReplyBlocks(normalizedPayload.interactive),
+      hasChannelData: hasReplyChannelData(normalizedPayload.channelData),
+    });
   }
   return plan;
 }
@@ -260,6 +228,16 @@ export function createOutboundPayloadPlan(
 ): OutboundPayloadPlan[] {
   return buildOutboundPayloadPlan(payloads, (payload) =>
     normalizeRawOutboundPayload(payload, context),
+  );
+}
+
+/** Internal lane handoff: retain admitted reasoning while parsing raw reply controls normally. */
+export function createOutboundPayloadPlanWithAdmittedReasoning(
+  payloads: readonly ReplyPayload[],
+  context: OutboundPayloadPlanContext = {},
+): OutboundPayloadPlan[] {
+  return buildOutboundPayloadPlan(payloads, (payload) =>
+    normalizeRawOutboundPayload(payload, context, true),
   );
 }
 
@@ -382,10 +360,7 @@ export function formatOutboundPayloadLog(
     mediaUrls: readonly string[];
   },
 ): string {
-  const lines: string[] = [];
-  if (payload.text) {
-    lines.push(payload.text.trimEnd());
-  }
+  const lines = payload.text ? [payload.text.trimEnd()] : [];
   for (const url of payload.mediaUrls) {
     lines.push(`Attachment: ${url}`);
   }

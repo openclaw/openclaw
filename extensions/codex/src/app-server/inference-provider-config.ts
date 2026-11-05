@@ -3,6 +3,30 @@ import { isJsonObject, type JsonObject } from "./protocol.js";
 
 export type ProviderKind = "openai" | "azure" | "other";
 
+type InferenceRouteIdentity = Pick<CodexInferenceProxy, "baseUrl" | "configurationIdentity">;
+export type CodexThreadFingerprintInference = {
+  inferenceRoute?: InferenceRouteIdentity;
+  inferenceProviderRoutes?: ReadonlyMap<string, InferenceRouteIdentity>;
+};
+
+/** Hash owned route configuration, not the process-local relay address and capability token. */
+export function resolveCodexThreadFingerprintConfig(
+  config: JsonObject,
+  inference?: CodexThreadFingerprintInference,
+): JsonObject {
+  if (!inference) {
+    return config;
+  }
+  let normalized = config;
+  for (const provider of configuredProviders(config)) {
+    const route = inference.inferenceProviderRoutes?.get(provider) ?? inference.inferenceRoute;
+    if (route && readProviderBaseUrl(config, provider) === route.baseUrl) {
+      normalized = withProviderBaseUrl(normalized, provider, route.configurationIdentity);
+    }
+  }
+  return normalized;
+}
+
 export function providerKind(name: unknown): ProviderKind | undefined {
   if (name === "Amazon Bedrock" || name === "Amazon Bedrock Runtime") {
     return undefined;
@@ -51,10 +75,9 @@ export function projectProviderRoutes(
 }
 
 export function readProviderBaseUrl(config: JsonObject | undefined, provider: string): unknown {
-  if (provider === "openai") {
-    return config?.openai_base_url;
-  }
-  return readProviderField(config, provider, "base_url");
+  return provider === "openai"
+    ? config?.openai_base_url
+    : readProviderField(config, provider, "base_url");
 }
 
 export function readProviderField(

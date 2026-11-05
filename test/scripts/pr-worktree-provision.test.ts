@@ -12,11 +12,17 @@ import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { detectWorktreeFilesystemBackend } from "../../src/agents/worktrees/filesystem-backend.js";
-import { listTemplates } from "../../src/agents/worktrees/template-registry.js";
+import { listTemplatesAsync } from "../../src/agents/worktrees/template-registry-async.js";
+import { closeStateDatabaseForTest } from "../../src/test-utils/database-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 function coldFixture(perWorktreeConfig = true) {
@@ -241,26 +247,26 @@ printf '${edit}\\n' > src/subject.ts
     expect(readFileSync(join(f.worktree, "src", "subject.ts"), "utf8")).toBe(`${edit}\n`);
     expect(existsSync(join(f.canonical, ".worktrees", ".templates"))).toBe(false);
     expect(f.git(f.canonical, "status", "--porcelain")).toBe("");
-    expect(
-      f.git(f.canonical, "rev-parse", "--verify", "refs/openclaw/pr-operation-locks/42"),
-    ).toMatch(/^[0-9a-f]{40}$/);
+    // The failed hook run drained, so the supervisor released the lock; the checkout keeps the evidence.
+    expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
   });
 
   it("preserves a caller fsmonitor hook without enabling it in managed Git", () => {
     const f = coldFixture(false);
-    const monitor = join(f.root, "fsmonitor");
+    const monitor = join(f.root, "fsmonitor's hook");
+    const monitorCommand = `'${monitor.replace(/'/gu, `'\\''`)}'`;
     const receipt = join(f.root, "fsmonitor.txt");
     // Git treats a nonzero monitor exit as a request for an ordinary scan.
     // This records invocation without faking a clean index or monitor token.
     writeFileSync(monitor, `#!/bin/sh\nprintf '%s\\n' "$PWD" >> "${receipt}"\nexit 1\n`);
     chmodSync(monitor, 0o755);
-    f.git(f.canonical, "config", "core.fsmonitor", monitor);
+    f.git(f.canonical, "config", "core.fsmonitor", monitorCommand);
     const result = f.run("review-init");
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain("PR source checkout: Git checkout.");
     expect(readFileSync(receipt, "utf8").trim().split("\n")).toContain(f.worktree);
     expectSeed(f);
-    expect(f.git(f.worktree, "config", "--get", "core.fsmonitor")).toBe(monitor);
+    expect(f.git(f.worktree, "config", "--get", "core.fsmonitor")).toBe(monitorCommand);
     expect(existsSync(join(f.canonical, ".worktrees", ".templates"))).toBe(false);
   });
 
@@ -279,9 +285,8 @@ printf '${edit}\\n' > src/subject.ts
     expect(readFileSync(join(f.worktree, "hook-evidence.txt"), "utf8")).toBe(
       "retained hook evidence\n",
     );
-    expect(
-      f.git(f.canonical, "rev-parse", "--verify", "refs/openclaw/pr-operation-locks/42"),
-    ).toMatch(/^[0-9a-f]{40}$/);
+    // The failed hook run drained, so the supervisor released the lock; the checkout keeps the evidence.
+    expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
   });
 
   it("does not repair a caller seed moved by a checkout hook", () => {
@@ -327,7 +332,7 @@ ${changeLock}
 
       const result = f.run("review-init");
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("PR operation lock changed or is unreadable");
+      expect(result.stderr).toContain("PR operation lock check failed (status=1, signal=null)");
       expectSeed(f);
       expect(readFileSync(join(f.worktree, "src", "subject.ts"), "utf8")).toBe(
         "hook-owned state after lock loss\n",
@@ -354,8 +359,48 @@ ${changeLock}
 
   // Only an actual accelerated host can prove this cell; a skip is not APFS proof.
   it.skipIf(process.platform !== "darwin")(
-    "materializes full cold/warm PR siblings, then preserves native sparse transitions",
+    "removes a failed template clone after losing its PR registration, then retries",
     () => {
+      const f = coldFixture(false);
+      const fault = join(f.root, "lose-registration.mjs");
+      const receipt = join(f.root, "lost-registration");
+      writeFileSync(
+        fault,
+        `import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+const marker = ${JSON.stringify(join(f.worktree, ".git"))};
+const admin = ${JSON.stringify(join(f.canonical, ".git/worktrees/pr-42"))};
+if (process.argv.includes('.git/worktrees/pr-42') && existsSync(marker) &&
+    !readFileSync(marker, 'utf8').includes('/pr-42')) {
+  writeFileSync(${JSON.stringify(receipt)}, readFileSync(marker));
+  rmSync(admin, { recursive: true, force: true });
+}
+`,
+      );
+      const gitShim = join(f.root, "bin/git");
+      writeFileSync(
+        gitShim,
+        readFileSync(gitShim, "utf8").replace(
+          "#!/bin/sh\n",
+          `#!/bin/sh\ncase "$*" in *'.git/worktrees/pr-42 rev-parse HEAD --symbolic-full-name HEAD'*) node '${fault}' "$@" || exit $? ;; esac\n`,
+        ),
+      );
+      const failed = f.run("review-init");
+      expect(failed.status).not.toBe(0);
+      expect(readFileSync(receipt, "utf8")).toMatch(/worktrees\/[0-9a-f-]{36}\n$/);
+      expect(failed.stderr).toContain("not a git repository");
+      expect(existsSync(f.worktree)).toBe(false);
+      expect(f.git(f.canonical, "rev-parse", "refs/heads/temp/pr-42")).toBe(f.main);
+      // The same PR can provision again, without a replacement PR or manual repair.
+      writeFileSync(fault, "");
+      const retried = f.run("review-init");
+      expect(retried.status, retried.stderr).toBe(0);
+      expectSeed(f);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "materializes full cold/warm PR siblings, then preserves native sparse transitions",
+    async () => {
       const f = coldFixture(false);
       const first = f.run("review-init");
       expect(first.status, first.stderr).toBe(0);
@@ -364,10 +409,12 @@ ${changeLock}
       const templateNames = readdirSync(templates).toSorted();
       expect(templateNames.length).toBeGreaterThan(0);
       expect(first.stderr).toContain("PR source checkout: filesystem template clone.");
-      const template = listTemplates({
-        ...f.env,
-        OPENCLAW_STATE_DIR: join(f.canonical, ".local", "pr-state"),
-      }).find((entry) => entry.sourceCommit === f.main);
+      const template = (
+        await listTemplatesAsync({
+          ...f.env,
+          OPENCLAW_STATE_DIR: join(f.canonical, ".local", "pr-state"),
+        })
+      ).find((entry) => entry.sourceCommit === f.main);
       expect(template?.backend).toBe("apfs");
       expect(template?.status).toBe("ready");
       const warmResult = nextPr(f, 43);

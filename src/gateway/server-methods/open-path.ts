@@ -12,10 +12,6 @@ type OpenPathCommand = {
   args: string[];
 };
 
-function escapePowerShellSingleQuotedString(value: string): string {
-  return value.replaceAll("'", "''");
-}
-
 export function resolveOpenPathCommand(
   targetPath: string,
   platform: NodeJS.Platform = process.platform,
@@ -28,7 +24,7 @@ export function resolveOpenPathCommand(
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        `Start-Process -FilePath '${escapePowerShellSingleQuotedString(targetPath)}'`,
+        `Start-Process -FilePath '${targetPath.replaceAll("'", "''")}'`,
       ],
     };
   }

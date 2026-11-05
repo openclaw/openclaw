@@ -62,11 +62,20 @@ describe("decision provider startup", () => {
     ).toEqual(expected);
   });
 
-  it("maps per-agent provider IDs through contract ownership in metadata scopes", () => {
+  it.each<{ name: string; agents: OpenClawConfig["agents"] }>([
+    {
+      name: "per-agent",
+      agents: { entries: { specialist: { decisionModel: "decision-provider/fast" } } },
+    },
+    {
+      name: "default",
+      agents: { defaults: { decisionModel: "decision-provider/fast" } },
+    },
+  ])("maps $name provider IDs through contract ownership in metadata scopes", ({ agents }) => {
     expect(
       resolveGatewayStartupMetadataPluginIds({
         config: {
-          agents: { entries: { specialist: { decisionModel: "decision-provider/fast" } } },
+          agents,
           plugins: { allow: ["allowed-plugin"], slots: { memory: "none" } },
         },
         env: {},

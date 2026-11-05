@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { warnPluginSdkDeprecation } from "../../../plugins/sdk-deprecation.js";
 import {
   getSessionInitializationUpstreamLinkCurrent,
   type SessionInitialization,
@@ -86,6 +87,17 @@ export function createNativeSessionInitializationOwner<TStore, TIdentity, TBindi
       };
       initializations.set(initialization, ownership);
       const cleanup = params.prepareCleanup?.();
+      const prepareLink = (input: Parameters<typeof upsertSessionUpstreamLink>[0]) => {
+        const now = Date.now();
+        link = structuredClone({ ...input, createdAt: now, updatedAt: now });
+        return { ...database, now, ifAbsent: true as const, assertCommitAllowed: assertCurrent };
+      };
+      const acceptLink = (stored: boolean) => {
+        if (!stored) {
+          link = undefined;
+          throw new Error(options.errors.linkWriteFailed);
+        }
+      };
       return {
         assertCurrent: initialization.assertCurrent,
         async bind(binding: TBinding) {
@@ -103,43 +115,24 @@ export function createNativeSessionInitializationOwner<TStore, TIdentity, TBindi
           }
           initialization.assertCurrent();
         },
-        /** @deprecated Use linkAsync. Retained for released official harnesses until the next Plugin SDK major. */
+        /** @deprecated Await linkAsync; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
         link(input: Parameters<typeof upsertSessionUpstreamLink>[0]) {
+          warnPluginSdkDeprecation({
+            family: "native-session-binding",
+            method: "createNativeSessionInitializationOwner.prepare.link",
+            replacement: "createNativeSessionInitializationOwner.prepare.linkAsync",
+          });
           initialization.assertCurrent();
-          const now = Date.now();
-          link = structuredClone({ ...input, createdAt: now, updatedAt: now });
-          if (
-            !upsertSessionUpstreamLink(input, {
-              ...database,
-              now,
-              ifAbsent: true,
-              assertCommitAllowed: assertCurrent,
-            })
-          ) {
-            link = undefined;
-            throw new Error(options.errors.linkWriteFailed);
-          }
+          const prepared = prepareLink(input);
+          acceptLink(upsertSessionUpstreamLink(input, prepared));
           initialization.assertCurrent();
         },
         async linkAsync(input: Parameters<typeof upsertSessionUpstreamLinkAsync>[0]) {
           assertCurrent();
-          const now = Date.now();
-          link = structuredClone({ ...input, createdAt: now, updatedAt: now });
-          if (
-            !(await upsertSessionUpstreamLinkWithCurrentSource(
-              input,
-              {
-                ...database,
-                now,
-                ifAbsent: true,
-                assertCommitAllowed: assertCurrent,
-              },
-              sourceCurrent,
-            ))
-          ) {
-            link = undefined;
-            throw new Error(options.errors.linkWriteFailed);
-          }
+          const prepared = prepareLink(input);
+          acceptLink(
+            await upsertSessionUpstreamLinkWithCurrentSource(input, prepared, sourceCurrent),
+          );
           assertCurrent();
         },
       };

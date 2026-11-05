@@ -11,11 +11,11 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import { mergeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { peekSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
-import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   clearPublishedSwarmCollectorOutput,
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   prepareSubagentKillSession,
@@ -37,12 +37,14 @@ import {
   mutateSubagentRuns,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
+import { isCompletionHeldByYield } from "./subagent-registry-run-pause.js";
 import { completeTerminalEffects } from "./subagent-registry-terminal-effects.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { getSubagentTerminalReplySummary } from "./subagent-run-payload-facts.js";
 import {
-  resolveSubagentRunDeadlineMs,
   resolveSubagentRunEffectiveEndedAt,
+  shouldPreservePublishedExplicitRunTimeout,
 } from "./subagent-run-timeout.js";
 
 const MISSING_REQUIRED_FINAL_REPLY_ERROR = "subagent run ended before producing a final reply";
@@ -51,33 +53,12 @@ const browserCleanupLoader = createLazyImportLoader(
   () => import("../../../browser-lifecycle-cleanup.js"),
 );
 
-function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
-  if (
-    entry.execution.outcome?.status !== "timeout" ||
-    typeof entry.execution.endedAt !== "number"
-  ) {
-    return false;
-  }
-  const deadlineMs = resolveSubagentRunDeadlineMs(entry);
-  if (deadlineMs === undefined || entry.execution.endedAt < deadlineMs) {
-    return false;
-  }
-  return (
-    entry.cleanupHandled === true ||
-    typeof entry.cleanupCompletedAt === "number" ||
-    typeof entry.endedHookEmittedAt === "number" ||
-    entry.delivery?.status === "delivered" ||
-    typeof entry.delivery?.announcedAt === "number"
-  );
-}
-
 function resolveTerminalRequest(
   entry: SubagentRunRecord,
   completeParams: SubagentCompletionRequest,
   now: number,
   liveStructuredOutput: SubagentRunRecord["structuredOutput"],
 ) {
-  const recoveryRequested = completeParams.recoverInterrupted === true;
   let completionReason = completeParams.reason;
   let requestedEndedAt = completeParams.endedAt ?? now;
   const existingEndedAt = entry.execution.endedAt;
@@ -91,9 +72,7 @@ function resolveTerminalRequest(
   // Preserve the newer canonical timing while allowing this duplicate
   // caller to rescue a stalled cleanup and delivery tail.
   const drainedEndedAt =
-    typeof existingEndedAt === "number" && (recoveryRequested || olderEquivalent)
-      ? existingEndedAt
-      : undefined;
+    typeof existingEndedAt === "number" && olderEquivalent ? existingEndedAt : undefined;
   const shouldDrainExistingTerminal = drainedEndedAt !== undefined;
   if (drainedEndedAt !== undefined) {
     requestedEndedAt = drainedEndedAt;
@@ -120,17 +99,20 @@ function resolveTerminalRequest(
     Number.isFinite(completeParams.startedAt)
       ? completeParams.startedAt
       : undefined;
-  const effectiveEndedAt = recoveryRequested
-    ? endedAt
-    : resolveSubagentRunEffectiveEndedAt(entry, endedAt, observedStartedAt);
+  const effectiveEndedAt = resolveSubagentRunEffectiveEndedAt(entry, endedAt, observedStartedAt);
   if (effectiveEndedAt < endedAt) {
     endedAt = effectiveEndedAt;
     completionOutcome = { status: "timeout" };
     completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
   }
+  // Reply evidence follows producer order; duplicate receipts may still drain cleanup.
   const terminalReply = mergeAgentRunTerminalReplySnapshot(
     entry.completion?.terminalReply,
-    completeParams.terminalReply,
+    entry.completion?.terminalReply &&
+      typeof existingEndedAt === "number" &&
+      (completeParams.endedAt ?? now) <= existingEndedAt
+      ? undefined
+      : completeParams.terminalReply,
   );
   return {
     requestedEndedAt,
@@ -153,7 +135,7 @@ export async function completeSubagentRunAttempt(
     ? getCurrentSubagentRunOwner(params.runs, completeParams.expectedEntry)
     : params.runs.get(completeParams.runId);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  if (!selectedOwner) {
+  if (!selectedOwner || resolveSubagentChildAuthority(selectedOwner).status === "mismatch") {
     return;
   }
   let releaseCompletionLock: (() => void) | undefined = await context.acquireTerminalCompletionLock(
@@ -193,13 +175,19 @@ export async function completeSubagentRunAttempt(
     }
     assertCurrent();
     assertSessionBinding();
-    if (selected.collect && !selected.collectorCompletion) {
+    if (
+      !suppressSessionEffects &&
+      selected.collect &&
+      !selected.collectorCompletion &&
+      resolveSubagentChildAuthority(selected).status === "verified"
+    ) {
       collectorSession = await prepareSubagentKillSession(
         params.getRuntimeConfig(),
         selected.childSessionKey,
         assertCurrent,
         selected.execution.transcriptTarget,
         selected.childAgentId,
+        selected.childSessionIdentity,
       );
     }
     const now = Date.now();
@@ -220,9 +208,9 @@ export async function completeSubagentRunAttempt(
       suppressSessionEffects,
       structuredOutput,
       capture:
-        completeParams.recoverInterrupted ||
         context.newerGenerationOwnsSession(selected) ||
         terminal.terminalReply ||
+        getSubagentTerminalReplySummary(selected) ||
         (terminal.missingRequiredReply && terminal.completionOutcome.status === "ok") ||
         completeParams.completionSnapshot
           ? undefined
@@ -231,7 +219,6 @@ export async function completeSubagentRunAttempt(
     };
     assertCurrent();
     let settled: ReturnType<typeof planTerminalCompletion>;
-    let terminalGeneration = 0;
     let publishesTerminalSignal = false;
     try {
       const commit = () =>
@@ -256,6 +243,7 @@ export async function completeSubagentRunAttempt(
             const entry = planned.entry;
             const outcomeStatus = entry.execution.outcome?.status;
             const terminalEvents =
+              planned.mutated &&
               !planned.suppressSessionEffects &&
               !planned.sessionSuperseded &&
               entry.killReconciliation === undefined &&
@@ -293,6 +281,7 @@ export async function completeSubagentRunAttempt(
                 const published = postimages.get(planned.entry.runId) ?? planned.entry;
                 completeParams.recoveryCurrent?.onPublished?.(published);
                 clearPublishedSwarmCollectorOutput(published);
+                context.resumeAncestorCleanup(published);
               }
             },
             assertCurrent: () => {
@@ -314,11 +303,7 @@ export async function completeSubagentRunAttempt(
         );
       settled = collectorSession ? await collectorSession.withPublication(commit) : await commit();
       if (settled) {
-        const bindingChanged =
-          completeParams.sessionEffects !== undefined &&
-          context.getSessionEffects(settled.entry) !== completeParams.sessionEffects;
         context.bindTerminalSessionEffects(settled.entry, completeParams.sessionEffects);
-        terminalGeneration = context.bumpTerminalGeneration(settled.entry, bindingChanged);
         if (settled.replacedProvisionalKill) {
           context.bumpCleanupGeneration(settled.entry);
         }
@@ -337,7 +322,6 @@ export async function completeSubagentRunAttempt(
     await completeTerminalEffects(context, {
       completeParams,
       ...settled,
-      terminalGeneration,
       stateContext,
       assertCurrent,
       loadCleanupBrowserSessionsForLifecycleEnd:
@@ -363,88 +347,20 @@ function planTerminalCompletion(
   },
 ) {
   const params = context.options;
-  if (
-    currentEntry.pauseReason === "sessions_yield" &&
-    completeParams.reason !== SUBAGENT_ENDED_REASON_KILLED
-  ) {
+  if (isCompletionHeldByYield(currentEntry, completeParams)) {
     return undefined;
   }
   const entry = structuredClone(currentEntry);
   let suppressSessionEffects =
     prepared.suppressSessionEffects || entry.execution.suppressSessionEffects === true;
   let replacedProvisionalKill = false;
-  const recoveryRequested = completeParams.recoverInterrupted === true;
   if (
-    !recoveryRequested &&
-    (entry.terminalOwner === "interrupted-recovery" ||
-      entry.execution.suppressSessionEffects === true) &&
+    entry.execution.suppressSessionEffects === true &&
+    (entry.execution.status === "terminal" ||
+      resolveSubagentChildAuthority(entry).status !== "legacy-unverified") &&
     entry.killIntent === undefined
   ) {
-    // Restart recovery already persisted the terminal winner for this exact
-    // run. Its sticky fence survives cleanup of the transient owner marker.
     return undefined;
-  }
-  if (recoveryRequested) {
-    const ownsInterruptedRecovery = entry.terminalOwner === "interrupted-recovery";
-    // Mismatched partial terminal evidence is an existing winner and must
-    // not be overwritten. Exact normalized evidence may be the same recovery
-    // request deferred by restart admission, so drain it.
-    const hasTerminalEvidence =
-      entry.execution.status === "terminal" ||
-      entry.endedReason !== undefined ||
-      typeof entry.cleanupCompletedAt === "number";
-    const expectedElapsedMs =
-      typeof currentEntry.execution.startedAt === "number" &&
-      typeof completeParams.endedAt === "number"
-        ? Math.max(0, completeParams.endedAt - currentEntry.execution.startedAt)
-        : undefined;
-    const outcomeMatchesInterruptedRecovery = (outcome: SubagentRunOutcome | undefined) =>
-      completeParams.outcome.status === "error" &&
-      outcome?.status === "error" &&
-      outcome.error === completeParams.outcome.error &&
-      (outcome.startedAt === undefined || outcome.startedAt === currentEntry.execution.startedAt) &&
-      (outcome.endedAt === undefined || outcome.endedAt === completeParams.endedAt) &&
-      (outcome.elapsedMs === undefined || outcome.elapsedMs === expectedElapsedMs);
-    const matchesRequestedInterruptedTerminal =
-      typeof completeParams.endedAt === "number" &&
-      entry.execution.endedAt === completeParams.endedAt &&
-      outcomeMatchesInterruptedRecovery(entry.execution.outcome) &&
-      entry.endedReason === SUBAGENT_ENDED_REASON_ERROR;
-    if (
-      !ownsInterruptedRecovery &&
-      (entry.killReconciliation !== undefined ||
-        entry.endedReason === SUBAGENT_ENDED_REASON_KILLED ||
-        entry.pauseReason === "sessions_yield" ||
-        typeof entry.cleanupCompletedAt === "number" ||
-        (hasTerminalEvidence && !matchesRequestedInterruptedTerminal))
-    ) {
-      return undefined;
-    }
-    if (!ownsInterruptedRecovery) {
-      const endedAt = completeParams.endedAt ?? prepared.now;
-      const outcome = withSubagentOutcomeTiming(
-        { status: "error", error: completeParams.outcome.error },
-        { startedAt: entry.execution.startedAt, endedAt },
-      );
-      entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
-      entry.pauseReason = undefined;
-      entry.execution = {
-        ...entry.execution,
-        status: "terminal",
-        endedAt,
-        outcome,
-        interruptedAt: undefined,
-        interruptionReason: "gateway-restart",
-        suppressSessionEffects: suppressSessionEffects ? true : undefined,
-      };
-      entry.completion = {
-        ...ensureCompletionState(entry),
-        resultText: null,
-        capturedAt: endedAt,
-      };
-      entry.cleanupHandled = false;
-      entry.terminalOwner = "interrupted-recovery";
-    }
   }
   const sessionSuperseded = context.newerGenerationOwnsSession(currentEntry);
   if (
@@ -457,12 +373,9 @@ function planTerminalCompletion(
         entry.killReconciliation === undefined &&
         entry.pauseReason === undefined &&
         typeof entry.execution.endedAt === "number" &&
-        Number.isFinite(entry.execution.endedAt) &&
-        typeof entry.cleanupCompletedAt === "number" &&
-        Number.isFinite(entry.cleanupCompletedAt) &&
-        entry.cleanupCompletedAt >= entry.execution.endedAt))
+        Number.isFinite(entry.execution.endedAt)))
   ) {
-    // A delayed abort must not replace a finalized result or reopen a cleaned cancellation.
+    // A delayed abort must not replace a finalized result or reopen a confirmed cancellation.
     return undefined;
   }
   if (shouldPreservePublishedExplicitRunTimeout(entry)) {
@@ -494,12 +407,15 @@ function planTerminalCompletion(
       completionReason = SUBAGENT_ENDED_REASON_KILLED;
       completionOutcome = { status: "error", error: killIntent.reason };
       entry.killIntent = undefined;
-      if (killOwnsCurrentLifecycle && entry.execution.suppressSessionEffects !== true) {
+      if (
+        killOwnsCurrentLifecycle &&
+        resolveSubagentChildAuthority(entry).status === "verified" &&
+        entry.execution.suppressSessionEffects !== true
+      ) {
         suppressSessionEffects = false;
         entry.execution = {
           ...entry.execution,
           lifecycleGeneration: killIntent.lifecycleGeneration,
-          restartRecovery: undefined,
           suppressSessionEffects: undefined,
         };
       }
@@ -589,30 +505,19 @@ function planTerminalCompletion(
     completionOutcome = { status: "error", error: MISSING_REQUIRED_FINAL_REPLY_ERROR };
     completionReason = SUBAGENT_ENDED_REASON_ERROR;
   }
-  const outcome =
-    recoveryRequested && entry.execution.outcome
-      ? entry.execution.outcome
-      : withSubagentOutcomeTiming(completionOutcome, {
-          startedAt: entry.execution.startedAt,
-          endedAt,
-        });
-  // Lifecycle events and agent.wait may report the same terminal facts. Keep
-  // their authority stable while a prepared announcement waits for admission.
+  const outcome = withSubagentOutcomeTiming(completionOutcome, {
+    startedAt: entry.execution.startedAt,
+    endedAt,
+  });
+  // Lifecycle events and agent.wait can report the same terminal facts.
   const executionOutcome =
-    (recoveryRequested || isDeepStrictEqual(entry.execution.outcome, outcome)) &&
-    entry.execution.outcome
+    isDeepStrictEqual(entry.execution.outcome, outcome) && entry.execution.outcome
       ? entry.execution.outcome
       : outcome;
-  const retainedRestartRecovery = suppressSessionEffects
-    ? entry.execution.restartRecovery
-    : undefined;
-  const interruptionReason = recoveryRequested ? "gateway-restart" : undefined;
   if (
     entry.execution.status !== "terminal" ||
     entry.execution.endedAt !== endedAt ||
     entry.execution.outcome !== executionOutcome ||
-    entry.execution.interruptionReason !== interruptionReason ||
-    entry.execution.restartRecovery !== retainedRestartRecovery ||
     entry.execution.suppressSessionEffects !== (suppressSessionEffects ? true : undefined)
   ) {
     entry.execution = {
@@ -620,41 +525,33 @@ function planTerminalCompletion(
       status: "terminal",
       endedAt,
       outcome: executionOutcome,
-      interruptedAt: undefined,
-      interruptionReason,
-      restartRecovery: retainedRestartRecovery,
       suppressSessionEffects: suppressSessionEffects ? true : undefined,
     };
   }
   entry.endedReason = completionReason;
-  if (completionReason === SUBAGENT_ENDED_REASON_KILLED && entry.terminalOwner !== undefined) {
-    entry.terminalOwner = undefined;
-  }
   if (entry.pauseReason !== undefined) {
     entry.pauseReason = undefined;
   }
 
+  const completion = ensureCompletionState(entry);
   if (completeParams.completionSnapshot) {
-    const completion = ensureCompletionState(entry);
     completion.resultText = completeParams.completionSnapshot.resultText;
     completion.capturedAt = completeParams.completionSnapshot.capturedAt;
   }
 
-  if (terminalReply) {
-    const completion = ensureCompletionState(entry);
-    if (
-      JSON.stringify(terminalReply) !== JSON.stringify(completion.terminalReply) ||
-      completion.resultText === undefined
-    ) {
-      completion.terminalReply = terminalReply;
-      completion.resultText =
-        terminalReply.disposition === "visible"
-          ? terminalReply.text
-          : terminalReply.disposition === "silent"
-            ? SILENT_REPLY_TOKEN
-            : null;
-      completion.capturedAt = endedAt;
-    }
+  if (
+    terminalReply &&
+    (JSON.stringify(terminalReply) !== JSON.stringify(completion.terminalReply) ||
+      completion.resultText === undefined)
+  ) {
+    completion.terminalReply = terminalReply;
+    completion.resultText =
+      terminalReply.disposition === "visible"
+        ? terminalReply.text
+        : terminalReply.disposition === "silent"
+          ? SILENT_REPLY_TOKEN
+          : null;
+    completion.capturedAt = endedAt;
   }
 
   const closesAsIntentionalNonDelivery =
@@ -675,32 +572,35 @@ function planTerminalCompletion(
     entry.suppressCompletionDelivery = true;
   }
 
-  const completion = ensureCompletionState(entry);
   if (completion.resultText === undefined) {
-    if (recoveryRequested || sessionSuperseded || executionOutcome.status === "error") {
+    if (sessionSuperseded || executionOutcome.status === "error") {
       completion.resultText = null;
       completion.capturedAt = prepared.now;
-    } else if (prepared.capture) {
+    } else {
+      const capture = prepared.capture;
       if (
-        !isDeepStrictEqual(entry.execution.transcriptTarget, prepared.capture.transcriptTarget) ||
-        !isDeepStrictEqual(executionOutcome, prepared.capture.outcome)
+        !capture ||
+        !isDeepStrictEqual(entry.execution.transcriptTarget, capture.transcriptTarget) ||
+        !isDeepStrictEqual(executionOutcome, capture.outcome)
       ) {
         throw new SubagentRegistryMutationRejectedError(
           "Subagent completion requires fresh result capture",
         );
       }
-      completion.resultText = prepared.capture.resultText;
-      completion.capturedAt = prepared.capture.capturedAt;
-    } else {
-      throw new SubagentRegistryMutationRejectedError(
-        "Subagent completion requires fresh result capture",
-      );
+      completion.resultText = capture.resultText;
+      completion.capturedAt = capture.capturedAt;
     }
   }
   if (entry.collect) {
-    updateSwarmCollectorCompletion(entry, params.getRuntimeConfig(), {
-      entry: prepared.collectorSession?.entry,
-    });
+    updateSwarmCollectorCompletion(
+      entry,
+      params.getRuntimeConfig(),
+      { entry: prepared.collectorSession?.entry },
+      // Mark only the sweeper's diagnostic settlement of a yield with no recorded outcome.
+      completeParams.settleYielded === true && currentEntry.execution.outcome === undefined
+        ? "yielded_without_result"
+        : undefined,
+    );
   } else {
     updateSubagentArchiveAtMs(entry, params.getRuntimeConfig());
   }

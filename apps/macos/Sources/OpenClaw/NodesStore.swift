@@ -55,18 +55,8 @@ final class NodesStore {
         var message: String?
     }
 
-    private final class Refresh {
-        let revision: UInt64?
-        var lease: GatewayConnection.ServerLease?
-        var task: Task<Void, Never>?
-
-        init(revision: UInt64?) {
-            self.revision = revision
-        }
-    }
-
     private var gatewayState: GatewayState?
-    private var refreshOperation: Refresh?
+    private var refreshOperation: GatewayStoreRefresh?
     private var eventTask: Task<Void, Never>?
 
     /// AppKit reads cached rows before starting a refresh. Project their captured
@@ -113,10 +103,7 @@ final class NodesStore {
     private let interval: TimeInterval = 30
     private let localNodeIdentityProfile: GatewayDeviceIdentityProfile
     @ObservationIgnored private let localNodeIDLoader: @Sendable (GatewayDeviceIdentityProfile) -> String?
-    @ObservationIgnored private var localNodeIdentityLoad:
-        (generation: UInt64, task: Task<String?, Never>)?
-    @ObservationIgnored private var localNodeIdentityLoadGeneration: UInt64 = 0
-    @ObservationIgnored private var localNodeIdentityPreparationTask: Task<Void, Never>?
+    @ObservationIgnored private var localNodeIdentityLoad: Task<Void, Never>?
 
     init(
         control: ControlChannel = .shared,
@@ -184,45 +171,26 @@ final class NodesStore {
     }
 
     private func scheduleLocalNodeIdentityPreparation() {
-        guard self.localNodeIdentityPreparationTask == nil else { return }
-        guard case .available = self.localNodeIdentityState else {
-            // Retry on the node refresh lifecycle so transient storage failures recover
-            // without moving identity I/O back into SwiftUI view evaluation.
-            self.localNodeIdentityPreparationTask = Task { [weak self] in
-                guard let self else { return }
-                await self.prepareLocalNodeIdentity()
-                self.localNodeIdentityPreparationTask = nil
-            }
-            return
+        guard self.localNodeIdentityLoad == nil else { return }
+        if case .available = self.localNodeIdentityState { return }
+        // Retry on the node refresh lifecycle so transient storage failures recover
+        // without moving identity I/O back into SwiftUI view evaluation.
+        self.localNodeIdentityState = .loading
+        self.localNodeIdentityLoad = Task { [weak self] in
+            guard let self else { return }
+            let profile = self.localNodeIdentityProfile
+            let loader = self.localNodeIDLoader
+            let nodeID = await Task.detached(priority: .utility) {
+                loader(profile)
+            }.value
+            self.localNodeIdentityState = nodeID.map(LocalNodeIdentityState.available) ?? .unavailable
+            self.localNodeIdentityLoad = nil
         }
     }
 
     func prepareLocalNodeIdentity() async {
-        if case .available = self.localNodeIdentityState {
-            return
-        }
-
-        let generation: UInt64
-        let task: Task<String?, Never>
-        if let load = self.localNodeIdentityLoad {
-            generation = load.generation
-            task = load.task
-        } else {
-            self.localNodeIdentityState = .loading
-            self.localNodeIdentityLoadGeneration &+= 1
-            generation = self.localNodeIdentityLoadGeneration
-            let profile = self.localNodeIdentityProfile
-            let loader = self.localNodeIDLoader
-            task = Task.detached(priority: .utility) {
-                loader(profile)
-            }
-            self.localNodeIdentityLoad = (generation, task)
-        }
-
-        let nodeID = await task.value
-        guard self.localNodeIdentityLoad?.generation == generation else { return }
-        self.localNodeIdentityLoad = nil
-        self.localNodeIdentityState = nodeID.map(LocalNodeIdentityState.available) ?? .unavailable
+        self.scheduleLocalNodeIdentityPreparation()
+        await self.localNodeIdentityLoad?.value
     }
 
     func refresh() async {
@@ -235,7 +203,7 @@ final class NodesStore {
         if let refresh = self.refreshOperation, self.isCurrent(refresh), let task = refresh.task { return task }
         self.cancelRefresh()
         self.scheduleLocalNodeIdentityPreparation()
-        let refresh = Refresh(revision: self.gateway.selectedEndpointRevision)
+        let refresh = GatewayStoreRefresh(revision: self.gateway.selectedEndpointRevision)
         self.gatewayState = self.currentState ?? GatewayState(revision: refresh.revision)
         self.gatewayState?.message = nil
         let task = Task<Void, Never> { [weak self] in await self?.performRefresh(refresh) }
@@ -249,13 +217,11 @@ final class NodesStore {
         self.refreshOperation = nil
     }
 
-    private func isCurrent(_ refresh: Refresh) -> Bool {
-        self.refreshOperation === refresh && refresh.task?.isCancelled != true &&
-            refresh.revision == self.gateway.selectedEndpointRevision &&
-            refresh.lease.map(self.gateway.serverLeaseMatchesCurrentState) != false
+    private func isCurrent(_ refresh: GatewayStoreRefresh) -> Bool {
+        self.refreshOperation === refresh && refresh.isCurrent(on: self.gateway)
     }
 
-    private func performRefresh(_ refresh: Refresh) async {
+    private func performRefresh(_ refresh: GatewayStoreRefresh) async {
         defer {
             if self.refreshOperation === refresh { self.refreshOperation = nil }
         }
@@ -272,7 +238,6 @@ final class NodesStore {
         } catch {
             guard self.isCurrent(refresh) else { return }
             if Self.isCancelled(error) {
-                self.logger.debug("node.list cancelled; keeping last nodes")
                 // Finish the cache read before its optional mutation begins.
                 let message = self.nodes.isEmpty ? "Refreshing devices…" : nil
                 self.gatewayState?.message = message

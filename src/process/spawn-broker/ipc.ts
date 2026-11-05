@@ -87,51 +87,24 @@ export function createBrokerSender(send: IpcSender) {
   return Object.assign(sender, {
     reserve<T>(run: (publish: BrokerPublisher) => Promise<T>): Promise<T> {
       // Prepay a frame before effects begin; later messages cannot consume its capacity.
-      return enqueue(FRAME_BYTES, async () => {
-        let active = true;
-        let publishing = false;
-        let publication: Promise<void> | undefined;
-        const publish: BrokerPublisher = (message) => {
-          if (!active || publishing) {
-            return Promise.reject(
-              new SpawnBrokerError("Spawn broker publication reservation is closed"),
-            );
+      // The launch owner awaits each publication before returning from its reservation.
+      return enqueue(FRAME_BYTES, () =>
+        run(async (message) => {
+          if (serialize(message).byteLength > FRAME_BYTES) {
+            throw new SpawnBrokerError("Spawn broker reserved publication exceeds one IPC frame");
           }
-          publishing = true;
-          publication = (async () => {
-            if (serialize(message).byteLength > FRAME_BYTES) {
-              throw new SpawnBrokerError("Spawn broker reserved publication exceeds one IPC frame");
-            }
-            await write(message);
-          })();
-          void publication.then(
-            () => {
-              publishing = false;
-            },
-            () => {},
-          );
-          void publication.catch(() => {});
-          return publication;
-        };
-        try {
-          return await run(publish);
-        } finally {
-          active = false;
-          // Even a callback that throws or forgets to await publication retains its write.
-          await publication;
-        }
-      });
+          await write(message);
+        }),
+      );
     },
   });
 }
 
 /** Only the version-matched private peer can supply frames on this channel. */
 export function createBrokerReceiver() {
-  const pending = new Map<number, { total: number; received: number; chunks: Buffer[] }>();
-  let reserved = 0;
+  let pending: { id: number; total: number; received: number; chunks: Buffer[] } | undefined;
   const clear = () => {
-    pending.clear();
-    reserved = 0;
+    pending = undefined;
   };
   return {
     receive(message: unknown): unknown {
@@ -158,22 +131,13 @@ export function createBrokerReceiver() {
       ) {
         throw new SpawnBrokerError("Invalid spawn broker IPC frame");
       }
-      // One serialized producer cannot interleave messages; a new message abandons an incomplete one.
-      if (frame.offset === 0 && !pending.has(frame.id)) {
-        clear();
-      }
-      let assembly = pending.get(frame.id);
+      let assembly = pending?.id === frame.id ? pending : undefined;
       if (!assembly) {
-        if (
-          frame.offset !== 0 ||
-          pending.size >= MAX_PENDING_MESSAGES ||
-          reserved + frame.total > MAX_PENDING_BYTES
-        ) {
+        if (frame.offset !== 0) {
           throw new SpawnBrokerError("Spawn broker receive capacity exceeded");
         }
-        assembly = { total: frame.total, received: 0, chunks: [] };
-        pending.set(frame.id, assembly);
-        reserved += frame.total;
+        // The serialized producer owns one assembly; a new message abandons its predecessor.
+        pending = assembly = { id: frame.id, total: frame.total, received: 0, chunks: [] };
       }
       if (
         assembly.total !== frame.total ||
@@ -187,8 +151,7 @@ export function createBrokerReceiver() {
       if (assembly.received < assembly.total) {
         return undefined;
       }
-      pending.delete(frame.id);
-      reserved -= assembly.total;
+      clear();
       return deserialize(Buffer.concat(assembly.chunks, assembly.total));
     },
     clear,

@@ -12,11 +12,9 @@ import {
 } from "./reasoning-tag-parser.js";
 
 export {
-  findMarkdownCodeSpans,
   findMarkdownCodeRegions,
   parseMarkdownOwnership,
   scanReasoningTags,
-  stripReasoningTagsFromMarkdown,
 } from "./reasoning-tag-parser.js";
 export type { ReasoningTagTextDelta } from "./reasoning-tag-parser.js";
 
@@ -67,7 +65,7 @@ export interface ReasoningTagTextPartitioner {
   markStrict(): void;
   push(chunk: string): ReasoningTagTextDelta[];
   pushVisible(chunk: string): ReasoningTagTextDelta[];
-  flush(): ReasoningTagTextDelta[];
+  flush(options?: { recoverUnclosed?: boolean }): ReasoningTagTextDelta[];
   hasPending(): boolean;
   /** Whether more input can change buffered Markdown or reasoning-tag ownership. */
   hasPendingSyntax(): boolean;
@@ -255,6 +253,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     output: ReasoningTagTextDelta[],
     parsedCodeSpans?: Array<[number, number]>,
     parsedRetainStart?: number,
+    recoverUnclosed = true,
   ): void => {
     const previousBlockStart = blockStart;
     let blockCodeSpans = parsedCodeSpans;
@@ -267,6 +266,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         output,
         reduceReasoningText("", [], reduction, {
           final: true,
+          recoverUnclosed,
           mode: strictMode ? "hide" : "visible",
           scope: "all",
         }),
@@ -307,6 +307,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         output,
         reduceReasoningText(block, blockCodeSpans, reduction, {
           final,
+          recoverUnclosed,
           mode: strictMode ? "hide" : "visible",
           scope: "all",
           start,
@@ -356,7 +357,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     }
   };
 
-  const consume = (appended: string, strict: boolean, final: boolean) => {
+  const consume = (appended: string, strict: boolean, final: boolean, recoverUnclosed = true) => {
     strictMode ||= strict;
     const previousEndedBlankBlock = endedBlankBlock;
     source += appended;
@@ -385,7 +386,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     }
     const output: ReasoningTagTextDelta[] = [];
     if (final) {
-      processBlock(source.length, true, output);
+      processBlock(source.length, true, output, undefined, undefined, recoverUnclosed);
     } else {
       emitSafePrefix(source.length, output, appended);
       if (!strictMode && holdStart !== undefined && holdStart < source.length) {
@@ -531,8 +532,8 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     pushVisible(chunk) {
       return consume(chunk, false, false);
     },
-    flush() {
-      return consume("", strictMode, true);
+    flush(options) {
+      return consume("", strictMode, true, options?.recoverUnclosed);
     },
     hasPending() {
       return (

@@ -1,10 +1,7 @@
 import { ensureRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import { mergeMissing } from "../../../config/merge-missing.js";
 import { isRecord } from "./legacy-config-record-shared.js";
-import {
-  migrateLegacyXSearchConfig,
-  resolveLegacyXSearchModelTarget,
-} from "./legacy-web-tools-migrate.js";
+import { migrateLegacyXSearchConfig } from "./legacy-web-tools-migrate.js";
 
 const LEGACY_OPENAI_CODEX_PLUGIN_ID = "openai-codex";
 const OPENAI_PLUGIN_ID = "openai";
@@ -179,39 +176,38 @@ function migrateLegacyCodexSupervisorPlugin(raw: Record<string, unknown>): strin
   return changes;
 }
 
+function pluginPolicyMigration(
+  id: string,
+  message: string,
+  migrate: (raw: Record<string, unknown>) => string[],
+): LegacyConfigMigrationSpec {
+  return {
+    id,
+    legacyRules: [
+      {
+        path: ["plugins"],
+        message,
+        requireSourceLiteral: true,
+        match: (_value, root) => migrate(structuredClone(root)).length > 0,
+      },
+    ],
+    apply: (raw, changes) => {
+      changes.push(...migrate(raw));
+    },
+  };
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_PROVIDERS: LegacyConfigMigrationSpec[] = [
-  {
-    id: "plugins.codex-supervisor->plugins.codex.config.supervision",
-    legacyRules: [
-      {
-        path: ["plugins"],
-        message:
-          'plugins.entries.codex-supervisor and related plugin policy references are retired; use plugins.entries.codex.config.supervision. Run "openclaw doctor --fix".',
-        requireSourceLiteral: true,
-        match: (_value, root) =>
-          migrateLegacyCodexSupervisorPlugin(structuredClone(root)).length > 0,
-      },
-    ],
-    apply: (raw, changes) => {
-      changes.push(...migrateLegacyCodexSupervisorPlugin(raw));
-    },
-  },
-  {
-    id: "plugins.openai-codex->plugins.openai",
-    legacyRules: [
-      {
-        path: ["plugins"],
-        message:
-          'plugins.openai-codex references are retired; use the openai plugin id. Run "openclaw doctor --fix".',
-        requireSourceLiteral: true,
-        match: (_value, root) =>
-          rewriteLegacyOpenAICodexPluginPolicy(structuredClone(root)).length > 0,
-      },
-    ],
-    apply: (raw, changes) => {
-      changes.push(...rewriteLegacyOpenAICodexPluginPolicy(raw));
-    },
-  },
+  pluginPolicyMigration(
+    "plugins.codex-supervisor->plugins.codex.config.supervision",
+    'plugins.entries.codex-supervisor and related plugin policy references are retired; use plugins.entries.codex.config.supervision. Run "openclaw doctor --fix".',
+    migrateLegacyCodexSupervisorPlugin,
+  ),
+  pluginPolicyMigration(
+    "plugins.openai-codex->plugins.openai",
+    'plugins.openai-codex references are retired; use the openai plugin id. Run "openclaw doctor --fix".',
+    rewriteLegacyOpenAICodexPluginPolicy,
+  ),
   {
     id: "tools.web.x_search.apiKey->plugins.entries.xai.config.webSearch.apiKey",
     legacyRules: [
@@ -219,13 +215,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_PROVIDERS: LegacyConfigMigrationSp
         path: ["tools", "web", "x_search", "apiKey"],
         message:
           'tools.web.x_search.apiKey moved to the xAI plugin; use plugins.entries.xai.config.webSearch.apiKey instead. Run "openclaw doctor --fix".',
-      },
-      {
-        path: ["tools", "web", "x_search", "model"],
-        message:
-          'tools.web.x_search.model uses a retired xAI model; run "openclaw doctor --fix" to repair it.',
-        requireSourceLiteral: true,
-        match: (value) => resolveLegacyXSearchModelTarget(value) !== undefined,
       },
     ],
     apply: (raw, changes) => {

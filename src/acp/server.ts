@@ -3,9 +3,11 @@ import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_METHODS,
-  AgentSideConnection,
   PROTOCOL_VERSION,
+  agent as createAgentApp,
+  methods,
   ndJsonStream,
+  type AgentConnection,
   type AnyMessage,
 } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
@@ -21,6 +23,7 @@ import {
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 import { GatewayClient } from "../gateway/client.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
@@ -136,12 +139,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       console.warn(`acp: state database close failed during shutdown: ${formatErrorMessage(err)}`);
       errors.push(err);
     }
-    if (errors.length === 1) {
-      throw errors[0];
-    }
-    if (errors.length > 1) {
-      throw new AggregateError(errors, "ACP capture and state database shutdown failed.");
-    }
+    throwCollectedErrors(errors, "ACP capture and state database shutdown failed.");
   };
 
   const gateway = new GatewayClient({
@@ -156,7 +154,11 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     clientDisplayName: "ACP",
     clientVersion: "acp",
     mode: GATEWAY_CLIENT_MODES.CLI,
-    caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+    caps: [
+      GATEWAY_CLIENT_CAPS.EXEC_APPROVALS,
+      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+      GATEWAY_CLIENT_CAPS.NO_QUESTION_INPUT,
+    ],
     onEvent: (evt) => {
       if (stopped) {
         return;
@@ -192,6 +194,12 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   const rawInput = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
   const startupInput = createStartupInputMonitor(rawInput);
 
+  const inputLifetime = new AbortController();
+  let inputClosed: Promise<void> | undefined;
+  let connection: AgentConnection | undefined;
+  const onSignal = () => {
+    void shutdown();
+  };
   let shuttingDown: Promise<void> | undefined;
   let stoppingAgent: AcpGatewayAgent | null = null;
   const shutdown = () => {
@@ -211,6 +219,11 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
         agent = null;
       }
       await stoppingAgent?.shutdown();
+      // The SDK only closes when its reader ends. Pausing Node stdin alone
+      // leaves its Web-stream reader alive after SIGINT/SIGTERM.
+      inputLifetime.abort();
+      await inputClosed;
+      await connection?.closed;
       stoppingAgent = null;
       // This injected store remains caller-owned through failed shutdown retries.
       sessionStore?.dispose();
@@ -237,79 +250,137 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     }, shutdown)
     .catch(onCloseFailed);
 
-  process.once("SIGINT", () => {
-    void shutdown();
-  });
-  process.once("SIGTERM", () => {
-    void shutdown();
-  });
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
 
-  // Wait for Gateway hello before dispatching buffered ACP requests.
-  const readiness = await startGatewayClientWhenEventLoopReady(gateway, {
-    clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
-    signal: startupAbortController.signal,
-  });
-  if (!readiness.ready) {
-    rejectGatewayReady(new Error("gateway event loop readiness timeout"));
-  }
-  await gatewayReady.catch(async (err: unknown) => {
-    await shutdown();
-    throw err;
-  });
-  if (stopped) {
-    return closed;
-  }
+  try {
+    // Wait for Gateway hello before dispatching buffered ACP requests.
+    const readiness = await startGatewayClientWhenEventLoopReady(gateway, {
+      clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
+      signal: startupAbortController.signal,
+    });
+    if (!readiness.ready) {
+      rejectGatewayReady(new Error("gateway event loop readiness timeout"));
+    }
+    await gatewayReady.catch(async (err: unknown) => {
+      await shutdown();
+      throw err;
+    });
+    if (stopped) {
+      return await closed;
+    }
 
-  const bufferedInput = startupInput.takeReadable();
-  startupInput.dispose();
-  const output = Writable.toWeb(process.stdout);
-  const stream = ndJsonStream(output, bufferedInput);
-  const sessionNewOrdering = new AcpSessionNewOrdering();
-  // Store-owned reaping and eviction must retire ordering state, just like session/close.
-  sessionStore = createInMemorySessionStore({
-    onSessionRemoved: (sessionId) => sessionNewOrdering.forget(sessionId),
-  });
-  const readable = stream.readable.pipeThrough(
-    new TransformStream<AnyMessage, AnyMessage>({
+    const bufferedInput = startupInput.takeReadable();
+    startupInput.dispose();
+    const output = Writable.toWeb(process.stdout);
+    const stream = ndJsonStream(output, bufferedInput);
+    const sessionNewOrdering = new AcpSessionNewOrdering();
+    // Store-owned reaping and eviction must retire ordering state, just like session/close.
+    sessionStore = createInMemorySessionStore({
+      onSessionRemoved: (sessionId) => sessionNewOrdering.forget(sessionId),
+    });
+    const inbound = new TransformStream<AnyMessage, AnyMessage>({
       transform(message, controller) {
+        if (stopped) {
+          return;
+        }
         sessionNewOrdering.observeInbound(message);
         controller.enqueue(normalizeAcpInitializeProtocolVersion(message));
       },
-    }),
-  );
-  const orderedOutbound = new TransformStream<AnyMessage, AnyMessage>({
-    transform(message, controller) {
-      sessionNewOrdering.transformOutbound(message, controller);
-    },
-  });
-  // Writer failure must close the Gateway and database, just like EOF and SIGTERM.
-  void orderedOutbound.readable
-    .pipeTo(stream.writable)
-    .catch(async (err: unknown) => {
-      if (opts.verbose) {
-        process.stderr.write(`openclaw acp: outbound stream failed: ${formatErrorMessage(err)}\n`);
-      }
-      await shutdown();
-    })
-    .catch(onCloseFailed);
-  const eventLedger = createSqliteAcpEventLedger();
-
-  const connection = new AgentSideConnection(
-    (conn: AgentSideConnection) => {
-      agent = new AcpGatewayAgent(conn, gateway, {
-        ...opts,
-        eventLedger,
-        sessionStore: sessionStore ?? undefined,
+    });
+    inputClosed = stream.readable
+      .pipeTo(inbound.writable, { signal: inputLifetime.signal })
+      .catch((error: unknown) => {
+        if (!inputLifetime.signal.aborted) {
+          void shutdown();
+          if (opts.verbose) {
+            process.stderr.write(
+              `openclaw acp: inbound stream failed: ${formatErrorMessage(error)}\n`,
+            );
+          }
+        }
       });
-      agent.start();
-      return agent;
-    },
-    { writable: orderedOutbound.writable, readable },
-  );
-  // SDK EOF must also close the Gateway and database.
-  void connection.closed.then(shutdown, shutdown).catch(onCloseFailed);
+    const readable = inbound.readable;
+    const orderedOutbound = new TransformStream<AnyMessage, AnyMessage>({
+      transform(message, controller) {
+        sessionNewOrdering.transformOutbound(message, controller);
+      },
+    });
+    // Writer failure must close the Gateway and database, just like EOF and SIGTERM.
+    void orderedOutbound.readable
+      .pipeTo(stream.writable)
+      .catch(async (err: unknown) => {
+        if (opts.verbose) {
+          process.stderr.write(
+            `openclaw acp: outbound stream failed: ${formatErrorMessage(err)}\n`,
+          );
+        }
+        await shutdown();
+      })
+      .catch(onCloseFailed);
+    const eventLedger = createSqliteAcpEventLedger();
 
-  return closed;
+    // The SDK runs connect handlers before dispatching the first inbound
+    // message. Handlers keep this translator after shutdown revokes `agent`.
+    let translator: AcpGatewayAgent | undefined;
+    const connectedTranslator = () => {
+      if (!translator) {
+        throw new Error("ACP translator is not connected");
+      }
+      return translator;
+    };
+    connection = createAgentApp()
+      .onConnect(({ client }) => {
+        agent = translator = new AcpGatewayAgent(client, gateway, {
+          ...opts,
+          eventLedger,
+          sessionStore: sessionStore ?? undefined,
+        });
+        agent.start();
+      })
+      .onRequest(methods.agent.initialize, ({ params }) => connectedTranslator().initialize(params))
+      .onRequest(methods.agent.authenticate, ({ params }) =>
+        connectedTranslator().authenticate(params),
+      )
+      .onRequest(methods.agent.session.new, ({ params }) =>
+        connectedTranslator().newSession(params),
+      )
+      .onRequest(methods.agent.session.load, ({ params }) =>
+        connectedTranslator().loadSession(params),
+      )
+      .onRequest(methods.agent.session.list, ({ params }) =>
+        connectedTranslator().listSessions(params),
+      )
+      .onRequest(methods.agent.session.resume, ({ params }) =>
+        connectedTranslator().resumeSession(params),
+      )
+      .onRequest(methods.agent.session.close, ({ params }) =>
+        connectedTranslator().closeSession(params),
+      )
+      .onRequest(methods.agent.session.setMode, ({ params }) =>
+        connectedTranslator().setSessionMode(params),
+      )
+      .onRequest(methods.agent.session.setConfigOption, ({ params }) =>
+        connectedTranslator().setSessionConfigOption(params),
+      )
+      .onRequest(methods.agent.session.prompt, ({ params }) => connectedTranslator().prompt(params))
+      .onNotification(methods.agent.session.cancel, ({ params }) =>
+        connectedTranslator().cancel(params),
+      )
+      .connect({ writable: orderedOutbound.writable, readable });
+    // SDK EOF must also close the Gateway and database.
+    void connection.closed.then(shutdown, shutdown).catch(onCloseFailed);
+
+    return await closed;
+  } catch (error) {
+    if (!stopped) {
+      await shutdown();
+    }
+    throw error;
+  } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+  }
 }
 
 function normalizeAcpInitializeProtocolVersion(message: AnyMessage): AnyMessage {
@@ -340,7 +411,7 @@ function isUint16Integer(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffff;
 }
 
-function parseArgs(args: string[]): AcpServerOptions {
+function parseArgs(args: string[]): AcpServerOptions | undefined {
   const opts: AcpServerOptions = {};
   let tokenFile: string | undefined;
   let passwordFile: string | undefined;
@@ -409,7 +480,7 @@ function parseArgs(args: string[]): AcpServerOptions {
     }
     if (arg === "--help" || arg === "-h") {
       printHelp();
-      process.exit(0);
+      return undefined;
     }
   }
   const gatewayToken = normalizeOptionalString(opts.gatewayToken);
@@ -466,8 +537,10 @@ if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
     );
   }
   const opts = parseArgs(argv);
-  serveAcpGateway(opts).catch((err: unknown) => {
-    console.error(formatErrorMessage(err));
-    process.exit(1);
-  });
+  if (opts) {
+    serveAcpGateway(opts).catch((err: unknown) => {
+      console.error(formatErrorMessage(err));
+      process.exitCode = 1;
+    });
+  }
 }

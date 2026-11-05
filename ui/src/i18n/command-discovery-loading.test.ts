@@ -11,9 +11,7 @@ describe("command discovery English loading", () => {
       surface: "palette search",
       load: () => import("../components/command-palette-catalog-search.ts"),
     },
-    { surface: "session transcript search", load: () => import("../pages/sessions/view.ts") },
-    { surface: "slash commands", load: () => import("../lib/chat/commands.ts") },
-    { surface: "shortcut help", load: () => import("../lib/keyboard-shortcut-catalog.ts") },
+    { surface: "shortcut help", load: () => import("../components/keyboard-shortcuts-dialog.tsx") },
   ])("registers fallback copy before $surface reads it", async ({ load }) => {
     const { manager } = await loadI18n();
     expect(manager.t("palette.placeholder")).toBe("Search or start a task…");
@@ -31,5 +29,35 @@ describe("command discovery English loading", () => {
     expect(manager.t("common.health")).toBe("Gesundheit");
     expect(manager.t("commandPalette.newSessionSettings")).toBe("New session settings");
     expect(manager.t("chat.commands.menu")).toBe("Slash commands");
+  });
+
+  it.each<[key: string, expected: string, load: () => Promise<unknown>]>([
+    [
+      "sessionsView.transcriptSearchTitle",
+      "Search transcripts",
+      () => import("../pages/sessions/view.tsx"),
+    ],
+    ["chat.commands.menu", "Slash commands", () => import("../lib/chat/commands.ts")],
+    [
+      "chat.welcome.recentSessions",
+      "Recent sessions",
+      () => import("../pages/chat/components/chat-welcome.tsx"),
+    ],
+  ])("loads only %s copy before discovery opens", async (key, expected, load) => {
+    const { manager } = await loadI18n();
+    await manager.setLocale("de");
+    await load();
+    expect(manager.t(key)).toBe(expected);
+    expect(manager.t("commandPalette.newSessionSettings")).toBe(
+      "commandPalette.newSessionSettings",
+    );
+    expect(manager.t("shortcutsOverlay.labels.sendMessage")).toBe(
+      "shortcutsOverlay.labels.sendMessage",
+    );
+    expect(manager.t("common.health")).toBe("Gesundheit");
+    const { registerCommandPaletteEnglish } = await import("./locales/en-command-palette.ts");
+    registerCommandPaletteEnglish();
+    expect(manager.t("commandPalette.newSessionSettings")).toBe("New session settings");
+    expect(manager.t("shortcutsOverlay.labels.sendMessage")).toBe("Send message");
   });
 });

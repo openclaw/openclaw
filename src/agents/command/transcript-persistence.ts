@@ -1,5 +1,6 @@
 /** Persists CLI and ACP command fallbacks through the shared transcript owner. */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   persistSessionTranscriptTurn,
   type TranscriptMessageAppendResult,
@@ -20,19 +21,15 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agent-run-terminal-outcome.js";
+import { resolveCliTranscriptUsage, type CliTranscriptUsage } from "../cli-transcript-usage.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
-import type { NormalizedUsage } from "../usage.js";
-
-type TranscriptUsage = Pick<
-  NormalizedUsage,
-  "input" | "output" | "cacheRead" | "cacheWrite" | "total" | "contextUsage"
->;
 
 type TextTurnTranscriptContext = {
   inputProvenance?: InputProvenance;
+  privateCompletion?: true;
   body: string;
   transcriptBody?: string;
   sessionId: string;
@@ -45,6 +42,7 @@ type TextTurnTranscriptContext = {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
+  runId?: string;
 };
 
 type PersistTextTurnTranscriptParams = TextTurnTranscriptContext & {
@@ -55,12 +53,13 @@ type PersistTextTurnTranscriptParams = TextTurnTranscriptContext & {
   expectedSessionId?: string;
   finalText: string;
   skipAssistantTurn?: boolean;
+  assistantUsageOnly?: boolean;
   assistant: {
     api: string;
     provider: string;
     model: string;
     stopReason: StopReason;
-    usage?: TranscriptUsage;
+    usage?: CliTranscriptUsage;
   };
 };
 
@@ -73,35 +72,6 @@ type PersistTextTurnTranscriptResult =
   | { kind: "session-rebound"; sessionEntry: undefined };
 
 const ACP_TRANSCRIPT_USAGE = buildUsageWithNoCost({});
-const CLI_TRANSCRIPT_UNAVAILABLE_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  total: 0,
-  contextUsage: { state: "unavailable" },
-} as const;
-
-function resolveCliTranscriptUsage(usage: TranscriptUsage | undefined): TranscriptUsage {
-  if (!usage) {
-    return CLI_TRANSCRIPT_UNAVAILABLE_USAGE;
-  }
-  if (usage.contextUsage) {
-    return usage;
-  }
-  const promptTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-  return {
-    ...usage,
-    contextUsage:
-      promptTokens > 0
-        ? {
-            state: "available",
-            promptTokens,
-            totalTokens: promptTokens + (usage.output ?? 0),
-          }
-        : { state: "unavailable" },
-  };
-}
 function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistant"]["usage"]) {
   if (!usage) {
     return ACP_TRANSCRIPT_USAGE;
@@ -121,6 +91,8 @@ async function persistTextTurnTranscript(
 ): Promise<PersistTextTurnTranscriptResult> {
   const promptText = params.transcriptBody ?? params.body;
   const replyText = params.skipAssistantTurn === true ? "" : params.finalText;
+  const persistAssistantUsage =
+    params.skipAssistantTurn !== true && params.assistantUsageOnly === true;
   const userMessage =
     params.userMessage ??
     (await params.userTurnTranscriptRecorder?.resolveMessage()) ??
@@ -131,7 +103,7 @@ async function persistTextTurnTranscript(
           provenance: params.inputProvenance,
         })
       : undefined);
-  if (!userMessage && !replyText) {
+  if (!userMessage && !replyText && !persistAssistantUsage) {
     return { kind: "persisted", sessionEntry: params.sessionEntry };
   }
   const inputProvenance =
@@ -157,7 +129,7 @@ async function persistTextTurnTranscript(
           );
           return prepared
             ? projectAgentHarnessTranscriptMessageForDisplay({
-                hidden: false,
+                hidden: params.privateCompletion === true,
                 inputProvenance,
                 message: prepared,
               })
@@ -167,7 +139,7 @@ async function persistTextTurnTranscript(
     });
   }
 
-  if (replyText) {
+  if (replyText || persistAssistantUsage) {
     const prepareAssistantTranscriptMessage = params.prepareAssistantTranscriptMessage;
     messages.push({
       idempotencyLookup: "scan-assistant" as const,
@@ -176,7 +148,7 @@ async function persistTextTurnTranscript(
         ...(params.assistantIdempotencyKey
           ? { idempotencyKey: params.assistantIdempotencyKey }
           : {}),
-        content: [{ type: "text", text: replyText }],
+        content: replyText ? [{ type: "text", text: replyText }] : [],
         api: params.assistant.api,
         provider: params.assistant.provider,
         model: params.assistant.model,
@@ -189,7 +161,8 @@ async function persistTextTurnTranscript(
           // SAFETY: This append creates the assistant row above; the preparer cannot receive another row.
           const assistant = message as Parameters<PrepareAssistantTranscriptMessage>[0];
           return projectAgentHarnessTranscriptMessageForDisplay({
-            hidden: false,
+            runId: params.runId,
+            hidden: params.privateCompletion === true || persistAssistantUsage,
             inputProvenance,
             message: prepareAssistantTranscriptMessage
               ? prepareAssistantTranscriptMessage(assistant, replyText)
@@ -215,9 +188,10 @@ async function persistTextTurnTranscript(
       config: params.config,
       cwd: params.sessionCwd,
       messages,
+      runId: params.runId,
       publishWhen: "always",
       touchSessionEntry: true,
-      updateMode: "file-only",
+      updateMode: params.runId ? "inline" : "file-only",
       expectedSessionId:
         params.expectedSessionId ??
         (params.sessionStore && params.storePath ? params.sessionId : undefined),
@@ -247,7 +221,20 @@ async function persistTextTurnTranscript(
   };
 }
 
+function hasSourceReplyTranscriptMirrors(result: EmbeddedAgentRunResult): boolean {
+  return (
+    result.payloads?.some(
+      (payload) => getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror,
+    ) === true
+  );
+}
+
 export function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
+  // Delivery owns the individual source-reply mirrors. Their joined visible text
+  // is not another CLI answer, and private terminal output must stay private.
+  if (hasSourceReplyTranscriptMirrors(result)) {
+    return "";
+  }
   const visibleText = result.meta.finalAssistantVisibleText?.trim();
   if (visibleText) {
     return visibleText;
@@ -294,9 +281,8 @@ export async function persistCliTurnTranscript(
 ): Promise<PersistTextTurnTranscriptResult> {
   const { result, skipUserTurn: requestedSkipUserTurn, ...transcript } = params;
   const replyText = resolveCliTranscriptReplyText(result);
-  const provider = result.meta.agentMeta?.provider?.trim() ?? "cli";
-  const model = result.meta.agentMeta?.model?.trim() ?? "default";
   const skipUserTurn = requestedSkipUserTurn === true;
+  const assistantUsageOnly = hasSourceReplyTranscriptMirrors(result);
 
   return await persistTextTurnTranscript({
     ...transcript,
@@ -304,14 +290,21 @@ export async function persistCliTurnTranscript(
     transcriptBody: skipUserTurn ? undefined : transcript.transcriptBody,
     userMessage: skipUserTurn ? undefined : transcript.userMessage,
     finalText: replyText,
+    // Mirrors carry no usage. Keep the whole-turn counters without another visible reply.
+    assistantUsageOnly,
+    assistantIdempotencyKey:
+      assistantUsageOnly && params.runId ? `cli-usage:${params.runId}` : undefined,
     assistant: {
       api: "cli",
-      provider,
-      model,
+      provider: result.meta.agentMeta?.provider?.trim() ?? "cli",
+      model: result.meta.agentMeta?.model?.trim() ?? "default",
       stopReason: "stop",
       // The marker is terminal for fallback scans: without it, readers could
       // skip this turn and revive an older cumulative usage record as fresh.
-      usage: resolveCliTranscriptUsage(result.meta.agentMeta?.lastCallUsage),
+      usage: resolveCliTranscriptUsage(
+        result.meta.agentMeta?.lastCallUsage,
+        result.meta.agentMeta?.diagnosticUsage,
+      ),
     },
   });
 }
