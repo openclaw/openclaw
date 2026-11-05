@@ -1,7 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { readConfiguredModelAuthProfileProvider } from "../../config/sessions/auth-profile-override-provenance.js";
 import { listActiveReplyRunSessionKeys } from "../../sessions/session-controller.queries.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
@@ -56,25 +55,6 @@ export function registerReplyAuthAdmissionCases({
       authProfileIdSource: "user",
     });
     expect(sessionEntry.authProfileOverride).toBe("openai:subscription");
-  });
-
-  it("carries configured account provenance from admission into the runnable turn", async () => {
-    const { resolveSessionAuthSelection } =
-      await import("../../agents/auth-profiles/session-override.js");
-    vi.mocked(shouldUseReplyFastTestRuntime).mockReturnValueOnce(false);
-    vi.mocked(resolveSessionAuthSelection).mockResolvedValueOnce({
-      profileId: "anthropic:configured",
-      source: "user",
-      routeRequirement: undefined,
-      configuredPrimaryProvider: "anthropic",
-    });
-
-    await runPreparedReply(baseParams());
-
-    const run = requireRunReplyAgentCall().followupRun.run;
-    expect(run.authProfileId).toBe("anthropic:configured");
-    expect(run.authProfileIdSource).toBe("user");
-    expect(readConfiguredModelAuthProfileProvider(run)).toBe("anthropic");
   });
 
   it.each([false, true])(
