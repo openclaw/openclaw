@@ -1083,6 +1083,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["mid block", [2, "B.", 2, "B. C.", ["B.", 1], 3, "B. C. D."], ["B.\n\nB. C.B.", "B. C. D."]],
     ["two starts", ["X.", 3, 2, 2, "X. Y.", ["X.", 0], 3, "X. Y."], ["X.", "X. Y.X.", "X. Y."]],
     ["offset", [2, "B.", ["B.", 2], 2, "X. Y.", ["X.", 2], 3, "X. Y."], ["B.\n\nX. Y.X.", "X. Y."]],
+    ["first block", [2, "X.", ["X.", 1]], ["X."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1807,7 +1808,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(session.closeWithResult).toHaveBeenCalledWith(text, { note: "Agent: agent" });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
-
   it("keeps visible reply state across repeated reply-start keepalives", async () => {
     const { result, options } = createDispatcherHarness();
     await options.onReplyStart?.();
