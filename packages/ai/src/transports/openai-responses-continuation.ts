@@ -107,14 +107,13 @@ function responseToolCalls(items: readonly unknown[]): ResponsesContinuationTool
   });
 }
 
-function toolCallReplayShapes(call: ResponsesContinuationToolCall): Set<string> {
-  return new Set(
-    [
-      call.callId,
-      canonicalizeToolCallId(call.callId, call.itemId),
-      canonicalizeToolCallId(call.callId, undefined),
-    ].filter((shape): shape is string => typeof shape === "string"),
-  );
+function toolCallReplayShapes(call: ResponsesContinuationToolCall): string[] {
+  // Membership checks and same-owner map writes already tolerate duplicate spellings.
+  return [
+    call.callId,
+    canonicalizeToolCallId(call.callId, call.itemId),
+    canonicalizeToolCallId(call.callId, undefined),
+  ].filter((shape): shape is string => typeof shape === "string");
 }
 
 function toolCallOwnerByReplayShape(
@@ -177,7 +176,7 @@ export function recordResponsesContinuationState(
   const pendingToolCalls = uniqueCalls.filter((_call, index) => {
     const callPosition = lastCallPosition.get(index);
     return (
-      [...toolCallReplayShapes(_call)].some((shape) => replayedCallIds.has(shape)) &&
+      toolCallReplayShapes(_call).some((shape) => replayedCallIds.has(shape)) &&
       (callPosition === undefined || (lastOutputPosition.get(index) ?? -1) < callPosition)
     );
   });
@@ -463,7 +462,7 @@ export function resolveResponsesContinuationRequest(
           !toolCallReplayShapes({
             callId: previousItem.call_id,
             ...(typeof previousItem.id === "string" ? { itemId: previousItem.id } : {}),
-          }).has(currentItem.call_id)
+          }).includes(currentItem.call_id)
         ) {
           return { request, continuationStatus: "history_changed" };
         }
