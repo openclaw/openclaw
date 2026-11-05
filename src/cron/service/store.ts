@@ -29,8 +29,9 @@ import { CronRunReceiptRevisionError } from "../store/run-receipt-store.js";
 import type { CronRuntimeMutationInputs } from "../store/runtime-worker.types.js";
 import { CronJobsStoreChangedError } from "../store/save-error.js";
 import { CronStreamExecApprovalRequiredError } from "../stream-exec-authority.js";
-import type { CronJob, CronStoreFile } from "../types.js";
+import type { CronJob, CronStoredJob, CronStoreFile } from "../types.js";
 import { prepareCronStreamMutationAdmission } from "./config-mutation.js";
+import { canCronJobRunAgain } from "./jobs-scheduling.js";
 import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";
 import { dispatchCronNotification } from "./notification-dispatch.js";
 import { wakeCronRunQueues } from "./run-queue-wake.js";
@@ -80,6 +81,23 @@ function warnInvalidPersistedCronJob(params: {
     },
     "cron: quarantined invalid persisted job and skipped it from runtime",
   );
+}
+
+/** Warns once per job; readiness advice waits until an edit gives the job another run. */
+export function warnCronJobDiagnostics(state: CronServiceState, job: CronStoredJob): void {
+  const warningKey = `host:${job.id}`;
+  if (state.warnedInvalidPersistedJobKeys.has(warningKey)) {
+    return;
+  }
+  const warning =
+    describeCronHostExecutionRestriction(job, state.deps.hostExecutionDisabled) ??
+    (canCronJobRunAgain(job, state.deps.nowMs())
+      ? state.deps.describeJobReadinessWarning?.(job)
+      : undefined);
+  if (warning) {
+    state.warnedInvalidPersistedJobKeys.add(warningKey);
+    state.deps.log.warn({ jobId: job.id, name: job.name }, warning);
+  }
 }
 
 function isValidatedCronJob(
@@ -191,14 +209,7 @@ export async function ensureLoaded(
       continue;
     }
     const hydrated = hydratedRaw;
-    const loadWarning =
-      describeCronHostExecutionRestriction(hydrated, state.deps.hostExecutionDisabled) ??
-      state.deps.describeJobLoadWarning?.(hydrated);
-    const loadWarningKey = `host:${hydrated.id}`;
-    if (loadWarning && !state.warnedInvalidPersistedJobKeys.has(loadWarningKey)) {
-      state.warnedInvalidPersistedJobKeys.add(loadWarningKey);
-      state.deps.log.warn({ jobId: hydrated.id, name: hydrated.name }, loadWarning);
-    }
+    warnCronJobDiagnostics(state, hydrated);
     jobs.push(hydrated);
     durableNextRunAtMsByJobId.set(hydrated.id, hydrated.state.nextRunAtMs);
   }

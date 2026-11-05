@@ -15,7 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import type { CronStoredJob } from "../cron/types.js";
 
-/** Startup diagnostics use configured facts only; Doctor remains the sole migration writer. */
+/** Readiness diagnostics use configured facts only; Doctor remains the sole migration writer. */
 export function describeCronInferenceMigration(
   cfg: OpenClawConfig,
   job: CronStoredJob,
