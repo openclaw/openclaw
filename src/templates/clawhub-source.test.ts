@@ -20,7 +20,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Catalog responses are fixed fixtures; no live registry request may escape.
-vi.mock("../infra/clawhub-packages.js", () => ({
+vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-packages.js")>()),
   listClawHubPackages: mocks.list,
   searchClawHubPackages: mocks.search,
   fetchClawHubPackageDetail: mocks.detail,
@@ -53,6 +54,7 @@ import {
   listClawHubTemplates,
   readClawHubTemplateDetail,
   readClawHubTemplatePreview,
+  readClawHubTemplatesOverview,
   searchClawHubTemplates,
   withResolvedClawHubSource,
 } from "./clawhub-source.js";
@@ -81,7 +83,13 @@ const release = (
   name = packageName,
 ) => ({
   package: { name, displayName: "Research Briefing", family: "template" },
-  version: { version: selectedVersion, createdAt: 2, changelog: "", templateManifestSummary },
+  version: {
+    version: selectedVersion,
+    createdAt: 2,
+    changelog: "",
+    templateManifestSummary,
+    artifact: artifact(selectedVersion, name).artifact,
+  },
 });
 const skillRequest = { slug: "citation-check", ownerHandle: "openclaw", version: "1.1.0" };
 const expectMissing = (file: string) =>
@@ -270,6 +278,60 @@ afterEach(async () => {
 });
 
 describe("public ClawHub Template catalog", () => {
+  it("projects an overview in one HTTP read, retaining featured order and category ranking", async () => {
+    const official = { ...officialPackage(), stats: { installs: 20 } };
+    const community = { ...communityPackage(), stats: { installs: 1 } };
+    const impostor = officialPackage("@other/impostor");
+    const fetch = vi.fn(async (_input: unknown) =>
+      Response.json({
+        complete: true,
+        featured: [community, impostor, official],
+        sections: [{ category: "research", items: [community, impostor, official] }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const overview = await readClawHubTemplatesOverview({
+      baseUrl: "https://registry.example",
+      limit: 8,
+      timeoutMs: 1234,
+    });
+    expect(overview?.featured.map((entry) => entry.packageName)).toEqual([
+      personalPackageName,
+      packageName,
+    ]);
+    expect(overview?.sections[0]?.entries.map((entry) => entry.packageName)).toEqual([
+      packageName,
+      personalPackageName,
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(String(fetch.mock.calls[0]?.[0])).toBe(
+      "https://registry.example/api/v1/templates/overview?limit=8",
+    );
+    expect(mocks.list).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: 404, body: {}, fallback: true },
+    { status: 200, body: { complete: false }, fallback: true },
+    { status: 200, body: { complete: true, featured: [] }, fallback: false },
+    ...[401, 403, 429, 500].map((status) => ({ status, body: {}, fallback: false })),
+  ])(
+    "uses legacy shelves only for 404/incomplete, not $status failures ($fallback)",
+    async ({ status, body, fallback }) => {
+      const fetch = vi.fn(async () =>
+        Response.json(body, { status, headers: { "retry-after": "61" } }),
+      );
+      vi.stubGlobal("fetch", fetch);
+      const result = readClawHubTemplatesOverview({ baseUrl: "https://registry.example" });
+      if (fallback) {
+        await expect(result).resolves.toBeUndefined();
+      } else {
+        await expect(result).rejects.toThrow();
+      }
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(mocks.list).not.toHaveBeenCalled();
+    },
+  );
   it.each(["featured", "category", "search", "blank", "limited"] as const)(
     "filters publishers and preserves %s ordering through the public API",
     async (mode) => {
@@ -422,6 +484,72 @@ describe("public ClawHub Template catalog", () => {
     });
     await expectPreview("instruction", "SOUL.md", "# Travel planner\n");
   });
+
+  it("starts exact-release reads together and reuses their artifact metadata", async () => {
+    const gate = Promise.withResolvers<Awaited<ReturnType<typeof mocks.detail>>>();
+    mocks.detail.mockReturnValueOnce(gate.promise);
+    const pending = readClawHubTemplateDetail({ packageName, version });
+    await vi.waitFor(() => {
+      expect(mocks.version).toHaveBeenCalledOnce();
+      expect(mocks.download).toHaveBeenCalledOnce();
+    });
+    expect(mocks.extract).not.toHaveBeenCalled();
+    gate.resolve({ package: officialPackage(), owner: { handle: "openclaw", official: true } });
+    await pending;
+    expect(mocks.artifact).not.toHaveBeenCalled();
+    const download = await mocks.download.mock.results[0]!.value;
+    expect(download.cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("aborts an unfinished archive when parallel metadata fails", async () => {
+    const metadata = Promise.withResolvers<Awaited<ReturnType<typeof mocks.detail>>>();
+    const aborted = vi.fn();
+    mocks.detail.mockReturnValueOnce(metadata.promise);
+    mocks.download.mockImplementationOnce(
+      ({ signal }) =>
+        new Promise((_, reject) => {
+          signal!.addEventListener(
+            "abort",
+            () => {
+              aborted();
+              reject(new Error("download aborted"));
+            },
+            { once: true },
+          );
+        }),
+    );
+    const pending = readClawHubTemplateDetail({ packageName, version });
+    const rejected = expect(pending).rejects.toThrow("metadata unavailable");
+    await vi.waitFor(() => expect(mocks.download).toHaveBeenCalledOnce());
+    metadata.reject(new Error("metadata unavailable"));
+    await rejected;
+    expect(aborted).toHaveBeenCalledOnce();
+    expect(mocks.extract).not.toHaveBeenCalled();
+  });
+
+  it.each(["metadata", "artifact"])(
+    "cleans the parallel download when %s verification fails",
+    async (failure) => {
+      if (failure === "metadata") {
+        mocks.detail.mockRejectedValueOnce(new Error("metadata unavailable"));
+      } else {
+        const selected = release();
+        mocks.version.mockResolvedValueOnce({
+          ...selected,
+          version: {
+            ...selected.version,
+            artifact: { ...selected.version.artifact, sha256: "f".repeat(64) },
+          },
+        });
+      }
+      await expect(readClawHubTemplateDetail({ packageName, version })).rejects.toThrow(
+        failure === "metadata" ? "metadata unavailable" : /integrity|match/i,
+      );
+      const download = await mocks.download.mock.results[0]!.value;
+      expect(download.cleanup).toHaveBeenCalledOnce();
+      expect(mocks.extract).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not substitute the latest package summary for a missing exact-release summary", async () => {
     mocks.version.mockResolvedValue(release(version, null));

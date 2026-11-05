@@ -301,6 +301,24 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     super.connectedCallback();
   }
 
+  override updated() {
+    super.updated();
+    const sections = this.zonedVisibleSections(
+      this.selectedAgentSessionRows(this.getSessionNavigationState()),
+    ).sections;
+    const disclosure = this.sessionProjection.children;
+    const selected = sections.find((section) =>
+      section.rows.some((row) => row.key === disclosure.selectedRootKey),
+    );
+    if (
+      selected &&
+      disclosure.revealOnce("section:" + selected.id) &&
+      this.sessionOrganizer.collapsedSessionSections.has(selected.id)
+    ) {
+      this.sessionOrganizer.toggleSection(selected.id);
+    }
+  }
+
   toggleSessionPin(session: SidebarRecentSession): void {
     this.sessionOrganizer.setPersonalSessionPin(
       session.key,

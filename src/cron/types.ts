@@ -502,6 +502,7 @@ type CronJobStateInput = Partial<
     CronJobState,
     | "lastMeaningfulResult"
     | "autoDisabled"
+    | "admissionDeferred"
     | "scheduleActivatedAtMs"
     | "streamSourceIdentity"
     | "sourceIdentity"

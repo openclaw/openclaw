@@ -275,6 +275,8 @@ not read the recreated file or follow its symlink.
 Unrelated invalid fields, unsupported legacy shapes, and heartbeat repairs in
 read-only, future-written, or included configuration still require operator
 repair before admission.
+If Doctor's projected configuration still fails validation, admission reports
+the remaining validation paths so you can correct them before retrying.
 
 ### Memory flush model selection
 
@@ -357,6 +359,15 @@ key, `ANTHROPIC_API_KEY`, or `ANTHROPIC_OAUTH_TOKEN`). An API default model with
 a Claude CLI fallback is left unchanged, and an existing `anthropic/*` entry is
 never replaced. Updates run the same repair through the backed-up Doctor config
 write; `openclaw doctor` without `--fix` reports it.
+
+Doctor rewrites legacy `claude-cli/<model>` refs to `anthropic/<model>` and pins
+the `claude-cli` runtime on that model entry. Runtime is chosen per model, so the
+rewrite would also move any direct `anthropic/<model>` selection onto Claude CLI.
+Doctor keeps the `claude-cli/*` refs as written, and reports a warning, when an
+agent runs the same model both ways: in its primary, fallbacks, heartbeat, or
+subagent model (including selections inherited from `agents.defaults`), or by
+listing both spellings in one model map or allowlist. Both routes keep working.
+The same rule applies to `google-gemini-cli/*` refs.
 
 ## Command-owner target kinds
 

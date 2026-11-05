@@ -48,6 +48,7 @@ const repositoryScriptEntries = [
   "scripts/bench-android-release-history.mts!",
   "scripts/bench-duplicate-paragraphs.mts!",
   "scripts/bench-plugin-catalog.ts!",
+  "scripts/bench-template-detail.mts!",
   "scripts/perf/agent-exec-cgroup-proof.ts!",
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
@@ -855,6 +856,8 @@ const rootToolingAndWorkspaceDependencies = [
   "signal-utils",
   // Root declaration builds compile terminal-core source and resolve this package from root.
   "string-width",
+  // The rule-cache benchmark resolves this dependency from extensions/tokenjuice/package.json.
+  "tokenjuice",
 ] as const;
 
 function workspacePackage(packageDir: string, extraEntries: readonly string[] = []) {

@@ -299,6 +299,9 @@ export function createGatewayRunCleanup(
     get failed() {
       return cleanupFailed;
     },
+    get retained() {
+      return resourcesRetained;
+    },
     get drained() {
       return processResourcesDrained;
     },
