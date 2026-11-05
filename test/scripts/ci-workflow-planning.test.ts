@@ -5643,6 +5643,59 @@ describe("ci workflow guards", () => {
     ).not.toBe(0);
   });
 
+  it("qualifies one bounded Boat Node row and keeps retained-output retries hosted", () => {
+    const admitted = runRunnerProfileFixture({
+      configuredProfile: "hybrid",
+      eventName: "workflow_dispatch",
+      requestedProfile: "boat",
+      ciShape: "main",
+      qualificationDispatch: true,
+      targetSupportsContract: true,
+    });
+    expect(admitted.status, admitted.output).toBe(0);
+    const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
+    const cache = requiredWorkflowStep(job.steps, "Setup Node environment").with[
+      "dependency-cache"
+    ];
+    const matrix = {
+      check_name: "checks-node-compact-large-4",
+      runner: "blacksmith-8vcpu-ubuntu-2404",
+      plan_concurrency: 1,
+      test_runtime_policy: "node",
+    };
+    const context = {
+      eventName: "workflow_dispatch" as const,
+      repository: "openclaw/openclaw",
+      runnerBackend: "hybrid" as const,
+      runnerEnvironment: "self-hosted" as const,
+      runAttempt: 1,
+      matrix,
+      preflightOutputs: admitted.outputs,
+    };
+    expect(evaluateWorkflowExpression(job["runs-on"], context)).toBe("boat-xlarge");
+    expect(evaluateWorkflowExpression(cache, context)).toBe("false");
+    expect(evaluateWorkflowExpression(job["timeout-minutes"], context)).toBe(60);
+    // Failed-job-only retries retain the successful first-attempt preflight outputs.
+    const retry = { ...context, runAttempt: 2 };
+    expect(evaluateWorkflowExpression(job["runs-on"], retry)).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowExpression(cache, retry)).toBe("false");
+    for (const override of [
+      { preflightOutputs: { ...admitted.outputs, boat_build_qualification: "false" } },
+      { preflightOutputs: { ...admitted.outputs, ci_shape: "default" } },
+      { matrix: { ...matrix, check_name: "checks-node-compact-large-3" } },
+      { matrix: { ...matrix, plan_concurrency: 2 } },
+      { matrix: { ...matrix, pretest_build_mode: "private-qa" } },
+      { matrix: { ...matrix, test_runtime_policy: "bun-all" } },
+    ]) {
+      const control = { ...context, ...override };
+      expect(evaluateWorkflowExpression(job["runs-on"], control)).toBe(matrix.runner);
+      expect(evaluateWorkflowExpression(cache, control)).toBe("true");
+    }
+    const larger = { ...context, matrix: { ...matrix, runner: "blacksmith-32vcpu-ubuntu-2404" } };
+    expect(evaluateWorkflowExpression(job["runs-on"], larger)).toBe(larger.matrix.runner);
+    expect(evaluateWorkflowExpression(cache, larger)).toBe("true");
+  });
+
   it.each([1, 2])("keeps Boat artifact consumers and build budget on attempt %s", (runAttempt) => {
     const admitted = runRunnerProfileFixture({
       configuredProfile: "hybrid",

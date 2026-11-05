@@ -2027,6 +2027,17 @@ def capture_release_ios_screenshots!(
     attempt: attempt,
     capture_outcome: "succeeded"
   )
+ensure
+  if diagnostics
+    begin
+      app_path = File.join(File.dirname(xctestrun_path), "Debug-iphonesimulator", "OpenClaw.app")
+      app_identifier = bundle_identifier_for_product(app_path)
+      retained = diagnostics.retain_mermaid_trace(device_udid, app_identifier, File.join(log_directory, "#{device}-mermaid.log"))
+      UI.message("Mermaid screenshot trace for #{device}: #{retained ? "saved" : "unavailable"}.")
+    rescue StandardError
+      UI.important("Could not locate the optional Mermaid screenshot trace.")
+    end
+  end
 end
 
 def build_app_store_release(context)

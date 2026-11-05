@@ -129,6 +129,16 @@ export async function finalizeCompletedCronRunOutcomes(
       for (const entry of result.logs) {
         state.deps.log[entry.level](entry.fields, entry.message);
       }
+      for (const job of result.upsertedJobs) {
+        if (job.state.admissionDeferred) {
+          emit(state, {
+            jobId: job.id,
+            action: "scheduled",
+            job,
+            nextRunAtMs: job.state.nextRunAtMs,
+          });
+        }
+      }
       for (const plan of result.eventPlans) {
         const outcome = outcomes[plan.outcomeIndex]!;
         if (!canPublish(outcome)) {

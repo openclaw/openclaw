@@ -38,11 +38,14 @@ export type MemberRole = (typeof MEMBER_ROLES)[number];
 /** Most owner devices one claw keeps. Adding past it is refused with `limit_reached`. */
 export const MAX_OWNER_DEVICES = 20;
 /** Most iroh peer keys one owner device certificate may carry. */
-export const MAX_OWNER_DEVICE_PEER_KEYS = 5;
-/** Most members one claw keeps. */
-export const MAX_MEMBERS = 50;
+export const MAX_OWNER_DEVICE_PEER_KEYS = 10;
+/**
+ * Most members one claw keeps. It equals the statement list limit, so a snapshot listing every
+ * member still validates.
+ */
+export const MAX_MEMBERS = 256;
 /** Most iroh peer keys (browsers) one member may have at a claw. */
-export const MAX_MEMBER_PEER_KEYS = 5;
+export const MAX_MEMBER_PEER_KEYS = 10;
 
 /**
  * Certifies an owner device key D (and optionally its iroh peer keys W). It is signed by R or by

@@ -81,6 +81,15 @@ it("warns for CI growth, writes the summary, and still rejects broken source", (
   expectSource(root, "export const = broken;", 1);
 });
 
+it("skips line-cap growth on release branches but not main", () => {
+  const root = fixture();
+  write(root, 6);
+  git(root, "branch", "-m", "release/2026.11.4");
+  expect(check(root)).toBe(0);
+  git(root, "branch", "-m", "main");
+  expect(check(root)).toBe(1);
+});
+
 it("measures ignored repository-contained scratch while preserving explicit exclusions", () => {
   const root = fixture(5, "warn", ["src/ignored/**"]);
   fs.writeFileSync(path.join(root, ".gitignore"), ".artifacts/\n");
