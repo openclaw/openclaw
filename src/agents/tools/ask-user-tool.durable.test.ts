@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
+import { readToolTurnHandoff, wrapToolWithAbortSignal } from "../agent-tools.abort.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "../embedded-agent-runner/run/attempt-sessions-yield.js";
 import { gatewayStub, validArgs } from "./ask-user-tool.gateway.test-fixture.js";
 import { createAskUserTool } from "./ask-user-tool.js";
-import { createSessionsYieldTool } from "./sessions-yield-tool.js";
+import { createSessionsYieldTool, type SessionsYieldCallback } from "./sessions-yield-tool.js";
 
 describe("native durable ask_user handoff", () => {
   it("cancels a transient question when a sibling hands off the run", async () => {
@@ -65,7 +65,7 @@ describe("native durable ask_user handoff", () => {
     "commits registration and delivers the %s prompt before yielding without a live answer waiter",
     async (outcome) => {
       const delivered = createDeferred();
-      const yielded = vi.fn();
+      const yielded = vi.fn<SessionsYieldCallback>();
       const gateway = gatewayStub(async (method, _opts, params) => {
         if (method === "question.request") {
           return { id: params.id, durable: true };
@@ -92,6 +92,10 @@ describe("native durable ask_user handoff", () => {
       await result;
       expect(send).toHaveBeenCalledOnce();
       expect(yielded).toHaveBeenCalledOnce();
+      expect(readToolTurnHandoff(yielded.mock.calls[0]?.[3]?.terminal)).toMatchObject({
+        toolCallId: "durable-call",
+        receipt: { status: "started", async: true, yielded: true },
+      });
       expect(gateway.mock.mock.calls.map(([method]) => method)).toEqual(["question.request"]);
     },
   );
@@ -99,7 +103,7 @@ describe("native durable ask_user handoff", () => {
   it.each(["answered", "cancelled", "expired"])(
     "hands off a terminal %s registration retry without redelivering a prompt",
     async (status) => {
-      const yielded = vi.fn();
+      const yielded = vi.fn<SessionsYieldCallback>();
       const send = vi.fn();
       const gateway = gatewayStub(async (method, _opts, params) => {
         if (method === "question.request") {
@@ -118,6 +122,10 @@ describe("native durable ask_user handoff", () => {
       await tool.execute(`terminal-${status}`, validArgs);
       expect(send).not.toHaveBeenCalled();
       expect(yielded).toHaveBeenCalledOnce();
+      expect(readToolTurnHandoff(yielded.mock.calls[0]?.[3]?.terminal)).toMatchObject({
+        toolCallId: `terminal-${status}`,
+        receipt: { status: "started", async: true, yielded: true },
+      });
       expect(gateway.mock.mock.calls.map(([method]) => method)).toEqual(["question.request"]);
     },
   );
@@ -125,7 +133,7 @@ describe("native durable ask_user handoff", () => {
   it.each(["failed", "suppressed"])(
     "hands off a committed question even when prompt delivery is %s",
     async (outcome) => {
-      const yielded = vi.fn();
+      const yielded = vi.fn<SessionsYieldCallback>();
       const gateway = gatewayStub(async (method, _opts, params) => {
         if (method === "question.request") {
           return { id: params.id, durable: true };
@@ -154,6 +162,10 @@ describe("native durable ask_user handoff", () => {
         "prompt delivery failed",
       );
       expect(yielded).toHaveBeenCalledOnce();
+      expect(readToolTurnHandoff(yielded.mock.calls[0]?.[3]?.terminal)).toMatchObject({
+        toolCallId: "failed-delivery",
+        receipt: { status: "started", async: true, yielded: true },
+      });
       expect(gateway.mock.mock.calls.map(([method]) => method)).toEqual([
         "question.request",
         "question.resolve",

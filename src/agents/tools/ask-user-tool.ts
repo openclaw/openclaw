@@ -10,6 +10,7 @@ import { sha256Hex } from "../../infra/crypto-digest.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { sleep } from "../../utils/sleep.js";
+import { createToolTurnHandoff } from "../agent-tools.abort.js";
 import {
   resolveAgentQuestionGatewayCall,
   type AgentHarnessQuestionGatewayCall,
@@ -443,6 +444,21 @@ function createAskUserPromptDelivery(
   return { state, delivery };
 }
 
+async function handoffDurableQuestion(
+  handoff: SessionsYieldCallback,
+  toolCallId: string,
+  message: string,
+): Promise<void> {
+  await handoff(message, undefined, undefined, {
+    terminal: createToolTurnHandoff(toolCallId, {
+      status: "started",
+      async: true,
+      yielded: true,
+      message,
+    }),
+  });
+}
+
 /** Creates a main-session question tool with host-negotiated durable custody. */
 export function createAskUserTool(params: {
   agentId?: string;
@@ -604,7 +620,9 @@ export function createAskUserTool(params: {
           }
           signal?.throwIfAborted();
           handedOff = true;
-          await handoff(
+          await handoffDurableQuestion(
+            handoff,
+            toolCallId,
             `Waiting for durable question ${questionId}. Its answer will arrive as an explicit new turn.`,
           );
           return textResult("Question registered; the turn handed off until an answer arrives.", {
@@ -684,7 +702,9 @@ export function createAskUserTool(params: {
           }
         } finally {
           if (durableRegistered && handoff && !handedOff && !signal?.aborted) {
-            await handoff(
+            await handoffDurableQuestion(
+              handoff,
+              toolCallId,
               "The durable question could not be delivered. Its committed outcome will arrive as a new turn.",
             );
           }

@@ -43,8 +43,10 @@ function deferredFixture() {
     agentId: "main",
     gatewayCall: gateway.call,
     questionPrompt: { send: async () => {} },
-    nativeQuestionHandoff: () => {
-      abort.abort({ code: "sessions_yield", turnHandoff: true });
+    nativeQuestionHandoff: (_message, _acknowledgment, _waitRegistered, options) => {
+      if (options?.terminal) {
+        abort.abort(options.terminal);
+      }
     },
   });
   const execute = vi.spyOn(target, "execute");
@@ -92,28 +94,32 @@ it.each([false, true])(
         execute: exec,
       },
     ];
+    let requests = 0;
     const streamFn: StreamFn = () => {
+      const first = requests++ === 0;
       const stream = createAssistantMessageEventStream();
       const message: AssistantMessage = {
         role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "question",
-            name: TOOL_CALL_RAW_TOOL_NAME,
-            arguments: { id: "ask_user", args: validArgs },
-          },
-          { type: "toolCall", id: "effect", name: "exec", arguments: {} },
-        ],
+        content: first
+          ? [
+              {
+                type: "toolCall",
+                id: "question",
+                name: TOOL_CALL_RAW_TOOL_NAME,
+                arguments: { id: "ask_user", args: validArgs },
+              },
+              { type: "toolCall", id: "effect", name: "exec", arguments: {} },
+            ]
+          : [],
         api: "faux",
         provider: "faux",
         model: "faux",
         usage: createZeroUsageFixture(),
-        stopReason: "toolUse",
+        stopReason: first ? "toolUse" : "stop",
         timestamp: 1,
       };
       queueMicrotask(() => {
-        stream.push({ type: "done", reason: "toolUse", message });
+        stream.push({ type: "done", reason: first ? "toolUse" : "stop", message });
         stream.end();
       });
       return stream;
