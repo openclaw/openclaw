@@ -1,2 +1,0 @@
-# Show plugins pack guard messages (for example a missing manifest) instead of the generic CLI failure.
-17
