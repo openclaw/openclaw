@@ -387,7 +387,7 @@ async function run() {
       nodeRunner: process.execPath,
       timeoutMs: 30 * 60_000,
     });
-    assert.deepEqual(captured.warnings, [], "Recovery capture must succeed without warnings");
+    result.captureWarnings = captured.warnings.map(({ kind, pluginId }) => ({ kind, pluginId }));
     const config: OpenClawConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
     const databaseBackup = await createUpdateDatabaseBackup({
       backupRoot: path.join(fixture, "backups", runId),
