@@ -130,10 +130,12 @@ function buildHeaders(
   const headers = safeReplayHeaders
     ? new Headers(safeReplayHeaders)
     : new Headers(
-        (params.buildRequestHeaders ?? buildDefaultLiveModelCatalogHeaders)({
-          apiKey: normalizeLiveModelCatalogRequestApiKey(params.apiKey),
-          discoveryApiKey: selectLiveModelCatalogRequestApiKey(params),
-        }),
+        params.buildRequestHeaders
+          ? params.buildRequestHeaders({
+              apiKey: normalizeLiveModelCatalogRequestApiKey(params.apiKey),
+              discoveryApiKey: selectLiveModelCatalogRequestApiKey(params),
+            })
+          : buildDefaultLiveModelCatalogHeaders(params),
       );
   if (!headers.has("accept")) {
     headers.set("accept", "application/json");

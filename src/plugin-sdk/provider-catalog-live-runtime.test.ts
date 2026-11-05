@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as modelAuthMarkers from "../agents/model-auth-markers.js";
 import { withProviderCatalogDiscoveryBudget } from "../plugins/provider-catalog-expiry.js";
 import { NON_ENV_SECRETREF_MARKER } from "./provider-auth-runtime.js";
 import {
@@ -92,6 +93,7 @@ describe("provider-catalog-live-runtime", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("fetches and dedupes live model ids with opaque resolved auth", async () => {
+    const markerCheck = vi.spyOn(modelAuthMarkers, "isNonSecretApiKeyMarker");
     const discoveryApiKey = NON_ENV_SECRETREF_MARKER;
     const { fetchGuard, fetchGuardMock, release } = buildFetchGuard({
       data: [
@@ -113,6 +115,7 @@ describe("provider-catalog-live-runtime", () => {
       }),
     ).resolves.toEqual(["model-a", "model-b"]);
 
+    expect(markerCheck).not.toHaveBeenCalled();
     expect(fetchGuardMock).toHaveBeenCalledTimes(1);
     const request = fetchGuardMock.mock.calls[0]?.[0];
     expect(request).toMatchObject({
@@ -127,30 +130,37 @@ describe("provider-catalog-live-runtime", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("does not send non-secret SecretRef markers as live catalog bearer tokens", async () => {
-    const { fetchGuard, fetchGuardMock } = buildFetchGuard({ data: [] });
-    const buildRequestHeaders = vi.fn(({ apiKey, discoveryApiKey }) => ({
-      Accept: "application/json",
-      ...(discoveryApiKey ? { Authorization: `Bearer ${discoveryApiKey}` } : {}),
-      ...(apiKey ? { "X-Api-Key": apiKey } : {}),
-    }));
+  it.each([false, true])(
+    "does not send SecretRef markers with custom headers %s",
+    async (custom) => {
+      const { fetchGuard, fetchGuardMock } = buildFetchGuard({ data: [] });
+      const buildRequestHeaders = vi.fn(({ apiKey, discoveryApiKey }) => ({
+        Accept: "application/json",
+        ...(discoveryApiKey ? { Authorization: `Bearer ${discoveryApiKey}` } : {}),
+        ...(apiKey ? { "X-Api-Key": apiKey } : {}),
+      }));
 
-    await expect(
-      fetchIds({
-        apiKey: NON_ENV_SECRETREF_MARKER,
-        fetchGuard,
-        buildRequestHeaders,
-      }),
-    ).resolves.toEqual([]);
+      await expect(
+        fetchIds({
+          apiKey: NON_ENV_SECRETREF_MARKER,
+          fetchGuard,
+          ...(custom ? { buildRequestHeaders } : {}),
+        }),
+      ).resolves.toEqual([]);
 
-    expect(buildRequestHeaders).toHaveBeenCalledWith({
-      apiKey: undefined,
-      discoveryApiKey: undefined,
-    });
-    const headers = requestHeaders(fetchGuardMock);
-    expect(headers.get("authorization")).toBeNull();
-    expect(headers.get("x-api-key")).toBeNull();
-  });
+      if (custom) {
+        expect(buildRequestHeaders).toHaveBeenCalledWith({
+          apiKey: undefined,
+          discoveryApiKey: undefined,
+        });
+      } else {
+        expect(buildRequestHeaders).not.toHaveBeenCalled();
+      }
+      const headers = requestHeaders(fetchGuardMock);
+      expect(headers.get("authorization")).toBeNull();
+      expect(headers.get("x-api-key")).toBeNull();
+    },
+  );
 
   it("contextualizes paginated malformed JSON through the guarded network path", async () => {
     const credential = "reflected-fake-network-credential";
