@@ -10,7 +10,6 @@ import {
 } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
-import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
@@ -21,6 +20,8 @@ import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { hasDetailsContent } from "./chat-details-availability.ts";
+import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
+import { createDetailsContentBoundary } from "./chat-details-loading.tsx";
 import { createDetailsAvailabilityProjection } from "./chat-details-presence.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import "../../../styles/chat/details.css";
@@ -539,7 +540,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     {
       lazy: true,
       equals: (before, after) =>
-        before.length === after.length && before.every((el, i) => el === after[i]),
+        before.length === after.length &&
+        before.every((element, index) => element === after[index]),
     },
   );
   createResizeObserver(resizeTargets, reposition);
@@ -584,19 +586,35 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       surface.remove();
     };
   });
-  function SessionContent(content: { children: Element }) {
+  const SessionContent = createDetailsContentBoundary(sessionOpened, cachedReady);
+  // Discovery follows requested intent even when an empty surface is not visibly opened.
+  function DesktopContent() {
+    const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
     return (
-      <Show when={sessionOpened()}>
-        <ChatLazyBoundary
-          fallback={
-            !cachedReady() && (
-              <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
-            )
-          }
-        >
-          {content.children}
-        </ChatLazyBoundary>
-      </Show>
+      <ChatDetailsDesktopBody presented={isPresented() && opened()} onScrollPortRef={setScrollport}>
+        {(handoff) => (
+          <SessionContent onLoading={handoff.onLoading}>
+            <ChatDetailsDesktopComposition
+              scrollport={scrollport()}
+              onReady={handoff.onReady}
+              props={props.chat}
+              presented={isPresented() && requested()}
+              onContentChange={detailsAvailability.onContentChange}
+              availabilityIdentity={detailsAvailability.identity()}
+              onAutomationAvailability={detailsAvailability.report}
+              dismissed={intent() === "closed"}
+              progressMenuRef={(menu) => {
+                progressMenu = menu;
+              }}
+              onHideProgress={() => {
+                if (!docked()) {
+                  close(true);
+                }
+              }}
+            />
+          </SessionContent>
+        )}
+      </ChatDetailsDesktopBody>
     );
   }
   return (
@@ -712,24 +730,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                   </Show>
                 }
               >
-                <SessionContent>
-                  <ChatDetailsDesktopComposition
-                    props={props.chat}
-                    presented={requested()}
-                    onContentChange={detailsAvailability.onContentChange}
-                    availabilityIdentity={detailsAvailability.identity()}
-                    onAutomationAvailability={detailsAvailability.report}
-                    dismissed={intent() === "closed"}
-                    progressMenuRef={(menu) => {
-                      progressMenu = menu;
-                    }}
-                    onHideProgress={() => {
-                      if (!docked()) {
-                        close(true);
-                      }
-                    }}
-                  />
-                </SessionContent>
+                {sessionOpened() && <DesktopContent />}
               </Show>
             )}
           </Show>

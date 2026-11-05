@@ -1,3 +1,4 @@
+import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal, merge } from "solid-js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
@@ -80,6 +81,7 @@ export async function createDetailsBrowserFixture(
       return details;
     },
     frame,
+    elements: current().elements!,
     pane,
     footer,
     get session() {
@@ -89,5 +91,29 @@ export async function createDetailsBrowserFixture(
     conversation,
     panel: pane.querySelector<HTMLElement>(".chat-details")!,
     trigger: element.querySelector<HTMLButtonElement>(".chat-details-toggle")!,
+  };
+}
+
+export const card: ProgressCard = {
+  sessionKey: "agent:main:details",
+  revision: 1,
+  updatedAt: 1_000,
+  steps: [
+    { step: "Inspect layout", status: "completed" },
+    { step: "Verify the change", status: "in_progress" },
+  ],
+};
+export function detailsFixtureProps(overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps {
+  return {
+    sessionKey: card.sessionKey,
+    currentAgentId: "main",
+    selectedSession: { key: card.sessionKey, kind: "direct" },
+    messages: [],
+    gatewayScope: {},
+    progressCard: card,
+    progressCardLifetime: {},
+    progressCardIdentity: card.sessionKey,
+    detailsWorkspace: { root: "/workspace/details", label: "details" },
+    ...overrides,
   };
 }

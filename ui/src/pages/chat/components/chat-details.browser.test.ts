@@ -1,10 +1,10 @@
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
+import { observeResize } from "../../../lib/reactive/observers.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
 import {
   createGatewayRequestMock,
@@ -19,7 +19,11 @@ import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import { createDetailsBrowserFixture } from "./chat-details.browser.test-support.ts";
+import {
+  card,
+  detailsFixtureProps as props,
+  createDetailsBrowserFixture,
+} from "./chat-details.browser.test-support.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./chat-details.tsx";
 import { pullRequest } from "./chat-pull-requests.test-support.ts";
 import "../../../styles/components.css";
@@ -27,15 +31,6 @@ import baseStyles from "../../../styles/base.css?inline";
 import detailsStyles from "../../../styles/chat/details.css?inline";
 import layoutStyles from "../../../styles/chat/layout.css?inline";
 
-const card: ProgressCard = {
-  sessionKey: "agent:main:details",
-  revision: 1,
-  updatedAt: 1_000,
-  steps: [
-    { step: "Inspect layout", status: "completed" },
-    { step: "Verify the change", status: "in_progress" },
-  ],
-};
 const mounted: HTMLElement[] = [];
 
 it.each([
@@ -74,20 +69,6 @@ it.each([
     await expect.poll(() => view.panel.getAttribute("role")).toBe(role);
   },
 );
-function props(overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps {
-  return {
-    sessionKey: card.sessionKey,
-    currentAgentId: "main",
-    selectedSession: { key: card.sessionKey, kind: "direct" },
-    messages: [],
-    gatewayScope: {},
-    progressCard: card,
-    progressCardLifetime: {},
-    progressCardIdentity: card.sessionKey,
-    detailsWorkspace: { root: "/workspace/details", label: "details" },
-    ...overrides,
-  };
-}
 async function fixture(
   value = props(),
   width = 600,
@@ -118,6 +99,34 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
+  it("keeps unchanged resize targets and observes replaced refs in the same layout object", async () => {
+    await page.viewport(1700, 900);
+    const view = await fixture(props(), 1320, false, "desktop", true);
+    onTestFinished(observeResize([view.frame], () => {}));
+    const settle = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    await settle();
+    const read = vi.spyOn(view.frame, "getBoundingClientRect");
+    onTestFinished(() => read.mockRestore());
+    view.updateChat({ messages: [] });
+    flush();
+    await Promise.resolve();
+    expect(read).not.toHaveBeenCalled();
+
+    const replacement = document.createElement("div");
+    replacement.style.cssText = view.frame.style.cssText;
+    view.pane.append(replacement);
+    const replacedRead = vi.spyOn(replacement, "getBoundingClientRect");
+    onTestFinished(() => replacedRead.mockRestore());
+    view.elements.frame = replacement;
+    view.updateChat({ messages: [] });
+    flush();
+    await settle();
+    expect(replacedRead).toHaveBeenCalled();
+  });
+
   it("resolves composer observation after refs attach", () => {
     const observe = vi.spyOn(ResizeObserver.prototype, "observe");
     const pane = document.createElement("div");
@@ -634,25 +643,26 @@ describe("chat Details presentation", () => {
         createComponent(ChatDetailsDesktopBody, {
           presented: true,
           get children() {
-            return createComponent(ChatDetailsEnvironment, {
-              details: props({
-                detailsWorkspace: {
-                  root: "/workspace/details",
-                  label: null,
+            return () =>
+              createComponent(ChatDetailsEnvironment, {
+                details: props({
+                  detailsWorkspace: {
+                    root: "/workspace/details",
+                    label: null,
+                    branch: "feature/details",
+                  },
+                }),
+                presented: true,
+                onOpenUncommitted: openChanges,
+                uncommitted: {
+                  sessionKey: card.sessionKey,
                   branch: "feature/details",
+                  baseRef: "HEAD",
+                  files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
+                  additions: 3,
+                  deletions: 1,
                 },
-              }),
-              presented: true,
-              onOpenUncommitted: openChanges,
-              uncommitted: {
-                sessionKey: card.sessionKey,
-                branch: "feature/details",
-                baseRef: "HEAD",
-                files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
-                additions: 3,
-                deletions: 1,
-              },
-            });
+              });
           },
         }),
       { container: panel },

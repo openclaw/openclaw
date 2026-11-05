@@ -20,9 +20,9 @@ import {
   readDetailsPeople,
 } from "./chat-details-availability.ts";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
-import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import "../../../styles/chat/details-desktop.css";
 import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import {
   ChatDetailsDesktopPresence,
@@ -548,6 +548,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     showProcesses={false}
                   />
                   <ChatDetailsProcesses
+                    details={props.props!}
                     processes={processes}
                     presented={active()}
                     expanded={sectionExpanded("processes")}
@@ -618,6 +619,7 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
   /** The native host keeps ownership of top-layer menus and Undo/focus behavior. */
   progressMenuRef?: (menu: MenuHandle) => void;
   onHideProgress?: () => void;
+  onReady?: () => void;
   onContentChange?: (hasContent: boolean) => void;
   availabilityIdentity?: unknown;
   onAutomationAvailability?: (fact: DetailsAutomationAvailability) => void;
@@ -625,41 +627,39 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
 
 /** Desktop entry point: one scroll body and the native Progress owner after Outputs. */
 export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositionProps) {
-  const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
+  onSettled(() => {
+    props.onReady?.();
+  });
   return (
     <ChatDetailsPresence
       onContentChange={props.onContentChange}
       identity={props.availabilityIdentity}
       onAutomationAvailability={props.onAutomationAvailability}
     >
-      <ChatDetailsDesktopBody presented={props.presented} onScrollPortRef={setScrollport}>
-        <ChatDetailsSession
+      <ChatDetailsSession
+        props={props.props}
+        presented={props.presented}
+        dismissed={props.dismissed}
+        scrollport={props.scrollport}
+        desktop
+      />
+      <Show when={props.props?.progressCard}>
+        <ChatDetailsProgress
+          desktop
           props={props.props}
           presented={props.presented}
-          dismissed={props.dismissed}
-          scrollport={scrollport()}
-          desktop
+          menuRef={props.progressMenuRef}
+          onHideProgress={props.onHideProgress}
         />
-        <Show when={props.props?.progressCard}>
-          <ChatDetailsProgress
-            desktop
-            props={props.props}
-            presented={props.presented}
-            menuRef={props.progressMenuRef}
-            onHideProgress={props.onHideProgress}
-          />
-        </Show>
-        <Show
-          when={!props.props?.progressCard && props.props?.progressCardError === "access-denied"}
-        >
-          <div class="chat-details__muted" data-details-group="progress" role="status">
-            <ChatDetailsDesktopPresence />
-            {t("sessionProgressCard.widgetAccessDenied")}
-          </div>
-        </Show>
-        {/* Keep the automation slot after Progress while its inventory revalidates. */}
-        <DetailsAutomations props={props.props} presented={props.presented} desktop />
-      </ChatDetailsDesktopBody>
+      </Show>
+      <Show when={!props.props?.progressCard && props.props?.progressCardError === "access-denied"}>
+        <ChatDetailsDesktopPresence />
+        <div class="chat-details__muted" role="status">
+          {t("sessionProgressCard.widgetAccessDenied")}
+        </div>
+      </Show>
+      {/* Keep the automation slot after Progress while its inventory revalidates. */}
+      <DetailsAutomations props={props.props} presented={props.presented} desktop />
     </ChatDetailsPresence>
   );
 }

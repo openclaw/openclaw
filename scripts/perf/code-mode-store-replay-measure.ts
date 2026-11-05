@@ -16,6 +16,14 @@
  * --durable uses an isolated SQLite transcript and an admitted actor, including
  * fresh worker-decoded entries per request. Use --entries 22 --keys 22 for 20 sets
  * and two deletes, and --iterations 100 for the repeated-turn cache workload.
+ * --append --durable appends one overwrite before each fresh-catalog replay;
+ * writes and fixture construction are excluded from replay CPU/allocation/time.
+ * Compare five alternating base/candidate pairs with --entries 10/100/500, --keys 4,
+ * --value-bytes 1024/16384/65536 and --iterations 50. Each arm measures 50
+ * appended-history replays, in addition to --warmup replays. Accept identical
+ * results with reduced replay CPU/allocation; GC and memory cover writes too.
+ * --matrix runs those nine shapes serially in one process with separate sessions.
+ * This is the actual admitted store boundary, not a whole-Gateway load test.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -38,24 +46,28 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "200" },
     warmup: { type: "string", default: "5" },
     durable: { type: "boolean", default: false },
+    append: { type: "boolean", default: false },
+    matrix: { type: "boolean", default: false },
   },
 });
-const entries = Number(values.entries);
-const keys = Number(values.keys);
-const valueBytes = Number(values["value-bytes"]);
+const selectedEntries = Number(values.entries);
+const selectedKeys = Number(values.keys);
+const selectedValueBytes = Number(values["value-bytes"]);
 const iterations = Number(values.iterations);
 const warmup = Number(values.warmup);
-for (const value of [entries, keys, valueBytes, iterations, warmup]) {
+for (const value of [selectedEntries, selectedKeys, selectedValueBytes, iterations, warmup]) {
   assert(Number.isSafeInteger(value) && value > 0, "Fixture arguments must be positive integers");
 }
 assert(
-  valueBytes <= 256 * 1024 && valueBytes * keys <= 1024 * 1024,
+  selectedValueBytes <= 256 * 1024 && selectedValueBytes * selectedKeys <= 1024 * 1024,
   "Fixture exceeds store limits",
 );
 assert(
   Number.isFinite(getHeapStatistics().total_allocated_bytes),
   "Node 26 allocation counter required",
 );
+assert(!values.append || values.durable, "--append requires --durable");
+assert(!values.matrix || (values.append && values.durable), "--matrix requires --append --durable");
 const ownerUrl = new URL("../../src/agents/code-mode-session-store.ts", import.meta.url);
 const storeModule = values["store-module"] ? path.resolve(values["store-module"]) : ownerUrl;
 const source = readFileSync(storeModule, "utf8");
@@ -76,7 +88,11 @@ const {
 }: typeof import("../../src/agents/code-mode-session-store.js") = await import(ownerUrl.href);
 assert(replaced, "Native owner source was not loaded");
 const { SessionManager } = await import("../../src/agents/sessions/session-manager.js");
-async function measure(manager: ReturnType<typeof SessionManager.inMemory>) {
+async function measure(
+  manager: ReturnType<typeof SessionManager.inMemory>,
+  fixture = { entries: selectedEntries, keys: selectedKeys, valueBytes: selectedValueBytes },
+) {
+  const { entries, keys, valueBytes } = fixture;
   const payloadBytes =
     valueBytes -
     JSON.stringify({ syntheticReplay: true, revision: "0000000000", payload: "" }).length;
@@ -127,6 +143,23 @@ async function measure(manager: ReturnType<typeof SessionManager.inMemory>) {
     };
   }
 
+  let appended = 0;
+  async function append() {
+    const key = `key-${appended++ % keys}`;
+    const value = {
+      syntheticReplay: true,
+      revision: String(entries + appended).padStart(10, "0"),
+      payload,
+    };
+    const networkContent = appended % 3 === 0;
+    await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+      set: { [key]: value },
+      delete: [],
+      networkContent: { [key]: networkContent },
+    });
+    expected.set(key, { value, networkContent });
+  }
+
   async function replay() {
     const run = access();
     try {
@@ -149,6 +182,9 @@ async function measure(manager: ReturnType<typeof SessionManager.inMemory>) {
     verified.close();
   }
   for (let index = 0; index < warmup; index++) {
+    if (values.append) {
+      await append();
+    }
     await replay();
   }
   globalThis.gc?.();
@@ -162,22 +198,47 @@ async function measure(manager: ReturnType<typeof SessionManager.inMemory>) {
   observer.observe({ entryTypes: ["gc"] });
   const beforeMemory = process.memoryUsage();
   const beforeLoad = loadavg();
-  const beforeAllocated = getHeapStatistics().total_allocated_bytes;
-  const beforeCpu = process.cpuUsage();
-  const beforeThreadCpu = process.threadCpuUsage();
-  const start = performance.now();
+  let allocatedBytes = 0;
+  let cpuMs = 0;
+  let mainThreadCpuMs = 0;
+  let elapsedMs = 0;
   for (let index = 0; index < iterations; index++) {
+    if (values.append) {
+      await append();
+    }
+    const beforeAllocated = getHeapStatistics().total_allocated_bytes;
+    const beforeCpu = process.cpuUsage();
+    const beforeThreadCpu = process.threadCpuUsage();
+    const start = performance.now();
     await replay();
+    elapsedMs += performance.now() - start;
+    const threadCpu = process.threadCpuUsage(beforeThreadCpu);
+    const cpu = process.cpuUsage(beforeCpu);
+    allocatedBytes += getHeapStatistics().total_allocated_bytes - beforeAllocated;
+    cpuMs += (cpu.user + cpu.system) / 1000;
+    mainThreadCpuMs += (threadCpu.user + threadCpu.system) / 1000;
   }
-  const elapsedMs = performance.now() - start;
-  const threadCpu = process.threadCpuUsage(beforeThreadCpu);
-  const cpu = process.cpuUsage(beforeCpu);
-  const allocatedBytes = getHeapStatistics().total_allocated_bytes - beforeAllocated;
   const afterMemory = process.memoryUsage();
   await nextTurn();
   await nextTurn();
   observer.disconnect();
 
+  // Verify the final projection before instrumenting a further appended replay.
+  const final = access();
+  const finalChecksum = createHash("sha256");
+  try {
+    for (let index = 0; index < keys; index++) {
+      const key = `key-${index}`;
+      const result = await final.cell.load(key);
+      assert.deepEqual(result, expected.get(key) ?? { networkContent: false });
+      finalChecksum.update(JSON.stringify([key, result]));
+    }
+  } finally {
+    final.close();
+  }
+  if (values.append) {
+    await append();
+  }
   let stringifyCalls = 0;
   let valueStringifies = 0;
   const stringify = JSON.stringify;
@@ -204,6 +265,8 @@ async function measure(manager: ReturnType<typeof SessionManager.inMemory>) {
     JSON.stringify({
       storeModule,
       durable: values.durable,
+      append: values.append,
+      appended,
       sourceSha256: createHash("sha256").update(source).digest("hex"),
       entries,
       keys,
@@ -213,12 +276,12 @@ async function measure(manager: ReturnType<typeof SessionManager.inMemory>) {
       iterations,
       warmup,
       elapsedMs,
-      cpuMs: (cpu.user + cpu.system) / 1000,
-      mainThreadCpuMs: (threadCpu.user + threadCpu.system) / 1000,
+      cpuMs,
+      mainThreadCpuMs,
       allocatedBytes,
       allocatedBytesPerReplay: allocatedBytes / iterations,
-      cpuMsPerReplay: (cpu.user + cpu.system) / 1000 / iterations,
-      mainThreadCpuMsPerReplay: (threadCpu.user + threadCpu.system) / 1000 / iterations,
+      cpuMsPerReplay: cpuMs / iterations,
+      mainThreadCpuMsPerReplay: mainThreadCpuMs / iterations,
       stringifyCallsPerReplay: stringifyCalls,
       valueStringifiesPerReplay: valueStringifies,
       gcCount: pauses.length,
@@ -228,6 +291,7 @@ async function measure(manager: ReturnType<typeof SessionManager.inMemory>) {
       afterMemory,
       hostLoad: { before: beforeLoad, after: loadavg() },
       checksum: checksum.digest("hex"),
+      finalChecksum: finalChecksum.digest("hex"),
     }),
   );
 }
@@ -238,15 +302,22 @@ if (values.durable) {
   const { withSelectedTranscriptReader } =
     await import("../../src/agents/sessions/session-manager-reader.test-support.js");
   await withOpenClawTestState({ label: "code-mode-replay-measure" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "replay-measure",
-      sessionKey: "agent:main:replay-measure",
-      storePath: state.path("sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const manager = await SessionManager.openAsync(target, state.root);
-    await withSelectedTranscriptReader(target, () => measure(manager), true);
+    const fixtures = values.matrix
+      ? [10, 100, 500].flatMap((entries) =>
+          [1024, 16384, 65536].map((valueBytes) => ({ entries, keys: 4, valueBytes })),
+        )
+      : [{ entries: selectedEntries, keys: selectedKeys, valueBytes: selectedValueBytes }];
+    for (const [index, fixture] of fixtures.entries()) {
+      const target = {
+        agentId: "main",
+        sessionId: `replay-measure-${index}`,
+        sessionKey: `agent:main:replay-measure-${index}`,
+        storePath: state.path("sessions.json"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const manager = await SessionManager.openAsync(target, state.root);
+      await withSelectedTranscriptReader(target, () => measure(manager, fixture), true);
+    }
   });
 } else {
   await measure(SessionManager.inMemory());
