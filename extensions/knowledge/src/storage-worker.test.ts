@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
@@ -60,4 +61,49 @@ it("authority revoked during a worker operation fails the write and publishes no
   ).toBe(0);
   expect((await service.lookup({ query: "Revoked mid-write" }, tool)).total).toBe(0);
   expect((await service.lookup({ query: "Warm up" }, tool)).total).toBe(1);
+});
+
+// The host scopes tool authority to each call's async context. The worker starts
+// on the first call and stays warm, so its replies must not answer later calls'
+// authority checks from that first call's retired context.
+it("worker authority checks run in each call's own context, not the call that started the worker", async () => {
+  const base = tempDirs.make("knowledge-worker-context-");
+  const { config } = await createVault(base);
+  const api = apiFor(base, config, { extra: { registerService: stopAtTestEnd } });
+  const service = createKnowledgeService(api);
+  const turn = new AsyncLocalStorage<string>();
+  const retired = new Set<string>();
+  const tool = toolContext(api);
+  Object.assign(tool.tool, {
+    sessionKey: "agent:main:test",
+    sessionId: randomUUID(),
+    assertInvocationCurrent: () => {
+      const current = turn.getStore();
+      if (!current || retired.has(current)) {
+        throw new Error("tool invocation authority is no longer active");
+      }
+    },
+  });
+  const save = (title: string) =>
+    service.save_page(
+      {
+        requestId: randomUUID(),
+        expectedVaultId: config.vaultId,
+        type: "note",
+        title,
+        body: "Body",
+      },
+      tool,
+    );
+
+  await turn.run("turn-1", () => save("First turn"));
+  retired.add("turn-1");
+  await expect(turn.run("turn-2", () => save("Second turn"))).resolves.toBeDefined();
+  await expect(
+    turn.run("turn-2", () => service.lookup({ query: "Second turn" }, tool)),
+  ).resolves.toMatchObject({ total: 1 });
+  // A retired turn's own late call still fails closed.
+  await expect(turn.run("turn-1", () => save("Late first turn"))).rejects.toThrow(
+    /no longer active/,
+  );
 });
