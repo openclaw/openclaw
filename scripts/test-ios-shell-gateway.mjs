@@ -202,7 +202,8 @@ const methods = [
   "models.list",
   "sessions.preview",
   "chat.send",
-  ...(workspacePaginationMode || workspacePreviewMode
+  ...(workspacePaginationMode ? ["agents.workspace.list", "agents.workspace.get"] : []),
+  ...(workspacePreviewMode && !workspacePaginationMode
     ? ["agents.workspace.list", "agents.workspace.get"]
     : []),
   ...(attachmentMode ? ["artifacts.download"] : []),
@@ -487,37 +488,36 @@ wss.on("connection", (ws) => {
             ],
           });
           break;
-        } else {
-          if (!workspacePaginationMode) {
-            fail(`Unsupported synthetic method: ${req.method}`);
-            break;
-          }
-          const offset = params.offset ?? 0;
-          const rows = workspaceEntries.slice(offset, offset + (params.limit ?? 250));
-          const failed = offset > 0 && workspacePageRejected;
-          workspacePageReads.push({
-            offset,
-            limit: params.limit ?? null,
-            count: failed ? 0 : rows.length,
-            paths: failed ? [] : rows.map((entry) => entry.path),
-            failed,
-          });
-          if (failed) {
-            fail("Synthetic workspace page unavailable");
-          } else {
-            reply({
-              agentId: "main",
-              path: "",
-              offset,
-              entries: rows,
-              totalEntries: workspaceEntries.length,
-            });
-          }
-          notifyWorkspacePageWaiters();
+        }
+        if (!workspacePaginationMode) {
+          fail(`Unsupported synthetic method: ${req.method}`);
           break;
         }
+        const offset = params.offset ?? 0;
+        const rows = workspaceEntries.slice(offset, offset + (params.limit ?? 250));
+        const failed = offset > 0 && workspacePageRejected;
+        workspacePageReads.push({
+          offset,
+          limit: params.limit ?? null,
+          count: failed ? 0 : rows.length,
+          paths: failed ? [] : rows.map((entry) => entry.path),
+          failed,
+        });
+        if (failed) {
+          fail("Synthetic workspace page unavailable");
+        } else {
+          reply({
+            agentId: "main",
+            path: "",
+            offset,
+            entries: rows,
+            totalEntries: workspaceEntries.length,
+          });
+        }
+        notifyWorkspacePageWaiters();
+        break;
       }
-      case "agents.workspace.get": {
+      case "agents.workspace.get":
         if (workspacePreviewMode) {
           if (
             !workspacePreviewMode ||
@@ -555,29 +555,27 @@ wss.on("connection", (ws) => {
             });
           }
           break;
-        } else {
-          if (
-            !workspacePaginationMode ||
-            !workspaceEntries.some((entry) => entry.path === params.path)
-          ) {
-            fail(`Unsupported synthetic method: ${req.method}`);
-            break;
-          }
-          reply({
-            agentId: "main",
-            file: {
-              name: params.path,
-              path: params.path,
-              size: 26,
-              updatedAtMs: created,
-              mimeType: "text/plain",
-              encoding: "utf8",
-              content: "Synthetic directory file.",
-            },
-          });
+        }
+        if (
+          !workspacePaginationMode ||
+          !workspaceEntries.some((entry) => entry.path === params.path)
+        ) {
+          fail(`Unsupported synthetic method: ${req.method}`);
           break;
         }
-      }
+        reply({
+          agentId: "main",
+          file: {
+            name: params.path,
+            path: params.path,
+            size: 26,
+            updatedAtMs: created,
+            mimeType: "text/plain",
+            encoding: "utf8",
+            content: "Synthetic directory file.",
+          },
+        });
+        break;
       case "connect": {
         ws.proofRole = params.role;
         ws.proofScopes = guestModelPolicy
