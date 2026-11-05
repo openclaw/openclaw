@@ -64,14 +64,14 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
   });
 
   const literalFence = "```text\n<think>literal code</think>\n```\nOrdinary prose follows.\n\n";
-  const inlineComparisons = "The guard uses `min` and `max`, so `a < b` returns false. ".repeat(
-    300,
-  );
+  const inlineComparisons = "The guard uses `min` and `max`, so `a < b` is false. ".repeat(335);
   it.each([
     ["JSX", jsxAnswer(20), CHUNK, false],
     ["multiline HTML", htmlAnswer(16_000), CHUNK, false],
     ["single-line HTML", htmlAnswer(16_000, false), CHUNK, false],
     ["inline-code comparisons", inlineComparisons, CHUNK, false],
+    ["list inline-code comparisons", "- " + inlineComparisons, CHUNK, false],
+    ["quoted inline-code comparisons", "> " + inlineComparisons, CHUNK, false],
     [
       "a fenced tool-call example",
       `\`\`\`xml\n<tool_call>{"path":"a.ts"}</tool_call>\n\`\`\`\n\n${htmlAnswer(16_000)}`,

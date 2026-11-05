@@ -5,12 +5,12 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import {
-  AgentSideConnection,
   PROTOCOL_VERSION,
   RequestError,
+  agent,
+  methods,
   ndJsonStream,
-  type Agent,
-  type AgentSideConnection as AgentConnection,
+  type AgentContext,
   type CloseSessionRequest,
   type CloseSessionResponse,
   type ContentBlock,
@@ -111,10 +111,8 @@ async function waitForMarker(name: string, signal?: AbortSignal): Promise<void> 
   }
 }
 
-class ResetTimeoutProofAgent implements Agent {
+class ResetTimeoutProofAgent {
   private readonly sessions = new Map<SessionId, SessionState>();
-
-  constructor(private readonly connection: AgentConnection) {}
 
   async initialize(): Promise<InitializeResponse> {
     logEvent("initialize");
@@ -158,7 +156,7 @@ class ResetTimeoutProofAgent implements Agent {
     return { modes: { currentModeId: session.mode, availableModes: AVAILABLE_MODES } };
   }
 
-  async prompt(params: PromptRequest): Promise<PromptResponse> {
+  async prompt(params: PromptRequest, client: AgentContext): Promise<PromptResponse> {
     const session = this.sessions.get(params.sessionId);
     if (!session) {
       throw RequestError.resourceNotFound(params.sessionId);
@@ -173,7 +171,7 @@ class ResetTimeoutProofAgent implements Agent {
         await waitForMarker("release-turn", promptAbort.signal);
       }
       const reply = `proof-reply instance=${instanceId} session=${params.sessionId} text=${text}`;
-      await this.connection.sessionUpdate({
+      await client.notify(methods.client.session.update, {
         sessionId: params.sessionId,
         update: {
           sessionUpdate: "agent_message_chunk",
@@ -237,8 +235,16 @@ process.once("SIGINT", () => {
 const output = Writable.toWeb(process.stdout);
 const input = Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>;
 const stream = ndJsonStream(output, input);
-const connection = new AgentSideConnection(
-  (agentConnection) => new ResetTimeoutProofAgent(agentConnection),
-  stream,
-);
-void connection;
+const proofAgent = new ResetTimeoutProofAgent();
+agent()
+  .onRequest(methods.agent.initialize, () => proofAgent.initialize())
+  .onRequest(methods.agent.authenticate, () => proofAgent.authenticate())
+  .onRequest(methods.agent.session.setMode, ({ params }) => proofAgent.setSessionMode(params))
+  .onRequest(methods.agent.session.new, () => proofAgent.newSession())
+  .onRequest(methods.agent.session.load, ({ params }) => proofAgent.loadSession(params))
+  .onRequest(methods.agent.session.prompt, ({ client, params }) =>
+    proofAgent.prompt(params, client),
+  )
+  .onNotification(methods.agent.session.cancel, ({ params }) => proofAgent.cancel(params))
+  .onRequest(methods.agent.session.close, ({ params }) => proofAgent.closeSession(params))
+  .connect(stream);

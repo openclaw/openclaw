@@ -98,7 +98,7 @@ it.each([false, true])(
         if (!refresh || (params as { refresh?: boolean } | undefined)?.refresh) {
           throw new Error("catalog unavailable: OPENAI_API_KEY=sk-1234567890abcdef");
         }
-        return configured;
+        return { ...configured, pendingProviders: ["test-provider"] };
       },
       () => ({
         ...emptyAuth,
@@ -114,6 +114,8 @@ it.each([false, true])(
     const result = await h.load(refresh);
     expect(result).toMatchObject({
       catalogError: "catalog unavailable: OPENAI_API_KEY=sk-123...cdef",
+      catalogRequestFailed: true,
+      pendingProviders: refresh ? ["test-provider"] : [],
       error: null,
     });
     expect(result.authStatus?.providers).toHaveLength(1);
