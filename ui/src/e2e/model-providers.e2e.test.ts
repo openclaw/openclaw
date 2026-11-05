@@ -203,7 +203,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       expect(await gateway.getRequests("models.list")).toHaveLength(2);
 
       await readiness.getByRole("button", { name: "Add account", exact: true }).click();
-      await page.locator("[data-models-login-search]").waitFor();
+      const search = page.locator("[data-models-login-search]");
+      await search.waitFor();
+      expect(await search.evaluate((element) => element.getBoundingClientRect().width)).toBeCloseTo(
+        await search.locator("..").evaluate((element) => element.getBoundingClientRect().width),
+        1,
+      );
       expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
     } finally {
       await context.close();
