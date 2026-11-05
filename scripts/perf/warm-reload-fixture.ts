@@ -365,6 +365,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       config.plugins.entries!.anthropic = { enabled: true };
       // A mock endpoint would withdraw the catalog's window and thinking facts.
       config.models.providers!.anthropic = {
+        baseUrl: "https://api.anthropic.com",
         apiKey: "synthetic-loopback-provider-key",
         models: [],
       };
