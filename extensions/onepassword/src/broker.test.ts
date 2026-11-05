@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import type {
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
@@ -12,8 +15,10 @@ import {
 } from "./broker.js";
 import type { OnePasswordConfig, OnePasswordItemConfig } from "./config.js";
 import { MemoryKeyedStore } from "./memory-store.test-support.js";
+import { OpClient } from "./op-client.js";
 import { AUTHORIZATION_NONCE_PARAM } from "./pending-authorization.js";
 import { createOnePasswordTool } from "./tool.js";
+import { createTrustedNodeFixture } from "./trusted-node.test-support.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -299,6 +304,44 @@ it("expires cached secrets on elapsed time when the wall clock steps backwards",
   });
   expect(getItem).toHaveBeenCalledTimes(2);
 });
+
+it.runIf(process.platform !== "win32")(
+  "re-fetches a secret through the real op boundary after a backward clock step",
+  async () => {
+    await withTempDir("openclaw-onepassword-real-", async (tempDir) => {
+      const interpreter = createTrustedNodeFixture(tempDir);
+      const opBin = path.join(tempDir, "op");
+      const tokenFile = path.join(tempDir, "service-account-token");
+      const counterFile = path.join(tempDir, "op-calls");
+      const source = [
+        `const { appendFileSync } = require("node:fs");`,
+        `appendFileSync(${JSON.stringify(counterFile)}, "1\\n");`,
+        `console.log(JSON.stringify({ id: "new", label: "credential", value: "secret-real" }));`,
+      ].join("\n");
+      await fs.writeFile(opBin, `#!${interpreter}\n${source}\n`, { mode: 0o700 });
+      await fs.writeFile(tokenFile, "fixture-auth\n", { mode: 0o600 });
+      const opClient = new OpClient({ opBin, tokenFile, timeoutMs: 5_000 });
+      let clock = 1_000;
+      vi.spyOn(Date, "now").mockImplementation(() => clock);
+      const configured = { ...config(), cacheTtlSeconds: 1 };
+      const audit = new MemoryKeyedStore<AuditRow>(() => clock);
+      const grants = new MemoryKeyedStore<StandingGrant>(() => clock);
+      const pending = new MemoryKeyedStore<PendingAuthorization>(() => clock);
+      const broker = new OnePasswordBroker({
+        resolveConfig: () => configured,
+        opClient,
+        stores: { audit, grants, pending },
+      });
+      const first = await (await prepareGet(broker, "real-1", "automatic")).get();
+      expect(first).toMatchObject({ value: "secret-real" });
+      clock -= 60 * 60 * 1000;
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      const second = await (await prepareGet(broker, "real-2", "automatic")).get();
+      expect(second).toMatchObject({ value: "secret-real" });
+      expect(await fs.readFile(counterFile, "utf8")).toBe("1\n1\n");
+    });
+  },
+);
 
 it("correlates reused call ids across sessions despite asymmetric execution context", async () => {
   const { broker, expectRows } = setup();
