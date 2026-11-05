@@ -3,9 +3,11 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-actor-accounting-reuse-measure.ts \
  *   --output .local/actor-accounting-base --iterations 1000 [--baseline-dir <overlay>]
  * Repeat alternating base/candidate, then separately with --mode allocation.
- * Overlay the original hydration and context-stats worker modules at their source paths.
+ * Overlay the changed accounting/hydration owner modules at their source paths.
  * Measures the real hydration owner with an unchanged transcript and previously owned
- * totals; the actor boundary regression separately proves invalidation and append behavior.
+ * totals. Use --readmission for actor eviction/reacquisition on the same admitted
+ * connection; --events controls history length (default 1024). The actor boundary
+ * regression separately proves invalidation and append behavior.
  * Acceptance: identical hydrated facts, no repeated unchanged transcript-window load,
  * lower CPU/allocation, no material GC increase. Fresh/changed histories still load.
  * Setup and cleanup are excluded. Each run deletes its synthetic state; keeps result.json.
@@ -26,6 +28,8 @@ const { values } = parseArgs({
     output: { type: "string" },
     "baseline-dir": { type: "string" },
     iterations: { type: "string", default: "1000" },
+    events: { type: "string", default: "1024" },
+    readmission: { type: "boolean" },
     mode: { type: "string", default: "timing" },
   },
 });
@@ -33,6 +37,8 @@ assert(values.output && typeof globalThis.gc === "function");
 assert(values.mode === "timing" || values.mode === "allocation");
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
+const eventCount = Number(values.events);
+assert(Number.isSafeInteger(eventCount) && eventCount > 0);
 const output = path.resolve(values.output);
 mkdirSync(output);
 const root = path.join(output, "state");
@@ -72,7 +78,7 @@ try {
     sessionId: "synthetic-accounting",
     storePath: database.path,
   };
-  const events = Array.from({ length: 1024 }, (_, index) => ({
+  const events = Array.from({ length: eventCount }, (_, index) => ({
     type: "message",
     id: `event-${index}`,
     parentId: index ? `event-${index - 1}` : null,
@@ -102,7 +108,14 @@ try {
   };
   const version = { epoch: "synthetic", sequence: 0 };
   const previous = hydrateSessionActorState(database, target, version, "synthetic");
-  const hydrate = () => hydrateSessionActorState(database, target, version, "synthetic", previous);
+  const hydrate = () =>
+    hydrateSessionActorState(
+      database,
+      target,
+      version,
+      "synthetic",
+      values.readmission ? undefined : previous,
+    );
   assert.deepEqual(hydrate(), previous);
   assert(previous.transcript.contextStats);
   assert.equal(previous.transcript.contextStats?.eventCount, events.length);
@@ -138,6 +151,7 @@ try {
     values.mode === "allocation" ? await inspector.post("HeapProfiler.stopSampling") : undefined;
   const result = {
     mode: values.mode,
+    readmission: Boolean(values.readmission),
     iterations,
     historyEvents: events.length,
     historyBytes: previous.transcript.contextStats.sizeBytes,

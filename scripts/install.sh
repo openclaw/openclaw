@@ -1274,7 +1274,7 @@ Options:
   --bun-path <absolute path>          Use an existing OpenClaw Bun fork executable
   --beta                               Use beta if available, else latest
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw)
-  --no-git-update                      Skip git pull for existing checkout
+  --no-git-update                     Skip rebasing local main (Git fetches can still occur)
   --no-onboard                          Skip onboarding (non-interactive)
   --no-prompt                           Disable prompts (required in CI/automation)
   --verify                              Run a post-install smoke verify

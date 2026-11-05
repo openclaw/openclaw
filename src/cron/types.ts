@@ -88,6 +88,7 @@ type CronCompletionDestination = {
 type CronFailureDestination = {
   channel?: CronMessageChannel;
   to?: string;
+  threadId?: string | number;
   accountId?: string;
   mode?: "announce" | "webhook";
 };
