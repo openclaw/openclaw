@@ -1,5 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { TalkClientCreateResult } from "../../packages/gateway-protocol/src/schema/channels.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RealtimeVoiceAudioOutputPort } from "./audio-output-port.js";
 import type { TalkTransport } from "./talk-events.js";
@@ -303,54 +305,21 @@ export type RealtimeVoiceGatewayControl = Omit<
   bindBridge: (bridge: RealtimeVoiceBridge) => void;
 };
 
-export type RealtimeVoiceBrowserAudioContract = {
-  inputEncoding: "pcm16" | "g711_ulaw";
-  inputSampleRateHz: number;
-  outputEncoding: "pcm16" | "g711_ulaw";
-  outputSampleRateHz: number;
-};
+export type RealtimeVoiceBrowserAudioContract = Extract<
+  TalkClientCreateResult,
+  { transport: "provider-websocket" }
+>["audio"];
 
-type RealtimeVoiceBrowserSessionBase = {
-  provider: RealtimeVoiceProviderId;
-  model?: string;
-  voice?: string;
-  expiresAt?: number;
-};
-
-type RealtimeVoiceBrowserWebRtcSdpSession = RealtimeVoiceBrowserSessionBase & {
-  transport: "webrtc";
-  clientSecret: string;
-  offerUrl?: string;
-  offerHeaders?: Record<string, string>;
-  offerResponseMaxBytes?: number;
-};
-
-type RealtimeVoiceBrowserJsonPcmWebSocketSession = RealtimeVoiceBrowserSessionBase & {
-  transport: "provider-websocket";
-  protocol: string;
-  clientSecret: string;
-  websocketUrl: string;
-  audio: RealtimeVoiceBrowserAudioContract;
-  initialMessage?: unknown;
-};
-
-type RealtimeVoiceBrowserGatewayRelaySession = RealtimeVoiceBrowserSessionBase & {
-  transport: "gateway-relay";
-  relaySessionId: string;
-  audio: RealtimeVoiceBrowserAudioContract;
-};
-
-type RealtimeVoiceBrowserManagedRoomSession = RealtimeVoiceBrowserSessionBase & {
-  transport: "managed-room";
-  roomUrl: string;
-  token?: string;
-};
-
-export type RealtimeVoiceBrowserSession =
-  | RealtimeVoiceBrowserWebRtcSdpSession
-  | RealtimeVoiceBrowserJsonPcmWebSocketSession
-  | RealtimeVoiceBrowserGatewayRelaySession
-  | RealtimeVoiceBrowserManagedRoomSession;
+/** Providers return transport details; the Gateway attaches client ownership fields. */
+export type RealtimeVoiceBrowserSession = SchemaContract<
+  | (Omit<
+      Extract<TalkClientCreateResult, { transport: "webrtc" }>,
+      "voiceSessionId" | "clientControl"
+    > & { offerResponseMaxBytes?: number })
+  | Omit<Extract<TalkClientCreateResult, { transport: "provider-websocket" }>, "voiceSessionId">
+  | Omit<Extract<TalkClientCreateResult, { transport: "gateway-relay" }>, "voiceSessionId">
+  | Omit<Extract<TalkClientCreateResult, { transport: "managed-room" }>, "voiceSessionId">
+>;
 
 export type RealtimeVoiceBridge = {
   /** Bind before connect: continuous PCM and interruption go to this call-bound worker sink,

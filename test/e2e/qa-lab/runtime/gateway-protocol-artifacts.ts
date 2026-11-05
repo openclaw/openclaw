@@ -426,6 +426,12 @@ async function compileAndRunSwiftProtocolModels(params: {
   const executablePath = path.join(swiftArtifactDir, "gateway-protocol-artifact-harness");
   await fs.rm(swiftArtifactDir, { force: true, recursive: true });
   await fs.mkdir(swiftArtifactDir, { recursive: true });
+  await runCommand({
+    args: ["scripts/prepare-native-protocol.mjs", "--language", "swift", "--out", swiftArtifactDir],
+    appendLog: params.appendLog,
+    command: "node",
+    cwd: params.repoRoot,
+  });
   const anyCodableSource = await fs.readFile(
     path.join(params.repoRoot, "apps/shared/OpenClawKit/Sources/OpenClawProtocol/AnyCodable.swift"),
     "utf8",
@@ -436,10 +442,7 @@ async function compileAndRunSwiftProtocolModels(params: {
   await runCommand({
     args: [
       anyCodablePath,
-      path.join(
-        params.repoRoot,
-        "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
-      ),
+      path.join(swiftArtifactDir, "GatewayModels.swift"),
       harnessPath,
       "-o",
       executablePath,

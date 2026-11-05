@@ -71,7 +71,7 @@ enum ShareContentExtractor {
 
     private static func loadURL(from provider: NSItemProvider) async -> URL? {
         if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier),
-           let url = await self.loadURLValue(from: provider, typeIdentifier: UTType.url.identifier)
+           let url = await self.loadURLValue(from: provider)
         {
             return url
         }
@@ -87,20 +87,16 @@ enum ShareContentExtractor {
     }
 
     private static func loadText(from provider: NSItemProvider) async -> String? {
-        if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier),
-           let text = await self.loadTextValue(from: provider, typeIdentifier: UTType.plainText.identifier)
-        {
-            return text
-        }
-
-        if provider.hasItemConformingToTypeIdentifier(UTType.text.identifier),
-           let text = await self.loadTextValue(from: provider, typeIdentifier: UTType.text.identifier)
-        {
-            return text
+        for type in [UTType.plainText, .text] {
+            if provider.hasItemConformingToTypeIdentifier(type.identifier),
+               let text = await self.loadTextValue(from: provider, typeIdentifier: type.identifier)
+            {
+                return text
+            }
         }
 
         if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier),
-           let url = await self.loadURLValue(from: provider, typeIdentifier: UTType.url.identifier)
+           let url = await self.loadURLValue(from: provider)
         {
             return url.absoluteString
         }
@@ -108,9 +104,9 @@ enum ShareContentExtractor {
         return nil
     }
 
-    private static func loadURLValue(from provider: NSItemProvider, typeIdentifier: String) async -> URL? {
+    private static func loadURLValue(from provider: NSItemProvider) async -> URL? {
         await withCheckedContinuation { continuation in
-            provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { item, _ in
+            provider.loadItem(forTypeIdentifier: UTType.url.identifier, options: nil) { item, _ in
                 continuation.resume(returning: (item as? URL) ?? (item as? String).flatMap(URL.init(string:)))
             }
         }

@@ -1,11 +1,9 @@
 // Packaged doctor capability tests cover built-in official metadata without plugin runtime loading.
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupTempDirs,
   makeTempDir as makeTempRepoRoot,
 } from "../../../test/helpers/temp-dir.js";
-import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 
 const packageRootMock = vi.hoisted(() => ({ value: "" }));
 const channelPluginMocks = vi.hoisted(() => ({
@@ -39,7 +37,6 @@ const tempDirs: string[] = [];
 beforeEach(() => {
   const root = makeTempRepoRoot(tempDirs, "doctor-channel-packaged-");
   packageRootMock.value = root;
-  writeJsonFile(path.join(root, "package.json"), { name: "openclaw" });
   clearPluginMetadataLifecycleCaches();
   channelPluginMocks.getBundledChannelPlugin.mockReset().mockReturnValue(undefined);
   channelPluginMocks.getChannelPlugin.mockReset().mockReturnValue(undefined);

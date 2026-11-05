@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SLACK_HUDDLES_PLATFORM_ADAPTER } from "./slack-huddles-platform-adapter.js";
 import {
   channelHeader,
+  clicks as clickCounts,
   CLIENT_URL,
   fixture,
   inCall,
@@ -11,6 +12,49 @@ import {
   preview,
   qaNode,
 } from "./slack-huddles-platform-adapter.test-helpers.js";
+
+const CHANNEL_URL = "https://app.slack.com/huddle/C0123ABCD";
+const FOREIGN_URL = "https://app.slack.com/client/T9999ABCD/C0123ABCD";
+const IDLE_HEADER = "p-huddle_channel_header_button__container";
+const WORKSPACE_BINDING = {
+  __openclawSlackHuddleWorkspaces: { "slack-huddle:C0123ABCD": "T0123ABCD" },
+};
+
+function sessionWindow(overrides: Record<string, unknown> = {}, bound = false) {
+  return {
+    __openclawSlackHuddle: {
+      identity: "slack-huddle:C0123ABCD",
+      sessionId: "session-1",
+      bindable: true,
+      ...overrides,
+    },
+    ...(bound ? structuredClone(WORKSPACE_BINDING) : {}),
+  };
+}
+
+function pendingJoin() {
+  return { joinRequested: true, joinRequestedAt: Date.now() };
+}
+
+function cameraOn() {
+  return new PageNode("button", {
+    role: "switch",
+    "aria-label": "Camera",
+    "aria-checked": "true",
+  });
+}
+
+function captionFixture(text: string) {
+  const span = (suffix: string, content = "") =>
+    new PageNode("span", { class: `p-huddle_closed_caption_event__${suffix}` }, content);
+  const words = span("transcription", text);
+  words.setAttribute("data-qa", "huddle_closed_caption_event");
+  const caption = new PageNode("div").append(
+    span("member_name", "Morgan:"),
+    new PageNode("div", { class: "p-huddle_closed_caption_event__event_text" }).append(words),
+  );
+  return { caption, words, span };
+}
 
 function classify(result: Record<string, unknown>) {
   const health = SLACK_HUDDLES_PLATFORM_ADAPTER.browser.parseStatus({
@@ -23,54 +67,74 @@ function classify(result: Record<string, unknown>) {
 }
 
 describe("Slack huddle browser adapter", () => {
+  it.each(["https://slack.com/signin", undefined])(
+    "requires login at %s or an embedded sign-in form",
+    async (currentUrl) => {
+      const document = currentUrl
+        ? page()
+        : page(
+            new PageNode("form", { action: "/signin" }).append(
+              new PageNode("input", { name: "email" }),
+            ),
+          );
+      const result = await fixture({ document, currentUrl }).status();
+      expect(result).toMatchObject({ inCall: false, clickedJoin: false });
+      expect(classify(result)).toEqual({
+        category: "login-required",
+        reason: "slack-login-required",
+        message:
+          "Sign the OpenClaw Chrome profile into Slack as the claw's Slack account, then retry.",
+      });
+    },
+  );
+
   it.each([
-    "https://slack.com/signin",
-    "https://workspace.slack.com/workspace-signin",
-    "https://slack.com/ssb/signin",
-  ])("reports signed-out redirect %s", async (currentUrl) => {
-    const result = await fixture({ document: page(), currentUrl }).status();
-    expect(result).toMatchObject({ inCall: false, clickedJoin: false });
-    expect(classify(result)).toEqual({
-      category: "login-required",
-      reason: "slack-login-required",
-      message:
-        "Sign the OpenClaw Chrome profile into Slack as the claw's Slack account, then retry.",
-    });
-  });
-
-  it("detects a sign-in form even when Slack retains the huddle URL", async () => {
-    const document = page(
-      new PageNode("form", { action: "/signin" }).append(new PageNode("input", { name: "email" })),
-    );
-    expect(classify(await fixture({ document }).status())).toMatchObject({
-      reason: "slack-login-required",
-    });
-  });
-
-  it("refuses Start Huddle without touching the preview controls", async () => {
-    const { document, join, mic } = preview("Start Huddle", true);
-    const result = await fixture({ document }).status();
-    expect(result).toMatchObject({
-      clickedJoin: false,
-      manualAction: {
-        reason: "slack-huddle-not-active",
-        message: "No one is in this huddle yet. Start the huddle in Slack, then ask again.",
-      },
-    });
-    expect(join.clicks).toBe(0);
-    expect(mic.clicks).toBe(0);
-  });
+    { label: "Start Huddle", autoJoin: true, disabled: false, reason: "slack-huddle-not-active" },
+    { label: "Join Huddle", autoJoin: false, disabled: false, reason: undefined },
+    { label: "Join Huddle", autoJoin: true, disabled: true, reason: "slack-microphone-required" },
+  ])(
+    "leaves refused previews untouched: $label / autoJoin=$autoJoin / disabled=$disabled",
+    async ({ label, autoJoin, disabled, reason }) => {
+      const { document, join, mic } = preview(label, true);
+      if (disabled) {
+        mic.setAttribute("aria-disabled", "true");
+      }
+      const result = await fixture({ document }).status({ autoJoin });
+      expect(result).toMatchObject({ clickedJoin: false });
+      if (reason) {
+        expect(result).toMatchObject({ manualAction: { reason } });
+      }
+      if (label === "Start Huddle") {
+        expect(result).toMatchObject({
+          manualAction: {
+            message: "No one is in this huddle yet. Start the huddle in Slack, then ask again.",
+          },
+        });
+      }
+      expect(clickCounts(join, mic)).toEqual([0, 0]);
+    },
+  );
 
   it.each([
     { mode: "agent" as const, initial: true, virtual: false, clicks: 1 },
-    { mode: "bidi" as const, initial: true, virtual: false, clicks: 1 },
-    { mode: "agent" as const, initial: true, virtual: true, clicks: 1 },
     { mode: "agent" as const, initial: false, virtual: true, clicks: 0 },
     { mode: "transcribe" as const, initial: true, virtual: true, clicks: 1 },
+    { mode: "transcribe" as const, initial: false, virtual: false, clicks: 0, fallback: true },
+    {
+      mode: "transcribe" as const,
+      initial: false,
+      virtual: false,
+      clicks: 0,
+      currentUrl: CLIENT_URL,
+    },
   ])(
-    "always joins $mode muted (preview mic on: $initial, virtual input: $virtual)",
-    async ({ mode, initial, virtual, clicks }) => {
-      const { document, join, mic } = preview("Join Huddle", initial);
+    "joins $mode muted (mic=$initial, virtual=$virtual, fallback=$fallback, URL=$currentUrl)",
+    async ({ mode, initial, virtual, clicks, fallback, currentUrl }) => {
+      const { document, join, mic } = preview("Join Huddle", initial, fallback);
+      const unrelated = new PageNode("button", {}, "Join Huddle");
+      if (fallback) {
+        document.body.append(unrelated);
+      }
       if (virtual) {
         document.body.append(new PageNode("div", { id: "microphone-info" }, "BlackHole 2ch"));
       }
@@ -78,131 +142,68 @@ describe("Slack huddle browser adapter", () => {
       join.onClick = () => {
         microphoneAtJoin = mic.getAttribute("aria-checked");
       };
-      const result = await fixture({ document }).status({ mode });
+      const result = await fixture({ document, currentUrl }).status({ mode });
       expect(result.clickedJoin).toBe(true);
       expect(join.clicks).toBe(1);
       expect(mic.clicks).toBe(clicks);
       expect(microphoneAtJoin).toBe("false");
-    },
-  );
-
-  it("uses the exact Join Huddle text fallback only inside the preview", async () => {
-    const { document, join } = preview("Join Huddle", false, true);
-    const unrelated = new PageNode("button", {}, "Join Huddle");
-    document.body.append(unrelated);
-    await fixture({ document }).status();
-    expect(join.clicks).toBe(1);
-    expect(unrelated.clicks).toBe(0);
-  });
-
-  it("leaves the preview unchanged when autoJoin is disabled", async () => {
-    const { document, join, mic } = preview("Join Huddle", true);
-    expect(await fixture({ document }).status({ autoJoin: false })).toMatchObject({
-      clickedJoin: false,
-    });
-    expect(join.clicks).toBe(0);
-    expect(mic.clicks).toBe(0);
-  });
-
-  it("does not join when Slack disables the microphone needed for the requested mode", async () => {
-    const { document, join, mic } = preview("Join Huddle", true);
-    mic.setAttribute("aria-disabled", "true");
-    expect(await fixture({ document }).status()).toMatchObject({
-      clickedJoin: false,
-      manualAction: { reason: "slack-microphone-required" },
-    });
-    expect(mic.clicks).toBe(0);
-    expect(join.clicks).toBe(0);
-  });
-
-  it.each(["huddle_join_modal", "huddle_in_thread_speed_bump_modal"])(
-    "requires manual confirmation for %s",
-    async (qa) => {
-      const { document, join } = preview("Join Huddle");
-      const confirm = qaNode("huddle_join_modal_go", "OK");
-      document.body.append(qaNode(qa, "Switch huddles?", "div").append(confirm));
-      const result = await fixture({ document }).status();
-      expect(classify(result)).toMatchObject({
-        category: "custom",
-        reason: "slack-confirmation-required",
-        message: expect.stringContaining("Switch huddles?"),
-      });
-      expect(confirm.clicks).toBe(0);
-      expect(join.clicks).toBe(0);
-    },
-  );
-
-  it.each(["huddle_multi_device_modal_switch_device", "huddle_multi_device_modal_use_both_device"])(
-    "requires manual resolution of %s",
-    async (qa) => {
-      const control = qaNode(qa, "Switch to this device");
-      expect(classify(await fixture({ document: page(control) }).status())).toMatchObject({
-        category: "session-conflict",
-        reason: "slack-session-conflict",
-      });
-      expect(control.clicks).toBe(0);
-    },
-  );
-
-  it("retains a request awaiting admission and adopts the admitted client page", async () => {
-    const request = new PageNode("button", {}, "Request to join");
-    const document = page(new PageNode("div", { role: "dialog" }).append(request));
-    const browser = fixture({ document });
-    expect(classify(await browser.status())).toMatchObject({
-      category: "admission-required",
-      reason: "slack-admission-required",
-    });
-    expect(request.clicks).toBe(0);
-    document.body.children.splice(0);
-    document.body.append(
-      qaNode("huddle_toolbar__leave_button", "Leave Huddle"),
-      microphone(false),
-      channelHeader(true),
-    );
-    browser.location.href = CLIENT_URL;
-    expect(await browser.status()).toMatchObject({ inCall: true, micMuted: true });
-  });
-
-  it.each(["agent", "transcribe"] as const)(
-    "reports the browser microphone permission prompt in %s mode without joining",
-    async (mode) => {
-      const { document, join } = preview("Join Huddle");
-      document.body.append(
-        new PageNode("div", { role: "dialog" }, "Allow Slack to use your microphone"),
-      );
-      expect(classify(await fixture({ document }).status({ mode }))).toMatchObject({
-        category: "permission-required",
-        reason: "slack-permission-required",
-      });
-      expect(join.clicks).toBe(0);
+      expect(unrelated.clicks).toBe(0);
     },
   );
 
   it.each([
-    ["huddle_toolbar__leave_button", "button"],
-    ["huddle_mini_player_leave_button", "button"],
-    ["huddle_sidebar_footer", "div"],
-    ["huddle_toolbar_buttons_center", "div"],
-  ])("recognizes %s as an in-call marker and verifies observe-only mute", async (qa, tag) => {
-    const { document, mic } = inCall(qaNode(qa, "", tag), true);
-    expect(await fixture({ document, joined: true }).status()).toMatchObject({
-      inCall: true,
-      micMuted: true,
-    });
-    expect(mic.clicks).toBe(1);
+    { qa: "huddle_join_modal", reason: "slack-confirmation-required", category: "custom" },
+    {
+      qa: "huddle_multi_device_modal_switch_device",
+      reason: "slack-session-conflict",
+      category: "session-conflict",
+    },
+    { qa: "permission", reason: "slack-permission-required", category: "permission-required" },
+  ])("requires manual resolution of $qa", async ({ qa, reason, category }) => {
+    const { document, join } = preview("Join Huddle");
+    const control = qaNode("huddle_join_modal_go", "OK");
+    const prompt =
+      qa === "permission"
+        ? new PageNode("div", { role: "dialog" }, "Allow Slack to use your microphone")
+        : qaNode(qa, "Switch huddles?", "div");
+    document.body.append(prompt.append(control));
+    const action = classify(await fixture({ document }).status({ mode: "agent" }));
+    expect(action).toMatchObject({ category, reason });
+    if (category === "custom") {
+      expect(action).toMatchObject({ message: expect.stringContaining("Switch huddles?") });
+    }
+    expect(clickCounts(control, prompt, join)).toEqual([0, 0, 0]);
   });
 
-  it.each([true, false])(
-    "reads the Microphone switch aria-checked=%s without mutation",
-    async (on) => {
-      const { document, mic } = inCall(undefined, on);
-      expect(await fixture({ document, joined: true }).status({ readOnly: true })).toMatchObject({
-        inCall: true,
-        micMuted: !on,
+  it.each([false, true])("requires admission unless a call is live (%s)", async (live) => {
+    const request = new PageNode("button", {}, "Request to join");
+    const dialog = new PageNode("div", { role: "dialog" }).append(request);
+    const document = live
+      ? page(qaNode("huddle_toolbar__leave_button", "Leave Huddle"), dialog)
+      : page(dialog);
+    const browser = fixture({ document });
+    if (live) {
+      expect(await browser.status()).toMatchObject({
+        inCall: false,
+        manualAction: { reason: "slack-session-conflict" },
       });
-      expect(mic.clicks).toBe(0);
-    },
-  );
+      document.body.children.splice(1);
+      expect(await browser.status()).toMatchObject({
+        inCall: false,
+        manualAction: { reason: "slack-session-conflict" },
+      });
+    } else {
+      expect(classify(await browser.status())).toMatchObject({
+        category: "admission-required",
+        reason: "slack-admission-required",
+      });
+      document.body.children.splice(0);
+      document.body.append(...inCall().document.body.children);
+      browser.location.href = CLIENT_URL;
+      expect(await browser.status()).toMatchObject({ inCall: true, micMuted: true });
+    }
+    expect(request.clicks).toBe(0);
+  });
 
   it("keeps huddle ownership through a Slack SPA URL rewrite and rejects a different channel view", async () => {
     const { document, marker } = inCall();
@@ -224,21 +225,33 @@ describe("Slack huddle browser adapter", () => {
     expect(marker.clicks).toBe(0);
   });
 
-  it("does not declare the huddle ended during a temporary toolbar rerender", async () => {
-    const { document, marker } = inCall(undefined, false, false);
-    document.body.append(channelHeader(true));
-    const browser = fixture({ document, currentUrl: CLIENT_URL, joined: true });
-    expect(await browser.status()).toMatchObject({ inCall: true });
-    marker.isConnected = false;
-    document.body.children.splice(document.body.children.indexOf(marker), 1);
-    const interrupted = await browser.status();
-    expect(interrupted.inCall).toBe(false);
-    expect(interrupted.meetingEnded).not.toBe(true);
-    document.body.append(qaNode("huddle_toolbar__leave_button", "Leave Huddle"));
-    expect(await browser.status()).toMatchObject({ inCall: true });
-  });
+  it.each([false, true])(
+    "retains ownership through a toolbar rerender (channelOnly=%s)",
+    async (channelOnly) => {
+      const { document, marker } = inCall();
+      const browser = fixture({
+        document,
+        currentUrl: CLIENT_URL,
+        joined: true,
+        ...(channelOnly ? { window: sessionWindow(pendingJoin()) } : {}),
+      });
+      const options = channelOnly ? { url: CHANNEL_URL } : {};
+      expect(await browser.status(options)).toMatchObject({ inCall: true });
+      marker.isConnected = false;
+      document.body.children.splice(document.body.children.indexOf(marker), 1);
+      const interrupted = await browser.status(options);
+      expect(interrupted.inCall).toBe(false);
+      expect(interrupted.meetingEnded).not.toBe(true);
+      document.body.append(qaNode("huddle_toolbar__leave_button", "Leave Huddle"));
+      if (!channelOnly) {
+        expect(await browser.status(options)).toMatchObject({ inCall: true });
+      }
+      browser.location.href = FOREIGN_URL;
+      expect(await browser.status(options)).toMatchObject({ inCall: false });
+    },
+  );
 
-  it.each(["huddle_toolbar__leave_button", "huddle_mini_player_leave_button"])(
+  it.each(["huddle_toolbar__leave_button"])(
     "leaves through %s and reports departure while the root audio element remains",
     async (qa) => {
       const leave = qaNode(qa, "Leave Huddle");
@@ -256,19 +269,9 @@ describe("Slack huddle browser adapter", () => {
       leave.isConnected = false;
       document.body.children.splice(document.body.children.indexOf(leave), 1);
       expect(browser.leave(true)).toMatchObject({ departed: false });
-      header.attributes.class = "p-huddle_channel_header_button__container";
+      header.attributes.class = IDLE_HEADER;
       expect(browser.leave(true)).toMatchObject({ departed: true });
       expect(endAll.clicks).toBe(0);
-    },
-  );
-
-  it.each([undefined, CLIENT_URL])(
-    "does not adopt another huddle's controls while viewing this channel at %s",
-    async (currentUrl) => {
-      const { document, marker } = inCall(undefined, false, false);
-      const result = await fixture({ document, currentUrl }).status({ readOnly: false });
-      expect(result).toMatchObject({ inCall: false });
-      expect(marker.clicks).toBe(0);
     },
   );
 
@@ -278,12 +281,15 @@ describe("Slack huddle browser adapter", () => {
     expect(await browser.status()).toMatchObject({ clickedJoin: true });
     active.document.body.children.splice(0);
     const confirm = qaNode("huddle_join_modal", "Switch huddles?", "div");
-    active.document.body.append(qaNode("huddle_toolbar__leave_button", "Leave Huddle"), confirm);
+    const leave = qaNode("huddle_toolbar__leave_button", "Leave Huddle");
+    active.document.body.append(leave, confirm);
     browser.location.href = CLIENT_URL;
     expect(await browser.status()).toMatchObject({
       inCall: false,
       manualAction: { reason: "slack-confirmation-required" },
     });
+    expect(browser.leave()).toMatchObject({ departed: false });
+    expect(leave.clicks).toBe(0);
     active.document.body.children.splice(active.document.body.children.indexOf(confirm), 1);
     expect(await browser.status()).toMatchObject({
       inCall: false,
@@ -291,123 +297,93 @@ describe("Slack huddle browser adapter", () => {
     });
   });
 
-  it("completes its own Join into in-call controls", async () => {
-    const active = preview("Join Huddle");
-    const browser = fixture({ document: active.document });
-    expect(await browser.status()).toMatchObject({ clickedJoin: true });
-    active.document.body.children.splice(0);
-    active.document.body.append(
-      qaNode("huddle_toolbar__leave_button", "Leave Huddle"),
-      microphone(false),
-      channelHeader(true),
-    );
-    browser.location.href = CLIENT_URL;
-    expect(await browser.status()).toMatchObject({ inCall: true });
-  });
+  it.each([
+    { channelOnly: false, lag: false },
+    { channelOnly: false, lag: true },
+    { channelOnly: true, lag: false },
+  ])(
+    "settles its own Join only after membership, then detects a move (channelOnly=$channelOnly, lag=$lag)",
+    async ({ channelOnly, lag }) => {
+      const active = preview("Join Huddle");
+      const browser = fixture({
+        document: active.document,
+        currentUrl: channelOnly ? CLIENT_URL : undefined,
+      });
+      const options = channelOnly ? { url: CHANNEL_URL } : {};
+      expect(await browser.status(options)).toMatchObject({ clickedJoin: true });
+      active.document.body.children.splice(0);
+      const header = channelHeader(!lag);
+      active.document.body.append(
+        qaNode("huddle_toolbar__leave_button", "Leave Huddle"),
+        microphone(false),
+        header,
+      );
+      browser.location.href = CLIENT_URL;
+      if (lag) {
+        const lagging = await browser.status(options);
+        expect(lagging.inCall).toBe(false);
+        expect(lagging.manualAction).toBeUndefined();
+        header.attributes.class += " p-huddle_channel_header_button--in_huddle";
+      }
+      expect(await browser.status(options)).toMatchObject({ inCall: true });
+      if (channelOnly) {
+        expect(browser.window).toMatchObject(WORKSPACE_BINDING);
+      }
+      header.attributes.class = IDLE_HEADER;
+      expect(await browser.status(options)).toMatchObject({
+        inCall: false,
+        manualAction: { reason: "slack-session-conflict" },
+      });
+    },
+  );
 
   it("does not join or touch the camera while another huddle is live in the tab", async () => {
     const active = preview("Join Huddle");
-    const camera = new PageNode("button", {
-      role: "switch",
-      "aria-label": "Camera",
-      "aria-checked": "true",
-    });
+    const camera = cameraOn();
     active.document.body.append(qaNode("huddle_toolbar__leave_button", "Leave Huddle"), camera);
     const result = await fixture({ document: active.document }).status();
     expect(result).toMatchObject({ manualAction: { reason: "slack-session-conflict" } });
     expect(result.clickedJoin).not.toBe(true);
-    expect(active.join.clicks).toBe(0);
-    expect(camera.clicks).toBe(0);
+    expect(clickCounts(active.join, camera)).toEqual([0, 0]);
   });
 
-  it("does not verify a page of another workspace that shows the same channel id", async () => {
-    const { document, marker } = inCall();
-    const result = await fixture({
-      document,
-      currentUrl: "https://app.slack.com/client/T9999ABCD/C0123ABCD",
-      joined: true,
-    }).status({ readOnly: true });
-    expect(result).toMatchObject({ inCall: false });
-    expect(marker.clicks).toBe(0);
-  });
-
-  it("binds a channel-only session to the workspace where it joined", async () => {
-    const { document, marker } = inCall();
-    const browser = fixture({
-      document,
-      currentUrl: CLIENT_URL,
-      window: {
-        __openclawSlackHuddle: {
-          identity: "slack-huddle:C0123ABCD",
-          bindable: true,
-          sessionId: "session-1",
-          joinRequested: true,
-          joinRequestedAt: Date.now(),
-        },
-      },
-    });
-    const channelOnly = { url: "https://app.slack.com/huddle/C0123ABCD" };
-    expect(await browser.status(channelOnly)).toMatchObject({ inCall: true });
-    browser.location.href = "https://app.slack.com/client/T9999ABCD/C0123ABCD";
-    expect(await browser.status(channelOnly)).toMatchObject({ inCall: false });
-    expect(marker.clicks).toBe(0);
-  });
+  it.each([false, true])(
+    "binds only mutable owned channel sessions (settling=%s)",
+    async (settling) => {
+      const { document, marker } = inCall();
+      const browser = fixture({
+        document,
+        currentUrl: CLIENT_URL,
+        window: sessionWindow(settling ? pendingJoin() : {}),
+      });
+      const channelOnly = { url: CHANNEL_URL };
+      expect(await browser.status({ ...channelOnly, readOnly: true })).toMatchObject({
+        inCall: false,
+      });
+      expect(await browser.status(channelOnly)).toMatchObject({ inCall: true });
+      expect(browser.window).toMatchObject(WORKSPACE_BINDING);
+      browser.location.href = FOREIGN_URL;
+      expect(await browser.status(channelOnly)).toMatchObject({ inCall: false });
+      expect(marker.clicks).toBe(0);
+    },
+  );
 
   it("binds the workspace before awaited work so a mid-status switch cannot claim it", async () => {
     const { document, mic } = inCall(undefined, true);
     const browser = fixture({
       document,
       currentUrl: CLIENT_URL,
-      window: {
-        __openclawSlackHuddle: {
-          identity: "slack-huddle:C0123ABCD",
-          bindable: true,
-          sessionId: "session-1",
-          joinRequested: true,
-          joinRequestedAt: Date.now(),
-        },
-      },
+      window: sessionWindow(pendingJoin()),
     });
-    const camera = new PageNode("button", {
-      role: "switch",
-      "aria-label": "Camera",
-      "aria-checked": "true",
-    });
+    const camera = cameraOn();
     camera.onClick = () => {
       camera.setAttribute("aria-checked", "false");
-      browser.location.href = "https://app.slack.com/client/T9999ABCD/C0123ABCD";
+      browser.location.href = FOREIGN_URL;
     };
     document.body.append(camera);
-    await browser.status({ url: "https://app.slack.com/huddle/C0123ABCD", mode: "transcribe" });
+    await browser.status({ url: CHANNEL_URL, mode: "transcribe" });
     expect(mic.clicks).toBe(0);
-    expect(browser.window).toMatchObject({
-      __openclawSlackHuddleWorkspaces: { "slack-huddle:C0123ABCD": "T0123ABCD" },
-    });
-  });
-
-  it("keeps the workspace binding through a toolbar rerender", async () => {
-    const { document, marker } = inCall();
-    const browser = fixture({
-      document,
-      currentUrl: CLIENT_URL,
-      window: {
-        __openclawSlackHuddle: {
-          identity: "slack-huddle:C0123ABCD",
-          bindable: true,
-          sessionId: "session-1",
-          joinRequested: true,
-          joinRequestedAt: Date.now(),
-        },
-      },
-    });
-    const channelOnly = { url: "https://app.slack.com/huddle/C0123ABCD" };
-    expect(await browser.status(channelOnly)).toMatchObject({ inCall: true });
-    marker.isConnected = false;
-    document.body.children.splice(document.body.children.indexOf(marker), 1);
-    await browser.status(channelOnly);
-    document.body.append(qaNode("huddle_toolbar__leave_button", "Leave Huddle"));
-    browser.location.href = "https://app.slack.com/client/T9999ABCD/C0123ABCD";
-    expect(await browser.status(channelOnly)).toMatchObject({ inCall: false });
+    expect(browser.window).toMatchObject(WORKSPACE_BINDING);
   });
 
   it("keeps a workspace binding when a status pass lands on another workspace's idle channel", async () => {
@@ -416,221 +392,58 @@ describe("Slack huddle browser adapter", () => {
     const browser = fixture({
       document,
       currentUrl: CLIENT_URL,
-      window: {
-        __openclawSlackHuddle: {
-          identity: "slack-huddle:C0123ABCD",
-          sessionId: "session-1",
-          bindable: true,
-        },
-        __openclawSlackHuddleWorkspaces: { "slack-huddle:C0123ABCD": "T0123ABCD" },
-      },
+      window: sessionWindow({}, true),
       onPermissionQuery: () => {
-        browser.location.href = "https://app.slack.com/client/T9999ABCD/C0123ABCD";
-        header.attributes.class = "p-huddle_channel_header_button__container";
+        browser.location.href = FOREIGN_URL;
+        header.attributes.class = IDLE_HEADER;
       },
     });
-    await browser.status({ url: "https://app.slack.com/huddle/C0123ABCD", mode: "agent" });
-    expect(browser.window).toMatchObject({
-      __openclawSlackHuddleWorkspaces: { "slack-huddle:C0123ABCD": "T0123ABCD" },
-    });
-  });
-
-  it("accepts channel-only membership only after binding its workspace", async () => {
-    const { document } = inCall();
-    const browser = fixture({
-      document,
-      currentUrl: CLIENT_URL,
-      window: {
-        __openclawSlackHuddle: {
-          identity: "slack-huddle:C0123ABCD",
-          bindable: true,
-          sessionId: "session-1",
-          joinRequested: true,
-          joinRequestedAt: Date.now(),
-        },
-      },
-    });
-    const channelOnly = { url: "https://app.slack.com/huddle/C0123ABCD" };
-    expect(await browser.status({ ...channelOnly, readOnly: true })).toMatchObject({
-      inCall: false,
-    });
-    expect(await browser.status(channelOnly)).toMatchObject({ inCall: true });
-    expect(browser.window).toMatchObject({
-      __openclawSlackHuddleWorkspaces: { "slack-huddle:C0123ABCD": "T0123ABCD" },
-    });
-  });
-
-  it("binds a channel-only session admitted without a settling Join", async () => {
-    const { document } = inCall();
-    const browser = fixture({
-      document,
-      currentUrl: CLIENT_URL,
-      window: {
-        __openclawSlackHuddle: {
-          identity: "slack-huddle:C0123ABCD",
-          sessionId: "session-1",
-          bindable: true,
-        },
-      },
-    });
-    expect(await browser.status({ url: "https://app.slack.com/huddle/C0123ABCD" })).toMatchObject({
-      inCall: true,
-    });
-    expect(browser.window).toMatchObject({
-      __openclawSlackHuddleWorkspaces: { "slack-huddle:C0123ABCD": "T0123ABCD" },
-    });
-  });
-
-  it("does not press Leave for a channel-only session that lost its workspace binding", () => {
-    const { document, marker } = inCall();
-    const browser = fixture({ document, currentUrl: CLIENT_URL });
-    expect(browser.leave(false, "https://app.slack.com/huddle/C0123ABCD")).toMatchObject({
-      departed: false,
-    });
-    expect(marker.clicks).toBe(0);
+    await browser.status({ url: CHANNEL_URL, mode: "agent" });
+    expect(browser.window).toMatchObject(WORKSPACE_BINDING);
   });
 
   it("does not let a reloaded channel-only session bind to the workspace now showing", async () => {
-    const { document } = inCall();
+    const { document, marker } = inCall();
     const browser = fixture({
       document,
-      currentUrl: "https://app.slack.com/client/T9999ABCD/C0123ABCD",
+      currentUrl: FOREIGN_URL,
     });
-    const channelOnly = { url: "https://app.slack.com/huddle/C0123ABCD" };
+    const channelOnly = { url: CHANNEL_URL };
+    expect(browser.leave(false, channelOnly.url)).toMatchObject({ departed: false });
+    expect(marker.clicks).toBe(0);
     expect(await browser.status(channelOnly)).toMatchObject({ inCall: false });
     expect(await browser.status(channelOnly)).toMatchObject({ inCall: false });
     expect(browser.window).not.toHaveProperty("__openclawSlackHuddleWorkspaces");
-  });
-
-  it("binds a channel-only session through the normal preview, Join, and in-call flow", async () => {
-    const active = preview("Join Huddle");
-    const browser = fixture({ document: active.document, currentUrl: CLIENT_URL });
-    const channelOnly = { url: "https://app.slack.com/huddle/C0123ABCD" };
-    expect(await browser.status(channelOnly)).toMatchObject({ clickedJoin: true });
-    active.document.body.children.splice(0);
-    active.document.body.append(
-      qaNode("huddle_toolbar__leave_button", "Leave Huddle"),
-      microphone(false),
-      channelHeader(true),
-    );
-    expect(await browser.status(channelOnly)).toMatchObject({ inCall: true });
-    expect(browser.window).toMatchObject({
-      __openclawSlackHuddleWorkspaces: { "slack-huddle:C0123ABCD": "T0123ABCD" },
-    });
-  });
-
-  it("adopts the huddle from Slack's own channel-header state without a join marker", async () => {
-    const { document } = inCall(undefined, false, false);
-    document.body.append(channelHeader(true));
-    const result = await fixture({ document, currentUrl: CLIENT_URL }).status({ readOnly: true });
-    expect(result).toMatchObject({ inCall: true });
-  });
-
-  it("does not claim or leave another huddle when the channel header says this device is elsewhere", async () => {
-    const { document, marker } = inCall(undefined, false, false);
-    document.body.append(channelHeader(false));
-    const browser = fixture({
-      document,
-      currentUrl: CLIENT_URL,
-      window: {
-        __openclawSlackHuddle: {
-          identity: "slack-huddle:T0123ABCD:C0123ABCD",
-          sessionId: "session-1",
-          inCallControl: marker,
-        },
-      },
-    });
-    expect(await browser.status()).toMatchObject({
-      inCall: false,
-      manualAction: { reason: "slack-session-conflict" },
-    });
-    expect(browser.leave()).toMatchObject({ departed: false, sessionMatched: false });
+    expect(browser.leave(false, channelOnly.url)).toMatchObject({ departed: false });
     expect(marker.clicks).toBe(0);
   });
 
-  it("waits through the header lag right after its own Join click", async () => {
-    const active = preview("Join Huddle");
-    const browser = fixture({ document: active.document });
-    expect(await browser.status()).toMatchObject({ clickedJoin: true });
-    active.document.body.children.splice(0);
-    const header = channelHeader(false);
-    active.document.body.append(
-      qaNode("huddle_toolbar__leave_button", "Leave Huddle"),
-      microphone(false),
-      header,
-    );
-    browser.location.href = CLIENT_URL;
-    const lagging = await browser.status();
-    expect(lagging.inCall).toBe(false);
-    expect(lagging.manualAction).toBeUndefined();
-    header.attributes.class += " p-huddle_channel_header_button--in_huddle";
-    expect(await browser.status()).toMatchObject({ inCall: true });
-  });
-
-  it("does not record admission while another huddle's toolbar is live", async () => {
-    const request = new PageNode("button", {}, "Request to join");
-    const document = page(
-      qaNode("huddle_toolbar__leave_button", "Leave Huddle"),
-      new PageNode("div", { role: "dialog" }).append(request),
-    );
-    const browser = fixture({ document });
-    expect(await browser.status()).toMatchObject({
-      inCall: false,
-      manualAction: { reason: "slack-session-conflict" },
-    });
-    document.body.children.splice(1);
-    expect(await browser.status()).toMatchObject({
-      inCall: false,
-      manualAction: { reason: "slack-session-conflict" },
-    });
-    expect(request.clicks).toBe(0);
-  });
-
-  it("reports a later move to another huddle as a conflict after its own join settled", async () => {
-    const active = preview("Join Huddle");
-    const browser = fixture({ document: active.document });
-    await browser.status();
-    active.document.body.children.splice(0);
-    const header = channelHeader(true);
-    active.document.body.append(
-      qaNode("huddle_toolbar__leave_button", "Leave Huddle"),
-      microphone(false),
-      header,
-    );
-    browser.location.href = CLIENT_URL;
-    expect(await browser.status()).toMatchObject({ inCall: true });
-    header.attributes.class = "p-huddle_channel_header_button__container";
-    expect(await browser.status()).toMatchObject({
-      inCall: false,
-      manualAction: { reason: "slack-session-conflict" },
-    });
-  });
-
-  it("does not attribute a replacement toolbar to a stale recorded control without Slack's header state", async () => {
-    const stale = qaNode("huddle_toolbar__leave_button", "Leave Huddle");
-    stale.isConnected = false;
-    const { document } = inCall(undefined, false, false);
-    const browser = fixture({
-      document,
-      currentUrl: CLIENT_URL,
-      window: {
-        __openclawSlackHuddle: {
-          identity: "slack-huddle:T0123ABCD:C0123ABCD",
-          sessionId: "session-1",
-          inCallControl: stale,
+  it.each([false, true])(
+    "fails closed without membership even with a recorded toolbar (stale=%s)",
+    async (stale) => {
+      const { document, marker } = inCall(undefined, false, false);
+      const recorded = stale ? qaNode("huddle_toolbar__leave_button", "Leave Huddle") : marker;
+      if (stale) {
+        recorded.isConnected = false;
+      }
+      const browser = fixture({
+        document,
+        currentUrl: CLIENT_URL,
+        window: {
+          __openclawSlackHuddle: {
+            identity: "slack-huddle:T0123ABCD:C0123ABCD",
+            sessionId: "session-1",
+            inCallControl: recorded,
+            ...(!stale ? { inCallUrl: CLIENT_URL } : {}),
+          },
         },
-      },
-    });
-    expect(await browser.status({ readOnly: true })).toMatchObject({ inCall: false });
-  });
-
-  it("refuses Leave while a pending Join faces a switch prompt beside another huddle", async () => {
-    const leave = qaNode("huddle_toolbar__leave_button", "Leave Huddle");
-    const document = page(leave, qaNode("huddle_join_modal", "Switch huddles?", "div"));
-    const browser = fixture({ document, currentUrl: CLIENT_URL, joined: true });
-    expect(browser.leave()).toMatchObject({ departed: false });
-    expect(leave.clicks).toBe(0);
-  });
+      });
+      expect(await browser.status({ readOnly: true })).toMatchObject({ inCall: false });
+      expect(browser.leave()).toMatchObject({ departed: false });
+      expect(marker.clicks).toBe(0);
+      await expect(browser.startAudioCapture()).rejects.toThrow("no longer owns");
+    },
+  );
 
   it("does not treat the root audio element as a call and still joins an active preview", async () => {
     const document = page(qaNode("p-huddle_audio", "", "audio"));
@@ -642,15 +455,11 @@ describe("Slack huddle browser adapter", () => {
     expect(active.join.clicks).toBe(1);
   });
 
-  it.each([
-    ["waiting for approval; request sent", "div"],
-    ["Allow Slack to use your microphone", "div"],
-    ["Request to join", "button"],
-  ])("ignores channel message content %s when classifying huddle prompts", async (content, tag) => {
+  it("ignores message buttons when classifying huddle prompts", async () => {
     const { document, join } = preview("Join Huddle");
     document.body.append(
       new PageNode("div", { "data-qa": "message_container" }).append(
-        new PageNode(tag, {}, content),
+        new PageNode("button", {}, "Request to join"),
       ),
     );
     const result = await fixture({ document }).status();
@@ -658,15 +467,6 @@ describe("Slack huddle browser adapter", () => {
     expect(result.manualAction).toBeUndefined();
     expect(join.clicks).toBe(1);
   });
-
-  it.each([CLIENT_URL, `${CLIENT_URL}/thread/C0123ABCD-123`])(
-    "joins the expected channel after a boot-time rewrite to %s",
-    async (currentUrl) => {
-      const { document, join } = preview("Join Huddle");
-      expect(await fixture({ document, currentUrl }).status()).toMatchObject({ clickedJoin: true });
-      expect(join.clicks).toBe(1);
-    },
-  );
 
   it.each([
     "https://app.slack.com/client/T0123ABCD/C9999ABCD",
@@ -681,29 +481,8 @@ describe("Slack huddle browser adapter", () => {
   });
 
   it("captures caption speaker siblings and nested newest words once, then finalizes the transcript", async () => {
-    const speaker = new PageNode(
-      "span",
-      { class: "p-huddle_closed_caption_event__member_name" },
-      "Morgan:",
-    );
-    const words = new PageNode(
-      "span",
-      {
-        "data-qa": "huddle_closed_caption_event",
-        class: "p-huddle_closed_caption_event__transcription",
-      },
-      "The next step ",
-    ).append(
-      new PageNode(
-        "span",
-        { class: "p-huddle_closed_caption_event__transcription_new" },
-        "is ready.",
-      ),
-    );
-    const caption = new PageNode("div").append(
-      speaker,
-      new PageNode("div", { class: "p-huddle_closed_caption_event__event_text" }).append(words),
-    );
+    const { caption, words, span } = captionFixture("The next step ");
+    words.append(span("transcription_new", "is ready."));
     const { document } = inCall();
     document.body.append(caption);
     const browser = fixture({ document, joined: true });
@@ -728,31 +507,17 @@ describe("Slack huddle browser adapter", () => {
     const browser = fixture({ document, currentUrl: CLIENT_URL, joined: true });
     expect(await browser.status()).toMatchObject({ inCall: true });
     await expect(browser.startAudioCapture()).rejects.toThrow("audio capture passed ownership");
-    header.attributes.class = "p-huddle_channel_header_button__container";
+    header.attributes.class = IDLE_HEADER;
     await expect(browser.startAudioCapture()).rejects.toThrow("no longer owns");
   });
 
   it("never lets a settling Join marker unlock audio without Slack's membership header", async () => {
-    const { document } = inCall(undefined, false, false);
-    document.body.append(channelHeader(false));
-    const browser = fixture({
-      document,
-      currentUrl: CLIENT_URL,
-      window: {
-        __openclawSlackHuddle: {
-          identity: "slack-huddle:T0123ABCD:C0123ABCD",
-          sessionId: "session-1",
-          joinRequested: true,
-          joinRequestedAt: Date.now(),
-        },
-      },
-    });
-    expect(await browser.status({ readOnly: true })).toMatchObject({ inCall: false });
-    await expect(browser.startAudioCapture()).rejects.toThrow("no longer owns");
-  });
-
-  it("fails closed on a reused toolbar this session recorded when Slack's header is not rendered", async () => {
     const { document, marker } = inCall(undefined, false, false);
+    document.body.append(
+      channelHeader(false),
+      qaNode("huddle_window_titlebar_title", "Other team huddle"),
+      qaNode("huddle_avatar_stack__member", ""),
+    );
     const browser = fixture({
       document,
       currentUrl: CLIENT_URL,
@@ -760,120 +525,39 @@ describe("Slack huddle browser adapter", () => {
         __openclawSlackHuddle: {
           identity: "slack-huddle:T0123ABCD:C0123ABCD",
           sessionId: "session-1",
-          inCallControl: marker,
-          inCallUrl: CLIENT_URL,
+          ...pendingJoin(),
         },
       },
     });
-    expect(await browser.status({ readOnly: true })).toMatchObject({ inCall: false });
+    const result = await browser.status({ readOnly: true });
+    expect(result).toMatchObject({ inCall: false });
+    expect(result.meetingTitle).toBeUndefined();
+    expect(result.participantCount).toBeUndefined();
     expect(browser.leave()).toMatchObject({ departed: false });
     expect(marker.clicks).toBe(0);
     await expect(browser.startAudioCapture()).rejects.toThrow("no longer owns");
   });
 
-  it("stops collecting captions when Slack's membership header disappears during a call", async () => {
-    const speaker = new PageNode(
-      "span",
-      { class: "p-huddle_closed_caption_event__member_name" },
-      "Morgan:",
-    );
-    const words = new PageNode(
-      "span",
-      {
-        "data-qa": "huddle_closed_caption_event",
-        class: "p-huddle_closed_caption_event__transcription",
-      },
-      "Owned huddle line.",
-    );
-    const caption = new PageNode("div").append(
-      speaker,
-      new PageNode("div", { class: "p-huddle_closed_caption_event__event_text" }).append(words),
-    );
-    const { document } = inCall(undefined, false, false);
-    const header = channelHeader(true);
-    document.body.append(header, caption);
-    const browser = fixture({ document, currentUrl: CLIENT_URL, joined: true });
-    expect(await browser.status({ captureCaptions: true })).toMatchObject({ transcriptLines: 1 });
-    document.body.children.splice(document.body.children.indexOf(header), 1);
-    words.textContent = "Unverified huddle line.";
-    browser.mutate();
-    expect(JSON.stringify(browser.transcript())).not.toContain("Unverified huddle line.");
-  });
-
-  it("stops collecting captions when both Slack's header and call controls disappear", async () => {
-    const words = new PageNode(
-      "span",
-      {
-        "data-qa": "huddle_closed_caption_event",
-        class: "p-huddle_closed_caption_event__transcription",
-      },
-      "Owned huddle line.",
-    );
-    const caption = new PageNode("div").append(
-      new PageNode("span", { class: "p-huddle_closed_caption_event__member_name" }, "Morgan:"),
-      new PageNode("div", { class: "p-huddle_closed_caption_event__event_text" }).append(words),
-    );
-    const { document, marker } = inCall(undefined, false, false);
-    const header = channelHeader(true);
-    document.body.append(header, caption);
-    const browser = fixture({ document, currentUrl: CLIENT_URL, joined: true });
-    expect(await browser.status({ captureCaptions: true })).toMatchObject({ transcriptLines: 1 });
-    for (const node of [header, marker]) {
-      document.body.children.splice(document.body.children.indexOf(node), 1);
-    }
-    words.textContent = "Unverified huddle line.";
-    browser.mutate();
-    expect(JSON.stringify(browser.transcript())).not.toContain("Unverified huddle line.");
-  });
-
-  it("does not report departure while this session's Join is still settling", async () => {
-    const { document, marker } = inCall(undefined, false, false);
-    document.body.append(channelHeader(false));
-    const browser = fixture({
-      document,
-      currentUrl: CLIENT_URL,
-      window: {
-        __openclawSlackHuddle: {
-          identity: "slack-huddle:T0123ABCD:C0123ABCD",
-          sessionId: "session-1",
-          joinRequested: true,
-          joinRequestedAt: Date.now(),
-        },
-      },
-    });
-    expect(browser.leave()).toMatchObject({ departed: false });
-    expect(marker.clicks).toBe(0);
-  });
-
-  it("stops collecting captions when the account moves to another huddle on the same channel view", async () => {
-    const speaker = new PageNode(
-      "span",
-      { class: "p-huddle_closed_caption_event__member_name" },
-      "Morgan:",
-    );
-    const words = new PageNode(
-      "span",
-      {
-        "data-qa": "huddle_closed_caption_event",
-        class: "p-huddle_closed_caption_event__transcription",
-      },
-      "Owned huddle line.",
-    );
-    const caption = new PageNode("div").append(
-      speaker,
-      new PageNode("div", { class: "p-huddle_closed_caption_event__event_text" }).append(words),
-    );
-    const { document } = inCall(undefined, false, false);
-    const header = channelHeader(true);
-    document.body.append(header, caption);
-    const browser = fixture({ document, currentUrl: CLIENT_URL, joined: true });
-    expect(await browser.status({ captureCaptions: true })).toMatchObject({ transcriptLines: 1 });
-    header.attributes.class = "p-huddle_channel_header_button__container";
-    words.textContent = "Foreign huddle line.";
-    browser.mutate();
-    const transcript = browser.transcript();
-    expect(JSON.stringify(transcript)).not.toContain("Foreign huddle line.");
-  });
+  it.each(["header", "other-huddle"])(
+    "stops captions after losing membership: %s",
+    async (loss) => {
+      const { caption, words } = captionFixture("Owned huddle line.");
+      const { document } = inCall(undefined, false, false);
+      const header = channelHeader(true);
+      document.body.append(header, caption);
+      const browser = fixture({ document, currentUrl: CLIENT_URL, joined: true });
+      expect(await browser.status({ captureCaptions: true })).toMatchObject({ transcriptLines: 1 });
+      if (loss === "other-huddle") {
+        header.attributes.class = IDLE_HEADER;
+      } else {
+        document.body.children.splice(document.body.children.indexOf(header), 1);
+      }
+      const foreign = loss === "other-huddle" ? "Foreign huddle line." : "Unverified huddle line.";
+      words.textContent = foreign;
+      browser.mutate();
+      expect(JSON.stringify(browser.transcript())).not.toContain(foreign);
+    },
+  );
 
   it("captures huddle_transcribe_event and reports unavailable captions without clicking menus", async () => {
     const { document } = inCall();

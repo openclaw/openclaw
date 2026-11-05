@@ -13,23 +13,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { DEFAULT_ACCOUNT_ID, isAcpSessionKey } from "../../routing/session-key.js";
 
-function resolveResetTargetAccountId(params: {
-  cfg: OpenClawConfig;
-  channel: string;
-  accountId?: string | null;
-}): string {
-  const explicit = normalizeOptionalString(params.accountId) ?? "";
-  if (explicit) {
-    return explicit;
-  }
-
-  const channelCfg = (
-    params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>
-  )[params.channel];
-  const configuredDefault = channelCfg?.defaultAccount;
-  return normalizeOptionalString(configuredDefault) ?? DEFAULT_ACCOUNT_ID;
-}
-
 function resolveRawConfiguredAcpSessionKey(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -88,11 +71,11 @@ export async function resolveEffectiveResetTargetSessionKey(params: {
   skipConfiguredFallbackWhenActiveSessionNonAcp?: boolean;
   fallbackToActiveAcpWhenUnbound?: boolean;
 }): Promise<string | undefined> {
+  const allowedTarget = (sessionKey: string) =>
+    params.allowNonAcpBindingSessionKey || isAcpSessionKey(sessionKey) ? sessionKey : undefined;
   const commandTargetSessionKey = normalizeOptionalString(params.commandTargetSessionKey);
   if (commandTargetSessionKey) {
-    return params.allowNonAcpBindingSessionKey || isAcpSessionKey(commandTargetSessionKey)
-      ? commandTargetSessionKey
-      : undefined;
+    return allowedTarget(commandTargetSessionKey);
   }
   const activeSessionKey = normalizeOptionalString(params.activeSessionKey);
   const activeAcpSessionKey =
@@ -104,26 +87,17 @@ export async function resolveEffectiveResetTargetSessionKey(params: {
   if (!channel || !conversationId) {
     return activeAcpSessionKey;
   }
-  const accountId = resolveResetTargetAccountId({
-    cfg: params.cfg,
-    channel,
-    accountId: params.accountId,
-  });
+  const accountId =
+    normalizeOptionalString(params.accountId) ??
+    normalizeOptionalString(params.cfg.channels?.[channel]?.defaultAccount) ??
+    DEFAULT_ACCOUNT_ID;
   const parentConversationId = normalizeOptionalString(params.parentConversationId);
-  const allowNonAcpBindingSessionKey = Boolean(params.allowNonAcpBindingSessionKey);
-
-  const serviceBinding = await getSessionBindingService().resolveByConversationAsync({
-    channel,
-    accountId,
-    conversationId,
-    parentConversationId,
-  });
+  const conversation = { channel, accountId, conversationId, parentConversationId };
+  const serviceBinding = await getSessionBindingService().resolveByConversationAsync(conversation);
   const serviceSessionKey =
     serviceBinding?.targetKind === "session" ? serviceBinding.targetSessionKey.trim() : "";
   if (serviceSessionKey) {
-    return allowNonAcpBindingSessionKey || isAcpSessionKey(serviceSessionKey)
-      ? serviceSessionKey
-      : undefined;
+    return allowedTarget(serviceSessionKey);
   }
 
   if (activeIsNonAcp && params.skipConfiguredFallbackWhenActiveSessionNonAcp) {
@@ -132,19 +106,14 @@ export async function resolveEffectiveResetTargetSessionKey(params: {
 
   const configuredBinding = resolveConfiguredBindingRecord({
     cfg: params.cfg,
-    channel,
-    accountId,
-    conversationId,
-    parentConversationId,
+    ...conversation,
   });
   const configuredSessionKey =
     configuredBinding?.record.targetKind === "session"
       ? configuredBinding.record.targetSessionKey.trim()
       : "";
   if (configuredSessionKey) {
-    return allowNonAcpBindingSessionKey || isAcpSessionKey(configuredSessionKey)
-      ? configuredSessionKey
-      : undefined;
+    return allowedTarget(configuredSessionKey);
   }
 
   const rawConfiguredSessionKey = resolveRawConfiguredAcpSessionKey({
@@ -158,8 +127,5 @@ export async function resolveEffectiveResetTargetSessionKey(params: {
     return rawConfiguredSessionKey;
   }
 
-  if (params.fallbackToActiveAcpWhenUnbound === false) {
-    return undefined;
-  }
-  return activeAcpSessionKey;
+  return params.fallbackToActiveAcpWhenUnbound === false ? undefined : activeAcpSessionKey;
 }

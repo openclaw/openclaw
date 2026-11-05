@@ -1,0 +1,2 @@
+# Extend renamed-fork coverage to reject duplicate same-owner GitHub requests.
+4

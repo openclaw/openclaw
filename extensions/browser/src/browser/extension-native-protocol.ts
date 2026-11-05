@@ -1,5 +1,5 @@
 import os from "node:os";
-import { parseStrictJsonObject } from "../../chrome-extension/modules/strict-json.js";
+import { hasExactKeys, parseStrictJsonObject } from "../../chrome-extension/modules/strict-json.js";
 
 const BROWSER_NATIVE_REQUEST_MAX_BYTES = 4 * 1024;
 const BROWSER_NATIVE_RESPONSE_MAX_BYTES = 1024 * 1024;
@@ -23,15 +23,15 @@ export type BrowserNativeBootstrapResponse =
   | { v: 1; ok: true; nonce: string; relay: BrowserNativeRelayEnsureStatus }
   | { v: 1; ok: false; code: BrowserNativeFailureCode };
 
-function readNativeUint32(buffer: Buffer, offset = 0): number {
-  return os.endianness() === "LE" ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
+function readNativeUint32(buffer: Buffer): number {
+  return os.endianness() === "LE" ? buffer.readUInt32LE(0) : buffer.readUInt32BE(0);
 }
 
-function writeNativeUint32(buffer: Buffer, value: number, offset = 0): void {
+function writeNativeUint32(buffer: Buffer, value: number): void {
   if (os.endianness() === "LE") {
-    buffer.writeUInt32LE(value, offset);
+    buffer.writeUInt32LE(value, 0);
   } else {
-    buffer.writeUInt32BE(value, offset);
+    buffer.writeUInt32BE(value, 0);
   }
 }
 
@@ -49,10 +49,9 @@ function parseBrowserNativeRequest(raw: string): BrowserNativeBootstrapRequest |
   if (record?.v !== 1 || !isCanonicalNonce(record.nonce)) {
     return null;
   }
-  const keys = Object.keys(record);
   const expected =
     record.op === "ensure_relay" ? ["v", "op", "nonce", "relayPort"] : ["v", "op", "nonce"];
-  if (keys.length !== expected.length || !expected.every((key) => keys.includes(key))) {
+  if (!hasExactKeys(record, expected)) {
     return null;
   }
   if (record.op === "bootstrap") {

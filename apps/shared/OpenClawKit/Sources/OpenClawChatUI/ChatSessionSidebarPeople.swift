@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import Observation
+import enum OpenClawKit.GatewayPayloadDecoding
 import OpenClawProtocol
 import SwiftUI
 
@@ -181,8 +182,8 @@ public final class OpenClawChatSidebarPeople {
         self.refreshActivity()
         let identified = entries.compactMap { entry -> (PresenceEntry, User)? in
             guard entry.reason != "disconnect", let value = entry.user,
-                  let data = try? JSONEncoder().encode(value),
-                  let user = try? JSONDecoder().decode(User.self, from: data), !user.id.isEmpty else { return nil }
+                  let user = try? GatewayPayloadDecoding.decode(AnyCodable(value), as: User.self),
+                  !user.id.isEmpty else { return nil }
             return (entry, user)
         }
         let selfKey = self.connectionID.flatMap { id in identified.first { $0.0.connectionid == id }?.1.key }
@@ -212,7 +213,7 @@ public final class OpenClawChatSidebarPeople {
     }
 
     private static func firstText(_ values: [String?]) -> String? {
-        values.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.min()
+        values.compactMap(ChatPayloadDecoding.trimmedNonEmptyString).min()
     }
 
     public func refreshCounts(load: () async throws -> [SessionOwnerSessionCount]?) async {
@@ -292,7 +293,7 @@ public final class OpenClawChatSidebarPeople {
             let canonical: String = if tail == "main" || tail == self.mainKey {
                 self.globalScope ? "global" : "agent:\(scope):\(self.mainKey)"
             } else {
-                Self.comparisonKey(parsedAgent != nil || raw.lowercased() == "global"
+                OpenClawChatSessionKey.comparisonKey(parsedAgent != nil || raw.lowercased() == "global"
                     ? raw : "agent:\(scope):\(raw)")
             }
             return "\(scope)\0\(canonical)"
@@ -322,40 +323,6 @@ public final class OpenClawChatSidebarPeople {
         return (
             visible, visible.map { identity($0.key, $0.agentId) },
             selected, selected.map { identity($0.key, $0.agentId) })
-    }
-
-    // ui/src/lib/sessions/session-key.ts:90: catalog, Matrix and Signal IDs have opaque, case-sensitive tails.
-    private static func comparisonKey(_ raw: String) -> String {
-        var parts = raw.components(separatedBy: ":")
-        var start = 0
-        while parts.count - start >= 3, parts[start].lowercased() == "agent" {
-            parts[start] = "agent"
-            parts[start + 1] = parts[start + 1].lowercased()
-            start += 2
-        }
-        while start < parts.count, parts[start].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            start += 1
-        }
-        guard start < parts.count else { return raw.lowercased() }
-        let channel = parts[start].lowercased()
-        if channel == "catalog" { return parts.joined(separator: ":") }
-        guard start + 1 < parts.count else { return raw.lowercased() }
-        let peer = parts[start + 1].lowercased()
-        let matrix = channel == "matrix" && ["channel", "group"].contains(peer)
-        guard matrix || (channel == "signal" && peer == "group") else { return raw.lowercased() }
-        parts[start] = channel
-        parts[start + 1] = peer
-        if matrix {
-            if let index = parts.indices.reversed().first(where: {
-                $0 >= start + 2 && $0 < parts.count - 1 && parts[$0].lowercased() == "thread"
-            }) { parts[index] = "thread" }
-        } else if start + 2 < parts.count {
-            parts[start + 2] = parts[start + 2].trimmingCharacters(in: .whitespacesAndNewlines)
-            for index in (start + 3)..<parts.count {
-                parts[index] = parts[index].lowercased()
-            }
-        }
-        return parts.joined(separator: ":")
     }
 }
 

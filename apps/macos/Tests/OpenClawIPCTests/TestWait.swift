@@ -43,6 +43,42 @@ enum TestWait {
         }
     }
 
+    /// Joins an owned task under the suite limit, forwarding cancellation and recording
+    /// the stage. The task must finish when cancelled.
+    static func value<Success: Sendable>(
+        of task: Task<Success, Never>,
+        _ stage: String,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws -> Success
+    {
+        try await self.taskResult(of: task, stage, sourceLocation: sourceLocation).get()
+    }
+
+    /// Preserves the task's own error unless the waiting test was cancelled.
+    static func value<Success: Sendable>(
+        of task: Task<Success, any Error>,
+        _ stage: String,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws -> Success
+    {
+        try await self.taskResult(of: task, stage, sourceLocation: sourceLocation).get()
+    }
+
+    private static func taskResult<Success: Sendable, Failure: Error>(
+        of task: Task<Success, Failure>,
+        _ stage: String,
+        sourceLocation: SourceLocation) async throws -> Result<Success, Failure>
+    {
+        let result = await withTaskCancellationHandler {
+            await task.result
+        } onCancel: {
+            task.cancel()
+        }
+        guard !Task.isCancelled else {
+            Issue.record("Still waiting for \(stage)", sourceLocation: sourceLocation)
+            throw CancellationError()
+        }
+        return result
+    }
+
     fileprivate static func wait(
         for change: AsyncTestGate,
         _ stage: String,
@@ -53,6 +89,13 @@ enum TestWait {
             Issue.record("Still waiting for \(stage)", sourceLocation: sourceLocation)
             throw CancellationError()
         }
+    }
+}
+
+extension AsyncTestGate {
+    /// Waits for `open()` under the suite limit (see `TestWait`), recording `stage` if cancelled first.
+    func wait(_ stage: String, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+        try await TestWait.wait(for: self, stage, sourceLocation)
     }
 }
 

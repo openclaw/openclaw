@@ -13,7 +13,8 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-internal val LocalBase64ImageDecodeDispatcher = staticCompositionLocalOf<CoroutineDispatcher> { Dispatchers.Default }
+/** Dispatcher for chat image decoding; tests provide their own to drain decodes explicitly. */
+internal val LocalChatImageDecodeDispatcher = staticCompositionLocalOf<CoroutineDispatcher> { Dispatchers.Default }
 
 /** Compose state for async base64 image decoding. */
 internal data class Base64ImageState(
@@ -27,7 +28,7 @@ internal fun rememberBase64ImageState(
   base64: String,
   source: Base64ImageSource = Base64ImageSource.Inline,
 ): Base64ImageState {
-  val decodeDispatcher = LocalBase64ImageDecodeDispatcher.current
+  val decodeDispatcher = LocalChatImageDecodeDispatcher.current
   var image by remember(base64, source) { mutableStateOf<ImageBitmap?>(null) }
   var failed by remember(base64, source) { mutableStateOf(false) }
 

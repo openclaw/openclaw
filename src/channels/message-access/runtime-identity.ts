@@ -122,7 +122,6 @@ function adapterEntry(params: {
   entry: string;
   entryIndex: number;
   value: string;
-  fallbackSuffix?: string;
   wildcard?: boolean;
 }): NormalizedIngressEntry {
   const dangerous = fieldDangerous(params.field, params.entry);
@@ -133,7 +132,7 @@ function adapterEntry(params: {
         entryIndex: params.entryIndex,
         fieldKey: params.field.key,
         fieldIndex: params.fieldIndex,
-      }) ?? `entry-${params.entryIndex + 1}:${params.fallbackSuffix ?? params.field.key}`,
+      }) ?? `entry-${params.entryIndex + 1}:${params.wildcard ? "wildcard" : params.field.key}`,
     kind: params.field.kind,
     value: params.value,
     identityFieldKey: params.field.key,
@@ -161,7 +160,6 @@ export function createIdentityAdapter(
               entry,
               entryIndex,
               value: "*",
-              fallbackSuffix: "wildcard",
               wildcard: true,
             }),
           ];

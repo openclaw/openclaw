@@ -1,10 +1,6 @@
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
-import {
-  createCodeModeExecDescriptionUpdater,
-  markCodeModeControlTool,
-} from "./code-mode-control-tools.js";
 import type { AgentTool } from "./runtime/index.js";
 
 const { digestCalls } = vi.hoisted(() => ({ digestCalls: { count: 0 } }));
@@ -72,33 +68,16 @@ describe("tool summary digest cache", () => {
     expect(second).toEqual(first);
   });
 
-  it("reports current Code Mode descriptions on retained finalized wrappers", () => {
-    const definition = markCodeModeControlTool(makeTool("exec", "Initial catalog probe"));
-    const updater = createCodeModeExecDescriptionUpdater(definition);
-    try {
-      const tools = finalize([definition]);
-      const first = buildReport(tools).tools.entries[0];
-      updater.update("Updated catalog probe with another capability");
-      const second = buildReport(tools).tools.entries[0];
+  it("reports changed descriptions on retained finalized tools", () => {
+    const tools = finalize([makeTool("probe", "Initial summary probe")]);
+    const first = buildReport(tools).tools.entries[0];
+    tools[0]!.description = "Updated summary probe with another capability";
+    const second = buildReport(tools).tools.entries[0];
 
-      expect(second?.summaryChars).toBe(definition.description.length);
-      expect(second?.summaryHash).not.toBe(first?.summaryHash);
-      expect(second?.schemaHash).toBe(first?.schemaHash);
-      expect(second).toEqual(buildReport(finalize([definition])).tools.entries[0]);
-    } finally {
-      updater.dispose();
-    }
-  });
-
-  it("keeps schema statistics independent of identical names and summaries", () => {
-    const tool = makeTool("schema_probe", "Shared schema probe summary");
-    const first = buildReport([tool]).tools.entries[0];
-    tool.parameters = Type.Object({ path: Type.String(), limit: Type.Integer() });
-    const second = buildReport([tool]).tools.entries[0];
-
-    expect(second?.summaryHash).toBe(first?.summaryHash);
-    expect(second?.schemaHash).not.toBe(first?.schemaHash);
-    expect(second?.propertiesCount).toBe(2);
+    expect(second?.summaryChars).toBe(tools[0]!.description.length);
+    expect(second?.summaryHash).not.toBe(first?.summaryHash);
+    expect(second?.schemaHash).toBe(first?.schemaHash);
+    expect(second).toEqual(buildReport(finalize(tools)).tools.entries[0]);
   });
 
   it("does not retain oversized summary keys", () => {

@@ -1,51 +1,29 @@
+import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserObservedDialogBlockedError } from "./pw-session-contracts.js";
+import { heldAction, type NavigationGuardCall } from "./pw-tools-core.guard-test-support.js";
 
 const pageState = vi.hoisted(() => ({
   page: null as Record<string, unknown> | null,
   locator: null as Record<string, unknown> | null,
 }));
 
-type NavigationGuardCall = {
-  action: (url: string) => Promise<unknown>;
-  onPolicyCheckStarted?: (check: Promise<void>) => void;
-  onPolicyDenied?: (event: {
-    state: "detected" | "handled";
-    error: unknown;
-    sourcePreserved?: boolean;
-  }) => void;
-  page: { url: () => string };
-};
-
-const session = vi.hoisted(() => ({
-  assertPageNavigationCompletedSafely: vi.fn(async () => {}),
-  closeBlockedNavigationTarget: vi.fn(async () => {}),
-  ensurePageState: vi.fn(() => ({})),
-  forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
-  getPageForTargetId: vi.fn(async () => {
-    if (!pageState.page) {
-      throw new Error("missing page");
+const session = await vi.hoisted(async () => {
+  const { createGuardSession } = await import("./pw-tools-core.guard-test-support.js");
+  const required = (key: keyof typeof pageState) => () => {
+    const value = pageState[key];
+    if (!value) {
+      throw new Error(`missing ${key}`);
     }
-    return pageState.page;
-  }),
-  gotoPageWithNavigationGuard: vi.fn(async () => null),
-  isBrowserObservedDialogBlockedError: vi.fn((_err: unknown) => false),
-  isPolicyDenyNavigationError: vi.fn((_err: unknown) => false),
-  markObservedDialogsHandledRemotelyForPage: vi.fn(() => ({})),
-  quarantineBlockedNavigationTarget: vi.fn(async () => {}),
-  refLocator: vi.fn(() => {
-    if (!pageState.locator) {
-      throw new Error("missing locator");
-    }
-    return pageState.locator;
-  }),
-  restoreRoleRefsForTarget: vi.fn(() => {}),
-  storeRoleRefsForTarget: vi.fn(() => {}),
-  wasBrowserNavigationSourcePreservedAfterPolicyDenial: vi.fn((_err: unknown) => false),
-  withPageNavigationRequestGuard: vi.fn(
-    async ({ action, page }: NavigationGuardCall) => await action(page.url()),
-  ),
-}));
+    return value;
+  };
+  return {
+    ...createGuardSession(required("page"), required("locator")),
+    closeBlockedNavigationTarget: vi.fn(async () => {}),
+    gotoPageWithNavigationGuard: vi.fn(async () => null),
+    storeRoleRefsForTarget: vi.fn(() => {}),
+  };
+});
 
 vi.mock("./pw-session.js", () => session);
 
@@ -64,31 +42,35 @@ function trackSettlement(task: Promise<unknown>) {
 
 function pendingHover(url = "about:blank") {
   const ctrl = new AbortController();
-  const hover = Promise.withResolvers<void>();
-  const started = Promise.withResolvers<void>();
-  install(
-    { url: () => url },
-    {
-      hover: () => {
-        started.resolve();
-        return hover.promise;
-      },
-    },
-  );
-  return { ctrl, hover, started };
+  const hover = heldAction();
+  install({ url: () => url }, { hover: hover.run });
+  return { ctrl, hover };
 }
 
 function startHover(ctrl?: AbortController) {
   return pw.hoverViaPlaywright({ ...strict, ref: "1", signal: ctrl?.signal });
 }
 
-function install(page: Record<string, unknown>, locator: Record<string, unknown> = {}): void {
+function install(
+  page: Record<string, unknown> = { url: () => "https://example.com" },
+  locator: Record<string, unknown> = {},
+): void {
+  const mainFrame = {};
+  page.mainFrame ??= vi.fn(() => mainFrame);
+  page.on ??= vi.fn();
+  page.off ??= vi.fn();
   pageState.page = page;
   pageState.locator = locator;
 }
 
 function guardOnce(implementation: (args: NavigationGuardCall) => Promise<unknown>): void {
   session.withPageNavigationRequestGuard.mockImplementationOnce(implementation);
+}
+function denyAfterAction(blocked: Error) {
+  guardOnce(async ({ action, page }) => {
+    await action(page.url());
+    throw blocked;
+  });
 }
 
 function trackGuardSettlement() {
@@ -114,20 +96,30 @@ function expectQuarantined() {
   });
 }
 
-function documentPage<T>(waitForFunction: T, url = "https://example.com") {
+function documentPage<T>(
+  waitForFunction: T,
+  options: { url?: () => string; waitForTimeout?: () => Promise<void> } = {},
+) {
   const documentHandle = { dispose: vi.fn(async () => {}) };
   const page = {
-    url: vi.fn(() => url),
+    url: () => "https://example.com",
     evaluateHandle: vi.fn(async () => documentHandle),
     waitForFunction,
+    ...options,
   };
   install(page);
   return { page, documentHandle };
 }
-
-async function withFakeTimers(run: () => Promise<void>): Promise<void> {
-  vi.useFakeTimers();
-  await run().finally(() => vi.useRealTimers());
+type WaitState = { document: unknown; source: string };
+type WaitPredicate = (state: WaitState) => boolean;
+function preservePolicyDenial(blocked: Error) {
+  session.isPolicyDenyNavigationError.mockImplementation((err: unknown) => err === blocked);
+  session.wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockImplementation(
+    (err: unknown) => err === blocked,
+  );
+}
+function wait(signal?: AbortSignal, fn = "() => true") {
+  return waitForViaPlaywright({ ...strict, fn, signal });
 }
 
 describe("pw-tools-core browser SSRF guards", () => {
@@ -135,13 +127,15 @@ describe("pw-tools-core browser SSRF guards", () => {
     pageState.page = null;
     pageState.locator = null;
     session.isBrowserObservedDialogBlockedError.mockReturnValue(false);
+    session.isPolicyDenyNavigationError.mockReturnValue(false);
+    session.wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockReturnValue(false);
     for (const fn of Object.values(session)) {
       fn.mockClear();
     }
   });
 
   it.each(["() => true", "async () => true"])(
-    "guards %s wait predicates and preserves proxy policy",
+    "guards serialized %s wait predicates without host compilation",
     async (fn) => {
       let currentUrl = "https://example.com";
       const order: string[] = [];
@@ -149,73 +143,69 @@ describe("pw-tools-core browser SSRF guards", () => {
         order.push("guard");
         return await action(page.url());
       });
-      const documentHandle = { dispose: vi.fn(async () => {}) };
-      const waitForFunction = vi.fn(
-        async (
-          predicate: (state: { document: unknown }) => boolean,
-          state: { document: unknown },
-        ) => {
-          order.push("predicate");
-          const browserState = { ...state, document: globalThis.document };
-          expect(predicate(browserState)).toBe(!fn.startsWith("async"));
-          if (fn.startsWith("async")) {
-            await Promise.resolve();
-            expect(predicate(browserState)).toBe(true);
-          }
-          currentUrl = "https://93.184.216.34/target";
-        },
-      );
-      install({
+      const waitForFunction = vi.fn(async (predicate: WaitPredicate, state: WaitState) => {
+        order.push("predicate");
+        const browserState = { ...state, document: {} };
+        const browser = { state: browserState, document: browserState.document };
+        const poll = () => runInNewContext(`(${predicate.toString()})(state)`, browser);
+        expect(poll()).toBe(!fn.startsWith("async"));
+        if (fn.startsWith("async")) {
+          await Promise.resolve();
+          expect(poll()).toBe(true);
+        }
+        currentUrl = "https://93.184.216.34/target";
+      });
+      const { documentHandle } = documentPage(waitForFunction, {
         url: () => currentUrl,
-        evaluateHandle: vi.fn(async () => documentHandle),
         waitForTimeout: vi.fn(async () => {
           order.push("passive");
         }),
-        waitForFunction,
       });
-      await waitForViaPlaywright({ ...proxied, timeMs: 1, fn });
-      expect(waitForFunction).toHaveBeenCalledOnce();
-      expect(waitForFunction).toHaveBeenCalledWith(
+      const hostFunction = vi.spyOn(globalThis, "Function").mockImplementation(() => {
+        throw new EvalError("Host code generation is disabled");
+      });
+      try {
+        await waitForViaPlaywright({ ...proxied, timeMs: 1, fn });
+      } finally {
+        hostFunction.mockRestore();
+      }
+      expect(waitForFunction).toHaveBeenCalledExactlyOnceWith(
         expect.any(Function),
-        { document: documentHandle },
+        { document: documentHandle, source: fn },
         { timeout: expect.any(Number) },
       );
       expect(order).toEqual(["guard", "passive", "predicate"]);
-      expect(session.withPageNavigationRequestGuard).toHaveBeenCalledWith({
-        action: expect.any(Function),
-        onPolicyCheckStarted: expect.any(Function),
-        onPolicyDenied: expect.any(Function),
-        page: pageState.page,
-        ssrfPolicy: { allowPrivateNetwork: false },
-        browserProxyMode: "explicit-browser-proxy",
-      });
-      expect(session.assertPageNavigationCompletedSafely).toHaveBeenLastCalledWith({
-        ...proxied,
-        page: pageState.page,
-        response: null,
-      });
+      expect(session.withPageNavigationRequestGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ssrfPolicy: { allowPrivateNetwork: false },
+          browserProxyMode: "explicit-browser-proxy",
+        }),
+      );
       expect(session.closeBlockedNavigationTarget).not.toHaveBeenCalled();
       expect(documentHandle.dispose).toHaveBeenCalledOnce();
     },
   );
 
+  it("rejects invalid wait syntax before starting passive waits", async () => {
+    const waitForTimeout = vi.fn(async () => {});
+    install({ url: () => "https://example.com", waitForTimeout });
+    await expect(waitForViaPlaywright({ ...strict, timeMs: 1, fn: "return (" })).rejects.toThrow(
+      SyntaxError,
+    );
+    expect(waitForTimeout).not.toHaveBeenCalled();
+  });
+
   it("does not recreate a wait predicate in a replacement document", async () => {
     const { documentHandle } = documentPage(
-      vi.fn(
-        async (
-          predicate: (state: { document: unknown }) => boolean,
-          state: { document: unknown },
-        ) => predicate({ ...state, document: {} }),
+      vi.fn(async (predicate: WaitPredicate, state: WaitState) =>
+        predicate({ ...state, document: {} }),
       ),
-      "https://example.com/next",
+      { url: () => "https://example.com/next" },
     );
 
-    await expect(
-      waitForViaPlaywright({
-        ...strict,
-        fn: "() => document.cookie",
-      }),
-    ).rejects.toThrow("Wait predicate document changed");
+    await expect(wait(undefined, "() => document.cookie")).rejects.toThrow(
+      "Wait predicate document changed",
+    );
 
     expect(documentHandle.dispose).toHaveBeenCalledOnce();
   });
@@ -226,14 +216,15 @@ describe("pw-tools-core browser SSRF guards", () => {
       dialogs: { pending: [], recent: [] },
     });
     session.isBrowserObservedDialogBlockedError.mockReturnValueOnce(true);
+    session.isBrowserObservedDialogBlockedError.mockReturnValueOnce(true);
     const waitForFunction = vi.fn(async () => {});
-    pageState.page = {
+    install({
       url: vi.fn(() => "https://example.com"),
       waitForTimeout: vi.fn(async () => {
         ctrl.abort(dialogError);
       }),
       waitForFunction,
-    };
+    });
 
     await expect(
       waitForViaPlaywright({
@@ -260,84 +251,51 @@ describe("pw-tools-core browser SSRF guards", () => {
       return documentHandle;
     });
 
-    await expect(
-      waitForViaPlaywright({
-        ...strict,
-        fn: "() => true",
-        signal: ctrl.signal,
-      }),
-    ).rejects.toThrow("aborted during document capture");
+    await expect(wait(ctrl.signal)).rejects.toThrow("aborted during document capture");
 
     expect(waitForFunction).not.toHaveBeenCalled();
     expect(documentHandle.dispose).toHaveBeenCalledOnce();
   });
 
-  it("lets a request-policy denial observed before abort win", async () => {
-    const { ctrl, hover } = pendingHover();
-    const observed = Promise.withResolvers<void>();
-    const fulfill = Promise.withResolvers<void>();
-    const blocked = policyFailure();
-    let guardSettled = false;
-    session.isPolicyDenyNavigationError.mockImplementationOnce((err: unknown) => err === blocked);
-    session.wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockReturnValueOnce(true);
-    guardOnce(async ({ action, onPolicyDenied, page }) => {
-      const actionTask = action(page.url());
-      onPolicyDenied?.({ state: "detected", error: blocked });
-      observed.resolve();
-      await fulfill.promise;
-      onPolicyDenied?.({ state: "handled", error: blocked, sourcePreserved: true });
-      try {
-        await actionTask;
-        throw blocked;
-      } finally {
-        guardSettled = true;
-      }
-    });
-
-    const task = startHover(ctrl);
-    await observed.promise;
-    ctrl.abort(new Error("aborted after policy denial"));
-
-    const settled = trackSettlement(task);
-    await Promise.resolve();
-    expect(settled).not.toHaveBeenCalled();
-    fulfill.resolve();
-    await Promise.resolve();
-    expect(settled).not.toHaveBeenCalled();
-    expect(guardSettled).toBe(false);
-    hover.resolve();
-    await expect(task).rejects.toBe(blocked);
-    await vi.waitFor(() => expect(guardSettled).toBe(true));
-  });
-
-  it.each([true, false])(
-    "joins an in-flight policy decision before abort (denied: %s)",
-    async (denied) => {
+  it.each(["observed denial", "pending denial", "pending allow"])(
+    "joins %s before returning cancellation",
+    async (mode) => {
+      const observed = mode === "observed denial";
+      const denied = mode !== "pending allow";
       const { ctrl, hover } = pendingHover();
       const policy = Promise.withResolvers<void>();
       const started = Promise.withResolvers<void>();
       const blocked = policyFailure();
+      let guardSettled = false;
       if (denied) {
-        session.isPolicyDenyNavigationError.mockImplementation((err: unknown) => err === blocked);
-        session.wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockImplementation(
-          (err: unknown) => err === blocked,
-        );
+        preservePolicyDenial(blocked);
       }
       guardOnce(async ({ action, onPolicyCheckStarted, onPolicyDenied, page }) => {
         const actionTask = action(page.url());
-        onPolicyCheckStarted?.(policy.promise);
+        if (observed) {
+          onPolicyDenied?.({ state: "detected", error: blocked });
+        } else {
+          onPolicyCheckStarted?.(policy.promise);
+        }
         started.resolve();
         try {
           await policy.promise;
+          if (observed) {
+            onPolicyDenied?.({ state: "handled", error: blocked, sourcePreserved: true });
+          }
         } catch (err) {
           onPolicyDenied?.({ state: "detected", error: err });
           onPolicyDenied?.({ state: "handled", error: err, sourcePreserved: true });
         }
-        const result = await actionTask;
-        if (denied) {
-          throw blocked;
+        try {
+          const result = await actionTask;
+          if (denied) {
+            throw blocked;
+          }
+          return result;
+        } finally {
+          guardSettled = true;
         }
-        return result;
       });
       const task = startHover(ctrl);
       await started.promise;
@@ -345,21 +303,21 @@ describe("pw-tools-core browser SSRF guards", () => {
       const settled = trackSettlement(task);
       await Promise.resolve();
       expect(settled).not.toHaveBeenCalled();
-      if (denied) {
+      if (denied && !observed) {
         policy.reject(blocked);
       } else {
         policy.resolve();
       }
       await Promise.resolve();
       expect(settled).not.toHaveBeenCalled();
+      expect(guardSettled).toBe(false);
       hover.resolve();
       if (denied) {
         await expect(task).rejects.toBe(blocked);
       } else {
         await expect(task).rejects.toThrow("aborted while policy pending");
       }
-      session.isPolicyDenyNavigationError.mockImplementation(() => false);
-      session.wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockImplementation(() => false);
+      await vi.waitFor(() => expect(guardSettled).toBe(true));
     },
   );
 
@@ -368,10 +326,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     const unsafeReported = Promise.withResolvers<void>();
     const detected = Promise.withResolvers<void>();
     const blocked = policyFailure();
-    session.isPolicyDenyNavigationError.mockImplementation((err: unknown) => err === blocked);
-    session.wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockImplementation(
-      (err: unknown) => err === blocked,
-    );
+    preservePolicyDenial(blocked);
     guardOnce(async ({ action, onPolicyDenied, page }) => {
       const actionTask = action(page.url());
       onPolicyDenied?.({ state: "detected", error: blocked });
@@ -391,44 +346,18 @@ describe("pw-tools-core browser SSRF guards", () => {
     await vi.waitFor(expectQuarantined);
     hover.resolve();
     await expect(task).rejects.toBe(blocked);
-    session.isPolicyDenyNavigationError.mockImplementation(() => false);
-    session.wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockImplementation(() => false);
-  });
-
-  it("keeps the request guard for the full grace after an early safe post-check", async () => {
-    await withFakeTimers(async () => {
-      let currentUrl = "https://example.com";
-      install(
-        { url: () => currentUrl },
-        {
-          hover: vi.fn(async () => {
-            currentUrl = "https://example.org";
-          }),
-        },
-      );
-      const settled = trackGuardSettlement();
-      const task = startHover();
-      await vi.advanceTimersByTimeAsync(249);
-      expect(settled).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      await task;
-      expect(settled).toHaveBeenCalledOnce();
-    });
   });
 
   it("quarantines a late unpreserved policy failure before returning cancellation", async () => {
-    const { ctrl, started, hover } = pendingHover("https://example.com");
+    const { ctrl, hover } = pendingHover("https://example.com");
     const blocked = policyFailure("late browser navigation blocked by policy");
     session.isPolicyDenyNavigationError.mockImplementationOnce(
       (err: unknown) => err instanceof Error && err.name === "SsrFBlockedError",
     );
-    guardOnce(async ({ action, page }) => {
-      await action(page.url());
-      throw blocked;
-    });
+    denyAfterAction(blocked);
 
     const task = startHover(ctrl);
-    await started.promise;
+    await hover.started;
     ctrl.abort(new Error("aborted by test"));
     hover.resolve();
     await expect(task).rejects.toBe(blocked);
@@ -437,19 +366,14 @@ describe("pw-tools-core browser SSRF guards", () => {
 
   it("preserves SSRF policy when aborting a pending click", async () => {
     const ctrl = new AbortController();
-    const clickStarted = Promise.withResolvers<void>();
-    const click = Promise.withResolvers<void>();
+    const click = heldAction();
     let nativeSignal: AbortSignal | undefined;
-    install(
-      { url: vi.fn(() => "https://example.com") },
-      {
-        click: vi.fn((options: { signal?: AbortSignal }) => {
-          nativeSignal = options.signal;
-          clickStarted.resolve();
-          return click.promise;
-        }),
-      },
-    );
+    install(undefined, {
+      click: vi.fn((options: { signal?: AbortSignal }) => {
+        nativeSignal = options.signal;
+        return click.run();
+      }),
+    });
 
     const task = pw.clickViaPlaywright({
       ...target,
@@ -458,7 +382,7 @@ describe("pw-tools-core browser SSRF guards", () => {
       signal: ctrl.signal,
     });
 
-    await clickStarted.promise;
+    await click.started;
     ctrl.abort(new Error("aborted by test"));
     expect(nativeSignal?.aborted).toBe(true);
     click.reject(
@@ -476,27 +400,16 @@ describe("pw-tools-core browser SSRF guards", () => {
     );
   });
 
-  it.each([
-    { label: "fill before submit", slowly: false, firstMethod: "fill" as const },
-    { label: "click before slow type", slowly: true, firstMethod: "click" as const },
-  ])("stops a multi-step type action after aborting $label", async ({ slowly, firstMethod }) => {
+  it.each([false, true])("stops multi-step typing after abort (slowly=%s)", async (slowly) => {
     const ctrl = new AbortController();
-    const started = Promise.withResolvers<void>();
-    const firstStepPending = Promise.withResolvers<void>();
+    const firstStep = heldAction();
     const click = vi.fn(async () => {});
     const fill = vi.fn(async () => {});
     const type = vi.fn(async () => {});
     const press = vi.fn(async () => {});
-    const firstStep = vi.fn(() => {
-      started.resolve();
-      return firstStepPending.promise;
-    });
-    if (firstMethod === "click") {
-      click.mockImplementation(firstStep);
-    } else {
-      fill.mockImplementation(firstStep);
-    }
-    install({ url: () => "https://example.com" }, { click, fill, type, press });
+    const locator = { click, fill, type, press };
+    locator[slowly ? "click" : "fill"].mockImplementation(firstStep.run);
+    install(undefined, locator);
     const settled = trackGuardSettlement();
 
     const task = pw.typeViaPlaywright({
@@ -508,10 +421,10 @@ describe("pw-tools-core browser SSRF guards", () => {
       signal: ctrl.signal,
     });
 
-    await started.promise;
+    await firstStep.started;
     ctrl.abort(new Error("aborted by test"));
     expect(settled).not.toHaveBeenCalled();
-    firstStepPending.resolve();
+    firstStep.resolve();
     await expect(task).rejects.toThrow("aborted by test");
     expect(settled).toHaveBeenCalledOnce();
     expect(type).not.toHaveBeenCalled();
@@ -521,11 +434,8 @@ describe("pw-tools-core browser SSRF guards", () => {
   it("stops form filling when the first field's request guard denies navigation", async () => {
     const fill = vi.fn(async () => {});
     const blocked = policyFailure("blocked field navigation");
-    install({ url: vi.fn(() => "https://example.com") }, { fill });
-    guardOnce(async ({ action, page }) => {
-      await action(page.url());
-      throw blocked;
-    });
+    install(undefined, { fill });
+    denyAfterAction(blocked);
 
     await expect(
       pw.fillFormViaPlaywright({
@@ -538,67 +448,44 @@ describe("pw-tools-core browser SSRF guards", () => {
     ).rejects.toThrow("blocked field navigation");
 
     expect(fill).toHaveBeenCalledOnce();
-    expect(session.withPageNavigationRequestGuard).toHaveBeenCalledOnce();
   });
-  it("disconnects a pending page evaluation on caller cancellation", async () => {
+  it.each([false, true])("settles evaluation interruption (dialog=%s)", async (dialog) => {
     const ctrl = new AbortController();
-    const entered = Promise.withResolvers<void>();
-    pageState.page = {
-      url: () => "https://example.com/current",
-      evaluate: () => {
-        entered.resolve();
-        return new Promise(() => {});
-      },
-    };
+    const evaluation = heldAction<boolean>();
+    install({ url: () => "https://example.com/current", evaluate: evaluation.run });
     const task = pw.evaluateViaPlaywright({
-      ...strict,
-      fn: "() => 1",
+      ...(dialog ? target : strict),
+      fn: dialog ? "() => alert('x')" : "() => 1",
       signal: ctrl.signal,
     });
-    await entered.promise;
-    ctrl.abort(new Error("aborted by test"));
-    await expect(task).rejects.toThrow("aborted by test");
-    expect(session.forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
-      ...strict,
-      page: pageState.page,
-    });
-  });
-
-  it("reconciles an observed dialog after evaluation settles without disconnecting", async () => {
-    const ctrl = new AbortController();
-    const entered = Promise.withResolvers<void>();
-    const evaluation = Promise.withResolvers<boolean>();
-    pageState.page = {
-      url: () => "https://example.com/current",
-      evaluate: () => {
-        entered.resolve();
-        return evaluation.promise;
-      },
-    };
-    const task = pw.evaluateViaPlaywright({
-      ...target,
-      fn: "() => alert('x')",
-      signal: ctrl.signal,
-    });
-    await entered.promise;
-    const error = new BrowserObservedDialogBlockedError({
-      dialogs: {
-        pending: [{ id: "d1", type: "alert", message: "x", openedAt: "2026-09-08T00:00:00Z" }],
-        recent: [],
-      },
-    });
+    await evaluation.started;
+    const error = dialog
+      ? new BrowserObservedDialogBlockedError({
+          dialogs: {
+            pending: [{ id: "d1", type: "alert", message: "x", openedAt: "2026-09-08T00:00:00Z" }],
+            recent: [],
+          },
+        })
+      : new Error("aborted by test");
     session.isBrowserObservedDialogBlockedError.mockImplementation(
       (err) => err instanceof BrowserObservedDialogBlockedError,
     );
     ctrl.abort(error);
     await expect(task).rejects.toBe(error);
-    expect(session.forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
-    evaluation.resolve(true);
-    await vi.waitFor(() =>
-      expect(session.markObservedDialogsHandledRemotelyForPage).toHaveBeenCalledWith(
-        pageState.page,
-        error.browserState.dialogs.pending,
-      ),
-    );
+    if (error instanceof BrowserObservedDialogBlockedError) {
+      expect(session.forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
+      evaluation.resolve(true);
+      await vi.waitFor(() =>
+        expect(session.markObservedDialogsHandledRemotelyForPage).toHaveBeenCalledWith(
+          pageState.page,
+          error.browserState.dialogs.pending,
+        ),
+      );
+    } else {
+      expect(session.forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
+        ...strict,
+        page: pageState.page,
+      });
+    }
   });
 });

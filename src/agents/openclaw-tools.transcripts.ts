@@ -62,18 +62,17 @@ export function resolveTranscriptsTool(
   if (config?.transcripts?.enabled === false) {
     return undefined;
   }
+  // Registration depends only on config so every turn of a session offers the
+  // same tool surface; a turn without a caller identity is refused when it runs.
   const caller = resolveTranscriptCaller(options ?? {});
-  if (!caller) {
-    return undefined;
-  }
   return createTranscriptsTool({
     agentId,
-    agentChannel: options?.gatewayCallerLocal
-      ? undefined
-      : (options?.gatewayCallerChannel ?? options?.agentChannel),
-    agentAccountId: options?.gatewayCallerAccountId ?? options?.agentAccountId,
-    caller: caller.caller,
-    ...(caller.assertCallerActive ? { assertCallerActive: caller.assertCallerActive } : {}),
+    ...(caller
+      ? {
+          caller: caller.caller,
+          ...(caller.assertCallerActive ? { assertCallerActive: caller.assertCallerActive } : {}),
+        }
+      : { callerUnavailable: true }),
     config,
   });
 }

@@ -59,12 +59,9 @@ export type ToolProfileId = NonNullable<SchemaToolsConfig["profile"]>;
 export type ToolLoopDetectionConfig = NonNullable<SchemaToolsConfig["loopDetection"]>;
 
 export type ToolSearchConfig = NonNullable<SchemaToolsConfig["toolSearch"]>;
+export type ToolSearchSelector = NonNullable<Exclude<ToolSearchConfig, boolean>["include"]>[number];
 
 export type CodeModeConfig = NonNullable<SchemaToolsConfig["codeMode"]>;
-
-export type SwarmConfig = NonNullable<SchemaToolsConfig["swarm"]>;
-
-export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
 export type ToolAllowDenyPolicyConfig = NonNullable<z.input<typeof ToolPolicySchema>>;
 
@@ -118,10 +115,6 @@ export type ExecToolConfig = Omit<NonNullable<SchemaToolsConfig["exec"]>, "safeB
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
 };
 
-export type FsToolsConfig = NonNullable<SchemaToolsConfig["fs"]>;
-
-export type SessionsSpawnToolsConfig = NonNullable<SchemaToolsConfig["sessions_spawn"]>;
-
 export type GitHubToolIdentityConfig = NonNullable<SchemaToolsConfig["github"]>;
 
 export type AgentToolsConfig = Omit<
@@ -149,3 +142,6 @@ export type ToolsConfig = Omit<
 };
 
 export type MessageToolsConfig = NonNullable<SchemaToolsConfig["message"]>;
+
+/** Required Gateway model-tool ceiling, separate from ordinary additive tool grants. */
+export type GatewayToolPolicyConfig = NonNullable<SchemaToolsConfig["gatewayPolicy"]>;

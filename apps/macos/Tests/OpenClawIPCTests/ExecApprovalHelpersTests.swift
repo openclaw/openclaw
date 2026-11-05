@@ -21,14 +21,16 @@ struct ExecApprovalHelpersTests {
         #expect(ExecApprovalHelpers.allowlistPattern(command: [], resolution: nil) == nil)
     }
 
-    @Test func `validate allowlist pattern returns reasons`() {
-        #expect(ExecApprovalHelpers.validateAllowlistPattern("rg") == .valid("rg"))
-
-        if case let .invalid(reason) = ExecApprovalHelpers.validateAllowlistPattern("  ") {
-            #expect(reason == .empty)
-        } else {
-            Issue.record("Expected empty pattern rejection")
-        }
+    @Test func `allowlist matching trims patterns and rejects blank entries`() {
+        let resolution = ExecCommandResolution(
+            rawExecutable: "rg",
+            resolvedPath: "/opt/homebrew/bin/rg",
+            executableName: "rg",
+            cwd: nil)
+        let valid = ExecAllowlistEntry(pattern: "  rg\n")
+        #expect(ExecAllowlistMatcher.match(entries: [valid], resolution: resolution) == valid)
+        #expect(ExecAllowlistMatcher.match(
+            entries: [ExecAllowlistEntry(pattern: " \n ")], resolution: resolution) == nil)
     }
 
     @Test func `requires ask matches policy`() {

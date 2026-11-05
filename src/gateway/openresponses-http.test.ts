@@ -1,16 +1,14 @@
-import fs from "node:fs/promises";
 import http from "node:http";
-import path from "node:path";
 import OpenAI from "openai";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState, type GatewayAuthConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import * as agentEvents from "../infra/agent-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
@@ -24,6 +22,7 @@ import {
   expectHttpForeignSessionAuthority,
   expectSharedSecretHttpOwnerIdentity,
 } from "./http-authority.test-support.js";
+import * as httpCommon from "./http-common.js";
 import {
   registerOpenResponsesHttpUploadTests,
   registerOpenResponsesHttpMediaInputTests,
@@ -31,15 +30,19 @@ import {
 import {
   incompatibleReplacementCases,
   emitIncompatibleAssistantReplacement,
+  emitEmbeddedLateCommentary,
   createOpenAiHttpTestClient,
   parseSseEvents,
   collectSseEventTypes,
   findSseEvent,
   parseSseData,
 } from "./http-stream.test-support.js";
+import * as httpUtils from "./http-utils.js";
 import type { ResponseResource } from "./open-responses.schema.js";
 import { registerOpenResponsesContinuationTests } from "./openresponses-http.continuation.test-support.js";
+import { browserProxyAuth } from "./server.auth.test-helpers.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
+import { writeGatewayConfig } from "./test-helpers.config-runtime.js";
 import {
   agentCommandMock,
   getGatewayTestPort,
@@ -64,26 +67,24 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
   };
 });
 
-installGatewayTestHooks({ scope: "suite" });
-
 let enabledServer: Awaited<ReturnType<typeof startServer>>;
 let enabledPort: number;
-beforeAll(async () => {
-  const started = await startGatewayServerWithRetries({
-    port: await getGatewayTestPort(),
-    opts: {
-      host: "127.0.0.1",
-      auth: { mode: "none" },
-      controlUiEnabled: false,
-      openResponsesEnabled: true,
-    },
-  });
-  enabledPort = started.port;
-  enabledServer = started.server;
-});
-
-afterAll(async () => {
-  await enabledServer?.close({ reason: "openresponses enabled suite done" });
+installGatewayTestHooks({
+  scope: "suite",
+  setup: async () => {
+    const started = await startGatewayServerWithRetries({
+      port: await getGatewayTestPort(),
+      opts: {
+        host: "127.0.0.1",
+        auth: { mode: "none" },
+        controlUiEnabled: false,
+        openResponsesEnabled: true,
+      },
+    });
+    enabledPort = started.port;
+    enabledServer = started.server;
+  },
+  cleanup: async () => enabledServer?.close({ reason: "openresponses enabled suite done" }),
 });
 
 beforeEach(() => {
@@ -100,15 +101,6 @@ async function startServer(port: TestPortClaim, auth: GatewayAuthConfig = { mode
       openResponsesEnabled: true,
     });
   });
-}
-
-async function writeGatewayConfig(config: Record<string, unknown>) {
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("OPENCLAW_CONFIG_PATH is required for gateway config tests");
-  }
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
 }
 
 async function postResponses(
@@ -156,6 +148,33 @@ function mockAgentOnce(payloads: Array<{ text: string }>, meta?: unknown) {
   agentCommandMock.mockResolvedValueOnce({ payloads, meta } as never);
 }
 
+function mockToolCalls(text: string, calls: Array<[string, string, string]>) {
+  mockAgentOnce([{ text }], {
+    stopReason: "tool_calls",
+    pendingToolCalls: calls.map(([id, name, args]) => ({ id, name, arguments: args })),
+  });
+}
+
+async function readResponse(res: Response, stream = false, terminal = "response.completed") {
+  const text = await res.text();
+  const events = stream ? parseSseEvents(text) : [];
+  const response: ResponseResource = stream ? responseEvent(events, terminal) : JSON.parse(text);
+  return { text, events, response };
+}
+
+function openRequest(stream: boolean, headers: Record<string, string> = {}) {
+  const request = http.request({
+    hostname: "127.0.0.1",
+    port: enabledPort,
+    path: "/v1/responses",
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+  });
+  request.on("error", () => {});
+  request.end(JSON.stringify({ stream, model: "openclaw", input: "hi" }));
+  return request;
+}
+
 function firstAgentOpts(callIndex = 0): Record<string, unknown> {
   const call = agentCommandMock.mock.calls[callIndex];
   if (!call) {
@@ -182,7 +201,7 @@ const WEATHER_TOOL = [
 const STREAM_FAILURE_CASES = [
   {
     name: "a reserved client tool",
-    createError: () => createClientToolNameConflictError(["read"]),
+    createError: () => new Error("client tool name conflict: read"),
     tools: [{ type: "function", name: "read" }],
     expectedCode: "invalid_request_error",
     expectedMessage: "invalid tool configuration",
@@ -304,11 +323,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
   it.each([false, true])(
     "returns SDK fallback text for empty output (stream=%s)",
     async (stream) => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockResolvedValueOnce({
-        payloads: [{ text: "", mediaUrl: null }],
-        meta: { durationMs: 0 },
-      });
+      mockAgentOnce([{ text: "" }]);
       const client = createOpenAiHttpTestClient(enabledPort);
       const request = {
         model: "openclaw",
@@ -337,6 +352,21 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("keeps embedded late commentary append-only while the final answer streams", async () => {
+    agentCommandMock.mockImplementationOnce(emitEmbeddedLateCommentary);
+    const stream = createStream();
+    const content: string[] = [];
+    const terminals: string[] = [];
+    stream.on("response.output_text.delta", ({ delta }) => content.push(delta));
+    stream.on("response.failed", () => terminals.push("failed"));
+    stream.on("response.completed", () => terminals.push("completed"));
+    const response = await stream.finalResponse();
+    expect(content.join("")).toBe("I will inspect the workspace.\n\nThe check is complete.");
+    expect(response.output_text).toBe(content.join(""));
+    expect(terminals).toEqual(["completed"]);
+    expect(response.status).toBe("completed");
+  });
 
   it.each(
     incompatibleReplacementCases.filter(({ name }) =>
@@ -403,7 +433,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const request = { model: "openclaw", input: "hi" };
     const admin = { "x-openclaw-scopes": "operator.admin, operator.write" };
     try {
-      testState.agentsConfig = { list: [{ id: "main" }] };
+      testState.agentsConfig = { entries: { main: {} } };
       resetConfigRuntimeState();
       const nonPost = await fetch(`http://127.0.0.1:${enabledPort}/v1/responses`);
       expect(nonPost.status).toBe(405);
@@ -415,7 +445,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
           "x-openclaw-session-key": `agent:main:${key}`,
         });
       }
-      testState.agentsConfig = { ownership: "explicit", list: [{ id: "main" }, { id: "beta" }] };
+      testState.agentsConfig = { ownership: "explicit", entries: { main: {}, beta: {} } };
       resetConfigRuntimeState();
       await accept(
         {},
@@ -434,7 +464,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         { model: "openclaw/beta" },
         { sessionKey: expect.stringMatching(/^agent:beta:/) },
       );
-      testState.agentsConfig = { list: [{ id: "main" }] };
+      testState.agentsConfig = { entries: { main: {} } };
       resetConfigRuntimeState();
       await accept(
         { model: "openclaw/default" },
@@ -472,7 +502,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         error: { type: "forbidden", message: "missing scope: operator.admin" },
       });
       expect(agentCommandMock).not.toHaveBeenCalled();
-      agentCommandMock.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
+      agentCommandMock.mockRejectedValueOnce(new Error("client tool name conflict: exec"));
       const conflict = await postResponses(enabledPort, { ...request, tools: WEATHER_TOOL });
       expect(conflict.status).toBe(400);
       expect(await conflict.json()).toMatchObject({
@@ -1007,17 +1037,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await withEnvAsync(
       { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
       async () => {
-        const { startGatewayServer } = await import("./server.js");
-        let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+        let server: Awaited<ReturnType<typeof startServer>> | undefined;
         const previousGatewayAuth = testState.gatewayAuth;
-        const trustedProxyAuth = {
-          mode: "trusted-proxy" as const,
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto"],
-            allowLoopback: true,
-          },
-        };
+        const trustedProxyAuth = browserProxyAuth();
         testState.gatewayAuth = trustedProxyAuth;
         try {
           await writeGatewayConfig({
@@ -1029,14 +1051,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
           resetConfigRuntimeState();
           const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
           const port = portClaim.port;
-          server = await startClaimedGateway(portClaim, () =>
-            startGatewayServer(port, {
-              host: "127.0.0.1",
-              auth: trustedProxyAuth,
-              controlUiEnabled: false,
-              openResponsesEnabled: true,
-            }),
-          );
+          server = await startServer(portClaim, trustedProxyAuth);
 
           const incognitoSessionKey = "agent:main:dashboard:incognito-openresponses-http";
           await upsertSessionEntryCore(
@@ -1244,10 +1259,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
   });
 
   it("returns a tool-only response without empty commentary", async () => {
-    mockAgentOnce([{ text: "" }], {
-      stopReason: "tool_calls",
-      pendingToolCalls: [{ id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' }],
-    });
+    mockToolCalls("", [["call_1", "get_weather", '{"city":"Taipei"}']]);
     const res = await post({ tools: WEATHER_TOOL });
     expect(res.status).toBe(200);
     const response = (await res.json()) as ResponseResource;
@@ -1266,16 +1278,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
       mockAgentOnce([{ text: "A partial answer" }], { stopReason: "length" });
       const res = await post({ stream });
       expect(res.status).toBe(200);
-      const text = await res.text();
-      const events = stream ? parseSseEvents(text) : [];
-      const response = stream
-        ? responseEvent(events, "response.incomplete")
-        : (JSON.parse(text) as ResponseResource);
-      expect(response.status).toBe("incomplete");
-      expect(response.incomplete_details?.reason).toBe("max_output_tokens");
-      expect(response.output).toMatchObject([
-        { type: "message", status: "incomplete", phase: "final_answer" },
-      ]);
+      const { text, events, response } = await readResponse(res, stream, "response.incomplete");
+      expect(response).toMatchObject({
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+        output: [{ type: "message", status: "incomplete", phase: "final_answer" }],
+      });
       if (stream) {
         expect(
           collectSseEventTypes(events).filter((type) =>
@@ -1306,14 +1314,14 @@ describe("OpenResponses HTTP API (e2e)", () => {
         })) as never);
       const res = await post({ stream, tools: WEATHER_TOOL, tool_choice: "required" });
       expect(res.status).toBe(stream ? 200 : 502);
-      const text = await res.text();
-      const events = stream ? parseSseEvents(text) : [];
-      const response = stream
-        ? responseEvent(events, "response.failed")
-        : (JSON.parse(text) as ResponseResource);
-      expect(response.status).toBe("failed");
-      expect(response.error?.code).toBe("api_error");
-      expect(response.error?.message).toContain("tool_choice=required was not satisfied");
+      const { text, events, response } = await readResponse(res, stream, "response.failed");
+      expect(response).toMatchObject({
+        status: "failed",
+        error: {
+          code: "api_error",
+          message: expect.stringContaining("tool_choice=required was not satisfied"),
+        },
+      });
       if (stream) {
         expect(text).toContain("[DONE]");
         expect(text).not.toContain("plain text despite required");
@@ -1323,38 +1331,22 @@ describe("OpenResponses HTTP API (e2e)", () => {
   );
 
   it("rejects a streaming function tool_choice when the agent calls a different tool", async () => {
-    agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "Calling another tool." }],
-      meta: {
-        stopReason: "tool_calls",
-        pendingToolCalls: [{ id: "call_1", name: "get_time", arguments: "{}" }],
-      },
-    } as never);
-
+    mockToolCalls("Calling another tool.", [["call_1", "get_time", "{}"]]);
     const res = await post({
       stream: true,
-      tools: [
-        ...WEATHER_TOOL,
-        {
-          type: "function",
-          name: "get_time",
-          description: "Get time",
-        },
-      ],
+      tools: [...WEATHER_TOOL, { type: "function", name: "get_time", description: "Get time" }],
       tool_choice: { type: "function", name: "get_weather" },
     });
 
     expect(res.status).toBe(200);
-    const text = await res.text();
-    const events = parseSseEvents(text);
-    const failed = findSseEvent(events, "response.failed");
-    const failedResponse = (parseSseData(failed) as { response: ResponseResource }).response;
-    expect(failedResponse?.status).toBe("failed");
-    expect(failedResponse?.error?.code).toBe("api_error");
-    expect(failedResponse?.error?.message ?? "").toContain(
-      "tool_choice required a get_weather tool call",
-    );
+    const { text, events, response } = await readResponse(res, true, "response.failed");
+    expect(response).toMatchObject({
+      status: "failed",
+      error: {
+        code: "api_error",
+        message: expect.stringContaining("tool_choice required a get_weather tool call"),
+      },
+    });
     expect(collectSseEventTypes(events)).not.toContain("response.completed");
     expect(text).toContain("[DONE]");
   });
@@ -1362,19 +1354,11 @@ describe("OpenResponses HTTP API (e2e)", () => {
   it.each([false, true])(
     "returns all client tool calls with commentary (stream=%s, #52288)",
     async (stream) => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockResolvedValueOnce({
-        payloads: [{ text: "Calling all three tools now.", mediaUrl: null }],
-        meta: {
-          durationMs: 0,
-          stopReason: "tool_calls",
-          pendingToolCalls: [
-            { id: "call_1", name: "create_graph", arguments: '{"nodes":["a","b"]}' },
-            { id: "call_2", name: "activate_graph", arguments: "{}" },
-            { id: "call_3", name: "get_status", arguments: "{}" },
-          ],
-        },
-      });
+      mockToolCalls("Calling all three tools now.", [
+        ["call_1", "create_graph", '{"nodes":["a","b"]}'],
+        ["call_2", "activate_graph", "{}"],
+        ["call_3", "get_status", "{}"],
+      ]);
       const res = await post({
         stream,
         tools: ["create_graph", "activate_graph", "get_status"].map((name) => ({
@@ -1383,8 +1367,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         })),
       });
       expect(res.status).toBe(200);
-      const events = stream ? parseSseEvents(await res.text()) : [];
-      const response = stream ? responseEvent(events) : ((await res.json()) as ResponseResource);
+      const { events, response } = await readResponse(res, stream);
       expect(response.status).toBe("completed");
       expect(response.output.map((item) => item.type)).toEqual([
         "message",
@@ -1470,10 +1453,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
   it("continues an empty client tool result using the previous response", async () => {
     const client = createOpenAiHttpTestClient(enabledPort);
-    mockAgentOnce([{ text: "Let me check that." }], {
-      stopReason: "tool_calls",
-      pendingToolCalls: [{ id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' }],
-    });
+    mockToolCalls("Let me check that.", [["call_1", "get_weather", '{"city":"Taipei"}']]);
     const first = await client.responses.create({
       model: "openclaw",
       input: "check the weather",
@@ -1574,15 +1554,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         await finishAgentCleanup.promise;
         return undefined;
       });
-      const clientReq = http.request({
-        hostname: "127.0.0.1",
-        port: enabledPort,
-        path: "/v1/responses",
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: "Bearer secret" },
-      });
-      clientReq.on("error", () => {});
-      clientReq.end(JSON.stringify({ stream, model: "openclaw", input: "hi" }));
+      const clientReq = openRequest(stream, { authorization: "Bearer secret" });
       await entered.promise;
       try {
         clientReq.destroy();
@@ -1601,5 +1573,62 @@ describe("OpenResponses HTTP API (e2e)", () => {
       });
     },
   );
+
+  it("releases stream observation when its client disconnects during session authorization", async () => {
+    const idleRootCount = getActiveGatewayRootWorkCount();
+    const authorized = createDeferred();
+    const finishAuthorization = createDeferred();
+    const disconnected = createDeferred();
+    const subscriptions = new Set<() => void>();
+    const authorizeSession = httpUtils.authorizeOpenAiCompatibleHttpSession;
+    const watchDisconnect = httpCommon.watchClientDisconnect;
+    const observeRun = agentEvents.onAgentEventForRun;
+    const authorizationSpy = vi
+      .spyOn(httpUtils, "authorizeOpenAiCompatibleHttpSession")
+      .mockImplementationOnce(async (params) => {
+        const result = await authorizeSession(params);
+        authorized.resolve();
+        await finishAuthorization.promise;
+        return result;
+      });
+    const disconnectSpy = vi
+      .spyOn(httpCommon, "watchClientDisconnect")
+      .mockImplementationOnce((req, res, controller, onDisconnect) => {
+        res.once("close", () => disconnected.resolve());
+        return watchDisconnect(req, res, controller, onDisconnect);
+      });
+    const observationSpy = vi
+      .spyOn(agentEvents, "onAgentEventForRun")
+      .mockImplementation((runId, listener) => {
+        const stop = observeRun(runId, listener);
+        const release = () => {
+          subscriptions.delete(release);
+          stop();
+        };
+        subscriptions.add(release);
+        return release;
+      });
+    agentCommandMock.mockClear();
+    const clientReq = openRequest(true);
+    try {
+      await authorized.promise;
+      clientReq.destroy();
+      await disconnected.promise;
+      finishAuthorization.resolve();
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+
+      expect(agentCommandMock).not.toHaveBeenCalled();
+      expect(subscriptions.size).toBe(0);
+    } finally {
+      clientReq.destroy();
+      finishAuthorization.resolve();
+      for (const release of subscriptions) {
+        release();
+      }
+      observationSpy.mockRestore();
+      disconnectSpy.mockRestore();
+      authorizationSpy.mockRestore();
+    }
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -6,10 +6,10 @@ import { resolveInboundPathRoot } from "@openclaw/media-core/inbound-path-policy
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
+import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
 
-/** Machine-readable reasons local media path validation can fail. */
 export type LocalMediaAccessErrorCode =
   | "path-not-allowed"
   | "invalid-root"
@@ -21,7 +21,6 @@ export type LocalMediaAccessErrorCode =
   | "invalid-path"
   | "not-file";
 
-/** Error raised when a local media path escapes the configured allowlist. */
 export class LocalMediaAccessError extends Error {
   code: LocalMediaAccessErrorCode;
 
@@ -46,7 +45,6 @@ export { getDefaultMediaLocalRoots as getDefaultLocalRootsCore };
 
 type LocalMediaBoundaryOptions = {
   inboundRoots?: readonly string[];
-  resolvedRoots?: readonly string[];
   resolveRoots?: () => Promise<readonly string[]>;
 };
 
@@ -139,8 +137,10 @@ async function resolveLocalMediaBoundary(
     // Channel inbound roots may contain whole-segment wildcards. Freeze the
     // matched root under the stable pre-wildcard anchor so an alias cannot
     // promote an outside directory into the authorized boundary.
-    const resolvedAnchor = await resolveCanonicalBoundaryPath(matchedInboundRoot.anchorRoot);
-    const resolvedRoot = await resolveCanonicalBoundaryPath(matchedInboundRoot.matchedRoot);
+    const [resolvedAnchor, resolvedRoot] = await settleCurrentReadPreparations([
+      resolveCanonicalBoundaryPath(matchedInboundRoot.anchorRoot),
+      resolveCanonicalBoundaryPath(matchedInboundRoot.matchedRoot),
+    ] as const);
     if (!isPathInside(resolvedAnchor, resolvedRoot)) {
       throw new LocalMediaAccessError(
         "path-not-allowed",
@@ -153,11 +153,10 @@ async function resolveLocalMediaBoundary(
     };
   }
   const roots = localRoots ?? getDefaultMediaLocalRoots();
-  const resolved = await resolveLocalMediaPathForContainment(mediaPath);
-  const resolvedRoots =
-    options?.resolvedRoots ??
-    (await options?.resolveRoots?.()) ??
-    (await resolveLocalMediaRoots(roots));
+  const [resolved, resolvedRoots] = await settleCurrentReadPreparations([
+    resolveLocalMediaPathForContainment(mediaPath),
+    options?.resolveRoots?.() ?? resolveLocalMediaRoots(roots),
+  ] as const);
   const workspaceRootIndex = roots.findIndex((root) => path.basename(root) === "workspace");
   const workspaceRoot = roots[workspaceRootIndex];
   if (workspaceRoot) {
@@ -208,8 +207,8 @@ export async function assertLocalMediaAllowed(
   await resolveLocalMediaBoundary(mediaPath, localRoots, "ignore", options);
 }
 
-/** Opens, revalidates, and bounded-reads local media against one frozen root boundary. */
-export async function readLocalMediaFile(
+/** Opens local media against one frozen root boundary without buffering its contents. */
+export async function openLocalMediaFile(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
   options: LocalMediaBoundaryOptions & {
@@ -217,39 +216,56 @@ export async function readLocalMediaFile(
     /** Local copies of remotely owned roots must not be read through ancestor aliases. */
     excludedRoots?: readonly string[];
   },
-): Promise<Buffer> {
+) {
   const readScope = captureChannelReadScope();
   readScope?.assertCurrent();
-  const boundary = await resolveLocalMediaBoundary(mediaPath, localRoots, "reject", options);
-  const excludedRoots = options.excludedRoots?.length
-    ? await resolveLocalMediaRoots(options.excludedRoots)
-    : [];
+  const [boundary, excludedRoots] = await settleCurrentReadPreparations([
+    resolveLocalMediaBoundary(mediaPath, localRoots, "reject", options),
+    options.excludedRoots?.length ? resolveLocalMediaRoots(options.excludedRoots) : [],
+  ] as const);
   readScope?.assertCurrent();
-  await using opened = await openLocalFileSafely({ filePath: mediaPath });
-  if (excludedRoots.some((root) => isPathInside(root, opened.realPath))) {
-    throw new LocalMediaAccessError(
-      "path-not-allowed",
-      `Local media path belongs to a remote workspace: ${mediaPath}`,
-    );
+  const opened = await openLocalFileSafely({ filePath: mediaPath });
+  try {
+    if (excludedRoots.some((root) => isPathInside(root, opened.realPath))) {
+      throw new LocalMediaAccessError(
+        "path-not-allowed",
+        `Local media path belongs to a remote workspace: ${mediaPath}`,
+      );
+    }
+    if (
+      boundary.roots !== "any" &&
+      !boundary.roots.some((resolvedRoot) => isPathInside(resolvedRoot, opened.realPath))
+    ) {
+      throw new LocalMediaAccessError(
+        "path-not-allowed",
+        `Local media path is not under an allowed directory: ${mediaPath}`,
+      );
+    }
+    if (boundary.rejectHardlinks && opened.stat.nlink > 1) {
+      throw new FsSafeError("hardlink", "hardlinked path not allowed");
+    }
+    if (opened.stat.size > options.maxBytes) {
+      throw new FsSafeError(
+        "too-large",
+        `file exceeds limit of ${options.maxBytes} bytes (got ${opened.stat.size})`,
+      );
+    }
+    readScope?.assertCurrent();
+    return opened;
+  } catch (error) {
+    await opened[Symbol.asyncDispose]();
+    throw error;
   }
-  if (
-    boundary.roots !== "any" &&
-    !boundary.roots.some((resolvedRoot) => isPathInside(resolvedRoot, opened.realPath))
-  ) {
-    throw new LocalMediaAccessError(
-      "path-not-allowed",
-      `Local media path is not under an allowed directory: ${mediaPath}`,
-    );
-  }
-  if (boundary.rejectHardlinks && opened.stat.nlink > 1) {
-    throw new FsSafeError("hardlink", "hardlinked path not allowed");
-  }
-  if (opened.stat.size > options.maxBytes) {
-    throw new FsSafeError(
-      "too-large",
-      `file exceeds limit of ${options.maxBytes} bytes (got ${opened.stat.size})`,
-    );
-  }
+}
+
+/** Opens, revalidates, and bounded-reads local media against one frozen root boundary. */
+export async function readLocalMediaFile(
+  mediaPath: string,
+  localRoots: readonly string[] | "any" | undefined,
+  options: Parameters<typeof openLocalMediaFile>[2],
+): Promise<Buffer> {
+  const readScope = captureChannelReadScope();
+  await using opened = await openLocalMediaFile(mediaPath, localRoots, options);
   if (!readScope) {
     return await readFileHandleBounded(opened.handle, options.maxBytes);
   }

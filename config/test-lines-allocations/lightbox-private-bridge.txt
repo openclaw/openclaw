@@ -1,0 +1,2 @@
+# Preserve the lazy lightbox lifecycle test through the production ItemView and its required props.
+4

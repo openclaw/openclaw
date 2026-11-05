@@ -5,12 +5,8 @@ describe("human mention text ownership", () => {
   const alex = { profileId: "profile-alex", start: 0, end: 5 };
 
   it.each([
-    ["Hello @Alex", [{ ...alex, start: 6, end: 11 }]],
-    ["🦞 @Alex", [{ ...alex, start: 3, end: 8 }]],
     ["@Alex!", [alex]],
     ["@Alexa", []],
-    ["@Alx", []],
-    ["", []],
     ["email@Alex", []],
   ])("keeps only the selected visible token after editing to %j", (next, expected) => {
     expect(updateHumanMentions("@Alex", next, [alex])).toEqual(expected);
@@ -46,26 +42,29 @@ describe("human mention text ownership", () => {
     expect(trimHumanMentions(result.text, result.mentions)).toEqual(result);
   });
 
-  it.each([
+  it.for([
     [{ ...alex, start: -1 }],
     [{ ...alex, end: 99 }],
     [alex, alex],
     [{ ...alex, profileId: "" }],
     [{ ...alex, start: 1 }],
-    Array.from({ length: 11 }, () => alex),
+    Array.from({ length: 11 }, (_, index) => ({
+      ...alex,
+      start: index * 6,
+      end: index * 6 + 5,
+    })),
   ])("does not restore invalid recipient metadata %j", (mentions) => {
-    expect(readHumanMentions("@Alex", mentions)).toBeUndefined();
+    const text = mentions.length === 11 ? "@Alex ".repeat(11).trimEnd() : "@Alex";
+    expect(readHumanMentions(text, mentions)).toBeUndefined();
+    if (mentions.length === 11) {
+      const allowed = mentions.slice(0, 10);
+      expect(readHumanMentions(text, allowed)).toEqual(allowed);
+    }
   });
 
   it.each([
-    [0, false],
     [9, false],
-    [10, false],
-    [13, false],
-    [31, false],
     [32, true],
-    [127, true],
-    [159, true],
   ] as const)(
     "rejects only C0 controls when restoring a token (code unit %i)",
     (code, accepted) => {

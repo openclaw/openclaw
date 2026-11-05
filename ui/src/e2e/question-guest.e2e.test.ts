@@ -1,22 +1,19 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { withOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   createGuestQuestionFixture,
   guestQuestionPrompt,
   guestQuestionScopes,
-  guestQuestionSessionKey,
+  guestQuestionSessionKey as sessionKey,
 } from "./question-guest.test-support.ts";
 
 declare global {
@@ -29,8 +26,11 @@ const suite = createControlUiE2eSuite({
   name: "Guest ordinary question lifecycle",
   startServerBeforeBrowser: true,
 });
-const viewport = { width: 1440, height: 900 };
-const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const settle = (turn: Promise<unknown>) =>
+  turn.then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
 
 async function releaseQuestionBridge(page: Page, gateway: MockGatewayControls) {
   await gateway.waitForRequest("connect");
@@ -52,20 +52,8 @@ async function releaseQuestionBridge(page: Page, gateway: MockGatewayControls) {
 
 suite.define(() => {
   it("recovers and answers its own admitted run's question and settles cancellation", async () => {
-    const artifactDir = capture
-      ? createControlUiE2eArtifactDir(
-          "question-guest",
-          path.resolve(".artifacts/ui-visual-proof/guest-questions"),
-        )
-      : undefined;
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        colorScheme: "dark",
-        serviceWorkers: "block",
-        viewport,
-        ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
-      });
+      const context = await suite.newBrowserContext(createDarkDesktopControlUiContextOptions());
       const page = await context.newPage();
       let gateway: MockGatewayControls | undefined;
       const fixture = await createGuestQuestionFixture(async (frame) => {
@@ -76,25 +64,13 @@ suite.define(() => {
       });
       const turns: Promise<unknown>[] = [];
       const run = new AbortController();
-      const screenshot = async (name: string) => {
-        if (artifactDir) {
-          const surface = page.locator(".chat-main__conversation");
-          await fs.writeFile(
-            path.join(artifactDir, name),
-            await takeControlUiViewportScreenshot(page, surface, [
-              page.getByText("Summary draft", { exact: true }).first(),
-            ]),
-          );
-        }
-      };
       try {
         await page.exposeFunction("dispatchGuestQuestion", fixture.request);
         gateway = await installMockGateway(page, {
           heldMethods: ["connect"],
           operatorScopes: guestQuestionScopes,
-          sessionKey: guestQuestionSessionKey,
+          sessionKey,
           mainSessionKey: "agent:main:main",
-          communityInvite: false,
           featureMethods: [
             "chat.startup",
             "chat.metadata",
@@ -107,89 +83,38 @@ suite.define(() => {
               self: true,
               id: fixture.profileId,
               identity: { type: "profile", id: fixture.profileId },
-              name: "Guest",
             },
           ],
           sessions: [
             {
-              key: guestQuestionSessionKey,
+              key: sessionKey,
               sessionId: "guest-question-session",
-              label: "Summary draft",
               kind: "direct",
               visibility: "shared",
               sharingRole: "owner",
-              updatedAt: Date.now(),
             },
           ],
-          historyMessages: [
-            {
-              role: "user",
-              content: [{ type: "text", text: "Help me prepare a project summary." }],
-            },
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: "I have the outline ready. I need your preference before continuing.",
-                },
-              ],
-            },
-          ],
+          historyMessages: [],
         });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, guestQuestionSessionKey));
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await releaseQuestionBridge(page, gateway);
-        await gateway.waitForRequest("chat.startup");
-        await page
-          .getByText("I have the outline ready. I need your preference before continuing.", {
-            exact: true,
-          })
-          .waitFor();
-        const result = fixture.ask("summary-format", run.signal).then(
-          (value) => ({ ok: true as const, value }),
-          (error: unknown) => ({ ok: false as const, error }),
-        );
+        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        const result = settle(fixture.ask("summary-format", run.signal));
         turns.push(result);
-        const registered = await fixture.registration;
+        expect(await fixture.registration).toMatchObject({ ok: true });
         await fixture.flushEvents();
         const panel = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
-        if (!registered.ok) {
-          expect(await panel.count()).toBe(0);
-          await screenshot("ordinary-question-unavailable.png");
-          if (artifactDir) {
-            await fs.writeFile(
-              path.join(artifactDir, "baseline.json"),
-              JSON.stringify(
-                {
-                  scopes: guestQuestionScopes,
-                  sessionKey: guestQuestionSessionKey,
-                  registration: registered,
-                  questionPanels: 0,
-                },
-                null,
-                2,
-              ),
-            );
-          }
-        }
-        expect(
-          registered,
-          `The Guest's original agent run must register an ordinary question: ${registered.error?.message ?? "no Gateway error"}`,
-        ).toMatchObject({ ok: true });
         await panel.getByText(guestQuestionPrompt, { exact: true }).waitFor();
-        await screenshot("ordinary-question-pending.png");
-        const initialLists = fixture.requests.filter(
-          (request) => request.method === "question.list",
-        ).length;
+        const listCount = () =>
+          fixture.requests.filter(({ method }) => method === "question.list").length;
+        const initialLists = listCount();
 
         fixture.disconnect();
         await page.reload();
         fixture.reconnect();
         await releaseQuestionBridge(page, gateway);
         await panel.getByText(guestQuestionPrompt, { exact: true }).waitFor();
-        expect(
-          fixture.requests.filter((request) => request.method === "question.list").length,
-        ).toBeGreaterThan(initialLists);
+        expect(listCount()).toBeGreaterThan(initialLists);
         await panel.getByRole("radio", { name: /Concise/ }).click();
         await panel.getByRole("button", { name: "Submit", exact: true }).click();
         expect(await result).toMatchObject({
@@ -198,12 +123,8 @@ suite.define(() => {
         });
         await page.locator(".chat-question-summary").filter({ hasText: "Concise" }).waitFor();
         expect(await panel.count()).toBe(0);
-        await screenshot("ordinary-question-answered.png");
 
-        const cancelled = fixture.ask("cancelled-format", run.signal).then(
-          (value) => ({ ok: true as const, value }),
-          (error: unknown) => ({ ok: false as const, error }),
-        );
+        const cancelled = settle(fixture.ask("cancelled-format", run.signal));
         turns.push(cancelled);
         await panel.getByText(guestQuestionPrompt, { exact: true }).waitFor();
         run.abort(new Error("Synthetic run stopped"));
@@ -212,16 +133,8 @@ suite.define(() => {
         await page.locator(".chat-question-summary").filter({ hasText: "Skipped" }).waitFor();
         expect(await panel.count()).toBe(0);
         expect(
-          fixture.requests.some(
-            (request) =>
-              request.method === "question.resolve" &&
-              request.result?.ok &&
-              typeof request.params === "object" &&
-              request.params !== null &&
-              "cancel" in request.params,
-          ),
-        ).toBe(true);
-        await screenshot("ordinary-question-cancelled.png");
+          fixture.requests.findLast((request) => request.method === "question.resolve"),
+        ).toMatchObject({ params: { cancel: true }, result: { ok: true } });
       } finally {
         run.abort();
         await fixture.close();

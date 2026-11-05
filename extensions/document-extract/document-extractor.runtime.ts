@@ -1,4 +1,4 @@
-import type { PdfDocument, PdfEngine, RenderOptions } from "clawpdf";
+import type { PdfDocument, PdfEngine, PdfPage, RenderOptions } from "clawpdf";
 import type {
   DocumentExtractedImage,
   DocumentExtractionRequest,
@@ -93,35 +93,37 @@ export async function extractPdfContent(
   }
   try {
     control.throwIfCancelled();
+    const pageCount = pdf.pageCount;
     const pages = request.pageNumbers
       ? request.pageNumbers
-          .filter((p) => Number.isInteger(p) && p >= 1 && p <= pdf.pageCount)
+          .filter((p) => Number.isInteger(p) && p >= 1 && p <= pageCount)
           .slice(0, request.maxPages)
       : undefined;
     if (request.pageNumbers?.length && pages?.length === 0) {
-      throw new Error(`No requested PDF pages exist in this ${pdf.pageCount}-page document.`);
+      throw new Error(`No requested PDF pages exist in this ${pageCount}-page document.`);
     }
     const selectedPages =
-      pages ?? Array.from({ length: Math.min(pdf.pageCount, request.maxPages) }, (_, i) => i + 1);
+      pages ?? Array.from({ length: Math.min(pageCount, request.maxPages) }, (_, i) => i + 1);
     const metadata = {
       pages: {
         processed: selectedPages,
-        total: pdf.pageCount,
+        total: pageCount,
         selection: request.pageNumbers ? ("explicit" as const) : ("automatic" as const),
         truncated: request.pageNumbers
           ? request.pageNumbers.length > selectedPages.length
-          : pdf.pageCount > request.maxPages,
+          : pageCount > request.maxPages,
       },
       textTruncated: false,
       imagesTruncated: false,
     };
-    const imagePages: number[] = [];
+    const imagePages: PdfPage[] = [];
     let text = "";
     for (const pageNumber of selectedPages) {
       control.throwIfCancelled();
-      const pageText = pdf.page(pageNumber).text();
+      const page = pdf.page(pageNumber);
+      const pageText = page.text();
       if (pageText.trim().length < request.minTextChars) {
-        imagePages.push(pageNumber);
+        imagePages.push(page);
       }
       const separator = text ? "\n\n" : "";
       const remaining = MAX_EXTRACTED_TEXT_CHARS - text.length - separator.length;
@@ -139,9 +141,12 @@ export async function extractPdfContent(
     // Share the aggregate pixel budget only across pages needing image fallback.
     try {
       const { encodePng, PdfError } = await import("clawpdf");
+      if (!Number.isFinite(request.maxPixels)) {
+        throw new PdfError("budget", "maxPixels must be a finite positive number");
+      }
       const images: DocumentExtractedImage[] = [];
       let remainingPixels = request.maxPixels;
-      for (const [index, pageNumber] of imagePages.entries()) {
+      for (const [index, page] of imagePages.entries()) {
         control.throwIfCancelled();
         if (remainingPixels <= 0) {
           metadata.imagesTruncated = true;
@@ -149,10 +154,6 @@ export async function extractPdfContent(
         }
         const pagesRemaining = imagePages.length - index;
         const maxPixelsPerPage = Math.max(1, Math.ceil(remainingPixels / pagesRemaining));
-        if (!Number.isFinite(maxPixelsPerPage)) {
-          throw new PdfError("budget", "maxPixels must be a finite positive number");
-        }
-        const page = pdf.page(pageNumber);
         const plan = pageRenderOptions(page.width, page.height, maxPixelsPerPage);
         if (!plan) {
           metadata.imagesTruncated = true;

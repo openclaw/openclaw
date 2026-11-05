@@ -1,6 +1,36 @@
 import { describe, expect, it } from "vitest";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
-import { canCallGatewayMethod } from "./gateway-methods.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
+import {
+  canCallGatewayMethod,
+  canPresentGatewayMethod,
+  isGatewayMethodAdvertised,
+} from "./gateway-methods.ts";
+
+it("prepares each advertised catalog once across interleaved connections and capability refreshes", () => {
+  const catalogs = ["sessions.patch", "sessions.create", "plugins.reload"].map((method) => {
+    let visits = 0;
+    const methods = ["health", method];
+    Object.defineProperty(methods, 0, {
+      get: () => {
+        visits++;
+        return "health";
+      },
+    });
+    return { methods, visits: () => visits };
+  });
+  const first = snapshot({ methods: catalogs[0]!.methods });
+  const second = snapshot({ methods: catalogs[1]!.methods });
+  for (let row = 0; row < 100; row++) {
+    expect(isGatewayMethodAdvertised(first, "sessions.patch")).toBe(true);
+    expect(isGatewayMethodAdvertised(second, "sessions.patch")).toBe(false);
+  }
+  first.hello!.features = { methods: catalogs[2]!.methods };
+  expect(isGatewayMethodAdvertised(first, "sessions.patch")).toBe(false);
+  expect(isGatewayMethodAdvertised(first, "plugins.reload")).toBe(true);
+  expect(isGatewayMethodAdvertised(second, "sessions.create")).toBe(true);
+  expect(catalogs.map((catalog) => catalog.visits())).toEqual([1, 1, 1]);
+});
 
 function snapshot(params: {
   connected?: boolean;
@@ -10,7 +40,7 @@ function snapshot(params: {
   includeScopes?: boolean;
 }): ApplicationGatewaySnapshot {
   const connected = params.connected ?? true;
-  return {
+  return createApplicationGatewaySnapshot({
     client: connected ? ({} as ApplicationGatewaySnapshot["client"]) : null,
     phase: connected ? "connected" : "offline",
     offlineStable: !connected,
@@ -25,12 +55,8 @@ function snapshot(params: {
             },
       features: params.methods === undefined ? {} : { methods: params.methods },
     } as ApplicationGatewaySnapshot["hello"],
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
     sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
 }
 
 describe("canCallGatewayMethod", () => {
@@ -72,5 +98,27 @@ describe("canCallGatewayMethod", () => {
         { requireAdvertisement: false },
       ),
     ).toBe(true);
+  });
+
+  it.each(["connected", "reconnecting", "offline"] as const)(
+    "separates retained presentation from live dispatch in %s",
+    (phase) => {
+      const retained = { ...snapshot({ methods: ["skills.update"] }), phase };
+      expect(canPresentGatewayMethod(retained, "skills.update", "operator.admin")).toBe(true);
+      expect(canCallGatewayMethod(retained, "skills.update", "operator.admin")).toBe(
+        phase === "connected",
+      );
+    },
+  );
+
+  it.each([
+    { methods: [] },
+    { methods: ["skills.update"], scopes: ["operator.write"] },
+    { methods: ["skills.update"], includeAuth: false },
+    { methods: ["skills.update"], includeScopes: false },
+  ])("does not present unadvertised or unauthorized methods (%j)", (params) => {
+    expect(canPresentGatewayMethod(snapshot(params), "skills.update", "operator.admin")).toBe(
+      false,
+    );
   });
 });

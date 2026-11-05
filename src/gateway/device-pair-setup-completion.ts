@@ -1,7 +1,4 @@
-import type {
-  DevicePairSetupCompletedEvent,
-  DevicePairSetupDeliveryUncertainEvent,
-} from "../../packages/gateway-protocol/src/index.js";
+import type { DevicePairSetupCompletedEvent } from "../../packages/gateway-protocol/src/index.js";
 import {
   confirmDevicePairSetupCompletionDelivery,
   consumeDeviceBootstrapTokenWithSetupCompletion,
@@ -30,7 +27,7 @@ export async function consumeSetupHandoff(params: {
   ts?: number;
 }): Promise<SetupHandoff | null> {
   const completedAtMs = params.ts ?? Date.now();
-  const consumed = await consumeDeviceBootstrapTokenWithSetupCompletion({
+  return consumeDeviceBootstrapTokenWithSetupCompletion({
     token: params.token,
     deviceId: params.deviceId,
     completedAtMs,
@@ -38,7 +35,6 @@ export async function consumeSetupHandoff(params: {
     ...(params.pairedDeviceMatches ? { pairedDeviceMatches: params.pairedDeviceMatches } : {}),
     ...(params.baseDir ? { baseDir: params.baseDir } : {}),
   });
-  return consumed;
 }
 
 /** Confirm the response completed before the operator can observe success. */
@@ -58,13 +54,12 @@ export async function confirmSetupHandoffDelivery(params: {
   return confirmed ? { record: params.handoff.record, completion: confirmed } : null;
 }
 
-/** Broadcast the already-committed completion; status reconciliation owns delivery loss. */
-export function broadcastSetupHandoffCompletion(params: {
-  handoff: SetupHandoff;
-  broadcast: GatewayBroadcastFn;
-}): void {
-  const completion = params.handoff.completion;
-  if (!completion || completion.deliveryState !== "confirmed") {
+function broadcastSetupHandoff(
+  { handoff, broadcast }: { handoff: SetupHandoff; broadcast: GatewayBroadcastFn },
+  deliveryState: "confirmed" | "uncertain",
+): void {
+  const completion = handoff.completion;
+  if (completion?.deliveryState !== deliveryState) {
     return;
   }
   const payload = {
@@ -74,9 +69,22 @@ export function broadcastSetupHandoffCompletion(params: {
     access: completion.access,
     ts: completion.completedAtMs,
   } satisfies DevicePairSetupCompletedEvent;
-  // Slow operator sockets drop this frame rather than being closed; the
-  // recorded completion above is the recovery path, so the drop is bounded.
-  params.broadcast("device.pair.setup.completed", payload, { dropIfSlow: true });
+  // The retained completion owns recovery when a slow operator socket drops this frame.
+  broadcast(
+    deliveryState === "confirmed"
+      ? "device.pair.setup.completed"
+      : "device.pair.setup.deliveryUncertain",
+    payload,
+    { dropIfSlow: true },
+  );
+}
+
+/** Broadcast the already-committed completion; status reconciliation owns delivery loss. */
+export function broadcastSetupHandoffCompletion(params: {
+  handoff: SetupHandoff;
+  broadcast: GatewayBroadcastFn;
+}): void {
+  broadcastSetupHandoff(params, "confirmed");
 }
 
 /** Tell the operator that replay is blocked but credential delivery is unknown. */
@@ -84,16 +92,5 @@ export function broadcastSetupHandoffDeliveryUncertain(params: {
   handoff: SetupHandoff;
   broadcast: GatewayBroadcastFn;
 }): void {
-  const completion = params.handoff.completion;
-  if (!completion || completion.deliveryState !== "uncertain") {
-    return;
-  }
-  const payload = {
-    setupId: completion.setupId,
-    deviceId: completion.deviceId,
-    ...(completion.deviceName ? { deviceName: completion.deviceName } : {}),
-    access: completion.access,
-    ts: completion.completedAtMs,
-  } satisfies DevicePairSetupDeliveryUncertainEvent;
-  params.broadcast("device.pair.setup.deliveryUncertain", payload, { dropIfSlow: true });
+  broadcastSetupHandoff(params, "uncertain");
 }

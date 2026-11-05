@@ -31,7 +31,6 @@ import {
   CROSS_OS_COMMAND_HEARTBEAT_SECONDS,
   CROSS_OS_PROCESS_TREE_KILL_AFTER_MS,
 } from "./config.ts";
-import { readLogTextSince } from "./logs.ts";
 import { formatError, sleep, trimForSummary } from "./shared.ts";
 
 const CROSS_OS_SIGNAL_EXIT_CODES: Partial<Record<NodeJS.Signals, number>> = {
@@ -40,8 +39,6 @@ const CROSS_OS_SIGNAL_EXIT_CODES: Partial<Record<NodeJS.Signals, number>> = {
   SIGTERM: 143,
 };
 const CROSS_OS_ACTIVE_CHILD_TREE_KILLERS = new Set<(signal: NodeJS.Signals) => void>();
-const STARTUP_MIGRATION_RESTART_PREFIX =
-  "OpenClaw plugin migration inputs changed during startup convergence;";
 let forwardedSignalExitCode: number | undefined;
 let forwardedSignalForceKillTimer: NodeJS.Timeout | undefined;
 
@@ -159,36 +156,6 @@ export function captureGatewayProcess(
   return { child, closeLog, ...log, waitForClose: () => childClosePromise };
 }
 
-export async function waitForGatewayWithStartupMigrationRestart(params: {
-  gatewayHolder: { current: GatewayHandle | null };
-  restartGateway: () => Promise<GatewayHandle>;
-  waitUntilReady: (gateway: GatewayHandle) => Promise<void>;
-}) {
-  let gateway = params.gatewayHolder.current;
-  if (!gateway) {
-    throw new Error("Gateway restart coordination requires an active gateway handle.");
-  }
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await params.waitUntilReady(gateway);
-      return;
-    } catch (error) {
-      if (!hasChildExited(gateway.child)) {
-        throw error;
-      }
-      await gateway.waitForClose();
-      await gateway.closeLog();
-      const startupLog = readLogTextSince(gateway.logPath, gateway.launchLogOffset);
-      if (attempt > 0 || !startupLog.includes(STARTUP_MIGRATION_RESTART_PREFIX)) {
-        throw error;
-      }
-      gateway = await params.restartGateway();
-      params.gatewayHolder.current = gateway;
-    }
-  }
-}
-
 export async function stopGateway(gateway: GatewayHandle | null) {
   try {
     if (!gateway?.child?.pid) {
@@ -259,9 +226,7 @@ async function waitForChildExit(child: ChildProcess, timeoutMs: number) {
         return;
       }
       settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
+      clearTimeout(timer);
       child.off("exit", onExit);
       child.off("close", onClose);
       child.off("error", onError);
@@ -270,12 +235,7 @@ async function waitForChildExit(child: ChildProcess, timeoutMs: number) {
     const onExit = () => finish(true);
     const onClose = () => finish(true);
     const onError = () => finish(true);
-    const timer =
-      timeoutMs > 0
-        ? setTimeout(() => {
-            finish(false);
-          }, timeoutMs)
-        : null;
+    const timer = setTimeout(() => finish(false), timeoutMs);
 
     child.once("exit", onExit);
     child.once("close", onClose);
@@ -314,8 +274,8 @@ function decodeBoundedUtf8Tail(buffer: Buffer, maxBytes: number): string {
   return tail.subarray(start).toString("utf8");
 }
 
-function appendBoundedCommandOutput(current: string, chunk: Uint8Array | string, maxBytes: number) {
-  const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+function appendBoundedCommandOutput(current: string, chunk: string, maxBytes: number) {
+  const chunkBuffer = Buffer.from(chunk);
   if (chunkBuffer.byteLength >= maxBytes) {
     return decodeBoundedUtf8Tail(chunkBuffer, maxBytes);
   }
@@ -604,11 +564,7 @@ export async function startStaticFileServer(params: {
               return;
             }
             if (closeLogError) {
-              rejectPromise(
-                closeLogError instanceof Error
-                  ? closeLogError
-                  : new Error(formatError(closeLogError)),
-              );
+              rejectPromise(closeLogError);
               return;
             }
             resolvePromise();

@@ -19,6 +19,12 @@ extension SettingsProTab {
     var offlineDeviceSection: some View {
         Section {
             self.settingsListRow(
+                icon: "cpu",
+                iconColor: .orange,
+                title: "ESP device setup",
+                route: .espSetup)
+                .accessibilityIdentifier("settings-esp-setup-row")
+            self.settingsListRow(
                 icon: "applewatch",
                 iconColor: .green,
                 title: "Apple Watch",
@@ -64,20 +70,28 @@ extension SettingsProTab {
     }
 
     func destination(for route: SettingsRoute) -> some View {
-        List {
-            switch route {
-            case .gateway:
-                self.gatewayDestination
-            case .appleWatch:
-                self.appleWatchDestination
-            case .approvals:
-                self.approvalsDestination
-            case .diagnostics:
-                self.diagnosticsDestination
-            case .about:
-                self.aboutDestination
-            case .licenses:
-                self.licensesDestination
+        Group {
+            if route == .espSetup {
+                ESPDeviceSetupScreen()
+            } else {
+                List {
+                    switch route {
+                    case .gateway:
+                        self.gatewayDestination
+                    case .appleWatch:
+                        self.appleWatchDestination
+                    case .espSetup:
+                        EmptyView()
+                    case .approvals:
+                        self.approvalsDestination
+                    case .diagnostics:
+                        self.diagnosticsDestination
+                    case .about:
+                        self.aboutDestination
+                    case .licenses:
+                        self.licensesDestination
+                    }
+                }
             }
         }
         .font(OpenClawType.body)
@@ -209,12 +223,13 @@ extension SettingsProTab {
         if showScanHero {
             scanAction = { self.openGatewayQRScanner() }
         }
+        let gateway = self.gatewayStatusPresentation
         return self.detailStatusCard(
             icon: "antenna.radiowaves.left.and.right",
             title: "Gateway",
-            detail: .verbatim(self.gatewayStatusDetail),
-            value: .verbatim(self.gatewayStatusValue),
-            color: self.gatewayStatusColor,
+            detail: .verbatim(gateway.detail),
+            value: .verbatim(gateway.value),
+            color: gateway.color,
             actionTitle: showScanHero ? "Scan QR to Pair" : nil,
             actionSystemImage: "qrcode.viewfinder",
             action: scanAction)
@@ -600,6 +615,11 @@ extension SettingsProTab {
 
             Section {
                 self.aboutLinkRow(
+                    title: "Support",
+                    icon: "questionmark.circle",
+                    color: .blue,
+                    url: URL(string: "https://community.openclaw.ai/")!)
+                self.aboutLinkRow(
                     title: "Website",
                     icon: "globe",
                     color: .blue,
@@ -618,7 +638,7 @@ extension SettingsProTab {
                     title: "Discord",
                     icon: "bubble.left.and.bubble.right.fill",
                     color: .indigo,
-                    url: URL(string: "https://discord.gg/clawd")!)
+                    url: URL(string: "https://openclaw.ai/discord?from=openclaw-app-ios-settings")!)
             } footer: {
                 Text("© 2026 OpenClaw Foundation — MIT License.")
                     .font(OpenClawType.footnote)
@@ -868,39 +888,34 @@ extension SettingsProTab {
                 .font(OpenClawType.body)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+            if let hostIssue = self.manualGatewayHostIssue {
+                Text(hostIssue)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(OpenClawBrand.warn)
+            }
             TextField("Port", text: self.manualPortBinding)
                 .font(OpenClawType.body)
                 .keyboardType(.numberPad)
-            Picker(selection: self.manualGatewayTLSBinding) {
-                Text("Unencrypted")
-                    .font(OpenClawType.captionSemiBold)
-                    .tag(false)
-                Text("Secure (TLS)")
-                    .font(OpenClawType.captionSemiBold)
-                    .tag(true)
-            } label: {
-                Text("Connection security")
-                    .font(OpenClawType.captionSemiBold)
-            }
-            .pickerStyle(.segmented)
-            .disabled(self.manualGatewayTransport.requiresTLS)
-            if let helperText = self.manualGatewayTransport.helperText {
-                Text(helperText)
-                    .font(OpenClawType.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            ManualGatewaySecurityRows(
+                presentation: self.manualGatewayTransport,
+                useTLS: self.manualGatewayTLSBinding)
             self.gatewayActionButton(
                 title: "Connect Manual",
                 icon: "network",
                 color: OpenClawBrand.accent,
                 isBusy: self.connectingGateway == .manual,
                 isDisabled: self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || self.manualGatewayHostIssue != nil
                     || !self.manualPortIsValid)
             {
                 Task { await self.connectManual() }
             }
         }
         .disabled(self.setupAttemptID != nil)
+    }
+
+    private var manualGatewayHostIssue: String? {
+        GatewayConnectionController.manualHostValidationMessage(host: self.manualGatewayHost)
     }
 
     private var manualGatewayTransport: GatewayManualTransportPresentation {
@@ -925,8 +940,8 @@ extension SettingsProTab {
             // Fixtures never load the saved manual Gateway, so a credential edit would overwrite
             // its pair with blank fields and headers would target the wrong identity.
             if !self.appModel.isLocalGatewayFixtureEnabled {
-                self.gatewaySecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
-                self.gatewaySecureField("Gateway Password", text: self.gatewayPasswordBinding)
+                self.gatewaySecureField("Gateway Auth Token", text: self.gatewayCredentialBinding(\.token))
+                self.gatewaySecureField("Gateway Password", text: self.gatewayCredentialBinding(\.password))
                 if let headersStableID = self.gatewayCustomHeadersTargetStableID {
                     NavigationLink {
                         GatewayCustomHeadersSettingsView(gatewayStableID: headersStableID)
@@ -935,6 +950,55 @@ extension SettingsProTab {
                             .font(OpenClawType.body)
                     }
                 }
+            }
+            if !self.appModel.isLocalGatewayFixtureEnabled,
+               let attention = Self.gatewayAccessAttention(
+                   in: self.gatewayRegistry, ingress: self.gatewayController.ingress)
+            {
+                Text(attention.message)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+                if self.gatewayController.ingress.signingIn {
+                    Button {
+                        self.gatewayController.ingress.cancelSignIn()
+                    } label: {
+                        Text("Cancel sign-in").font(OpenClawType.body)
+                    }
+                } else if attention.canSignIn {
+                    Button {
+                        Task { await self.reconnectGateway(ingressAttention: attention) }
+                    } label: {
+                        Text("Sign in to Cloudflare Access").font(OpenClawType.body)
+                    }
+                    .disabled(self.isReconnectingGateway)
+                }
+            }
+            if !self.appModel.isLocalGatewayFixtureEnabled,
+               let target = Self.gatewayAccessSessionTarget(
+                   in: self.gatewayRegistry, ingress: self.gatewayController.ingress)
+            {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Access Host")
+                        .font(OpenClawType.body)
+                    Text(verbatim: target.origin.url.absoluteString)
+                        .font(OpenClawType.subhead)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button {
+                    Task {
+                        await self.gatewayController.ingress.signOut(
+                            stableID: target.stableID, expectedOrigin: target.origin)
+                    }
+                } label: {
+                    Text("Sign out of Cloudflare Access").font(OpenClawType.body)
+                }
+                Text("Signs out gateways using this host’s Access session. Your browser may stay signed in.")
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
             }
             Button(role: .destructive) {
                 self.showResetOnboardingAlert = true

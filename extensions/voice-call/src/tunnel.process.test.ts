@@ -1,47 +1,39 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  withinTest,
+  type FixtureReceiptChannel,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { isProcessAlive } from "../../test-support/process.test-support.js";
 import { startTunnel } from "./tunnel.js";
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
-async function readPid(pidPath: string): Promise<number> {
-  let pid = Number.NaN;
-  await expect
-    .poll(
-      async () => {
-        try {
-          pid = Number.parseInt(await fs.readFile(pidPath, "utf8"), 10);
-          return Number.isInteger(pid) && pid > 0;
-        } catch {
-          return false;
-        }
-      },
-      { timeout: 2_000, interval: 20 },
-    )
-    .toBe(true);
-  return pid;
-}
-
-async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
-  try {
-    await expect.poll(() => isProcessAlive(pid), { timeout: timeoutMs, interval: 20 }).toBe(false);
-    return true;
-  } catch {
-    return false;
+// Ngrok stop can finish its bounded close wait before the OS has reaped the process.
+async function expectProcessExit(pidPath: string, signal: AbortSignal): Promise<void> {
+  const pid = Number.parseInt(await fs.readFile(pidPath, "utf8"), 10);
+  expect(Number.isInteger(pid) && pid > 0).toBe(true);
+  while (isProcessAlive(pid)) {
+    signal.throwIfAborted();
+    await waitForProcessTick(10, undefined, { signal });
   }
+  expect(isProcessAlive(pid)).toBe(false);
 }
 
 async function withNgrok(
-  script: string[],
+  script: string,
   run: (paths: { pidPath: string; signalPath: string; evidencePath: string }) => Promise<void>,
 ): Promise<void> {
   await withTempDir("openclaw-ngrok-", async (tempDir) => {
@@ -51,23 +43,21 @@ async function withNgrok(
       evidencePath: path.join(tempDir, "ngrok-auth-evidence.json"),
     };
     await fs.writeFile(
-      path.join(tempDir, "ngrok"),
-      [
-        "#!/usr/bin/env node",
-        'const fs = require("node:fs");',
-        ...script,
-        "fs.writeFileSync(process.env.OPENCLAW_NGROK_PID_FILE, String(process.pid));",
-        "setInterval(() => {}, 1000);",
-      ].join("\n"),
+      path.join(tempDir, "ngrok.mjs"),
+      // Publish the PID before stdout, and readiness after signal handlers are installed.
+      `#!/usr/bin/env node
+import fs from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
+const paths = ${JSON.stringify(paths)};
+fs.writeFileSync(paths.pidPath, String(process.pid));
+${script}
+sendReceipt(paths.pidPath, "ready");
+setInterval(() => {}, 1000);`,
       { mode: 0o755 },
     );
+    await fs.symlink("ngrok.mjs", path.join(tempDir, "ngrok"));
     await withEnvAsync(
-      {
-        PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
-        OPENCLAW_NGROK_PID_FILE: paths.pidPath,
-        OPENCLAW_NGROK_SIGNAL_FILE: paths.signalPath,
-        OPENCLAW_NGROK_AUTH_EVIDENCE_FILE: paths.evidencePath,
-      },
+      { PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}` },
       async () => {
         try {
           await run(paths);
@@ -75,7 +65,10 @@ async function withNgrok(
           const pid = Number.parseInt(await fs.readFile(paths.pidPath, "utf8").catch(() => ""), 10);
           if (Number.isInteger(pid) && pid > 0 && isProcessAlive(pid)) {
             process.kill(pid, "SIGKILL");
-            await waitForProcessExit(pid, 1_000);
+            await expect
+              .poll(() => isProcessAlive(pid), { timeout: 1_000, interval: 20 })
+              .toBe(false)
+              .catch(() => {});
           }
         }
       },
@@ -83,8 +76,15 @@ async function withNgrok(
   });
 }
 
-const startNgrok = (ngrokAuthToken?: string) =>
-  startTunnel({ provider: "ngrok", port: 3334, path: "/voice/webhook", ngrokAuthToken });
+async function startNgrok(ngrokAuthToken?: string) {
+  const tunnel = await startTunnel({
+    provider: "ngrok",
+    port: 3334,
+    path: "/voice/webhook",
+    ngrokAuthToken,
+  });
+  return tunnel ?? Promise.reject(new Error("Expected ngrok tunnel to start"));
+}
 
 const announceTunnel =
   'process.stdout.write(JSON.stringify({ msg: "started tunnel", url: "https://bounded.ngrok.test" }) + "\\n");';
@@ -92,26 +92,16 @@ const announceTunnel =
 describe.skipIf(process.platform === "win32")("voice-call tunnel child process", () => {
   it("passes ngrok auth through the environment without exposing it in argv", async () => {
     await withNgrok(
-      [
-        "const token = process.env.NGROK_AUTHTOKEN;",
-        "fs.writeFileSync(",
-        "  process.env.OPENCLAW_NGROK_AUTH_EVIDENCE_FILE,",
-        '  JSON.stringify({ argvContainsToken: process.argv.includes(token), envHasToken: token === "synthetic-test-token" }),',
-        ");",
-        announceTunnel,
-      ],
+      `const token = process.env.NGROK_AUTHTOKEN;
+fs.writeFileSync(paths.evidencePath, JSON.stringify({ argvContainsToken: process.argv.includes(token), envHasToken: token === "synthetic-test-token" }));
+${announceTunnel}`,
       async ({ evidencePath }) => {
         const tunnel = await startNgrok("synthetic-test-token");
-        if (!tunnel) {
-          throw new Error("Expected ngrok tunnel to start");
-        }
         try {
-          await expect
-            .poll(async () => JSON.parse(await fs.readFile(evidencePath, "utf8")), {
-              timeout: 2_000,
-              interval: 20,
-            })
-            .toEqual({ argvContainsToken: false, envHasToken: true });
+          expect(JSON.parse(await fs.readFile(evidencePath, "utf8"))).toEqual({
+            argvContainsToken: false,
+            envHasToken: true,
+          });
         } finally {
           await tunnel.stop();
         }
@@ -119,67 +109,45 @@ describe.skipIf(process.platform === "win32")("voice-call tunnel child process",
     );
   });
 
-  it("force-kills ngrok when it ignores graceful shutdown", async () => {
-    await withNgrok(['process.on("SIGTERM", () => {});', announceTunnel], async ({ pidPath }) => {
+  it("force-kills ngrok when it ignores graceful shutdown", async ({ signal }) => {
+    await withNgrok(`process.on("SIGTERM", () => {});\n${announceTunnel}`, async ({ pidPath }) => {
       const tunnel = await startNgrok();
-      if (!tunnel) {
-        throw new Error("Expected ngrok tunnel to start");
-      }
-      const childPid = await readPid(pidPath);
       await tunnel.stop();
-      expect(await waitForProcessExit(childPid, 1_000)).toBe(true);
+      await expectProcessExit(pidPath, signal);
     });
   });
 
-  it("force-kills ngrok before rejecting a startup timeout", async () => {
+  it("force-kills ngrok before rejecting a startup timeout", async ({ signal }) => {
     await withNgrok(
-      [
-        'process.on("SIGTERM", () => fs.writeFileSync(process.env.OPENCLAW_NGROK_SIGNAL_FILE, "SIGTERM"));',
-      ],
+      'process.on("SIGTERM", () => fs.writeFileSync(paths.signalPath, "SIGTERM"));',
       async ({ pidPath, signalPath }) => {
-        let startupTimer: ReturnType<typeof setTimeout> | undefined;
         const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-        let result: ReturnType<typeof startTunnel>;
-        let timeoutCalls: typeof timeoutSpy.mock.calls;
-        let timeoutResults: typeof timeoutSpy.mock.results;
-        try {
-          result = startNgrok();
-          // Keep setup failures from leaving an unobserved startup rejection.
-          void result.catch(() => undefined);
-          timeoutCalls = [...timeoutSpy.mock.calls];
-          timeoutResults = [...timeoutSpy.mock.results];
-          const timer = timeoutResults[0];
-          if (timer?.type === "return") {
-            startupTimer = timer.value;
-          }
-        } finally {
-          timeoutSpy.mockRestore();
+        const result = startNgrok();
+        // Observe setup failures while waiting for the child's readiness receipt.
+        void result.catch(() => undefined);
+        const [callback, delay] = timeoutSpy.mock.calls[0] ?? [];
+        const timer = timeoutSpy.mock.results[0];
+        timeoutSpy.mockRestore();
+        expect(delay).toBe(30_000);
+        if (typeof callback !== "function" || timer?.type !== "return") {
+          throw new Error("Expected a native ngrok startup deadline");
         }
-        const childPid = await readPid(pidPath);
-
-        expect(timeoutCalls).toEqual([[expect.any(Function), 30_000]]);
-        const callback = timeoutCalls[0]?.[0];
-        expect(timeoutResults).toHaveLength(1);
-        if (typeof callback !== "function" || !startupTimer) {
-          throw new Error("Expected one native ngrok startup deadline");
-        }
+        await withinTest(
+          // This fixture emits no ready stdout; only the test triggers startup settlement.
+          awaitGateBeforeSettlement(
+            receipts.waitFor(pidPath, "ready"),
+            result,
+            "ngrok settled before publishing its PID",
+          ),
+          signal,
+        );
         // Advance only startup readiness; real signal escalation and child closure stay timed.
-        clearTimeout(startupTimer);
+        clearTimeout(timer.value);
         callback();
         await expect(result).rejects.toThrow("ngrok startup timed out (30s)");
-        await expect
-          .poll(
-            async () => {
-              try {
-                return await fs.readFile(signalPath, "utf8");
-              } catch {
-                return "";
-              }
-            },
-            { timeout: 1_000, interval: 20 },
-          )
-          .toBe("SIGTERM");
-        expect(await waitForProcessExit(childPid, 1_000)).toBe(true);
+        // Timeout rejection follows the termination owner, including its SIGTERM handler.
+        expect(await fs.readFile(signalPath, "utf8")).toBe("SIGTERM");
+        await expectProcessExit(pidPath, signal);
       },
     );
   }, 40_000);

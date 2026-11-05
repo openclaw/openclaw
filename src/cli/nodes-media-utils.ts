@@ -36,11 +36,7 @@ export function mediaPathMatchesFormat(filePath: string, format: string): boolea
   return !desired || normalizeMediaExtension(current) === desired;
 }
 
-export function resolveTempPathParts(opts: { ext: string; tmpDir?: string; id?: string }): {
-  ext: string;
-  tmpDir: string;
-  id: string;
-} {
+export function resolveTempPathParts(opts: { ext: string; tmpDir?: string; id?: string }) {
   // Restrict extensions before writing temp media paths derived from CLI/user input.
   const tmpDir = opts.tmpDir ?? resolvePreferredOpenClawTmpDir();
   const rawExt = opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`;

@@ -25,6 +25,8 @@ export async function searchVisibleSessionTranscripts(params: {
     includeDerivedTitles: _titles,
     includeLastMessage: _preview,
     ownerFirst: _ownerFirst,
+    rowMode: _rowMode,
+    source: _source,
     ...scope
   } = buildSessionListParams(params.listOptions);
   return params.client.request<VisibleSessionTranscriptSearchResult>("sessions.search", {

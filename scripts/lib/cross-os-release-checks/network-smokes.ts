@@ -107,30 +107,20 @@ async function configureDiscordSmoke(params: {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["config", "set", "channels.discord.enabled", "true"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["config", "set", "channels.discord.groupPolicy", "allowlist"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["config", "set", "channels.discord.guilds", guildsJson, "--strict-json"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
+  for (const args of [
+    ["channels.discord.enabled", "true"],
+    ["channels.discord.groupPolicy", "allowlist"],
+    ["channels.discord.guilds", guildsJson, "--strict-json"],
+  ]) {
+    await runInstalledCli({
+      cliPath: params.cliPath,
+      args: ["config", "set", ...args],
+      cwd: params.cwd,
+      env: params.env,
+      logPath: params.logPath,
+      timeoutMs: 2 * 60 * 1000,
+    });
+  }
   if (!shouldUseManagedGatewayService()) {
     const gatewayEnv = { ...params.env, DISCORD_BOT_TOKEN: params.token };
     const gatewayLogPath = join(
@@ -244,7 +234,7 @@ export function dashboardHtmlMarkerStatus(html: string): {
   title: boolean;
 } {
   const title = html.includes("<title>OpenClaw Control</title>");
-  const app = html.includes("<openclaw-app></openclaw-app>");
+  const app = /<openclaw-app(?:\s|>)/u.test(html);
   return { app, ready: title && app, title };
 }
 

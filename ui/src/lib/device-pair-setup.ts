@@ -1,15 +1,17 @@
-// Shared mobile pairing setup state for app-level entry points.
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   DevicePairSetupCodeParams,
   DevicePairSetupCodeResult,
   DevicePairSetupCompletedEvent,
-  DevicePairSetupDeliveryUncertainEvent,
   DevicePairSetupStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { t } from "../i18n/index.ts";
+import { registerDevicesEnglish } from "../i18n/locales/en-devices.ts";
 import { formatUiError } from "./format-error.ts";
+
+registerDevicesEnglish();
 
 type GatewayRequestClient = Pick<GatewayBrowserClient, "request">;
 
@@ -17,53 +19,39 @@ export type DevicePairSetup = DevicePairSetupCodeResult & {
   setupId: string;
   expiresAtMs: number;
 };
+export type DevicePairJoinSetup = DevicePairSetup &
+  Required<Pick<DevicePairSetupCodeResult, "command" | "serviceCommand" | "installedCommand">>;
 export type DevicePairSetupAccess = "full" | "limited" | "node";
 // Only the fields the modal actually shows. The event also carries deviceId and
 // ts; validating what is never rendered would just be shipped dead weight.
 type DevicePairSetupCompletion = Pick<DevicePairSetupCompletedEvent, "setupId" | "access"> & {
   deviceName?: string;
 };
-type DevicePairSetupDeliveryUncertain = Pick<
-  DevicePairSetupDeliveryUncertainEvent,
-  "setupId" | "access"
->;
+type DevicePairSetupDeliveryUncertain = Pick<DevicePairSetupCompletion, "setupId" | "access">;
 
-export type DevicePairSetupLifecycle =
-  | { phase: "selection"; access: DevicePairSetupAccess }
-  | { phase: "loading"; access: DevicePairSetupAccess }
-  | { phase: "waiting"; access: DevicePairSetupAccess; setup: DevicePairSetup }
-  | {
-      phase: "reconciling";
-      access: DevicePairSetupAccess;
-      setupId: string;
-    }
-  | { phase: "error"; source: "create"; access: DevicePairSetupAccess; message: string }
-  | {
-      phase: "error";
-      source: "status";
-      access: DevicePairSetupAccess;
-      setupId: string;
-      message: string;
-    }
-  | {
-      phase: "success";
-      access: DevicePairSetupCompletion["access"];
-      deviceName?: string;
-    }
-  | {
-      phase: "delivery-uncertain";
-      access: DevicePairSetupDeliveryUncertain["access"];
-    }
-  | { phase: "expired"; access: DevicePairSetupAccess };
+export type DevicePairSetupLifecycle = { access: DevicePairSetupAccess } & (
+  | { phase: "selection" }
+  | { phase: "loading" }
+  | { phase: "waiting"; setup: DevicePairSetup }
+  | { phase: "reconciling"; setupId: string }
+  | { phase: "error"; source: "create"; message: string }
+  | { phase: "error"; source: "status"; setupId: string; message: string }
+  | { phase: "success"; deviceName?: string }
+  | { phase: "delivery-uncertain" }
+  | { phase: "expired" }
+);
 
-function requestDevicePairSetup(client: GatewayRequestClient, params: DevicePairSetupCodeParams) {
-  return client.request<DevicePairSetup>("device.pair.setupCode", params, {
+function requestDevicePairSetup<Result extends DevicePairSetup = DevicePairSetup>(
+  client: GatewayRequestClient,
+  params: DevicePairSetupCodeParams,
+) {
+  return client.request<Result>("device.pair.setupCode", params, {
     timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   });
 }
 
 export function requestDevicePairJoinSetup(client: GatewayRequestClient) {
-  return requestDevicePairSetup(client, { includeQr: false, joinUrl: true });
+  return requestDevicePairSetup<DevicePairJoinSetup>(client, { includeQr: false, joinUrl: true });
 }
 
 type DevicePairSetupState = {
@@ -162,7 +150,7 @@ async function readGatewaySetupCompletion(
 ): Promise<DevicePairSetupCompletionLookup> {
   const client = state.client;
   if (!client || !state.connected) {
-    return { status: "unavailable", message: "Gateway unavailable" };
+    return { status: "unavailable", message: t("devices.pairing.gatewayUnavailable") };
   }
   try {
     const result = await client.request<DevicePairSetupStatusResult>("device.pair.setupStatus", {
@@ -175,12 +163,12 @@ async function readGatewaySetupCompletion(
       const outcome = parseDevicePairSetupDeliveryUncertain(result.deliveryUncertain);
       return outcome?.setupId === setupId
         ? { status: "delivery-uncertain", outcome }
-        : { status: "unavailable", message: "Invalid setup status response" };
+        : { status: "unavailable", message: t("devices.pairing.invalidStatus") };
     }
     const completion = parseDevicePairSetupCompletion(result.completion);
     return completion?.setupId === setupId
       ? { status: "found", completion }
-      : { status: "unavailable", message: "Invalid setup status response" };
+      : { status: "unavailable", message: t("devices.pairing.invalidStatus") };
   } catch (err) {
     return { status: "unavailable", message: formatUiError(err) };
   }
@@ -331,6 +319,7 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
   const requestToken = {};
   devicePairSetupRequests.set(state, requestToken);
   if (lifecycle.phase === "error" && lifecycle.source === "status") {
+    state.devicePairSetupLifecycle = { phase: "reconciling", access, setupId: lifecycle.setupId };
     const lookup = await readGatewaySetupCompletion(state, lifecycle.setupId);
     if (devicePairSetupRequests.get(state) === requestToken) {
       applyDevicePairSetupCompletionLookup(state, lifecycle.setupId, access, lookup);
@@ -358,9 +347,7 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
       return;
     }
     if (!hasDevicePairSetupLifecycle(result)) {
-      throw new Error(
-        "Gateway does not provide pairing lifecycle metadata. Update the Gateway and try again.",
-      );
+      throw new Error(t("devices.pairing.lifecycleUnavailable"));
     }
     const resolvedAccess =
       result.access === "full" || result.access === "limited" || result.access === "node"

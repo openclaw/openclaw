@@ -12,13 +12,4 @@ enum SessionKey {
         if trimmedAgent.isEmpty { return normalizedBase }
         return "agent:\(trimmedAgent):\(normalizedBase)"
     }
-
-    static func agentId(from value: String?) -> String? {
-        let parts = (value ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: ":", omittingEmptySubsequences: false)
-        guard parts.count >= 3, parts[0].lowercased() == "agent" else { return nil }
-        let agentId = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
-        return agentId.isEmpty ? nil : agentId
-    }
 }

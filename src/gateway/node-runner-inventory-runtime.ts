@@ -2,7 +2,7 @@ import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-i
 import { availableWorkerSlots } from "../../packages/gateway-protocol/src/worker-capacity.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
-  formatNodeRunnerInventoryIssue,
+  createNodeRunnerInventoryIssueError,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_STATUS_WAIT_VERSION,
@@ -11,6 +11,7 @@ import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   resolveNodeWorkerExecutionIssue,
   type NodeRunnerInventoryIssue,
+  type NodeRunnerInventoryDeclaration,
   type NodeWorkerHostDeclaration,
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
@@ -65,6 +66,24 @@ export type NodeRunnerInventoryRecord = Omit<
   workerHost?: NodeWorkerHostDeclaration;
 };
 
+export function createNodeRunnerInventoryRecord(
+  node: NodeRunnerRegistrySession & { pairingIdentity: string },
+  clientId: NodeWorkerHostClientId,
+  declaration: NodeRunnerInventoryDeclaration,
+): NodeRunnerInventoryRecord {
+  const workerHost = "workerHost" in declaration ? declaration.workerHost : undefined;
+  return {
+    nodeId: node.nodeId,
+    connId: node.connId,
+    pairingIdentity: node.pairingIdentity,
+    ...(node.pairingGeneration ? { pairingGeneration: node.pairingGeneration } : {}),
+    clientId,
+    clientMode: "node",
+    protocolFeatures: [...declaration.protocolFeatures],
+    ...(workerHost ? { workerHost: structuredClone(workerHost) } : {}),
+  };
+}
+
 export type NodeRunnerStateChange = {
   inventoryChanged: boolean;
   availabilityChanged: boolean;
@@ -83,7 +102,7 @@ export function createNodeRunnerStatePublisher(
     return Boolean(
       node &&
       node.client.invalidated !== true &&
-      resolveNodeWorkerSupervisorProof(node, runnerInventoryByConn),
+      resolveNodeWorkerSupervisorState(node, runnerInventoryByConn),
     );
   };
   return {
@@ -152,7 +171,7 @@ export async function waitForNodeRunnerAvailability(
       }
       const issue = transport.getIssue?.(nodeId);
       if (issue) {
-        throw new Error(formatNodeRunnerInventoryIssue(nodeId, issue));
+        throw createNodeRunnerInventoryIssueError(nodeId, issue);
       }
       await racePromiseWithAbortSignal(changed.promise, options.signal);
       changed = createDeferredCore();
@@ -175,6 +194,7 @@ export function collectNodeRunnerCatalogState(params: {
   };
 }) {
   const sessionHostNodeIds = new Set<string>();
+  const deviceFolderNodeIds = new Set<string>();
   const issuesByNodeId = new Map<string, NodeRunnerInventoryIssue[]>();
   const workerSlotsByNodeId = new Map<string, NodeWorkerCapacitySnapshot>();
   const workerBundleByNodeId = new Map<string, NodeWorkerBundleStatus>();
@@ -184,9 +204,12 @@ export function collectNodeRunnerCatalogState(params: {
     if (!state || !current || current.connId !== node.connId) {
       continue;
     }
-    const proof = resolveNodeWorkerSupervisorProof(current, state.runnerInventoryByConn);
+    const proof = resolveNodeWorkerSupervisorState(current, state.runnerInventoryByConn);
     if (proof && proof.pairingGeneration === node.pairingGeneration) {
       sessionHostNodeIds.add(node.nodeId);
+      if (proof.workerHost.deviceFolders === true) {
+        deviceFolderNodeIds.add(node.nodeId);
+      }
     }
     const issue =
       resolveNodeRunnerInventoryIssue(current, state.runnerInventoryByConn) ??
@@ -197,17 +220,38 @@ export function collectNodeRunnerCatalogState(params: {
       issuesByNodeId.set(node.nodeId, [issue]);
     }
     if (proof) {
-      workerSlotsByNodeId.set(node.nodeId, { ...proof.workerHost.capacity });
+      workerSlotsByNodeId.set(node.nodeId, proof.workerHost.capacity);
     }
     const observation = state.bundleStatusByConn.get(node.connId);
     if (observation) {
-      workerBundleByNodeId.set(node.nodeId, structuredClone(observation.status));
+      workerBundleByNodeId.set(node.nodeId, observation.status);
     }
   }
-  return { sessionHostNodeIds, issuesByNodeId, workerSlotsByNodeId, workerBundleByNodeId };
+  return {
+    sessionHostNodeIds,
+    deviceFolderNodeIds,
+    issuesByNodeId,
+    workerSlotsByNodeId,
+    workerBundleByNodeId,
+  };
 }
 
 export function resolveNodeWorkerSupervisorProof(
+  node: NodeRunnerRegistrySession,
+  runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
+): NodeWorkerSupervisorNodeProof | undefined {
+  const current = resolveNodeWorkerSupervisorState(node, runnerInventoryByConn);
+  return current
+    ? {
+        ...current,
+        workerHost: structuredClone(current.workerHost),
+        commands: [...current.commands],
+      }
+    : undefined;
+}
+
+// Synchronous registry reads borrow admitted facts; only escaping proofs need a snapshot.
+function resolveNodeWorkerSupervisorState(
   node: NodeRunnerRegistrySession,
   runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
 ): NodeWorkerSupervisorNodeProof | undefined {
@@ -236,8 +280,8 @@ export function resolveNodeWorkerSupervisorProof(
     clientId: node.clientId,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: structuredClone(declaration.workerHost),
-    commands: [...node.commands],
+    workerHost: declaration.workerHost,
+    commands: node.commands,
   };
 }
 
@@ -286,7 +330,7 @@ export function isNodeWorkerSupervisorProofCurrent(
   if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
     return false;
   }
-  const current = resolveNodeWorkerSupervisorProof(node, runnerInventoryByConn);
+  const current = resolveNodeWorkerSupervisorState(node, runnerInventoryByConn);
   return (
     current?.pairingIdentity === proof.pairingIdentity &&
     current.pairingGeneration === proof.pairingGeneration &&

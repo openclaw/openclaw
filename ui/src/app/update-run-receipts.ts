@@ -1,3 +1,4 @@
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
 // Only browser acknowledgments live here. Run identity, progress and outcomes
@@ -13,9 +14,7 @@ export function createUpdateRunReceipts() {
         return [];
       }
       const saved: unknown = raw.length < 32_768 ? JSON.parse(raw) : null;
-      return Array.isArray(saved) && saved.every((item): item is string => typeof item === "string")
-        ? saved.slice(-32)
-        : null;
+      return isStringArray(saved) ? saved.slice(-32) : null;
     } catch {
       return null;
     }
