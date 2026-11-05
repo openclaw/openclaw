@@ -185,7 +185,7 @@ export function createSessionActorMemoryEvents(options: {
   const parent = (input: { parentId?: string | null; appendIntent?: "active-branch" }) =>
     resolveTranscriptAppendParent({
       ...input,
-      tailId: tree().appendParentId,
+      readTailId: () => tree().appendParentId,
       parentId: input.parentId,
       isAncestor,
     });

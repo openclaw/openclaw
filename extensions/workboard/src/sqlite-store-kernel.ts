@@ -15,6 +15,8 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   runSqliteImmediateTransactionSync,
+  type SqliteWorkerTransactionOptions,
+  type SynchronousSqliteCallback,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { definedFields } from "../record-fields.js";
@@ -64,9 +66,9 @@ export type WorkboardSqliteKernel = {
 } & {
   assertSettled(this: void): void;
   close(this: void): void;
-  withWriteTransaction<T>(
-    operation: () => T,
-    options?: Parameters<typeof runSqliteImmediateTransactionSync>[2],
+  withWriteTransaction<T, CommitResult = void>(
+    operation: SynchronousSqliteCallback<T>,
+    options?: SqliteWorkerTransactionOptions<CommitResult>,
   ): T;
 };
 
