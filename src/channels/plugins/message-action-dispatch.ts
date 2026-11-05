@@ -412,7 +412,7 @@ function resolveMessageActionConversationReadGate(
         !hasCurrentConversationTarget(params.ctx))
     ) {
       throw new Error(
-        `Delegated ${params.ctx.channel}:${params.ctx.action} requires current provider and account context.`,
+        `Delegated ${params.ctx.channel}:${params.ctx.action} requires current provider and account context. Hint: if this read runs from a scheduled job, grant read authority with "openclaw automations edit <jobId> --tools message".`,
       );
     }
     return true;

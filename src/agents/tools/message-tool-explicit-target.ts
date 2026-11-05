@@ -54,7 +54,7 @@ export function createMessageToolExplicitTargetGuard(params: {
       return;
     }
     throw new MessageActionDeniedError(
-      "Explicit message target required for this run. Provide target/targets (and channel when needed).",
+      'Explicit message target required for this run. Provide target/targets (and channel when needed). Hint: use a target such as "channel:<id>" or "user:<id>".',
       "message_target_missing",
       "message-target:explicit",
     );

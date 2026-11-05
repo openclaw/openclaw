@@ -185,7 +185,7 @@ describe("official plugin read-only authority", () => {
       assertDirectAdapterHandoff: vi.fn(),
     };
     await expect(fixture.prepare(context)).rejects.toThrow(
-      "requires current provider and account context",
+      'requires current provider and account context. Hint: if this read runs from a scheduled job, grant read authority with "openclaw automations edit <jobId> --tools message"',
     );
     const authorized = {
       ...context,
