@@ -68,16 +68,17 @@ export class TranscriptReaderAnchor {
   ) {}
 
   get endReady(): boolean {
-    return (
-      !this.host.offsetState.pendingScrollOffset &&
-      (this.host.initialRange.pending || this.rowsMeasured)
-    );
+    const { initialRange, offsetState } = this.host;
+    return !offsetState.pendingScrollOffset && (initialRange.pending || this.rowsMeasured);
   }
 
-  /** Native receipts and the virtual range must describe the same measurement batch. */
+  /** Native receipts and the active range must describe the same measurement batch. */
   get rowsMeasured(): boolean {
     return this.host.virtualizer.getVirtualItems().every(({ key, size }) => {
       const row = this.host.virtualizer.elementsCache.get(key);
+      if (row?.dataset.preparedRow === "true") {
+        return true;
+      }
       const height = row && this.heights.get(row);
       return row?.isConnected === true && height !== undefined && Math.abs(height - size) < 0.5;
     });
@@ -212,9 +213,9 @@ export class TranscriptReaderAnchor {
     );
     if (applied === undefined) {
       if (!above || owned || !this.holdsNativeOffset()) {
-        // Virtual-core grows the native range and writes (or retries) the correction itself;
-        // positioning owners restore their own anchors afterwards.
-        return above;
+        // Prepend restores the measured bubble absolutely; relative compensation
+        // can replay after its anchor retires during iOS's post-touch grace.
+        return above && this.host.prependAnchor.messageKey === null;
       }
       this.columnShift += delta;
       this.landedShift += delta;

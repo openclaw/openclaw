@@ -83,8 +83,20 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.scheduleEndReconcile();
   };
   readonly layout = new TranscriptLayoutOwner(this.recordEndLayoutCorrection);
-  private readonly reconcileEnd = () => {
+  private readonly followEnd = () =>
+    this.scrollToEnd({
+      source: "auto",
+      behavior: this.offsetState.scrollCommand?.behavior ?? "auto",
+    });
+  private readonly reconcilePosition = () => {
     if (this.connected && !this.offsetState.pendingInteractionAnchor) {
+      if (
+        !this.offsetState.touchActive &&
+        this.prependAnchor.update(this.virtualizer, this.readerAnchor.rowsMeasured)
+      ) {
+        this.offsetState.syncNativeOffset?.();
+        this.presentation.commitChange(this.invalidate, true);
+      }
       this.commitComposerResize(true);
       // Initial layout owns positioning until the visible range is measured.
       if (!this.initialRange.pending) {
@@ -92,11 +104,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           this.scrollElement,
           this.canAutoFollow(),
           this.offsetState.pendingScrollOffset !== null || this.offsetState.touchActive,
-          () =>
-            this.scrollToEnd({
-              source: "auto",
-              behavior: this.offsetState.scrollCommand?.behavior ?? "auto",
-            }),
+          this.followEnd,
         );
       }
     }
@@ -132,18 +140,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       }
     });
   };
-  private readonly reconcileReader = () => {
-    if (
-      !this.offsetState.touchActive &&
-      this.prependAnchor.update(this.virtualizer, this.readerAnchor.rowsMeasured)
-    ) {
-      this.offsetState.syncNativeOffset?.();
-      this.presentation.commitChange(this.invalidate, true);
-    }
-    this.reconcileEnd();
-  };
   private readonly rowRefs: TranscriptRowRefs;
-  private readonly readerAnchor = new TranscriptReaderAnchor(this, this.reconcileReader);
+  private readonly readerAnchor = new TranscriptReaderAnchor(this, this.reconcilePosition);
   private readonly captureInteractionResize = (event: Event) => {
     const anchor = resolveChatTranscriptInteractionAnchor(event);
     if (!anchor) {
@@ -340,7 +338,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     const target = this.callbacks.geometryEventTarget;
     this.stopGeometry =
       target && listen(target, SIDEBAR_GEOMETRY_COMMIT_EVENT, this.handleGeometryCommit);
-    this.cleanupVirtualizer = this.virtualizer._didMount();
+    // Virtual-core exposes its lifecycle hooks as bound arrow functions.
+    const { _didMount: mountVirtualizer } = this.virtualizer;
+    this.cleanupVirtualizer = mountVirtualizer();
     if (this.offsetState.pendingScrollOffset) {
       this.invalidate();
     }
@@ -367,7 +367,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   }
 
   private readonly scheduleEndReconcile = (contentSize?: number) =>
-    this.connected && this.endAnchor.scheduleReconcile(this.reconcileEnd, contentSize);
+    this.connected && this.endAnchor.scheduleReconcile(this.reconcilePosition, contentSize);
 
   update(): void {
     if (this.threadInnerElement) {
@@ -382,12 +382,13 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.entryAnimations.didCommit();
     this.layout.connect(this.scrollElement, this.callbacks);
     this.positionRail.update();
-    this.virtualizer._willUpdate();
+    const { _willUpdate: updateVirtualizer } = this.virtualizer;
+    updateVirtualizer();
     this.rowRefs.observeConnected();
     const interactionResizePending = this.offsetState.pendingInteractionAnchor !== null;
     this.offsetState.reconcileInteractionResize(this.scrollElement, this.virtualizer);
     if (!interactionResizePending) {
-      this.renderer.queueAfterCommit(this.reconcileReader);
+      this.renderer.queueAfterCommit(this.reconcilePosition);
     }
     if (!this.initialRange.pending || (this.layout.ready && this.rowKeys.length === 0)) {
       applyPendingScrollOffset(this.scrollRestoreHost);
