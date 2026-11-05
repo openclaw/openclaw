@@ -69,7 +69,7 @@ worker.${name}(database, () => 7, { withCommit: thenableCommit });
     files: {
       [configFileName]: JSON.stringify({
         extends: "./tsconfig.json",
-        compilerOptions: { strict: true, exactOptionalPropertyTypes: true },
+        compilerOptions: { strict: true },
         files: [sourceFileName, ...owners],
         include: [],
       }),
