@@ -160,7 +160,7 @@ async function fetchOpenRouterModels(timeoutMs: number): Promise<OpenRouterModel
           headers: { Accept: "application/json" },
           signal,
         }).catch((error: unknown) => {
-          if (signal.aborted) {
+          if (signal?.aborted) {
             throw error;
           }
           // fetch rejects with a bare "fetch failed"; the cause names the network failure.
