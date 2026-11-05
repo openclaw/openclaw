@@ -26,10 +26,10 @@ import {
   renderMediaAttachmentDisposition,
 } from "./media-attachment-outcomes.js";
 import type { MediaExecutionContext } from "./provider-execution.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { resolveConcurrency } from "./resolve.js";
 import { createScopedMediaAttachmentCache } from "./runner.attachments.js";
 import { buildProviderRegistry, normalizeMediaAttachments, runCapability } from "./runner.js";
-import type { MediaUnderstandingProvider } from "./types.js";
 
 export type ApplyMediaUnderstandingResult = {
   extractedFileImages: ExtractedFileImage[];

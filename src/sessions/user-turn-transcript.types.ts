@@ -199,6 +199,8 @@ type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnI
 export type CreateUserTurnTranscriptRecorderParams = {
   /** Authenticated input identity independent of prepared media paths. */
   pendingInputRequestFingerprint?: string;
+  /** Durable channel source turns may reopen their own cancelled, unconsumed attempt. */
+  reclaimCancelledSourceTurn?: boolean;
   trackInputCompletion?: boolean;
   /** Trusted settle replay candidates; storage must match the complete original request hash. */
   pendingInputReplaySourceSessionKeys?: readonly string[];
@@ -224,6 +226,7 @@ export type CreateUserTurnTranscriptRecorderParams = {
 
 type UserTurnPersistenceOptions = {
   target?: UserTurnTranscriptTargetResolver;
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   /** Pin admitted storage without replacing the recorder's target resolver or metadata. */
   storageTarget?: Readonly<
     Pick<UserTurnTranscriptTarget, "agentId" | "sessionKey" | "sessionId"> & { storePath: string }
@@ -304,7 +307,6 @@ export type UserTurnTranscriptRecorder = {
     params?: UserTurnPersistenceOptions & {
       expectedSessionId?: string;
       expectedSessionState?: SessionTranscriptTurnExpectedState;
-      sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
       beforeFreshMessageCommit?: SessionSourceAssertion;
       /** Allow a later explicit persistence attempt when this attempt appends nothing. */
       retryIfUnpersisted?: boolean;

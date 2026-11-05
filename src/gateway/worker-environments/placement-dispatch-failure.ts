@@ -88,6 +88,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "prepareProjectIntent"
   | "assertPreparedIntentCurrent"
   | "getPreparedCandidates"
+  | "refreshPreparedEnvironment"
   | "schedulePreparedRefill"
   | "createWithRequest"
   | "destroy"

@@ -56,10 +56,14 @@ afterEach(() => {
   runFfprobe.mockReset();
 });
 
-function startMediaRequest(filePath: string, mode: "meta" | "playback" = "meta") {
+function startMediaRequest(
+  filePath: string,
+  mode: "meta" | "playback" | "bytes" = "meta",
+  ticket?: string,
+) {
   const response = makeMockHttpResponse();
   const { res } = response;
-  res.req.url = `/__openclaw__/assistant-media?${mode}=1&source=${encodeURIComponent(filePath)}&token=test-token`;
+  res.req.url = `/__openclaw__/assistant-media?${mode}=1&source=${encodeURIComponent(filePath)}&${ticket ? `mediaTicket=${encodeURIComponent(ticket)}` : "token=test-token"}`;
   res.req.method = "GET";
   Object.defineProperty(res.req.socket, "remoteAddress", { value: "127.0.0.1" });
   const handled = handleControlUiAssistantMediaRequest(res.req, res, {
@@ -191,6 +195,27 @@ it("shares audio metadata probes, retries failures, and reinspects replacements"
   expect(runFfprobe).toHaveBeenCalledWith(expect.any(Array), {
     stdinFileDescriptor: expect.any(Number),
   });
+});
+
+it("shows explicit scratch expiry for local image cards after the original file disappears", async () => {
+  const root = tempDirs.make("ui-media-expiry-", resolvePreferredOpenClawTmpDir());
+  const file = path.join(root, ".openclaw", "tmp", "proof", "image.svg");
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>');
+  const metadata = await readMetadata(file);
+  expect(metadata).toMatchObject({ available: true, mediaTicket: expect.any(String) });
+  const ticket = (metadata as { mediaTicket: string }).mediaTicket;
+  await fs.unlink(file);
+  expect(await readMetadata(file)).toMatchObject({
+    available: false,
+    code: "artifact-file-expired",
+    reason: "file expired (scratch cleaned after 24 h)",
+    retryable: false,
+  });
+  const download = startMediaRequest(file, "bytes", ticket);
+  expect(await download.handled).toBe(true);
+  expect(download.res.statusCode).toBe(410);
+  expect(download.end).toHaveBeenCalledWith("file expired (scratch cleaned after 24 h)");
 });
 
 it("retains exotic playback metadata while distinct files fill the inspection slots", async () => {

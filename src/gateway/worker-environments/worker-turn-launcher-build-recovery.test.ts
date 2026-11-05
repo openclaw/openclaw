@@ -190,6 +190,7 @@ async function createBuildRecoveryHarness(
     ensureRetainedRunning: unexpected("retained wake"),
     assertPreparedIntentCurrent: vi.fn(),
     getPreparedCandidates: () => [],
+    refreshPreparedEnvironment: unexpected("prepared refresh"),
     schedulePreparedRefill: vi.fn(),
     bindPreparedWorkspace: unexpected("prepared binding"),
     recordError: vi.fn(() => {

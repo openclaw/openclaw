@@ -209,6 +209,9 @@ their SHA-512 hashes in private staging before extraction; missing or invalid
 archives fall back to the runner image, then the registry. Exact dependency
 archives carry the same files, and dependency repair preserves them. Store v2
 and exact-dependency v4 entries reseed once to include these bootstrap archives.
+Vitest transform and Node compile caches use workspace-relative `.cache/` roots
+so archives restore across different runner workspace layouts. Their new namespaces
+exclude older archives containing absolute-host paths.
 Cache publication still belongs to the existing warmer on each backend.
 Node discovery scans only the toolcache's executable levels, avoiding bundled
 npm dependency trees before selecting an already-installed runtime.
@@ -375,8 +378,11 @@ unchanged by the measured-worker cutover.
 Backend routing still applies. Hybrid retries and fork retries retain their
 hosted routes. Ordinary manual CI dispatches remain hosted in hybrid mode;
 Full Release Validation's existing frozen-target lint exception remains separate.
-Npm preflight uses the larger Blacksmith request by default and retains its
-explicit `use_github_hosted_runners` option.
+Npm preflight build and test jobs use the larger Blacksmith request by default
+and retain their explicit `use_github_hosted_runners` option, which Full Release
+Validation exposes as `npm_preflight_use_github_hosted_runners`. The final npm
+qualification job uses `ubuntu-24.04`, honoring `OPENCLAW_RELEASE_RUNNER_GROUP`.
+It validates and seals the existing artifacts without rerunning builds or tests.
 
 Candidate discovery and binding, plus short Full Release Validation admission,
 reuse, dispatch, and execution-plan jobs, always use `ubuntu-24.04`. Reusable
@@ -385,6 +391,14 @@ Full Release Validation honors `OPENCLAW_RELEASE_RUNNER_GROUP`; the reusable
 workflow honors its `runner_group` input. Release Decision, Diagnostic Drain,
 and the nightly watcher keep their existing runner selection and 720-minute
 budgets; standard hosted runners cannot preserve that lifetime.
+
+Mantis Discord and web UI actor authorization, request resolution, and ref
+validation use `ubuntu-24.04`. Their live proof jobs retain separate runtime
+placement and deadlines.
+
+Mantis scenario dispatch and QA actor/ref validation also use `ubuntu-24.04`.
+The QA controls honor their `runner_group` input. QA profile planning, builds,
+shards, aggregation, and live transport workloads keep their existing runners.
 
 Ordinary iOS smoke CI builds the app and embedded Watch targets for the runner's
 architecture, using the same iPhone simulator for compilation and voice-cleanup
