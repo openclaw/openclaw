@@ -90,4 +90,18 @@ describe("resolveDiscordTarget", () => {
     expect(resolveDiscordDirectoryUserId({ accountId: "work", handle: "jane" })).toBe("999");
     expect(resolveDiscordDirectoryUserId({ accountId: "default", handle: "jane" })).toBeUndefined();
   });
+
+  it("resolves a bare username ending in digits through the directory lookup", async () => {
+    const janeWithDigits = { kind: "user", id: "user:999", name: "Jane99" } as const;
+    const listPeers = vi
+      .spyOn(directoryLive, "listDiscordDirectoryPeersLive")
+      .mockResolvedValueOnce([janeWithDigits]);
+
+    expect(await resolveDiscordTarget("jane99", account)).toMatchObject({
+      kind: "user",
+      id: "999",
+      normalized: "user:999",
+    });
+    expect(listPeers).toHaveBeenCalledWith(expect.objectContaining({ query: "jane99" }));
+  });
 });
