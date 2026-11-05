@@ -49,6 +49,18 @@ const APPROVAL_HISTORY_PAGE_SIZE = 50;
 const APPROVAL_HISTORY_REQUIRED_SCOPE = "operator.approvals";
 const APPROVALS_DOCS_URL = "https://docs.openclaw.ai/tools/exec-approvals";
 
+function StandingGrantsEmpty(props: { loaded: boolean }) {
+  return (
+    <SettingsEmpty
+      message={
+        <span class="standing-grants-empty" data-empty-message={t("standingGrants.empty")}>
+          <span>{t(props.loaded ? "standingGrants.empty" : "approvalHistory.unknown")}</span>
+        </span>
+      }
+    />
+  );
+}
+
 export function ApprovalsPage() {
   const context = useApplication();
   let disposed = false;
@@ -454,17 +466,10 @@ export function ApprovalsPage() {
                 description={t("standingGrants.description")}
                 notice={<ApprovalErrorNotice error={view().grantsError} />}
               >
-                <Loading
-                  on={requestGeneration()}
-                  fallback={<SettingsEmpty message={t("approvalHistory.unknown")} />}
-                >
+                <Loading on={requestGeneration()} fallback={<StandingGrantsEmpty loaded={false} />}>
                   {readGrants()}
                   {view().grants.length === 0 ? (
-                    <SettingsEmpty
-                      message={t(
-                        view().grantsLoaded ? "standingGrants.empty" : "approvalHistory.unknown",
-                      )}
-                    />
+                    <StandingGrantsEmpty loaded={view().grantsLoaded} />
                   ) : (
                     <ul class="standing-grants" aria-labelledby="standing-grants-title">
                       <For each={view().grants} keyed={(grant) => grant.grantId}>

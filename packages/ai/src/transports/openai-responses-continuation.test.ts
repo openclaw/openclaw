@@ -167,6 +167,35 @@ afterEach(() => {
 });
 
 describe("OpenAI Responses continuation", () => {
+  it("matches replay aliases without allocating per-call sets", () => {
+    const state = continuationState(
+      [toolCall("call_latest")],
+      [firstUser, toolCall("call_sent"), toolOutput("call_sent")],
+    );
+    const request = {
+      ...state.lastRequest,
+      input: [
+        ...(state.lastRequest.input ?? []),
+        toolCall("call_latest"),
+        toolOutput("call_latest"),
+      ],
+    };
+    const sets = vi.spyOn(globalThis, "Set");
+    let allocations: number;
+    let result: ReturnType<typeof resolve>;
+    try {
+      result = resolve(state, request);
+      allocations = sets.mock.calls.length;
+    } finally {
+      sets.mockRestore();
+    }
+    expect(result).toMatchObject({
+      continuationStatus: "continued",
+      request: { previous_response_id: "resp_1", input: [toolOutput("call_latest")] },
+    });
+    expect(allocations).toBe(0);
+  });
+
   it("extends immutable prefix hashes without re-encoding retained entries across branches", () => {
     const host = createAiTransportHost({
       immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },

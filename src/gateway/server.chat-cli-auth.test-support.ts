@@ -74,7 +74,10 @@ if (process.argv.includes("auth")) {
   process.exit(0);
 }
 const descriptor = process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR;
-appendFileSync(join(nativeRoot, "execution-launches.log"), descriptor === undefined ? "native\n" : "saved\n");
+// Exclude native discovery; every saved-credential launch still counts.
+if (descriptor !== undefined || process.argv.includes("--session-id") || process.argv.includes("--resume")) {
+  appendFileSync(join(nativeRoot, "execution-launches.log"), descriptor === undefined ? "native\n" : "saved\n");
+}
 let credential = nativeLogin
   ? JSON.parse(readFileSync(join(nativeRoot, ".credentials.json"), "utf8")).claudeAiOauth?.accessToken
   : undefined;
