@@ -1181,7 +1181,10 @@
             },
             "toolsAllowMode": {
               "description": "Add/update: \"exact\" persistently opts out of cron.defaultTools; \"defaults\" explicitly resets that choice. Omitted preserves the saved mode and copied selections on schedule/name edits. New or changed nonempty selections add configured defaults before policy checks. [] always stays tool-less.",
-              "enum": ["exact", "defaults"],
+              "enum": [
+                "exact",
+                "defaults"
+              ],
               "type": "string"
             }
           },
