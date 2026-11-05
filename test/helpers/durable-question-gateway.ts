@@ -4,7 +4,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { TOOL_CALL_RAW_TOOL_NAME } from "../../src/agents/tool-search-types.js";
+import { TOOL_CALL_RAW_TOOL_NAME } from "../../src/agents/tool-catalog.js";
 import type { GatewayClientOptions } from "../../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../../src/gateway/test-openai-responses-model.js";
 import { loadOrCreateDeviceIdentity } from "../../src/infra/device-identity.js";
