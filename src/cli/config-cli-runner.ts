@@ -251,15 +251,17 @@ export async function runConfigOperations(params: {
     const merge =
       operation.mutation === "merge" || (options.merge && operation.mutation !== "replace");
     roster.prepare(operation, Boolean(merge));
+    // Address a mixed-case stored agents.entries key by its normalized id before
+    // the conditional-write guard: a casing resolution changes the requested
+    // persistent path, and the documented contract rejects redirected
+    // conditional writes so expectations apply only to the exact authored path.
+    operation.setPath = resolveStoredAgentsEntryKey(next, operation.setPath);
     if (
       currentExpectation &&
       !pathEquals(operation.requestedPath, roster.writePath(operation.setPath))
     ) {
       throw new Error("conditional config set requires a direct, non-redirected config path");
     }
-    // Address a mixed-case stored agents.entries key by its normalized id; the
-    // expectation check above still sees the exact authored path.
-    operation.setPath = resolveStoredAgentsEntryKey(next, operation.setPath);
     if (operation.mutation === "delete") {
       const writePath = recordOperation(operation);
       // Capture identity before the splice changes legacy roster positions.

@@ -72,6 +72,24 @@ describe("config cli roster integration", () => {
     });
   });
 
+  it("rejects conditional writes redirected by mixed-case key resolution", async () => {
+    const raw = JSON.stringify({
+      agents: { ownership: "explicit", entries: { main: {}, Work: { name: "Work Agent" } } },
+    });
+    await withConfig(raw, async ({ configPath }) => {
+      await reject(
+        set(
+          "agents.entries.work.name",
+          '"Renamed"',
+          "--strict-json",
+          "--expect-current-json",
+          '"Work Agent"',
+        ),
+      );
+      expect(read(configPath)).toBe(raw);
+    });
+  });
+
   it("never matches agents.entries ids that differ beyond casing", async () => {
     const raw = JSON.stringify({
       agents: { ownership: "explicit", entries: { main: { name: "Main" } } },
