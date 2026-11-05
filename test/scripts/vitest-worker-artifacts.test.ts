@@ -88,7 +88,7 @@ function heldWorkerBorrowingProbe(directory: string) {
 }
 
 describe.concurrent("fresh compiled subprocess invocation", () => {
-  it("keeps source-host SDK imports native in maintenance workers", ({ workerArtifacts }) =>
+  it("keeps source-host SDK imports native in state and maintenance workers", ({ workerArtifacts }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
       const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
       const owner = workerArtifacts.createWorkerRun();
@@ -103,10 +103,12 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           import {parentPort,workerData} from 'node:worker_threads';
           await import(workerData.entry);
           const {tryNativeRequireModule}=await import(workerData.nativeRequire);
-          const native=tryNativeRequireModule(workerData.sdk);
-          assert(native.ok,'source-host SDK must load natively');
-          const imported=await import(workerData.sdk);
-          assert.equal(native.moduleExport,imported,'source SDK must retain one module identity');
+          for (const sdk of workerData.sdks) {
+            const native=tryNativeRequireModule(sdk);
+            assert(native.ok,'source-host SDK must load natively: '+sdk);
+            const imported=await import(sdk);
+            assert.equal(native.moduleExport,imported,'source SDK must retain one module identity');
+          }
           parentPort.postMessage('native-sdk-ready');
           parentPort.close();
           `,
@@ -121,14 +123,21 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             import {pathToFileURL} from 'node:url';
             import {Worker} from 'node:worker_threads';
             const [probe,directory,root]=process.argv.slice(1);
-            for(const entry of ['commands/doctor-database-engine-inspection.worker.js','snapshot/database-backup.worker.js','infra/database-engine/port-command.entry.worker.js']) {
+            for(const entry of [
+              'infra/sqlite-store.worker.js',
+              'state/openclaw-state.worker.js',
+              'commands/doctor-database-engine-inspection.worker.js',
+              'snapshot/database-backup.worker.js',
+              'infra/database-engine/port-command.entry.worker.js',
+            ]) {
               const worker=new Worker(pathToFileURL(probe),{
                 execArgv:[],
                 env:{...process.env,NODE_OPTIONS:'',TSX_TSCONFIG_PATH:path.join(root,'tsconfig.json')},
                 workerData:{
                   entry:pathToFileURL(path.join(directory,'dist',entry)).href,
                   nativeRequire:pathToFileURL(path.join(root,'src/plugins/native-module-require.ts')).href,
-                  sdk:pathToFileURL(path.join(root,'src/plugin-sdk/sqlite-worker-runtime.ts')).href,
+                  sdks:['sqlite-worker-runtime.ts','time-runtime.ts'].map(sdk=>
+                    pathToFileURL(path.join(root,'src/plugin-sdk',sdk)).href),
                 },
               });
               try {
