@@ -679,7 +679,12 @@ export async function finalizeCodexAttempt(
           ? params.userTurnTranscriptRecorder?.getPersistedMessage?.()
           : undefined;
         const continuedPromptIdentity = continuedPrompt && readMirrorIdentity(continuedPrompt);
-        const evidencePrefix = continuedPrompt && continuedPromptIdentity ? [continuedPrompt] : [];
+        const evidencePrefix =
+          continuedPrompt &&
+          continuedPromptIdentity &&
+          continuedPromptIdentity !== `${activeTurnId}:prompt`
+            ? [continuedPrompt]
+            : [];
         // Supervised auth has no stock tool-free summary operation. Preserve eligibility
         // for the host fallback without substituting another credential owner.
         const finalizationContext =
@@ -690,7 +695,10 @@ export async function finalizeCodexAttempt(
                 modelProvider: resourceState.thread.modelProvider,
                 authProfileId: startupAuthProfileId,
                 mirroredMessages: [...evidencePrefix, ...mirrorOutcome.mirroredMessages],
-                settledMessages: [...evidencePrefix, ...result.messagesSnapshot],
+                settledMessages: [
+                  ...evidencePrefix,
+                  ...(mirrorOutcome.settledMessages ?? result.messagesSnapshot),
+                ],
                 ...(continuedPromptIdentity ? { promptIdentity: continuedPromptIdentity } : {}),
                 turnId: activeTurnId,
                 // A stranded-reply retry suppresses its system prompt and carries no

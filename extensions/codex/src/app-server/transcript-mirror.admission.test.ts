@@ -34,14 +34,16 @@ beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
 
 it.each([
-  ["monitor without source key", undefined, false, "available"],
+  ["monitor without source key", undefined, false, "available", false],
+  ["pre-persisted initial input", "persisted:user", false, "available", true],
+  ["removed pre-persisted input", "removed-persisted:user", false, "removed", true],
   ["hidden subagent announcement", "announce:child:user", true, "available"],
   ["replayed settle wake", "announce:requester-settle:replay:user", true, "replayed"],
   ["removed admitted prompt", "removed:user", false, "removed"],
   ["closed consultation", "closed-consult:user", true, "closed"],
 ] as const)(
   "preserves host prompt ownership for an admitted %s",
-  async (_label, idempotencyKey, hidden, recovery) => {
+  async (_label, idempotencyKey, hidden, recovery, suppressed = false) => {
     const admittedContent = "Check the admitted monitor.";
     const upstreamUserText =
       recovery === "replayed" ? "Restarted: check the monitor." : "Check the monitor.";
@@ -91,6 +93,7 @@ it.each([
       ...target,
       sessionTarget: target,
       userTurnTranscriptRecorder: recorder,
+      suppressNextUserMessagePersistence: suppressed,
       onUserMessagePersisted,
     };
     const host = await createAdmittedHostCapabilityTestFixture(params);
@@ -158,7 +161,7 @@ it.each([
         sessionFile: base.sessionFile,
         model: "gpt-5.6-luna",
         turnId,
-        settledMessages: result.messagesSnapshot,
+        settledMessages: mirrored.settledMessages ?? result.messagesSnapshot,
         mirroredMessages: mirrored.mirroredMessages,
       });
       if (recovery === "available" || recovery === "replayed") {

@@ -79,9 +79,12 @@ export async function resolveFinalCodexMirrorMessages(params: {
   messagesSnapshot: AgentMessage[];
   turnId: string;
 }): Promise<AgentMessage[]> {
+  const recorder = params.params.userTurnTranscriptRecorder;
+  const persistedPrompt = recorder?.getPersistedMessage?.();
   if (
-    params.params.suppressNextUserMessagePersistence ||
-    !params.params.userTurnTranscriptRecorder
+    !recorder ||
+    (params.params.suppressNextUserMessagePersistence &&
+      (!persistedPrompt || readMirrorIdentity(persistedPrompt) !== `${params.turnId}:prompt`))
   ) {
     return params.messagesSnapshot;
   }
