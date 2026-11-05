@@ -343,7 +343,7 @@ Details and example CoreDNS config: [Bonjour](/gateway/bonjour).
 
 ### 3. Connect from Android
 
-Create a setup code in the [Control UI](/web/control-ui) (**Devices → Pair device**) or with `openclaw qr`.
+Create a setup code in the [Control UI](/web/control-ui) (**Devices → Connect a device**) or with `openclaw qr`.
 
 That mobile **setup code** (and its QR) is what Android **Scan QR or setup code** / **Enter setup code** accept. It is a different artifact from the gateway **join URL** minted by [`openclaw devices join-code`](/cli/devices#openclaw-devices-join-code) (`https://…/j/<code>`), which enrolls a headless node host via [`openclaw connect`](/cli/connect). Pasting a join URL or bare join code into Android setup is rejected — generate a fresh mobile QR/setup code with [`openclaw qr`](/cli/qr).
 

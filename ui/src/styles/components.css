@@ -256,9 +256,17 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .sidebar-recent-session .session-owner-stack::after {
   right: 0;
+  /* Keep the right-hand face opaque underneath its away opacity. */
+  z-index: var(--owner-cutout-z, 0);
+  background:
+    linear-gradient(var(--session-row-bg, transparent) 0 0) padding-box,
+    var(--sidebar-bg, var(--bg));
+  mask: none;
 }
 
 .session-owner-stack--overflow {
+  --owner-cutout-z: 1;
+
   justify-content: flex-start;
 }
 
@@ -368,7 +376,9 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   left: -6px;
   width: 32px;
   height: 22px;
-  overflow: visible;
+  overflow: hidden;
+  /* Keep its animated stroke from rerasterizing the entire sidebar tile. */
+  transform: translateZ(0);
   pointer-events: none;
 }
 
@@ -382,13 +392,13 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   opacity: 0.2;
 }
 
-/* The arc covers the same share of its outline as the ring's arc and moves at the
-   ring's linear speed (~45px/s). */
+/* Keep the small arc at 30 painted positions per second without limiting
+   transcript frames. Its average speed still matches the ring (~45px/s). */
 .session-glyph__trace-run {
   stroke: var(--accent);
   stroke-linecap: round;
   stroke-dasharray: var(--spinner-trace-dash);
-  animation: session-run-trace 2s linear infinite;
+  animation: session-run-trace 2s steps(60, end) infinite;
 }
 
 .session-glyph__badge {
@@ -620,6 +630,10 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   box-shadow: 0 2px 12px var(--accent-glow);
 }
 
+.btn.primary:active:where(:not(:disabled, [aria-disabled="true"])) {
+  background: var(--primary-active);
+}
+
 .btn.active {
   border-color: var(--accent);
   background: var(--accent-subtle);
@@ -647,6 +661,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   line-height: 1;
 }
 
+/* Keep the lazy toast renderer's failure and retry surface available offline. */
 openclaw-toast-host[popover] {
   position: fixed;
   inset: 0;
@@ -694,17 +709,12 @@ openclaw-toast-host[popover] {
   padding-right: 10px;
 }
 
-.app-toast--avatar {
-  --app-toast-row: 32px;
-  padding-left: 12px;
-}
-
-.shell--chat {
+/* Other chat-like pages have no session toolbar to clear. */
+.shell--session {
   --app-toast-shell-top: calc(var(--safe-area-top) + var(--rail-header-height) + 12px);
 }
 
-.app-toast-lanes,
-.app-toast-anchored {
+.app-toast-lanes {
   display: contents;
 }
 
@@ -747,187 +757,6 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
   width: min(360px, calc(100vw - 24px));
 }
 
-/* Arrivals are always blocks, never pills. */
-.app-toast-lane--top-right > .app-toast {
-  border-radius: min(16px, calc(16px * var(--openclaw-corner-radius-scale)));
-}
-
-@supports (corner-shape: squircle) {
-  .app-toast-lane--top-right > .app-toast {
-    border-radius: min(24px, calc(24px * var(--openclaw-corner-radius-scale)));
-    corner-shape: squircle;
-  }
-}
-
-.app-toast-lane > .app-toast {
-  transition:
-    translate 320ms var(--app-toast-lane-ease),
-    scale 320ms var(--app-toast-lane-ease),
-    opacity 200ms ease;
-}
-
-.app-toast-lane > .app-toast > * {
-  transition: opacity 160ms ease;
-}
-
-@starting-style {
-  .app-toast-lane > .app-toast[data-active="true"] {
-    opacity: 0;
-    translate: 0 -14px;
-    scale: 0.98;
-  }
-}
-
-.app-toast-lane > .app-toast[data-active="false"] {
-  opacity: 0;
-  translate: 0 -8px;
-  scale: 0.97;
-  pointer-events: none;
-  transition-timing-function: ease-in;
-  transition-duration: 180ms;
-}
-
-/* Closed, the newest toast is the only one in flow and sizes the lane. The next two
- * take its box and peek 10px lower per step, 5% smaller; later ones wait hidden. */
-.app-toast-lane:not([data-open]) > .app-toast:not([data-depth="0"]) {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  transform-origin: bottom center;
-}
-
-.app-toast-lane:not([data-open]) > .app-toast:not([data-depth="0"]) > * {
-  opacity: 0;
-}
-
-.app-toast-lane:not([data-open]) > .app-toast[data-depth="0"] {
-  z-index: 3;
-}
-
-.app-toast-lane:not([data-open]) > .app-toast[data-active="false"] {
-  z-index: 4;
-}
-
-.app-toast-lane:not([data-open]) > .app-toast[data-depth="1"] {
-  z-index: 2;
-  translate: 0 10px;
-  scale: 0.95;
-}
-
-.app-toast-lane:not([data-open]) > .app-toast[data-depth="2"] {
-  z-index: 1;
-  translate: 0 20px;
-  scale: 0.9;
-}
-
-.app-toast-lane:not([data-open])
-  > .app-toast[data-depth]:not([data-depth="0"], [data-depth="1"], [data-depth="2"]) {
-  opacity: 0;
-  translate: 0 20px;
-  scale: 0.85;
-  visibility: hidden;
-}
-
-/* The last toast leaving keeps its own box so the lane does not collapse under it. */
-.app-toast-lane:not([data-open]):not(:has(> .app-toast[data-active="true"]))
-  > .app-toast[data-active="false"] {
-  position: relative;
-  inset: auto;
-}
-
-.app-toast--anchored {
-  position: fixed;
-  z-index: var(--z-toast);
-  width: max-content;
-  left: var(--app-toast-anchor-center);
-  top: var(--app-toast-anchor-top);
-  transform: translateX(-50%);
-  min-width: 0;
-  max-width: min(360px, calc(var(--app-toast-anchor-width) - 24px));
-  transition-property: translate, scale, opacity;
-}
-
-.app-toast--anchored[data-active="true"] {
-  translate: 0 0;
-  scale: 1;
-  opacity: 1;
-  transition-duration: 200ms;
-  transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
-}
-
-@starting-style {
-  .app-toast--anchored[data-active="true"] {
-    translate: 0 -100%;
-    scale: 0.95;
-    opacity: 0;
-  }
-}
-
-.app-toast--anchored[data-active="false"] {
-  translate: 0 -100%;
-  scale: 0.95;
-  opacity: 0;
-  pointer-events: none;
-  transition-duration: 400ms;
-  transition-timing-function: cubic-bezier(0.7, 0, 0.84, 0);
-}
-
-/* The leading slot shares the first row's height, so the glyph or avatar centers on
- * the title line whether an inline action makes that row 20, 28 or 32 tall. */
-.app-toast__icon,
-.app-toast__avatar {
-  display: grid;
-  flex: 0 0 auto;
-  height: var(--app-toast-row);
-  place-items: center;
-}
-
-.app-toast__icon {
-  width: 20px;
-  color: var(--muted);
-}
-
-.app-toast__icon svg {
-  width: 18px;
-  height: 18px;
-}
-
-.app-toast__avatar {
-  width: 32px;
-}
-
-.app-toast__avatar > * {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-full);
-}
-
-.app-toast--success .app-toast__icon {
-  color: var(--ok);
-}
-
-.app-toast--info .app-toast__icon {
-  color: var(--info);
-}
-
-.app-toast--warning .app-toast__icon {
-  color: var(--warn);
-}
-
-.app-toast--error .app-toast__icon {
-  color: var(--danger);
-}
-
-.app-toast--progress .app-toast__icon svg {
-  animation: app-toast-spin 0.9s linear infinite;
-}
-
-@keyframes app-toast-spin {
-  to {
-    rotate: 360deg;
-  }
-}
-
 /* An action stays beside the text only while the title and description fit one line
  * next to it. The body's flex basis is its single-line width, so anything longer
  * wraps the action onto its own row, right aligned. */
@@ -963,18 +792,6 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
   text-wrap: pretty;
 }
 
-.app-toast__message a {
-  color: var(--link, var(--accent));
-  font-weight: 500;
-}
-
-.app-toast__description {
-  color: var(--muted);
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: calc(18px * var(--control-ui-text-scale));
-  text-wrap: pretty;
-}
-
 .app-toast__action {
   display: inline-flex;
   flex: 0 0 auto;
@@ -1000,16 +817,6 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
 
 .app-toast__action:active {
   background: var(--app-toast-wash-active);
-}
-
-.app-toast__action--primary {
-  background: var(--accent);
-  color: var(--accent-foreground);
-}
-
-.app-toast__action--primary:hover,
-.app-toast__action--primary:active {
-  background: var(--accent-hover);
 }
 
 /* Dismiss floats on the trailing corner and appears only while the toast is
@@ -1043,12 +850,6 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
   content: "";
 }
 
-.app-toast__dismiss svg {
-  width: 11px;
-  height: 11px;
-  stroke-width: 2.5;
-}
-
 .app-toast:hover > .app-toast__dismiss,
 .app-toast:focus-within > .app-toast__dismiss {
   opacity: 1;
@@ -1068,7 +869,7 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
 /* On a phone both lanes share one column at the top: the center lane, then
  * arrivals. Each toast spans the screen between the gutters. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .shell--chat {
+  .shell--session {
     --app-toast-shell-top: calc(
       var(--safe-area-top) + var(--shell-topbar-height) + var(--chat-mobile-pane-header-height) +
         20px
@@ -1124,31 +925,12 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
     max-width: none;
     translate: none;
   }
-
-  /* Touch has no hover: an open stack shows every dismiss button. */
-  .app-toast-lane[data-open] > .app-toast > .app-toast__dismiss {
-    opacity: 1;
-    scale: 1;
-  }
-
-  .app-toast--anchored {
-    max-width: calc(var(--app-toast-anchor-width) - 24px);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .app-toast-lane > .app-toast,
-  .app-toast-lane > .app-toast > *,
-  .app-toast--anchored,
-  .app-toast--anchored[data-active="true"],
-  .app-toast--anchored[data-active="false"],
   .app-toast__dismiss,
   .app-toast__action {
     transition: none;
-  }
-
-  .app-toast--progress .app-toast__icon svg {
-    animation-duration: 2s;
   }
 }
 
@@ -3736,7 +3518,7 @@ select.data-table-pagination__size {
 }
 
 .sidebar-recent-session .hover-marquee {
-  --hover-marquee-fade-width: 24px;
+  --hover-marquee-fade-width: 6px;
 }
 
 /* Text on a tag fill keeps its readable tone; only icons take the quieter one. */

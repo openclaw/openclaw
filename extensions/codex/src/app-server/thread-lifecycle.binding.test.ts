@@ -57,6 +57,7 @@ import {
 } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import { fingerprintEnvironmentSelection } from "./thread-fingerprints.js";
+import { registerManagedFeaturePinTests } from "./thread-lifecycle-managed-feature-pins.test-support.js";
 import { registerThreadPolicyRefreshTests } from "./thread-lifecycle-policy-refresh.test-support.js";
 import { registerRequiredRootThreadPolicyTests } from "./thread-lifecycle-rooted.test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
@@ -1096,7 +1097,8 @@ describe("Codex app-server thread lifecycle bindings", () => {
         const rejected = expect(fixture.start()).rejects.toThrow(error);
         if (options.receipt) {
           await fixture.unsubscribed;
-          await vi.advanceTimersByTimeAsync(2_000);
+          // Codex's 10s unload confirmation window (thread-lifecycle-adoption.ts).
+          await vi.advanceTimersByTimeAsync(10_000);
         }
         await rejected;
         expect(await readCodexAppServerBinding(fixture.sessionFile)).toEqual(before);
@@ -2374,28 +2376,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
     ]);
   });
 
-  it("fails closed when requirements pin denied image generation on", async () => {
-    const { sessionFile, workspaceDir } = createPaths();
-    const params = createParams(sessionFile, workspaceDir);
-    params.pluginHarnessToolPolicySafeDeniedTools = ["image_generate"];
-    const request = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: { featureRequirements: { image_generation: true } } };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    await expect(
-      startOrResumeThread({
-        client: { request } as never,
-        params,
-        userMcpServersEnabled: false,
-      }),
-    ).rejects.toThrow("cannot override required feature image_generation");
-    expect(request.mock.calls.map(([method]) => method)).toEqual([...PREFLIGHT_METHODS]);
+  registerManagedFeaturePinTests({
+    createPaths,
+    createParams,
+    startOrResumeThread,
+    preflightMethods: PREFLIGHT_METHODS,
   });
 
   it("discards the fresh ephemeral thread after MCP attestation finds a malformed inventory", async () => {

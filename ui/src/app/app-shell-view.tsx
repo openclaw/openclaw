@@ -150,6 +150,7 @@ export function ApplicationShell(props: {
           {
             "shell--navigation-rail": view().railAvailable,
             "shell--chat": view().chatLikeRoute,
+            "shell--session": view().sessionRoute,
             "shell--nav-collapsed": view().navCollapsed,
             "shell--mobile-nav": view().mobileNavLayout,
             "shell--merged-chat-chrome": view().mergedChatChrome,
@@ -413,7 +414,7 @@ export function ApplicationShell(props: {
               "content--new-session": view().activeRoute === "new-session",
               "content--systems": view().activeRoute === "systems",
               "content--custodian": view().activeRoute === "custodian",
-              "content--workboard": view().activeRoute === "workboard",
+              "content--workboard": view().workboardLayout,
             },
           ]}
           ref={(element) => {

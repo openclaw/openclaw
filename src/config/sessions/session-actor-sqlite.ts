@@ -30,7 +30,6 @@ import type {
   SessionActorAuthorityFacts,
   SessionActorCommandContext,
   SessionActorCommitObserver,
-  SessionActorHotState,
   SessionActorOperations,
   SessionActorOutcome,
   SessionActorPhase,
@@ -43,6 +42,7 @@ import { SessionActorReadInvalidatedError } from "./session-actor-read-error.js"
 import {
   restoreSessionActorCommittedOutcome,
   type SessionActorCommittedWireOutcome,
+  type SessionActorEntryReference,
 } from "./session-actor-receipt.js";
 import type { createSessionActorReplica } from "./session-actor-replica.js";
 import { publishCommittedSessionTranscriptReceipts } from "./session-transcript-authority.js";
@@ -123,7 +123,7 @@ export function createSqliteSessionActorExecutor(
       snapshot: SessionActorAuthorityFacts,
     ) => void,
     beforeFinalGrant?: (conversationPublication: unknown) => void,
-    entryReference?: () => SessionActorHotState | undefined,
+    entryReference?: () => SessionActorEntryReference | undefined,
   ) => {
     let actorAdmissionSeen = false;
     return (
@@ -234,7 +234,7 @@ export function createSqliteSessionActorExecutor(
     let native: NativeAdmission | undefined;
     let previousEntry: SessionActorAuthorityFacts["entry"];
     let capturedPreviousEntry = false;
-    let entryReference: SessionActorHotState | undefined;
+    let entryReference: SessionActorEntryReference | undefined;
     let running: Promise<Outcome> | undefined;
     let committed: Extract<Outcome, { kind: "committed" }> | undefined;
     let candidate: unknown;

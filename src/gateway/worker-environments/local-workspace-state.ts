@@ -168,7 +168,9 @@ export function projectionOperations(
     const document = selected.baseline_ref ? await baselineDocument() : undefined;
     return await selectLocalWorkspaceCanonicalPaths({
       root: owner.worktree.path,
-      admittedPaths: selected.source_paths_json,
+      admittedPaths: preparedInputPaths
+        ? undefined
+        : parseLocalWorkspaceSourcePaths(selected.source_paths_json),
       preparedPaths: preparedInputPaths,
       signal,
       assertCurrent,
@@ -197,9 +199,6 @@ export function projectionOperations(
     return snapshot;
   };
   const scan = async (target: Direction): Promise<LocalWorkspaceManifestCheckpoint> => {
-    if (owner.worktree.snapshotRef) {
-      await buildCacheInputs();
-    }
     await assertLocalWorkspaceDirectory(sourcePath(target));
     const snapshot = await readManifest({
       kind: "scan",

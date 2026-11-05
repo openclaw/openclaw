@@ -258,6 +258,7 @@ test("HTTP Visitor publications are privately readable by their initial publishe
           canContinue: false,
           canArchive: false,
           continuationUnavailableReason: expect.stringContaining("beam handoff"),
+          continuationUnavailableReasonCode: "source-handoff-required",
         },
       ]);
       expect(JSON.stringify(own)).not.toContain("publisherProfileId");

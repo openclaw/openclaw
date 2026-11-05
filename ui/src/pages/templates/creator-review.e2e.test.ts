@@ -100,7 +100,7 @@ async function withHeldCreator(
     const openAction = async () => {
       await row.hover();
       await menu.click();
-      await page.getByRole("menuitem", { name: "Create Template", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Create template", exact: true }).click();
     };
     await openAction();
     await expect.poll(() => held).toBe(1);
@@ -479,7 +479,7 @@ it.skipIf(!process.env.OPENCLAW_TEMPLATE_CREATOR_AUTHORITY_PROOF)(
           const row = page.locator('.sidebar-agent-roster__row[data-agent-id="main"]');
           await row.hover();
           await page.getByRole("button", { name: "Options for Creator proof" }).click();
-          await page.getByRole("menuitem", { name: "Create Template", exact: true }).click();
+          await page.getByRole("menuitem", { name: "Create template", exact: true }).click();
           await expect.poll(() => runtimeUrl).toBeTruthy();
           expect(writes).toEqual([]);
           const application = await getControlUiContextHandle(page);

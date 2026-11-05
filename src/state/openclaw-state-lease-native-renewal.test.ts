@@ -43,6 +43,7 @@ async function withNativeLeaseTest(
       signal?: AbortSignal,
     ) => Promise<void>;
   }) => Promise<void>,
+  durationMs = leaseMs,
 ) {
   await withOpenClawTestState({ label: "native-lease-renewal" }, async (state) => {
     const database = openOpenClawStateDatabase({ env: state.env });
@@ -62,7 +63,7 @@ async function withNativeLeaseTest(
             {
               scope: "core:test",
               key: "native-renewal",
-              leaseMs,
+              leaseMs: durationMs,
               waitMs: 0,
               signal,
               database: { scope: "shared", options: { env: state.env } },
@@ -75,6 +76,22 @@ async function withNativeLeaseTest(
     }
   });
 }
+
+it("paces long leases by their TTL without periodic short-interval writes", async () => {
+  await withNativeLeaseTest(async ({ readExpiry, runLease }) => {
+    await runLease(async (lease) => {
+      let expiresAt = readExpiry();
+      for (let renewal = 1; renewal <= 3; renewal++) {
+        await vi.advanceTimersByTimeAsync(99_999);
+        expect(readExpiry()).toBe(expiresAt);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(readExpiry()).toBeGreaterThan(expiresAt);
+        expiresAt = readExpiry();
+        expect(lease.signal.aborted).toBe(false);
+      }
+    });
+  }, 300_000);
+});
 
 it.each([false, true])(
   "renews a native lease after its heartbeat (contended=%s)",

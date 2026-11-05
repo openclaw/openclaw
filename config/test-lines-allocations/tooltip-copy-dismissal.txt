@@ -1,0 +1,2 @@
+# Wait for tooltip dismissal before asserting fallback-copy feedback and keyboard navigation.
+4
