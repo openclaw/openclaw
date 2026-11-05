@@ -310,8 +310,20 @@ The recommended model is
 (Apache-2.0, about 150M parameters, runs locally on CPU or a small GPU). The
 defaults (keyword top 10, `highThreshold` 0.75, 4 × 1,000-character excerpts
 capped at 2,800 per page, no pointer tier) are the configuration measured with
-it on a recall benchmark. Serve it from the official repository with
-safetensors weights, and pin a revision.
+it on a recall benchmark.
+
+Serve it safely:
+
+- Pin the revision, for example
+  `f7481e6055501a30fb19d090657df9ec1f79ab2c` (the current release as of this
+  writing).
+- Load `model.safetensors` (or the repository's ONNX files) only. The
+  repository ships no Python code and no pickle weights.
+- Leave `trust_remote_code` off. ModernBERT is built into `transformers`
+  4.48 and later, so the model needs no remote code; a server or copy that
+  asks for it is a red flag.
+- Use current serving libraries; with `sentence-transformers`, use 5.6.0 or
+  later, which fixes local-path loading of extra model code.
 
 Reranker scores are relevance, not calibrated probabilities, and each model
 scores on its own scale. With any other model, run the gate in `shadow` mode,
