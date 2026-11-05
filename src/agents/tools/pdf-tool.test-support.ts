@@ -1,6 +1,6 @@
 import { expect, type Mock, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
+import type { MediaUnderstandingProvider } from "../../media-understanding/provider-types.js";
 import * as pdfExtract from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";

@@ -11,17 +11,19 @@ export type {
 } from "../../packages/media-understanding-common/src/types.js";
 export type {
   AudioTranscriptionConfigContext,
-  AudioTranscriptionRequest,
   ImageDescriptionRequest,
   ImagesDescriptionRequest,
   MediaUnderstandingProvider,
   MediaUnderstandingProviderAuthContext,
+  StructuredExtractionRequest,
+} from "../media-understanding/provider-types.js";
+export type {
+  AudioTranscriptionRequest,
   MediaUnderstandingProviderAuthResult,
   MediaUnderstandingProviderRequestAuth,
   MediaUnderstandingProviderSyntheticAuthResult,
   PdfAnalysisRequest,
   PdfAnalysisResult,
-  StructuredExtractionRequest,
   VideoDescriptionRequest,
 } from "../media-understanding/types.js";
 

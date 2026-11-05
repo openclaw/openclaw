@@ -1,10 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import type {
-  MediaUnderstandingProvider,
-  PdfAnalysisRequest,
-} from "../../media-understanding/types.js";
+import type { MediaUnderstandingProvider } from "../../media-understanding/provider-types.js";
+import type { PdfAnalysisRequest } from "../../media-understanding/types.js";
 import * as pdfExtract from "../../media/pdf-extract.js";
 import { attachProviderAuthAuthority } from "../../plugins/provider-auth-authority.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
