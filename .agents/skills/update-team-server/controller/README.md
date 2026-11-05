@@ -243,8 +243,10 @@ user. The service invokes the launcher; the timer schedules it hourly. Both unit
 belong in `/etc/systemd/system/` as `root:root`, mode `0644`.
 
 The launcher now takes the deployment lock exclusively and nonblockingly, then
-hands it to the release proofs as FD 9 to satisfy the release library's entry
-guard. Runtime bodies and status reporters do not inherit either lock descriptor.
+hands it to the release proofs as FD 9. The host's currently installed release
+library requires that lock on FD 9 before any command; this repository's library
+accepts the handoff unchanged. Runtime bodies and status reporters do not inherit
+either lock descriptor.
 Proof failures print their command, exit code, and last 2000 stderr bytes. The
 disk-maintenance body remains outside this closure; its launcher job entry is
 unchanged. Landing does not install these files: publication is a separate
