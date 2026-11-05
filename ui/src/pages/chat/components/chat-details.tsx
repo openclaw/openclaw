@@ -20,7 +20,7 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
-import { ChatDetailsDesktopComposition } from "./chat-details-desktop-loader.ts";
+import { loadChatDetailsDesktopComposition } from "./chat-details-desktop-loader.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import "../../../styles/chat/details.css";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
@@ -33,6 +33,9 @@ const ChatDetailsProgress = lazy(() => import("./chat-details-progress.tsx"), {
 
 const ChatDetailsSession = lazy(() => import("./chat-details-session.tsx"), {
   export: "ChatDetailsSession",
+});
+const ChatDetailsDesktopComposition = lazy(loadChatDetailsDesktopComposition, {
+  export: "ChatDetailsDesktopComposition",
 });
 const ChatDetailsMobileHostContent = lazy(() => import("../chat-details-mobile-host-content.tsx"), {
   export: "ChatDetailsMobileHostContent",
