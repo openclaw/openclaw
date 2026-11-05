@@ -333,6 +333,8 @@ const enCron = {
     },
     jobState: {
       nextRelative: "Next {at}",
+      waiting: "Waiting: {reason} since {since}",
+      waitingWarning: "Warning: admission deferred {count} times",
     },
     runEntry: {
       tokens: "{count} Tokens",
