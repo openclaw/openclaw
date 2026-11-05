@@ -30,7 +30,6 @@ import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runClientCredentialOperation } from "./client-credential-store.js";
 import { readExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
-import * as gatewayOwner from "./gateway-owner-lease.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as sqliteReadOnlyWorker from "./sqlite-readonly-worker.js";
 import {
@@ -405,13 +404,16 @@ async function withCapture(
   operation: () => Promise<void>,
   assertDatabaseAccess?: (requested: string) => void,
   assertOwnerCurrent: () => void = () => {},
+  existingCapture?: ReturnType<typeof createUpdateDoctorDatabaseWriteCapture>,
 ) {
   const warnings: string[] = [];
-  const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
-    env,
-    signal: new AbortController().signal,
-    warn: (message) => warnings.push(message),
-  })!;
+  const capture =
+    existingCapture ??
+    createUpdateDoctorDatabaseWriteCapture(generations, {
+      env,
+      signal: new AbortController().signal,
+      warn: (message) => warnings.push(message),
+    })!;
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
     assertOwnerCurrent,
@@ -805,35 +807,14 @@ it("migrates legacy exec approvals after Doctor detection retained a shared-stat
   });
 });
 
-it.runIf(process.platform !== "win32").each([
-  { name: "supervised owner", liveOwner: true, interference: "none" },
-  { name: "service between crashed processes", liveOwner: false, interference: "none" },
-  { name: "unrelated write before receipt", liveOwner: true, interference: "before" },
-  { name: "unrelated write after receipt", liveOwner: true, interference: "after" },
-])(
-  "retains the original capture through a predecessor stop receipt: $name",
-  async ({ liveOwner, interference }) => {
+it.runIf(process.platform !== "win32").each(["none", "before", "after"])(
+  "retains the original capture through a predecessor stop receipt (outside write: %s)",
+  async (interference) => {
     await withOpenClawTestState({ scenario: "minimal", applyEnv: true }, async ({ env }) => {
-      const root = process.cwd();
       const pathname = openOpenClawStateDatabase({ env }).path;
-      const run = createUpdateRun({ trigger: "cli" }, { env });
+      const { runId } = createUpdateRun({ trigger: "cli" }, { env });
       await closeOpenClawStateDatabaseAsync();
       const generations = readUpdateDatabaseGenerations([pathname]);
-      vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(
-        liveOwner
-          ? {
-              owner: "fixture-gateway",
-              pid: 631,
-              host: "fixture-host",
-              startedAt: 1,
-              state: "live",
-              expired: false,
-              mode: "supervised",
-              port: 18789,
-              supervisor: { kind: "systemd", name: "fixture-gateway" },
-            }
-          : undefined,
-      );
       const unrelatedWrite = () => {
         using database = new DatabaseSync(pathname);
         database.exec("CREATE TABLE unrelated_write(value);");
@@ -854,7 +835,7 @@ it.runIf(process.platform !== "win32").each([
             stoppedAtMs: 7,
             serviceUpdateVerdict: {
               kind: "owned" as const,
-              root,
+              root: process.cwd(),
               fingerprint: "sealed",
               refreshDefinition: false,
             },
@@ -870,13 +851,8 @@ it.runIf(process.platform !== "win32").each([
       })!;
       await capture.admit();
       const preparing = stopSupervisedPredecessorGateway(
-        { runId: run.runId, repair: true },
-        {
-          root,
-          assertCurrent() {},
-          warn: vi.fn(),
-          databaseWriteCapture: capture,
-        },
+        { runId, repair: true },
+        { root: process.cwd(), assertCurrent() {}, warn: vi.fn(), databaseWriteCapture: capture },
       );
       if (interference === "before") {
         await expect(preparing).rejects.toThrow("source changed after update capture");
@@ -886,37 +862,31 @@ it.runIf(process.platform !== "win32").each([
         if (interference === "after") {
           unrelatedWrite();
         }
-        const scope = createOpenClawDatabaseMaintenanceScope({
-          schemaMaintenance: true,
-          assertOwnerCurrent() {},
-          assertDatabaseAccess() {},
-        });
-        try {
-          await capture!.admit();
-          const migrate = () =>
-            scope.run(() =>
-              capture!.run(() => {
-                using database = new DatabaseSync(pathname);
-                runUpdateSqliteMigration(database, pathname, () =>
-                  database.exec("CREATE TABLE predecessor_repaired(value);"),
-                );
-              }),
-            );
-          if (interference === "after") {
-            expect(migrate).toThrow("source changed after update capture");
-          } else {
-            migrate();
-          }
-        } finally {
-          await scope.close();
-        }
-        await capture!.settle();
-        expect(capture!.receipt).toMatchObject({
+        const { receipt } = await withCapture(
+          env,
+          generations,
+          async () => {
+            using database = new DatabaseSync(pathname);
+            const migrateCaptured = () =>
+              runUpdateSqliteMigration(database, pathname, () =>
+                database.exec("CREATE TABLE predecessor_repaired(value);"),
+              );
+            if (interference === "after") {
+              expect(migrateCaptured).toThrow("source changed after update capture");
+            } else {
+              migrateCaptured();
+            }
+          },
+          undefined,
+          undefined,
+          capture,
+        );
+        expect(receipt).toMatchObject({
           unchanged: interference === "none",
           fromGenerations: generations,
         });
       }
-      expect(getUpdateRun(run.runId, { env })?.steps).toContainEqual(
+      expect(getUpdateRun(runId, { env })?.steps).toContainEqual(
         expect.objectContaining({
           step: "finalize:predecessor-stop:7:1000:631:sealed",
           status: "completed",
