@@ -659,38 +659,16 @@ wss.on("connection", (ws) => {
           fail("Unexpected artifact scope");
           break;
         }
-        if (params.type !== undefined && params.type !== "image") {
-          fail("Unsupported artifact type filter");
-          break;
-        }
         if (
-          params.type !== "image" &&
-          (params.limit !== undefined || params.cursor !== undefined)
+          params.type !== undefined ||
+          params.limit !== undefined ||
+          params.cursor !== undefined ||
+          params.messageRole !== undefined
         ) {
-          fail("limit and cursor require type image");
+          fail("This fixture supports the unpaged conversation catalog only");
           break;
         }
-        if (
-          params.limit !== undefined &&
-          (!Number.isInteger(params.limit) || params.limit < 1 || params.limit > 4)
-        ) {
-          fail("Image page limit must be between 1 and 4");
-          break;
-        }
-        // This one-image fixture never issues a next cursor; any supplied cursor is invalid.
-        if (params.cursor !== undefined) {
-          fail("Invalid artifact cursor; restart the image list");
-          break;
-        }
-        const artifacts = sessionArtifacts.filter(
-          (artifact, index) =>
-            (params.type !== "image" || artifact.type === "image") &&
-            (params.messageRole !== "assistant" ||
-              sessionArtifactFiles[index].role === "assistant"),
-        );
-        reply({
-          artifacts: params.type === "image" ? artifacts.slice(0, params.limit ?? 4) : artifacts,
-        });
+        reply({ artifacts: sessionArtifacts });
         break;
       }
       case "artifacts.download":
