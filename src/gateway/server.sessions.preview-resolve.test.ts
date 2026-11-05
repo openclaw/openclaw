@@ -1,6 +1,3 @@
-import { once } from "node:events";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { readSessionManagerBoundedSelection } from "../agents/sessions/session-manager-bounded-selection.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
