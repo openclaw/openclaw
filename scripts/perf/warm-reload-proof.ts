@@ -18,10 +18,15 @@ import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control
 import { evaluateControlUiContext } from "../../ui/src/test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
 import { installPaneChromeProbe } from "../lib/control-ui-pane-chrome-probe.ts";
+import { attachSidebarNetworkAttribution } from "../lib/control-ui-sidebar-network-attribution.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { freeProofPort, startWarmReloadAdmission } from "./warm-reload-admission.ts";
 import { installWarmReloadBrowserProbe, proofRegions } from "./warm-reload-browser-probe.ts";
-import { launchWarmReloadBrowser, calibrateWarmReloadPaintHolding } from "./warm-reload-browser.ts";
+import {
+  launchWarmReloadBrowser,
+  calibrateWarmReloadPaintHolding,
+  startWarmReloadScreencast,
+} from "./warm-reload-browser.ts";
 import { prepareWarmReloadBuild, createWarmReloadComparison } from "./warm-reload-compare.ts";
 import { seedWarmReloadFixture } from "./warm-reload-fixture.ts";
 import { analyzeReloadFrames, type ReloadFrame } from "./warm-reload-frames.ts";
@@ -48,6 +53,7 @@ const { values } = parseArgs({
     "composer-controls": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
+    "sidebar-network-attribution": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
     route: { type: "string", default: "both" },
     "audit-report": { type: "string" },
@@ -322,7 +328,6 @@ async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = f
   );
 }
 
-type WireFrame = { file: string; epochMs: number; clockSource: "surface" | "arrival" };
 type ShortVisit = {
   cache: Awaited<ReturnType<typeof inspectWarmCache>>;
   elapsedBeforeCaptureMs: number;
@@ -337,6 +342,9 @@ async function captureReload(
   shortVisit?: ShortVisit,
 ) {
   await mkdir(outputDir, { recursive: true });
+  const sidebarNetwork = values["sidebar-network-attribution"]
+    ? await attachSidebarNetworkAttribution(cdp)
+    : undefined;
   const oldAnimationSample = warm
     ? await page.evaluate(() => {
         const data: ReturnType<typeof installWarmReloadBrowserProbe> = Reflect.get(
@@ -346,12 +354,7 @@ async function captureReload(
         return data?.animationSamples.at(-1) ?? { atMs: 0, animations: [] };
       })
     : null;
-  const frames: WireFrame[] = [];
-  let initialFrameReady: (() => void) | undefined;
-  const initialFrame = new Promise<void>((resolve) => {
-    initialFrameReady = resolve;
-  });
-  const writes: Promise<void>[] = [];
+  let capture: Awaited<ReturnType<typeof startWarmReloadScreencast>> | undefined;
   const errors: string[] = [];
   const tree: { frameTree: { frame: { id: string } } } = await cdp.send("Page.getFrameTree");
   const documents: Array<{ path: string; epochMs: number; monotonicMs: number; loaderId: string }> =
@@ -391,24 +394,6 @@ async function captureReload(
     bytes: number;
     responseBytes?: number;
   }> = [];
-  const onFrame = (event: {
-    data: string;
-    sessionId: number;
-    metadata: { timestamp?: number };
-  }) => {
-    const file = path.join(outputDir, `frame-${String(frames.length).padStart(5, "0")}.png`);
-    const timestamp = event.metadata.timestamp;
-    frames.push({
-      file,
-      epochMs:
-        timestamp !== undefined && Number.isFinite(timestamp) ? timestamp * 1000 : Date.now(),
-      clockSource: timestamp !== undefined && Number.isFinite(timestamp) ? "surface" : "arrival",
-    });
-    writes.push(writeFile(file, Buffer.from(event.data, "base64")));
-    initialFrameReady?.();
-    initialFrameReady = undefined;
-    writes.push(cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).then(() => {}));
-  };
   const onError = (error: Error) => errors.push(error.message);
   const onHttp = (event: { type: string; response: { url: string; status: number } }) => {
     if (event.response.url.startsWith("http")) {
@@ -444,7 +429,6 @@ async function captureReload(
       });
     }
   };
-  cdp.on("Page.screencastFrame", onFrame);
   cdp.on("Network.requestWillBeSent", onDocument);
   cdp.on("Page.lifecycleEvent", onLifecycle);
   cdp.on("Network.responseReceived", onHttp);
@@ -464,19 +448,8 @@ async function captureReload(
         transferMode: "ReportEvents",
       });
     }
-    await cdp.send("Page.startScreencast", {
-      format: "png",
-      maxWidth: viewport.width,
-      maxHeight: viewport.height,
-      everyNthFrame: 1,
-    });
-    await Promise.race([
-      initialFrame,
-      delay(10000, undefined, { ref: false }).then(() => {
-        throw new Error("No pre-navigation compositor frame received");
-      }),
-    ]);
-    const priorSurface = frames.at(-1)!;
+    capture = await startWarmReloadScreencast(cdp, { outputDir, viewport });
+    const { priorSurface } = capture;
     if (warm) {
       await page.reload({ waitUntil: "domcontentloaded" });
     } else {
@@ -487,6 +460,20 @@ async function captureReload(
       timeout: captureMs + 60000,
     });
     const probe = await readProbe(page);
+    if (sidebarNetwork) {
+      await writeFile(
+        path.join(outputDir, "sidebar-network.json"),
+        JSON.stringify(
+          sidebarNetwork.read({
+            timeOriginMs: probe.timeOrigin,
+            helloHandledMs: probe.helloHandledMs,
+            finalRowsMs: probe.finalRowsDomMs,
+          }),
+          null,
+          2,
+        ),
+      );
+    }
     const finalDocumentTimeOrigin = probe.timeOrigin;
     const navigationOrigin = documents[0]?.epochMs ?? finalDocumentTimeOrigin;
     const documentOffsetMs = finalDocumentTimeOrigin - navigationOrigin;
@@ -564,8 +551,7 @@ async function captureReload(
       (name) => !regions.some((region) => region.name === name),
     );
     await page.screenshot({ path: path.join(outputDir, "final.png") });
-    await cdp.send("Page.stopScreencast");
-    await Promise.all(writes);
+    const frames = await capture.stop();
     const ordered: ReloadFrame[] = frames
       .map((frame) => ({ file: frame.file, atMs: frame.epochMs - probe.timeOrigin }))
       .filter((frame) => frame.atMs >= 0);
@@ -680,6 +666,7 @@ async function captureReload(
     );
     return report;
   } finally {
+    sidebarNetwork?.dispose();
     if (profiling) {
       const { profile } = await cdp.send("Profiler.stop");
       const complete = new Promise<void>((resolve) => {
@@ -694,15 +681,13 @@ async function captureReload(
         JSON.stringify({ traceEvents: timeline }),
       );
     }
-    await cdp.send("Page.stopScreencast").catch(() => {});
-    cdp.off("Page.screencastFrame", onFrame);
+    await capture?.stop().catch(() => {});
     cdp.off("Network.requestWillBeSent", onDocument);
     cdp.off("Page.lifecycleEvent", onLifecycle);
     cdp.off("Network.responseReceived", onHttp);
     cdp.off("Network.webSocketFrameSent", onSent);
     cdp.off("Network.webSocketFrameReceived", onReceived);
     page.off("pageerror", onError);
-    await Promise.allSettled(writes);
   }
 }
 

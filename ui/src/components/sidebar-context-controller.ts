@@ -1,6 +1,6 @@
-import { createContext, createSignal } from "solid-js";
+import { createContext, createSignal, onSettled } from "solid-js";
 import { elementRef } from "../lib/reactive/element-ref.ts";
-import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import type { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import type { SidebarSessionsScrollState } from "./app-sidebar-session-types.ts";
 import { observeScrollState } from "./scroll-state-observer.ts";
 
@@ -15,8 +15,8 @@ export const SidebarScrollContext = createContext<{
 /** Preserve the shared sidebar's scroll position for each destination. */
 export function createSidebarScroll(
   host: Pick<
-    AppSidebarSessionNavigationElement,
-    "isConnected" | "navigationView" | "contextualSidebar"
+    AppSidebarOwner,
+    "isConnected" | "navigationView" | "contextualSidebar" | "sidebarSnapshot" | "snapshot"
   >,
 ) {
   const positions = new Map<string, number>();
@@ -57,6 +57,13 @@ export function createSidebarScroll(
       // The frame can disappear while its containing sidebar retains destination offsets.
       return elementRef((element: HTMLElement) => {
         scroller = element;
+        // Restore after adoption; writing the initial zero would force an unnecessary layout.
+        onSettled(() => {
+          const top = host.sidebarSnapshot?.scrollTop ?? positions.get(presentedKey);
+          if (scroller === element && top) {
+            element.scrollTop = top;
+          }
+        });
         const bound = observeScrollState(element, (next) =>
           setState(
             !next.scrollable ? "none" : next.atStart ? "top" : next.atEnd ? "bottom" : "middle",
@@ -97,6 +104,7 @@ export function createSidebarScroll(
         for (const listener of scrollListeners) {
           listener();
         }
+        host.snapshot.capture();
       }
     },
   };

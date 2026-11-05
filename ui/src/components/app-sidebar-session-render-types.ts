@@ -40,6 +40,7 @@ export interface SessionListHost {
   loadMoreSidebarSessions(): Promise<void>;
   readonly presencePeople?: Map<string, HTMLElement>;
   readonly sidebarSnapshot?: import("./sidebar-snapshot-model.ts").SidebarSnapshotModel | null;
+  readonly sidebarPresencePayload: import("../app/user-profile.ts").PresencePayload | undefined;
   readonly sidebarAgentsMode?: "chip" | "roster";
   readonly basePath: string;
   readonly sessionDataContext:

@@ -275,7 +275,8 @@ export function ParticipantAvatar(props: {
           const rosterAgent = agents
             ?.read()
             .agentsList?.agents.find((entry) => entry.id === identity().id);
-          const hydrated = agentIdentity?.read().get(identity().id);
+          // Rows already carry cached portraits; boot name/emoji facts cannot replace them.
+          const hydrated = agentIdentity?.read().get(identity().id, false);
           const resolved = resolveAvatar({
             identity: identity(),
             id: props.user.id,
@@ -288,7 +289,10 @@ export function ParticipantAvatar(props: {
               ? resolveAgentAvatarUrl(rosterAgent ?? {}, hydrated)
               : (resolveAgentAvatarUrl(rosterAgent ?? {}) ??
                 (resolved.kind === "profile" ? resolved.url : null)),
-            textAvatar: resolveAgentTextAvatar(rosterAgent ?? {}, hydrated),
+            textAvatar: resolveAgentTextAvatar(
+              rosterAgent ?? {},
+              agentIdentity?.read().get(identity().id),
+            ),
           };
         });
         return (

@@ -4,6 +4,7 @@ import photon from "@silvia-odwyer/photon-node";
 import { afterEach, expect, it } from "vitest";
 import {
   analyzeReloadFrames,
+  reloadRegionHasVariation,
   type ReloadAnimationSample,
 } from "../../scripts/perf/warm-reload-frames.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
@@ -55,6 +56,10 @@ it("counts visible regional states and revisits while reporting changes hidden b
       atMs: 40,
     },
   ];
+  const label = { name: "label", x: 0, y: 0, width: 16, height: 16 };
+  expect(await reloadRegionHasVariation(frames[0]!.file, label)).toBe(false);
+  expect(await reloadRegionHasVariation(frames[1]!.file, label)).toBe(false);
+  expect(await reloadRegionHasVariation(frames[2]!.file, label)).toBe(true);
   const report = await analyzeReloadFrames({
     frames,
     regions: [

@@ -19,7 +19,7 @@ const sidebarRecordsSchema = json.array(
   ),
 );
 export type SidebarRecord = json.SnapshotValue<typeof sidebarRecordsSchema>[number];
-export const SIDEBAR_SNAPSHOT_PROJECTION_VERSION = 4;
+export const SIDEBAR_SNAPSHOT_PROJECTION_VERSION = 5;
 export const sidebarRecordBytes = (record: SidebarRecord) =>
   new TextEncoder().encode(JSON.stringify(record)).byteLength;
 const SIDEBAR_SNAPSHOT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;

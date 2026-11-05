@@ -25,6 +25,7 @@
 // --layout-matrix covers routes, themes, viewports and cold/warm reloads; --runs is per bundle/cell.
 // Repeat --layout-cell mobile:light:chat:cold to isolate cells with their matrix setup intact.
 // --sidebar-presentation adds badges/avatars; --sidebar-presentation-probe records visible waves.
+// --sidebar-pixel-probe captures native PNG parity; --warm-reload-perf-probe alone avoids capture.
 // --late-row-facts covers titled links, native/ticketed thumbnails, archive notice and avatars.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
@@ -65,7 +66,10 @@ import { navigationDrawerToggle } from "../ui/src/test-helpers/control-ui-naviga
 import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import { sidebarPresentationProbe } from "../ui/src/test-helpers/control-ui-sidebar-presentation-probe.test-support.ts";
-import { installTeamScaleSidebarPresentation } from "../ui/src/test-helpers/control-ui-sidebar-presentation.test-support.ts";
+import {
+  installTeamScaleSidebarPresentation,
+  installSidebarCachedParitySettings,
+} from "../ui/src/test-helpers/control-ui-sidebar-presentation.test-support.ts";
 import { revealSidebarTarget } from "../ui/src/test-helpers/control-ui-sidebar-window.ts";
 import { createControlUiTeamScaleFixture } from "../ui/src/test-helpers/control-ui-team-scale-fixture.ts";
 import { LONG_SESSION_SCENARIOS } from "../ui/src/test-helpers/control-ui-team-scale-history-fixture.ts";
@@ -118,6 +122,7 @@ import {
 } from "./lib/control-ui-long-session-probe.ts";
 import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
 import { installPaneChromeProbe } from "./lib/control-ui-pane-chrome-probe.ts";
+import { attachSidebarNetworkAttribution } from "./lib/control-ui-sidebar-network-attribution.ts";
 import { createControlUiStreamingReply } from "./lib/control-ui-streaming-fixture.ts";
 import { createStreamingReplyProbeInitScript } from "./lib/control-ui-streaming-reply.ts";
 import { warmReloadProbe, type TranscriptWitnesses } from "./lib/control-ui-warm-reload-probe.ts";
@@ -125,7 +130,327 @@ import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,
   readGatewayHeapProfile,
 } from "./lib/gateway-bench-profile.ts";
-import { summarizeDetailsGeometry } from "./perf/warm-reload-browser-probe.ts";
+import {
+  installWarmReloadBrowserProbe,
+  summarizeDetailsGeometry,
+} from "./perf/warm-reload-browser-probe.ts";
+import {
+  startWarmReloadScreencast,
+  writeWarmReloadRegionStrip,
+} from "./perf/warm-reload-browser.ts";
+import {
+  analyzeReloadFrames,
+  reloadRegionHasVariation,
+  type ReloadMask,
+  type ReloadRegion,
+} from "./perf/warm-reload-frames.ts";
+
+type SidebarPresentationSnapshot = {
+  timeOrigin: number;
+  sidebar?: Omit<ReloadRegion, "name">;
+  reconnectMasks: ReloadMask[];
+  frames: Array<{
+    at: number;
+    cached: boolean;
+    sidebar: Omit<ReloadRegion, "name">;
+    rowLabel: { key: string; box: Omit<ReloadRegion, "name"> } | null;
+    scrollTop: number;
+    mountedKeys: Array<string | null>;
+    mountedRows: Array<{ key: string; avatars: string[]; images: string[] }>;
+    rows: Array<{
+      key: string;
+      avatars: string[];
+      images: string[];
+      ownerAvatars: number;
+      presenceAvatars: number;
+    }>;
+  }>;
+};
+
+async function readSidebarPixelProof(
+  page: Page,
+  cdp: CDPSession,
+  capture: Awaited<ReturnType<typeof startWarmReloadScreencast>>,
+  presentation: SidebarPresentationSnapshot,
+  outputDir: string,
+  requestedScrollTop: number,
+  browserErrors: readonly string[],
+) {
+  const initial = presentation.frames.find((frame) => frame.cached);
+  const populated = presentation.frames.find((frame) => frame.cached && frame.rows.length > 0);
+  const live =
+    populated && presentation.frames.find((frame) => !frame.cached && frame.at >= populated.at);
+  const final = presentation.frames.at(-1);
+  const settledFile = path.join(outputDir, "settled.png");
+  const captureStartedMs = await page.evaluate(() => performance.now());
+  const screenshot = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+  const captureFinishedMs = await page.evaluate(() => performance.now());
+  await writeFile(settledFile, Buffer.from(screenshot.data, "base64"));
+  const surfaces = await capture.stop();
+  // Compositor timestamps, rather than asynchronous CDP delivery, order the surfaces.
+  const frames = surfaces
+    .map((frame, captureIndex) => ({
+      ...frame,
+      captureIndex,
+      atMs: frame.epochMs - presentation.timeOrigin,
+    }))
+    .toSorted((a, b) => a.atMs - b.atMs);
+  const timestampCandidate =
+    populated &&
+    live &&
+    frames.find(
+      (frame) =>
+        frame.clockSource === "surface" && frame.atMs >= populated.at && frame.atMs < live.at,
+    );
+  const label = populated?.rowLabel;
+  let populatedSurface: (typeof frames)[number] | undefined;
+  let labelGap = false;
+  if (populated && live && label) {
+    for (const frame of frames.filter(
+      (surface) => surface.atMs >= populated.at && surface.atMs < live.at,
+    )) {
+      const sampled = presentation.frames.findLast((value) => value.at <= frame.atMs);
+      if (!sampled?.rows.some((row) => row.key === label.key)) {
+        labelGap = true;
+        break;
+      }
+      if (await reloadRegionHasVariation(frame.file, { name: "row-label", ...label.box })) {
+        populatedSurface = frame;
+        break;
+      }
+    }
+  }
+  const first = populatedSurface;
+  const paintQualification = {
+    method:
+      "First timestamp-eligible nonuniform RGB pixels in frozen text-node bounds. Never waits for avatars or matches final appearance. Selected, previous and all pre-population surfaces require visual audit for semantic firstness.",
+    auditRequired: true,
+    rowLabel: label,
+    timestampCandidate,
+    selected: first,
+    previous: first ? frames[frames.indexOf(first) - 1] : undefined,
+    prePopulationSurfaces: first
+      ? frames.filter((frame) => frame.atMs >= 0 && frame.atMs < first.atMs)
+      : [],
+    labelGap,
+  };
+  await writeFile(
+    path.join(outputDir, "frames.json"),
+    JSON.stringify(
+      {
+        navigationTimeOrigin: presentation.timeOrigin,
+        frames,
+        cachedInterval: populated && live ? { fromMs: populated.at, untilMs: live.at } : null,
+        settled: { file: settledFile, captureStartedMs, captureFinishedMs },
+        paintQualification,
+      },
+      null,
+      2,
+    ),
+  );
+  if (
+    !initial ||
+    !populated ||
+    !live ||
+    !final ||
+    final.cached ||
+    !first ||
+    labelGap ||
+    surfaces.some((frame) => frame.clockSource !== "surface")
+  ) {
+    throw new Error(
+      `No populated cached/live sidebar compositor candidate; inspect ${outputDir}/frames.json`,
+    );
+  }
+  if (presentation.reconnectMasks.some((mask) => mask.reason !== "Permitted reconnect indicator")) {
+    throw new Error("Sidebar pixel proof permits only reconnect-indicator masks");
+  }
+  const domFrames = presentation.frames.filter((frame) => frame.at >= populated.at);
+  const viewport = page.viewportSize()!;
+  const x = Math.max(0, Math.floor(Math.min(...domFrames.map((frame) => frame.sidebar.x))));
+  const y = Math.max(0, Math.floor(Math.min(...domFrames.map((frame) => frame.sidebar.y))));
+  const region = {
+    name: "sidebar",
+    x,
+    y,
+    width:
+      Math.min(
+        viewport.width,
+        Math.ceil(Math.max(...domFrames.map((frame) => frame.sidebar.x + frame.sidebar.width))),
+      ) - x,
+    height:
+      Math.min(
+        viewport.height,
+        Math.ceil(Math.max(...domFrames.map((frame) => frame.sidebar.y + frame.sidebar.height))),
+      ) - y,
+  };
+  const strips = {
+    cached: await writeWarmReloadRegionStrip(
+      first.file,
+      region,
+      path.join(outputDir, "cached-sidebar.png"),
+    ),
+    settled: await writeWarmReloadRegionStrip(
+      settledFile,
+      region,
+      path.join(outputDir, "settled-sidebar.png"),
+    ),
+  };
+  const croppedRegion = { ...region, x: 0, y: 0 };
+  const croppedMasks = presentation.reconnectMasks.map((mask) => ({
+    ...mask,
+    x: mask.x - region.x,
+    y: mask.y - region.y,
+  }));
+  const thresholds = { channelThreshold: 0, minChangedPixels: 1, minChangedRatio: 0 };
+  const visual = await analyzeReloadFrames({
+    frames: [
+      { file: strips.cached, atMs: first.atMs },
+      { file: strips.settled, atMs: captureFinishedMs },
+    ],
+    regions: [croppedRegion],
+    masks: croppedMasks,
+    outputDir,
+    ...thresholds,
+  });
+  const restorationDir = path.join(outputDir, "restoration");
+  await mkdir(restorationDir, { recursive: true });
+  const restorationFrames: Array<(typeof frames)[number] & { sourceFile: string }> = [];
+  for (const frame of frames.filter(
+    (surface) => surface.atMs >= first.atMs && surface.atMs <= captureFinishedMs,
+  )) {
+    const file =
+      frame.file === first.file
+        ? strips.cached
+        : await writeWarmReloadRegionStrip(
+            frame.file,
+            region,
+            path.join(restorationDir, path.basename(frame.file)),
+          );
+    restorationFrames.push({ ...frame, sourceFile: frame.file, file });
+  }
+  await writeFile(
+    path.join(restorationDir, "frames.json"),
+    JSON.stringify(
+      {
+        cropBounds: region,
+        frames: restorationFrames,
+        settled: { file: strips.settled, captureStartedMs, captureFinishedMs },
+      },
+      null,
+      2,
+    ),
+  );
+  const restorationVisual = await analyzeReloadFrames({
+    frames: [...restorationFrames, { file: strips.settled, atMs: captureFinishedMs }],
+    regions: [croppedRegion],
+    masks: croppedMasks,
+    outputDir: restorationDir,
+    ...thresholds,
+  });
+  const restorationSidebar = restorationVisual.regions.sidebar!;
+  const maxFrameToFrameChangedPixels = Math.max(
+    ...restorationSidebar.timeline.map((frame) => frame.changedPixels),
+  );
+  const finalKeys = new Set(final.mountedKeys);
+  const domDrift = domFrames.map((frame) => {
+    const keys = new Set(frame.mountedKeys);
+    return {
+      atMs: frame.at,
+      cached: frame.cached,
+      mountedRows: frame.mountedKeys.length,
+      visibleRows: frame.rows.length,
+      avatarNodes: frame.mountedRows.reduce((sum, row) => sum + row.avatars.length, 0),
+      images: frame.mountedRows.reduce((sum, row) => sum + row.images.length, 0),
+      scrollTop: frame.scrollTop,
+      rowChanges:
+        [...keys].filter((key) => !finalKeys.has(key)).length +
+        [...finalKeys].filter((key) => !keys.has(key)).length,
+      avatarChanges: frame.mountedRows.filter((row) => {
+        const liveRow = final.mountedRows.find((value) => value.key === row.key);
+        return (
+          !liveRow ||
+          JSON.stringify([row.avatars, row.images]) !==
+            JSON.stringify([liveRow.avatars, liveRow.images])
+        );
+      }).length,
+    };
+  });
+  const { rowChanges, avatarChanges } = domDrift[0]!;
+  const maxRowChanges = Math.max(...domDrift.map((frame) => frame.rowChanges));
+  const maxAvatarChanges = Math.max(...domDrift.map((frame) => frame.avatarChanges));
+  const noZeroRowFrame = domDrift.every((frame) => frame.mountedRows > 0 && frame.visibleRows > 0);
+  const avatarCounts = (frame: SidebarPresentationSnapshot["frames"][number]) => ({
+    ownerParticipants: frame.rows.reduce((sum, row) => sum + row.ownerAvatars, 0),
+    presence: frame.rows.reduce((sum, row) => sum + row.presenceAvatars, 0),
+    total: frame.rows.reduce((sum, row) => sum + row.avatars.length, 0),
+    images: frame.rows.reduce((sum, row) => sum + row.images.length, 0),
+  });
+  const noZeroRowCachedFrame = !presentation.frames.some(
+    (frame) => frame.cached && frame.mountedKeys.length === 0,
+  );
+  const noZeroVisibleRowCachedFrame = !presentation.frames.some(
+    (frame) => frame.cached && frame.rows.length === 0,
+  );
+  const scrollPreserved =
+    initial.scrollTop === requestedScrollTop &&
+    domFrames.every((frame) => frame.scrollTop === requestedScrollTop);
+  const changedPixels = visual.regions.sidebar!.timeline.at(-1)!.changedPixels;
+  const report = {
+    valid: browserErrors.length === 0,
+    captureValid: true,
+    browserErrors: [...browserErrors],
+    measurement:
+      "Capture-perturbed correctness only; native compositor PNGs, exact RGBA differences, only reconnect indicator masked",
+    firstCachedFrameMs: initial.at,
+    firstPopulatedCachedFrameMs: populated.at,
+    cachedSurface: first,
+    paintQualification,
+    firstLiveFrameMs: live.at,
+    settled: { file: settledFile, captureStartedMs, captureFinishedMs },
+    initialRows: initial.mountedKeys.length,
+    populatedRows: populated.mountedKeys.length,
+    finalRows: final.mountedKeys.length,
+    noZeroRowCachedFrame,
+    noZeroVisibleRowCachedFrame,
+    noZeroRowFrame,
+    requestedScrollTop,
+    scrollTop: {
+      initial: initial.scrollTop,
+      populated: populated.scrollTop,
+      final: final.scrollTop,
+    },
+    scrollPreserved,
+    rowChanges,
+    avatarChanges,
+    maxRowChanges,
+    maxAvatarChanges,
+    domDrift,
+    avatars: { cached: avatarCounts(populated), settled: avatarCounts(final) },
+    changedPixels,
+    cropBounds: region,
+    analyzedRestorationSurfaces: restorationFrames.length,
+    restorationComparison:
+      "Every native surface through final capture, losslessly cropped at native pixel density. Zero consecutive differences requires all surfaces to match settle. The settled PNG uses its recorded capture-completion upper bound, not an inferred compositor timestamp.",
+    maxFrameToFrameChangedPixels,
+    restorationPixelTransitions: restorationSidebar.transitionCount,
+    strictParityCandidate:
+      browserErrors.length === 0 &&
+      changedPixels === 0 &&
+      restorationSidebar.transitionCount === 0 &&
+      maxRowChanges === 0 &&
+      maxAvatarChanges === 0 &&
+      noZeroRowCachedFrame &&
+      noZeroVisibleRowCachedFrame &&
+      noZeroRowFrame &&
+      scrollPreserved,
+    strips,
+    visual,
+    restorationVisual,
+  };
+  await writeFile(path.join(outputDir, "sidebar-pixels.json"), JSON.stringify(report, null, 2));
+  return report;
+}
 
 function readRigProbeSnapshot() {
   const perf = Reflect.get(window, "__perf");
@@ -333,7 +658,12 @@ const { values } = parseArgs({
     "sidebar-avatars": { type: "boolean", default: false },
     "transcript-avatars": { type: "boolean", default: false },
     "sidebar-presentation": { type: "boolean", default: false },
+    "sidebar-cached-parity": { type: "boolean", default: false },
+    "sidebar-network-attribution": { type: "boolean", default: false },
+    "sidebar-scroll-top": { type: "string", default: "0" },
     "sidebar-presentation-probe": { type: "boolean", default: false },
+    "sidebar-pixel-probe": { type: "boolean", default: false },
+    "warm-reload-perf-probe": { type: "boolean", default: false },
     "sidebar-expanded": { type: "boolean", default: false },
     "sidebar-persistent-children": { type: "boolean", default: false },
     "omit-hello-self-presence": { type: "boolean", default: false },
@@ -400,6 +730,25 @@ if (values["details-processes"]) {
 if (values["pane-chrome-probe"] && !values["warm-reload"]) {
   throw new Error("pane-chrome-probe requires warm-reload for the first transcript paint boundary");
 }
+if (values["sidebar-pixel-probe"]) {
+  if (
+    !values["warm-reload"] ||
+    !values["gateway-http"] ||
+    values["cold-http-cache"] ||
+    !values["sidebar-presentation-probe"] ||
+    !values.untraced ||
+    values["filmstrip-only"] ||
+    values["cpu-profile"]
+  ) {
+    throw new Error(
+      "sidebar-pixel-probe requires cache-enabled gateway-http, warm-reload, sidebar-presentation-probe and untraced without filmstrip-only or cpu-profile",
+    );
+  }
+  values["warm-reload-perf-probe"] = true;
+}
+if (values["warm-reload-perf-probe"] && !values["warm-reload"]) {
+  throw new Error("warm-reload-perf-probe requires warm-reload");
+}
 if (values["selector-stats"] && (values.untraced || values["filmstrip-only"])) {
   throw new Error("selector-stats requires tracing; exclude untraced and filmstrip-only");
 }
@@ -411,6 +760,9 @@ if (values["streaming-allocations"] && !values["streaming-reply"]) {
 }
 if (values["sidebar-presentation-probe"] && !values["sidebar-presentation"]) {
   throw new Error("sidebar-presentation-probe requires sidebar-presentation");
+}
+if (values["sidebar-network-attribution"] && !values["warm-reload-perf-probe"]) {
+  throw new Error("sidebar-network-attribution requires warm-reload-perf-probe");
 }
 if (values["sidebar-list-churn"] && !values["live-events"]) {
   throw new Error("sidebar-list-churn requires live-events");
@@ -902,6 +1254,7 @@ const fixture = createControlUiTeamScaleFixture({
   sidebarAvatars: values["sidebar-avatars"],
   transcriptAvatars: values["transcript-avatars"],
   sidebarPresentation: values["sidebar-presentation"],
+  sidebarCachedParity: values["sidebar-cached-parity"],
   sidebarPersistentChildren: values["sidebar-persistent-children"],
   sessionEventChurn: values["session-event-churn"],
   sessionEventDurationMs,
@@ -1051,6 +1404,7 @@ const chromiumArgs = [
 let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
+let sidebarCapture: Awaited<ReturnType<typeof startWarmReloadScreencast>> | undefined;
 const results = [];
 const waterfallArtifacts: Array<{
   file: string;
@@ -1491,6 +1845,11 @@ try {
       return asset
         ? {
             ...asset,
+            headers:
+              url.searchParams.has("v") &&
+              (pathname.startsWith("/avatar/") || /^\/api\/users\/[^/]+\/avatar$/u.test(pathname))
+                ? { "Cache-Control": "private, max-age=31536000, immutable" }
+                : undefined,
             delayMs:
               (fixture.assets.get(pathname)?.delayMs ?? 0) +
               (values["dashboard-widget"] && pathname.startsWith("/__openclaw__/board/")
@@ -1620,13 +1979,17 @@ try {
           : "chip",
     },
   );
-  const paneChromeScript = values["pane-chrome-probe"]
-    ? `const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome);`
-    : "";
+  const paneChromeScript =
+    values["pane-chrome-probe"] || values["warm-reload-perf-probe"]
+      ? `const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome);`
+      : "";
   const warmProbes =
     values["warm-reload"] || firstLoad
       ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"], lateRowFacts: values["late-row-facts"], witnesses: transcriptWitness?.witnesses })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
       : "";
+  const warmPerformanceProbe = values["warm-reload-perf-probe"]
+    ? `\nReflect.set(window, "__warmReloadProof", (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(face)}));`
+    : "";
   // The last history case is the fixture's full-window fallback. Witness mode
   // measures a changed transcript, so it must not replay the unchanged-cursor delta.
   const historyCases = asNullableRecord(fixture.scenario.methodResponses?.["chat.history"])?.cases;
@@ -1660,11 +2023,14 @@ try {
   const presentationProbes = fixture.sidebarPresentation
     ? `\n(${installTeamScaleSidebarPresentation.toString()})(${JSON.stringify(fixture.sidebarPresentation)});${values["sidebar-presentation-probe"] ? `\n(${sidebarPresentationProbe.toString()})();` : ""}`
     : "";
+  const paritySettings = values["sidebar-cached-parity"]
+    ? `\n(${installSidebarCachedParitySettings.toString()})(${JSON.stringify(fixture.scenario.sessionGroups)});`
+    : "";
   const boardTickets = values["dashboard-widget"]
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(gatewayScenario)}\n${witnessInit}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] || values["long-session"] || latencyProfile === "live-capped" ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes}${presentationProbes} })();`,
+    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(gatewayScenario)}\n${witnessInit}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] || values["long-session"] || latencyProfile === "live-capped" ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes}${warmPerformanceProbe}${presentationProbes}${paritySettings} })();`,
   });
   if (values["critical-path"]) {
     await page.addInitScript({
@@ -1778,11 +2144,17 @@ try {
             )
             .waitFor({ state: "visible" });
         }
-        await page
-          .locator(
-            `[data-session-section="pinned"] [data-session-key="${fixture.pinnedKeys.at(-1)}"]`,
-          )
-          .waitFor({ state: "attached" });
+        if (values["sidebar-cached-parity"]) {
+          await page
+            .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
+            .waitFor();
+        } else {
+          await page
+            .locator(
+              `[data-session-section="pinned"] [data-session-key="${fixture.pinnedKeys.at(-1)}"]`,
+            )
+            .waitFor({ state: "attached" });
+        }
         await page.locator('[data-sidebar-entry="plugin:team-scale-7/overview"]').waitFor();
         if (sidebarView === "online") {
           await page.locator('[data-online-user-id="team-person-120"]').waitFor();
@@ -2173,6 +2545,17 @@ try {
           await page.locator(".shell--nav-drawer-open").waitFor();
         }
         await expandSidebar();
+        await page.locator(".sidebar-shell__body").evaluate((element, top) => {
+          element.scrollTop = top;
+          element.dispatchEvent(new Event("scroll"));
+        }, Number(values["sidebar-scroll-top"]));
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
         await qualifyLateRowFacts();
         await qualifyDetailsProcess();
         const { storage: captured, ...saved } = await page.evaluate(
@@ -2362,6 +2745,9 @@ try {
       : undefined;
     let witnessHold: unknown;
     const cdp = await context.newCDPSession(page);
+    const sidebarNetwork = values["sidebar-network-attribution"]
+      ? await attachSidebarNetworkAttribution(cdp)
+      : undefined;
     if (cold) {
       await resetColdState(cdp, bundleIndex);
     } else {
@@ -2475,6 +2861,12 @@ try {
       : undefined;
     if (values.coverage) {
       await page.coverage.startJSCoverage({ resetOnNavigation: true });
+    }
+    if (values["sidebar-pixel-probe"]) {
+      sidebarCapture = await startWarmReloadScreencast(cdp, {
+        outputDir: path.join(artifactDir, `run-${run + 1}.sidebar-pixels`),
+        viewport: page.viewportSize()!,
+      });
     }
     if (values["hold-boot-assets"]) {
       await page.goto(url, { waitUntil: "commit" });
@@ -2861,13 +3253,92 @@ try {
           ),
         }
       : undefined;
-    const sidebarPresentation = values["sidebar-presentation-probe"]
-      ? await page.evaluate(() => Reflect.get(window, "__sidebarPresentation").read())
+    const warmReloadPerformance = values["warm-reload-perf-probe"]
+      ? await page.evaluate(() => {
+          const probe: NonNullable<ReturnType<typeof installWarmReloadBrowserProbe>> = Reflect.get(
+            window,
+            "__warmReloadProof",
+          );
+          probe.stopped = true;
+          return {
+            timeOrigin: performance.timeOrigin,
+            capturedUntilMs: performance.now(),
+            helloPublishedMs: probe.helloPublishedMs,
+            helloHandledMs: probe.helloHandledMs,
+            fcpMs: probe.fcpMs,
+            firstPaintedRowsMs: probe.firstPaintedRowsMs,
+            finalRowsDomMs: probe.finalRowsDomMs,
+            firstDashboardContentDomMs: probe.firstDashboardContentDomMs,
+            allBoardWidgetsVisibleMs: probe.allBoardWidgetsVisibleMs,
+            cachedBoardLayoutMs: probe.cachedBoardLayoutMs,
+            boardWidgetSkeletonMs: probe.boardWidgetSkeletonMs,
+            loafBlockingMs: probe.loafBlockingMs,
+            cls: probe.cls,
+          };
+        })
       : undefined;
     const detailsGeometry =
       values["details-processes"] && paneChrome
         ? summarizeDetailsGeometry(paneChrome.detailsFrames)
         : undefined;
+    const sidebarPresentation = values["sidebar-presentation-probe"]
+      ? await page.evaluate(() => {
+          const probe: { read(): SidebarPresentationSnapshot } = Reflect.get(
+            window,
+            "__sidebarPresentation",
+          );
+          return probe.read();
+        })
+      : undefined;
+    if (sidebarPresentation) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.sidebar-presentation.json`),
+        JSON.stringify(sidebarPresentation, null, 2),
+      );
+    }
+    if (warmReloadPerformance) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.warm-perf.json`),
+        JSON.stringify(
+          {
+            ...warmReloadPerformance,
+            measurement: values["sidebar-pixel-probe"]
+              ? "Capture-perturbed correctness run; do not use for timing comparison"
+              : "Unprofiled timing requires untraced without cpu-profile or coverage; existing warm-reload probe metric definitions",
+          },
+          null,
+          2,
+        ),
+      );
+    }
+    if (sidebarNetwork && warmReloadPerformance) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.sidebar-network.json`),
+        JSON.stringify(
+          sidebarNetwork.read({
+            timeOriginMs: warmReloadPerformance.timeOrigin,
+            helloHandledMs: warmReloadPerformance.helloHandledMs,
+            finalRowsMs: warmReloadPerformance.finalRowsDomMs,
+          }),
+          null,
+          2,
+        ),
+      );
+      sidebarNetwork.dispose();
+    }
+    const sidebarPixels =
+      sidebarCapture && sidebarPresentation
+        ? await readSidebarPixelProof(
+            page,
+            cdp,
+            sidebarCapture,
+            sidebarPresentation,
+            path.join(artifactDir, `run-${run + 1}.sidebar-pixels`),
+            Number(values["sidebar-scroll-top"]),
+            errors,
+          )
+        : undefined;
+    sidebarCapture = undefined;
     if (cpuProfile) {
       await writeFile(
         path.join(artifactDir, `run-${run + 1}.cpu-clock.json`),
@@ -2882,6 +3353,8 @@ try {
         variant: ["base", "candidate", "candidate-2"][bundleIndex],
         hostLoadAverage,
         threadCpu,
+        warmReloadPerformance,
+        sidebarPixels,
         threadCpuSamples: threadCpuBefore
           ? { before: threadCpuBefore, after: threadCpuAfter }
           : undefined,
@@ -3940,6 +4413,8 @@ try {
       paneChrome,
       detailsGeometry,
       sidebarPresentation,
+      warmReloadPerformance,
+      sidebarPixels,
       historyValidatorRequests: historyValidatorRequests - validatorRequestsBeforeReload,
       snapshotSave: snapshotSaves[bundleIndex],
       overlays,
@@ -4003,6 +4478,7 @@ try {
   }
   await context.close();
 } finally {
+  await sidebarCapture?.stop().catch(() => {});
   await browser?.close();
   await selectComparisonBundle(0);
   await server?.close();
@@ -4068,6 +4544,13 @@ try {
         sidebarAvatars: values["sidebar-avatars"],
         sidebarPresentation: values["sidebar-presentation"],
         sidebarPresentationProbe: values["sidebar-presentation-probe"],
+        sidebarPixelProbe: values["sidebar-pixel-probe"],
+        warmReloadPerfProbe: values["warm-reload-perf-probe"],
+        performanceProbeScope: values["warm-reload-perf-probe"]
+          ? "Existing warm-reload-browser-probe metric definitions in the final document; PNG-enabled runs are capture-perturbed correctness evidence, not performance comparisons."
+          : undefined,
+        sidebarCachedParity: values["sidebar-cached-parity"],
+        sidebarScrollTop: Number(values["sidebar-scroll-top"]),
         sidebarExpanded: values["sidebar-expanded"],
         sidebarPersistentChildren: fixture.sidebarPersistentChildren,
         omitHelloSelfPresence: values["omit-hello-self-presence"],

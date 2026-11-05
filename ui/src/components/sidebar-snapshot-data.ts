@@ -1,3 +1,4 @@
+import { isSessionParticipantIdentity } from "../../../packages/gateway-protocol/src/compiled/sender-identity.js";
 import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
@@ -16,6 +17,19 @@ const userFields = {
   identity: json.optional(identity),
 };
 const user = json.object(userFields);
+const participantIdentity = json.checked(isSessionParticipantIdentity);
+const actor = json.object({
+  type: json.enumeration(["human", "agent", "system"]),
+  id: optionalText,
+  label: optionalText,
+  avatarUrl: optionalText,
+  identity: json.optional(participantIdentity),
+});
+const participant = json.object({
+  identity: participantIdentity,
+  label: optionalText,
+  avatarUrl: optionalText,
+});
 const sessionKey = json.refine(text, (key) => !isIncognitoSessionKey(key));
 const attention = json.enumeration([
   "none",
@@ -56,6 +70,10 @@ const state = json.object({
 });
 const sessionFields = {
   key: sessionKey,
+  owner: json.optional(json.object({ actor, assignedAt: json.optional(json.number) })),
+  archivedBy: json.optional(actor),
+  participants: json.optional(json.array(participant, 32)),
+  participantCount: json.optional(json.number),
   label: text,
   agentId: optionalText,
   subtitle: optionalText,
@@ -162,7 +180,7 @@ export const sidebarSnapshotSchema = json.object({
   onlineUsers: json.array(
     json.object({
       ...userFields,
-      watchedSessions: json.array(text, 0),
+      watchedSessions: json.array(sessionKey),
       entries: json.optional(
         json.array(json.object({ ts: json.number, lastActivityAt: json.optional(json.number) }), 1),
       ),
@@ -189,6 +207,13 @@ export const sidebarSnapshotSchema = json.object({
   ),
   ownerId: json.nullable(text),
   involvingMe: json.boolean,
+  home: json.nullable(session),
+  homeAllowed: json.boolean,
+  homeSessionKey: sessionKey,
+  ownershipAvatars: json.boolean,
+  newSessionAllowed: json.boolean,
+  windowKeys: json.array(sessionKey),
+  scrollTop: json.number,
   footer: json.nullable(user),
   brand: json.object({
     name: text,
@@ -237,6 +262,12 @@ export function removeSidebarSnapshotSession(
   };
   const next = {
     ...model,
+    home: prune(model.home ? [model.home] : [])[0] ?? null,
+    windowKeys: model.windowKeys.filter((value) => retain({ key: value })),
+    onlineUsers: model.onlineUsers.map((user) => ({
+      ...user,
+      watchedSessions: user.watchedSessions.filter((value) => retain({ key: value })),
+    })),
     pinnedSessions: prune(model.pinnedSessions),
     pages: prune(model.pages),
     entries: model.entries.filter(

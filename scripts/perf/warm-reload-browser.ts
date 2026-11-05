@@ -1,9 +1,117 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
-import { chromium, type Browser } from "playwright";
-import { analyzeReloadFrames } from "./warm-reload-frames.ts";
+import { chromium, type Browser, type CDPSession } from "playwright";
+import { analyzeReloadFrames, type ReloadRegion } from "./warm-reload-frames.ts";
+
+type WarmReloadSurfaceFrame = {
+  file: string;
+  epochMs: number;
+  clockSource: "surface" | "arrival";
+};
+
+/** Native PNG surfaces; arrival-clock fallback is diagnostic and must never qualify a proof. */
+export async function startWarmReloadScreencast(
+  cdp: CDPSession,
+  options: { outputDir: string; viewport: { width: number; height: number } },
+) {
+  await mkdir(options.outputDir, { recursive: true });
+  const frames: WarmReloadSurfaceFrame[] = [];
+  const writes: Promise<void>[] = [];
+  const failures: unknown[] = [];
+  const initialFrame = Promise.withResolvers<void>();
+  const track = (operation: Promise<void>) => {
+    writes.push(
+      operation.catch((error: unknown) => {
+        failures.push(error);
+      }),
+    );
+  };
+  const onFrame = (event: {
+    data: string;
+    sessionId: number;
+    metadata: { timestamp?: number };
+  }) => {
+    const file = path.join(
+      options.outputDir,
+      `frame-${String(frames.length).padStart(5, "0")}.png`,
+    );
+    const timestamp = event.metadata.timestamp;
+    const surfaceClock = timestamp !== undefined && Number.isFinite(timestamp);
+    frames.push({
+      file,
+      epochMs: surfaceClock ? timestamp * 1000 : Date.now(),
+      clockSource: surfaceClock ? "surface" : "arrival",
+    });
+    track(writeFile(file, Buffer.from(event.data, "base64")));
+    track(cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).then(() => {}));
+    initialFrame.resolve();
+  };
+  let stopped: Promise<WarmReloadSurfaceFrame[]> | undefined;
+  const stop = () =>
+    (stopped ??= (async () => {
+      try {
+        await cdp.send("Page.stopScreencast");
+      } finally {
+        cdp.off("Page.screencastFrame", onFrame);
+        await Promise.all(writes);
+      }
+      if (failures.length) {
+        throw new AggregateError(failures, "Compositor frame capture failed");
+      }
+      return frames;
+    })());
+  cdp.on("Page.screencastFrame", onFrame);
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await cdp.send("Page.enable");
+    await cdp.send("Page.startScreencast", {
+      format: "png",
+      maxWidth: options.viewport.width,
+      maxHeight: options.viewport.height,
+      everyNthFrame: 1,
+    });
+    await Promise.race([
+      initialFrame.promise,
+      new Promise<never>((_, reject) => {
+        deadline = setTimeout(
+          () => reject(new Error("No pre-navigation compositor frame received")),
+          10000,
+        );
+      }),
+    ]);
+    return { priorSurface: frames.at(-1)!, stop };
+  } catch (error) {
+    await stop().catch(() => {});
+    throw error;
+  } finally {
+    clearTimeout(deadline);
+  }
+}
+
+export async function writeWarmReloadRegionStrip(
+  file: string,
+  region: ReloadRegion,
+  output: string,
+) {
+  const image = photon.PhotonImage.new_from_byteslice(await readFile(file));
+  let cropped: ReturnType<typeof photon.crop> | undefined;
+  try {
+    cropped = photon.crop(
+      image,
+      Math.max(0, Math.floor(region.x)),
+      Math.max(0, Math.floor(region.y)),
+      Math.min(image.get_width(), Math.ceil(region.x + region.width)),
+      Math.min(image.get_height(), Math.ceil(region.y + region.height)),
+    );
+    await writeFile(output, cropped.get_bytes());
+    return output;
+  } finally {
+    cropped?.free();
+    image.free();
+  }
+}
 
 const featureMembers = (arguments_: string[], name: string) =>
   arguments_
