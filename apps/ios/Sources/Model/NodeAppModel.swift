@@ -340,7 +340,6 @@ final class NodeAppModel {
     private(set) var operatorAuthorityGeneration: UInt64 = 0 {
         didSet {
             self.unreadIconBadge.invalidate()
-            self.unreadBadgeRoute = nil
         }
     }
     private(set) var hasOperatorAdminScope: Bool = false {
@@ -482,8 +481,6 @@ final class NodeAppModel {
             throw error
         }
     }
-    @ObservationIgnored private var unreadBadgeRoute: GatewayNodeSessionRoute?
-    @ObservationIgnored private var unreadBadgeScope: UnreadAppIconBadge.Scope?
     private var nodeGatewayTask: Task<Void, Never>?
     @ObservationIgnored private var nodeHostStatsTask: Task<Void, Never>?
     private var operatorGatewayTask: Task<Void, Never>?
@@ -993,8 +990,6 @@ final class NodeAppModel {
             if oldValue?.controlUIInputs != self.activeGatewayConnectConfig?.controlUIInputs {
                 self.operatorAuthorityGeneration &+= 1
                 self.unreadIconBadge.reset()
-                self.unreadBadgeScope = nil
-                self.unreadBadgeRoute = nil
             }
         }
     }
@@ -3378,8 +3373,6 @@ extension NodeAppModel {
             return
         }
 
-        self.unreadBadgeRoute = nil
-        self.unreadBadgeScope = nil
         self.gatewayRouteGeneration &+= 1
         self.stopNodeHostStatsPublisher()
         self.activeGatewayConnectConfig = nextConfig
@@ -3567,8 +3560,6 @@ extension NodeAppModel {
         invalidateConnectAttempts: Bool)
     {
         self.unreadIconBadge.reset()
-        self.unreadBadgeRoute = nil
-        self.unreadBadgeScope = nil
         invalidateExecApprovalSurfacesForGatewayChange()
         if invalidateConnectAttempts {
             self.invalidateGatewayConnectAttempts()
@@ -3769,8 +3760,6 @@ extension NodeAppModel {
         guard !self.isLocalGatewayFixtureEnabled else { return }
         if problem.needsPairingApproval || problem.pauseReconnect {
             self.unreadIconBadge.reset()
-            self.unreadBadgeScope = nil
-            self.unreadBadgeRoute = nil
         }
         let problem = GatewayConnectionIssue.addingEndpointGuidance(
             to: problem,
@@ -4385,8 +4374,6 @@ extension NodeAppModel {
     }
 
     func invalidateOperatorTalkRoute() {
-        self.unreadIconBadge.invalidate()
-        self.unreadBadgeRoute = nil
         self.operatorTalkConnectionGeneration &+= 1
         self.operatorTalkHydrationGeneration = nil
         // A socket replacement invalidates Talk, not gateway identity hydration. The
@@ -8904,74 +8891,40 @@ extension NodeAppModel {
 }
 
 extension NodeAppModel {
-    /// Every count comes from this operator's complete authorized roster, not the sidebar page.
+    /// The operator connection owns scope; the badge only projects its authorized roster.
     func refreshUnreadBadge() async {
-        self.unreadIconBadge.invalidate()
-        guard !self.isLocalGatewayFixtureEnabled, self.operatorConnected,
-              let route = await self.operatorGateway.currentRoute()
-        else { return }
-        let generation = self.gatewayRouteGeneration
-        let authorityGeneration = self.operatorAuthorityGeneration
-        let settings = await UNUserNotificationCenter.current().notificationSettings()
-        guard settings.badgeSetting == .enabled,
-              authorityGeneration == self.operatorAuthorityGeneration,
-              generation == self.gatewayRouteGeneration,
-              await self.operatorGateway.currentRoute() == route
-        else { return }
-        do {
-            if self.unreadBadgeRoute != route {
-                let identity = try await self.fetchPushRelayGatewayIdentity(ifCurrentRoute: route)
-                let binding = await self.operatorGateway.authBinding(ifCurrentRoute: route)
-                let access = await self.operatorGateway.currentReactionAccess(ifCurrentRoute: route)
-                guard authorityGeneration == self.operatorAuthorityGeneration,
-                      generation == self.gatewayRouteGeneration,
-                      await self.operatorGateway.currentRoute() == route,
-                      let binding, let access, access.role == "operator",
-                      let principalID = access.userID.map({ "profile:" + $0 })
-                        ?? binding.deviceId.map({ "device:" + $0 })
-                else { return }
-                self.unreadBadgeScope = UnreadAppIconBadge.Scope(
-                    gatewayDeviceID: identity.deviceId,
-                    principalID: principalID,
-                    credentialFingerprint: binding.credentialFingerprint)
-                self.unreadBadgeRoute = route
-            }
-            guard let scope = self.unreadBadgeScope else { return }
-            await self.unreadIconBadge.refresh(scope: scope) { [weak self] in
-                guard let self, authorityGeneration == self.operatorAuthorityGeneration,
-                      generation == self.gatewayRouteGeneration
+        guard !self.isLocalGatewayFixtureEnabled, self.operatorConnected else {
+            self.unreadIconBadge.invalidate()
+            return
+        }
+        let authority = self.operatorAuthorityGeneration
+        let isCurrent: @MainActor () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return self.operatorAuthorityGeneration == authority && self.operatorConnected &&
+                !self.isLocalGatewayFixtureEnabled
+        }
+        await self.unreadIconBadge.refresh { [weak self] in
+            guard let self, isCurrent() else { throw CancellationError() }
+            do {
+                let settings = await UNUserNotificationCenter.current().notificationSettings()
+                guard settings.badgeSetting == .enabled,
+                      let route = await self.operatorGateway.currentRoute(), isCurrent()
                 else { throw CancellationError() }
-                struct UnreadRoster: Decodable { let totalCount: Int }
-                do {
-                    let data = try await self.operatorGateway.request(
-                        method: "sessions.list",
-                        paramsJSON: #"{"unreadOnly":true,"excludeSubagents":true,"archived":false,"limit":1}"#,
-                        timeoutSeconds: 8,
-                        ifCurrentRoute: route)
-                    guard authorityGeneration == self.operatorAuthorityGeneration,
-                          generation == self.gatewayRouteGeneration,
-                          await self.operatorGateway.currentRoute() == route
-                    else { throw CancellationError() }
-                    return try JSONDecoder().decode(UnreadRoster.self, from: data).totalCount
-                } catch {
-                    if let error = error as? GatewayResponseError, error.isAuthorizationFailure,
-                       generation == self.gatewayRouteGeneration,
-                       await self.operatorGateway.currentRoute() == route
-                    {
-                        self.unreadIconBadge.reset()
-                    }
-                    self.pushWakeLogger.debug("Unread badge snapshot unavailable")
-                    throw error
+                let data = try await self.operatorGateway.request(
+                    method: "sessions.list",
+                    paramsJSON: #"{"unreadOnly":true,"excludeSubagents":true,"archived":false,"limit":1}"#,
+                    timeoutSeconds: 8,
+                    ifCurrentRoute: route)
+                let response = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+                guard isCurrent(), let count = response.totalCount else { throw CancellationError() }
+                return count
+            } catch {
+                if isCurrent(), let error = error as? GatewayResponseError, error.isAuthorizationFailure {
+                    self.unreadIconBadge.reset()
                 }
+                self.pushWakeLogger.debug("Unread badge snapshot unavailable")
+                throw error
             }
-        } catch {
-            if let error = error as? GatewayResponseError, error.isAuthorizationFailure,
-               generation == self.gatewayRouteGeneration,
-               await self.operatorGateway.currentRoute() == route
-            {
-                self.unreadIconBadge.reset()
-            }
-            self.pushWakeLogger.debug("Unread badge refresh deferred")
         }
     }
 

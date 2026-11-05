@@ -3,19 +3,12 @@ import Foundation
 /// A replaceable projection, never read truth. APNs carries invalidations, not badge values.
 @MainActor
 final class UnreadAppIconBadge {
-    struct Scope: Equatable {
-        let gatewayDeviceID: String
-        let principalID: String
-        let credentialFingerprint: String?
-    }
-
     private struct Refresh {
         let revision: UInt64
         let read: @MainActor () async throws -> Int
     }
 
     private let apply: @MainActor (Int) async throws -> Void
-    private var scope: Scope?
     private var revision: UInt64 = 0
     private var pending: Refresh?
     private var worker: Task<Void, Never>?
@@ -35,15 +28,10 @@ final class UnreadAppIconBadge {
     @discardableResult
     func reset() -> Task<Void, Never> {
         self.invalidate()
-        self.scope = nil
         return self.enqueueApplication(0)
     }
 
-    func refresh(scope: Scope, read: @escaping @MainActor () async throws -> Int) async {
-        if self.scope != scope {
-            self.scope = scope
-            _ = self.enqueueApplication(0)
-        }
+    func refresh(read: @escaping @MainActor () async throws -> Int) async {
         self.revision &+= 1
         self.pending = Refresh(revision: self.revision, read: read)
         if self.worker == nil {
