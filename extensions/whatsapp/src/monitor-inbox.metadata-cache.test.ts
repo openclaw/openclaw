@@ -381,6 +381,78 @@ describe("web monitor inbox metadata cache", () => {
     await listener.close();
   });
 
+  const expectDescriptionContext = (inbound: ReturnType<typeof inboundMessage>, text: string) =>
+    expect(inbound.payload.channelStructuredContext).toContainEqual({
+      label: "WhatsApp group description",
+      source: "whatsapp",
+      type: "group_description",
+      payload: { text },
+    });
+
+  it("group metadata cache delivers the group description as structured context", async () => {
+    const sock = getSock();
+    sock.groupFetchAllParticipating.mockRejectedValueOnce(new Error("no groups"));
+    sock.groupMetadata.mockResolvedValueOnce(
+      groupMetadata({
+        subject: "Described Group",
+        desc: "what this group is for",
+        participants: ["444@s.whatsapp.net"],
+      }),
+    );
+    const onMessage = vi.fn(async () => {});
+    const { listener } = await startInboxMonitor(onMessage as InboxOnMessage);
+
+    emitText(sock, nextMessageId("group-description"));
+
+    await waitForMessageCalls(onMessage, 1);
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.group?.subject).toBe("Described Group");
+    expectDescriptionContext(inbound, "what this group is for");
+
+    await listener.close();
+  });
+
+  it("group metadata cache omits description context for a group without one", async () => {
+    const sock = getSock();
+    sock.groupFetchAllParticipating.mockRejectedValueOnce(new Error("no groups"));
+    sock.groupMetadata.mockResolvedValueOnce(phoneGroup("Plain Group"));
+    const onMessage = vi.fn(async () => {});
+    const { listener } = await startInboxMonitor(onMessage as InboxOnMessage);
+
+    emitText(sock, nextMessageId("group-no-description"));
+
+    await waitForMessageCalls(onMessage, 1);
+    expect(inboundMessage(onMessage).payload.channelStructuredContext).toBeUndefined();
+
+    await listener.close();
+  });
+
+  it("group metadata cache serves the group description after live fetch failures", async () => {
+    const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
+    const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => {});
+
+    const firstSock = getSock();
+    firstSock.groupFetchAllParticipating.mockResolvedValueOnce({
+      "123@g.us": groupMetadata({
+        subject: "Recovered Group",
+        desc: "still here after a reconnect",
+        participants: ["444@s.whatsapp.net"],
+      }),
+    });
+    const first = await startInboxMonitor(onMessage as InboxOnMessage, { groupMetadataCache });
+    await vi.waitFor(() => expect(groupMetadataCache.get("123@g.us")?.desc).toBeDefined());
+    await first.listener.close();
+
+    const second = await startInboxMonitor(onMessage as InboxOnMessage, { groupMetadataCache });
+    second.sock.groupMetadata.mockRejectedValueOnce(new Error("408 timed out"));
+    emitText(second.sock, nextMessageId("group-description-reconnect"));
+
+    await waitForMessageCalls(onMessage, 1);
+    expectDescriptionContext(inboundMessage(onMessage), "still here after a reconnect");
+
+    await second.listener.close();
+  });
+
   it("group metadata cache does not block inbound listeners during hydration", async () => {
     const sock = getSock();
     const hydration = Promise.withResolvers<Record<string, never>>();
