@@ -325,12 +325,10 @@ function* assembleOpenClawCodingTools(
         })
       : [];
   const sessionToolAccess = prepareSessionPortalToolAccess({
+    ...options,
     sessionKey: executionSessionKey,
     agentId: executionAgentId,
-    sessionId: options?.sessionId,
-    senderIsOwner: options?.senderIsOwner,
     sandboxed: Boolean(sandbox),
-    runId: options?.runId,
     cronSelfRemoveOnlyJobId,
   });
   const { sessionPortalTarget, cronCreatorAuthorityResolver } = sessionToolAccess;
@@ -590,6 +588,7 @@ function* assembleOpenClawCodingTools(
         ? completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, undefined, "session"))
         : undefined,
     ownerOnlyDenied: new Set(ownerOnlyCoreToolDenylist),
+    ownerToolCurrentAssertion: sessionToolAccess.ownerToolCurrentAssertion,
     hostSystemTurn: isHostSystemTurn(options ?? {}),
   });
   assertMemoryFlushPersistenceToolAvailable(authorizedTools, options?.memoryFlushTools);

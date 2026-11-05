@@ -75,6 +75,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
+  const isTelegram = (params.messageChannel ?? params.messageProvider) === "telegram";
   const usesSelectedHistory = Boolean(
     activeContextEngine ||
     (!usesSupervisionConnection && params.hostCapabilities.prepareBoundedSeed),
@@ -140,6 +141,19 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const currentUserTurnIdempotencyKey = params.pluginRuntimeRefreshMessages
     ? undefined
     : admittedMessage?.idempotencyKey;
+  const currentMedia =
+    isTelegram && currentUserTurnIdempotencyKey && admittedMessage && !params.images?.length
+      ? await params.hostCapabilities.prepareContextMedia?.({
+          message: (await params.userTurnTranscriptRecorder?.resolveMessage()) ?? admittedMessage,
+          maxChars: 0,
+        })
+      : undefined;
+  assertProjectionCurrent();
+  const imageHistory = isTelegram
+    ? params.images?.length || currentMedia?.hasImageAttachments
+      ? "none"
+      : "latest-turn"
+    : undefined;
   const prepareFileContext: NonNullable<
     Parameters<typeof projectContextEngineAssemblyForCodex>[0]["prepareFileContext"]
   > = async (message, maxChars) => {
@@ -173,6 +187,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       prepareFileContext,
       currentUserTurnIdempotencyKey,
       currentUserMessage: admittedMessage,
+      imageHistory,
     });
     assertProjectionCurrent();
     contextImageGroups = projection.imageGroups ?? [];
@@ -255,6 +270,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           prepareFileContext,
           currentUserTurnIdempotencyKey,
           currentUserMessage: admittedMessage,
+          imageHistory,
         },
         historyTokenBudget: historyBudget?.tokenBudget,
         baseDeveloperInstructions,

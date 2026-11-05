@@ -203,7 +203,7 @@ export function ReplyButton(props: {
   onReply: (target: MessageReplyTarget) => void;
 }) {
   return (
-    <openclaw-tooltip prop:content={t("chat.messages.reply")}>
+    <openclaw-tooltip prop:content={t("chat.messages.reply")} prop:describe={false}>
       <button
         class="chat-reply-btn"
         type="button"

@@ -14,6 +14,7 @@ on:
       # CI planners are Linux-owned; retain inputs used by native worker preparation.
       - "!scripts/lib/ci-*.mts"
       - "!scripts/lib/ci-*.mjs"
+      - "scripts/lib/ci-adaptive-markdown.mjs"
       - "scripts/lib/ci-test-timings.mts"
       - "scripts/lib/ci-test-timings-schema.mts"
       - "scripts/lib/ci-test-timings-refit.mts"
@@ -32,11 +33,16 @@ on:
       - "test/scripts/pr-materialized-anchor.test.ts"
       - "test/scripts/pr-operation-lock.test.ts"
       - "test/scripts/pr-git-invocation.test.ts"
+      - "test/scripts/package-mac-dist.test.ts"
+      - "scripts/package-mac-dist.sh"
+      - "scripts/notarize-mac-artifact.sh"
+      - "src/infra/directory-walk.ts"
       - "!test/scripts/pr-ci-sweeper*"
       - "test/scripts/exited-descendant-reaper.test-support.ts"
       - "test/helpers/**"
       - "!test/helpers/**/*.test.ts"
       - "test/vitest/**"
+      - "config/ci-adaptive-markdown.json"
       - "test/setup*.ts"
       - "test/test-home-policy.mts"
       - "src/test-utils/**"
@@ -140,3 +146,6 @@ jobs:
 
       - name: Test selected Git with native GitHub CLI
         run: node scripts/run-vitest.mjs test/scripts/pr-git-invocation.test.ts --maxWorkers=1
+
+      - name: Test macOS distribution archives
+        run: node scripts/run-vitest.mjs test/scripts/package-mac-dist.test.ts --maxWorkers=1
