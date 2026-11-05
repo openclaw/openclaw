@@ -1,2 +1,2 @@
 # Bound the materialized session-archive read cache by entries and bytes so a small /tmp tmpfs cannot fill.
-29
+2

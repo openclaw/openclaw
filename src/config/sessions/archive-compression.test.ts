@@ -8,7 +8,8 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 // Keep the materialized read cache inside a temp dir so the budget assertions are isolated
 // from other readers of the real /tmp/openclaw cache.
 const cacheRoot = vi.hoisted(() => ({ dir: "" }));
-vi.mock("../../infra/tmp-openclaw-dir.js", () => ({
+vi.mock("../../infra/tmp-openclaw-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/tmp-openclaw-dir.js")>()),
   resolvePreferredOpenClawTmpDir: () => cacheRoot.dir,
 }));
 import {
