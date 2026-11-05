@@ -1,15 +1,34 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { runtimeProcessScriptEntrypoints } from "../src/infra/runtime-process-manifest.ts";
+import { reportLimitViolations } from "./lib/check-limits.mts";
+import {
+  loadRatchetReference,
+  loadRatchetSnapshot,
+  loadRatchetSources,
+  parseRatchetArgs,
+  parseRatchetScalar,
+  resolveRatchetBase,
+} from "./lib/shrink-ratchet.mts";
 
 const BUDGET_PATH = "config/env-var-count-budget.txt";
 const SOURCE_ROOTS = ["src", "packages", "extensions"];
 const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
 const ENV_VAR_PATTERN = /OPENCLAW_[A-Z0-9_]+/gu;
+// Compiled copies carry their source owner's names; only authored inputs define configuration.
+const generatedScriptArtifacts = new Set<string>(
+  Object.values(runtimeProcessScriptEntrypoints).flatMap((entry) =>
+    "buildSource" in entry ? [entry.sourceModule] : [],
+  ),
+);
 
 export function isCountedSourcePath(filePath: string) {
   const normalized = filePath.replaceAll("\\", "/");
+  if (generatedScriptArtifacts.has(normalized)) {
+    return false;
+  }
   if (!SOURCE_ROOTS.some((root) => normalized.startsWith(root + "/"))) {
     return false;
   }
@@ -28,7 +47,18 @@ export function isCountedSourcePath(filePath: string) {
   );
 }
 
-export function collectEnvVarNames(root = process.cwd(), options: { staged?: boolean } = {}) {
+export type EnvVarNamesByPath = ReadonlyMap<string, ReadonlySet<string>>;
+
+export function addEnvVarNames(source: string, names: Set<string>) {
+  for (const match of source.matchAll(ENV_VAR_PATTERN)) {
+    names.add(match[0]);
+  }
+}
+
+export function collectEnvVarNames(
+  root = process.cwd(),
+  options: { staged?: boolean; preparedNames?: EnvVarNamesByPath } = {},
+) {
   const staged = options.staged === true;
   const files = execFileSync(
     "git",
@@ -46,87 +76,72 @@ export function collectEnvVarNames(root = process.cwd(), options: { staged?: boo
     .split("\0")
     .filter(isCountedSourcePath)
     .filter((file) => staged || fs.existsSync(path.join(root, file)));
+  const sources = staged ? loadRatchetSources(root, files).values() : files;
   const names = new Set<string>();
-  for (const file of files) {
-    const source = staged
-      ? execFileSync("git", ["show", `:${file}`], { cwd: root, encoding: "utf8" })
-      : fs.readFileSync(path.join(root, file), "utf8");
-    for (const match of source.matchAll(ENV_VAR_PATTERN)) {
-      names.add(match[0]);
+  for (const entry of sources) {
+    const prepared = staged ? undefined : options.preparedNames?.get(entry);
+    if (prepared !== undefined) {
+      for (const name of prepared) {
+        names.add(name);
+      }
+      continue;
     }
+    const source = staged ? entry : fs.readFileSync(path.join(root, entry), "utf8");
+    addEnvVarNames(source, names);
   }
   return [...names].toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
 
-export function parseBudget(source: string) {
-  const values = source
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("#"));
-  const value = values[0];
-  if (values.length !== 1 || value === undefined || !/^\d+$/u.test(value)) {
-    throw new Error(`${BUDGET_PATH} must contain exactly one non-negative integer`);
-  }
-  return Number(value);
+function parseBudget(source: string) {
+  return parseRatchetScalar(source, BUDGET_PATH);
 }
 
-function readBaseBudget(root: string, ref: string) {
-  const resolved = spawnSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
-    cwd: root,
-    encoding: "utf8",
+export function main(
+  argv: string[] = process.argv.slice(2),
+  root = process.cwd(),
+  preparedNames?: EnvVarNamesByPath,
+) {
+  const args = parseRatchetArgs(argv);
+  if (args.prune) {
+    throw new Error("The env-var budget must be updated explicitly; --prune is not supported.");
+  }
+  const { staged } = args;
+  const budget = loadRatchetSnapshot(root, BUDGET_PATH, staged, parseBudget);
+  // Staging selects the source/budget snapshot, not the allowed budget: that
+  // still belongs to the origin/main fork unless the caller supplies a base.
+  const baseRef = resolveRatchetBase(root, {
+    ...args,
+    base: args.base ?? "origin/main",
+    staged: false,
   });
-  if (resolved.status !== 0) {
-    throw new Error(`Could not resolve env-var count base ref: ${ref}`);
+  if (!baseRef) {
+    throw new Error("Could not resolve env-var count budget base");
   }
-  const mergeBase = spawnSync("git", ["merge-base", "HEAD", ref], {
-    cwd: root,
-    encoding: "utf8",
-  });
-  const baselineRef = mergeBase.stdout.trim();
-  if (mergeBase.status !== 0 || !baselineRef) {
-    throw new Error(`Could not resolve env-var count merge base for: ${ref}`);
+  const baseBudget = loadRatchetReference(root, baseRef, BUDGET_PATH, parseBudget);
+  const growth =
+    baseBudget !== null && budget > baseBudget
+      ? [
+          {
+            file: BUDGET_PATH,
+            title: "Environment variable count budget",
+            message: `OPENCLAW_* budget grew from ${baseBudget} to ${budget}`,
+          },
+        ]
+      : [];
+  if (reportLimitViolations(growth)) {
+    throw new Error(growth[0]!.message);
   }
-  const entry = execFileSync("git", ["ls-tree", "--name-only", baselineRef, "--", BUDGET_PATH], {
-    cwd: root,
-    encoding: "utf8",
-  }).trim();
-  if (!entry) {
-    return null;
-  }
-  return parseBudget(
-    execFileSync("git", ["show", `${baselineRef}:${BUDGET_PATH}`], {
-      cwd: root,
-      encoding: "utf8",
-    }),
-  );
-}
-
-export function main(argv: string[] = process.argv.slice(2), root = process.cwd()) {
-  const baseIndex = argv.indexOf("--base");
-  const baseRef = baseIndex < 0 ? "origin/main" : argv[baseIndex + 1];
-  const staged = argv.includes("--staged");
-  const expectedLength = (baseIndex >= 0 ? 2 : 0) + (staged ? 1 : 0);
-  if (!baseRef || argv.length !== expectedLength) {
-    throw new Error(
-      "Usage: node --import tsx scripts/check-env-var-count.mts [--staged] [--base <git-ref>]",
-    );
-  }
-  const budgetSource = staged
-    ? execFileSync("git", ["show", `:${BUDGET_PATH}`], { cwd: root, encoding: "utf8" })
-    : fs.readFileSync(path.join(root, BUDGET_PATH), "utf8");
-  const budget = parseBudget(budgetSource);
-  const baseBudget = readBaseBudget(root, baseRef);
-  if (baseBudget !== null && budget > baseBudget) {
-    throw new Error(`OPENCLAW_* budget grew from ${baseBudget} to ${budget}`);
-  }
-  const names = collectEnvVarNames(root, { staged });
+  const names = collectEnvVarNames(root, { staged, preparedNames });
+  // The budget must describe the tree in CI too, so unrecorded names cannot reach main
+  // and fail every later local run. Recorded growth follows the limit severity policy.
   if (names.length !== budget) {
-    const direction = names.length > budget ? "exceeds" : "is below";
     throw new Error(
-      `OPENCLAW_* count ${names.length} ${direction} budget ${budget}; update ${BUDGET_PATH}`,
+      `OPENCLAW_* count ${names.length} ${names.length < budget ? "is below" : "exceeds"} budget ${budget}; update ${BUDGET_PATH}`,
     );
   }
-  console.log(`OPENCLAW_* count ${names.length}/${budget}`);
+  if (growth.length === 0) {
+    console.log(`OPENCLAW_* count ${names.length}/${budget}`);
+  }
   return names.length;
 }
 

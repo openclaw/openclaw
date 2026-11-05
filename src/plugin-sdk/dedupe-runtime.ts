@@ -1,5 +1,3 @@
-// In-memory dedupe helpers for plugin runtime hot paths.
-
 import { resolveGlobalDedupeCache } from "../infra/dedupe.js";
 import type { OpenKeyedStoreOptions } from "./plugin-state-runtime.js";
 
@@ -8,6 +6,11 @@ export { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js"
 type PersistentDedupeStore<TRecord> = {
   register(key: string, value: TRecord, opts?: { ttlMs?: number }): Promise<void>;
   lookup(key: string): Promise<TRecord | undefined>;
+};
+
+type PersistentDedupeEntryMetadata = {
+  key: string;
+  expiresAt?: number;
 };
 
 /** Dual-layer presence cache: process-memory dedupe plus best-effort persistent state. */
@@ -67,7 +70,7 @@ export function createPersistentDedupeCache<TRecord>(params: {
       persistentStore = params.persistent.openStore({
         namespace: params.persistent.namespace,
         maxEntries: params.persistent.maxEntries,
-        defaultTtlMs: params.ttlMs,
+        ...(params.ttlMs > 0 ? { defaultTtlMs: params.ttlMs } : {}),
       });
       return persistentStore;
     } catch (error) {
@@ -89,14 +92,36 @@ export function createPersistentDedupeCache<TRecord>(params: {
       let record: TRecord | undefined;
       try {
         record = await store.lookup(key);
+        if (record === undefined) {
+          return false;
+        }
+        if (params.ttlMs <= 0) {
+          const metadataStore = store as {
+            entries?: () => Promise<PersistentDedupeEntryMetadata[] | undefined>;
+          };
+          if (typeof metadataStore.entries === "function") {
+            const entries = await metadataStore.entries();
+            if (Array.isArray(entries)) {
+              const entry = entries.find((candidate) => candidate.key === key);
+              if (!entry) {
+                return false;
+              }
+              if (entry.expiresAt !== undefined) {
+                // Legacy TTL-bound entries must never become permanent memory hits.
+                return entry.expiresAt > Date.now();
+              }
+            }
+          }
+        }
       } catch (error) {
         disablePersistentStore(error);
         return false;
       }
-      if (record === undefined) {
+      const recordedAt = params.persistent.readTimestamp?.(record);
+      if (recordedAt !== undefined && params.ttlMs > 0 && Date.now() - recordedAt >= params.ttlMs) {
         return false;
       }
-      memory.check(key, params.persistent.readTimestamp?.(record));
+      memory.check(key, recordedAt);
       return true;
     },
     register: async (key, record, opts) => {

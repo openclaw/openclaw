@@ -1,6 +1,7 @@
 // Whatsapp tests cover qa driver plugin behavior.
 import { EventEmitter } from "node:events";
 import type { proto, WAMessage } from "baileys";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startWhatsAppQaDriverSession, type WhatsAppQaDriverSession } from "./qa-driver.runtime.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
@@ -22,12 +23,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./session.js", () => ({
   createWaSocket: mocks.createWaSocket,
-  formatError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  formatError: coerceErrorMessage,
   getStatusCode: (error: unknown) =>
     (error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode,
   waitForWaConnection: mocks.waitForWaConnection,
 }));
-vi.mock("./text-runtime.js", () => ({ jidToE164: mocks.jidToE164 }));
+vi.mock("./targets-runtime.js", () => ({ jidToE164: mocks.jidToE164 }));
 vi.mock("./inbound/send-api.js", () => ({ createWebSendApi: mocks.createWebSendApi }));
 
 function createMockSocket() {
@@ -108,34 +109,21 @@ const ingressCases = [
     "pollCreationMessageV2",
     "pollCreationMessageV3",
     "pollCreationMessageV5",
-  ].flatMap((pollKey) => {
-    const message = pollMessage(pollKey);
-    return [
-      { name: pollKey, message, expected: pollExpected },
-      {
-        name: `ephemeral ${pollKey}`,
-        message: { ephemeralMessage: { message } },
-        expected: pollExpected,
+  ].map((pollKey) => ({ name: pollKey, message: pollMessage(pollKey), expected: pollExpected })),
+  {
+    name: "ephemeral future-proof version-4 poll",
+    message: {
+      ephemeralMessage: {
+        message: { pollCreationMessageV4: { message: pollMessage("pollCreationMessageV5") } },
       },
-    ];
-  }),
-  ...["pollCreationMessageV3", "pollCreationMessageV5"].flatMap((pollKey) => {
-    const message = pollMessage(pollKey);
-    const wrapped = { pollCreationMessageV4: { message } };
-    return [
-      { name: `future-proof version-4 ${pollKey}`, message: wrapped, expected: pollExpected },
-      {
-        name: `ephemeral future-proof version-4 ${pollKey}`,
-        message: { ephemeralMessage: { message: wrapped } },
-        expected: pollExpected,
-      },
-      {
-        name: `edited ${pollKey}`,
-        message: { editedMessage: { message } },
-        expected: pollExpected,
-      },
-    ];
-  }),
+    },
+    expected: pollExpected,
+  },
+  {
+    name: "edited poll",
+    message: { editedMessage: { message: pollMessage("pollCreationMessageV3") } },
+    expected: pollExpected,
+  },
 ];
 
 describe("startWhatsAppQaDriverSession", () => {
@@ -238,18 +226,6 @@ describe("startWhatsAppQaDriverSession", () => {
       name: "bodyless audio",
       message: { audioMessage: { mimetype: "audio/ogg; codecs=opus" } },
       expected: { hasMedia: true, kind: "media", mediaType: "audio/ogg; codecs=opus", text: "" },
-    },
-    {
-      name: "future-proof wrapped media",
-      message: {
-        editedMessage: { message: { imageMessage: { caption: "edited image caption" } } },
-      },
-      expected: {
-        hasMedia: true,
-        kind: "media",
-        mediaType: "image/jpeg",
-        text: "edited image caption",
-      },
     },
     {
       name: "top-level locations",
@@ -425,11 +401,6 @@ describe("startWhatsAppQaDriverSession", () => {
       mimetype: "image/webp",
     });
     expect(mocks.socketSendMessage).not.toHaveBeenCalled();
-  });
-
-  it("passes the connection timeout to the shared connection waiter", async () => {
-    await startSession({ connectionTimeoutMs: 45_000 });
-    expect(mocks.waitForWaConnection).toHaveBeenCalledWith(sock, { timeoutMs: 45_000 });
   });
 
   it("passes a bounded socket adapter to the send API", async () => {

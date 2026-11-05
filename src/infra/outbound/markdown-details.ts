@@ -29,7 +29,24 @@ function appendNode(target: DetailsNode[], node: DetailsNode): void {
 }
 
 function trimMarkdownBlankLines(value: string): string {
-  return value.replace(/^(?:[ \t]*\r?\n)+/, "").replace(/(?:\r?\n[ \t]*)+$/, "");
+  const body = value.replace(/^(?:[ \t]*\r?\n)+/, "");
+  let end = body.length;
+  // Scan backward: an unanchored repeated suffix regex retries internal blank
+  // lines quadratically and blocks unrelated sessions on the same event loop.
+  for (let cursor = end; cursor > 0;) {
+    while (body[cursor - 1] === " " || body[cursor - 1] === "\t") {
+      cursor -= 1;
+    }
+    if (body[cursor - 1] !== "\n") {
+      break;
+    }
+    cursor -= 1;
+    if (body[cursor - 1] === "\r") {
+      cursor -= 1;
+    }
+    end = cursor;
+  }
+  return body.slice(0, end);
 }
 
 type MarkdownContainerLayout = { blankPrefix: string; continuationPrefix: string };
@@ -41,14 +58,11 @@ function resolveMarkdownContainerLayout(rendered: string): MarkdownContainerLayo
   }
   const quotePrefix = /^[ \t]{0,3}(?:>\s?)+/.exec(currentLine)?.[0] ?? "";
   const remainder = currentLine.slice(quotePrefix.length);
-  if (quotePrefix && !remainder) {
-    return { blankPrefix: quotePrefix.trimEnd(), continuationPrefix: quotePrefix };
-  }
   const listMarker = /^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+$/.exec(remainder)?.[0];
-  if (listMarker) {
+  if (listMarker || (quotePrefix && !remainder)) {
     return {
       blankPrefix: quotePrefix.trimEnd(),
-      continuationPrefix: quotePrefix + " ".repeat(listMarker.length),
+      continuationPrefix: quotePrefix + (listMarker ? " ".repeat(listMarker.length) : ""),
     };
   }
   return null;
@@ -57,32 +71,28 @@ function resolveMarkdownContainerLayout(rendered: string): MarkdownContainerLayo
 function renderInMarkdownContainer(block: string, layout: MarkdownContainerLayout): string {
   return block
     .split("\n")
-    .map((line, index) => {
-      if (index === 0) {
-        return line;
-      }
-      return line ? layout.continuationPrefix + line : layout.blankPrefix;
-    })
+    .map((line, index) =>
+      index === 0 ? line : line ? layout.continuationPrefix + line : layout.blankPrefix,
+    )
     .join("\n");
 }
 
 function stripMarkdownContainerLayout(block: string, layout: MarkdownContainerLayout): string {
   return block
     .split("\n")
-    .map((line) => {
-      if (line === layout.blankPrefix) {
-        return "";
-      }
-      return line.startsWith(layout.continuationPrefix)
-        ? line.slice(layout.continuationPrefix.length)
-        : line;
-    })
+    .map((line) =>
+      line === layout.blankPrefix
+        ? ""
+        : line.startsWith(layout.continuationPrefix)
+          ? line.slice(layout.continuationPrefix.length)
+          : line,
+    )
     .join("\n");
 }
 
 function collectDetailsText(nodes: readonly DetailsNode[]): string {
   let text = "";
-  const pending = [...nodes].toReversed();
+  const pending = nodes.toReversed();
   while (pending.length > 0) {
     const node = pending.pop();
     if (typeof node === "string") {
@@ -95,6 +105,11 @@ function collectDetailsText(nodes: readonly DetailsNode[]): string {
 }
 
 function renderDetailsNodes(nodes: readonly DetailsNode[], depth = 0): string {
+  // Render nodes at the limit; only their children fall back to plain text.
+  if (depth > MAX_DETAILS_RENDER_DEPTH) {
+    return collectDetailsText(nodes);
+  }
+
   let rendered = "";
   for (const [index, node] of nodes.entries()) {
     if (typeof node === "string") {
@@ -102,10 +117,7 @@ function renderDetailsNodes(nodes: readonly DetailsNode[], depth = 0): string {
       continue;
     }
     if (node.type === "summary") {
-      rendered +=
-        depth >= MAX_DETAILS_RENDER_DEPTH
-          ? collectDetailsText(node.children)
-          : renderDetailsNodes(node.children, depth + 1);
+      rendered += renderDetailsNodes(node.children, depth + 1);
       continue;
     }
 
@@ -115,19 +127,11 @@ function renderDetailsNodes(nodes: readonly DetailsNode[], depth = 0): string {
     );
     const bodyNodes = node.children.filter((child) => child !== summary);
     const container = resolveMarkdownContainerLayout(rendered);
-    const renderedBody =
-      depth >= MAX_DETAILS_RENDER_DEPTH
-        ? collectDetailsText(bodyNodes)
-        : renderDetailsNodes(bodyNodes, depth + 1);
+    const renderedBody = renderDetailsNodes(bodyNodes, depth + 1);
     const body = trimMarkdownBlankLines(
       container ? stripMarkdownContainerLayout(renderedBody, container) : renderedBody,
     );
-    const label = summary
-      ? (depth >= MAX_DETAILS_RENDER_DEPTH
-          ? collectDetailsText(summary.children)
-          : renderDetailsNodes(summary.children, depth + 1)
-        ).trim()
-      : "Details";
+    const label = summary ? renderDetailsNodes(summary.children, depth + 1).trim() : "Details";
     const heading = `**${label || "Details"}**`;
     const block = body ? `${heading}\n\n${body}` : heading;
     if (container) {
@@ -172,10 +176,7 @@ export function flattenMarkdownDetails(text: string): string {
     appendNode(target, text.slice(cursor, start));
     cursor = start + match[0].length;
 
-    const type = match[2]?.toLowerCase();
-    if (type !== "details" && type !== "summary") {
-      continue;
-    }
+    const type = match[2]?.toLowerCase() === "summary" ? "summary" : "details";
     if (match[1]) {
       if (
         type === "details" &&

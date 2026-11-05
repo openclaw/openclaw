@@ -1,0 +1,423 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { describe, expect, it, vi } from "vitest";
+import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { beforeSettlement, create, providerService } from "./provider-lifecycle.test-support.js";
+import * as support from "./service.test-support.js";
+
+type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
+const invalidSshLease = (patch: object) => ({
+  leaseId: "lease-invalid",
+  ssh: support.SSH_ENDPOINT,
+  ...patch,
+});
+const providerFailure = {
+  code: "provider_failure",
+} satisfies Partial<WorkerEnvironmentServiceError>;
+const pendingAllocation = { state: "provisioning", leaseId: null };
+
+describe("worker environment service provision replay", () => {
+  support.setupWorkerEnvironmentServiceSuite();
+
+  it("retains an indeterminate node lease when runtime preflight fails after restart", async () => {
+    const provision = vi.fn<WorkerProvider["provision"]>(async () => {
+      throw new Error("node allocation response was lost");
+    });
+    const destroy = vi.fn(async () => {});
+    const provider = support.createProvider({
+      requiresNodeEnrollment: true,
+      provisionBeforeInstallation: true,
+      provision,
+      destroy,
+    });
+    const enrollment = async () => {
+      throw new Error("enrollment must not run");
+    };
+    const first = support.createService(provider, { prepareNodeEnrollment: enrollment });
+    await expect(create(first, "preflight-replay")).rejects.toMatchObject(providerFailure);
+    const original = support.testState.store.list()[0]!;
+    expect(original.state).toBe("provisioning");
+    await support.reopenWorkerEnvironmentStore();
+    const restarted = support.createService(provider, {
+      prepareNodeEnrollment: enrollment,
+      prepareNodeBootstrap: async () => {
+        throw new Error("runtime preparation unavailable");
+      },
+    });
+    restarted.start();
+    await support.waitForFast(() =>
+      expect(support.testState.store.get(original.environmentId)?.lastError).toContain(
+        "runtime preparation unavailable",
+      ),
+    );
+    expect(support.testState.store.get(original.environmentId)).toMatchObject({
+      ...pendingAllocation,
+      provisionOperationId: original.provisionOperationId,
+    });
+    expect(provision).toHaveBeenCalledOnce();
+    expect(destroy).not.toHaveBeenCalled();
+    await expect(restarted.destroy(original.environmentId)).resolves.toMatchObject({
+      state: "destroyed",
+    });
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it("adopts one committed provision across a service and store restart", async () => {
+    const physicalLeases = new Set<string>();
+    const operationIds: string[] = [];
+    const machineClasses: Array<string | undefined> = [];
+    const operatingSystems: Array<string | undefined> = [];
+    const destroyed: string[] = [];
+    let creates = 0;
+    let loseFirstReply = true;
+    const provider = () =>
+      support.createProvider({
+        provision: async (_profile, operationId, options) => {
+          operationIds.push(operationId);
+          machineClasses.push(options?.machineClass);
+          operatingSystems.push(options?.os);
+          if (!physicalLeases.has("lease-restarted")) {
+            creates += 1;
+            physicalLeases.add("lease-restarted");
+          }
+          if (loseFirstReply) {
+            loseFirstReply = false;
+            throw new Error("provider response was lost after commit");
+          }
+          return { leaseId: "lease-restarted", ssh: support.SSH_ENDPOINT };
+        },
+        destroy: async ({ leaseId }) => {
+          destroyed.push(leaseId);
+          physicalLeases.delete(leaseId);
+        },
+      });
+    const first = support.createService(provider());
+
+    await expect(
+      first.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-restart-replay",
+        machineClass: "large",
+        os: "os-a",
+      }),
+    ).rejects.toMatchObject({
+      code: "provider_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    const environmentId = expectDefined(
+      support.testState.store.list()[0],
+      "persisted provision intent",
+    ).environmentId;
+    const operationId = expectDefined(
+      support.testState.store.get(environmentId),
+      "persisted provision record",
+    ).provisionOperationId;
+    expect(operationId).toMatch(/^provision:v2:[a-f0-9]{64}$/u);
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "provisioning",
+      leaseId: null,
+    });
+
+    await support.reopenWorkerEnvironmentStore();
+
+    const restarted = support.createService(provider());
+    // A new caller must not replay an indeterminate allocation after losing authority.
+    await expect(
+      restarted.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-restart-replay",
+        machineClass: "large",
+        os: "os-a",
+        beforeProvision: () => {
+          throw new Error("Caller authority revoked");
+        },
+      }),
+    ).rejects.toThrow("Caller authority revoked");
+    expect(operationIds).toEqual([operationId]);
+    expect(support.testState.store.get(environmentId)).toMatchObject(pendingAllocation);
+    restarted.start();
+    await support.waitForFast(() =>
+      expect(support.testState.store.get(environmentId)).toMatchObject({
+        state: "ready",
+        leaseId: "lease-restarted",
+        lastError: null,
+      }),
+    );
+    await restarted.destroy(environmentId);
+
+    expect(creates).toBe(1);
+    expect(operationIds).toEqual([operationId, operationId]);
+    expect(machineClasses).toEqual(["large", "large"]);
+    expect(operatingSystems).toEqual(["os-a", "os-a"]);
+    expect(destroyed).toEqual(["lease-restarted"]);
+    expect(physicalLeases.size).toBe(0);
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "destroyed",
+      leaseId: "lease-restarted",
+    });
+  });
+
+  it("recovers indeterminate cleanup with bounded, redacted diagnostics", async () => {
+    const leaseId = "lease:worker-provision-cleanup";
+    const provisionDiagnosis = "worker enrollment failed: tar: Unexpected EOF in archive";
+    const cleanupDiagnosis = "provider stop timed out after release was requested";
+    const secret = `synthetic-worker-auth-${"x".repeat(48)}`;
+    const progress = String.fromCodePoint(0x1f9ea).repeat(200);
+    const provisionDetail = `Crabbox worker bootstrap failed with exit code 1: ... ${progress} --provider aws --type worker\nAuthorization: Bearer ${secret}\n${provisionDiagnosis}`;
+    const cleanupDetail = `Crabbox stop did not exit normally (timeout): ... ${progress} --provider aws --type worker\nAuthorization: Bearer ${secret}\n${cleanupDiagnosis}`;
+    const provision = vi.fn(async () => {
+      throw WorkerProviderError.cleanupIndeterminate(
+        leaseId,
+        new Error(provisionDetail),
+        new Error(cleanupDetail),
+      );
+    });
+    const destroy = vi.fn(async () => {});
+    const provider = support.createProvider({ provision, destroy });
+    const workerService = support.createService(provider);
+
+    const failure = await create(workerService, "request-provision-cleanup").catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toMatchObject(providerFailure);
+    if (!(failure instanceof Error)) {
+      throw new Error("expected worker creation to fail");
+    }
+    const pending = expectDefined(support.testState.store.list()[0], "persisted provision cleanup");
+    const diagnostic = expectDefined(pending.lastError, "persisted cleanup diagnostic");
+    for (const detail of [failure.message, diagnostic]) {
+      expect(detail).toContain(provisionDiagnosis);
+      expect(detail).toContain(cleanupDiagnosis);
+      expect(detail).not.toContain(secret);
+      expect(detail).not.toContain("x".repeat(40));
+      expect(detail).not.toMatch(/\s{2,}/u);
+      expect(Buffer.from(detail, "utf8").toString("utf8")).toBe(detail);
+      expect(detail).toContain("Crabbox worker bootstrap failed with exit code 1");
+      expect(detail).toContain("Crabbox stop did not exit normally (timeout)");
+    }
+    expect(diagnostic.length).toBeLessThanOrEqual(1_024);
+    expect(failure.message).toBe(
+      `Worker provider operation failed; teardown is pending: ${diagnostic}`,
+    );
+    expect(pending).toMatchObject({
+      state: "destroying",
+      leaseId,
+      destroyRequestedAtMs: expect.any(Number),
+      teardownTerminalState: "failed",
+      lastError: diagnostic,
+    });
+
+    await support.reopenWorkerEnvironmentStore();
+    const restarted = support.createService(provider);
+    restarted.start();
+    await support.waitForFast(() =>
+      expect(support.testState.store.get(pending.environmentId)).toMatchObject({
+        state: "failed",
+        leaseId: null,
+      }),
+    );
+
+    expect(provision).toHaveBeenCalledTimes(1);
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(support.testState.store.get(pending.environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      teardownTerminalState: "failed",
+      lastError: diagnostic,
+    });
+  });
+
+  it("rejects a timer-overflow provider provision timeout before allocation", async () => {
+    const timeoutMs = MAX_TIMER_TIMEOUT_MS + 1;
+    const provision = vi.fn();
+    const workerService = providerService({
+      provision,
+      resolveProvisionTimeoutMs: () => timeoutMs,
+    });
+
+    await expect(
+      create(workerService, `request-invalid-provider-timeout-${String(timeoutMs)}`),
+    ).rejects.toMatchObject({
+      code: "provider_failure",
+      message: expect.stringContaining("Worker provider provision timeout must be an integer"),
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(provision).not.toHaveBeenCalled();
+    expect(support.testState.store.list()[0]).toMatchObject({ state: "failed", leaseId: null });
+  });
+
+  it("does not invoke a late prepared allocation after replay times out", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const entered = createDeferredCore();
+    const settled = createDeferredCore();
+    const lateAllocation = vi.fn(async () => ({ leaseId: "lease-1", ssh: support.SSH_ENDPOINT }));
+    let preparations = 0;
+    const service = providerService(
+      {
+        prepareProvision: async () => {
+          if (++preparations === 1) {
+            return async () => {
+              throw new Error("synthetic response lost after allocation");
+            };
+          }
+          entered.resolve();
+          await settled.promise;
+          return lateAllocation;
+        },
+      },
+      { providerCallTimeoutMs: 25 },
+    );
+    await expect(create(service, "replayed-preparation")).rejects.toThrow(
+      "response lost after allocation",
+    );
+    const replay = create(service, "replayed-preparation").catch((error: unknown) => error);
+    try {
+      await beforeSettlement(entered.promise, replay, "Replay preparation");
+      await vi.advanceTimersByTimeAsync(25);
+      expect(await replay).toMatchObject(providerFailure);
+      expect(support.testState.store.list()[0]).toMatchObject(pendingAllocation);
+    } finally {
+      settled.resolve();
+      await replay;
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(lateAllocation).not.toHaveBeenCalled();
+    expect(support.testState.store.list()[0]).toMatchObject(pendingAllocation);
+  });
+
+  it("serializes allocation resolution and destroy behind a timed-out provider operation", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const provisionEntered = createDeferredCore();
+    const intentCommitted = createDeferredCore();
+    const requestDestroy = support.testState.store.requestDestroy.bind(support.testState.store);
+    vi.spyOn(support.testState.store, "requestDestroy").mockImplementation(async (input) => {
+      const record = await requestDestroy(input);
+      intentCommitted.resolve();
+      return record;
+    });
+    const events: string[] = [];
+    const { promise: firstProvisionPending, resolve: finishFirstProvision } = createDeferredCore();
+    const destroy = vi.fn(async () => {
+      events.push("destroy");
+    });
+    const provider = support.createProvider({
+      resolveAllocation: async () => {
+        events.push("resolve");
+        return { leaseId: "lease-timeout-replay", sharedHost: false };
+      },
+      provision: async () => {
+        events.push("provision:start");
+        provisionEntered.resolve();
+        await firstProvisionPending;
+        events.push("provision:end");
+        return { leaseId: "lease-timeout-replay", ssh: support.SSH_ENDPOINT };
+      },
+      destroy,
+      resolveProvisionTimeoutMs: () => 20,
+    });
+    const workerService = support.createService(provider);
+    const creationResult = create(workerService, "request-provider-timeout-race").then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    let teardownResult: Promise<unknown> | undefined;
+    try {
+      await beforeSettlement(provisionEntered.promise, creationResult, "Creation provider call");
+      expect(events).toEqual(["provision:start"]);
+      const queuedEnvironmentId = expectDefined(
+        support.testState.store.list()[0],
+        "timed-out provision row",
+      ).environmentId;
+      teardownResult = workerService.destroy(queuedEnvironmentId).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await creationResult).toMatchObject({ error: providerFailure });
+      await beforeSettlement(intentCommitted.promise, teardownResult, "Teardown intent commit");
+      expect(destroy).not.toHaveBeenCalled();
+    } finally {
+      finishFirstProvision();
+      await Promise.all([creationResult, teardownResult]);
+    }
+
+    expect(await teardownResult).toMatchObject({ value: { state: "destroyed" } });
+    expect(events).toEqual(["provision:start", "provision:end", "resolve", "destroy"]);
+    expect(support.testState.store.list()[0]).toMatchObject({ state: "destroyed" });
+  });
+
+  it.each([
+    [{ leaseId: "lease-invalid", node: { deviceId: " " } }, "invalid node device id"],
+    [
+      invalidSshLease({ ssh: { ...support.SSH_ENDPOINT, keyRef: "not-a-secret-ref" } }),
+      "SSH key must be a valid SecretRef",
+    ],
+    [invalidSshLease({ sharedHost: "yes" }), "invalid provision result"],
+    [
+      invalidSshLease({ desktop: { protocol: "rdp", port: 5900 } }),
+      'desktop protocol must be "rfb"',
+    ],
+    [invalidSshLease({ desktop: { protocol: "rfb", port: 0 } }), "desktop port must be an integer"],
+    [
+      invalidSshLease({
+        desktop: { protocol: "rfb", port: 5900, passwordFilePath: "vnc.password" },
+      }),
+      "desktop password file path must be absolute",
+    ],
+  ])("keeps provider result %j retryable (%s)", async (result, error) => {
+    const workerService = providerService({ provision: async () => result as never });
+
+    await expect(create(workerService, "request-malformed")).rejects.toMatchObject({
+      code: "provider_failure",
+      message: expect.stringContaining(error),
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    expect(support.testState.store.list()[0]).toMatchObject({
+      state: "provisioning",
+      lastError: expect.stringContaining(error),
+    });
+  });
+
+  it("adopts an indeterminate allocation before a replay preparation failure", async () => {
+    const events: string[] = [];
+    let preparationFails = false;
+    support.testState.prepareInstallation = vi.fn(async () => {
+      events.push("prepare");
+      if (preparationFails) {
+        throw new Error("persisted bundle is unavailable");
+      }
+      return support.BUNDLE_ARTIFACT;
+    });
+    let provisionCalls = 0;
+    const operationIds: string[] = [];
+    const provider = support.createProvider({
+      provision: async (_profile, operationId) => {
+        events.push("provision");
+        provisionCalls += 1;
+        operationIds.push(operationId);
+        if (provisionCalls === 1) {
+          throw new Error("provision response was lost");
+        }
+        return { leaseId: "lease-replayed", ssh: support.SSH_ENDPOINT };
+      },
+      destroy: async () => void events.push("destroy"),
+    });
+    const workerService = support.createService(provider);
+
+    await expect(create(workerService, "request-lost-provision")).rejects.toMatchObject(
+      providerFailure,
+    );
+    preparationFails = true;
+    await workerService.reconcileOnce();
+
+    expect(events).toEqual(["prepare", "provision", "provision", "prepare", "destroy"]);
+    expect(new Set(operationIds).size).toBe(1);
+    expect(support.testState.store.list()[0]).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      teardownTerminalState: "failed",
+      lastError: "persisted bundle is unavailable",
+    });
+  });
+});

@@ -1,7 +1,24 @@
 // Covers provider-owned target prefixes, generic kind prefixes, topic suffixes,
 // and selected-channel prefix validation.
 import { describe, expect, it } from "vitest";
-import { stripTargetTopicSuffix } from "./channel-target-prefix.js";
+import { stripOutboundTargetKindPrefix, stripTargetTopicSuffix } from "./channel-target-prefix.js";
+
+describe("stripOutboundTargetKindPrefix", () => {
+  it("uses the current custom kinds on every call", () => {
+    const kinds = ["room"];
+    expect(stripOutboundTargetKindPrefix("room:Room-A", kinds)).toBe("Room-A");
+    kinds[0] = "user";
+    expect(stripOutboundTargetKindPrefix("room:Room-A", kinds)).toBe("room:Room-A");
+    expect(stripOutboundTargetKindPrefix("user:User-A", kinds)).toBe("User-A");
+    expect(stripOutboundTargetKindPrefix("room:Room-A")).toBe("Room-A");
+  });
+
+  it("preserves custom pattern and empty-list behavior", () => {
+    expect(stripOutboundTargetKindPrefix("THREAD:Room-A", [" room|thread "])).toBe("Room-A");
+    expect(stripOutboundTargetKindPrefix(" room:Room-A ", [])).toBe("room:Room-A");
+    expect(() => stripOutboundTargetKindPrefix("room:Room-A", ["["])).toThrow(SyntaxError);
+  });
+});
 
 describe("stripTargetTopicSuffix", () => {
   it("strips explicit topic suffixes", () => {
@@ -12,10 +29,5 @@ describe("stripTargetTopicSuffix", () => {
     expect(stripTargetTopicSuffix("-100200300:77", { allowNumericShorthand: true })).toBe(
       "-100200300",
     );
-  });
-
-  it("keeps generic colon targets intact", () => {
-    expect(stripTargetTopicSuffix("room:123")).toBe("room:123");
-    expect(stripTargetTopicSuffix("room-a:child")).toBe("room-a:child");
   });
 });

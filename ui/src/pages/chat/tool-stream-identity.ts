@@ -1,26 +1,23 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asToolRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
+import type { LiveToolStreamState } from "./tool-stream-contract.ts";
 
 type ToolMessageRef = {
   id: string;
   runId?: string;
 };
 
-export type LiveToolStreamRef = ToolMessageRef & {
+type LiveToolStreamRef = ToolMessageRef & {
   identity: string;
-};
-
-type LiveToolStreamHost = {
-  chatStream?: string | null;
-  chatStreamStartedAt?: number | null;
-  toolStreamById?: Map<string, unknown>;
-  toolStreamOrder?: unknown[];
 };
 
 const TOOL_NAME_FIELDS = ["toolName", "tool_name"] as const;
@@ -28,6 +25,16 @@ const TOOL_NAME_FIELDS = ["toolName", "tool_name"] as const;
 /** Tool call ids belong to one run; sibling runs may legitimately reuse them. */
 export function buildToolStreamIdentity(runId: string, toolCallId: string): string {
   return JSON.stringify([runId, toolCallId]);
+}
+
+export function toolStreamIdentityRunId(identity: string): string | undefined {
+  const parts = safeParseJson(identity);
+  return Array.isArray(parts) &&
+    parts.length === 2 &&
+    typeof parts[0] === "string" &&
+    typeof parts[1] === "string"
+    ? parts[0]
+    : undefined;
 }
 
 function addToolMessageRef(
@@ -52,7 +59,10 @@ function isToolMessageContentBlock(block: Record<string, unknown>): boolean {
 }
 
 /** Reads invocation ids without confusing row ids or inventing a missing run owner. */
-export function extractToolMessageRefs(message: unknown): ToolMessageRef[] {
+export function extractToolMessageRefs(
+  message: unknown,
+  options: { resultsOnly?: boolean } = {},
+): ToolMessageRef[] {
   const record = asToolRecord(message);
   if (!record) {
     return [];
@@ -66,19 +76,23 @@ export function extractToolMessageRefs(message: unknown): ToolMessageRef[] {
       )
     : [];
   const topLevelToolId = resolveToolUseId({ ...record, id: undefined });
-  const topLevelRunId = normalizeOptionalString(record.runId);
+  const topLevelRunId =
+    readSessionMessageIdentity(record)?.runId ?? normalizeOptionalString(record.runId);
   const role = record.role;
   const messageHasToolShape =
     (typeof role === "string" && normalizeRoleForGrouping(role).toLowerCase() === "tool") ||
-    TOOL_NAME_FIELDS.some((field) => Boolean(normalizeOptionalString(record[field]))) ||
-    blocks.some(isToolMessageContentBlock);
+    (!options.resultsOnly &&
+      (TOOL_NAME_FIELDS.some((field) => Boolean(normalizeOptionalString(record[field]))) ||
+        blocks.some(isToolMessageContentBlock)));
 
   if (messageHasToolShape) {
     addToolMessageRef(refs, seen, topLevelToolId, topLevelRunId);
   }
 
   for (const block of blocks) {
-    if (!isToolMessageContentBlock(block)) {
+    if (
+      options.resultsOnly ? !isToolResultContentType(block.type) : !isToolMessageContentBlock(block)
+    ) {
       continue;
     }
     addToolMessageRef(
@@ -92,26 +106,13 @@ export function extractToolMessageRefs(message: unknown): ToolMessageRef[] {
   return refs;
 }
 
-/** Resolves canonical live entries while preserving existing bare-id fixtures. */
-export function resolveLiveToolStreamRefs(state: LiveToolStreamHost): LiveToolStreamRef[] {
-  if (!Array.isArray(state.toolStreamOrder)) {
-    return [];
-  }
-  return state.toolStreamOrder
-    .filter(
-      (identity): identity is string => typeof identity === "string" && Boolean(identity.trim()),
-    )
-    .map((identity) => {
-      const entry = asToolRecord(state.toolStreamById?.get(identity));
-      const message = asToolRecord(entry?.message);
-      const id =
-        normalizeOptionalString(entry?.toolCallId) ??
-        (message ? resolveToolUseId(message) : undefined) ??
-        identity;
-      const runId =
-        normalizeOptionalString(entry?.runId) ?? normalizeOptionalString(message?.runId);
-      return runId ? { identity, id, runId } : { identity, id };
-    });
+export function resolveLiveToolStreamRefs(state: LiveToolStreamState): LiveToolStreamRef[] {
+  return state.toolStreamOrder.map((identity) => {
+    const entry = state.toolStreamById.get(identity);
+    const id = normalizeOptionalString(entry?.toolCallId) ?? identity;
+    const runId = normalizeOptionalString(entry?.runId);
+    return runId ? { identity, id, runId } : { identity, id };
+  });
 }
 
 /** Unscoped history cannot prove which sibling owns a reused tool call id. */
@@ -124,4 +125,40 @@ export function resolveMatchingLiveToolIdentity(
       liveRef.id === ref.id && (!ref.runId || !liveRef.runId || liveRef.runId === ref.runId),
   );
   return matches.length === 1 ? matches[0]?.identity : undefined;
+}
+
+export function persistedCurrentToolStreamIds(
+  messages: unknown[],
+  state: LiveToolStreamState,
+): Set<string> {
+  const liveToolRefs = resolveLiveToolStreamRefs(state);
+  const matchedToolIds = new Set<string>();
+  if (liveToolRefs.length === 0) {
+    return matchedToolIds;
+  }
+  const lastUserIndex = messages.findLastIndex((message) => {
+    const role = asToolRecord(message)?.role;
+    return typeof role === "string" && normalizeRoleForGrouping(role).toLowerCase() === "user";
+  });
+  for (const message of messages.slice(lastUserIndex + 1)) {
+    // A saved call only proves invocation identity. Retire its live execution
+    // facts when history has an outcome, including prepared receipts whose
+    // result lies outside the rendered page.
+    const settledCalls = new Set(
+      readPreparedActivity(message)
+        .filter((item) => item.phase === "end" && !item.unpairedCall)
+        .map((item) => item.toolCallId ?? item.itemId),
+    );
+    const refs = [
+      ...extractToolMessageRefs(message, { resultsOnly: true }),
+      ...extractToolMessageRefs(message).filter((ref) => settledCalls.has(ref.id)),
+    ];
+    for (const ref of refs) {
+      const identity = resolveMatchingLiveToolIdentity(ref, liveToolRefs);
+      if (identity) {
+        matchedToolIds.add(identity);
+      }
+    }
+  }
+  return matchedToolIds;
 }

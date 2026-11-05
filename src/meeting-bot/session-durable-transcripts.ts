@@ -1,4 +1,5 @@
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
+import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import type {
   TranscriptSourceLocator,
   TranscriptStartRequest,
@@ -18,6 +19,8 @@ const STOP_RETRY_MAX_DELAY_MS = 60_000;
 
 export class MeetingSessionDurableTranscripts<TSession extends MeetingSessionRecord> {
   #bridge?: Promise<MeetingDurableTranscriptBridge<TSession> | undefined>;
+  #enabled: boolean;
+  #policyTransition = Promise.resolve();
   readonly #stopRetries = new Map<string, { attempt: number; token: symbol }>();
 
   constructor(
@@ -32,14 +35,55 @@ export class MeetingSessionDurableTranscripts<TSession extends MeetingSessionRec
       sameMeetingUrl(left: string | undefined, right: string | undefined): boolean;
       transcriptStore: MeetingSessionTranscriptStore<TSession>;
     },
-  ) {}
+  ) {
+    this.#enabled = resolveTranscriptsConfig(options.config?.config).enabled;
+  }
+
+  reconcilePolicy(enabled: boolean): Promise<void> {
+    this.#enabled = enabled;
+    const reconcile = async () => {
+      const bridge = await this.#getBridge();
+      if (!bridge) {
+        return;
+      }
+      await Promise.all(
+        this.options.listSessions().map(async (session) => {
+          if (session.state !== "active" || !this.options.isBrowserSession(session)) {
+            return;
+          }
+          if (!enabled) {
+            await bridge.stop(session, async () =>
+              this.options.transcriptStore.captureNotes(session),
+            );
+          } else if (this.#enabled) {
+            await bridge.stop(session, async () =>
+              this.options.transcriptStore.flushPending(session),
+            );
+            this.#stopRetries.delete(session.id);
+            // Advance the page cursor before resuming so disabled-period captions
+            // never become durable transcript rows.
+            await this.options.transcriptStore.captureNotes(session);
+            if (this.#enabled && session.state === "active") {
+              await bridge.start(session, async () =>
+                this.options.transcriptStore.captureNotes(session),
+              );
+            }
+          }
+        }),
+      );
+    };
+    const transition = this.#policyTransition.then(reconcile);
+    this.#policyTransition = transition.catch(() => {});
+    return transition;
+  }
 
   async ingest(session: TSession, lines: MeetingTranscriptLine[]): Promise<void> {
     await (await this.#getBridge())?.ingest(session, lines);
   }
 
   async start(session: TSession): Promise<void> {
-    if (!this.options.isBrowserSession(session)) {
+    await this.#policyTransition;
+    if (!this.#enabled || !this.options.isBrowserSession(session)) {
       return;
     }
     const bridge = await this.#getBridge();
@@ -53,7 +97,7 @@ export class MeetingSessionDurableTranscripts<TSession extends MeetingSessionRec
     const finalCapture = async () =>
       await this.options.transcriptStore.captureNotes(session, { finalize: true });
     const bridge = await this.#getBridge();
-    if (bridge?.enabled) {
+    if (bridge) {
       try {
         if (await bridge.stop(session, finalCapture)) {
           this.#stopRetries.delete(session.id);
@@ -125,6 +169,7 @@ export class MeetingSessionDurableTranscripts<TSession extends MeetingSessionRec
     this.#bridge ??= import("./transcripts-bridge.runtime.js")
       .then(({ createMeetingDurableTranscriptBridge }) =>
         createMeetingDurableTranscriptBridge<TSession>({
+          isEnabled: () => this.#enabled,
           logger: this.options.logger,
           options: this.options.config!,
         }),
@@ -154,6 +199,7 @@ export class MeetingSessionDurableTranscripts<TSession extends MeetingSessionRec
       timer.unref?.();
     };
     const run = async () => {
+      await this.#policyTransition;
       const state = this.#stopRetries.get(session.id);
       if (!state || state.token !== token) {
         return;

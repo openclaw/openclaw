@@ -1,0 +1,100 @@
+import { isAbortError } from "../../infra/abort-signal.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import type { ResolvedCliBackend } from "../cli-backends.js";
+import { extractCliErrorMessage } from "../cli-output.js";
+import {
+  coerceToFailoverError,
+  FailoverError,
+  isFailoverError,
+  resolveFailoverStatus,
+} from "../failover-error.js";
+
+type CliResumeAttempt = {
+  // Option name the backend was invoked with, e.g. --resume-session-at.
+  resumeAtArg?: string;
+  // Checkpoint value that option carried, when the attempt targeted one.
+  resumeCheckpointId?: string;
+};
+
+type CliExitFailoverErrorParams = {
+  context: Pick<FailoverError, "provider" | "model" | "sessionId" | "lane">;
+  candidates: readonly string[];
+  retryEmptyFailure: boolean;
+  resumeAtArg?: string;
+  resumeCheckpointId?: string;
+  classifyErrorCode?: ResolvedCliBackend["classifyErrorCode"];
+};
+
+export function createCliFailoverError(
+  message: string,
+  reason: FailoverError["reason"],
+  context: Pick<FailoverError, "provider" | "model" | "sessionId" | "lane">,
+  options?: Pick<FailoverError, "cause" | "cliTimeout" | "code" | "timeout">,
+): FailoverError {
+  return new FailoverError(message, {
+    reason,
+    ...context,
+    status: resolveFailoverStatus(reason),
+    ...options,
+  });
+}
+
+export function resolveCliResumeAtError(
+  error: unknown,
+  resumeAt: CliResumeAttempt | undefined,
+  context: CliExitFailoverErrorParams["context"],
+): FailoverError | undefined {
+  if (isFailoverError(error) || isAbortError(error)) {
+    return undefined;
+  }
+  const message = formatErrorMessage(error).toLowerCase();
+  // Older CLIs reject the resume option itself as unknown; Claude Code rejects
+  // a checkpoint its transcript compacted away by naming the checkpoint uuid.
+  const rejectedOption = Boolean(
+    resumeAt?.resumeAtArg &&
+    message.includes(resumeAt.resumeAtArg.toLowerCase()) &&
+    /\b(?:unknown|unexpected|unrecognized)\b|\bnot\s+recognized\b/.test(message),
+  );
+  const rejectedCheckpoint = Boolean(
+    resumeAt?.resumeCheckpointId &&
+    message.includes(resumeAt.resumeCheckpointId.toLowerCase()) &&
+    /\bno\s+message\s+found\s+with\s+message\.uuid\b/.test(message),
+  );
+  if (!rejectedOption && !rejectedCheckpoint) {
+    return undefined;
+  }
+  // A rejected local option is already a recovery fact; provider policy must
+  // not materialize before the caller can use its remaining retry budget.
+  return createCliFailoverError(
+    "CLI backend cannot resume from the stored checkpoint.",
+    "session_expired",
+    context,
+    { code: "cli_resume_at_unsupported", cause: error },
+  );
+}
+
+export function createCliExitFailoverError(params: CliExitFailoverErrorParams): FailoverError {
+  const candidates = params.candidates.map((candidate) => candidate.trim()).filter(Boolean);
+  const structuredError =
+    candidates.map((candidate) => extractCliErrorMessage(candidate)).find(Boolean) ?? null;
+  const resumeAtError = resolveCliResumeAtError(
+    structuredError || candidates[0] || "CLI failed.",
+    { resumeAtArg: params.resumeAtArg, resumeCheckpointId: params.resumeCheckpointId },
+    params.context,
+  );
+  if (resumeAtError) {
+    return resumeAtError;
+  }
+  const classified = [structuredError, ...candidates]
+    .flatMap((candidate) => (candidate ? [coerceToFailoverError(candidate, params.context)] : []))
+    .find((error) => error !== null);
+  const message = structuredError || classified?.message || candidates[0] || "CLI failed.";
+  const reason = classified?.reason ?? "unknown";
+  const code =
+    reason === "context_overflow"
+      ? "cli_context_overflow"
+      : candidates.length === 0 && params.retryEmptyFailure
+        ? "cli_unknown_empty_failure"
+        : params.classifyErrorCode?.(message);
+  return createCliFailoverError(message, reason, params.context, { code });
+}

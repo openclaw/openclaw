@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 command_name="${1:?command is required}"
@@ -53,14 +57,20 @@ configure_image_artifact_inputs() {
 
 is_transient_gh_api_get_error() {
   local error_text="$1"
-  if [[ "$error_text" =~ (^|[^0-9])(401|403|404|422)([^0-9]|$) ||
+  local not_found_policy="$2"
+  if [[ "$error_text" =~ (^|[^0-9])(401|403|422)([^0-9]|$) ||
     "$error_text" =~ [Bb]ad[[:space:]]+[Cc]redentials ||
     "$error_text" =~ [Cc]redential ||
     "$error_text" =~ [Aa]uthentication ]]; then
     return 1
   fi
+  if [[ "$error_text" =~ (^|[^0-9])404([^0-9]|$) ]]; then
+    [[ "$not_found_policy" == "retry-fresh-artifact" ]]
+    return
+  fi
 
   [[ "$error_text" == *"i/o timeout"* ||
+    "$error_text" == *"request deadline"* ||
     "$error_text" =~ [Cc]ontext[[:space:]]+deadline[[:space:]]+exceeded ||
     "$error_text" =~ [Cc]onnection[[:space:]]+(refused|reset) ||
     "$error_text" =~ [Nn]etwork[[:space:]]+is[[:space:]]+unreachable ||
@@ -76,7 +86,21 @@ is_transient_gh_api_get_error() {
 gh_api_get_with_retry() {
   local label="$1"
   local endpoint="$2"
-  local attempt error_file response_file retry_delay retry_dir
+  local not_found_policy="$3"
+  local attempt error_file response_file retry_delay retry_dir request_status
+  case "$not_found_policy" in
+    fail-fast) ;;
+    retry-fresh-artifact)
+      # Artifact metadata can briefly lag upload completion. Keep 404 retries confined
+      # to that fresh-object read so producer tuple and authentication failures stay immediate.
+      if [[ ! "$endpoint" =~ ^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/artifacts/[1-9][0-9]*$ ]]; then
+        fail "$label cannot retry 404 responses for this GitHub API endpoint."
+      fi
+      ;;
+    *)
+      fail "$label has an invalid GitHub API 404 retry policy."
+      ;;
+  esac
   retry_dir="$(mktemp -d)"
   response_file="${retry_dir}/response"
   error_file="${retry_dir}/error"
@@ -84,16 +108,25 @@ gh_api_get_with_retry() {
   for attempt in 1 2 3; do
     : > "$response_file"
     : > "$error_file"
-    if gh api --method GET "$endpoint" > "$response_file" 2> "$error_file"; then
+    # Bound stalled requests even when gh ignores TERM, so the retry loop can progress.
+    if timeout --signal=TERM --kill-after=10s 30s \
+      gh api --method GET "$endpoint" > "$response_file" 2> "$error_file"; then
       cat "$response_file"
       rm -rf -- "$retry_dir"
       return 0
+    else
+      request_status=$?
     fi
 
-    if [[ "$attempt" -lt 3 ]] && is_transient_gh_api_get_error "$(cat "$error_file")"; then
+    if [[ "$request_status" -eq 124 || "$request_status" -eq 137 ]]; then
+      printf 'gh: GitHub API GET exceeded the 30s request deadline.\n' >> "$error_file"
+    fi
+
+    if [[ "$attempt" -lt 3 ]] &&
+      is_transient_gh_api_get_error "$(cat "$error_file")" "$not_found_policy"; then
       retry_delay=$((attempt * 2))
       printf \
-        'warning: %s GitHub API GET failed transiently on attempt %d/3; retrying in %ss.\n' \
+        '::warning::%s GitHub API GET failed transiently on attempt %d/3; retrying in %ss.\n' \
         "$label" "$attempt" "$retry_delay" >&2
       cat "$error_file" >&2
       sleep "$retry_delay"
@@ -107,8 +140,8 @@ gh_api_get_with_retry() {
 }
 
 verify_uploaded_artifact() {
-  if [[ "$#" -ne 6 ]]; then
-    fail "usage: $0 verify-upload <label> <artifact-id> <artifact-name> <artifact-digest> <run-id> <run-attempt>"
+  if [[ "$#" -ne 6 && ( "$#" -ne 7 || "${7:-}" != "--json" ) ]]; then
+    fail "usage: $0 verify-upload <label> <artifact-id> <artifact-name> <artifact-digest> <run-id> <run-attempt> [--json]"
   fi
 
   local artifact_label="$1"
@@ -137,12 +170,14 @@ verify_uploaded_artifact() {
   fi
   command -v gh >/dev/null
   command -v jq >/dev/null
+  command -v timeout >/dev/null
 
   local artifact_json attempt_json
   artifact_json="$(
     gh_api_get_with_retry \
       "$artifact_label artifact metadata" \
-      "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
+      "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}" \
+      "retry-fresh-artifact"
   )"
   jq -e \
     --arg digest "sha256:${artifact_digest}" \
@@ -161,7 +196,8 @@ verify_uploaded_artifact() {
   attempt_json="$(
     gh_api_get_with_retry \
       "$artifact_label producer run attempt metadata" \
-      "repos/${GITHUB_REPOSITORY}/actions/runs/${artifact_run_id}/attempts/${artifact_run_attempt}"
+      "repos/${GITHUB_REPOSITORY}/actions/runs/${artifact_run_id}/attempts/${artifact_run_attempt}" \
+      "fail-fast"
   )"
   jq -e \
     --arg attempt "$artifact_run_attempt" \
@@ -169,6 +205,11 @@ verify_uploaded_artifact() {
     '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
     <<< "$attempt_json" >/dev/null ||
     fail "$artifact_label producer run attempt does not match the immutable tuple."
+
+  # Metadata consumers share this verified response only after both identity checks.
+  if [[ "${7:-}" == "--json" ]]; then
+    printf '%s\n' "$artifact_json"
+  fi
 }
 
 require_common_inputs() {
@@ -183,16 +224,16 @@ require_common_inputs() {
   if [[ "${#image_refs[@]}" -eq 0 ]]; then
     fail "at least one image ref is required."
   fi
-  local image_ref
-  declare -A seen_refs=()
+  local image_ref seen_refs
+  seen_refs=$'\n'
   for image_ref in "${image_refs[@]}"; do
     if [[ ! "$image_ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/@:-]*$ ]]; then
       fail "image ref contains unsupported characters: $image_ref"
     fi
-    if [[ -n "${seen_refs[$image_ref]:-}" ]]; then
+    if [[ "$seen_refs" == *$'\n'"$image_ref"$'\n'* ]]; then
       fail "duplicate image ref: $image_ref"
     fi
-    seen_refs["$image_ref"]=1
+    seen_refs+="$image_ref"$'\n'
   done
 }
 
@@ -323,19 +364,11 @@ load_artifact() {
   }
   trap cleanup_load EXIT
 
-  EXPECTED_IMAGES_JSON="$(
-    printf '%s\0' "${image_refs[@]}" |
-      node -e '
-        const fs = require("node:fs");
-        const refs = fs.readFileSync(0).toString("utf8").split("\0").filter(Boolean);
-        process.stdout.write(JSON.stringify(refs));
-      '
-  )" node - "$manifest_path" > "$validated_path" <<'NODE'
+  node - "$manifest_path" "${image_refs[@]}" > "$validated_path" <<'NODE'
 const fs = require("node:fs");
 
-const [manifestPath] = process.argv.slice(2);
+const [manifestPath, ...expectedRefs] = process.argv.slice(2);
 const value = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-const expectedRefs = JSON.parse(process.env.EXPECTED_IMAGES_JSON);
 const fail = (message) => {
   throw new Error(`invalid shared Docker image artifact: ${message}`);
 };
@@ -374,17 +407,20 @@ for (const image of value.images) {
 }
 NODE
 
-  mapfile -t validated < "$validated_path"
-  if [[ "${#validated[@]}" -ne $((2 + ${#image_refs[@]})) ]]; then
+  local validated=("__openclaw_sentinel__") validated_line
+  while IFS= read -r validated_line; do
+    validated+=("$validated_line")
+  done < "$validated_path"
+  if [[ "${#validated[@]}" -ne $((3 + ${#image_refs[@]})) ]]; then
     fail "invalid shared Docker image artifact: validated manifest output length"
   fi
   local actual_archive_sha256 actual_archive_size
   actual_archive_sha256="$(sha256sum "$archive_path" | awk '{print $1}')"
   actual_archive_size="$(wc -c < "$archive_path" | tr -d '[:space:]')"
-  if [[ "$actual_archive_sha256" != "${validated[0]}" ]]; then
+  if [[ "$actual_archive_sha256" != "${validated[1]}" ]]; then
     fail "shared Docker image artifact archive SHA-256 mismatch."
   fi
-  if [[ "$actual_archive_size" != "${validated[1]}" ]]; then
+  if [[ "$actual_archive_size" != "${validated[2]}" ]]; then
     fail "shared Docker image artifact archive size mismatch."
   fi
   zstd -t "$archive_path"
@@ -392,7 +428,7 @@ NODE
 
   local index expected_ref expected_id actual_id
   for index in "${!image_refs[@]}"; do
-    IFS=$'\t' read -r expected_ref expected_id <<< "${validated[$((index + 2))]}"
+    IFS=$'\t' read -r expected_ref expected_id <<< "${validated[$((index + 3))]}"
     if [[ "$expected_ref" != "${image_refs[$index]}" ]]; then
       fail "shared Docker image artifact ref mismatch after validation: ${image_refs[$index]}"
     fi

@@ -1,124 +1,73 @@
-// The system heartbeat monitor payload replaces the dedicated interval
-// scheduler: firing it must only poke the heartbeat wake queue.
-import { describe, expect, it } from "vitest";
-import { heartbeatTaskDeclarationKey } from "./heartbeat-task.js";
+import { expect, it } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { heartbeatTaskDeclarationKey } from "../commands/doctor-heartbeat-task-identity.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
-  createCronStoreHarness,
-  createNoopLogger,
   createStartedCronServiceWithFinishedBarrier,
-  installCronTestHooks,
+  setupCronServiceSuite,
 } from "./service.test-harness.js";
+import type { CronJobCreate } from "./types.js";
 
-const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness();
-installCronTestHooks({ logger: noopLogger });
+const { logger, makeStorePath } = setupCronServiceSuite();
 
-describe("heartbeat payload execution", () => {
-  it("fires as an interval heartbeat wake without enqueuing a system event", async () => {
-    const { storePath, cleanup } = await makeStorePath();
-    const { cron, enqueueSystemEvent, requestHeartbeat } =
-      createStartedCronServiceWithFinishedBarrier({ storePath, logger: noopLogger });
-    try {
-      await cron.start();
-      const added = await cron.add(
-        {
-          declarationKey: "heartbeat:main",
-          name: "heartbeat-main",
-          agentId: "main",
-          enabled: true,
-          schedule: { kind: "every", everyMs: 60_000 },
-          payload: { kind: "heartbeat" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-        },
-        { enabledExplicit: true, systemOwned: true },
-      );
-      const job = "job" in added ? added.job : added;
-      // System ownership boundary: no caller may create or patch to the
-      // heartbeat payload without the gateway's opt-in.
-      await expect(
-        cron.add({
-          name: "rogue",
-          enabled: true,
-          schedule: { kind: "every", everyMs: 60_000 },
-          payload: { kind: "heartbeat" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-        }),
-      ).rejects.toThrow(/system-owned/);
-      await expect(cron.update(job.id, { payload: { kind: "heartbeat" } })).rejects.toThrow(
-        /system-owned/,
-      );
-      // Existing monitors reject every patch, not just payload-kind edits.
-      await expect(cron.update(job.id, { enabled: false })).rejects.toThrow(/system-owned/);
-      // Ad-hoc deletion is rejected too; only reconciliation cleanup removes.
-      await expect(cron.remove(job.id)).rejects.toThrow(/system-owned/);
-      // A declarative upsert on the monitor's key cannot repurpose it either.
-      await expect(
-        cron.add({
-          declarationKey: "heartbeat:main",
-          name: "rogue-upsert",
-          enabled: true,
-          schedule: { kind: "every", everyMs: 60_000 },
-          payload: { kind: "systemEvent", text: "hijack" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-        }),
-      ).rejects.toThrow(/system-owned/);
-      const result = await cron.run(job.id, "force");
-      expect(result.ok).toBe(true);
-      expect(requestHeartbeat).toHaveBeenCalledWith(
-        expect.objectContaining({
-          source: "interval",
-          intent: "scheduled",
-          agentId: "main",
-          scheduledEveryMs: 60_000,
-        }),
-      );
-      // The monitor never fabricates a system event; the wake is the whole run.
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    } finally {
-      cron.stop();
-      await cleanup();
-    }
+it("settles a migrated task through ordinary session execution without a heartbeat wake", async () => {
+  const { storePath } = await makeStorePath();
+  const entered = createDeferred();
+  const release = createDeferred();
+  let completed = false;
+  const context = createStartedCronServiceWithFinishedBarrier({
+    scheduler: createTestGatewayScheduler(),
+    storePath,
+    logger,
+    runSessionEvent: async () => {
+      entered.resolve();
+      await release.promise;
+      return { status: "ok" };
+    },
   });
-
-  it("routes migrated task jobs through the guarded task wake path", async () => {
-    const { storePath, cleanup } = await makeStorePath();
-    const { cron, enqueueSystemEvent, requestHeartbeat } =
-      createStartedCronServiceWithFinishedBarrier({ storePath, logger: noopLogger });
-    try {
-      await cron.start();
-      const added = await cron.add({
-        declarationKey: heartbeatTaskDeclarationKey("main", "inbox"),
-        name: "inbox",
-        agentId: "main",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        payload: { kind: "systemEvent", text: "Check urgent inbox items" },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-      });
-      const job = "job" in added ? added.job : added;
-
-      await expect(cron.run(job.id, "force")).resolves.toMatchObject({ ok: true });
-      expect(requestHeartbeat).toHaveBeenCalledWith({
-        source: "interval",
-        intent: "task",
-        reason: `heartbeat-task:${job.id}`,
-        agentId: "main",
-        tasks: [{ jobId: job.id, name: "inbox", prompt: "Check urgent inbox items" }],
-      });
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-
-      // These stay ordinary cron rows: operators can edit and remove them.
-      await expect(
-        cron.update(job.id, { payload: { kind: "systemEvent", text: "Check priority inbox" } }),
-      ).resolves.toMatchObject({ id: job.id });
-      await expect(cron.remove(job.id)).resolves.toEqual({ ok: true, removed: true });
-    } finally {
-      cron.stop();
-      await cleanup();
-    }
-  });
+  const { cron } = context;
+  try {
+    await cron.start();
+    const input: CronJobCreate = {
+      declarationKey: heartbeatTaskDeclarationKey("main", "inbox"),
+      agentId: "main",
+      name: "inbox",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "systemEvent", text: "Check urgent inbox items" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+    };
+    const added = await cron.add(input);
+    const job = "job" in added ? added.job : added;
+    const running = cron.run(job.id, "force").then((result) => {
+      completed = true;
+      return result;
+    });
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      running,
+      "Migrated task finished before reaching ordinary session execution",
+    );
+    expect(completed).toBe(false);
+    expect(cron.getJob(job.id)?.state.lastStatus).not.toBe("ok");
+    expect(context.runSessionEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        job: expect.objectContaining({ id: job.id, sessionTarget: "main" }),
+        text: "Check urgent inbox items",
+      }),
+    );
+    expect(context.enqueueSystemEvent).not.toHaveBeenCalled();
+    release.resolve();
+    await expect(running).resolves.toMatchObject({ ok: true });
+    expect(cron.getJob(job.id)?.state.lastStatus).toBe("ok");
+    await expect(
+      cron.update(job.id, { payload: { kind: "systemEvent", text: "Check priority inbox" } }),
+    ).resolves.toMatchObject({ id: job.id });
+    await expect(cron.remove(job.id)).resolves.toEqual({ ok: true, removed: true });
+  } finally {
+    release.resolve();
+    cron.stop();
+    await cron.waitForIdle();
+  }
 });

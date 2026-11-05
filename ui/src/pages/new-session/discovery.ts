@@ -1,92 +1,74 @@
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import type {
+  EnvironmentSummary,
+  WorkerEnvironmentProfileSummary,
+  WorkerExecutionMode,
+  WorkerMachineOption,
+} from "../../../../packages/gateway-protocol/src/schema/environments.ts";
+import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/schema/worktrees.ts";
 
-export type DraftBranches = {
+type DraftBranches = Omit<WorktreesBranchesResult, "repositoryStatus"> & {
   repoRoot: string;
-  branches: Array<{ name: string; kind: "local" | "remote" }>;
-  defaultBranch?: string;
-  headBranch?: string;
 };
 
 export type DraftRepositoryState =
   | { kind: "idle" }
+  // Selected GitHub projects offer isolation before checkout exists. Local first
+  // turns prepare after admission; remote placement clones on its selected runner.
+  | { kind: "pending-clone"; cloneUrl: string }
+  | { kind: "pending-project"; projectId: string }
   | { kind: "checking"; repoRoot: string }
   | ({ kind: "git" } & DraftBranches)
   | { kind: "direct"; repoRoot: string }
-  | { kind: "unavailable"; repoRoot: string };
+  | { kind: "unavailable"; repoRoot: string }
+  | { kind: "forbidden"; repoRoot: string; missingScope?: string };
 
-export type DraftNode = {
-  nodeId: string;
-  displayName: string;
-  platform?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  remoteIp?: string;
-  connected: boolean;
-  canExec: boolean;
-  canBrowse: boolean;
+export type DraftCloudProfile = Omit<WorkerEnvironmentProfileSummary, "executionModes"> & {
+  executionModes?: readonly WorkerExecutionMode[];
 };
 
-export type DraftCloudProfile = {
-  id: string;
-  providerId: string;
-};
+export type DraftEnvironment = EnvironmentSummary;
 
-export type BrowserTarget = { nodeId: string; label: string };
-
-export function readDraftNodes(value: unknown): DraftNode[] {
-  const rawNodes = Array.isArray(value) ? value : [];
-  return rawNodes
-    .flatMap((raw) => {
-      const node = raw as {
-        nodeId?: unknown;
-        displayName?: unknown;
-        platform?: unknown;
-        deviceFamily?: unknown;
-        modelIdentifier?: unknown;
-        remoteIp?: unknown;
-        connected?: unknown;
-        commands?: unknown;
-      };
-      const nodeId = normalizeOptionalString(node.nodeId);
-      const commands = Array.isArray(node.commands)
-        ? node.commands.filter((command): command is string => typeof command === "string")
-        : [];
-      if (!nodeId) {
-        return [];
-      }
-      const connected = node.connected === true;
-      const canExec = connected && commands.includes("system.run");
-      return [
-        {
-          nodeId,
-          displayName: normalizeOptionalString(node.displayName) ?? nodeId,
-          platform: normalizeOptionalString(node.platform),
-          deviceFamily: normalizeOptionalString(node.deviceFamily),
-          modelIdentifier: normalizeOptionalString(node.modelIdentifier),
-          remoteIp: normalizeOptionalString(node.remoteIp),
-          connected,
-          canExec,
-          canBrowse: canExec && commands.includes("fs.listDir"),
-        },
-      ];
-    })
-    .toSorted(
-      (left, right) =>
-        left.displayName.localeCompare(right.displayName) ||
-        left.nodeId.localeCompare(right.nodeId),
-    );
+export function draftCloudProfileSupportsExecutionMode(
+  profile: DraftCloudProfile,
+  executionMode: WorkerExecutionMode,
+): boolean {
+  return profile.executionModes?.includes(executionMode) === true;
 }
 
-export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
-  return (Array.isArray(value) ? value : [])
-    .flatMap((raw) => {
-      if (!raw || typeof raw !== "object") {
-        return [];
-      }
-      const profile = raw as { id?: unknown; providerId?: unknown };
-      const id = normalizeOptionalString(profile.id);
-      const providerId = normalizeOptionalString(profile.providerId);
-      return id && providerId ? [{ id, providerId }] : [];
-    })
-    .toSorted((left, right) => left.id.localeCompare(right.id));
+export function defaultCloudOs(profile: DraftCloudProfile): string {
+  return (
+    profile.operatingSystems?.find((os) => os.default)?.id ??
+    profile.operatingSystems?.[0]?.id ??
+    profile.machines?.find((machine) => machine.os)?.os ??
+    ""
+  );
+}
+
+export function cloudMachinesForOs(profile: DraftCloudProfile, os: string): WorkerMachineOption[] {
+  return (profile.machines ?? []).filter((machine) => !machine.os || machine.os === os);
+}
+
+/** Preserve configured defaults; prefer smaller reported hardware only when unambiguous. */
+export function defaultCloudMachine(
+  profile: DraftCloudProfile,
+  os = defaultCloudOs(profile),
+): WorkerMachineOption | undefined {
+  const machines = cloudMachinesForOs(profile, os);
+  return (
+    machines.find((machine) => machine.default) ??
+    // Class names do not rank capacity across providers or operating systems.
+    // Unknown dimensions or CPU/RAM tradeoffs retain the provider's catalog order.
+    machines.find((machine) =>
+      machines.every(
+        (other) =>
+          machine.cpu !== undefined &&
+          machine.memoryGb !== undefined &&
+          other.cpu !== undefined &&
+          other.memoryGb !== undefined &&
+          machine.cpu <= other.cpu &&
+          machine.memoryGb <= other.memoryGb,
+      ),
+    ) ??
+    machines[0]
+  );
 }

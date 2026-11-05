@@ -1,4 +1,4 @@
-import type { ChatSplitEdge } from "./split-layout.ts";
+import type { ChatSplitEdge } from "./split-layout-types.ts";
 
 export type SplitDropZone = { kind: "edge"; edge: ChatSplitEdge } | { kind: "center" };
 export type SplitDropRect = { left: number; top: number; width: number; height: number };
@@ -39,14 +39,12 @@ export function splitDropIndicatorRect(rect: SplitDropRect, zone: SplitDropZone)
   if (zone.kind === "center") {
     return fullRect;
   }
-  if (zone.edge === "left") {
-    return { ...fullRect, width: rect.width / 2 };
+  const horizontal = zone.edge === "left" || zone.edge === "right";
+  const size = horizontal ? "width" : "height";
+  const position = horizontal ? "left" : "top";
+  fullRect[size] /= 2;
+  if (zone.edge === "right" || zone.edge === "down") {
+    fullRect[position] += fullRect[size];
   }
-  if (zone.edge === "right") {
-    return { ...fullRect, left: rect.left + rect.width / 2, width: rect.width / 2 };
-  }
-  if (zone.edge === "up") {
-    return { ...fullRect, height: rect.height / 2 };
-  }
-  return { ...fullRect, top: rect.top + rect.height / 2, height: rect.height / 2 };
+  return fullRect;
 }

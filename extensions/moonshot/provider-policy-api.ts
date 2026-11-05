@@ -1,35 +1,44 @@
 // Moonshot policy module exposes model-specific thinking controls before runtime registration.
-import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-export const KIMI_K2_7_CODE_MODEL_ID = "kimi-k2.7-code";
-export const KIMI_K2_7_CODE_HIGHSPEED_MODEL_ID = "kimi-k2.7-code-highspeed";
-export const KIMI_K3_MODEL_ID = "kimi-k3";
+export const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
+export const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
 
-export function isMoonshotAlwaysThinkingModelId(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  return (
-    normalized === KIMI_K2_7_CODE_MODEL_ID ||
-    normalized === KIMI_K2_7_CODE_HIGHSPEED_MODEL_ID ||
-    normalized === KIMI_K3_MODEL_ID
+const MODELS = manifest.modelCatalog.providers.moonshot.models;
+// Rows that cannot turn thinking off own their profile (compat.defaultThinkingLevel).
+const ALWAYS_THINKING_MODEL_IDS = new Set(
+  MODELS.filter((row) => row.compat.thinkingRequired).map((row) => row.id),
+);
+// Released readers drop `video` from hosted rows, so native video is read from the bundled row.
+const NATIVE_VIDEO_MODEL_IDS = new Set(
+  MODELS.filter((row) => row.input.includes("video")).map((row) => row.id),
+);
+
+export function isNativeMoonshotBaseUrl(baseUrl: string | undefined): boolean {
+  return [MOONSHOT_BASE_URL, MOONSHOT_CN_BASE_URL].some(
+    (official) => baseUrl === official || baseUrl === `${official}/`,
   );
 }
 
-export function resolveThinkingProfile(context: ProviderDefaultThinkingPolicyContext) {
-  const modelId = context.modelId.trim().toLowerCase();
-  if (modelId === KIMI_K3_MODEL_ID) {
-    return {
-      levels: [{ id: "max" as const, label: "max" }],
-      defaultLevel: "max" as const,
-      preserveWhenCatalogReasoningFalse: true,
-    };
-  }
-  if (modelId === KIMI_K2_7_CODE_MODEL_ID || modelId === KIMI_K2_7_CODE_HIGHSPEED_MODEL_ID) {
-    return {
-      levels: [{ id: "low" as const, label: "on" }],
-      defaultLevel: "low" as const,
-      preserveWhenCatalogReasoningFalse: true,
-    };
-  }
+export function isMoonshotK3NativeVideoRoute(route: {
+  provider?: string;
+  modelId?: string;
+  api?: string;
+  baseUrl?: string;
+}): boolean {
+  return (
+    route.provider === "moonshot" &&
+    NATIVE_VIDEO_MODEL_IDS.has(route.modelId ?? "") &&
+    route.api === "openai-completions" &&
+    isNativeMoonshotBaseUrl(route.baseUrl)
+  );
+}
+
+export function isMoonshotAlwaysThinkingModelId(modelId: string): boolean {
+  return ALWAYS_THINKING_MODEL_IDS.has(modelId.trim().toLowerCase());
+}
+
+export function resolveThinkingProfile() {
   return {
     levels: [
       { id: "off" as const, label: "off" },

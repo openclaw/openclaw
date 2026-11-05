@@ -1,24 +1,21 @@
 // Live end-to-end checks for AgentSession turns, compaction, and follow-up delivery.
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import { discoverModels } from "../agent-model-discovery.js";
-import { isLiveTestEnabled, readLiveTestConfig } from "../live-test-helpers.js";
-import { ensureOpenClawModelsJson } from "../models-config.js";
+import { isLiveTestEnabled } from "../live-test-helpers.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { cleanupLiveSessions } from "./agent-session-live-cleanup.test-support.js";
+import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
-import { createExtensionRuntime } from "./extensions/loader.js";
-import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
-import type { ModelRegistry } from "./model-registry.js";
-import type { ResourceLoader } from "./resource-loader.js";
+import type { ExtensionFactory, ToolDefinition } from "./extensions/types.js";
+import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
-import { createSyntheticSourceInfo } from "./source-info.js";
 
 const API_KEY = process.env.ANTHROPIC_API_KEY?.trim() ?? "";
 const LIVE = isLiveTestEnabled() && API_KEY.length > 0;
@@ -30,59 +27,42 @@ const DEFAULT_MODEL_ID = "claude-haiku-4-5";
 const sessions: AgentSession[] = [];
 const tempRoots: string[] = [];
 
-type ExtensionHandlers = Map<string, Array<(...args: unknown[]) => Promise<unknown>>>;
-
-function createResourceLoader(handlers: ExtensionHandlers = new Map()): ResourceLoader {
-  const extensionsResult: LoadExtensionsResult = {
-    extensions:
-      handlers.size > 0
-        ? [
-            {
-              path: "<live-test-extension>",
-              resolvedPath: "<live-test-extension>",
-              sourceInfo: createSyntheticSourceInfo("<live-test-extension>", {
-                source: "temporary",
-              }),
-              handlers,
-              tools: new Map(),
-              messageRenderers: new Map(),
-              commands: new Map(),
-              flags: new Map(),
-              shortcuts: new Map(),
-            },
-          ]
-        : [],
-    errors: [],
-    runtime: createExtensionRuntime(),
-  };
-  return {
-    getExtensions: () => extensionsResult,
-    getSkills: () => ({ skills: [], diagnostics: [] }),
-    getPrompts: () => ({ prompts: [], diagnostics: [] }),
-    getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => undefined,
-    getAppendSystemPrompt: () => [],
-    extendResources: () => {},
-    reload: async () => {},
-  };
-}
-
 async function resolveLiveModel(
-  agentDir: string,
+  modelsPath: string,
   authStorage: AuthStorage,
 ): Promise<{ model: Model; modelRegistry: ModelRegistry }> {
-  await ensureOpenClawModelsJson(await readLiveTestConfig(), agentDir, {
-    providerDiscoveryProviderIds: ["anthropic"],
-  });
-  const modelRegistry = discoverModels(authStorage, agentDir, { providerFilter: "anthropic" });
   const requestedModelId =
     process.env.OPENCLAW_LIVE_AGENT_SESSION_MODEL?.trim() || DEFAULT_MODEL_ID;
-  const model =
-    modelRegistry.find("anthropic", requestedModelId) ??
-    modelRegistry
-      .getAll()
-      .find((candidate) => candidate.provider === "anthropic" && /haiku/i.test(candidate.id));
+  // This suite owns AgentSession behavior, so keep its provider fixture independent from the
+  // operator's config and refreshable catalog state. Catalog discovery has dedicated live lanes.
+  await writeFile(
+    modelsPath,
+    `${JSON.stringify(
+      {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            api: "anthropic-messages",
+            models: [
+              {
+                id: requestedModelId,
+                name: requestedModelId,
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200_000,
+                maxTokens: 64_000,
+              },
+            ],
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const modelRegistry = ModelRegistry.create(authStorage, modelsPath);
+  const model = modelRegistry.find("anthropic", requestedModelId);
   if (!model) {
     throw new Error(`No Anthropic Haiku model found for ${requestedModelId}`);
   }
@@ -94,42 +74,45 @@ async function resolveLiveModel(
 
 async function createLiveSession(
   options: {
-    customTools?: ToolDefinition[];
-    handlers?: ExtensionHandlers;
+    customTools?: (cwd: string) => ToolDefinition[];
+    handlers?: ExtensionFactory;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "openclaw-agent-session-live-"));
   tempRoots.push(root);
   const cwd = join(root, "workspace");
-  const agentDir = join(root, "agent");
+  const modelsPath = join(root, "models.json");
   await mkdir(cwd, { recursive: true });
   const authStorage = AuthStorage.inMemory();
   authStorage.setRuntimeApiKey("anthropic", API_KEY);
-  const { model, modelRegistry } = await resolveLiveModel(agentDir, authStorage);
+  const { model, modelRegistry } = await resolveLiveModel(modelsPath, authStorage);
   const sessionManager = SessionManager.inMemory();
   const settingsManager = SettingsManager.inMemory({
     defaultThinkingLevel: "off",
     compaction: { enabled: true, reserveTokens: 128, keepRecentTokens: 0 },
     retry: {
       enabled: false,
-      provider: { timeoutMs: PROVIDER_TIMEOUT_MS, maxRetries: 0, maxRetryDelayMs: 0 },
+      provider: { timeoutMs: PROVIDER_TIMEOUT_MS, maxRetryDelayMs: 0 },
     },
   });
+  const customTools = options.customTools?.(cwd) ?? [];
   const { session } = await createAgentSession({
+    systemPrompt: "Follow the user's instructions and use the supplied tools when requested.",
     cwd,
-    agentDir,
     model,
     thinkingLevel: "off",
-    noTools: "builtin",
-    customTools: options.customTools,
-    resourceLoader: createResourceLoader(options.handlers),
-    authStorage,
+    tools: customTools.map((tool) => tool.name),
+    customTools,
+    resourceLoader: await createResourceLoader(options.handlers, {
+      cwd,
+      agentDir: join(root, "agent"),
+    }),
     modelRegistry,
     sessionManager,
     settingsManager,
   });
   sessions.push(session);
-  return { session, sessionManager };
+  return { session, sessionManager, cwd };
 }
 
 function assistantText(message: AgentMessage): string {
@@ -144,14 +127,7 @@ function assistantText(message: AgentMessage): string {
 }
 
 afterEach(async () => {
-  for (const session of sessions.splice(0)) {
-    session.dispose();
-  }
-  await Promise.all(
-    tempRoots.splice(0).map(async (root) => {
-      await rm(root, { recursive: true, force: true });
-    }),
-  );
+  await cleanupLiveSessions(sessions, tempRoots);
 });
 
 describeLive("AgentSession live", () => {
@@ -174,7 +150,7 @@ describeLive("AgentSession live", () => {
           };
         },
       };
-      const { session } = await createLiveSession({ customTools: [echoTool] });
+      const { session } = await createLiveSession({ customTools: () => [echoTool] });
 
       await session.prompt(
         "Call live_echo exactly once with text OK. After its result, reply with exactly OK.",
@@ -223,20 +199,15 @@ describeLive("AgentSession live", () => {
     async () => {
       const sessionRef: { current?: AgentSession } = {};
       let queued = false;
-      const handlers: ExtensionHandlers = new Map([
-        [
-          "agent_end",
-          [
-            async () => {
-              if (!queued) {
-                queued = true;
-                await sessionRef.current?.followUp("Reply with exactly SECOND.");
-              }
-              return undefined;
-            },
-          ],
-        ],
-      ]);
+      const handlers: ExtensionFactory = (api) => {
+        api.on("agent_end", async () => {
+          if (!queued) {
+            queued = true;
+            await sessionRef.current?.followUp("Reply with exactly SECOND.");
+          }
+          return undefined;
+        });
+      };
       const { session } = await createLiveSession({ handlers });
       sessionRef.current = session;
 

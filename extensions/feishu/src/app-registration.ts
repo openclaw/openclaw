@@ -1,21 +1,9 @@
-// Feishu plugin module implements app registration behavior.
+import { renderQrTerminal } from "openclaw/plugin-sdk/media-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-/**
- * Feishu app registration via OAuth device-code flow.
- *
- * Migrated from feishu-plugin-cli's `feishu-auth.ts` and `install-prompts.ts`.
- * Replaces axios with native fetch, removes inquirer/ora/chalk in favor of
- * the openclaw WizardPrompter surface.
- */
-import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
-import { readFeishuJsonResponse } from "./json-response.js";
-import { renderQrTerminal } from "./qr-terminal.js";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { FeishuDomain } from "./types.js";
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
 
 const FEISHU_ACCOUNTS_URL = "https://accounts.feishu.cn";
 const LARK_ACCOUNTS_URL = "https://accounts.larksuite.com";
@@ -28,48 +16,11 @@ const APP_REGISTRATION_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_REGISTRATION_POLL_INTERVAL_SECONDS = 5;
 const DEFAULT_REGISTRATION_EXPIRE_SECONDS = 600;
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface AppRegistrationResult {
   appId: string;
   appSecret: string;
   domain: FeishuDomain;
   openId?: string;
-}
-
-interface InitResponse {
-  nonce: string;
-  supported_auth_methods: string[];
-}
-
-interface BeginResult {
-  deviceCode: string;
-  qrUrl: string;
-  userCode: string;
-  interval: number;
-  expireIn: number;
-}
-
-export type FeishuAppRegistrationFetch = typeof fetch;
-
-type FeishuAppRegistrationFetchOptions = {
-  /** Override fetch for tests while preserving the real SSRF guard path. */
-  fetchImpl?: FeishuAppRegistrationFetch;
-  /** Override hostname lookup for hermetic SSRF-guard tests. */
-  lookupFn?: LookupFn;
-  /** Override the registration HTTP deadline for tests. */
-  timeoutMs?: number;
-};
-
-interface RawBeginResponse {
-  device_code: string;
-  verification_uri: string;
-  user_code: string;
-  verification_uri_complete: string;
-  interval: number;
-  expire_in: number;
 }
 
 interface PollResponse {
@@ -90,20 +41,12 @@ type PollOutcome =
   | { status: "timeout" }
   | { status: "error"; message: string };
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function accountsBaseUrl(domain: FeishuDomain): string {
   return domain === "lark" ? LARK_ACCOUNTS_URL : FEISHU_ACCOUNTS_URL;
 }
 
-async function postRegistration<T>(
-  baseUrl: string,
-  body: Record<string, string>,
-  options?: FeishuAppRegistrationFetchOptions,
-): Promise<T> {
-  return await fetchFeishuJson<T>({
+async function postRegistration<T>(baseUrl: string, body: Record<string, string>): Promise<T> {
+  return fetchFeishuJson<T>({
     url: `${baseUrl}${REGISTRATION_PATH}`,
     init: {
       method: "POST",
@@ -111,9 +54,6 @@ async function postRegistration<T>(
       body: new URLSearchParams(body).toString(),
     },
     auditContext: "feishu.app-registration.post",
-    fetchImpl: options?.fetchImpl,
-    lookupFn: options?.lookupFn,
-    timeoutMs: options?.timeoutMs,
   });
 }
 
@@ -121,44 +61,27 @@ async function fetchFeishuJson<T>(params: {
   url: string;
   init: RequestInit;
   auditContext: string;
-  fetchImpl?: FeishuAppRegistrationFetch;
-  lookupFn?: LookupFn;
-  timeoutMs?: number;
 }): Promise<T> {
-  const timeoutMs = params.timeoutMs ?? APP_REGISTRATION_REQUEST_TIMEOUT_MS;
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     init: params.init,
-    fetchImpl: params.fetchImpl,
-    lookupFn: params.lookupFn,
-    timeoutMs,
+    timeoutMs: APP_REGISTRATION_REQUEST_TIMEOUT_MS,
     policy: { allowedHostnames: [new URL(params.url).hostname] },
     auditContext: params.auditContext,
   });
   try {
     // Registration poll returns 4xx for pending/error states with a JSON body.
-    return await readFeishuJsonResponse<T>(response);
+    return await readProviderJsonResponse<T>(response, "feishu.api");
   } finally {
     await release();
   }
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/**
- * Step 1: Initialize registration and verify the environment supports
- * `client_secret` auth.
- *
- * @throws If the environment does not support `client_secret`.
- */
-export async function initAppRegistration(
-  domain: FeishuDomain = "feishu",
-  options?: FeishuAppRegistrationFetchOptions,
-): Promise<void> {
+export async function initAppRegistration(domain: FeishuDomain = "feishu"): Promise<void> {
   const baseUrl = accountsBaseUrl(domain);
-  const res = await postRegistration<InitResponse>(baseUrl, { action: "init" }, options);
+  const res = await postRegistration<{
+    supported_auth_methods: string[];
+  }>(baseUrl, { action: "init" });
 
   if (!res.supported_auth_methods?.includes("client_secret")) {
     throw new Error("Current environment does not support client_secret auth method");
@@ -169,21 +92,19 @@ export async function initAppRegistration(
  * Step 2: Begin the device-code flow. Returns a device code and a QR URL
  * that the user should scan with Feishu/Lark mobile app.
  */
-export async function beginAppRegistration(
-  domain: FeishuDomain = "feishu",
-  options?: FeishuAppRegistrationFetchOptions,
-): Promise<BeginResult> {
+export async function beginAppRegistration(domain: FeishuDomain = "feishu") {
   const baseUrl = accountsBaseUrl(domain);
-  const res = await postRegistration<RawBeginResponse>(
-    baseUrl,
-    {
-      action: "begin",
-      archetype: "PersonalAgent",
-      auth_method: "client_secret",
-      request_user_info: "open_id",
-    },
-    options,
-  );
+  const res = await postRegistration<{
+    device_code: string;
+    verification_uri_complete: string;
+    interval: number;
+    expire_in: number;
+  }>(baseUrl, {
+    action: "begin",
+    archetype: "PersonalAgent",
+    auth_method: "client_secret",
+    request_user_info: "open_id",
+  });
 
   const qrUrl = new URL(res.verification_uri_complete);
   qrUrl.searchParams.set("from", "oc_onboard");
@@ -192,7 +113,6 @@ export async function beginAppRegistration(
   return {
     deviceCode: res.device_code,
     qrUrl: qrUrl.toString(),
-    userCode: res.user_code,
     interval:
       finiteSecondsToTimerSafeMilliseconds(res.interval) === undefined
         ? DEFAULT_REGISTRATION_POLL_INTERVAL_SECONDS
@@ -217,27 +137,17 @@ export async function pollAppRegistration(params: {
   abortSignal?: AbortSignal;
   /** Registration type parameter. The CLI bot QR flow uses "ob_cli_app". */
   tp?: string;
-  fetchImpl?: FeishuAppRegistrationFetch;
-  lookupFn?: LookupFn;
 }): Promise<PollOutcome> {
-  const {
-    deviceCode,
-    expireIn,
-    initialDomain = "feishu",
-    abortSignal,
-    tp,
-    fetchImpl,
-    lookupFn,
-  } = params;
+  const { deviceCode, expireIn, initialDomain = "feishu", abortSignal, tp } = params;
   let currentInterval = params.interval;
   let domain: FeishuDomain = initialDomain;
   let domainSwitched = false;
 
   const expireInMs =
     finiteSecondsToTimerSafeMilliseconds(expireIn) ?? DEFAULT_REGISTRATION_EXPIRE_SECONDS * 1_000;
-  const deadline = Date.now() + expireInMs;
+  const deadline = performance.now() + expireInMs;
 
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     if (abortSignal?.aborted) {
       return { status: "timeout" };
     }
@@ -246,33 +156,24 @@ export async function pollAppRegistration(params: {
 
     let pollRes: PollResponse;
     try {
-      pollRes = await postRegistration<PollResponse>(
-        baseUrl,
-        {
-          action: "poll",
-          device_code: deviceCode,
-          ...(tp ? { tp } : {}),
-        },
-        { fetchImpl, lookupFn },
-      );
+      pollRes = await postRegistration<PollResponse>(baseUrl, {
+        action: "poll",
+        device_code: deviceCode,
+        ...(tp ? { tp } : {}),
+      });
     } catch {
       // Transient network error — keep polling.
       await sleepRegistrationPollInterval(currentInterval, abortSignal);
       continue;
     }
 
-    // Domain auto-detection: switch to lark if tenant_brand says so.
-    if (pollRes.user_info?.tenant_brand) {
-      const isLark = pollRes.user_info.tenant_brand === "lark";
-      if (!domainSwitched && isLark) {
-        domain = "lark";
-        domainSwitched = true;
-        // Retry poll immediately with the correct domain.
-        continue;
-      }
+    if (!domainSwitched && pollRes.user_info?.tenant_brand === "lark") {
+      domain = "lark";
+      domainSwitched = true;
+      // Retry poll immediately with the correct domain.
+      continue;
     }
 
-    // Success.
     if (pollRes.client_id && pollRes.client_secret) {
       return {
         status: "success",
@@ -285,11 +186,8 @@ export async function pollAppRegistration(params: {
       };
     }
 
-    // Error handling.
-    if (pollRes.error) {
-      if (pollRes.error === "authorization_pending") {
-        // Continue waiting.
-      } else if (pollRes.error === "slow_down") {
+    if (pollRes.error && pollRes.error !== "authorization_pending") {
+      if (pollRes.error === "slow_down") {
         currentInterval += 5;
       } else if (pollRes.error === "access_denied") {
         return { status: "access_denied" };
@@ -330,14 +228,11 @@ export async function getAppOwnerOpenId(params: {
   appId: string;
   appSecret: string;
   domain?: FeishuDomain;
-  fetchImpl?: FeishuAppRegistrationFetch;
-  lookupFn?: LookupFn;
 }): Promise<string | undefined> {
   const baseUrl =
     params.domain === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
 
   try {
-    // First, get a tenant_access_token.
     const tokenData = await fetchFeishuJson<{
       code?: number;
       tenant_access_token?: string;
@@ -349,14 +244,11 @@ export async function getAppOwnerOpenId(params: {
         body: JSON.stringify({ app_id: params.appId, app_secret: params.appSecret }),
       },
       auditContext: "feishu.app-registration.owner-token",
-      fetchImpl: params.fetchImpl,
-      lookupFn: params.lookupFn,
     });
     if (!tokenData.tenant_access_token) {
       return undefined;
     }
 
-    // Query app info for the owner's open_id.
     const appData = await fetchFeishuJson<{
       code?: number;
       data?: {
@@ -375,8 +267,6 @@ export async function getAppOwnerOpenId(params: {
         },
       },
       auditContext: "feishu.app-registration.owner-app",
-      fetchImpl: params.fetchImpl,
-      lookupFn: params.lookupFn,
     });
     if (appData.code !== 0) {
       return undefined;

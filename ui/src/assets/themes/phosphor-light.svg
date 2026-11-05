@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" fill="none">
+  <defs>
+    <linearGradient id="ink" x1="0" y1="1000" x2="1600" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2f6b47"/>
+      <stop offset="0.7" stop-color="#10693a"/>
+      <stop offset="1" stop-color="#2f6b47"/>
+    </linearGradient>
+    <radialGradient id="quiet">
+      <stop offset="0.15" stop-color="white" stop-opacity="0"/>
+      <stop offset="0.8" stop-color="white" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="white"/>
+    </radialGradient>
+    <mask id="edges"><path fill="url(#quiet)" d="M0 0h1600v1000H0z"/></mask>
+  </defs>
+  <g stroke="url(#ink)" stroke-width="2" opacity="0.035" mask="url(#edges)">
+    <path d="M1660 80h-370l-180 180v180M1660 125h-345l-160 160v200M1660 170h-320l-140 140v220M1660 215h-295l-120 120v240M1660 260h-270l-100 100v260M-80 640h215l180 180h180M-80 685h190l180 180h250M-80 730h165l180 180h320M-80 775h140l180 180h390"/><path d="M1102 440h16v16h-16zM1147 485h16v16h-16zM1192 530h16v16h-16zM1237 575h16v16h-16zM1282 620h16v16h-16zM495 812h16v16h-16zM540 857h16v16h-16zM585 902h16v16h-16z"/>
+  </g>
+</svg>

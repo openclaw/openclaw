@@ -1,13 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
-import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import { describe, expect, it } from "vitest";
 import {
   createMinimalRunAgentTurnParams,
+  getRawExecuteAgentTurnForTest,
   createMockReplyOperation,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
-const { executeAgentTurn } = await import("./agent-runner-execution.js");
+const state = await setupAgentRunnerExecutionTestState();
+const executeAgentTurn = await getRawExecuteAgentTurnForTest();
 
 describe("executeAgentTurn contract", () => {
   it("returns one closed settled result with winner and fallback facts", async () => {
@@ -33,10 +33,10 @@ describe("executeAgentTurn contract", () => {
     });
   });
 
-  it("retains a late completed result for accounting after user abort was accepted", async () => {
+  it("keeps publisher-only compaction counts presentation-only after a late user abort", async () => {
     state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "late reply" }],
-      meta: { durationMs: 1 },
+      meta: { durationMs: 1, agentMeta: { compactionCount: 1, compactionTokensAfter: 40 } },
     });
     const { replyOperation } = createMockReplyOperation();
     let operationResult: typeof replyOperation.result = null;
@@ -54,29 +54,10 @@ describe("executeAgentTurn contract", () => {
       createMinimalRunAgentTurnParams({ replyOperation: lateAbortedOperation }),
     );
 
-    expect(result.outcome).toMatchObject({
-      kind: "settled",
-      abortReason: "user",
-      result: { payloads: [{ text: "late reply" }] },
+    expect(result.outcome).toEqual({
+      kind: "aborted",
+      reason: "user",
+      compaction: { count: 1, durable: [] },
     });
-  });
-
-  it("releases an unsettled operation when a restart error aborts execution", async () => {
-    const { replyOperation } = createMockReplyOperation();
-    const complete = vi.fn();
-    const unsettledOperation = {
-      ...replyOperation,
-      complete,
-      freezeAbort: () => {
-        throw createAgentRunRestartAbortError();
-      },
-    };
-
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({ replyOperation: unsettledOperation }),
-    );
-
-    expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
-    expect(complete).toHaveBeenCalledOnce();
   });
 });

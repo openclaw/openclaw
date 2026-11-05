@@ -9,6 +9,7 @@ import type {
 } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 
 type TrustedPolicyHookRunnerRegistry = GlobalHookRunnerRegistry & {
   trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
@@ -21,19 +22,18 @@ type HookRunnerGlobalState = {
 
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
 
-export function getHookRunnerGlobalState(): HookRunnerGlobalState {
-  return resolveGlobalSingleton<HookRunnerGlobalState>(
-    hookRunnerGlobalStateKey,
-    () => ({
-      hookRunner: null,
-      registry: null,
-    }),
-    (state) => {
-      state.registry = null;
-    },
-    "plugin-registry",
-  );
-}
+// Lifecycle resets mutate this shared slot in place, including across source/built copies.
+export const hookRunnerGlobalState = resolveGlobalSingleton<HookRunnerGlobalState>(
+  hookRunnerGlobalStateKey,
+  () => ({
+    hookRunner: null,
+    registry: null,
+  }),
+  (state) => {
+    state.registry = null;
+  },
+  "plugin-registry",
+);
 
 function resolveRootHookRegistry(
   state: HookRunnerGlobalState,
@@ -121,35 +121,37 @@ function overlayHookRegistries(
 }
 
 function resolveHookRegistry(state: HookRunnerGlobalState): TrustedPolicyHookRunnerRegistry | null {
+  const generationRegistry = getPluginRuntimeGenerationRegistry();
+  if (generationRegistry && !isPluginRegistryRetired(generationRegistry)) {
+    return generationRegistry;
+  }
+  const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? null;
   return overlayHookRegistries(
     resolveRootHookRegistry(state),
-    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? null,
+    requestRegistry && !isPluginRegistryRetired(requestRegistry) ? requestRegistry : null,
   );
 }
 
-export function createLiveHookRegistryFacade(
-  state: HookRunnerGlobalState,
-): TrustedPolicyHookRunnerRegistry {
+export function createLiveHookRegistryFacade(): TrustedPolicyHookRunnerRegistry {
   // The runner object stays stable while these getters select the current request
   // handle or process root on every dispatch.
   return {
     get hooks() {
-      return resolveHookRegistry(state)?.hooks ?? [];
+      return resolveHookRegistry(hookRunnerGlobalState)?.hooks ?? [];
     },
     get typedHooks() {
-      return resolveHookRegistry(state)?.typedHooks ?? [];
+      return resolveHookRegistry(hookRunnerGlobalState)?.typedHooks ?? [];
     },
     get plugins() {
-      return resolveHookRegistry(state)?.plugins ?? [];
+      return resolveHookRegistry(hookRunnerGlobalState)?.plugins ?? [];
     },
     get trustedToolPolicies() {
-      return resolveHookRegistry(state)?.trustedToolPolicies ?? [];
+      return resolveHookRegistry(hookRunnerGlobalState)?.trustedToolPolicies ?? [];
     },
   };
 }
 
 /** Get the registry view that backs global hook dispatch. */
 export function getGlobalHookRunnerRegistry(): TrustedPolicyHookRunnerRegistry | null {
-  const state = getHookRunnerGlobalState();
-  return resolveHookRegistry(state) ? createLiveHookRegistryFacade(state) : null;
+  return resolveHookRegistry(hookRunnerGlobalState) ? createLiveHookRegistryFacade() : null;
 }

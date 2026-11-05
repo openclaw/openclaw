@@ -1,6 +1,8 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
+import { CodexHistoryRejection } from "./history-rejection.js";
 import { projectSettledCodexMessages } from "./settled-turn-projection.js";
+import { attachUpstreamUserText } from "./upstream-prompt-provenance.js";
 
 function message(value: unknown): AgentMessage {
   return value as AgentMessage;
@@ -87,23 +89,42 @@ describe("projectSettledCodexMessages", () => {
     ]);
   });
 
-  it("preserves failed tool-result status in the projected output", () => {
+  it("projects dotted namespaced tool names recorded from Codex MCP calls", () => {
+    const name = "codex_apps.slack.slack_send";
     expect(
       projectSettledCodexMessages([
-        toolCall(),
+        message({
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name, arguments: { channel: "C1" } }],
+        }),
         message({
           role: "toolResult",
           toolCallId: "call-1",
-          toolName: "message",
-          isError: true,
-          content: [{ type: "text", text: "Delivery failed." }],
+          toolName: name,
+          content: [{ type: "text", text: "Sent." }],
         }),
-      ]).at(-1),
-    ).toEqual({
-      type: "function_call_output",
-      call_id: "call-1",
-      output: "[Tool result status: error]\nDelivery failed.",
-    });
+      ]),
+    ).toEqual([
+      { type: "function_call", call_id: "call-1", name, arguments: '{"channel":"C1"}' },
+      { type: "function_call_output", call_id: "call-1", output: "Sent." },
+    ]);
+  });
+
+  it("rejects invalid tool names without including transcript text", () => {
+    expect(() =>
+      projectSettledCodexMessages([
+        message({
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "bad tool", arguments: {} }],
+        }),
+        message({
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "bad tool",
+          content: [{ type: "text", text: "failed" }],
+        }),
+      ]),
+    ).toThrowError(new CodexHistoryRejection("invalid_content"));
   });
 
   it("preserves an empty failed tool result as failure evidence", () => {
@@ -169,31 +190,72 @@ describe("projectSettledCodexMessages", () => {
     ]);
   });
 
-  it("rejects an oversized item count instead of dropping earlier context", () => {
-    const oldMessages = Array.from({ length: 205 }, (_, index) =>
-      message({ role: "user", content: `old-${index}` }),
+  it.each([
+    { count: 205, text: "old", error: "item_limit" },
+    { count: 9, text: "x".repeat(60 * 1024), error: "byte_limit" },
+  ])("stops acquiring later payloads after $error", ({ count, text, error }) => {
+    let laterReads = 0;
+    const later = message({
+      role: "user",
+      get content() {
+        laterReads += 1;
+        return "must not acquire this later payload";
+      },
+    });
+    const oldMessages = Array.from({ length: count }, () =>
+      message({ role: "user", content: text }),
     );
-    expect(() => projectSettledCodexMessages([...oldMessages, toolCall(), toolResult()])).toThrow(
-      "exceeds the item limit",
-    );
+    expect(() =>
+      projectSettledCodexMessages([...oldMessages, later, toolCall(), toolResult()]),
+    ).toThrow(error);
+    expect(laterReads).toBe(0);
   });
 
-  it("prefers the undecorated upstream user text", () => {
+  it("preserves upstream user text above the ordinary message limit", () => {
+    const upstreamUserText = "x".repeat(64 * 1024 + 1);
+
     expect(
       projectSettledCodexMessages([
-        message({
-          role: "user",
-          content: "[Telegram metadata] decorated prompt",
-          __openclaw: { upstreamUserText: "Send the Aurora notice to Erin." },
-        }),
+        attachUpstreamUserText(
+          message({ role: "user", content: "[Telegram metadata] decorated prompt" }),
+          upstreamUserText,
+        ),
         toolCall(),
         toolResult(),
       ])[0],
     ).toEqual({
       type: "message",
       role: "user",
-      content: [{ type: "input_text", text: "Send the Aurora notice to Erin." }],
+      content: [{ type: "input_text", text: upstreamUserText }],
     });
+  });
+
+  it("rejects upstream user text above the projection limit", () => {
+    expect(() =>
+      projectSettledCodexMessages([
+        attachUpstreamUserText(
+          message({ role: "user", content: "[Telegram metadata] decorated prompt" }),
+          "x".repeat(512 * 1024 + 1),
+        ),
+        toolCall(),
+        toolResult(),
+      ]),
+    ).toThrow("field_limit");
+  });
+
+  it("charges upstream user text against the aggregate byte limit", () => {
+    expect(() =>
+      projectSettledCodexMessages([
+        attachUpstreamUserText(
+          message({ role: "user", content: "decorated" }),
+          "x".repeat(400 * 1024),
+        ),
+        message({ role: "user", content: "x".repeat(60 * 1024) }),
+        message({ role: "user", content: "x".repeat(60 * 1024) }),
+        toolCall(),
+        toolResult(),
+      ]),
+    ).toThrow("byte_limit");
   });
 
   it("does not let provenance hide non-text user content", () => {
@@ -210,7 +272,7 @@ describe("projectSettledCodexMessages", () => {
         toolCall(),
         toolResult(),
       ]),
-    ).toThrow("does not support user content image");
+    ).toThrow("unsupported_user_image");
   });
 
   it.each([
@@ -230,7 +292,40 @@ describe("projectSettledCodexMessages", () => {
       ],
     },
   ])("fails closed for $name", ({ messages }) => {
-    expect(() => projectSettledCodexMessages(messages)).toThrow(/Codex settled-turn projection/u);
+    expect(() => projectSettledCodexMessages(messages)).toThrowError(CodexHistoryRejection);
+  });
+
+  it.each([
+    {
+      name: "unknown role",
+      value: { role: "future-role", content: "unknown" },
+      reason: "unsupported_content",
+    },
+    {
+      name: "custom image evidence",
+      value: {
+        role: "custom",
+        customType: "plugin.note",
+        display: false,
+        content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+        __openclaw: { upstreamUserText: "Cannot replace image evidence." },
+      },
+      reason: "unsupported_user_image",
+    },
+    {
+      name: "unknown custom block",
+      value: {
+        role: "custom",
+        customType: "plugin.note",
+        display: false,
+        content: [{ type: "future-block" }],
+      },
+      reason: "unsupported_content",
+    },
+  ])("rejects $name instead of dropping it during context conversion", ({ value, reason }) => {
+    expect(() => projectSettledCodexMessages([message(value), toolCall(), toolResult()])).toThrow(
+      expect.objectContaining({ reason }),
+    );
   });
 
   it("preserves valid image tool results as bounded non-vision evidence", () => {
@@ -256,15 +351,6 @@ describe("projectSettledCodexMessages", () => {
         toolCall(),
         toolResult(),
       ]),
-    ).toThrow("oversized user message");
-  });
-
-  it("rejects a complete transcript above the aggregate byte limit", () => {
-    const messages = Array.from({ length: 9 }, () =>
-      message({ role: "user", content: "x".repeat(60 * 1024) }),
-    );
-    expect(() => projectSettledCodexMessages([...messages, toolCall(), toolResult()])).toThrow(
-      "exceeds the byte limit",
-    );
+    ).toThrow("field_limit");
   });
 });

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 set -euo pipefail
 
@@ -14,10 +14,10 @@ fi
 ./scripts/check-swift-tools.sh swiftlint
 
 if [[ "$scope" != "ios" ]]; then
-  swiftlint lint --strict --config config/swiftlint.yml
+  node "$repo_root/scripts/run-swiftlint.mts" --strict --config config/swiftlint.yml
   (
     cd apps/swabble
-    swiftlint lint --strict --config .swiftlint.yml
+    node "$repo_root/scripts/run-swiftlint.mts" --strict --config .swiftlint.yml
   )
 fi
 
@@ -27,5 +27,5 @@ fi
 
 (
   cd apps/ios
-  swiftlint lint --strict --config .swiftlint.yml
+  node "$repo_root/scripts/run-swiftlint.mts" --strict --config .swiftlint.yml
 )

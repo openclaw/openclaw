@@ -1,187 +1,134 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
-import {
-  resolveBrowserActExecutionBudgetMs,
-  resolveBrowserActRequestTimeoutMs,
-} from "./act-policy.js";
+import { resolveBrowserActRequestTimeoutMs } from "./act-policy.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
 
-describe("browser action execution budgets", () => {
+const wait = {
+  kind: "wait",
+  text: "ready",
+  textGone: "loading",
+  selector: "#result",
+  url: "**/done",
+  loadState: "networkidle",
+  fn: "() => true",
+} as const;
+function expectTimeout(request: BrowserActRequest, expected: number) {
+  expect(resolveBrowserActRequestTimeoutMs(request)).toBe(expected);
+}
+const batch = (actions: BrowserActRequest[]): BrowserActRequest => ({ kind: "batch", actions });
+const delay = (): BrowserActRequest => ({ kind: "wait", timeMs: 30_000 });
+const fields = ["first", "second"].map((ref) => ({ ref, type: "text" }));
+
+describe("browser action request deadlines", () => {
   it("sums the delay and every sequential wait condition", () => {
-    expect(
-      resolveBrowserActExecutionBudgetMs({
-        kind: "wait",
-        timeMs: 10_000,
-        text: "ready",
-        textGone: "loading",
-        selector: "#result",
-        url: "**/done",
-        loadState: "networkidle",
-        fn: "() => true",
-        timeoutMs: 20_000,
-      }),
-    ).toBe(130_000);
+    expectTimeout({ ...wait, timeMs: 10_000, timeoutMs: 20_000 }, 135_000);
   });
 
   it("normalizes each condition timeout before multiplication", () => {
-    const wait = {
-      kind: "wait",
-      text: "ready",
-      textGone: "loading",
-      selector: "#result",
-      url: "**/done",
-      loadState: "load",
-      fn: "() => true",
-    } as const;
-
-    expect(resolveBrowserActExecutionBudgetMs({ ...wait, timeoutMs: 1 })).toBe(3_000);
-    expect(resolveBrowserActExecutionBudgetMs({ ...wait, timeoutMs: Number.MAX_VALUE })).toBe(
-      720_000,
-    );
+    expectTimeout({ ...wait, timeoutMs: 1 }, 8_000);
+    expectTimeout(batch([{ ...wait, timeoutMs: Number.MAX_VALUE }]), 725_000);
   });
 
-  it("matches runtime normalization for whitespace-only wait conditions", () => {
-    expect(
-      resolveBrowserActExecutionBudgetMs({
-        kind: "wait",
-        timeMs: 0,
-        text: " ",
-        textGone: " ",
-        selector: "",
-        url: " ",
-        fn: " ",
-      }),
-    ).toBe(40_000);
-    expect(resolveBrowserActRequestTimeoutMs({ kind: "wait", timeMs: 0 })).toBe(5_000);
+  it("keeps Playwright text whitespace in sequential batch budgets", () => {
+    const whitespaceWait = {
+      kind: "wait",
+      timeMs: 0,
+      text: " ",
+      textGone: " ",
+      selector: "",
+      url: " ",
+      fn: " ",
+    } as const;
+    expectTimeout(batch([whitespaceWait, whitespaceWait]), 85_000);
   });
 
   it("recursively sums nested batch children in execution order", () => {
-    expect(
-      resolveBrowserActExecutionBudgetMs({
-        kind: "batch",
-        actions: [
-          { kind: "wait", timeMs: 30_000 },
-          {
-            kind: "batch",
-            actions: [
-              { kind: "wait", timeMs: 30_000 },
-              { kind: "wait", timeMs: 30_000 },
-            ],
-          },
-        ],
-      }),
-    ).toBe(90_000);
+    expectTimeout(batch([delay(), batch([delay(), delay()])]), 95_000);
   });
 
-  it("keeps leaf defaults and adds outer slack once", () => {
-    expect(resolveBrowserActExecutionBudgetMs({ kind: "click", ref: "1" })).toBe(60_000);
-    expect(resolveBrowserActRequestTimeoutMs({ kind: "click", ref: "1", timeoutMs: 45_000 })).toBe(
-      50_250,
-    );
+  it("budgets action and verification defaults and adds outer slack once", () => {
+    expectTimeout({ kind: "click", ref: "1" }, 126_250);
+    expectTimeout({ kind: "wait", timeMs: 0 }, 126_250);
+    expectTimeout({ kind: "click", ref: "1", timeoutMs: 45_000 }, 96_250);
   });
 
   it("budgets sequential leaf phases and bounded delays", () => {
-    expect(
-      resolveBrowserActExecutionBudgetMs({
-        kind: "fill",
-        fields: [
-          { ref: "first", type: "text" },
-          { ref: "second", type: "text" },
-        ],
-        timeoutMs: 20_000,
-      }),
-    ).toBe(40_500);
-    expect(
-      resolveBrowserActExecutionBudgetMs({
+    expectTimeout(batch([{ kind: "fill", fields, timeoutMs: 40_000 }]), 85_500);
+    expectTimeout(
+      {
         kind: "type",
         ref: "field",
         text: "value",
         slowly: true,
         submit: true,
-        timeoutMs: 20_000,
-      }),
-    ).toBe(60_250);
-    expect(
-      resolveBrowserActExecutionBudgetMs({
-        kind: "click",
-        ref: "button",
-        delayMs: 5_000,
-        timeoutMs: 20_000,
-      }),
-    ).toBe(45_250);
-    expect(
-      resolveBrowserActExecutionBudgetMs({
+        timeoutMs: 60_000,
+      },
+      185_250,
+    );
+    expectTimeout({ kind: "click", ref: "button", delayMs: 5_000, timeoutMs: 20_000 }, 50_250);
+    expectTimeout(
+      {
         kind: "clickCoords",
         x: 10,
         y: 20,
         doubleClick: true,
         delayMs: 5_000,
-        timeoutMs: 20_000,
-      }),
-    ).toBe(35_250);
+        timeoutMs: 1_000,
+      },
+      21_250,
+    );
   });
 
+  it.each([
+    { kind: "type", ref: "field", text: "value" },
+    { kind: "hover", ref: "field" },
+    { kind: "scrollIntoView", ref: "field" },
+    { kind: "drag", startRef: "first", endRef: "second" },
+    { kind: "select", ref: "field", values: ["value"] },
+    { kind: "fill", fields: [{ ref: "field", type: "text" }] },
+  ] satisfies BrowserActRequest[])(
+    "bounds $kind transport when only Playwright accepts the timeout override",
+    (request) => {
+      expect(
+        resolveBrowserActRequestTimeoutMs({ ...request, timeoutMs: Number.MAX_VALUE }),
+      ).toBeLessThanOrEqual(126_250);
+    },
+  );
+
   it("preserves the prior whole-request floor for batches", () => {
-    expect(
-      resolveBrowserActExecutionBudgetMs({
-        kind: "batch",
-        actions: [
-          {
-            kind: "fill",
-            fields: [
-              { ref: "first", type: "text" },
-              { ref: "second", type: "text" },
-            ],
-            timeoutMs: 20_000,
-          },
-        ],
-      }),
-    ).toBe(60_000);
+    expectTimeout(batch([{ kind: "fill", fields, timeoutMs: 20_000 }]), 65_000);
   });
 
   it("budgets the wider scrollIntoView locator timeout", () => {
-    expect(
-      resolveBrowserActExecutionBudgetMs({
-        kind: "batch",
-        actions: Array.from({ length: 4 }, () => ({
+    expectTimeout(
+      batch(
+        Array.from({ length: 4 }, () => ({
           kind: "scrollIntoView" as const,
           ref: "result",
         })),
-      }),
-    ).toBe(81_000);
-    expect(
-      resolveBrowserActExecutionBudgetMs({
-        kind: "scrollIntoView",
-        ref: "result",
-        timeoutMs: 120_000,
-      }),
-    ).toBe(120_250);
+      ),
+      86_000,
+    );
+    expectTimeout(batch([{ kind: "scrollIntoView", ref: "result", timeoutMs: 120_000 }]), 125_250);
   });
 
   it("leaves malformed model batch validation to the browser route", () => {
-    expect(
-      resolveBrowserActExecutionBudgetMs({
+    expectTimeout(
+      {
         kind: "batch",
         requests: [],
         actions: [{ kind: "wait", selector: 1 }, { kind: "unknown" }, null],
-      } as unknown as BrowserActRequest),
-    ).toBe(60_000);
+      } as unknown as BrowserActRequest,
+      65_000,
+    );
   });
 
   it("saturates aggregate and slack arithmetic at the timer limit", () => {
     const actions: BrowserActRequest[] = Array.from({ length: 3_000 }, () => ({
-      kind: "wait",
-      text: "ready",
-      textGone: "loading",
-      selector: "#result",
-      url: "**/done",
+      ...wait,
       loadState: "load",
-      fn: "() => true",
       timeoutMs: 120_000,
     }));
-    const batch = { kind: "batch", actions } as const;
-
-    expect(resolveBrowserActExecutionBudgetMs(batch)).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(resolveBrowserActRequestTimeoutMs(batch)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expectTimeout(batch(actions), MAX_TIMER_TIMEOUT_MS);
   });
 });

@@ -1,8 +1,10 @@
-import type { BigIntStats, Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { sha256File } from "../infra/directory-durability.js";
-import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
+import { copyFileHandle, sameFileMutationFingerprint } from "../infra/file-descriptor.js";
 import { root } from "../infra/fs-safe.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -21,20 +23,10 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 export type SnapshotArtifactDigest = {
   sha256: string;
   sizeBytes: number;
-  stat: Stats;
+  identity: Pick<BigIntStats, "dev" | "ino">;
 };
 
 type OpenFileHandle = Awaited<ReturnType<typeof fs.open>>;
-
-export function containsAsciiControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f) {
-      return true;
-    }
-  }
-  return false;
-}
 
 export async function hashSnapshotArtifact(snapshotDir: string): Promise<SnapshotArtifactDigest> {
   const snapshotRoot = await root(snapshotDir);
@@ -43,7 +35,10 @@ export async function hashSnapshotArtifact(snapshotDir: string): Promise<Snapsho
     symlinks: "reject",
   });
   try {
-    return { ...(await hashFileHandle(opened.handle)), stat: opened.stat };
+    return {
+      ...(await hashFileHandle(opened.handle)),
+      identity: opened.exactIdentity,
+    };
   } finally {
     await opened.handle.close();
   }
@@ -59,26 +54,26 @@ export async function copySnapshotArtifact(
     symlinks: "reject",
   });
   let target: OpenFileHandle | undefined;
-  let targetIdentity: Stats | undefined;
+  let targetIdentity: BigIntStats | undefined;
   try {
     target = await fs.open(targetPath, "wx+", 0o600);
-    targetIdentity = await target.stat();
+    targetIdentity = await target.stat({ bigint: true });
     const digest = await hashFileHandle(source.handle, target);
     await target.sync();
-    const finalIdentity = await target.stat();
-    const currentIdentity = await fs.lstat(targetPath);
+    const finalIdentity = await target.stat({ bigint: true });
+    const currentIdentity = await fs.lstat(targetPath, { bigint: true });
     if (
       !sameFileIdentity(targetIdentity, finalIdentity) ||
       !sameFileIdentity(targetIdentity, currentIdentity)
     ) {
       throw new Error(`Snapshot restore staging file changed during copy: ${targetPath}`);
     }
-    return { ...digest, stat: finalIdentity };
+    return { ...digest, identity: finalIdentity };
   } catch (error) {
     await target?.close().catch(() => undefined);
     target = undefined;
     if (targetIdentity) {
-      const currentIdentity = await fs.lstat(targetPath).catch(() => undefined);
+      const currentIdentity = await fs.lstat(targetPath, { bigint: true }).catch(() => undefined);
       if (currentIdentity && sameFileIdentity(targetIdentity, currentIdentity)) {
         await fs.unlink(targetPath).catch(() => undefined);
       }
@@ -93,49 +88,21 @@ export async function copySnapshotArtifact(
 async function hashFileHandle(
   source: OpenFileHandle,
   target?: OpenFileHandle,
-): Promise<Omit<SnapshotArtifactDigest, "stat">> {
+): Promise<Omit<SnapshotArtifactDigest, "identity">> {
   const initialStat = await source.stat({ bigint: true });
   let sizeBytes = 0;
   if (target) {
-    const buffer = Buffer.allocUnsafe(1024 * 1024);
-    while (true) {
-      const { bytesRead } = await source.read(buffer, 0, buffer.length, sizeBytes);
-      if (bytesRead === 0) {
-        break;
-      }
-      let bytesWritten = 0;
-      while (bytesWritten < bytesRead) {
-        const result = await target.write(
-          buffer,
-          bytesWritten,
-          bytesRead - bytesWritten,
-          sizeBytes + bytesWritten,
-        );
-        if (result.bytesWritten === 0) {
-          throw new Error("Snapshot restore staging copy made no progress.");
-        }
-        bytesWritten += result.bytesWritten;
-      }
-      sizeBytes += bytesRead;
-    }
+    sizeBytes = await copyFileHandle(source, target);
   }
   const hashed = await sha256File(target ?? source);
   const finalStat = await source.stat({ bigint: true });
-  if (!sameMutationFingerprint(initialStat, finalStat) || (target && sizeBytes !== hashed.bytes)) {
+  if (
+    !sameFileMutationFingerprint(initialStat, finalStat) ||
+    (target && sizeBytes !== hashed.bytes)
+  ) {
     throw new Error("Snapshot artifact changed while being read.");
   }
   return { sha256: hashed.digest, sizeBytes: hashed.bytes };
-}
-
-function sameMutationFingerprint(left: BigIntStats, right: BigIntStats): boolean {
-  return (
-    left.birthtimeNs === right.birthtimeNs &&
-    left.ctimeNs === right.ctimeNs &&
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeNs === right.mtimeNs &&
-    left.size === right.size
-  );
 }
 
 export async function writeSnapshotManifest(
@@ -152,10 +119,7 @@ export async function writeSnapshotManifest(
   }
 }
 
-export async function readSnapshotManifest(
-  snapshotDir: string,
-  expectedSnapshotId = path.basename(snapshotDir),
-): Promise<SnapshotManifest> {
+export async function readSnapshotManifest(snapshotDir: string): Promise<SnapshotManifest> {
   const snapshotRoot = await root(snapshotDir);
   const manifestPath = path.join(snapshotDir, SNAPSHOT_MANIFEST_FILENAME);
   const result = await snapshotRoot.read(SNAPSHOT_MANIFEST_FILENAME, {
@@ -169,10 +133,10 @@ export async function readSnapshotManifest(
   } catch (error) {
     throw new Error(`Snapshot manifest is not valid JSON: ${manifestPath}`, { cause: error });
   }
-  return parseSnapshotManifest(parsed, manifestPath, expectedSnapshotId);
+  return parseSnapshotManifest(parsed, manifestPath, path.basename(snapshotDir));
 }
 
-function parseSnapshotManifest(
+export function parseSnapshotManifest(
   value: unknown,
   manifestPath: string,
   expectedSnapshotId: string,

@@ -1,162 +1,172 @@
-// Freezes the central failover classifier before the refactor-02 consolidation.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 
-const providerRuntimeMocks = vi.hoisted(() => ({
-  classifyProviderFailoverSignalWithPlugin: vi.fn(() => null),
+// mock-isolation: Test the core classification corpus without loading or consulting provider plugins.
+vi.mock("../../plugins/provider-failover.js", () => ({
+  classifyProviderFailoverSignalWithPlugin: () => null,
 }));
 
-// classify.ts resolves this hook through a lazy require. Mocking the runtime
-// directly keeps the corpus independent of plugin loadability.
-vi.mock("../../logging/node-require.js", () => ({
-  resolveNodeRequireFromMeta: () => () => providerRuntimeMocks,
-}));
+import { classifyFailoverSignal, isBillingErrorMessage } from "./classify.js";
+import { failoverClassificationCorpus } from "./failover-classification.corpus.cases.test-support.js";
+import { classifyProviderRequestFacets } from "./request-error-facets.js";
+import { resolveReplyFailoverFacts } from "./request-error-facts.js";
+import type { FailoverSignal } from "./signal.js";
 
-import { classifyProviderRequestError } from "../../auto-reply/reply/provider-request-error-classifier.js";
-import {
-  classifyFailoverSignal,
-  classifyProviderSpecificError,
-  isAuthErrorMessage,
-  isBillingErrorMessage,
-  isOverloadedErrorMessage,
-  isRateLimitErrorMessage,
-  isServerErrorMessage,
-  isTimeoutErrorMessage,
-} from "./classify.js";
-import { authFormatCases } from "./failover-classification.auth-format.cases.js";
-import { billingCases } from "./failover-classification.billing.cases.js";
-import { legacyBillingACases } from "./failover-classification.legacy-billing-a.cases.js";
-import { legacyBillingBCases } from "./failover-classification.legacy-billing-b.cases.js";
-import { legacyProviderMatcherCases } from "./failover-classification.legacy-provider-matchers.cases.js";
-import { overflowServerMiscCases } from "./failover-classification.overflow-server-misc.cases.js";
-import { overflowCases } from "./failover-classification.overflow.cases.js";
-import { rateLimitOverloadCases } from "./failover-classification.rate-limit-overload.cases.js";
-import { structuredMiscCases } from "./failover-classification.structured-misc.cases.js";
+const classifyReplyRequest = (signal: FailoverSignal) =>
+  resolveReplyFailoverFacts(signal, signal.message ?? "").providerRequestError;
 
-afterEach(() => {
-  providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockClear();
-});
+const expectClassification = (signal: FailoverSignal, reason: string | null) =>
+  expect(classifyFailoverSignal(signal)).toEqual(reason ? { kind: "reason", reason } : null);
+function expectRequest(message: string, facet: string | null, code: string, status?: number) {
+  const signal = { message, status };
+  expect(classifyProviderRequestFacets(signal)).toBe(facet);
+  expect(classifyReplyRequest(signal)).toMatchObject({ code });
+}
 
-const failoverClassificationCorpus = [
-  ...overflowCases,
-  ...billingCases,
-  ...rateLimitOverloadCases,
-  ...overflowServerMiscCases,
-  ...authFormatCases,
-  ...structuredMiscCases,
-  ...legacyBillingACases,
-  ...legacyBillingBCases,
-  ...legacyProviderMatcherCases,
-];
-import { formatRateLimitOrOverloadedErrorCopy } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
+// The shared corpus also feeds retry tests; select only distinct classification paths here.
+const representativeCorpusIds = new Set([
+  "patterns-context-tgi-input",
+  "patterns-context-tgi-total",
+  "structured-tgi-output-only",
+  "patterns-context-lmstudio-loaded-length-400",
+  "billing-together-payment-required",
+  "billing-proxy-subscription",
+  "http-structured-insufficient-quota",
+  "xai-403-spending-limit",
+  "billing-periodic-limit-402",
+  "billing-zhipu-periodic-limit",
+  "billing-minimax-chinese-usage-limit",
+  "billing-subscription-quota-refresh",
+  "billing-org-period",
+  "retry-429-insufficient-quota-short",
+  "billing-cloudflare-521",
+  "retry-http-500",
+  "openrouter-missing-model",
+  "billing-claude-conversation-missing",
+  "patterns-html-407",
+  "bedrock-deprecated-temperature",
+  "billing-context-reasoning-required",
+  "billing-context-dashscope-range",
+  "billing-context-siliconflow-max-seq-len",
+  "billing-context-vllm-decoder-prompt",
+  "billing-context-vllm-engine-prompt",
+  "http-legacy-bad-request-normalized",
+  "billing-image-dimension",
+  "billing-image-size",
+  "legacy-billing-a-006",
+  "legacy-billing-a-034",
+  "legacy-billing-a-058",
+  "legacy-billing-a-073",
+  "legacy-billing-b-003",
+  "legacy-billing-b-028",
+  "legacy-billing-b-037",
+  "legacy-billing-b-055",
+  "legacy-billing-b-079",
+  "legacy-provider-matchers-024",
+]);
 
-describe("golden failover classification corpus", () => {
-  it("has unique row ids", () => {
-    const ids = failoverClassificationCorpus.map((row) => row.id);
-    expect(new Set(ids).size).toBe(ids.length);
-  });
-
-  it("does not duplicate a signal from the same source", () => {
-    const sourceSignals = failoverClassificationCorpus.map(
-      (row) => `${row.source}:${JSON.stringify(row.signal)}`,
-    );
-    expect(new Set(sourceSignals).size).toBe(sourceSignals.length);
-  });
-
-  it.each(failoverClassificationCorpus)("$id [$source]", ({ signal, expected }) => {
-    expect(classifyFailoverSignal(signal)).toEqual(expected);
-  });
-});
-
-describe("cross-layer drift (documents current behavior, see refactor-02)", () => {
-  it.each([
-    // FIXED(refactor-02): was rate_limit, now null
-    // FOLLOW-UP(refactor-06): reclaim this wording in the canonical overflow table.
-    "input length 14295 tokens exceeds the model limit",
-    // FIXED(refactor-02): was rate_limit, now null
-    "request id req-4291 failed",
-  ])("ignores an embedded 429 substring outside a status context: %s", (message) => {
-    expect(isRateLimitErrorMessage(message)).toBe(false);
-    expect(classifyFailoverSignal({ message })).toBeNull();
-  });
-
-  it("classifies a bare HTTP 503 service-unavailable response as overloaded", () => {
-    const message = "503 service unavailable";
-
-    // FIXED(refactor-02): was timeout, now overloaded
-    expect(isTimeoutErrorMessage(message)).toBe(false);
-    expect(isOverloadedErrorMessage(message)).toBe(true);
-    expect(isServerErrorMessage(message)).toBe(false);
-    expect(classifyFailoverSignal({ message })).toEqual({
-      kind: "reason",
-      reason: "overloaded",
-    });
-    expect(classifyProviderRequestError(message)).toMatchObject({
-      code: "provider_internal_error",
-      technicalMessage: message,
-      allowTransientHttpRetry: true,
-    });
-  });
-
-  it("uses rate-limit retry semantics but overloaded user copy", () => {
-    const message = "429 Too Many Requests: model overloaded";
-
-    // BUG(refactor-02): retry classification and user-copy precedence are inverted.
-    expect(classifyFailoverSignal({ message })).toEqual({
-      kind: "reason",
-      reason: "rate_limit",
-    });
-    expect(formatRateLimitOrOverloadedErrorCopy(message)).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
-    );
-  });
-
-  it("classifies billing evidence beyond 512 characters", () => {
-    const longMessage = JSON.stringify({
-      error: {
-        message: "insufficient credits",
-        type: "account_balance_error",
-        details: "x".repeat(600),
-      },
-    });
-    const truncatedMessage = longMessage.slice(0, 511);
-
-    // FIXED(refactor-02): was false, now true
-    expect(longMessage.length).toBeGreaterThan(512);
-    expect(truncatedMessage.length).toBeLessThan(512);
-    expect(isBillingErrorMessage(longMessage)).toBe(true);
-    expect(isBillingErrorMessage(truncatedMessage)).toBe(true);
-  });
-
-  it("rotates ambiguous 403 permissions without reply-level auth copy", () => {
-    const message = "403 Forbidden: insufficient permissions";
-
-    // BUG(refactor-02): failover and reply classifiers expose different auth lanes.
-    expect(isAuthErrorMessage(message)).toBe(true);
-    expect(classifyProviderRequestError(message)).toBeUndefined();
-  });
-
-  it.each([
+it.each(failoverClassificationCorpus.filter(({ id }) => representativeCorpusIds.has(id)))(
+  "$id [$source]",
+  ({ signal, expected }) => expect(classifyFailoverSignal(signal)).toEqual(expected),
+);
+it.each([
+  [{ status: 524, message: "The model is not available. Please try again later." }, "timeout"],
+  [{ errorType: "server_error", message: "The model is not available." }, "server_error"],
+  [
     {
-      message: "ThrottlingException: Rate exceeded",
-      rateLimit: true,
-      // FIXED(refactor-02): was rate_limit, now null
-      providerSpecific: null,
+      status: 529,
+      message: '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
     },
-    {
-      message: "throttling disabled for this account",
-      rateLimit: true,
-      providerSpecific: null,
-    },
-  ])("records generic throttling normalization for $message", (row) => {
-    // FIXED(refactor-02): generic matching owns throttling; provider-specific duplicates are gone.
-    // "throttling disabled" still matches by decision; it is unrealistic provider error text.
-    expect(isRateLimitErrorMessage(row.message)).toBe(row.rateLimit);
-    expect(classifyFailoverSignal({ message: row.message })).toEqual({
-      kind: "reason",
-      reason: "rate_limit",
-    });
-    expect(classifyProviderSpecificError(row.message, { includePluginHooks: false })).toBe(
-      row.providerSpecific,
-    );
+    "overloaded",
+  ],
+  [{ message: "Selected model is at capacity. Please try a different model." }, "overloaded"],
+] satisfies [FailoverSignal, string][])("keeps outages transient: %j", (signal, reason) => {
+  expectClassification(signal, reason);
+  expect(classifyReplyRequest(signal)?.code).not.toBe("provider_model_unavailable");
+});
+
+it("ignores an embedded 429 substring outside a status context", () =>
+  expectClassification({ message: "request id req-4291 failed" }, null));
+
+it.each([
+  [
+    "Google Generative AI API error (503): The service is currently unavailable. [code=UNAVAILABLE]",
+    "server_error",
+  ],
+  ["Google Generative AI API error (429): Retry later.", "rate_limit"],
+  [
+    "Google Generative AI API error (503): The service is currently unavailable.",
+    "rate_limit",
+    429,
+  ],
+  ["Provider selected candidate (503) before request dispatch.", null],
+  [
+    'Invalid request: user text contained "Google Generative AI API error (503): unavailable".',
+    null,
+  ],
+] satisfies [string, string | null, number?][])(
+  "guards wrapped statuses: %s",
+  (message, reason, status?: number) => expectClassification({ message, status }, reason),
+);
+
+it("classifies a bare HTTP 503 service-unavailable response as overloaded", () => {
+  const message = "503 service unavailable";
+  expectClassification({ message }, "overloaded");
+  expect(classifyProviderRequestFacets({ message })).toBe("provider-internal-503");
+  expect(classifyReplyRequest({ message })).toMatchObject({ code: "provider_internal_error" });
+});
+
+it("classifies billing evidence beyond 512 characters", () =>
+  expect(isBillingErrorMessage(`insufficient credits ${"x".repeat(600)}`)).toBe(true));
+
+it("rotates ambiguous 403 permissions without reply-level auth copy", () => {
+  const message = "403 Forbidden: insufficient permissions";
+  expectClassification({ message }, "auth");
+  expect(classifyReplyRequest({ message, status: 403 })).toBeUndefined();
+});
+
+it("preserves model-unavailable guidance from the canonical reason", () => {
+  const message = "Unknown model: openai/gpt-5.3-codex";
+  expectClassification({ message }, "model_not_found");
+  expect(classifyProviderRequestFacets({ message })).toBeNull();
+  expect(classifyReplyRequest({ message })).toMatchObject({
+    code: "provider_model_unavailable",
+    userMessage: expect.stringContaining("Choose another model in the Control UI"),
   });
 });
+
+it("preserves quota guidance for generic provider text with HTTP 429 evidence", () =>
+  expectRequest(
+    "Something went wrong while processing your request. Please try again.",
+    "quota-429",
+    "provider_rate_limit_or_quota_error",
+    429,
+  ));
+it("preserves authentication guidance for provider HTTP 401 failures", () => {
+  const message =
+    "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";
+  expectClassification({ message, status: 401 }, "auth");
+  expectRequest(message, null, "provider_authentication_error", 401);
+});
+it("preserves provider-internal guidance", () =>
+  expectRequest(
+    "server_error: An error occurred while processing your request. Please include the request ID req_123.",
+    "provider-internal",
+    "provider_internal_error",
+  ));
+it.each([
+  "Custom tool call output is missing for call id: call_live_123.",
+  "The number of toolResult blocks at messages.186.content exceeds the number of toolUse blocks of previous turn.",
+  "400 Function call turn comes immediately after a user turn or after a function response turn.",
+  "messages.1: `tool_use` ids were found without `tool_result` blocks immediately after: toolu_01A09q90qw90lq917835lq9.",
+])("preserves conversation-state guidance for %s", (message) =>
+  expectRequest(message, "conversation-state", "provider_conversation_state_error"),
+);
+const retirement =
+  "glm-5.1 was retired at 2026-09-25 00:00:00 -0700 PDT (ref: synthetic-retirement)";
+
+it.each([
+  [{ status: 410, message: "Gone", details: [retirement] }, "model_not_found"],
+  [{ message: "410 The account has been retired." }, "timeout"],
+])("distinguishes model retirement from other HTTP 410s: %j", (signal, reason) =>
+  expectClassification(signal, reason),
+);

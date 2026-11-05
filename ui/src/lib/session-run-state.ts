@@ -1,17 +1,6 @@
-// Control UI module implements session run state behavior.
-import type { SessionRunStatus } from "../api/types.ts";
+export { isSessionRunStateActive } from "../../../src/shared/session-run-state.js";
 
-type SessionRunState = {
-  hasActiveRun?: boolean;
-  status?: SessionRunStatus;
-};
-
-export function isSessionRunActive(state: SessionRunState): boolean {
-  if (state.status && state.status !== "running") {
-    return false;
-  }
-  if (typeof state.hasActiveRun === "boolean") {
-    return state.hasActiveRun;
-  }
-  return state.status === "running";
+/** Chat-only presentation: settlement still owns an active, abortable run. */
+export function isSessionRunVisuallyActive(active: boolean, phase?: string): boolean {
+  return active && phase !== "finishing" && phase !== "answer";
 }

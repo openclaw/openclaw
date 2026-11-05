@@ -1,69 +1,174 @@
-// Lifecycle billing error tests ensure subscription error events include enough
-// provider/model context for users to fix account or quota issues.
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { onAgentEventForRun } from "../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
+import {
+  closeDiagnosticEmbeddedRunOwner,
+  createDiagnosticEmbeddedRunOwner,
+} from "../logging/diagnostic-run-activity.js";
+import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
+import type { ProviderFailoverErrorContext } from "../plugins/types.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
+import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import { prepareCatalogExecutor } from "./embedded-agent-runner/run/attempt-stream-prepare.test-support.js";
+import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.test-support.js";
 import {
   createSubscribedSessionHarness,
   emitAssistantLifecycleErrorAndEnd,
-  findLifecycleErrorAgentEvent,
 } from "./embedded-agent-subscribe.e2e-harness.js";
+import {
+  createAssistant,
+  createAssistantResultStream,
+  createTestSession,
+  registerAgentSessionLoopTestLifecycle,
+  streamMocks,
+  testModel,
+} from "./sessions/agent-session-loop-correctness.test-support.js";
 
-describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
-  function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
-    // Harness captures lifecycle events only; stream/block reply paths are not
-    // relevant to billing-error attribution.
-    const onAgentEvent = vi.fn();
-    const { emit } = createSubscribedSessionHarness({
-      runId: options?.runId ?? "run",
-      sessionKey: options?.sessionKey,
+registerAgentSessionLoopTestLifecycle();
+
+function lifecycleData(observer: ReturnType<typeof vi.fn>, phase?: string) {
+  return observer.mock.calls
+    .map(([event]) => event)
+    .filter((event) => event.stream === "lifecycle" && (!phase || event.data.phase === phase))
+    .map((event) => event.data);
+}
+
+it("refines the requested model once when the provider reports the executing model", () => {
+  const runId = "run-response-model";
+  const emitted = vi.fn();
+  const unlisten = onAgentEventForRun(runId, emitted);
+  onTestFinished(() => {
+    unlisten();
+    clearAgentRunContext(runId);
+  });
+  registerAgentRunContext(runId, {
+    agentId: "main",
+    sessionKey: "agent:main:response-model",
+    sessionId: "session-response-model",
+    projectSessionActive: true,
+  });
+  const { emit } = createSubscribedSessionHarness({
+    runId,
+    sessionKey: "agent:main:response-model",
+  });
+  const requested = createAssistant(testModel, []);
+  const rerouted = { ...requested, responseModel: "provider-executing-model" };
+  emit({ type: "message_start", message: requested });
+  emit({
+    type: "message_update",
+    message: rerouted,
+    assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "done" },
+  });
+  emit({ type: "message_end", message: rerouted });
+
+  expect(lifecycleData(emitted, "model")).toEqual([
+    { phase: "model", provider: testModel.provider, model: testModel.id },
+    { phase: "model", provider: testModel.provider, model: "provider-executing-model" },
+  ]);
+});
+
+it("defers error terminal ownership while preserving diagnostics", () => {
+  const onAgentEvent = vi.fn();
+  const { emit } = createSubscribedSessionHarness({
+    runId: "run-deferred-error",
+    onAgentEvent,
+    terminalLifecyclePhase: "finishing",
+  });
+
+  emitAssistantLifecycleErrorAndEnd({
+    emit,
+    errorMessage: "insufficient credits",
+    provider: "Anthropic",
+    model: "claude-3-5-sonnet",
+  });
+
+  expect(lifecycleData(onAgentEvent)).toMatchObject([
+    {
+      phase: "finishing",
+      error: expect.stringContaining("Anthropic (claude-3-5-sonnet)"),
+    },
+  ]);
+});
+
+it("preserves the prepared custom-route owner through real terminal dispatch", async () => {
+  const ownerId = "prepared-lifecycle-owner";
+  const model = attachModelProviderRuntimePluginHandle(
+    { ...testModel, provider: "custom-lifecycle-route" },
+    {
+      provider: "custom-lifecycle-route",
+      plugin: {
+        id: ownerId,
+        label: "Prepared lifecycle owner",
+        auth: [],
+        classifyFailoverReason: (context: ProviderFailoverErrorContext) =>
+          context.provider === ownerId &&
+          context.status === 403 &&
+          context.code === "FIXTURE_REFUSAL"
+            ? "overloaded"
+            : undefined,
+      },
+    },
+  );
+  const onAgentEvent = vi.fn();
+  const emitted = vi.fn();
+  const runId = "run-prepared-lifecycle-owner";
+  const sessionId = "session-prepared-lifecycle-owner";
+  const sessionKey = "agent:main:prepared-lifecycle-owner";
+  const unlisten = onAgentEventForRun(runId, emitted);
+  const diagnosticOwner = createDiagnosticEmbeddedRunOwner({ runId, sessionId, sessionKey });
+  onTestFinished(() => {
+    unlisten();
+    closeDiagnosticEmbeddedRunOwner(diagnosticOwner);
+  });
+  streamMocks.streamSimple.mockImplementation((activeModel) =>
+    createAssistantResultStream({
+      ...createAssistant(activeModel, [], "error"),
+      errorMessage: "403 fixture refusal",
+      errorCode: "FIXTURE_REFUSAL",
+    }),
+  );
+  const { session } = await createTestSession({ model });
+  const replyOperation = createReplyOperation({
+    sessionKey,
+    sessionId,
+    agentId: "main",
+    resetTriggered: false,
+  });
+  const stream = prepareCatalogExecutor({
+    activeSession: session,
+    diagnosticOwner,
+    streamReplies: false,
+    abortRun: () => {
+      void session.abort();
+    },
+    attempt: {
+      runId,
+      sessionId,
+      sessionKey,
+      replyOperation,
+      sessionFile: sessionKey,
+      config: {},
+      model,
+      provider: model.provider,
+      modelId: model.id,
+      thinkLevel: "off",
+      admittedRunContext: createTestAdmittedRunContext(runId),
       onAgentEvent,
-    });
-    return { emit, onAgentEvent };
+    },
+  });
+  try {
+    await session.prompt("exercise terminal provider failure");
+    for (const observer of [emitted, onAgentEvent]) {
+      expect.soft(lifecycleData(observer, "error")).toMatchObject([
+        {
+          phase: "error",
+          error: "The AI service is temporarily overloaded. Please try again in a moment.",
+        },
+      ]);
+    }
+  } finally {
+    stream.subscription.unsubscribe();
+    clearActiveEmbeddedRun(sessionId, stream.queueHandle, sessionKey, sessionKey);
+    replyOperation.complete();
   }
-
-  it("includes provider and model context in lifecycle billing errors", () => {
-    const { emit, onAgentEvent } = createAgentEventHarness({
-      runId: "run-billing-error",
-      sessionKey: "test-session",
-    });
-
-    emitAssistantLifecycleErrorAndEnd({
-      emit,
-      errorMessage: "insufficient credits",
-      provider: "Anthropic",
-      model: "claude-3-5-sonnet",
-    });
-
-    const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
-    expect(lifecycleError?.stream).toBe("lifecycle");
-    expect(lifecycleError?.data?.phase).toBe("error");
-    expect(lifecycleError?.data?.error).toContain("Anthropic (claude-3-5-sonnet)");
-  });
-
-  it("defers error terminal ownership while preserving diagnostics", () => {
-    const onAgentEvent = vi.fn();
-    const { emit } = createSubscribedSessionHarness({
-      runId: "run-deferred-error",
-      onAgentEvent,
-      terminalLifecyclePhase: "finishing",
-    });
-
-    emitAssistantLifecycleErrorAndEnd({
-      emit,
-      errorMessage: "insufficient credits",
-      provider: "Anthropic",
-      model: "claude-3-5-sonnet",
-    });
-
-    const lifecycleEvents = onAgentEvent.mock.calls
-      .map(([event]) => event)
-      .filter((event) => event.stream === "lifecycle");
-    expect(lifecycleEvents).toEqual([
-      expect.objectContaining({
-        data: expect.objectContaining({
-          phase: "finishing",
-          error: expect.stringContaining("Anthropic (claude-3-5-sonnet)"),
-        }),
-      }),
-    ]);
-  });
 });

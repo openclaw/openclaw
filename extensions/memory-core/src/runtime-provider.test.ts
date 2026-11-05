@@ -33,7 +33,12 @@ vi.mock("./dreaming-state.js", () => ({
   configureMemoryCoreDreamingState: configureMemoryCoreDreamingStateMock,
 }));
 
-import { createMemoryRuntime, memoryRuntime } from "./runtime-provider.js";
+import { runInMemoryTestBackgroundContext } from "./memory/background-context.test-support.js";
+import { createMemoryRuntime } from "./runtime-provider.js";
+
+const memoryRuntime = createMemoryRuntime({
+  runInBackgroundContext: runInMemoryTestBackgroundContext,
+});
 
 describe("memoryRuntime", () => {
   it("preserves manager debug metadata", async () => {
@@ -48,6 +53,26 @@ describe("memoryRuntime", () => {
     expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
       cfg,
       agentId: "main",
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+    });
+  });
+
+  it("forwards optional diagnostic source inspection", async () => {
+    const cfg = {} as OpenClawConfig;
+
+    await memoryRuntime.getMemorySearchManager({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+      inspectSources: true,
+    });
+
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+      inspectSources: true,
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
     });
   });
 
@@ -105,10 +130,6 @@ describe("memoryRuntime", () => {
       },
     ];
     filterMemorySearchHitsBySessionVisibilityMock.mockResolvedValue([]);
-    if (!memoryRuntime.authorizeSearchHits) {
-      throw new Error("memory runtime search authorizer is unavailable");
-    }
-
     await expect(
       memoryRuntime.authorizeSearchHits({
         cfg,

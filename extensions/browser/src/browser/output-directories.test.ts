@@ -28,37 +28,46 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("ensureOutputDirectory", () => {
-  it("creates nested missing output directories", async () => {
+  it("creates nested output directories without changing their names", async () => {
     await withTempDir(async (tempDir) => {
-      const outputDir = path.join(tempDir, "reports", "downloads");
+      const names = process.platform === "win32" ? ["downloads"] : ["downloads", "downloads \n"];
+      for (const name of names) {
+        const outputDir = path.join(tempDir, "reports", name);
 
-      await ensureOutputDirectory(outputDir);
+        await ensureOutputDirectory(outputDir);
 
-      const stat = await fs.stat(outputDir);
-      expect(stat.isDirectory()).toBe(true);
-    });
-  });
-
-  it("rejects symlinked output directory ancestors", async ({ skip }) => {
-    await withTempDir(async (tempDir) => {
-      const outsideDir = path.join(tempDir, "outside");
-      await fs.mkdir(outsideDir);
-      const symlinkDir = path.join(tempDir, "downloads");
-      try {
-        await fs.symlink(outsideDir, symlinkDir, directorySymlinkType);
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code === "EACCES" || code === "EPERM" || code === "ENOTSUP") {
-          skip("directory links are unavailable on this host");
-          return;
-        }
-        throw error;
+        const stat = await fs.stat(outputDir);
+        expect(stat.isDirectory()).toBe(true);
+        await ensureOutputDirectory(outputDir);
       }
-
-      await expect(ensureOutputDirectory(path.join(symlinkDir, "nested"))).rejects.toThrow(
-        /symlink|output directory/i,
-      );
-      await expectPathMissing(path.join(outsideDir, "nested"));
+      await expect(ensureOutputDirectory(path.parse(tempDir).root)).resolves.toBeUndefined();
     });
   });
+
+  it.for(["nested", "existing", "existing/nested"])(
+    "rejects symlinked output directory ancestors (%s)",
+    async (relativePath, { skip }) => {
+      await withTempDir(async (tempDir) => {
+        const outsideDir = path.join(tempDir, "outside");
+        await fs.mkdir(path.join(outsideDir, "existing"), { recursive: true });
+        const symlinkDir = path.join(tempDir, "downloads");
+        try {
+          await fs.symlink(outsideDir, symlinkDir, directorySymlinkType);
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "EACCES" || code === "EPERM" || code === "ENOTSUP") {
+            skip("directory links are unavailable on this host");
+            return;
+          }
+          throw error;
+        }
+
+        await expect(ensureOutputDirectory(path.join(symlinkDir, relativePath))).rejects.toThrow(
+          /symlink|output directory/i,
+        );
+        await expectPathMissing(path.join(outsideDir, "nested"));
+        await expectPathMissing(path.join(outsideDir, "existing", "nested"));
+      });
+    },
+  );
 });

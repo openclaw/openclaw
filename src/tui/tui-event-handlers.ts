@@ -1,23 +1,24 @@
-// Handles TUI keyboard, paste, backend, and command events.
 import {
   hasSessionProjectionAcceptedFinal,
   reduceSessionProjectionRunEvent,
-  type SessionProjectionRunStatus,
 } from "../../packages/gateway-client/src/session-projection.js";
+import type { ChatLogOperations } from "./components/chat-log.js";
 import {
-  asString,
+  formatPrimitiveString,
   extractTextFromMessage,
   extractTuiAbortedText,
   formatTuiAbortDiagnostic,
-  isCommandMessage,
+  isCommandMarkedMessage,
 } from "./tui-formatters.js";
+import { extractTuiImageSources } from "./tui-images.js";
 import { createTuiRunLifecycle } from "./tui-run-lifecycle.js";
 import { matchesSelectedTuiSession, readTuiSessionUserMessage } from "./tui-session-events.js";
 import {
   getTuiSessionProjection,
   hasDisplayableTuiSessionFinal,
   isIdentityOnlyTuiSessionInvalidation,
-  isReplayableTuiSessionMessage,
+  isFailedTuiRunStatus,
+  projectTuiSessionMessage,
   projectTuiSessionFinal,
   readTuiSessionProjectionScope,
   reduceTuiSessionProjection,
@@ -25,9 +26,11 @@ import {
 import { TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
 import {
   clearPendingSubmit,
+  clearPendingSubmitDraft,
   getPendingSubmitAcceptedRunId,
   hasPendingSubmit,
 } from "./tui-submit-state.js";
+import { renderTuiActivityItem } from "./tui-tool-activity.js";
 import type {
   AgentEvent,
   BtwEvent,
@@ -35,54 +38,26 @@ import type {
   SessionChangedEvent,
   SessionMessageEvent,
   TuiHistoryLoadResult,
-  TuiStateAccess,
+  TuiSessionRow,
 } from "./tui-types.js";
 
-type EventHandlerChatLog = {
-  addLiveUser: (text: string, options: { messageId: string; runId?: string }) => void;
-  startTool: (toolCallId: string, toolName: string, args: unknown, runId?: string) => void;
-  updateToolResult: (
-    toolCallId: string,
-    result: unknown,
-    options?: { partial?: boolean; isError?: boolean },
-  ) => void;
-  addSystem: (text: string) => void;
-  addPendingSystem: (runId: string, text: string) => void;
-  dismissPendingSystem: (runId: string) => void;
-  updateAssistant: (text: string, runId: string) => void;
-  finalizeAssistant: (text: string, runId: string) => void;
-  dropAssistant: (runId: string) => void;
-};
+const ACTIVITY_PHASES = new Set(["start", "finishing", "end", "error"]);
 
-type EventHandlerTui = { requestRender: (force?: boolean) => void };
-
-type EventHandlerBtwPresenter = {
-  showResult: (params: { question: string; text: string; isError?: boolean }) => void;
-  clear: () => void;
-};
-
-function isFailedTuiRunStatus(status: SessionProjectionRunStatus | undefined): boolean {
-  return status === "aborted" || status === "error" || status === "timeout";
-}
-
-type EventHandlerContext = {
-  chatLog: EventHandlerChatLog;
-  btw: EventHandlerBtwPresenter;
-  tui: EventHandlerTui;
-  state: TuiStateAccess;
-  setActivityStatus: (text: string) => void;
-  refreshSessionInfo?: () => Promise<void>;
-  loadHistory?: () => Promise<TuiHistoryLoadResult>;
+type EventHandlerContext = Omit<
+  Parameters<typeof createTuiRunLifecycle>[0],
+  "runCoordinator" | "chatLog" | "btw"
+> & {
+  chatLog: ChatLogOperations;
+  btw: {
+    showResult: (params: { question: string; text: string; isError?: boolean }) => void;
+    clear: () => void;
+  };
+  updateFooter: () => void;
+  loadHistory: () => Promise<TuiHistoryLoadResult>;
+  applySessionEventRow?: (row: TuiSessionRow) => boolean;
   noteLocalRunId?: (runId: string) => void;
-  isLocalRunId?: (runId: string) => boolean;
-  forgetLocalRunId?: (runId: string) => void;
-  clearLocalRunIds?: () => void;
   isLocalBtwRunId?: (runId: string) => boolean;
   forgetLocalBtwRunId?: (runId: string) => void;
-  clearLocalBtwRunIds?: () => void;
-  /** Reset `streaming` after this much delta silence. Set to 0 to disable. */
-  streamingWatchdogMs?: number;
-  localMode?: boolean;
 };
 
 export function createEventHandlers(context: EventHandlerContext) {
@@ -93,30 +68,37 @@ export function createEventHandlers(context: EventHandlerContext) {
     state,
     setActivityStatus,
     refreshSessionInfo,
+    applySessionEventRow,
     loadHistory,
     noteLocalRunId,
     isLocalRunId,
-    forgetLocalRunId,
-    clearLocalRunIds,
     isLocalBtwRunId,
     forgetLocalBtwRunId,
-    clearLocalBtwRunIds,
     localMode,
   } = context;
   const runCoordinator = new TuiSessionRunCoordinator({
     state,
     loadHistory,
-    refreshSessionInfo,
     restoreTerminalError: (message) => chatLog.addSystem(message),
     requestRender: (force) => tui.requestRender(force),
     finalizeHistoryOwnedRun: ({ runId, result, previouslyDisplayed }) => {
       // Persisted history owns the final row; retain the previous display fact
       // after a failed rebuild so delayed finals never duplicate or disappear.
+      const ownsRun =
+        state.activeChatRunId === runId ||
+        getPendingSubmitAcceptedRunId(state) === runId ||
+        runCoordinator.sessionRuns.has(runId);
+      const outcome = ownsRun && result.loaded ? result.runOutcome.state : undefined;
+      clearPendingSubmit(state, runId);
       finalizeRun({
         runId,
-        wasActiveRun: state.activeChatRunId === runId,
-        status: "idle",
+        wasActiveRun:
+          state.activeChatRunId === runId || (!state.activeChatRunId && !hasPendingSubmit(state)),
+        status: outcome === "failed" ? "error" : "idle",
+        runOutcome:
+          outcome === "completed" ? "completed" : outcome === "interrupted" ? "aborted" : undefined,
         displayedFinal: result.loaded || previouslyDisplayed,
+        reconcileIdle: false,
       });
     },
     replayHistoryRunEvent: (event) => handleChatEvent(event),
@@ -139,11 +121,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearStreamingWatchdog,
     clearStaleStreamingIfNoTrackedRunRemains,
     clearTrackedRunState,
-    dispose,
     finalizeRun,
     flushPendingHistoryRefreshIfIdle,
     hasConcurrentActiveRun,
-    markSubmittedRunRegistered,
     maybeRefreshHistoryForRun,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
@@ -151,35 +131,32 @@ export function createEventHandlers(context: EventHandlerContext) {
     scheduleTerminalLifecycleError,
     syncSessionKey,
     terminateRun,
-  } = createTuiRunLifecycle({
-    state,
-    runCoordinator,
-    chatLog,
-    btw,
-    tui,
-    setActivityStatus,
-    refreshSessionInfo,
-    isLocalRunId,
-    forgetLocalRunId,
-    clearLocalRunIds,
-    clearLocalBtwRunIds,
-    streamingWatchdogMs: context.streamingWatchdogMs,
-    localMode,
-  });
+  } = createTuiRunLifecycle({ ...context, runCoordinator });
 
-  const handleChatEvent = (payload: unknown) => {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const evt = payload as ChatEvent;
-    syncSessionKey();
+  const eventHandler =
+    <T extends object>(handle: (event: T) => void) =>
+    (payload: unknown) => {
+      if (!payload || typeof payload !== "object") {
+        return;
+      }
+      syncSessionKey();
+      handle(payload as T);
+    };
+
+  const handleChatEvent = eventHandler((evt: ChatEvent) => {
     if (!matchesSelectedTuiSession(state, evt)) {
       return;
     }
+    if (runCoordinator.isHistoryTerminalDiagnosticRun(evt.runId)) {
+      return;
+    }
     const isSequencedGatewayEvent = Number.isSafeInteger(evt.seq) && (evt.seq ?? -1) >= 0;
+    const isOwnedLocalPendingRun =
+      localMode && state.pendingSubmit?.runId === evt.runId && isLocalRunId?.(evt.runId) === true;
     if (
       runCoordinator.isRetiredOrphanRun(evt.runId) &&
       !isSequencedGatewayEvent &&
+      !isOwnedLocalPendingRun &&
       evt.runId !== getPendingSubmitAcceptedRunId(state)
     ) {
       return;
@@ -244,10 +221,10 @@ export function createEventHandlers(context: EventHandlerContext) {
         }
       }
     }
-    // Gateway chat envelopes require a non-negative sequence, even when a
-    // legacy peer omits agent lifecycle starts; orphan deltas have none.
+    // Gateway events are sequenced; early embedded events are trustworthy only
+    // when their exact provisional run belongs to the selected local viewport.
     acknowledgeChatRun(evt.runId, {
-      protectStream: isSequencedGatewayEvent,
+      protectStream: isSequencedGatewayEvent || isOwnedLocalPendingRun,
     });
     const isPendingChatRun = getPendingSubmitAcceptedRunId(state) === evt.runId;
     const isLocalChatRun = isLocalRunId?.(evt.runId) ?? false;
@@ -274,16 +251,21 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (state.activeChatRunId === evt.runId) {
         armStreamingWatchdog(evt.runId);
       }
+      if (evt.replace === true) {
+        streamAssembler.drop(evt.runId);
+      }
       const displayText = streamAssembler.ingestDelta(evt.runId, evt.message, state.showThinking);
-      if (!displayText) {
+      if (displayText === null && evt.replace !== true) {
         return;
       }
-      chatLog.updateAssistant(displayText, evt.runId);
+      chatLog.updateAssistant(displayText ?? "", evt.runId);
     }
     if (evt.state === "final") {
-      const isLocalBtwRunLocal = isLocalBtwRunId?.(evt.runId) ?? false;
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      if (!evt.message && isLocalBtwRunLocal) {
+      const terminalStopReason = state.sessionProjection.runs[evt.runId]?.stopReason;
+      const status = terminalStopReason === "error" ? "error" : "idle";
+      const runOutcome = status === "error" ? undefined : "completed";
+      if (!evt.message && isLocalBtwRun) {
         forgetLocalBtwRunId?.(evt.runId);
         runCoordinator.noteFinalizedRun(evt.runId);
         clearStaleStreamingIfNoTrackedRunRemains();
@@ -296,22 +278,31 @@ export function createEventHandlers(context: EventHandlerContext) {
           wasPendingChatRun: isPendingChatRun,
         });
         chatLog.dropAssistant(evt.runId);
-        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
+        finalizeRun({
+          runId: evt.runId,
+          wasActiveRun,
+          status,
+          runOutcome,
+        });
         tui.requestRender(true);
         return;
       }
-      if (isCommandMessage(evt.message)) {
+      if (isCommandMarkedMessage(evt.message)) {
         maybeRefreshHistoryForRun(evt.runId, { wasPendingChatRun: isPendingChatRun });
         const text = extractTextFromMessage(evt.message);
         if (text) {
           chatLog.addSystem(text);
         }
-        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle", displayedFinal: true });
+        finalizeRun({
+          runId: evt.runId,
+          wasActiveRun,
+          status,
+          runOutcome,
+          displayedFinal: true,
+        });
         tui.requestRender(true);
         return;
       }
-      const terminalStopReason = state.sessionProjection.runs[evt.runId]?.stopReason;
-
       const hasStreamedText = streamAssembler.hasDisplayText(evt.runId);
       const finalText = streamAssembler.finalize(
         evt.runId,
@@ -324,10 +315,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!suppressEmptyExternalPlaceholder) {
         projectTuiSessionFinal(state, evt, finalText, hasStreamedText);
       }
-      // Skip the history reload when the final event produced displayable
-      // output. loadHistory() does clearAll() + rebuild from server data,
-      // but the server may not have persisted this message yet — causing
-      // the just-rendered final message to vanish (#87922).
+      // Skip history reload for displayable output: loadHistory() rebuilds from
+      // server data that may not contain the final yet, making it vanish (#87922).
       maybeRefreshHistoryForRun(evt.runId, {
         hasDisplayableFinal: !suppressEmptyExternalPlaceholder,
         wasPendingChatRun: isPendingChatRun,
@@ -335,12 +324,13 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (suppressEmptyExternalPlaceholder) {
         chatLog.dropAssistant(evt.runId);
       } else {
-        chatLog.finalizeAssistant(finalText, evt.runId);
+        chatLog.finalizeAssistant(finalText, evt.runId, extractTuiImageSources(evt.message));
       }
       finalizeRun({
         runId: evt.runId,
         wasActiveRun,
-        status: terminalStopReason === "error" ? "error" : "idle",
+        status,
+        runOutcome,
         displayedFinal: !suppressEmptyExternalPlaceholder,
       });
     }
@@ -360,7 +350,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       const diagnostic = formatTuiAbortDiagnostic(evt.errorMessage);
       chatLog.addSystem(diagnostic ? `run aborted: ${diagnostic}` : "run aborted");
-      terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
+      terminateRun({
+        runId: evt.runId,
+        wasActiveRun,
+        status: "aborted",
+        localModelMayStillBeFinishing: evt.localModelMayStillBeFinishing,
+      });
       maybeRefreshHistoryForRun(evt.runId, {
         hasDisplayableFinal: hasDisplayableAbortedText,
       });
@@ -373,32 +368,10 @@ export function createEventHandlers(context: EventHandlerContext) {
       });
     }
     tui.requestRender();
-  };
+  });
 
-  const collectTrackedSessionRunIds = () => {
-    const runIds = new Set(sessionRuns.keys());
-    if (state.activeChatRunId) {
-      runIds.add(state.activeChatRunId);
-    }
-    const pendingRunId = getPendingSubmitAcceptedRunId(state);
-    if (pendingRunId) {
-      runIds.add(pendingRunId);
-    }
-    const finalizedRunIds = new Set(finalizedRuns.keys());
-    const displayedRunIds = new Set(finalizedRunsWithDisplay.keys());
-    for (const runId of finalizedRunIds) {
-      runIds.add(runId);
-    }
-    return { runIds, finalizedRunIds, displayedRunIds };
-  };
-
-  const handleSessionsChangedEvent = (payload: unknown) => {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const evt = payload as SessionChangedEvent;
-    syncSessionKey();
-    if (!matchesSelectedTuiSession(state, evt)) {
+  const handleSessionsChangedEvent = eventHandler((evt: SessionChangedEvent) => {
+    if (!matchesSelectedTuiSession(state, evt, { requireAliasOwnership: true })) {
       return;
     }
 
@@ -407,28 +380,34 @@ export function createEventHandlers(context: EventHandlerContext) {
         typeof evt.sessionId !== "string" ||
         !state.currentSessionId ||
         evt.sessionId === state.currentSessionId;
-      if (
-        !matchesSelectedTuiSession(state, evt, { requireAliasOwnership: true }) ||
-        !matchesCurrentSessionId ||
-        !isIdentityOnlyTuiSessionInvalidation(evt)
-      ) {
+      if (!matchesCurrentSessionId || !isIdentityOnlyTuiSessionInvalidation(evt)) {
         return;
       }
       // Legacy atomic batches expose no replayable message identity. Refresh
       // their authoritative history without resetting the current run or stream.
-      runCoordinator.queueHistoryReload();
+      void runCoordinator.queueHistoryReload();
       return;
     }
 
     const persistedRunId = evt.clientRunId || evt.runId;
     if (persistedRunId && (evt.phase === "end" || evt.phase === "error")) {
       runCoordinator.notePersistedRun(persistedRunId);
-      if (pendingNewSessionRunIds.delete(persistedRunId)) {
+      if (
+        pendingNewSessionRunIds.delete(persistedRunId) ||
+        sessionRuns.has(persistedRunId) ||
+        state.activeChatRunId === persistedRunId ||
+        getPendingSubmitAcceptedRunId(state) === persistedRunId
+      ) {
         if (evt.phase === "end") {
           const displayedRunIds = finalizedRunsWithDisplay.has(persistedRunId)
             ? [persistedRunId]
             : [];
-          runCoordinator.queueHistoryReload([persistedRunId], [persistedRunId], displayedRunIds);
+          runCoordinator.pendingHistoryRefresh = false;
+          void runCoordinator.queueHistoryReload(
+            [persistedRunId],
+            [persistedRunId],
+            displayedRunIds,
+          );
         } else {
           void refreshSessionInfo?.();
         }
@@ -437,7 +416,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (evt.reason !== "new" && evt.reason !== "reset") {
-      return;
+      return clearStaleStreamingIfNoTrackedRunRemains(evt);
     }
 
     const nextSessionId = typeof evt.sessionId === "string" ? evt.sessionId : null;
@@ -446,7 +425,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       nextSessionId !== null &&
       state.currentSessionId !== nextSessionId;
     if (evt.reason === "new" && !replacesKnownSession) {
-      const { runIds, displayedRunIds } = collectTrackedSessionRunIds();
+      const { runIds, displayedRunIds } = runCoordinator.collectTrackedSessionRunIds();
       if (runIds.size > 0) {
         if (nextSessionId) {
           state.currentSessionId = nextSessionId;
@@ -462,17 +441,14 @@ export function createEventHandlers(context: EventHandlerContext) {
             pendingNewSessionRunIds.add(runId);
           }
         }
-        runCoordinator.queueHistoryReload(persistedRunIds, persistedRunIds, displayedRunIds);
+        void runCoordinator.queueHistoryReload(persistedRunIds, persistedRunIds, displayedRunIds);
         tui.requestRender();
         return;
       }
     }
 
-    const {
-      runIds: reloadingRunIds,
-      finalizedRunIds,
-      displayedRunIds,
-    } = collectTrackedSessionRunIds();
+    const { runIds, finalizedRunIds, displayedRunIds } =
+      runCoordinator.collectTrackedSessionRunIds();
     state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
     // Reduce the old epoch before adopting its replacement ID; otherwise the
     // canonical reducer correctly rejects the reset as a foreign session.
@@ -491,46 +467,58 @@ export function createEventHandlers(context: EventHandlerContext) {
       state.sessionInfo.updatedAt = evt.updatedAt;
     }
     getTuiSessionProjection(state);
-    if (reloadingRunIds.size > 0) {
-      runCoordinator.queueHistoryReload(reloadingRunIds, finalizedRunIds, displayedRunIds);
-    } else {
-      runCoordinator.queueHistoryReload();
-    }
+    const selection = { sessionKey: state.currentSessionKey, agentId: state.currentAgentId };
+    const generation = state.sessionGeneration;
+    const historyReload = runCoordinator.queueHistoryReload(
+      runIds.size > 0 ? runIds : undefined,
+      finalizedRunIds,
+      displayedRunIds,
+    );
+    // The reset event can retire its own RPC acknowledgement. Its authoritative
+    // receipt belongs after the last queued history rebuild, which clears chat.
+    void historyReload.then((current) => {
+      if (
+        current &&
+        evt.reason === "reset" &&
+        generation === state.sessionGeneration &&
+        matchesSelectedTuiSession(state, selection) &&
+        selection.agentId === state.currentAgentId
+      ) {
+        chatLog.addSystem(`session ${state.currentSessionKey} reset`);
+        tui.requestRender();
+      }
+    });
     tui.requestRender();
-  };
+  });
 
-  const handleSessionMessageEvent = (payload: unknown) => {
-    if (!payload || typeof payload !== "object") {
+  const handleSessionMessageEvent = eventHandler((evt: SessionMessageEvent) => {
+    const currentUpdatedAt = state.sessionInfo.updatedAt;
+    const priorSession =
+      evt.sessionId && state.currentSessionId && evt.sessionId !== state.currentSessionId;
+    const isOlderSnapshot =
+      typeof evt.updatedAt === "number" && evt.updatedAt < (currentUpdatedAt ?? evt.updatedAt);
+    if (
+      !matchesSelectedTuiSession(state, evt, { requireAliasOwnership: true }) ||
+      (priorSession &&
+        (typeof evt.updatedAt !== "number" ||
+          (typeof currentUpdatedAt === "number" && evt.updatedAt <= currentUpdatedAt)))
+    ) {
       return;
     }
-    const evt = payload as SessionMessageEvent;
-    syncSessionKey();
-    if (!matchesSelectedTuiSession(state, evt, { requireAliasOwnership: true })) {
-      return;
-    }
 
-    if (isReplayableTuiSessionMessage(evt)) {
-      reduceTuiSessionProjection(state, {
-        type: "messagePersisted",
-        message: evt.message,
-        envelope: evt,
-        scope: readTuiSessionProjectionScope(state),
-      });
+    const unboundDisplayedRunIds = [...finalizedRunsWithDisplay.keys()].filter(
+      (runId) => !persistedTerminalRunIds.has(runId),
+    );
+    const authoritativeRunId = projectTuiSessionMessage(state, evt, unboundDisplayedRunIds);
+    if (authoritativeRunId) {
+      runCoordinator.notePersistedRun(authoritativeRunId);
     }
     const liveUserMessage = readTuiSessionUserMessage(evt);
     if (liveUserMessage) {
-      chatLog.addLiveUser(liveUserMessage.text, {
-        messageId: liveUserMessage.messageId,
-        ...(liveUserMessage.runId ? { runId: liveUserMessage.runId } : {}),
-      });
+      chatLog.addLiveUser(liveUserMessage.text, liveUserMessage);
       tui.requestRender();
     }
 
-    const currentUpdatedAt = state.sessionInfo.updatedAt;
-    const isOlderSnapshot =
-      typeof evt.updatedAt === "number" &&
-      typeof currentUpdatedAt === "number" &&
-      evt.updatedAt < currentUpdatedAt;
     if (!isOlderSnapshot) {
       if (typeof evt.sessionId === "string") {
         state.currentSessionId = evt.sessionId;
@@ -541,19 +529,15 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
     }
 
-    if (runCoordinator.deferSessionMessageRefresh()) {
+    if (
+      runCoordinator.routeSessionMessageRefresh(Boolean(liveUserMessage || authoritativeRunId)) &&
+      !(evt.session && applySessionEventRow?.(evt.session))
+    ) {
       void refreshSessionInfo?.();
-      return;
     }
-    flushPendingHistoryRefreshIfIdle();
-  };
+  });
 
-  const handleAgentEvent = (payload: unknown) => {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const evt = payload as AgentEvent;
-    syncSessionKey();
+  const handleAgentEvent = eventHandler((evt: AgentEvent) => {
     // System-injected runs (bridge-notify, webhook, cron) never go through the
     // TUI submit path, so no active/pending run id exists when their lifecycle
     // "start" arrives — leaving the status bar idle until the response lands.
@@ -568,7 +552,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       !finalizedRuns.has(evt.runId);
     if (
       evt.stream === "lifecycle" &&
-      asString(evt.data?.phase, "") === "start" &&
+      formatPrimitiveString(evt.data?.phase, "") === "start" &&
       !finalizedRuns.has(evt.runId) &&
       !(isLocalBtwRunId?.(evt.runId) ?? false) &&
       matchesSelectedTuiSession(state, evt)
@@ -592,11 +576,37 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (isActiveRun) {
         armStreamingWatchdog(evt.runId);
       }
+      context.updateFooter();
       tui.requestRender();
       return;
     }
     const isKnownRun = isActiveRun || isPendingRun || isSessionRun || finalizedRuns.has(evt.runId);
     if (!isKnownRun) {
+      return;
+    }
+    if (evt.stream === "run_status" && isActiveRun) {
+      if (evt.data?.phase === "waiting_for_model") {
+        pauseStreamingWatchdog();
+        setActivityStatus(
+          evt.data.reason === "slot"
+            ? "Waiting for a free model slot"
+            : "Waiting for the local model to respond",
+        );
+      } else if (evt.data?.phase === "starting_model") {
+        armStreamingWatchdog(evt.runId);
+        setActivityStatus("running");
+      } else {
+        return;
+      }
+      tui.requestRender();
+      return;
+    }
+    if (evt.stream === "item") {
+      if (
+        renderTuiActivityItem({ chatLog, event: evt, verboseLevel: state.sessionInfo.verboseLevel })
+      ) {
+        tui.requestRender();
+      }
       return;
     }
     if (evt.stream === "tool") {
@@ -610,9 +620,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       const data = evt.data ?? {};
-      const phase = asString(data.phase, "");
-      const toolCallId = asString(data.toolCallId, "");
-      const toolName = asString(data.name, "tool");
+      const phase = formatPrimitiveString(data.phase, "");
+      const toolCallId = formatPrimitiveString(data.toolCallId, "");
+      const toolName = formatPrimitiveString(data.name, "tool");
       if (!toolCallId) {
         return;
       }
@@ -626,13 +636,9 @@ export function createEventHandlers(context: EventHandlerContext) {
           partial: true,
         });
       } else if (phase === "result") {
-        if (allowToolOutput) {
-          chatLog.updateToolResult(toolCallId, data.result, {
-            isError: Boolean(data.isError),
-          });
-        } else {
-          chatLog.updateToolResult(toolCallId, { content: [] }, { isError: Boolean(data.isError) });
-        }
+        chatLog.updateToolResult(toolCallId, allowToolOutput ? data.result : { content: [] }, {
+          isError: Boolean(data.isError),
+        });
       }
       tui.requestRender();
       return;
@@ -641,7 +647,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (isPendingRun) {
         // Exact run ownership matters: concurrent clients share this event stream.
         runCoordinator.noteSessionRun(evt.runId, { protectStream: true });
-        markSubmittedRunRegistered(evt.runId);
+        clearPendingSubmitDraft(state, evt.runId);
         state.activeChatRunId = evt.runId;
         noteLocalRunId?.(evt.runId);
         clearPendingSubmit(state, evt.runId);
@@ -656,39 +662,42 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!isActiveRun && !isPendingRun && phase !== "finishing" && !isPostFinalTerminalPhase) {
         return;
       }
-      const canUpdateActivityStatus = !hasConcurrentActiveRun(evt.runId);
+      const canUpdateActivityStatus =
+        !hasConcurrentActiveRun(evt.runId) && (!hasPendingSubmit(state) || isPendingRun);
       if (phase && phase !== "end" && phase !== "error" && phase !== "finishing") {
         armStreamingWatchdog(evt.runId);
       }
+      if (phase === "finishing") {
+        runCoordinator.notePostFinalizingRun(evt.runId);
+      } else if (phase === "end" || phase === "error") {
+        postFinalizingRuns.delete(evt.runId);
+      }
+      if (!canUpdateActivityStatus && ACTIVITY_PHASES.has(phase)) {
+        return;
+      }
       if (phase === "start") {
-        if (!canUpdateActivityStatus) {
-          return;
+        if (localMode && evt.data?.explicitFollowup === true) {
+          chatLog.addSystem("Your followup has started.");
         }
         setActivityStatus("running");
       }
       if (phase === "finishing") {
-        runCoordinator.notePostFinalizingRun(evt.runId);
-        if (!canUpdateActivityStatus) {
-          return;
-        }
         clearStreamingWatchdog();
         setActivityStatus("finishing context");
       }
-      let forceRender = phase === "end";
       if (phase === "end") {
-        postFinalizingRuns.delete(evt.runId);
-        if (!canUpdateActivityStatus) {
-          return;
-        }
         if (!localMode || !isLocalRunId?.(evt.runId) || finalizedRuns.has(evt.runId)) {
-          setActivityStatus("idle"); // Local chat.final proves post-turn maintenance finished.
+          // Local chat.final proves post-turn maintenance finished. A lifecycle
+          // end must not turn an already aborted or failed run into success.
+          const runStatus = state.sessionProjection?.runs[evt.runId]?.status;
+          if (runStatus === "error" || runStatus === "timeout") {
+            setActivityStatus("error");
+          } else {
+            setActivityStatus("idle", runStatus === "aborted" ? "aborted" : "completed");
+          }
         }
       }
       if (phase === "error") {
-        postFinalizingRuns.delete(evt.runId);
-        if (!canUpdateActivityStatus) {
-          return;
-        }
         const isTerminalLifecycleError = typeof evt.data?.endedAt === "number";
         if (isTerminalLifecycleError && (isActiveRun || isPendingRun)) {
           const errorMessage =
@@ -700,52 +709,33 @@ export function createEventHandlers(context: EventHandlerContext) {
           scheduleTerminalLifecycleError(evt.runId, errorMessage);
         }
         setActivityStatus("error");
-        forceRender = true;
       }
-      tui.requestRender(forceRender);
+      tui.requestRender(phase === "end" || phase === "error");
     }
-  };
+  });
 
-  const handleBtwEvent = (payload: unknown) => {
-    if (!payload || typeof payload !== "object") {
+  const handleBtwEvent = eventHandler((evt: BtwEvent) => {
+    if (
+      evt.kind !== "btw" ||
+      !matchesSelectedTuiSession(state, evt) ||
+      (localMode && (!evt.runId || !isLocalBtwRunId?.(evt.runId)))
+    ) {
       return;
     }
-    const evt = payload as BtwEvent;
-    syncSessionKey();
-    if (!matchesSelectedTuiSession(state, evt)) {
-      return;
-    }
-    if (evt.kind !== "btw") {
-      return;
-    }
-    const question = evt.question.trim();
-    const text = evt.text.trim();
+    const [question, text] = [evt.question.trim(), evt.text.trim()];
     if (!question || !text) {
       return;
     }
-    btw.showResult({
-      question,
-      text,
-      isError: evt.isError,
-    });
+    btw.showResult({ question, text, isError: evt.isError });
     tui.requestRender();
-  };
-
-  // True once any event for this runId has been seen, even before sendChat
-  // resolves. Lets the optimistic-submit path know an accepted run already
-  // registered so it does not re-arm a draft the abort path would then drop.
-  const isRunObserved = (runId: string) => sessionRuns.has(runId);
+  });
 
   const reconcileHistoryAfterGap = () => {
     reduceTuiSessionProjection(state, {
       type: "transportGap",
       scope: readTuiSessionProjectionScope(state),
     });
-    const { runIds, displayedRunIds } = collectTrackedSessionRunIds();
-    if (runIds.size === 0) {
-      runCoordinator.queueHistoryReload();
-      return;
-    }
+    const { runIds, displayedRunIds } = runCoordinator.collectTrackedSessionRunIds();
     // A dropped final cannot distinguish a finished run from a still-streaming
     // one; authoritative history must either finalize it or restore it.
     runCoordinator.queueGapHistoryReload(runIds, displayedRunIds);
@@ -760,9 +750,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend: (runId: string) => completedRuns.delete(runId),
-    isRunObserved,
+    // Events can register before sendChat resolves; do not re-arm their draft.
+    isRunObserved: (runId: string) => sessionRuns.has(runId),
+    captureHistoryRunMembership: () => runCoordinator.captureHistoryRunMembership(),
     reconcileHistoryAfterGap,
     flushPendingHistoryRefreshIfIdle,
-    dispose,
+    dispose: clearTrackedRunState,
   };
 }

@@ -1,7 +1,13 @@
 import type { Server } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import type { QaMockProviderDispatchResult, ResponsesInputItem } from "./mock-openai-contracts.js";
+import {
+  isPreviewCompletion,
+  parseJsonObjectBody,
+  type QaMockProviderDispatchResult,
+  type ResponsesInputItem,
+} from "./mock-openai-contracts.js";
 
 type QaMockResponsesWebSocketDispatch = (params: {
   body: Record<string, unknown>;
@@ -13,30 +19,6 @@ type QaMockResponsesWebSocketHistory = {
   body: Record<string, unknown>;
   input: ResponsesInputItem[];
 };
-
-function readWebSocketText(data: RawData): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  return data.toString("utf8");
-}
-
-function readWebSocketRequest(raw: string): Record<string, unknown> | undefined {
-  try {
-    const value: unknown = JSON.parse(raw);
-    return value !== null && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 function sendWebSocketEvent(socket: WebSocket, event: unknown): void {
   if (socket.readyState === WebSocket.OPEN) {
@@ -90,8 +72,8 @@ export function attachQaMockResponsesWebSocketServer(params: {
           // Responses stream sequence numbers describe one response, not
           // all responses that happen to reuse the same WebSocket.
           sequenceNumber = 0;
-          const raw = readWebSocketText(data);
-          const request = isBinary ? undefined : readWebSocketRequest(raw);
+          const raw = rawDataToString(data);
+          const request = isBinary ? undefined : parseJsonObjectBody(raw);
           if (!request || request.type !== "response.create") {
             sendEvent({
               type: "error",
@@ -201,28 +183,22 @@ export function attachQaMockResponsesWebSocketServer(params: {
           }
           const completion = events.find((event) => event.type === "response.completed");
           if (completion?.type === "response.completed") {
-            if (!events.some((event) => event.type === "response.created")) {
-              sendEvent({
-                type: "response.created",
-                response: {
-                  id: completion.response.id,
-                  object: "response",
-                  created_at: Math.floor(Date.now() / 1_000),
-                  model: typeof body.model === "string" ? body.model : "",
-                  status: "in_progress",
-                  output: [],
-                },
-              });
-            }
             cachedResponse = {
               id: completion.response.id,
               body,
               input: [...body.input, ...completion.response.output],
             };
           }
-          for (const event of events) {
-            if (dispatched.previewPauseMs && event.type === "response.output_text.done") {
-              await sleep(dispatched.previewPauseMs);
+          for (const [index, event] of events.entries()) {
+            if (
+              (dispatched.previewPauseMs || dispatched.previewPause) &&
+              isPreviewCompletion(event, events[index - 1])
+            ) {
+              if (dispatched.previewPause) {
+                await dispatched.previewPause();
+              } else if (dispatched.previewPauseMs) {
+                await sleep(dispatched.previewPauseMs);
+              }
             }
             sendEvent(event);
           }

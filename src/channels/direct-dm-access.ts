@@ -11,11 +11,10 @@ import {
 import {
   DM_GROUP_ACCESS_REASON,
   type DmGroupAccessReasonCode,
-} from "../plugin-sdk/channel-access-compat.js";
-import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
 } from "../plugin-sdk/channel-access-compat.js";
+import type { resolveCommandAuthorizedFromAuthorizers } from "./command-gating.js";
 import type { ChannelId } from "./plugins/types.public.js";
 export type { AccessGroupMembershipResolver } from "../plugin-sdk/access-groups.js";
 
@@ -23,11 +22,7 @@ export type { AccessGroupMembershipResolver } from "../plugin-sdk/access-groups.
 export type DirectDmCommandAuthorizationRuntime = {
   shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
   /** @deprecated Command authorization is resolved by channel ingress. Kept for runtime injection compatibility. */
-  resolveCommandAuthorizedFromAuthorizers?: (params: {
-    useAccessGroups: boolean;
-    authorizers: Array<{ configured: boolean; allowed: boolean }>;
-    modeWhenAccessGroupsOff?: "allow" | "deny" | "configured";
-  }) => boolean;
+  resolveCommandAuthorizedFromAuthorizers?: typeof resolveCommandAuthorizedFromAuthorizers;
 };
 
 /**
@@ -93,26 +88,19 @@ export async function resolveInboundDirectDmAccessWithRuntime(params: {
       : [];
   // Pairing-mode store entries and configured allowlists both support access groups.
   // Expand them separately so the access reason still reflects the source list.
-  const [allowFrom, effectiveStoreAllowFrom] = await Promise.all([
-    expandAllowFromWithAccessGroups({
-      cfg: params.cfg,
-      allowFrom: params.allowFrom,
-      channel: params.channel,
-      accountId: params.accountId,
-      senderId: params.senderId,
-      isSenderAllowed: params.isSenderAllowed,
-      resolveMembership: params.resolveAccessGroupMembership,
-    }),
-    expandAllowFromWithAccessGroups({
-      cfg: params.cfg,
-      allowFrom: storeAllowFrom,
-      channel: params.channel,
-      accountId: params.accountId,
-      senderId: params.senderId,
-      isSenderAllowed: params.isSenderAllowed,
-      resolveMembership: params.resolveAccessGroupMembership,
-    }),
-  ]);
+  const [allowFrom, effectiveStoreAllowFrom] = await Promise.all(
+    [params.allowFrom, storeAllowFrom].map((entries) =>
+      expandAllowFromWithAccessGroups({
+        cfg: params.cfg,
+        allowFrom: entries,
+        channel: params.channel,
+        accountId: params.accountId,
+        senderId: params.senderId,
+        isSenderAllowed: params.isSenderAllowed,
+        resolveMembership: params.resolveAccessGroupMembership,
+      }),
+    ),
+  );
   const access = resolveDmGroupAccessWithLists({
     isGroup: false,
     dmPolicy,
@@ -182,14 +170,7 @@ export function createPreCryptoDirectDmAuthorizer(params: {
       return "allow";
     }
     if (access.decision === "pairing") {
-      if (params.issuePairingChallenge) {
-        // Pairing challenges happen before decrypting the DM payload; keep this branch
-        // side-effect free apart from the explicit reply hook.
-        await params.issuePairingChallenge({
-          senderId: input.senderId,
-          reply: input.reply,
-        });
-      }
+      await params.issuePairingChallenge?.({ senderId: input.senderId, reply: input.reply });
       return "pairing";
     }
     params.onBlocked?.({

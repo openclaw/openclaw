@@ -1,32 +1,38 @@
-type AnthropicAuthModel = {
-  provider?: string;
-  authHeader?: boolean;
-  headers?: Record<string, string>;
-};
+import { getAiTransportHost } from "../host.js";
+import type { ModelRequestHeaders } from "../types.js";
 
-export function usesFoundryBearerAuth(model: AnthropicAuthModel): boolean {
+/** Inspect resolved credential shape for auth routing without exposing its value. */
+export function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
   return (
-    model.provider === "microsoft-foundry" &&
-    (model.authHeader === true || hasBearerAuthorizationHeader(model.headers))
+    typeof apiKey === "string" &&
+    getAiTransportHost().resolveSecretSentinel(apiKey).includes("sk-ant-oat")
   );
 }
 
-function hasBearerAuthorizationHeader(headers?: Record<string, string>): boolean {
-  if (!headers) {
-    return false;
-  }
-  return Object.entries(headers).some(
-    ([key, value]) => key.toLowerCase() === "authorization" && /^bearer\s+\S+/i.test(value.trim()),
+export function usesFoundryBearerAuth(model: {
+  provider?: string;
+  authHeader?: boolean;
+  headers?: ModelRequestHeaders;
+}): boolean {
+  return (
+    model.provider === "microsoft-foundry" &&
+    (model.authHeader === true ||
+      Object.entries(model.headers ?? {}).some(
+        ([key, value]) =>
+          key.toLowerCase() === "authorization" &&
+          value !== null &&
+          /^bearer\s+\S+/i.test(value.trim()),
+      ))
   );
 }
 
 export function omitFoundryBearerCredentialHeaders(
-  headers?: Record<string, string>,
-): Record<string, string> | undefined {
+  headers?: ModelRequestHeaders,
+): ModelRequestHeaders | undefined {
   if (!headers) {
     return undefined;
   }
-  const next: Record<string, string> = {};
+  const next: ModelRequestHeaders = {};
   for (const [key, value] of Object.entries(headers)) {
     const lower = key.toLowerCase();
     if (lower === "authorization" || lower === "x-api-key" || lower === "api-key") {

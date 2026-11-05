@@ -1,8 +1,16 @@
 // Tests fenced-code-block span scanning used to keep chunk breaks out of code blocks.
 import { describe, expect, it } from "vitest";
-import { isSafeFenceBreak, parseFenceSpans } from "./fences.js";
+import { isSafeFenceBreak, parseFenceSpans, scanFenceSpans } from "./fences.js";
 
 describe("parseFenceSpans closing-fence rules", () => {
+  it("allows backticks in tilde-fence info strings", () => {
+    const text = "~~~literal`\ncode\n~~~\nParagraph";
+    const spans = parseFenceSpans(text);
+    expect(spans).toHaveLength(1);
+    expect(isSafeFenceBreak(spans, text.indexOf("code") + 1)).toBe(false);
+    expect(isSafeFenceBreak(spans, text.indexOf("Paragraph") + 1)).toBe(true);
+  });
+
   it("treats a marker line with trailing text as code content, not a closing fence", () => {
     // CommonMark: a closing fence may be followed only by whitespace, so "``` not a close" is code
     // content and the block stays open until the real closing fence. Reporting an interior offset
@@ -33,13 +41,18 @@ describe("parseFenceSpans closing-fence rules", () => {
     expect(isSafeFenceBreak(spans, text.indexOf("after") + 1)).toBe(true);
   });
 
-  it("still closes on a bare fence, a longer same-marker fence, and keeps an opener info string", () => {
-    expect(parseFenceSpans("```\ncode\n```\nafter\n")).toHaveLength(1);
-    expect(parseFenceSpans("```\ncode\n`````  \nafter\n")).toHaveLength(1);
-    expect(parseFenceSpans("```python\nx = 1\n```\n")).toHaveLength(1);
+  it("carries an open fence through empty input and a continued line without mutating state", () => {
+    const { state } = scanFenceSpans("  ~~~sh\nbody");
+    Object.freeze(state.open);
+    Object.freeze(state);
+    const continued = "~~~\nbody\n~~~~ ";
+    const span = { start: 0, openLine: "  ~~~sh", marker: "~~~", indent: "  " };
 
-    const closed = "```\ncode\n```\nafter\n";
-    const spans = parseFenceSpans(closed);
-    expect(isSafeFenceBreak(spans, closed.indexOf("after") + 1)).toBe(true);
+    expect(scanFenceSpans("", state)).toEqual({ spans: [{ ...span, end: 0 }], state });
+    expect(scanFenceSpans(continued, state)).toEqual({
+      spans: [{ ...span, end: continued.length }],
+      state: { atLineStart: false },
+    });
+    expect(state).toMatchObject({ atLineStart: false, open: { openLine: "  ~~~sh" } });
   });
 });

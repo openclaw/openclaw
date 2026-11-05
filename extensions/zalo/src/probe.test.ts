@@ -1,4 +1,6 @@
+import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import type { ZaloFetch } from "./api.js";
 import { probeZalo } from "./probe.js";
 
@@ -7,13 +9,18 @@ describe("probeZalo", () => {
     const fetcher = vi.fn<ZaloFetch>(async () =>
       Response.json({
         ok: true,
-        result: { account_name: "test-bot", account_type: "BASIC", id: "bot-1" },
+        result: {
+          account_name: "test-bot",
+          account_type: "BASIC",
+          id: "bot-1",
+          can_join_groups: false,
+        },
       }),
     );
 
     await expect(probeZalo(" token ", 5000, fetcher)).resolves.toMatchObject({
       ok: true,
-      bot: { account_name: "test-bot", id: "bot-1" },
+      bot: { account_name: "test-bot", account_type: "BASIC", id: "bot-1", can_join_groups: false },
       elapsedMs: expect.any(Number),
     });
     expect(fetcher.mock.calls[0]?.[0]).toContain("/bottoken/getMe");
@@ -29,6 +36,41 @@ describe("probeZalo", () => {
       error: "invalid token",
       elapsedMs: expect.any(Number),
     });
+  });
+
+  it("rejects a non-ok HTTP response with a success-shaped body", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          ok: true,
+          result: {
+            id: "controlled-bot",
+            account_name: "Controlled Bot",
+            account_type: "BOT",
+            can_join_groups: false,
+          },
+        }),
+      );
+    });
+    const port = await listenOnLoopback(server);
+    const originalApiUrl = process.env.ZALO_API_URL;
+    process.env.ZALO_API_URL = `http://127.0.0.1:${String(port)}`;
+
+    try {
+      await expect(probeZalo("controlled-token", 1000)).resolves.toMatchObject({
+        ok: false,
+        error: expect.stringContaining("zalo.getMe (401)"),
+      });
+    } finally {
+      if (originalApiUrl === undefined) {
+        delete process.env.ZALO_API_URL;
+      } else {
+        process.env.ZALO_API_URL = originalApiUrl;
+      }
+      server.closeAllConnections();
+      await server[Symbol.asyncDispose]();
+    }
   });
 
   it("preserves timeout errors", async () => {

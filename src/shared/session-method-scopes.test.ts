@@ -1,137 +1,90 @@
-import { describe, expect, it } from "vitest";
-import { resolveDynamicSessionMutationRequiredScope } from "./session-method-scopes.js";
+import { expect, it } from "vitest";
+import { resolveSessionMethodScope } from "./session-method-scopes-base.js";
+import { resolveDynamicSessionMutationRequiredScope as scope } from "./session-method-scopes.js";
 
-describe("resolveDynamicSessionMutationRequiredScope", () => {
-  it("keeps ordinary session creation write-scoped", () => {
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.create", {
-        agentId: "main",
-        message: "hello",
-        worktree: true,
-      }),
-    ).toBe("operator.write");
-  });
+const target = { key: "agent:main:thread" };
+const patchScope = (patch: Record<string, unknown>) =>
+  scope("sessions.patch", { ...target, ...patch });
+const batchScope = (patch: Record<string, unknown>, extraTarget = {}) =>
+  scope("sessions.patchMany", { targets: [{ ...target, ...extraTarget }], patch });
 
-  it.each([
-    { incognito: true },
-    { key: "agent:main:dashboard:incognito-123" },
-    { parentSessionKey: "agent:main:subagent:incognito-123" },
-    { execNode: "node-1" },
-  ])("requires admin for privileged session creation params %#", (params) => {
-    expect(resolveDynamicSessionMutationRequiredScope("sessions.create", params)).toBe(
-      "operator.admin",
-    );
-  });
+it("requires admin to create a full-access session", () => {
+  expect(scope("sessions.create", { permissionMode: "full" })).toBe("operator.admin");
+});
 
-  it("leaves Gateway cwd containment to the state-aware create handler", () => {
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.create", {
-        cwd: "/configured/workspace/packages/app",
-      }),
-    ).toBe("operator.write");
-  });
+it("requires admin to patch a session to full access", () => {
+  expect(patchScope({ permissionMode: "full" })).toBe("operator.admin");
+  expect(batchScope({ permissionMode: "full" })).toBe("operator.admin");
+});
 
-  it.each([
-    { name: "model set", patch: { model: "openai/gpt-5.6-luna" } },
-    { name: "model reset", patch: { model: null } },
-    {
-      name: "safe mixed patch",
-      patch: { label: "Renamed", archived: true, model: "openai/gpt-5.6-luna" },
-    },
-    {
-      name: "CAS envelope",
-      patch: { expectedSessionId: "session-1", expectedLifecycleRevision: "revision-1" },
-    },
-  ])("keeps $name write-scoped", ({ patch }) => {
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.patch", {
-        key: "agent:main:thread",
-        agentId: "main",
-        ...patch,
-      }),
-    ).toBe("operator.write");
-  });
+it("allows session-scoped visibility mutations for single and batch patch", () => {
+  const patch = { snoozedUntil: null };
+  const visibilityTarget = {
+    ...target,
+    expectedSessionId: "session-1",
+    expectedSidebarRoot: false,
+    expectedCategory: null,
+    expectedArchived: false,
+  };
+  for (const [method, params] of [
+    ["sessions.patch", { ...visibilityTarget, ...patch }],
+    ["sessions.patchMany", { targets: [visibilityTarget], patch }],
+  ] as const) {
+    expect(resolveSessionMethodScope(method, params)).toBe("operator.sessions.write");
+    expect(scope(method, params)).toBe("operator.write");
+  }
+});
 
-  it.each([
-    { thinkingLevel: "high" },
-    { fastMode: true },
-    { verboseLevel: "full" },
-    { reasoningLevel: "high" },
-    { model: "openai/gpt-5.6-luna", thinkingLevel: "high" },
-    { model: null, futureField: true },
-  ])("keeps privileged or unknown patch fields admin-scoped %#", (patch) => {
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.patch", {
-        key: "agent:main:thread",
-        ...patch,
-      }),
-    ).toBe("operator.admin");
-  });
+it.each([{ contextWindow: "extended" }, { sandboxMode: null }])(
+  "keeps privileged or unknown patch fields admin-scoped %#",
+  (patch) => {
+    expect(patchScope(patch)).toBe("operator.admin");
+  },
+);
 
-  it("scopes sessions.patchMany from the shared patch only", () => {
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
-        targets: [
-          {
-            key: "agent:main:thread",
-            agentId: "main",
-            expectedSessionId: "session-1",
-            expectedLifecycleRevision: "revision-1",
-          },
-        ],
-        patch: { label: "Renamed", archived: true, unread: false, model: "openai/gpt-5.6-luna" },
-      }),
-    ).toBe("operator.write");
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
-        targets: [{ key: "agent:main:thread" }],
-        patch: { model: null },
-      }),
-    ).toBe("operator.write");
-    for (const patch of [
-      { statusNote: "Working" },
-      { thinkingLevel: "high" },
-      { model: "openai/gpt-5.6-luna", fastMode: true },
-      { futureField: true },
-    ]) {
-      expect(
-        resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
-          targets: [{ key: "agent:main:thread" }],
-          patch,
-        }),
-      ).toBe("operator.admin");
-    }
-    expect(resolveDynamicSessionMutationRequiredScope("sessions.patchMany")).toBe("operator.write");
-    expect(resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {})).toBe(
-      "operator.write",
-    );
-  });
+it("scopes sessions.patchMany from the shared patch only", () => {
+  for (const sandboxMode of ["off", null]) {
+    expect(batchScope({ sandboxMode }, { expectedSandboxMode: null })).toBe("operator.admin");
+  }
+  const patch = {
+    label: "Renamed",
+    icon: "🦞",
+    archived: true,
+    unread: false,
+    model: "openai/gpt-5.6-luna",
+    thinkingLevel: "high",
+    cyberAccessProgram: "daybreak_blue",
+    fastMode: "auto",
+  };
+  const targetEnvelope = {
+    agentId: "main",
+    expectedSessionId: "session-1",
+    expectedLifecycleRevision: "revision-1",
+  };
+  expect(batchScope(patch, targetEnvelope)).toBe("operator.write");
+  expect(
+    batchScope({ model: null, thinkingLevel: null, cyberAccessProgram: null, fastMode: null }),
+  ).toBe("operator.write");
+  for (const adminPatch of [
+    { statusNote: "Working" },
+    { thinkingLevel: "high", contextWindow: "extended" },
+    { model: "openai/gpt-test-a", fastMode: true, toolOverrides: {} },
+    { futureField: true },
+  ]) {
+    expect(batchScope(adminPatch)).toBe("operator.admin");
+  }
+  expect(scope("sessions.patchMany")).toBe("operator.write");
+  expect(scope("sessions.patchMany", {})).toBe("operator.write");
+});
 
-  it("allows write-scoped deletion only for safe archived-only requests", () => {
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.delete", {
-        key: "agent:main:archived",
-        deleteTranscript: true,
-        archivedOnly: true,
-      }),
-    ).toBe("operator.write");
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.delete", {
-        key: "agent:main:active",
-        deleteTranscript: true,
-      }),
-    ).toBe("operator.admin");
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.delete", {
-        key: "agent:main:archived",
-        archivedOnly: true,
-        emitLifecycleHooks: false,
-      }),
-    ).toBe("operator.admin");
-  });
+it.each([
+  { ...target, autoDevice: true },
+  { ...target, profileId: "development", deviceId: "device-1" },
+] as const)("classifies dispatch target %j as write-scoped", (params) => {
+  expect(scope("sessions.dispatch", params)).toBe("operator.write");
+});
 
-  it("does not duplicate static method policy from the core descriptor table", () => {
-    expect(resolveDynamicSessionMutationRequiredScope("sessions.groups.put")).toBeUndefined();
-    expect(resolveDynamicSessionMutationRequiredScope("sessions.list")).toBeUndefined();
-  });
+it("does not duplicate static method policy from the core descriptor table", () => {
+  expect(scope("sessions.groups.put")).toBeUndefined();
+  expect(scope("sessions.list")).toBeUndefined();
 });

@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 
-import fs from "node:fs/promises";
 import path from "node:path";
-import ts from "typescript";
-import { z } from "zod";
+import * as ts from "typescript/ast";
+import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 import {
-  collectTypeScriptFilesFromRoots,
   isTestLikeTypeScriptFile,
-  resolveSourceRoots,
   runAsScript,
+  toLine,
   unwrapExpression,
 } from "./lib/ts-guard-utils.mts";
 
@@ -19,31 +19,50 @@ export type ExportNameCollision = {
   sdk?: true;
 };
 
-type SourceModule = {
+export type SourceModule = {
   content: string;
   includeDefinitions?: boolean;
   path: string;
 };
 
-type ModuleExports = {
-  definitions: Set<string>;
-  exportedNames: Set<string>;
-  starExportSpecifiers: string[];
+export type ImportedSymbolReference = {
+  importedName: string;
+  localName: string;
+  moduleSpecifier: string;
 };
 
-const exportNameCollisionSchema = z
-  .object({
-    name: z.string(),
-    files: z.array(z.string()),
-    sdk: z.literal(true).optional(),
-  })
-  .strict();
-const exportNameCollisionBaselineSchema = z.array(exportNameCollisionSchema);
+export type NamedReExport = {
+  exportedName: string;
+  importedName: string;
+  moduleSpecifier: string;
+};
 
-const baselineRelativePath = "scripts/lib/export-name-collision-baseline.json";
-const baselineRegenCommand = "pnpm lint:tmp:export-name-collisions:gen";
-const failurePrefix = "check-export-name-collisions";
-const extraExcludedFileSuffixes = [".test-support.ts", ".test-helpers.ts", ".d.ts"];
+export type AliasingReExport = NamedReExport & {
+  line: number;
+  path: string;
+};
+
+export type ExportedValueDefinition = {
+  importedReferences: ImportedSymbolReference[];
+  name: string;
+};
+
+export type ModuleExports = {
+  aliasingReExports: Array<Omit<AliasingReExport, "path">>;
+  definitions: Set<string>;
+  exportedNames: Set<string>;
+  namedReExports: NamedReExport[];
+  starExportSpecifiers: string[];
+  valueDefinitions: Map<string, ExportedValueDefinition>;
+};
+
+const extraExcludedFileSuffixes = [
+  ".test-support.ts",
+  ".test-helpers.ts",
+  ".d.ts",
+  ".d.mts",
+  ".d.cts",
+];
 
 function normalizeRelativePath(filePath: string) {
   return filePath.replaceAll(path.sep, "/");
@@ -59,8 +78,8 @@ export function isExcludedExportCollisionSource(filePath: string) {
   );
 }
 
-function hasModifier(node: ts.Node, kind: ts.SyntaxKind) {
-  return ts.canHaveModifiers(node) && ts.getModifiers(node)?.some((item) => item.kind === kind);
+function hasModifier(node: ts.ModifiersBase, kind: ts.SyntaxKind) {
+  return node.modifiers?.some((item) => item.kind === kind);
 }
 
 function collectBindingNames(name: ts.BindingName, names: Set<string>) {
@@ -69,10 +88,74 @@ function collectBindingNames(name: ts.BindingName, names: Set<string>) {
     return;
   }
   for (const element of name.elements) {
-    if (ts.isBindingElement(element)) {
+    if (ts.isBindingElement(element) && element.name) {
       collectBindingNames(element.name, names);
     }
   }
+}
+
+function resolveImportedReference(
+  expression: ts.Expression,
+  importedSymbolsByLocalName: ReadonlyMap<string, ImportedSymbolReference>,
+  namespaceImportsByLocalName: ReadonlyMap<string, string>,
+) {
+  const target = unwrapExpression(expression);
+  if (ts.isIdentifier(target)) {
+    return importedSymbolsByLocalName.get(target.text);
+  }
+  if (!ts.isPropertyAccessExpression(target) && !ts.isElementAccessExpression(target)) {
+    return undefined;
+  }
+  const namespaceName = ts.isPropertyAccessExpression(target)
+    ? target.name.text
+    : ts.isStringLiteral(target.argumentExpression)
+      ? target.argumentExpression.text
+      : null;
+  if (!namespaceName || !ts.isIdentifier(target.expression)) {
+    return undefined;
+  }
+  const moduleSpecifier = namespaceImportsByLocalName.get(target.expression.text);
+  return moduleSpecifier
+    ? {
+        importedName: namespaceName,
+        localName: `${target.expression.text}.${namespaceName}`,
+        moduleSpecifier,
+      }
+    : undefined;
+}
+
+function collectImportedReferences(
+  node: ts.Node,
+  importedSymbolsByLocalName: ReadonlyMap<string, ImportedSymbolReference>,
+  namespaceImportsByLocalName: ReadonlyMap<string, string>,
+) {
+  const references = new Map<string, ImportedSymbolReference>();
+  const addReference = (reference: ImportedSymbolReference | undefined) => {
+    if (reference) {
+      references.set(
+        `${reference.moduleSpecifier}\0${reference.importedName}\0${reference.localName}`,
+        reference,
+      );
+    }
+  };
+  const visit = (current: ts.Node): void => {
+    if (ts.isCallExpression(current)) {
+      addReference(
+        resolveImportedReference(
+          current.expression,
+          importedSymbolsByLocalName,
+          namespaceImportsByLocalName,
+        ),
+      );
+    }
+    current.forEachChild(visit);
+  };
+  visit(node);
+  return [...references.values()].toSorted((left, right) =>
+    `${left.moduleSpecifier}\0${left.importedName}\0${left.localName}`.localeCompare(
+      `${right.moduleSpecifier}\0${right.importedName}\0${right.localName}`,
+    ),
+  );
 }
 
 function parametersAreForwarded(
@@ -105,17 +188,29 @@ function parametersAreForwarded(
   });
 }
 
-function isAwaitedZeroArgumentCall(expression: ts.Expression) {
+function isAwaitedModuleLoad(expression: ts.Expression) {
   const unwrapped = unwrapExpression(expression);
   if (!ts.isAwaitExpression(unwrapped)) {
     return false;
   }
   const awaited = unwrapExpression(unwrapped.expression);
-  return ts.isCallExpression(awaited) && awaited.arguments.length === 0;
+  if (!ts.isCallExpression(awaited)) {
+    return false;
+  }
+  // Literal imports and zero-argument loaders acquire the same lazy boundary;
+  // forwarding its unchanged arguments does not define a second behavior.
+  const [specifier] = awaited.arguments;
+  return (
+    awaited.arguments.length === 0 ||
+    (awaited.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      awaited.arguments.length === 1 &&
+      specifier !== undefined &&
+      ts.isStringLiteral(specifier))
+  );
 }
 
-function returnCall(statement: ts.Statement) {
-  if (!ts.isReturnStatement(statement) || !statement.expression) {
+function returnCall(statement: ts.Statement | undefined) {
+  if (!statement || !ts.isReturnStatement(statement) || !statement.expression) {
     return null;
   }
   const expression = unwrapExpression(statement.expression);
@@ -125,13 +220,13 @@ function returnCall(statement: ts.Statement) {
 function isStaticImportForwarder(
   call: ts.CallExpression,
   functionName: string,
-  importedNamesByLocalName: ReadonlyMap<string, string>,
+  importedSymbolsByLocalName: ReadonlyMap<string, ImportedSymbolReference>,
 ) {
   const callee = unwrapExpression(call.expression);
   return (
     ts.isIdentifier(callee) &&
     callee.text !== functionName &&
-    importedNamesByLocalName.get(callee.text) === functionName
+    importedSymbolsByLocalName.get(callee.text)?.importedName === functionName
   );
 }
 
@@ -148,101 +243,115 @@ function isLazyModuleForwarderCall(
   if (moduleObjectName) {
     return ts.isIdentifier(target) && target.text === moduleObjectName;
   }
-  return isAwaitedZeroArgumentCall(target);
+  return isAwaitedModuleLoad(target);
 }
 
 function isForwardingOnlyFunction(
   declaration: ts.FunctionDeclaration | ts.ArrowFunction,
   functionName: string,
-  importedNamesByLocalName: ReadonlyMap<string, string>,
+  importedSymbolsByLocalName: ReadonlyMap<string, ImportedSymbolReference>,
 ) {
   const body = declaration.body;
   if (!body) {
     return false;
   }
-
+  let call: ts.CallExpression | null;
+  let moduleObjectName: string | undefined;
   if (!ts.isBlock(body)) {
     const expression = unwrapExpression(body);
-    return (
-      ts.isCallExpression(expression) &&
-      parametersAreForwarded(declaration.parameters, expression.arguments) &&
-      (isStaticImportForwarder(expression, functionName, importedNamesByLocalName) ||
-        isLazyModuleForwarderCall(expression, functionName))
-    );
-  }
-
-  if (body.statements.length === 1) {
-    const statement = body.statements[0];
-    if (!statement) {
-      return false;
+    call = ts.isCallExpression(expression) ? expression : null;
+  } else if (body.statements.length === 1 || body.statements.length === 2) {
+    if (body.statements.length === 2) {
+      const loadStatement = body.statements[0];
+      if (!loadStatement || !ts.isVariableStatement(loadStatement)) {
+        return false;
+      }
+      const { declarations, flags } = loadStatement.declarationList;
+      const [loaded] = declarations;
+      if (
+        !(flags & ts.NodeFlags.Const) ||
+        declarations.length !== 1 ||
+        !loaded ||
+        !ts.isIdentifier(loaded.name) ||
+        !loaded.initializer ||
+        !isAwaitedModuleLoad(loaded.initializer)
+      ) {
+        return false;
+      }
+      moduleObjectName = loaded.name.text;
     }
-    const call = returnCall(statement);
-    return Boolean(
-      call &&
-      parametersAreForwarded(declaration.parameters, call.arguments) &&
-      (isStaticImportForwarder(call, functionName, importedNamesByLocalName) ||
-        isLazyModuleForwarderCall(call, functionName)),
-    );
-  }
-
-  if (body.statements.length !== 2) {
+    call = returnCall(body.statements.at(-1));
+  } else {
     return false;
   }
-  const loadStatement = body.statements[0];
-  const returnStatement = body.statements[1];
-  if (
-    !loadStatement ||
-    !returnStatement ||
-    !ts.isVariableStatement(loadStatement) ||
-    !(loadStatement.declarationList.flags & ts.NodeFlags.Const) ||
-    loadStatement.declarationList.declarations.length !== 1
-  ) {
-    return false;
-  }
-  const declarationItem = loadStatement.declarationList.declarations[0];
-  if (
-    !declarationItem ||
-    !ts.isIdentifier(declarationItem.name) ||
-    !declarationItem.initializer ||
-    !isAwaitedZeroArgumentCall(declarationItem.initializer)
-  ) {
-    return false;
-  }
-  const call = returnCall(returnStatement);
   return Boolean(
     call &&
     parametersAreForwarded(declaration.parameters, call.arguments) &&
-    isLazyModuleForwarderCall(call, functionName, declarationItem.name.text),
+    ((!moduleObjectName &&
+      isStaticImportForwarder(call, functionName, importedSymbolsByLocalName)) ||
+      isLazyModuleForwarderCall(call, functionName, moduleObjectName)),
   );
 }
 
 function isForwardingOnlyConst(
   declaration: ts.VariableDeclaration,
   exportName: string,
-  importedNamesByLocalName: ReadonlyMap<string, string>,
+  importedSymbolsByLocalName: ReadonlyMap<string, ImportedSymbolReference>,
+  lazyRuntimeMethods: ReadonlyMap<string, number>,
 ) {
   if (!ts.isIdentifier(declaration.name) || !declaration.initializer) {
     return false;
   }
   const initializer = unwrapExpression(declaration.initializer);
   if (ts.isIdentifier(initializer)) {
-    return importedNamesByLocalName.get(initializer.text) === exportName;
+    return importedSymbolsByLocalName.get(initializer.text)?.importedName === exportName;
+  }
+  if (ts.isCallExpression(initializer) && ts.isIdentifier(initializer.expression)) {
+    const arity = lazyRuntimeMethods.get(initializer.expression.text);
+    const selector = initializer.arguments.at(-1);
+    if (
+      arity !== initializer.arguments.length ||
+      !selector ||
+      !ts.isArrowFunction(selector) ||
+      ts.isBlock(selector.body)
+    ) {
+      return false;
+    }
+    const [parameter] = selector.parameters;
+    const member = unwrapExpression(selector.body);
+    return (
+      selector.parameters.length === 1 &&
+      parameter !== undefined &&
+      !parameter.initializer &&
+      !parameter.dotDotDotToken &&
+      ts.isIdentifier(parameter.name) &&
+      ts.isPropertyAccessExpression(member) &&
+      ts.isIdentifier(member.expression) &&
+      member.expression.text === parameter.name.text &&
+      member.name.text === exportName
+    );
   }
   return (
     ts.isArrowFunction(initializer) &&
-    isForwardingOnlyFunction(initializer, exportName, importedNamesByLocalName)
+    isForwardingOnlyFunction(initializer, exportName, importedSymbolsByLocalName)
   );
 }
 
 /** Collects value exports and locally defined exported functions/consts from one module. */
-export function collectModuleExportNames(content: string, fileName = "source.ts"): ModuleExports {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
-  const importedNamesByLocalName = new Map<string, string>();
+export function collectModuleExportNames(
+  fileName: string,
+  sourceFile: ts.SourceFile,
+): ModuleExports {
+  const importedSymbolsByLocalName = new Map<string, ImportedSymbolReference>();
+  const namespaceImportsByLocalName = new Map<string, string>();
   const localConstDeclarations = new Map<string, ts.VariableDeclaration[]>();
   const localFunctions = new Map<string, ts.FunctionDeclaration[]>();
   const directlyExportedNames = new Set<string>();
   const locallyExportedNames = new Set<string>();
   const exportedNames = new Set<string>();
+  const aliasingReExports: Array<Omit<AliasingReExport, "path">> = [];
+  const namedReExports: NamedReExport[] = [];
+  const pendingLocalReExports: Array<{ exportedName: string; localName: string }> = [];
   const starExportSpecifiers: string[] = [];
 
   for (const statement of sourceFile.statements) {
@@ -250,14 +359,43 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
       const bindings = statement.importClause?.namedBindings;
       if (bindings && ts.isNamedImports(bindings)) {
         for (const specifier of bindings.elements) {
-          if (!statement.importClause?.isTypeOnly && !specifier.isTypeOnly) {
-            importedNamesByLocalName.set(
-              specifier.name.text,
-              specifier.propertyName?.text ?? specifier.name.text,
-            );
+          if (
+            statement.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
+            !specifier.isTypeOnly
+          ) {
+            const importedName = specifier.propertyName?.text ?? specifier.name.text;
+            const moduleSpecifier = ts.isStringLiteral(statement.moduleSpecifier)
+              ? statement.moduleSpecifier.text
+              : "";
+            importedSymbolsByLocalName.set(specifier.name.text, {
+              importedName,
+              localName: specifier.name.text,
+              moduleSpecifier,
+            });
           }
         }
+      } else if (
+        bindings &&
+        ts.isNamespaceImport(bindings) &&
+        statement.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
+        ts.isStringLiteral(statement.moduleSpecifier)
+      ) {
+        namespaceImportsByLocalName.set(bindings.name.text, statement.moduleSpecifier.text);
       }
+      continue;
+    }
+
+    if (
+      ts.isImportEqualsDeclaration(statement) &&
+      !statement.isTypeOnly &&
+      ts.isExternalModuleReference(statement.moduleReference) &&
+      statement.moduleReference.expression &&
+      ts.isStringLiteral(statement.moduleReference.expression)
+    ) {
+      namespaceImportsByLocalName.set(
+        statement.name.text,
+        statement.moduleReference.expression.text,
+      );
       continue;
     }
 
@@ -325,7 +463,19 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
           continue;
         }
         const localName = specifier.propertyName?.text ?? specifier.name.text;
-        // Renamed re-exports are deliberately outside this guard's first slice.
+        if (statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
+          const reExport = {
+            exportedName: specifier.name.text,
+            importedName: localName,
+            moduleSpecifier: statement.moduleSpecifier.text,
+          };
+          namedReExports.push(reExport);
+          if (reExport.exportedName !== reExport.importedName) {
+            aliasingReExports.push({ ...reExport, line: toLine(sourceFile, specifier) });
+          }
+        } else if (!statement.moduleSpecifier) {
+          pendingLocalReExports.push({ exportedName: specifier.name.text, localName });
+        }
         if (specifier.name.text !== localName) {
           continue;
         }
@@ -337,15 +487,111 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
     }
   }
 
+  for (const reExport of pendingLocalReExports) {
+    const imported = importedSymbolsByLocalName.get(reExport.localName);
+    if (imported) {
+      namedReExports.push({
+        exportedName: reExport.exportedName,
+        importedName: imported.importedName,
+        moduleSpecifier: imported.moduleSpecifier,
+      });
+    }
+  }
+
+  // Only the shared helpers guarantee transparent argument forwarding; a same-named
+  // factory from another module or a selector that adds behavior remains a definition.
+  const lazyRuntimeMethods = new Map<string, number>();
+  for (const reference of importedSymbolsByLocalName.values()) {
+    const source = reference.moduleSpecifier.startsWith(".")
+      ? path.posix.normalize(
+          path.posix.join(path.posix.dirname(fileName), reference.moduleSpecifier),
+        )
+      : reference.moduleSpecifier;
+    if (
+      ![
+        "src/shared/lazy-runtime.js",
+        "src/plugin-sdk/lazy-runtime.js",
+        "openclaw/plugin-sdk/lazy-runtime",
+        "@openclaw/plugin-sdk/lazy-runtime",
+      ].includes(source)
+    ) {
+      continue;
+    }
+    if (reference.importedName === "createLazyRuntimeMethod") {
+      lazyRuntimeMethods.set(reference.localName, 2);
+    } else if (reference.importedName === "createLazyRuntimeMethodBinder") {
+      for (const [name, declarations] of localConstDeclarations) {
+        const [declaration] = declarations;
+        const initializer = declaration?.initializer;
+        if (
+          declarations.length === 1 &&
+          declaration &&
+          ts.isIdentifier(declaration.name) &&
+          initializer &&
+          ts.isCallExpression(initializer) &&
+          ts.isIdentifier(initializer.expression) &&
+          initializer.expression.text === reference.localName &&
+          initializer.arguments.length === 1
+        ) {
+          lazyRuntimeMethods.set(name, 1);
+        }
+      }
+    }
+  }
+
   const definitions = new Set<string>();
+  const valueDefinitions = new Map<string, ExportedValueDefinition>();
   for (const name of new Set([...directlyExportedNames, ...locallyExportedNames])) {
     const constDeclarations = localConstDeclarations.get(name);
     if (constDeclarations) {
       const [constDeclaration] = constDeclarations;
+      if (constDeclarations.length === 1 && constDeclaration) {
+        const importedReferences = collectImportedReferences(
+          constDeclaration,
+          importedSymbolsByLocalName,
+          namespaceImportsByLocalName,
+        );
+        const initializer = constDeclaration.initializer
+          ? unwrapExpression(constDeclaration.initializer)
+          : undefined;
+        if (initializer) {
+          const aliasSource = resolveImportedReference(
+            initializer,
+            importedSymbolsByLocalName,
+            namespaceImportsByLocalName,
+          );
+          if (aliasSource) {
+            if (ts.isIdentifier(constDeclaration.name) && aliasSource.importedName === name) {
+              // Const aliases keep runtime identity even when their declared type narrows.
+              // Retain the edge so real wrappers still resolve through this facade.
+              namedReExports.push({
+                exportedName: name,
+                importedName: aliasSource.importedName,
+                moduleSpecifier: aliasSource.moduleSpecifier,
+              });
+              continue;
+            }
+            importedReferences.push(aliasSource);
+          }
+        }
+        valueDefinitions.set(name, {
+          importedReferences: importedReferences.toSorted((left, right) =>
+            `${left.moduleSpecifier}\0${left.importedName}\0${left.localName}`.localeCompare(
+              `${right.moduleSpecifier}\0${right.importedName}\0${right.localName}`,
+            ),
+          ),
+          name,
+        });
+      }
       if (
         constDeclarations.length === 1 &&
         constDeclaration &&
-        isForwardingOnlyConst(constDeclaration, name, importedNamesByLocalName)
+        isForwardingOnlyConst(
+          constDeclaration,
+          name,
+          importedSymbolsByLocalName,
+          lazyRuntimeMethods,
+        )
       ) {
         continue;
       }
@@ -357,21 +603,42 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
       continue;
     }
     const implementation = functionDeclarations.find((declaration) => declaration.body);
+    if (implementation?.body) {
+      valueDefinitions.set(name, {
+        importedReferences: collectImportedReferences(
+          implementation.body,
+          importedSymbolsByLocalName,
+          namespaceImportsByLocalName,
+        ),
+        name,
+      });
+    }
     // Lazy runtime facades are mandated by AGENTS.md. Exempt only exact same-name
     // argument forwarding so those boundaries do not become duplicate behavior.
     if (
       implementation &&
-      isForwardingOnlyFunction(implementation, name, importedNamesByLocalName)
+      isForwardingOnlyFunction(implementation, name, importedSymbolsByLocalName)
     ) {
       continue;
     }
     definitions.add(name);
   }
 
-  return { definitions, exportedNames, starExportSpecifiers };
+  return {
+    aliasingReExports,
+    definitions,
+    exportedNames,
+    namedReExports: namedReExports.toSorted((left, right) =>
+      `${left.exportedName}\0${left.importedName}\0${left.moduleSpecifier}`.localeCompare(
+        `${right.exportedName}\0${right.importedName}\0${right.moduleSpecifier}`,
+      ),
+    ),
+    starExportSpecifiers,
+    valueDefinitions,
+  };
 }
 
-function resolveStarExportPath(
+export function resolveExportModulePath(
   sourcePath: string,
   specifier: string,
   modulesByPath: ReadonlyMap<string, ModuleExports>,
@@ -396,27 +663,25 @@ function resolveStarExportPath(
   return candidates.find((candidate) => modulesByPath.has(candidate)) ?? null;
 }
 
-function collectTransitiveExportNames(
-  modulePath: string,
-  modulesByPath: ReadonlyMap<string, ModuleExports>,
-  visiting = new Set<string>(),
-): Set<string> {
-  if (visiting.has(modulePath)) {
-    return new Set();
-  }
-  const moduleExports = modulesByPath.get(modulePath);
-  if (!moduleExports) {
-    return new Set();
-  }
-  const nextVisiting = new Set(visiting).add(modulePath);
-  const names = new Set(moduleExports.exportedNames);
-  for (const specifier of moduleExports.starExportSpecifiers) {
-    const targetPath = resolveStarExportPath(modulePath, specifier, modulesByPath);
-    if (!targetPath) {
+function collectSdkExportNames(modulesByPath: ReadonlyMap<string, ModuleExports>): Set<string> {
+  const names = new Set<string>();
+  const reachablePaths = new Set(
+    [...modulesByPath.keys()].filter((modulePath) => modulePath.startsWith("src/plugin-sdk/")),
+  );
+  // Set iteration visits newly added targets once, including shared and cyclic barrels.
+  for (const modulePath of reachablePaths) {
+    const moduleExports = modulesByPath.get(modulePath);
+    if (!moduleExports) {
       continue;
     }
-    for (const name of collectTransitiveExportNames(targetPath, modulesByPath, nextVisiting)) {
+    for (const name of moduleExports.exportedNames) {
       names.add(name);
+    }
+    for (const specifier of moduleExports.starExportSpecifiers) {
+      const targetPath = resolveExportModulePath(modulePath, specifier, modulesByPath);
+      if (targetPath) {
+        reachablePaths.add(targetPath);
+      }
     }
   }
   return names;
@@ -426,18 +691,67 @@ function collectTransitiveExportNames(
 // exports its own `testing`/`testApi` object and tests import it qualified from that
 // exact module. Flagging them would push burn-down work to "fix" a deliberate idiom.
 const intentionalSameNameFamilies = new Set(["testing", "testApi"]);
+// Sealed recovery builds substitute these exact loaders for the shared one, so
+// all must implement the same export. Any other implementation is a collision.
+const sealedRecoveryNativeLoaderModules = [
+  "src/infra/package-update-activation-native-loader.ts",
+  "src/infra/update-managed-service-handoff-native-loader.ts",
+  "src/shared/freebsd-process-identity-native.ts",
+];
+// These module owners implement fixed names required by the worker loaders.
+// Other modules remain collisions, including while these consumers land separately.
+const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
+  [
+    "createSqliteWorkerBackend",
+    new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
+  ],
+  [
+    "openExistingSqliteWorkerBackend",
+    new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
+  ],
+  [
+    "bindSqliteWorkerBackend",
+    new Set([
+      "src/agents/auth-profiles/inline-usage.worker.ts",
+      "src/agents/harness/context-engine-turn-outbox.worker.ts",
+      "src/agents/plugin-model-catalog.worker.ts",
+      "src/boards/sqlite-board-store.worker.ts",
+      "src/agents/sessions/session-manager-metadata.worker.ts",
+      "src/config/sessions/goals-operations.worker.ts",
+      "src/config/sessions/session-accessor.sqlite-transcript-reports.worker.ts",
+      "src/config/sessions/session-fork-domain.worker.ts",
+      "src/config/sessions/session-lifecycle-projection.worker.ts",
+      "src/config/sessions/session-message-rewrite.worker.ts",
+      "src/config/sessions/session-sharing-store.worker.ts",
+      "src/config/sessions/session-transcript-projection-publication.worker.ts",
+      "src/gateway/worker-environments/transcript-commit.worker.ts",
+      "src/session-cards/progress-card-store.worker.ts",
+    ]),
+  ],
+]);
 
-/** Finds duplicate exported function/const definitions across source modules. */
-export function findExportNameCollisions(modules: SourceModule[]): ExportNameCollision[] {
+function analyzeExportNames(modules: SourceModule[]) {
+  using parser = createNativeTypeScriptParser();
+  const aliasingReExports: AliasingReExport[] = [];
   const filesByName = new Map<string, Set<string>>();
-  const sdkExportNames = new Set<string>();
   const modulesByPath = new Map<string, ModuleExports>();
   for (const sourceModule of modules.toSorted((left, right) =>
     left.path.localeCompare(right.path),
   )) {
     const relativePath = normalizeRelativePath(sourceModule.path);
-    const moduleExports = collectModuleExportNames(sourceModule.content, relativePath);
+    const moduleExports = collectModuleExportNames(
+      relativePath,
+      parser.parseSourceFile(relativePath, sourceModule.content),
+    );
     modulesByPath.set(relativePath, moduleExports);
+    if (sourceModule.includeDefinitions !== false && !relativePath.startsWith("src/plugin-sdk/")) {
+      aliasingReExports.push(
+        ...moduleExports.aliasingReExports.map((reExport) => ({
+          ...reExport,
+          path: relativePath,
+        })),
+      );
+    }
     if (sourceModule.includeDefinitions !== false) {
       for (const name of moduleExports.definitions) {
         const files = filesByName.get(name) ?? new Set<string>();
@@ -446,18 +760,19 @@ export function findExportNameCollisions(modules: SourceModule[]): ExportNameCol
       }
     }
   }
-  for (const modulePath of modulesByPath.keys()) {
-    if (!modulePath.startsWith("src/plugin-sdk/")) {
-      continue;
-    }
-    for (const name of collectTransitiveExportNames(modulePath, modulesByPath)) {
-      sdkExportNames.add(name);
-    }
-  }
+  const sdkExportNames = collectSdkExportNames(modulesByPath);
 
   const collisions: ExportNameCollision[] = [];
   for (const [name, fileSet] of filesByName) {
-    if (fileSet.size < 2 || intentionalSameNameFamilies.has(name)) {
+    const protocolModules = sqliteWorkerProtocolModules.get(name);
+    if (
+      fileSet.size < 2 ||
+      intentionalSameNameFamilies.has(name) ||
+      (name === "loadFreeBsdProcessIdentityNative" &&
+        fileSet.size === sealedRecoveryNativeLoaderModules.length &&
+        sealedRecoveryNativeLoaderModules.every((file) => fileSet.has(file))) ||
+      (protocolModules !== undefined && [...fileSet].every((file) => protocolModules.has(file)))
+    ) {
       continue;
     }
     const collision: ExportNameCollision = {
@@ -469,167 +784,104 @@ export function findExportNameCollisions(modules: SourceModule[]): ExportNameCol
     }
     collisions.push(collision);
   }
-  return collisions.toSorted((left, right) => left.name.localeCompare(right.name));
+  return {
+    aliasingReExports: aliasingReExports.toSorted(
+      (left, right) =>
+        left.path.localeCompare(right.path) ||
+        left.line - right.line ||
+        left.exportedName.localeCompare(right.exportedName),
+    ),
+    collisions: collisions.toSorted((left, right) => left.name.localeCompare(right.name)),
+  };
 }
 
-type CollisionChange = {
-  baseline?: ExportNameCollision;
-  current?: ExportNameCollision;
-};
-
-/** Compares every collision cluster so additions fail and removals ratchet debt down. */
-export function compareExportNameCollisionDebt(
-  current: ExportNameCollision[],
-  baseline: ExportNameCollision[],
-) {
-  const currentByName = new Map(current.map((collision) => [collision.name, collision]));
-  const baselineByName = new Map(baseline.map((collision) => [collision.name, collision]));
-  const regressions: CollisionChange[] = [];
-  const improvements: CollisionChange[] = [];
-  const names = [...new Set([...currentByName.keys(), ...baselineByName.keys()])].toSorted();
-
-  for (const name of names) {
-    const currentCollision = currentByName.get(name);
-    const baselineCollision = baselineByName.get(name);
-    if (!baselineCollision) {
-      regressions.push({ current: currentCollision });
-      continue;
-    }
-    if (!currentCollision) {
-      improvements.push({ baseline: baselineCollision });
-      continue;
-    }
-    const baselineFiles = new Set(baselineCollision.files);
-    const currentFiles = new Set(currentCollision.files);
-    const hasAddedFile = currentCollision.files.some((file) => !baselineFiles.has(file));
-    const hasRemovedFile = baselineCollision.files.some((file) => !currentFiles.has(file));
-    if (hasAddedFile || (currentCollision.sdk === true && baselineCollision.sdk !== true)) {
-      regressions.push({ baseline: baselineCollision, current: currentCollision });
-    }
-    if (hasRemovedFile || (baselineCollision.sdk === true && currentCollision.sdk !== true)) {
-      improvements.push({ baseline: baselineCollision, current: currentCollision });
-    }
-  }
-  return { regressions, improvements };
+/** Finds direct renamed re-exports outside the Plugin SDK boundary. */
+export function findAliasingReExports(modules: SourceModule[]) {
+  return analyzeExportNames(modules).aliasingReExports;
 }
 
-function resolveBaselinePath(repoRoot: string) {
-  return path.join(repoRoot, ...baselineRelativePath.split("/"));
+/** Finds duplicate exported function/const definitions across source modules. */
+export function findExportNameCollisions(modules: SourceModule[]): ExportNameCollision[] {
+  return analyzeExportNames(modules).collisions;
+}
+
+async function collectRepositoryModules(repoRoot: string) {
+  const ignoredDirNames = new Set(["node_modules", "test", "__fixtures__"]);
+  const scans = [
+    {
+      scanRoots: ["src"],
+      scanExtensions: new Set([".ts", ".mts", ".js", ".mjs"]),
+      includeDefinitions: true,
+    },
+    // Package modules are resolution-only: Plugin SDK barrels can export their
+    // names, but the collision rule itself remains scoped to src/ definitions.
+    {
+      scanRoots: ["packages"],
+      scanExtensions: new Set([".ts", ".mts"]),
+      includeDefinitions: false,
+    },
+  ];
+  return (
+    await Promise.all(
+      scans.map(async ({ includeDefinitions, ...scan }) =>
+        (await collectSourceFileContents({ repoRoot, ignoredDirNames, ...scan }))
+          .filter(({ relativeFile }) => !isExcludedExportCollisionSource(relativeFile))
+          .map(({ content, relativeFile }) => ({
+            content,
+            includeDefinitions,
+            path: relativeFile,
+          })),
+      ),
+    )
+  ).flat();
+}
+
+async function collectRepositoryExportAnalysis(repoRoot: string) {
+  return analyzeExportNames(await collectRepositoryModules(repoRoot));
 }
 
 export async function collectRepositoryCollisions(repoRoot: string) {
-  const sourceCollectOptions = {
-    fileExtensions: [".ts", ".mts", ".js", ".mjs"],
-    includeTests: true,
-    skipDirectories: ["test", "__fixtures__"],
-  };
-  const supportCollectOptions = {
-    ...sourceCollectOptions,
-    fileExtensions: [".ts", ".mts"],
-  };
-  const [collectedFiles, collectedSupportFiles] = await Promise.all([
-    collectTypeScriptFilesFromRoots(resolveSourceRoots(repoRoot, ["src"]), sourceCollectOptions),
-    // Package modules are resolution-only: Plugin SDK barrels can export their
-    // names, but the collision rule itself remains scoped to src/ definitions.
-    collectTypeScriptFilesFromRoots(
-      resolveSourceRoots(repoRoot, ["packages"]),
-      supportCollectOptions,
-    ),
-  ]);
-  const files = collectedFiles.filter((filePath) => !isExcludedExportCollisionSource(filePath));
-  const supportFiles = collectedSupportFiles.filter(
-    (filePath) => !isExcludedExportCollisionSource(filePath),
-  );
-  const modules = await Promise.all(
-    [
-      ...files.map((filePath) => ({ filePath, includeDefinitions: true })),
-      ...supportFiles.map((filePath) => ({ filePath, includeDefinitions: false })),
-    ].map(async ({ filePath, includeDefinitions }) => ({
-      content: await fs.readFile(filePath, "utf8"),
-      includeDefinitions,
-      path: normalizeRelativePath(path.relative(repoRoot, filePath)),
-    })),
-  );
-  return findExportNameCollisions(modules);
+  return (await collectRepositoryExportAnalysis(repoRoot)).collisions;
 }
 
-async function readBaseline(repoRoot: string) {
-  try {
-    return exportNameCollisionBaselineSchema.parse(
-      JSON.parse(await fs.readFile(resolveBaselinePath(repoRoot), "utf8")),
+function printAliasingReExports(reExports: AliasingReExport[]) {
+  if (reExports.length === 0) {
+    return;
+  }
+  console.log("Aliasing re-exports outside src/plugin-sdk/ (informational):");
+  for (const reExport of reExports) {
+    console.log(
+      `- ${reExport.path}:${reExport.line}: ${reExport.importedName} as ${reExport.exportedName} from ${JSON.stringify(reExport.moduleSpecifier)}`,
     );
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return null;
-    }
-    throw error;
   }
 }
 
-async function writeBaseline(repoRoot: string) {
-  const collisions = await collectRepositoryCollisions(repoRoot);
-  await fs.writeFile(resolveBaselinePath(repoRoot), `${JSON.stringify(collisions, null, 2)}\n`);
-  return collisions.length;
-}
-
-function formatCollision(collision: ExportNameCollision | undefined) {
-  return JSON.stringify(collision);
-}
-
-export async function main() {
-  const repoRoot = resolveRepoRoot(import.meta.url);
-  if (process.argv.includes("--update-debt-baseline")) {
-    const count = await writeBaseline(repoRoot);
-    console.log(`Wrote ${baselineRelativePath} (${count} entries)`);
-    return 0;
+export async function main(
+  repoRoot = resolveRepoRoot(import.meta.url),
+  argv = process.argv.slice(2),
+) {
+  if (argv.length > 0) {
+    console.error(`Unknown argument(s): ${argv.join(", ")}`);
+    return 2;
   }
 
-  const baseline = await readBaseline(repoRoot);
-  if (!baseline) {
-    console.error(
-      `Missing ${baselineRelativePath}; run \`${baselineRegenCommand}\` and commit it.`,
-    );
-    return 1;
-  }
-  const current = await collectRepositoryCollisions(repoRoot);
-  const debt = compareExportNameCollisionDebt(current, baseline);
-  if (debt.regressions.length === 0 && debt.improvements.length === 0) {
+  const analysis = await collectRepositoryExportAnalysis(repoRoot);
+  printAliasingReExports(analysis.aliasingReExports);
+  if (analysis.collisions.length === 0) {
     console.log("export name collision guard passed.");
     return 0;
   }
 
-  if (debt.regressions.length > 0) {
-    console.error(
-      `Found new exported function/const name collisions beyond ${baselineRelativePath}:`,
-    );
-    for (const regression of debt.regressions) {
-      console.error(`- ${formatCollision(regression.current)}`);
-    }
-    console.error(
-      `Give each behavior one exported spelling. If the debt increase is intentional, run \`${baselineRegenCommand}\` and commit the generated baseline.`,
-    );
+  console.error("Found exported function/const name collisions:");
+  for (const collision of analysis.collisions) {
+    console.error(`- ${JSON.stringify(collision)}`);
   }
-  if (debt.improvements.length > 0) {
-    console.error(`Export name collision debt dropped below ${baselineRelativePath}:`);
-    for (const improvement of debt.improvements) {
-      console.error(
-        `- ${improvement.baseline?.name}: ${formatCollision(improvement.baseline)} -> ${formatCollision(improvement.current)}`,
-      );
-    }
-    console.error(`Run \`${baselineRegenCommand}\` to ratchet the baseline down and commit it.`);
-  }
+  console.error("Give each behavior one exported spelling.");
   return 1;
 }
 
-runAsScript(import.meta.url, async () => {
-  let exitCode = 1;
-  try {
-    exitCode = await main();
-  } catch (error) {
-    console.error(error);
-  }
-  if (exitCode !== 0) {
-    process.exitCode = exitCode;
-    console.error(`[${failurePrefix}] FAILED (exit ${exitCode})`);
-  }
-});
+runAsScript(import.meta.url, () =>
+  runWithFailedTrailer("check-export-name-collisions", async () => {
+    process.exitCode = await main();
+  }),
+);

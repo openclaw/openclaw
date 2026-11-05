@@ -1,0 +1,2 @@
+# Real WebSocket regression: terminal shutdown discards audio before session reuse.
+31

@@ -14,11 +14,21 @@ public enum ChatTranscriptExporter {
         timestampFormatter.timeZone = TimeZone(secondsFromGMT: 0)
 
         var sections = ["# \(title)"]
-        for message in messages where self.shouldExport(message) {
-            let timestamp = self.timestamp(message.timestamp, formatter: timestampFormatter)
-            let heading = "### \(self.displayRole(message.role)) — \(timestamp)"
-            let body = self.body(for: message)
-            sections.append([heading, body].filter { !$0.isEmpty }.joined(separator: "\n\n"))
+        for row in ChatTranscriptRow.build(from: messages) {
+            switch row {
+            case let .message(message):
+                guard let body = self.body(for: message) else { continue }
+                let timestamp = self.timestamp(message.timestamp, formatter: timestampFormatter)
+                let heading = "### \(self.displayRole(message.role)) — \(timestamp)"
+                sections.append([heading, body].filter { !$0.isEmpty }.joined(separator: "\n\n"))
+            case .completedWork:
+                continue
+            case let .systemNotice(notice):
+                let timestamp = self.timestamp(notice.timestamp, formatter: timestampFormatter)
+                sections.append("### System — \(timestamp)\n\n[\(notice.label)] \(notice.body)")
+            case let .historyDivider(divider):
+                sections.append(self.dividerLine(divider))
+            }
         }
         return sections.joined(separator: "\n\n") + "\n"
     }
@@ -35,21 +45,8 @@ public enum ChatTranscriptExporter {
 
     private static func sanitizedFileStem(_ value: String) -> String? {
         let forbidden = CharacterSet(charactersIn: "/\\:*?\"<>|").union(.controlCharacters)
-        var segments: [String] = []
-        var current = ""
-
-        for scalar in value.unicodeScalars {
-            if forbidden.contains(scalar) {
-                segments.append(current)
-                current = ""
-            } else {
-                current.unicodeScalars.append(scalar)
-            }
-        }
-        segments.append(current)
-
         let edgeCharacters = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".-"))
-        let stem = segments
+        let stem = value.components(separatedBy: forbidden)
             .map { segment in
                 segment
                     .split(whereSeparator: { $0.isWhitespace })
@@ -80,36 +77,35 @@ public enum ChatTranscriptExporter {
         return key.isEmpty ? "Chat transcript" : key.split(whereSeparator: { $0.isNewline }).joined(separator: " ")
     }
 
-    private static func shouldExport(_ message: OpenClawChatMessage) -> Bool {
+    private static func body(for message: OpenClawChatMessage) -> String? {
         let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard role != "system" else { return false }
-        if !self.attachments(in: message).isEmpty {
-            return true
-        }
-        let text = self.visibleText(in: message)
-        guard !text.isEmpty else { return false }
-        return role == "user" || AssistantTextParser.hasVisibleContent(in: text)
-    }
-
-    private static func body(for message: OpenClawChatMessage) -> String {
+        guard role != "system" else { return nil }
+        let attachments = message.content.filter(\.isInlineAttachment)
+        let text = ChatMessageVisibleText.visibleText(in: message)
+        guard !attachments.isEmpty ||
+            (!text.isEmpty && (role == "user" || AssistantTextParser.hasVisibleContent(in: text)))
+        else { return nil }
         var parts: [String] = []
-        let text = self.visibleText(in: message)
         if !text.isEmpty {
             parts.append(text)
         }
-        parts.append(contentsOf: self.attachments(in: message).map { attachment in
+        parts.append(contentsOf: attachments.map { attachment in
             let filename = attachment.fileName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return "_[attachment: \(filename.isEmpty ? "Attachment" : filename)]_"
         })
         return parts.joined(separator: "\n\n")
     }
 
-    private static func visibleText(in message: OpenClawChatMessage) -> String {
-        ChatMessageVisibleText.visibleText(in: message)
-    }
-
-    private static func attachments(in message: OpenClawChatMessage) -> [OpenClawChatMessageContent] {
-        message.content.filter(\.isInlineAttachment)
+    private static func dividerLine(_ divider: ChatTranscriptRow.HistoryDivider) -> String {
+        switch divider.kind {
+        case .compaction:
+            let text = [divider.label, divider.metric]
+                .compactMap(\.self)
+                .joined(separator: " · ")
+            return "[\(text)]"
+        case .reset:
+            return "[\(divider.label) — \(divider.description ?? "")]"
+        }
     }
 
     private static func displayRole(_ role: String) -> String {

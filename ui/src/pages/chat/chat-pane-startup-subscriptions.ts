@@ -1,26 +1,25 @@
-import type { ApplicationContext } from "../../app/context.ts";
+import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+import { resolveChatSnapshotKey } from "./session-message-cache.ts";
+import { subscribeSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 
-type ChatPaneStartupContext = Pick<ApplicationContext, "cloudStartup" | "initialUserMessage">;
-
-export function subscribeChatPaneStartup(
-  context: ChatPaneStartupContext,
+export function subscribeChatPaneSnapshotInvalidation(
   getState: () => ChatPageHost | undefined,
+  onInvalidate?: () => void,
 ): () => void {
-  const stopInitialUserMessage = context.initialUserMessage.subscribe(() => {
+  return subscribeSnapshotInvalidation(({ sessionKey, scopePrefix, reason }) => {
+    // Cache eviction must preserve the active transcript and its completed load.
     const state = getState();
     if (
-      state &&
-      admitInitialUserMessageHandoff(state.initialUserMessage, state, state.sessionKey)
+      reason === "cache-eviction" ||
+      !state ||
+      (scopePrefix &&
+        !resolveChatSnapshotKey(state, { sessionKey: state.sessionKey }).startsWith(scopePrefix)) ||
+      (sessionKey && resolveChatSnapshotKey(state, { sessionKey: state.sessionKey }) !== sessionKey)
     ) {
-      state.requestUpdate?.();
+      return;
     }
+    onInvalidate?.();
+    resetChatHistoryProjection(state);
   });
-  const stopCloudStartup = context.cloudStartup.subscribe(() => getState()?.requestUpdate?.());
-
-  return () => {
-    stopCloudStartup();
-    stopInitialUserMessage();
-  };
 }

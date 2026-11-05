@@ -1,29 +1,31 @@
 // E2E: ordinary embedded Gateway turns preserve raw transcript cursor continuity.
 import { randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listSessionEntries, loadSessionEntry } from "../src/config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import {
+  listSessionEntriesCore,
+  loadSessionEntry,
+} from "../src/config/sessions/session-accessor.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import {
+  createOpenAiResponsesModelConfig,
+  startOpenAiResponsesModelServer,
+  type OpenAiResponsesModelServer,
+} from "./helpers/openai-responses-model-fixture.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "./helpers/openclaw-test-instance.js";
 
 const TEST_TIMEOUT_MS = 180_000;
-const MODEL_REF = "cursor-settlement/cursor-settlement";
 const SESSION_KEY = "agent:main:main";
 const GATEWAY_TOKEN_OPTION = "token";
 
-type MockModelServer = {
-  baseUrl: string;
-  close: () => Promise<void>;
-};
-
 const instances: OpenClawTestInstance[] = [];
-const modelServers: MockModelServer[] = [];
+const modelServers: OpenAiResponsesModelServer[] = [];
 
 afterEach(async () => {
   await Promise.allSettled(instances.splice(0).map((instance) => instance.cleanup()));
@@ -39,8 +41,17 @@ describe("embedded transcript cursor settlement", () => {
       modelServers.push(modelServer);
       const instance = await createOpenClawTestInstance({
         name: "embedded-transcript-cursor",
-        config: createTestConfig(modelServer.baseUrl),
-        env: { OPENCLAW_SKIP_PROVIDERS: undefined },
+        config: createOpenAiResponsesModelConfig({
+          baseUrl: modelServer.baseUrl,
+          providerId: "cursor-settlement",
+          modelId: "cursor-settlement",
+          reasoning: false,
+          toolProfile: "minimal",
+        }),
+        env: {
+          OPENCLAW_SKIP_PROVIDERS: undefined,
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        },
       });
       instances.push(instance);
       await instance.startGateway();
@@ -56,7 +67,7 @@ describe("embedded transcript cursor settlement", () => {
         const storePath = path.join(instance.state.sessionsDir("main"), "sessions.json");
         const sessionId = await waitForSessionId(storePath);
         expect(
-          listSessionEntries({ agentId: "main", storePath }).map((entry) => entry.sessionKey),
+          listSessionEntriesCore({ agentId: "main", storePath }).map((entry) => entry.sessionKey),
           instance.logs(),
         ).toEqual([SESSION_KEY]);
         const target = { agentId: "main", sessionId, sessionKey: SESSION_KEY, storePath };
@@ -110,45 +121,6 @@ describe("embedded transcript cursor settlement", () => {
     },
   );
 });
-
-function createTestConfig(baseUrl: string): OpenClawConfig {
-  return {
-    plugins: { slots: { memory: "none" } },
-    agents: {
-      defaults: {
-        heartbeat: { every: "0m" },
-        model: { primary: MODEL_REF },
-        models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
-        skipBootstrap: true,
-        skills: [],
-      },
-    },
-    tools: { profile: "minimal" },
-    models: {
-      mode: "replace",
-      providers: {
-        "cursor-settlement": {
-          baseUrl: `${baseUrl}/v1`,
-          apiKey: "test-token-placeholder",
-          api: "openai-responses",
-          request: { allowPrivateNetwork: true },
-          models: [
-            {
-              id: "cursor-settlement",
-              name: "cursor-settlement",
-              api: "openai-responses",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 128_000,
-              maxTokens: 4_096,
-            },
-          ],
-        },
-      },
-    },
-  };
-}
 
 async function runAgentTurn(
   client: Awaited<ReturnType<typeof connectGatewayClient>>,
@@ -213,99 +185,25 @@ function readMessageText(event: unknown): string[] {
   );
 }
 
-async function startMockModelServer(): Promise<MockModelServer> {
+async function startMockModelServer(): Promise<OpenAiResponsesModelServer> {
   let responseCount = 0;
-  const server = createServer((request, response) => {
-    void (async () => {
-      const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      if (request.method === "GET" && url.pathname === "/v1/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ data: [{ id: "cursor-settlement", object: "model" }] }));
-        return;
-      }
-      if (request.method !== "POST" || url.pathname !== "/v1/responses") {
-        response.writeHead(404).end();
-        return;
-      }
+  return startOpenAiResponsesModelServer({
+    modelId: "cursor-settlement",
+    bindError: "cursor settlement model server did not bind",
+    onRequest: async (request, response) => {
       await drainRequest(request);
       responseCount += 1;
-      writeModelResponse(response, responseCount);
-    })().catch((error: unknown) => {
-      response.writeHead(500, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { message: String(error) } }));
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("cursor settlement model server did not bind");
-  }
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    close: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
+      writeOpenAiResponsesText(response, {
+        text: `cursor settlement response ${responseCount}`,
+        messageId: `cursor-settlement-message-${responseCount}`,
+        responseId: `cursor-settlement-response-${responseCount}`,
       });
     },
-  };
+  });
 }
 
 async function drainRequest(request: IncomingMessage): Promise<void> {
   for await (const chunk of request) {
     void chunk;
   }
-}
-
-function writeModelResponse(response: ServerResponse, sequence: number): void {
-  const text = `cursor settlement response ${sequence}`;
-  const message = {
-    type: "message",
-    id: `cursor-settlement-message-${sequence}`,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  const events = [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...message, status: "in_progress", content: [] },
-    },
-    {
-      type: "response.output_text.delta",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      delta: text,
-    },
-    {
-      type: "response.output_text.done",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      text,
-    },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    {
-      type: "response.completed",
-      response: {
-        id: `cursor-settlement-response-${sequence}`,
-        status: "completed",
-        output: [message],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ];
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
 }

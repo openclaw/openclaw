@@ -1,12 +1,6 @@
-// Migrate Hermes plugin module implements items behavior.
 import type { MigrationItem } from "openclaw/plugin-sdk/migration";
-import {
-  createMigrationItem,
-  markMigrationItemConflict,
-  markMigrationItemError,
-  markMigrationItemSkipped,
-} from "openclaw/plugin-sdk/migration";
-import { isRecord, readString } from "./helpers.js";
+import { createMigrationItem } from "openclaw/plugin-sdk/migration";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const HERMES_REASON_ALREADY_CONFIGURED = "already configured";
 export const HERMES_REASON_DEFAULT_MODEL_CONFIGURED = "default model already configured";
@@ -21,6 +15,7 @@ export const HERMES_REASON_AUTH_PROFILE_WRITE_FAILED = "failed to write auth pro
 export function createHermesModelItem(params: {
   model: string;
   currentModel?: string;
+  targetAgentId?: string;
   overwrite?: boolean;
 }): MigrationItem {
   const alreadyConfigured = params.currentModel === params.model;
@@ -29,7 +24,7 @@ export function createHermesModelItem(params: {
     id: "config:default-model",
     kind: "config",
     action: alreadyConfigured ? "skip" : "update",
-    target: "agents.defaults.model",
+    target: params.targetAgentId ? `agent:${params.targetAgentId}:model` : "agents.defaults.model",
     status: alreadyConfigured ? "skipped" : conflict ? "conflict" : "planned",
     reason: alreadyConfigured
       ? HERMES_REASON_ALREADY_CONFIGURED
@@ -41,7 +36,7 @@ export function createHermesModelItem(params: {
 }
 
 export function readHermesModelDetails(item: MigrationItem): { model: string } | undefined {
-  const model = readString(item.details?.model);
+  const model = normalizeOptionalString(item.details?.model);
   return model ? { model } : undefined;
 }
 
@@ -100,29 +95,18 @@ export function createHermesSecretItem(params: {
   });
 }
 
-export function readHermesSecretDetails(item: MigrationItem):
-  | {
-      envVar?: string;
-      provider: string;
-      profileId: string;
-      mode?: "token";
-      sourceKind?: string;
-      sourceProvider?: string;
-      sourceCredentialId?: string;
-      secretField?: string;
-    }
-  | undefined {
-  const envVar = readString(item.details?.envVar);
-  const provider = readString(item.details?.provider);
-  const profileId = readString(item.details?.profileId);
+export function readHermesSecretDetails(item: MigrationItem) {
+  const envVar = normalizeOptionalString(item.details?.envVar);
+  const provider = normalizeOptionalString(item.details?.provider);
+  const profileId = normalizeOptionalString(item.details?.profileId);
   if (!provider || !profileId) {
     return undefined;
   }
-  const mode = item.details?.mode === "token" ? "token" : undefined;
-  const sourceKind = readString(item.details?.sourceKind);
-  const sourceProvider = readString(item.details?.sourceProvider);
-  const sourceCredentialId = readString(item.details?.sourceCredentialId);
-  const secretField = readString(item.details?.secretField);
+  const mode = item.details?.mode === "token" ? ("token" as const) : undefined;
+  const sourceKind = normalizeOptionalString(item.details?.sourceKind);
+  const sourceProvider = normalizeOptionalString(item.details?.sourceProvider);
+  const sourceCredentialId = normalizeOptionalString(item.details?.sourceCredentialId);
+  const secretField = normalizeOptionalString(item.details?.secretField);
   return {
     ...(envVar ? { envVar } : {}),
     provider,
@@ -133,16 +117,4 @@ export function readHermesSecretDetails(item: MigrationItem):
     ...(sourceCredentialId ? { sourceCredentialId } : {}),
     ...(secretField ? { secretField } : {}),
   };
-}
-
-export function hermesItemConflict(item: MigrationItem, reason: string): MigrationItem {
-  return markMigrationItemConflict(item, reason);
-}
-
-export function hermesItemError(item: MigrationItem, reason: string): MigrationItem {
-  return markMigrationItemError(item, reason);
-}
-
-export function hermesItemSkipped(item: MigrationItem, reason: string): MigrationItem {
-  return markMigrationItemSkipped(item, reason);
 }

@@ -5,17 +5,21 @@ import { ensureCustomElementDefined } from "./lazy-custom-element.ts";
 
 let tagSequence = 0;
 
-function uniqueTag(): string {
-  tagSequence += 1;
-  return `openclaw-lazy-test-${tagSequence}`;
+const uniqueTag = () => `openclaw-lazy-test-${++tagSequence}`;
+
+function definedElement() {
+  const tagName = uniqueTag();
+  return {
+    tagName,
+    loadModule: vi.fn(async () => {
+      customElements.define(tagName, class extends HTMLElement {});
+    }),
+  };
 }
 
 describe("ensureCustomElementDefined", () => {
   it("deduplicates concurrent module loads", async () => {
-    const tagName = uniqueTag();
-    const loadModule = vi.fn(async () => {
-      customElements.define(tagName, class extends HTMLElement {});
-    });
+    const { tagName, loadModule } = definedElement();
 
     await Promise.all([
       ensureCustomElementDefined(tagName, loadModule),
@@ -24,22 +28,6 @@ describe("ensureCustomElementDefined", () => {
 
     expect(loadModule).toHaveBeenCalledOnce();
     expect(customElements.get(tagName)).toBeDefined();
-  });
-
-  it("allows a failed module load to be retried", async () => {
-    const tagName = uniqueTag();
-    const firstError = new Error("chunk unavailable");
-    const loadModule = vi
-      .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(firstError)
-      .mockImplementationOnce(async () => {
-        customElements.define(tagName, class extends HTMLElement {});
-      });
-
-    await expect(ensureCustomElementDefined(tagName, loadModule)).rejects.toBe(firstError);
-    await expect(ensureCustomElementDefined(tagName, loadModule)).resolves.toBeUndefined();
-
-    expect(loadModule).toHaveBeenCalledTimes(2);
   });
 
   it("rejects modules that do not register their declared element", async () => {

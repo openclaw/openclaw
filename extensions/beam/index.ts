@@ -1,32 +1,35 @@
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createBeamRequestHandler } from "./src/http.js";
 import { createBeamMirrorService } from "./src/mirror.js";
+import { createBeamOwnedViewHandler } from "./src/owned-view.js";
 import { createBeamSessionCatalog } from "./src/session-catalog.js";
 import { createBeamStore } from "./src/store.js";
 
 export default definePluginEntry({
   id: "beam",
   name: "Beam",
-  description: "Receive redacted local coding sessions as a read-only catalog",
+  description: "Receive redacted coding-session snapshots for review or Team continuation",
   register(api) {
     const store = createBeamStore(api.runtime);
     api.registerSessionCatalog(createBeamSessionCatalog(store));
+    for (const operation of ["list", "read", "resolve", "continue"] as const) {
+      api.registerGatewayMethod(
+        `beam.owned.${operation}`,
+        createBeamOwnedViewHandler(store, operation),
+        {
+          scope: "operator.sessions.write",
+          profileAccess: "required",
+        },
+      );
+    }
+    api.registerService(store.catalogService);
     api.registerHttpRoute({
       path: "/api/v1/beam/sessions",
       auth: "gateway",
       match: "exact",
       handler: createBeamRequestHandler({
         store,
-        resolveControlUiTarget: () => {
-          const config = api.runtime.config.current();
-          return {
-            // The resolver only reads; the plugin runtime exposes a DeepReadonly view.
-            agentId: resolveDefaultAgentId(config as OpenClawConfig),
-            basePath: config.gateway?.controlUi?.basePath,
-          };
-        },
+        resolveControlUiBasePath: () => api.runtime.config.current().gateway?.controlUi?.basePath,
       }),
     });
     api.registerService(createBeamMirrorService({ runtime: api.runtime }));

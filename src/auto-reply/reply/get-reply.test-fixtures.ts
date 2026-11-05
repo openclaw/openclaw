@@ -82,6 +82,35 @@ export function createGetReplySessionState(overrides: Record<string, unknown> = 
   };
 }
 
+export function createLockedReplyPreprocessingState(params: {
+  sessionKey: string;
+  sessionId: string;
+  agentHarnessId: string;
+}) {
+  return {
+    sessionKey: params.sessionKey,
+    storePath: "/tmp/sessions.json",
+    sessionEntry: {
+      sessionId: params.sessionId,
+      updatedAt: 1,
+      agentHarnessId: params.agentHarnessId,
+      modelSelectionLocked: true,
+    },
+  };
+}
+
+export function registerGetReplyBaselineBypass(): void {
+  vi.doMock("../../sessions/session-diff-baseline.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../sessions/session-diff-baseline.js")>();
+    return {
+      ...actual,
+      ensureSessionDiffBaseline: vi.fn(
+        async (params: Parameters<typeof actual.ensureSessionDiffBaseline>[0]) => params.entry,
+      ),
+    };
+  });
+}
+
 export function createGetReplyContinueDirectivesResult(params: {
   body: string;
   abortKey: string;
@@ -123,9 +152,11 @@ export function createGetReplyContinueDirectivesResult(params: {
       elevatedAllowed: false,
       elevatedFailures: [],
       defaultActivation: "always",
-      resolvedThinkLevel: params.resolvedThinkLevel,
+      resolveModelLevels: async () => ({
+        resolvedThinkLevel: params.resolvedThinkLevel ?? "off",
+        resolvedReasoningLevel: params.resolvedReasoningLevel ?? "off",
+      }),
       resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: params.resolvedReasoningLevel ?? "off",
       resolvedElevatedLevel: "off",
       execOverrides: undefined,
       blockStreamingEnabled: false,
@@ -134,7 +165,8 @@ export function createGetReplyContinueDirectivesResult(params: {
       provider: params.provider ?? "openai",
       model: params.model ?? "gpt-4o-mini",
       modelState: {
-        resolveDefaultThinkingLevel: async () => undefined,
+        resolveDefaultThinkingLevel: async () => "off",
+        resolveDefaultReasoningLevel: async () => "off",
         resolveThinkingCatalog: async () => [],
       },
       contextTokens: 0,

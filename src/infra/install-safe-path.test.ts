@@ -1,10 +1,9 @@
-// Covers safe plugin install path normalization and boundary checks.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   assertCanonicalPathWithinBase,
   packageNameMatchesId,
@@ -15,6 +14,13 @@ import {
 } from "./install-safe-path.js";
 
 const directorySymlinkType = process.platform === "win32" ? "junction" : "dir";
+
+const withDir = (run: (directory: string) => Promise<void>) =>
+  withTestDir({ prefix: "openclaw-install-safe-" }, run);
+const checkBoundary = (baseDir: string, candidatePath: string) =>
+  assertCanonicalPathWithinBase({ baseDir, candidatePath, boundaryLabel: "install directory" });
+const resolveDir = (id: string) =>
+  resolveSafeInstallDir({ baseDir: "/tmp/plugins", id, invalidNameMessage: "invalid plugin name" });
 
 // Vitest evaluates skipIf while declaring tests, so probe before describe().
 const canCreateDirectorySymlinks = (() => {
@@ -99,26 +105,14 @@ describe("safePathSegmentHashed", () => {
 
 describe("resolveSafeInstallDir", () => {
   it("resolves install dirs under the base directory", () => {
-    expect(
-      resolveSafeInstallDir({
-        baseDir: "/tmp/plugins",
-        id: "@openclaw/matrix",
-        invalidNameMessage: "invalid plugin name",
-      }),
-    ).toEqual({
+    expect(resolveDir("@openclaw/matrix")).toEqual({
       ok: true,
       path: path.join("/tmp/plugins", "@openclaw__matrix"),
     });
   });
 
   it("rejects ids that resolve to the base directory itself", () => {
-    expect(
-      resolveSafeInstallDir({
-        baseDir: "/tmp/plugins",
-        id: "   ",
-        invalidNameMessage: "invalid plugin name",
-      }),
-    ).toEqual({
+    expect(resolveDir("   ")).toEqual({
       ok: false,
       error: "invalid plugin name",
     });
@@ -127,7 +121,7 @@ describe("resolveSafeInstallDir", () => {
 
 describe("assertCanonicalPathWithinBase", () => {
   it("accepts in-base directories", async () => {
-    await withTempDir({ prefix: "openclaw-install-safe-" }, async (baseDir) => {
+    await withTestDir({ prefix: "openclaw-install-safe-" }, async (baseDir) => {
       const candidate = path.join(baseDir, "tools");
       await fs.mkdir(candidate, { recursive: true });
       await expect(
@@ -141,7 +135,7 @@ describe("assertCanonicalPathWithinBase", () => {
   });
 
   it("accepts missing candidate paths when their parent stays in base", async () => {
-    await withTempDir({ prefix: "openclaw-install-safe-" }, async (baseDir) => {
+    await withTestDir({ prefix: "openclaw-install-safe-" }, async (baseDir) => {
       const candidate = path.join(baseDir, "tools", "plugin");
       await fs.mkdir(path.dirname(candidate), { recursive: true });
       await expect(
@@ -155,47 +149,35 @@ describe("assertCanonicalPathWithinBase", () => {
   });
 
   it("rejects non-directory base paths", async () => {
-    await withTempDir({ prefix: "openclaw-install-safe-" }, async (baseDir) => {
+    await withDir(async (baseDir) => {
       const baseFile = path.join(baseDir, "not-a-dir");
       await fs.writeFile(baseFile, "nope", "utf-8");
-      await expect(
-        assertCanonicalPathWithinBase({
-          baseDir: baseFile,
-          candidatePath: path.join(baseFile, "child"),
-          boundaryLabel: "install directory",
-        }),
-      ).rejects.toThrow(/base directory must be a directory/i);
+      await expect(checkBoundary(baseFile, path.join(baseFile, "child"))).rejects.toThrow(
+        /base directory must be a directory/i,
+      );
     });
   });
 
   it("rejects non-directory candidate paths inside the base", async () => {
-    await withTempDir({ prefix: "openclaw-install-safe-" }, async (baseDir) => {
+    await withDir(async (baseDir) => {
       const candidate = path.join(baseDir, "file.txt");
       await fs.writeFile(candidate, "nope", "utf-8");
-      await expect(
-        assertCanonicalPathWithinBase({
-          baseDir,
-          candidatePath: candidate,
-          boundaryLabel: "install directory",
-        }),
-      ).rejects.toThrow(/must stay within install directory/i);
+      await expect(checkBoundary(baseDir, candidate)).rejects.toThrow(
+        /must stay within install directory/i,
+      );
     });
   });
 
   it.skipIf(!canCreateDirectorySymlinks)(
     "rejects symlinked candidate directories that escape the base",
     async () => {
-      await withTempDir({ prefix: "openclaw-install-safe-" }, async (baseDir) => {
-        await withTempDir({ prefix: "openclaw-install-safe-outside-" }, async (outsideDir) => {
+      await withDir(async (baseDir) => {
+        await withTestDir({ prefix: "openclaw-install-safe-outside-" }, async (outsideDir) => {
           const linkDir = path.join(baseDir, "alias");
           await fs.symlink(outsideDir, linkDir, directorySymlinkType);
-          await expect(
-            assertCanonicalPathWithinBase({
-              baseDir,
-              candidatePath: linkDir,
-              boundaryLabel: "install directory",
-            }),
-          ).rejects.toThrow(/must stay within install directory/i);
+          await expect(checkBoundary(baseDir, linkDir)).rejects.toThrow(
+            /must stay within install directory/i,
+          );
         });
       });
     },
@@ -204,7 +186,7 @@ describe("assertCanonicalPathWithinBase", () => {
   it.skipIf(!canCreateDirectorySymlinks)(
     "accepts symlinked base directories when the target stays in the real base",
     async () => {
-      await withTempDir({ prefix: "openclaw-install-safe-" }, async (parentDir) => {
+      await withTestDir({ prefix: "openclaw-install-safe-" }, async (parentDir) => {
         const realBaseDir = path.join(parentDir, "real-base");
         const symlinkBaseDir = path.join(parentDir, "base-link");
         await fs.mkdir(realBaseDir, { recursive: true });
@@ -223,7 +205,7 @@ describe("assertCanonicalPathWithinBase", () => {
   it.skipIf(!canCreateDirectorySymlinks)(
     "rejects nested symlinked candidate directories",
     async () => {
-      await withTempDir({ prefix: "openclaw-install-safe-" }, async (parentDir) => {
+      await withDir(async (parentDir) => {
         const realBaseDir = path.join(parentDir, "base");
         const nestedRealDir = path.join(parentDir, "nested-real");
         const nestedSymlinkDir = path.join(realBaseDir, "nested-link");
@@ -231,11 +213,7 @@ describe("assertCanonicalPathWithinBase", () => {
         await fs.mkdir(nestedRealDir, { recursive: true });
         await fs.symlink(nestedRealDir, nestedSymlinkDir, directorySymlinkType);
         await expect(
-          assertCanonicalPathWithinBase({
-            baseDir: realBaseDir,
-            candidatePath: path.join(nestedSymlinkDir, "tool"),
-            boundaryLabel: "install directory",
-          }),
+          checkBoundary(realBaseDir, path.join(nestedSymlinkDir, "tool")),
         ).rejects.toThrow(/must stay within install directory/i);
       });
     },

@@ -1,0 +1,481 @@
+import { ConnectErrorDetailCodes } from "@openclaw/gateway-client/browser";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  MentionInboxItem,
+  MentionsListResult,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayHelloOk } from "../api/gateway.ts";
+import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
+import { createMentionsCapability, type MentionsCapability } from "./mentions.ts";
+import {
+  client,
+  createGatewayHarness,
+  flushMicrotasks,
+  type RequestFn,
+} from "./overlays-access.test-support.ts";
+
+const mention: MentionInboxItem = {
+  id: "mention-1",
+  senderProfileId: "alice",
+  senderLabel: "Alice",
+  sessionKey: "agent:writer:review",
+  agentId: "writer",
+  sessionTitle: "Review",
+  messageId: "message-1",
+  createdAt: 1_000,
+  expiresAt: 10_000,
+  excerpt: "@Bob please review this",
+};
+
+function hello(bootId = "boot-a"): GatewayHelloOk {
+  return {
+    type: "hello-ok",
+    protocol: 1,
+    server: { bootId, connId: "connection-a" },
+    auth: { role: "operator", scopes: ["operator.read"] },
+    features: { methods: ["mentions.list", "mentions.dismiss"] },
+  };
+}
+
+function result(
+  revision: number,
+  items: MentionInboxItem[] = [mention],
+  gatewayInstanceId = "boot-a",
+): MentionsListResult {
+  return { gatewayInstanceId, revision, items };
+}
+
+function gatewayForMentions(request: RequestFn) {
+  const harness = createGatewayHarness(client(request));
+  harness.update({
+    hello: hello(),
+    selfUser: { id: "bob", identity: { type: "profile", id: "bob" }, name: "Bob" },
+  });
+  return {
+    ...harness,
+    changed: (revision: number) =>
+      harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision }),
+  };
+}
+
+function inboxFixture(
+  request: RequestFn,
+  options?: Parameters<typeof createMentionsCapability>[1],
+) {
+  const harness = gatewayForMentions(request);
+  return { harness, capability: createCapability(harness.gateway, options) };
+}
+function accessError(profile = false) {
+  return new GatewayRequestError({
+    code: profile ? "UNAVAILABLE" : "FORBIDDEN",
+    message: "Mention access revoked",
+    ...(profile
+      ? { details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE } }
+      : {}),
+  });
+}
+const capabilities: MentionsCapability[] = [];
+
+function createCapability(...args: Parameters<typeof createMentionsCapability>) {
+  const capability = createMentionsCapability(...args);
+  capabilities.push(capability);
+  return capability;
+}
+
+afterEach(() => {
+  capabilities.splice(0).forEach((capability) => capability.dispose());
+  vi.useRealTimers();
+});
+
+describe("application mention Inbox", () => {
+  it("backs off unavailable reads across gateway updates and invalidations, then recovers", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn<RequestFn>().mockRejectedValue(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Profile catalog pending",
+        retryable: true,
+        retryAfterMs: 1_000,
+        details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
+      }),
+    );
+    const { harness, capability } = inboxFixture(request);
+    await flushMicrotasks();
+    for (let index = 0; index < 100; index++) {
+      harness.update({});
+      harness.changed(index);
+      await capability.refresh();
+    }
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(request).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(request).toHaveBeenCalledTimes(3);
+    request.mockResolvedValue(result(1));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(capability.snapshot).toMatchObject({ phase: "ready", items: [mention], error: null });
+  });
+
+  it.each(["connection", "dispose"] as const)(
+    "cancels an unavailable retry after %s changes",
+    async (boundary) => {
+      vi.useFakeTimers();
+      const request = vi
+        .fn<RequestFn>()
+        .mockRejectedValueOnce(new GatewayRequestError({ code: "UNAVAILABLE", message: "Pending" }))
+        .mockResolvedValue(result(1));
+      const { harness, capability } = inboxFixture(request);
+      await flushMicrotasks();
+      if (boundary === "connection") {
+        harness.update({ client: client(request) });
+      } else {
+        capability.dispose();
+      }
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(request).toHaveBeenCalledTimes(boundary === "connection" ? 2 : 1);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it.each(["none", "pending", "completed"] as const)(
+    "defers hydration behind chat without blocking explicit refresh (%s)",
+    async (explicit) => {
+      const bootstrap = createConnectionBootstrapCoordinator();
+      bootstrap.setForegroundRoute("agent:main:pending");
+      const response = deferred<MentionsListResult>();
+      const request = vi.fn<RequestFn>(() => response.promise);
+      const harness = gatewayForMentions(request);
+      const gatewayClient = harness.gateway.snapshot.client;
+      const capability = createCapability(harness.gateway, { connectionBootstrap: bootstrap });
+      bootstrap.synchronize({ client: gatewayClient, connected: true });
+      try {
+        harness.changed(2);
+        harness.changed(3);
+        await flushMicrotasks();
+        expect(request).not.toHaveBeenCalled();
+        let manual: Promise<void> | undefined;
+        if (explicit !== "none") {
+          manual = capability.refresh();
+          await flushMicrotasks();
+          if (explicit === "completed") {
+            response.resolve(result(3));
+            await manual;
+            expect(capability.snapshot.items).toEqual([mention]);
+          }
+        }
+        bootstrap.setForegroundPane(
+          {},
+          { sessionKey: "agent:main:pending", client: gatewayClient, ready: true },
+        );
+        response.resolve(result(3));
+        await manual;
+        await vi.waitFor(() => expect(capability.snapshot.phase).toBe("ready"));
+        await flushMicrotasks();
+        expect(request).toHaveBeenCalledExactlyOnceWith("mentions.list", {});
+      } finally {
+        response.resolve(result(3));
+        bootstrap.reset();
+      }
+    },
+  );
+
+  it("hydrates only a canonical profile and keeps mentions independent of the selected session", async () => {
+    const request = vi.fn<RequestFn>(() => Promise.resolve(result(1)));
+    const harness = gatewayForMentions(request);
+    harness.update({ selfUser: { id: "bob", name: "Bob" } });
+    const capability = createCapability(harness.gateway);
+
+    await capability.refresh();
+    expect(capability.snapshot.phase).toBe("unavailable");
+    expect(request).not.toHaveBeenCalled();
+
+    harness.update({
+      selfUser: { id: "raw-login", identity: { type: "profile", id: "bob" } },
+    });
+    await capability.refresh();
+    expect(capability.snapshot).toMatchObject({ phase: "ready", items: [mention] });
+    harness.update({ sessionKey: "agent:other:main", assistantAgentId: "other" });
+
+    expect(capability.snapshot.items).toEqual([mention]);
+    expect(request).toHaveBeenCalledExactlyOnceWith("mentions.list", {});
+  });
+
+  it.each([1, 3])("coalesces in-flight refreshes (%s)", async (revision) => {
+    const initial = deferred<MentionsListResult>();
+    const latest = deferred<MentionsListResult>();
+    const request = vi
+      .fn<RequestFn>()
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValue(latest.promise);
+    const { harness, capability } = inboxFixture(request);
+    await flushMicrotasks();
+    const refreshes = [capability.refresh(), capability.refresh()];
+    harness.changed(2);
+    harness.changed(3);
+    initial.resolve(result(revision));
+    await flushMicrotasks();
+    const calls = revision === 1 ? 2 : 1;
+    expect(request).toHaveBeenCalledTimes(calls);
+    const current = { ...mention, id: "mention-current" };
+    latest.resolve(result(3, [current]));
+    await Promise.all(refreshes);
+    expect(capability.snapshot).toMatchObject({
+      phase: "ready",
+      items: revision === 1 ? [current] : [mention],
+    });
+    harness.changed(3);
+    harness.changed(2);
+    await flushMicrotasks();
+    expect(request).toHaveBeenCalledTimes(calls);
+  });
+
+  it("reconciles an invalidation arriving as the previous snapshot settles", async () => {
+    const request = vi
+      .fn<RequestFn>()
+      .mockResolvedValueOnce(result(1))
+      .mockResolvedValue(result(2, []));
+    const { harness, capability } = inboxFixture(request);
+    let invalidated = false;
+    capability.subscribe(() => {
+      if (invalidated || capability.snapshot.phase !== "ready") {
+        return;
+      }
+      invalidated = true;
+      queueMicrotask(() => {
+        harness.changed(2);
+      });
+    });
+
+    await capability.refresh();
+
+    expect(capability.snapshot).toMatchObject({ phase: "ready", items: [] });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps failed acknowledgements visible and retries only caller-visible IDs", async () => {
+    let dismissals = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method !== "mentions.dismiss") {
+        return Promise.resolve(result(1));
+      }
+      dismissals += 1;
+      return dismissals === 1
+        ? Promise.reject(new Error("Connection interrupted"))
+        : Promise.resolve(result(2, []));
+    });
+    const { capability } = inboxFixture(request);
+    await capability.refresh();
+
+    await capability.dismiss(["foreign-id", mention.id, mention.id]);
+    expect(capability.snapshot).toMatchObject({
+      phase: "error",
+      items: [mention],
+      dismissing: [],
+      error: "Connection interrupted",
+    });
+    expect(request).toHaveBeenLastCalledWith("mentions.dismiss", { ids: [mention.id] });
+    await capability.dismiss([mention.id]);
+    expect(capability.snapshot).toMatchObject({ phase: "ready", items: [], error: null });
+  });
+
+  it.each([
+    ["dismiss", "role"],
+    ["refresh", "profile"],
+  ] as const)("clears the Inbox when %s reports %s access loss", async (operation, failure) => {
+    vi.useFakeTimers();
+    const request = vi.fn<RequestFn>().mockResolvedValue(result(1));
+    const { capability } = inboxFixture(request);
+    await capability.refresh();
+    request.mockRejectedValue(accessError(failure === "profile"));
+
+    if (operation === "refresh") {
+      await capability.refresh();
+    } else {
+      await capability.dismiss([mention.id]);
+    }
+
+    expect(capability.snapshot).toMatchObject({
+      phase: "error",
+      items: [],
+      dismissing: [],
+      error: "Mention access revoked",
+    });
+    request.mockResolvedValue(result(1));
+    if (failure === "profile") {
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    await capability.refresh();
+    expect(capability.snapshot).toMatchObject({ phase: "ready", items: [mention], error: null });
+  });
+
+  it.each(["dismissed", "revoked"] as const)(
+    "fences an in-flight list after dismissal is %s",
+    async (outcome) => {
+      const stale = deferred<MentionsListResult>();
+      let reads = 0;
+      const request = vi.fn<RequestFn>((method) => {
+        if (method === "mentions.dismiss") {
+          return outcome === "dismissed"
+            ? Promise.resolve(result(3, []))
+            : Promise.reject(accessError());
+        }
+        return ++reads === 1 ? Promise.resolve(result(1)) : stale.promise;
+      });
+      const { capability } = inboxFixture(request);
+      await capability.refresh();
+      const pending = capability.refresh();
+      await flushMicrotasks();
+      await capability.dismiss([mention.id]);
+
+      stale.resolve(result(2));
+      await pending;
+
+      expect(capability.snapshot).toMatchObject({
+        phase: outcome === "dismissed" ? "ready" : "error",
+        items: [],
+      });
+    },
+  );
+
+  it.each([
+    "profile",
+    "profileless",
+    "connection",
+    "gateway",
+    "credentials",
+    "scope",
+    "capability",
+  ] as const)("clears and fences the old Inbox after a %s change", async (boundary) => {
+    const stale = deferred<MentionsListResult>();
+    let reads = 0;
+    const request = vi.fn<RequestFn>(() => {
+      reads += 1;
+      return reads === 1
+        ? Promise.resolve(result(1))
+        : reads === 2
+          ? stale.promise
+          : Promise.resolve(result(0, [], boundary === "gateway" ? "boot-b" : "boot-a"));
+    });
+    const { harness, capability } = inboxFixture(request);
+    await capability.refresh();
+    const refresh = capability.refresh();
+    await flushMicrotasks();
+
+    if (boundary === "profile") {
+      harness.update({ selfUser: { id: "carol", identity: { type: "profile", id: "carol" } } });
+    } else if (boundary === "profileless") {
+      harness.update({ selfUser: null });
+    } else if (boundary === "connection") {
+      harness.update({ client: client(request) });
+    } else if (boundary === "gateway") {
+      harness.update({ hello: hello("boot-b") });
+    } else if (boundary === "credentials") {
+      harness.gateway.connectionRevision += 1;
+      harness.update({});
+    } else if (boundary === "scope") {
+      harness.update({ hello: { ...hello(), auth: { role: "operator", scopes: [] } } });
+    } else if (boundary === "capability") {
+      harness.update({ hello: { ...hello(), features: { methods: [] } } });
+    }
+    expect(capability.snapshot.items).toEqual([]);
+    await capability.refresh();
+    stale.resolve(result(99));
+    await refresh;
+
+    expect(capability.snapshot.items).toEqual([]);
+    expect(capability.snapshot.phase).toBe(
+      ["profileless", "scope", "capability"].includes(boundary) ? "unavailable" : "ready",
+    );
+  });
+
+  it.each(["same hello", "profile hydration"] as const)(
+    "refreshes on reconnect alone and never revives a pre-disconnect read (%s)",
+    async (reconnect) => {
+      const stale = deferred<MentionsListResult>();
+      const refreshed = deferred<MentionsListResult>();
+      const request = vi
+        .fn<RequestFn>()
+        .mockResolvedValueOnce(result(1))
+        .mockReturnValueOnce(stale.promise)
+        .mockReturnValueOnce(refreshed.promise);
+      const harness = gatewayForMentions(request);
+      const connected = { ...harness.gateway.snapshot };
+      const capability = createCapability(harness.gateway);
+      await flushMicrotasks();
+      expect(capability.snapshot.items).toEqual([mention]);
+      harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 2 });
+      await flushMicrotasks();
+      expect(request).toHaveBeenCalledTimes(2);
+      harness.update({ phase: "reconnecting", selfUser: null, hello: null });
+      expect(capability.snapshot).toMatchObject({ phase: "unavailable", items: [mention] });
+      await capability.dismiss([mention.id]);
+      expect(request).toHaveBeenCalledTimes(2);
+      harness.update(
+        reconnect === "same hello"
+          ? connected
+          : { phase: "connected", hello: hello(), selfUser: undefined },
+      );
+      expect(capability.snapshot).toMatchObject({ phase: "loading", items: [mention] });
+      if (reconnect === "profile hydration") {
+        await capability.dismiss([mention.id]);
+        expect(request).toHaveBeenCalledTimes(2);
+        harness.update({ selfUser: connected.selfUser });
+      }
+      await flushMicrotasks();
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(request).toHaveBeenLastCalledWith("mentions.list", {});
+
+      // Resolve the old read only after reconnect, when its transport facts match again.
+      stale.resolve(result(99, []));
+      await flushMicrotasks();
+      expect(capability.snapshot).toMatchObject({ phase: "loading", items: [mention] });
+      const current = { ...mention, id: "created-during-outage" };
+      refreshed.resolve(result(2, [current]));
+      await flushMicrotasks();
+      expect(capability.snapshot).toMatchObject({ phase: "ready", items: [current] });
+      expect(request).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("hydrates the new profile when an earlier profile's bootstrap is still queued", async () => {
+    const bootstrap = createConnectionBootstrapCoordinator();
+    const request = vi.fn<RequestFn>(() => Promise.resolve(result(0, [])));
+    const { harness, capability } = inboxFixture(request, { connectionBootstrap: bootstrap });
+    harness.update({ selfUser: { id: "carol", identity: { type: "profile", id: "carol" } } });
+
+    bootstrap.synchronize({ client: harness.gateway.snapshot.client, connected: true });
+    await vi.waitFor(() => expect(capability.snapshot.phase).toBe("ready"));
+    expect(request).toHaveBeenCalledExactlyOnceWith("mentions.list", {});
+    bootstrap.reset();
+  });
+
+  it("does not start queued work or publish an in-flight dismissal after disposal", async () => {
+    const dismissal = deferred<MentionsListResult>();
+    const request = vi.fn<RequestFn>((method) =>
+      method === "mentions.dismiss" ? dismissal.promise : Promise.resolve(result(1)),
+    );
+    const { harness, capability } = inboxFixture(request);
+    await capability.refresh();
+    const pending = capability.dismiss([mention.id]);
+    const publish = vi.fn();
+    capability.subscribe(publish);
+    capability.dispose();
+    dismissal.resolve(result(2, []));
+    await pending;
+    harness.changed(3);
+    expect(publish).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(2);
+
+    const queued = createCapability(harness.gateway);
+    queued.dispose();
+    await flushMicrotasks();
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+});

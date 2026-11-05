@@ -17,9 +17,9 @@ struct OpenClawChatSwarmActivityState: Equatable {
     }
 
     mutating func observe(_ event: OpenClawChatSessionsChangedEvent) -> Bool {
-        guard let groupID = Self.normalized(event.swarmGroupId) else { return false }
-        let kind = Self.normalized(event.kind)
-        let text = Self.normalized(event.text)
+        guard let groupID = ChatPayloadDecoding.trimmedNonEmptyString(event.swarmGroupId) else { return false }
+        let kind = ChatPayloadDecoding.trimmedNonEmptyString(event.kind)
+        let text = ChatPayloadDecoding.trimmedNonEmptyString(event.text)
         if let text, kind == "phase" || kind == "log" {
             if kind == "phase" {
                 let rankKey = Self.phaseRankKey(groupID: groupID, phase: text)
@@ -31,38 +31,21 @@ struct OpenClawChatSwarmActivityState: Equatable {
                         limit: maxTrackedSwarmChildren)
                     self.nextPhaseRank += 1
                 }
-                Self.setBounded(
-                    &self.currentPhaseByGroup,
-                    key: groupID,
-                    value: text,
-                    limit: maxTrackedSwarmGroups)
-            } else {
-                Self.setBounded(
-                    &self.latestLogByGroup,
-                    key: groupID,
-                    value: text,
-                    limit: maxTrackedSwarmGroups)
             }
+            let field: WritableKeyPath<Self, [String: String]> = kind == "phase"
+                ? \.currentPhaseByGroup : \.latestLogByGroup
+            Self.setBounded(&self[keyPath: field], key: groupID, value: text, limit: maxTrackedSwarmGroups)
             return true
         }
 
-        guard let childKey = Self.normalized(event.sessionKey) else { return true }
-        if let phase = Self.normalized(event.swarmPhase) {
+        guard let childKey = ChatPayloadDecoding.trimmedNonEmptyString(event.sessionKey) else { return true }
+        let inheritedPhase = event.reason == "create" && self.phaseByChild[childKey] == nil
+            ? self.currentPhaseByGroup[groupID] : nil
+        if let phase = ChatPayloadDecoding.trimmedNonEmptyString(event.swarmPhase) ?? inheritedPhase {
             Self.setBounded(
                 &self.phaseByChild,
                 key: childKey,
                 value: phase,
-                limit: maxTrackedSwarmChildren)
-            return true
-        }
-        if event.reason == "create",
-           self.phaseByChild[childKey] == nil,
-           let currentPhase = currentPhaseByGroup[groupID]
-        {
-            Self.setBounded(
-                &self.phaseByChild,
-                key: childKey,
-                value: currentPhase,
                 limit: maxTrackedSwarmChildren)
         }
         return true
@@ -70,7 +53,7 @@ struct OpenClawChatSwarmActivityState: Equatable {
 
     func decorate(_ sessions: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry] {
         sessions.map { row in
-            guard let groupID = Self.normalized(row.swarmGroupId) else { return row }
+            guard let groupID = ChatPayloadDecoding.trimmedNonEmptyString(row.swarmGroupId) else { return row }
             let phase = self.phaseByChild[row.key] ?? row.swarmPhase
             let rank = phase.flatMap { self.phaseRankByGroupPhase[Self.phaseRankKey(groupID: groupID, phase: $0)] }
                 ?? row.swarmPhaseRank
@@ -81,11 +64,6 @@ struct OpenClawChatSwarmActivityState: Equatable {
             decorated.swarmLog = log
             return decorated
         }
-    }
-
-    private static func normalized(_ value: String?) -> String? {
-        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized?.isEmpty == false ? normalized : nil
     }
 
     private static func phaseRankKey(groupID: String, phase: String) -> String {
@@ -161,16 +139,12 @@ func buildOpenClawChatSwarmGroups(
 
     var byGroup: [String: [Entry]] = [:]
     for row in sessions {
-        guard let groupID = row.swarmGroupId?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !groupID.isEmpty,
+        guard let groupID = ChatPayloadDecoding.trimmedNonEmptyString(row.swarmGroupId),
               SelfContainedSwarmHelpers.belongsToParent(row, groupID: groupID, matchesParent: matchesParent),
               let status = SelfContainedSwarmHelpers.status(row)
         else { continue }
         let label = [row.label, row.displayName, row.derivedTitle, row.key]
-            .compactMap { value -> String? in
-                let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return normalized?.isEmpty == false ? normalized : nil
-            }
+            .compactMap(ChatPayloadDecoding.trimmedNonEmptyString)
             .first ?? row.key
         byGroup[groupID, default: []].append(Entry(
             phase: row.swarmPhase?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -223,6 +197,9 @@ func buildOpenClawChatSwarmGroups(
 
 enum SelfContainedSwarmHelpers {
     static func status(_ row: OpenClawChatSessionEntry) -> OpenClawChatSwarmDotStatus? {
+        if row.status == "queued" {
+            return .queued
+        }
         if row.status == "running" || row.hasActiveRun == true {
             return .running
         }
@@ -250,7 +227,7 @@ enum SelfContainedSwarmHelpers {
     }
 
     static func isActivityNote(_ event: OpenClawChatSessionsChangedEvent) -> Bool {
-        let kind = self.normalized(event.kind)
+        let kind = ChatPayloadDecoding.trimmedNonEmptyString(event.kind)
         return kind == "phase" || kind == "log"
     }
 
@@ -258,15 +235,16 @@ enum SelfContainedSwarmHelpers {
         _ event: OpenClawChatSessionsChangedEvent,
         matchesParent: (String) -> Bool) -> Bool
     {
-        if let parent = normalized(event.parentSessionKey) ?? normalized(event.spawnedBy) {
+        if let parent = ChatPayloadDecoding.trimmedNonEmptyString(event.parentSessionKey)
+            ?? ChatPayloadDecoding.trimmedNonEmptyString(event.spawnedBy)
+        {
             return matchesParent(parent)
         }
-        let kind = self.normalized(event.kind)
-        if kind == "phase" || kind == "log" {
-            guard let sessionKey = normalized(event.sessionKey) else { return false }
+        if self.isActivityNote(event) {
+            guard let sessionKey = ChatPayloadDecoding.trimmedNonEmptyString(event.sessionKey) else { return false }
             return matchesParent(sessionKey)
         }
-        guard let groupID = normalized(event.swarmGroupId) else { return false }
+        guard let groupID = ChatPayloadDecoding.trimmedNonEmptyString(event.swarmGroupId) else { return false }
         return self.generatedGroupBelongsToParent(groupID, matchesParent: matchesParent)
     }
 
@@ -278,15 +256,10 @@ enum SelfContainedSwarmHelpers {
         guard parts.first == "swarm", parts.count > 2 else { return false }
         return matchesParent(parts.dropFirst().dropLast().joined(separator: ":"))
     }
-
-    private static func normalized(_ value: String?) -> String? {
-        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized?.isEmpty == false ? normalized : nil
-    }
 }
 
 extension OpenClawChatViewModel {
-    private func updateSwarmProjection() {
+    func updateSwarmProjection() {
         self.activeSwarmGroups = buildOpenClawChatSwarmGroups(sessions: self.swarmSessions) { candidate in
             self.matchesCurrentSessionKey(incoming: candidate, current: self.sessionKey)
         }
@@ -304,7 +277,7 @@ extension OpenClawChatViewModel {
         var nextActivity = swarmActivityState
         guard nextActivity.observe(event) else { return false }
         swarmActivityState = nextActivity
-        swarmSessions = nextActivity.decorate(swarmSessions)
+        if self.sidebarData == nil { swarmSessions = nextActivity.decorate(swarmSessions) }
         self.updateSwarmProjection()
         if event.kind != "phase", event.kind != "log" {
             self.scheduleSwarmRefresh()
@@ -316,48 +289,63 @@ extension OpenClawChatViewModel {
         sessionSnapshot: SessionSnapshot? = nil,
         retryAttempt: Int = 0) async
     {
-        let requestedKey = sessionSnapshot?.key ?? sessionKey
-        guard matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey) else { return }
-        guard let routeLease = await transport.acquireSwarmRouteLease() else {
-            self.scheduleSwarmCapabilityRetry(
-                sessionKey: requestedKey,
-                sessionSnapshot: sessionSnapshot,
-                retryAttempt: retryAttempt)
+        let session = sessionSnapshot ?? self.currentSessionSnapshot()
+        guard self.isCurrentSession(session) else { return }
+        // Capability and child rows are one observation. A later refresh or reset
+        // must fence both, even when the Gateway route and session key are unchanged.
+        self.swarmRefreshGeneration &+= 1
+        let generation = self.swarmRefreshGeneration
+        let isCurrent = {
+            self.swarmRefreshGeneration == generation && self.isCurrentSession(session)
+        }
+        let routeLease = await self.transport.acquireSwarmRouteLease()
+        guard isCurrent() else { return }
+        guard let routeLease else {
+            self.scheduleSwarmCapabilityRetry(sessionSnapshot: session, retryAttempt: retryAttempt)
             return
         }
         do {
-            let enabled = try await routeLease.isEnabled(sessionKey: requestedKey)
-            guard matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey) else { return }
-            swarmEnabled = enabled
+            let enabled = try await routeLease.isEnabled(session.key)
+            guard isCurrent() else { return }
+            self.swarmEnabled = enabled
             guard enabled else {
                 self.resetSwarmProgress()
                 return
             }
-            await self.refreshSwarmSessions(
-                sessionKey: requestedKey,
-                sessionSnapshot: sessionSnapshot,
-                routeLease: routeLease)
+            if self.swarmSessionKey != session.key {
+                self.swarmSessionKey = session.key
+                self.swarmActivityState.clear()
+                self.swarmSessions = []
+                self.updateSwarmProjection()
+            }
+            let rosterRead = self.sidebarData?.beginRead()
+            let result = try await routeLease.listChildSessions(session.key)
+            guard isCurrent() else { return }
+            // iOS and macOS Swarm keep showing partial rows; only sidebar hydration uses completeness for retry UI.
+            let rows = result.rows
+            if let owner = self.sidebarData, let rosterRead {
+                self.swarmRowIDs = owner.receive(rows, read: rosterRead)
+            } else if self.sidebarData == nil {
+                self.swarmSessions = self.swarmActivityState.decorate(rows)
+            }
+            self.updateSwarmProjection()
         } catch {
-            guard matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey) else { return }
-            chatUILogger.debug("swarm capability refresh failed: \(error.localizedDescription, privacy: .public)")
-            self.scheduleSwarmCapabilityRetry(
-                sessionKey: requestedKey,
-                sessionSnapshot: sessionSnapshot,
-                retryAttempt: retryAttempt)
+            guard isCurrent() else { return }
+            chatUILogger.debug("swarm refresh failed \(error.localizedDescription, privacy: .public)")
+            self.scheduleSwarmCapabilityRetry(sessionSnapshot: session, retryAttempt: retryAttempt)
         }
     }
 
     private func scheduleSwarmCapabilityRetry(
-        sessionKey requestedKey: String,
-        sessionSnapshot: SessionSnapshot?,
+        sessionSnapshot: SessionSnapshot,
         retryAttempt: Int)
     {
-        guard matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey),
+        guard self.isCurrentSession(sessionSnapshot),
               swarmRefreshRetryDelays.indices.contains(retryAttempt)
         else { return }
         let delay = swarmRefreshRetryDelays[retryAttempt]
-        swarmRefreshTask?.cancel()
-        swarmRefreshTask = Task { [weak self] in
+        self.swarmRefreshTask?.cancel()
+        self.swarmRefreshTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled else { return }
             await self?.refreshSwarmCapability(
@@ -367,116 +355,13 @@ extension OpenClawChatViewModel {
     }
 
     func scheduleSwarmRefresh() {
-        guard swarmEnabled else { return }
-        let requestedKey = sessionKey
-        swarmRefreshTask?.cancel()
-        swarmRefreshTask = Task { [weak self] in
+        guard self.swarmEnabled else { return }
+        let session = self.currentSessionSnapshot()
+        self.swarmRefreshTask?.cancel()
+        self.swarmRefreshTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
-            await self?.refreshSwarmSessions(sessionKey: requestedKey)
-        }
-    }
-
-    func refreshSwarmSessions(
-        sessionKey requestedSessionKey: String? = nil,
-        sessionSnapshot: SessionSnapshot? = nil,
-        routeLease: OpenClawChatSwarmRouteLease? = nil,
-        retryAttempt: Int = 0) async
-    {
-        guard swarmEnabled else { return }
-        let requestedKey = requestedSessionKey ?? sessionSnapshot?.key ?? sessionKey
-        guard matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey) else { return }
-        let activeRouteLease: OpenClawChatSwarmRouteLease
-        if let routeLease {
-            activeRouteLease = routeLease
-        } else if let capturedRouteLease = await transport.acquireSwarmRouteLease() {
-            guard swarmEnabled,
-                  matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
-            else { return }
-            do {
-                let enabled = try await capturedRouteLease.isEnabled(sessionKey: requestedKey)
-                guard swarmEnabled,
-                      matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
-                else { return }
-                guard enabled else {
-                    swarmEnabled = false
-                    self.resetSwarmProgress()
-                    return
-                }
-            } catch {
-                guard swarmEnabled,
-                      matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
-                else { return }
-                self.scheduleSwarmSessionRetry(
-                    sessionKey: requestedKey,
-                    sessionSnapshot: sessionSnapshot,
-                    retryAttempt: retryAttempt)
-                return
-            }
-            guard swarmEnabled,
-                  matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
-            else { return }
-            activeRouteLease = capturedRouteLease
-        } else {
-            guard swarmEnabled,
-                  matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
-            else { return }
-            self.scheduleSwarmSessionRetry(
-                sessionKey: requestedKey,
-                sessionSnapshot: sessionSnapshot,
-                retryAttempt: retryAttempt)
-            return
-        }
-        guard swarmEnabled,
-              matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
-        else { return }
-        if swarmSessionKey != sessionKey {
-            swarmSessionKey = sessionKey
-            swarmActivityState.clear()
-            swarmSessions = []
-            self.updateSwarmProjection()
-        }
-        swarmRefreshGeneration &+= 1
-        let generation = swarmRefreshGeneration
-        do {
-            let rows = try await activeRouteLease.listChildSessions(parentKey: requestedKey)
-            guard generation == swarmRefreshGeneration,
-                  swarmEnabled,
-                  matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
-            else { return }
-            swarmSessions = swarmActivityState.decorate(rows)
-            self.updateSwarmProjection()
-        } catch {
-            guard generation == swarmRefreshGeneration,
-                  swarmEnabled,
-                  matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
-            else { return }
-            chatUILogger.debug("swarm child refresh failed: \(error.localizedDescription, privacy: .public)")
-            self.scheduleSwarmSessionRetry(
-                sessionKey: requestedKey,
-                sessionSnapshot: sessionSnapshot,
-                retryAttempt: retryAttempt)
-        }
-    }
-
-    private func scheduleSwarmSessionRetry(
-        sessionKey requestedKey: String,
-        sessionSnapshot: SessionSnapshot?,
-        retryAttempt: Int)
-    {
-        guard swarmEnabled,
-              matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey),
-              swarmRefreshRetryDelays.indices.contains(retryAttempt)
-        else { return }
-        let delay = swarmRefreshRetryDelays[retryAttempt]
-        swarmRefreshTask?.cancel()
-        swarmRefreshTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(delay))
-            guard !Task.isCancelled else { return }
-            await self?.refreshSwarmSessions(
-                sessionKey: requestedKey,
-                sessionSnapshot: sessionSnapshot,
-                retryAttempt: retryAttempt + 1)
+            await self?.refreshSwarmCapability(sessionSnapshot: session)
         }
     }
 

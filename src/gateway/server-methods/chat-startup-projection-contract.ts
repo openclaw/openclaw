@@ -1,22 +1,20 @@
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import type { SessionScope } from "../../config/types.base.js";
-import type { GatewayAgentRow } from "../../shared/session-types.js";
 import type { ChatMetadataResult, ChatMetadataSessionEntry } from "./chat-metadata-contract.js";
 
 export type ChatStartupProjectionReadParams = {
   agentId: string;
+  sessionKey?: string;
   sessionEntry?: ChatMetadataSessionEntry;
-  includeSystem: boolean;
+  // Ready reads return settled catalogs only; startup also prepares commands and worker policy.
+  readPolicy?: "current" | "ready";
 };
 
 export type ChatStartupProjectionResult = {
-  metadata: ChatMetadataResult;
-  sessionModelCatalog: ModelCatalogEntry[];
-  defaultModelCatalog: ModelCatalogEntry[];
-  agentsList: {
-    defaultId: string;
-    mainKey: string;
-    scope: SessionScope;
-    agents: GatewayAgentRow[];
-  };
+  commandsRevision?: string;
+  metadata?: Pick<
+    ChatMetadataResult,
+    "commands" | "swarmEnabled" | "requiredWorkerInferenceProfileId"
+  >;
+  sessionModelCatalog?: ModelCatalogEntry[];
+  defaultModelCatalog?: ModelCatalogEntry[];
 };

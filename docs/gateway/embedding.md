@@ -13,7 +13,7 @@ replaceable runtime. This keeps process ownership, readiness, failure recovery,
 and upgrades explicit without depending on OpenClaw's private state layout.
 
 For client authentication and reconnect state, read
-[Building a Gateway client](https://docs.openclaw.ai/gateway/clients).
+[Building a Gateway client](/gateway/clients).
 
 ## Start the child with an embedding preset
 
@@ -98,19 +98,21 @@ Use WebSocket signals instead of a log substring:
 3. Send `connect` with the challenge-bound device signature.
 4. Treat `hello-ok` as application readiness for authenticated RPC.
 
-The challenge is deliberately earlier than full initialization. If startup
-sidecars are still pending, `connect` returns a retryable `UNAVAILABLE` error with
+The challenge is deliberately earlier than full initialization. While authentication
+and request state are still being prepared, `connect` returns a retryable `UNAVAILABLE` error with
 `details.reason: "startup-sidecars"`, a bounded `retryAfterMs`, and then closes
 with code `1013` and reason `gateway starting`. Use
 `resolveGatewayStartupRetryAfterMs` from
 `@openclaw/gateway-protocol/startup-unavailable` or the reference client's built-in
-policy, then reconnect.
+policy, then reconnect. Background session recovery does not hold authenticated
+connections or reads of available sessions. A successful handshake does not mean
+every agent is ready for writes; honor each RPC's recovery response.
 
 ## Interpret restart and shutdown
 
 Before an orderly close, the Gateway broadcasts a `shutdown` event with `reason`
-and `restartExpectedMs`. A non-null `restartExpectedMs` means an in-process or
-supervised restart is expected; `null` means a terminal shutdown.
+and optional `restartExpectedMs`. A numeric `restartExpectedMs` means an in-process
+or supervised restart is expected; an absent or null value means a terminal shutdown.
 
 The subsequent WebSocket close code is `1012` for both cases. The ordinary client
 close reason is also `service restart` in both cases, so neither the close code nor
@@ -118,6 +120,12 @@ the reason distinguishes restart from shutdown. Preserve the preceding `shutdown
 payload when it arrives, and combine it with the host's own stop intent and the
 child exit status. If the connection disappears without the event, use normal
 bounded reconnect and child-supervision policy.
+
+An accepted agent response acknowledges the request before its command and cleanup
+finish. Shutdown retains that work through cancellation and final cleanup. If
+shutdown or failed-startup cleanup cannot finish, the child exits unsuccessfully
+instead of starting another Gateway generation in the same process. Wait for the
+child to exit before replacing it.
 
 ## Use RPC instead of state files
 
@@ -155,7 +163,7 @@ bundle, or vendor selected extension files.
 
 ## Related
 
-- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
-- [Gateway protocol](https://docs.openclaw.ai/gateway/protocol)
-- [Gateway CLI](https://docs.openclaw.ai/cli/gateway)
-- [Gateway integrations for external apps](https://docs.openclaw.ai/gateway/external-apps)
+- [Building a Gateway client](/gateway/clients)
+- [Gateway protocol](/gateway/protocol)
+- [Gateway CLI](/cli/gateway)
+- [Gateway integrations for external apps](/gateway/external-apps)

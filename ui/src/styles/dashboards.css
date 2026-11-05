@@ -1,0 +1,463 @@
+.dashboards-header__count {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dashboards-header__count strong {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-lg);
+  letter-spacing: -0.03em;
+}
+
+.dashboards-gallery {
+  width: 100%;
+}
+
+.dashboards-loading {
+  pointer-events: none;
+}
+
+.dashboards-loading__control {
+  height: var(--settings-control-height);
+}
+
+.dashboards-loading__select {
+  min-width: 156px;
+}
+
+.dashboards-loading .dashboard-preview {
+  border-radius: 0;
+  background: var(--skeleton-base, var(--bg-muted));
+}
+
+.dashboards-loading__label {
+  width: 80px;
+  height: calc(var(--control-ui-text-xs) * 1.5);
+}
+
+.dashboards-loading__title {
+  height: 1.3em;
+}
+
+.dashboards-toolbar {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) max-content max-content;
+  gap: var(--space-3);
+  align-items: end;
+  margin-bottom: var(--space-3);
+}
+
+.dashboards-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.dashboards-search > span[aria-hidden="true"] {
+  position: absolute;
+  left: var(--space-3);
+  z-index: 1;
+  display: inline-flex;
+  width: 17px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.dashboards-search svg {
+  width: 17px;
+  height: 17px;
+}
+
+.dashboards-search input {
+  width: 100%;
+  min-height: var(--settings-control-height);
+  padding: 0 var(--space-3) 0 40px;
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background-color: var(--field-bg);
+  font-size: var(--field-font-size);
+  outline: none;
+}
+
+.dashboards-select {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.dashboards-select > span,
+.dashboards-results {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.dashboards-select > span {
+  font-weight: 600;
+}
+
+.dashboards-select select {
+  min-width: 156px;
+}
+
+.dashboards-results {
+  margin-bottom: var(--space-3);
+}
+
+/* Phone widths only; wider layouts keep the labeled selects. */
+.dashboards-filter {
+  display: none;
+}
+
+.dashboards-filter__popover {
+  --oc-popover-padding: var(--menu-padding);
+
+  min-width: min(224px, calc(100dvw - 16px));
+  font-size: calc(13px * var(--control-ui-text-scale));
+  user-select: none;
+}
+
+.dashboards-filter__heading {
+  flex: none;
+  margin: 0.25em 0;
+  padding: 0.25em 0.75em;
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: round(calc(1em / 1.125), 1px);
+  font-weight: var(--control-ui-font-weight-semibold);
+}
+
+.dashboards-filter__authors + .dashboards-filter__heading {
+  margin-top: var(--space-2);
+}
+
+.dashboards-filter__authors {
+  max-height: calc(var(--menu-item-height) * 5.85);
+  overflow-y: auto;
+}
+
+.dashboards-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.dashboards-grid__item {
+  min-width: 0;
+}
+
+.dashboards-grid__item > .dashboard-card {
+  height: 100%;
+}
+
+.dashboard-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  transition:
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+}
+
+.dashboard-card:has(a.dashboard-card__main):hover {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.dashboard-card__main {
+  display: block;
+  color: inherit;
+}
+
+.dashboard-card__main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.dashboard-preview {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-bottom: 1px solid transparent;
+  background: var(--bg);
+  pointer-events: none;
+}
+
+.dashboard-preview > openclaw-dashboard-preview,
+.dashboard-preview openclaw-board-document {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.dashboard-preview .board-document__content > openclaw-board-view {
+  padding: 0;
+  overflow: hidden;
+}
+
+.dashboard-preview .board-document__content .board-view {
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+}
+
+/* A passive thumbnail has its own frame; the full-page empty-state frame and
+   minimum height would be clipped inside it. */
+.dashboard-preview .board-empty {
+  height: 100%;
+  min-height: 0;
+  padding: var(--space-4);
+  border: 0;
+  border-radius: 0;
+}
+
+.dashboard-preview .board-empty__mark {
+  color: var(--muted);
+}
+
+.dashboard-preview .board-tabs {
+  display: none;
+}
+
+.dashboard-preview__error {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  color: var(--danger);
+  font-size: var(--control-ui-text-xs);
+  text-align: center;
+}
+
+.dashboard-card__body {
+  padding: var(--space-4);
+}
+
+.dashboard-card__heading,
+.dashboard-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.dashboard-card__heading h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-card__heading .settings-status {
+  flex: none;
+}
+
+.dashboard-card__author {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.dashboard-card__avatar {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  color: var(--text);
+  background: var(--bg-hover);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.dashboard-card__footer {
+  min-height: 42px;
+  padding: 0 var(--space-4);
+  border-top: 1px solid transparent;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.dashboard-card__open {
+  display: inline-flex;
+  width: 14px;
+  transition: transform var(--duration-fast) ease;
+}
+
+.dashboard-card:hover .dashboard-card__open {
+  color: var(--text-strong);
+  transform: translate(2px, -2px);
+}
+
+.dashboards-no-results {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  padding: var(--space-8) var(--space-4);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  color: var(--muted);
+  text-align: center;
+}
+
+.dashboards-no-results > span[aria-hidden="true"] {
+  display: inline-flex;
+  width: 24px;
+}
+
+.dashboards-no-results strong {
+  color: var(--text-strong);
+}
+
+@media (max-width: 1100px) {
+  .dashboards-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboards-toolbar {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .dashboards-search {
+    grid-column: 1 / -1;
+  }
+  .dashboards-select select,
+  .dashboards-loading__select {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .dashboards-header__count {
+    display: none;
+  }
+  .dashboards-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dashboards-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-2);
+  }
+  .dashboards-search {
+    grid-column: auto;
+  }
+  .dashboards-select,
+  .dashboards-results {
+    display: none;
+  }
+  .dashboards-filter {
+    display: block;
+  }
+  .dashboards-filter__trigger,
+  .dashboards-loading__filter {
+    width: var(--settings-control-height);
+    min-width: 0;
+    height: var(--settings-control-height);
+    padding: 0;
+    border-radius: var(--field-radius);
+  }
+  .dashboards-filter__trigger {
+    justify-content: center;
+  }
+  .dashboards-filter__trigger svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  /* One meta row: author from the body, then the footer's update time and open arrow. */
+  .dashboard-card__main,
+  .dashboards-loading .dashboard-card {
+    display: grid;
+    grid-template-columns: minmax(0, max-content) minmax(max-content, 1fr);
+    gap: var(--space-2);
+    align-items: center;
+    padding-bottom: var(--space-3);
+  }
+  .dashboard-preview {
+    grid-column: 1 / -1;
+    height: 176px;
+    aspect-ratio: auto;
+    contain: inline-size;
+  }
+  /* The preview is inert and the card already names it, so its widgets drop the title bar. */
+  .dashboard-preview .board-widget {
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .dashboard-preview .board-widget__chrome,
+  .dashboard-preview .board-widget__grant-dot {
+    display: none;
+  }
+  .dashboard-card__body {
+    display: contents;
+  }
+  /* Full-width rows must not size the meta row's columns. */
+  .dashboard-card__heading,
+  .dashboards-loading__title {
+    grid-column: 1 / -1;
+    margin: var(--space-1) var(--space-3) 0;
+    contain: inline-size;
+  }
+  .dashboard-card__author {
+    min-width: 0;
+    margin: 0;
+    padding-inline-start: var(--space-3);
+    line-height: 22px;
+  }
+  .dashboard-card__author > span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dashboard-card__footer {
+    min-height: 0;
+    padding: 0 var(--space-3) 0 0;
+    border-top: 0;
+    line-height: 22px;
+    white-space: nowrap;
+  }
+  .dashboard-card__footer > span:first-child {
+    margin-inline-end: auto;
+  }
+  .dashboard-card__footer > span:first-child::before {
+    margin-inline-end: var(--space-2);
+    content: "\00b7";
+  }
+  .dashboard-card__open,
+  .dashboard-card__open svg {
+    flex: none;
+    width: 14px;
+    height: 14px;
+  }
+  .dashboards-loading .dashboard-card__author .skeleton-line {
+    width: 64px;
+  }
+  .dashboards-loading .dashboard-card__footer .skeleton-line {
+    width: 112px;
+  }
+}

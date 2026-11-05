@@ -25,24 +25,56 @@ describe("resolveTelegramMiniAppUrls", () => {
     });
   });
 
-  it("uses service MagicDNS for Tailscale Serve service names", async () => {
-    const runCommand = vi.fn(async () => ({
-      code: 0,
-      stdout: JSON.stringify({ Self: { DNSName: "host.tailnet.ts.net" } }),
-    }));
-    const cfg = {
-      gateway: {
-        tailscale: { mode: "serve", serviceName: "svc:openclaw" },
-      },
-    } satisfies OpenClawConfig;
+  it.each([undefined, [" HTTPS://GATEWAY.EXAMPLE:8443 "], ["*"]])(
+    "prefers an admitted HTTPS public origin with allowedOrigins=%j",
+    async (allowedOrigins) => {
+      for (const mode of ["off", "serve"] as const) {
+        const cfg: OpenClawConfig = {
+          gateway: {
+            publicOrigin: " https://gateway.example:8443/ ",
+            tailscale: { mode },
+            controlUi: { basePath: "/openclaw/", allowedOrigins },
+          },
+        };
+        const runCommand = vi.fn(async () => ({ code: 1, stdout: "" }));
+        await expect(resolveTelegramMiniAppUrls({ cfg, runCommand })).resolves.toEqual({
+          pageUrl: "https://gateway.example:8443/__openclaw_tg_miniapp/",
+          controlUiUrl: "https://gateway.example:8443/openclaw",
+          gatewayUrl: "wss://gateway.example:8443/openclaw",
+        });
+        expect(runCommand).not.toHaveBeenCalled();
+      }
+    },
+  );
 
-    await expect(resolveTelegramMiniAppUrls({ cfg, runCommand })).resolves.toMatchObject({
-      pageUrl: "https://openclaw.tailnet.ts.net/__openclaw_tg_miniapp/",
-      gatewayUrl: "wss://openclaw.tailnet.ts.net",
+  it.each([
+    { publicOrigin: "http://localhost:3000" },
+    { publicOrigin: "https://gateway.example/path" },
+    { publicOrigin: "https://gateway.example", controlUi: { allowedOrigins: [] } },
+    {
+      publicOrigin: "https://gateway.example",
+      controlUi: { allowedOrigins: ["https://host.tailnet.ts.net"] },
+    },
+  ])("refuses an unusable public origin and retains Tailscale fallback: %j", async (gateway) => {
+    await expect(resolveTelegramMiniAppUrls({ cfg: { gateway } })).rejects.toThrow(
+      TELEGRAM_MINIAPP_URL_ERROR,
+    );
+    await expect(
+      resolveTelegramMiniAppUrls({
+        cfg: { gateway: { ...gateway, tailscale: { mode: "funnel" } } },
+        runCommand: async () => ({
+          code: 0,
+          stdout: JSON.stringify({ Self: { DNSName: "host.tailnet.ts.net." } }),
+        }),
+      }),
+    ).resolves.toEqual({
+      pageUrl: "https://host.tailnet.ts.net/__openclaw_tg_miniapp/",
+      controlUiUrl: "https://host.tailnet.ts.net",
+      gatewayUrl: "wss://host.tailnet.ts.net",
     });
   });
 
-  it("fails loud when Tailscale mode is off or MagicDNS cannot resolve", async () => {
+  it("fails loud when no public origin is set and Tailscale is off or unavailable", async () => {
     await expect(resolveTelegramMiniAppUrls({ cfg: {} })).rejects.toThrow(
       TELEGRAM_MINIAPP_URL_ERROR,
     );

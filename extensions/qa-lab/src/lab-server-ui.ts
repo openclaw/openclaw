@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements lab server ui behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
@@ -7,24 +6,64 @@ import net from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, format as formatUrl } from "node:url";
+import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { writeError } from "./bus-server.js";
 
+const CONTROL_UI_CREDENTIAL_QUERY_KEYS = new Set([
+  "access_token",
+  "api_key",
+  "apikey",
+  "auth",
+  "devicetoken",
+  "id_token",
+  "password",
+  "refresh_token",
+  "token",
+]);
+const CONTROL_UI_CREDENTIAL_QUERY_PATTERN =
+  /([?&])(?:access_token|api_?key|auth|deviceToken|id_token|password|refresh_token|token)=[^&#\s]*&?/gi;
+
+export function sanitizeControlUiPublicUrl(rawUrl: string | null): string | null {
+  if (!rawUrl) {
+    return null;
+  }
+  const fragmentIndex = rawUrl.indexOf("#");
+  let sanitized = fragmentIndex === -1 ? rawUrl : rawUrl.slice(0, fragmentIndex);
+  try {
+    const url = new URL(sanitized);
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (CONTROL_UI_CREDENTIAL_QUERY_KEYS.has(key.toLowerCase())) {
+        url.searchParams.delete(key);
+      }
+    }
+    return url.toString();
+  } catch {
+    for (;;) {
+      const next = sanitized
+        .replace(CONTROL_UI_CREDENTIAL_QUERY_PATTERN, (match: string, separator: string) =>
+          match.endsWith("&") ? separator : "",
+        )
+        .replace(/[?&]$/, "")
+        .replace("?&", "?");
+      if (next === sanitized) {
+        return next;
+      }
+      sanitized = next;
+    }
+  }
+}
+
+const UI_CONTENT_TYPES: Record<string, string> = {
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+};
+
 export function detectContentType(filePath: string): string {
-  if (filePath.endsWith(".css")) {
-    return "text/css; charset=utf-8";
-  }
-  if (filePath.endsWith(".js")) {
-    return "text/javascript; charset=utf-8";
-  }
-  if (filePath.endsWith(".json")) {
-    return "application/json; charset=utf-8";
-  }
-  if (filePath.endsWith(".svg")) {
-    return "image/svg+xml";
-  }
-  return "text/html; charset=utf-8";
+  return UI_CONTENT_TYPES[filePath.slice(filePath.lastIndexOf("."))] ?? "text/html; charset=utf-8";
 }
 
 export function missingUiHtml() {
@@ -72,23 +111,15 @@ function resolveUiDistDir(overrideDir?: string | null, repoRoot = process.cwd())
   );
 }
 
-function listUiAssetFiles(rootDir: string, currentDir = rootDir): string[] {
-  const entries = fs
-    .readdirSync(currentDir, { withFileTypes: true })
-    .toSorted((left, right) => left.name.localeCompare(right.name));
-  const files: string[] = [];
-  for (const entry of entries) {
-    const resolved = path.join(currentDir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...listUiAssetFiles(rootDir, resolved));
-      continue;
-    }
-    if (!entry.isFile()) {
-      continue;
-    }
-    files.push(path.relative(rootDir, resolved));
+function listUiAssetFiles(rootDir: string): string[] {
+  const scan = walkDirectorySync(rootDir, {
+    symlinks: "skip",
+    include: (entry) => entry.kind === "file",
+  });
+  if (scan.failedDirs.length > 0) {
+    throw scan.failedDirs[0]!.error;
   }
-  return files;
+  return scan.entries.map((entry) => entry.relativePath).toSorted();
 }
 
 export function resolveUiAssetVersion(
@@ -98,7 +129,7 @@ export function resolveUiAssetVersion(
   try {
     const distDir = resolveUiDistDir(overrideDir, repoRoot);
     const indexPath = path.join(distDir, "index.html");
-    if (!fs.existsSync(indexPath) || !fs.statSync(indexPath).isFile()) {
+    if (!fs.statSync(indexPath).isFile()) {
       return null;
     }
     const hash = createHash("sha1");
@@ -127,7 +158,8 @@ export function resolveAdvertisedBaseUrl(params: {
     typeof params.advertisePort === "number" && Number.isFinite(params.advertisePort)
       ? params.advertisePort
       : params.bindPort;
-  return `http://${advertisedHost}:${advertisedPort}`;
+  // Keep explicit zero ports: url.format drops numeric zero.
+  return formatUrl({ protocol: "http", hostname: advertisedHost, port: String(advertisedPort) });
 }
 
 export function isControlUiProxyPath(pathname: string) {
@@ -203,6 +235,10 @@ export async function proxyHttpRequest(params: {
   params.req.pipe(upstreamReq);
 }
 
+// Bound only the opening transport stage. Established WebSocket streams remain
+// unbounded after TCP connect for HTTP or the completed handshake for HTTPS.
+const PROXY_UPSTREAM_CONNECT_TIMEOUT_MS = 10_000;
+
 export function proxyUpgradeRequest(params: {
   req: IncomingMessage;
   socket: Duplex;
@@ -212,16 +248,19 @@ export function proxyUpgradeRequest(params: {
 }) {
   const requestUrl = new URL(params.req.url ?? "/", "http://127.0.0.1");
   const port = Number(params.target.port || (params.target.protocol === "https:" ? 443 : 80));
+  const usesTls = params.target.protocol === "https:";
   const upstream =
     params.target.protocol === "https:"
       ? tls.connect({
           host: params.target.hostname,
           port,
           servername: params.target.hostname,
+          timeout: PROXY_UPSTREAM_CONNECT_TIMEOUT_MS,
         })
       : net.connect({
           host: params.target.hostname,
           port,
+          timeout: PROXY_UPSTREAM_CONNECT_TIMEOUT_MS,
         });
 
   const headerLines: string[] = [];
@@ -238,7 +277,40 @@ export function proxyUpgradeRequest(params: {
     headerLines.push(`${name}: ${value}`);
   }
 
-  upstream.once("connect", () => {
+  let responseStarted = false;
+  let upstreamClosed = false;
+  const closeUpstream = () => {
+    if (!upstreamClosed) {
+      upstreamClosed = true;
+      upstream.destroy();
+    }
+  };
+  const closeBoth = () => {
+    closeUpstream();
+    params.socket.destroy();
+  };
+  const failOpening = (status: "502 Bad Gateway" | "504 Gateway Timeout") => {
+    if (responseStarted || upstreamClosed) {
+      return;
+    }
+    closeUpstream();
+    if (!params.socket.destroyed) {
+      params.socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`, () =>
+        params.socket.destroy(),
+      );
+    }
+  };
+  const onOpeningTimeout = () => {
+    failOpening("504 Gateway Timeout");
+  };
+
+  upstream.once("timeout", onOpeningTimeout);
+  upstream.once(usesTls ? "secureConnect" : "connect", () => {
+    if (upstreamClosed) {
+      return;
+    }
+    upstream.setTimeout(0);
+    upstream.removeListener("timeout", onOpeningTimeout);
     const requestText = [
       `${params.req.method ?? "GET"} ${rewriteControlUiProxyPath(requestUrl.pathname, requestUrl.search)} HTTP/${params.req.httpVersion}`,
       `Host: ${params.target.host}`,
@@ -255,21 +327,17 @@ export function proxyUpgradeRequest(params: {
     params.socket.pipe(upstream);
   });
 
-  const closeBoth = () => {
-    if (!params.socket.destroyed) {
-      params.socket.destroy();
-    }
-    if (!upstream.destroyed) {
-      upstream.destroy();
-    }
-  };
-
+  upstream.once("data", () => {
+    responseStarted = true;
+  });
   upstream.on("error", () => {
-    if (!params.socket.destroyed) {
-      params.socket.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+    if (!responseStarted) {
+      failOpening("502 Bad Gateway");
+      return;
     }
     closeBoth();
   });
+  params.socket.on("end", closeBoth);
   params.socket.on("error", closeBoth);
   params.socket.on("close", closeBoth);
 }

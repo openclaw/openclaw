@@ -28,11 +28,7 @@ export const legacyConfigRules = [
 // video surfaces; rewriting a custom host's URL cannot make it speak the
 // OpenAI videos protocol, so custom endpoints are never auto-converted.
 function isDeepInfraApiHost(value: string): boolean {
-  try {
-    return new URL(value).host === "api.deepinfra.com";
-  } catch {
-    return false;
-  }
+  return URL.parse(value)?.host === "api.deepinfra.com";
 }
 
 function normalizeBaseUrlValue(value: unknown): string | undefined {
@@ -47,21 +43,26 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   config: OpenClawConfig;
   changes: string[];
 } {
-  const models = asObjectRecord(cfg.models);
-  const providers = asObjectRecord(models?.providers);
-  const provider = asObjectRecord(providers?.deepinfra);
+  const models = cfg.models;
+  const providers = models?.providers;
+  const provider = providers?.deepinfra;
   if (!provider) {
     return { config: cfg, changes: [] };
   }
 
   const changes: string[] = [];
-  const next: Record<string, unknown> = { ...provider };
+  const providerRecord = asObjectRecord(provider) ?? {};
+  const { nativeBaseUrl, ...providerWithoutLegacyNativeBaseUrl } = providerRecord;
+  const next = {
+    ...providerWithoutLegacyNativeBaseUrl,
+    baseUrl: provider.baseUrl,
+    models: provider.models,
+  };
 
   // Change messages never echo configured URL values: a legacy URL may carry
   // userinfo or query tokens, and doctor output lands in terminals/CI logs.
-  if (Object.hasOwn(next, "nativeBaseUrl")) {
-    const legacyNative = normalizeBaseUrlValue(next.nativeBaseUrl);
-    delete next.nativeBaseUrl;
+  if (Object.hasOwn(providerRecord, "nativeBaseUrl")) {
+    const legacyNative = normalizeBaseUrlValue(nativeBaseUrl);
     if (normalizeBaseUrlValue(next.baseUrl)) {
       changes.push(`${PROVIDER_PATH}.nativeBaseUrl: removed (baseUrl is already configured)`);
     } else if (legacyNative && !isDeepInfraApiHost(legacyNative)) {
@@ -101,7 +102,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
       models: {
         ...models,
         providers: { ...providers, deepinfra: next },
-      } as unknown as OpenClawConfig["models"],
+      },
     },
     changes,
   };

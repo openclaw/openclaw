@@ -13,27 +13,40 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => {
   };
 });
 
-import { withTempDir } from "./install-source-utils.js";
+import { withInstallWorkspace } from "./install-source-utils.js";
 
-describe("withTempDir private root", () => {
+describe("withInstallWorkspace private root", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it.runIf(process.platform !== "win32")(
-    "preserves parent temp root permissions when using private OpenClaw temp root",
-    async () => {
+  it.runIf(process.platform !== "win32").each(["missing", "writable"] as const)(
+    "preserves parent temp root permissions when securing a %s OpenClaw temp root",
+    async (state) => {
       const mockParentRoot = tempDirs.make("openclaw-chmod-test-");
       const mockOpenClawDir = path.join(mockParentRoot, "openclaw");
 
-      await fs.mkdir(mockOpenClawDir, { recursive: true });
+      if (state === "writable") {
+        await fs.mkdir(mockOpenClawDir);
+        await fs.chmod(mockOpenClawDir, 0o777);
+      }
       await fs.chmod(mockParentRoot, 0o1777);
-      const canonicalOpenClawDir = await fs.realpath(mockOpenClawDir);
+      const canonicalOpenClawDir = path.join(await fs.realpath(mockParentRoot), "openclaw");
 
-      resolvePreferredOpenClawTmpDirMock.mockReturnValue(mockOpenClawDir);
+      const { resolvePreferredOpenClawTmpDir } =
+        await vi.importActual<typeof import("./tmp-openclaw-dir.js")>("./tmp-openclaw-dir.js");
+      resolvePreferredOpenClawTmpDirMock.mockImplementation(() =>
+        resolvePreferredOpenClawTmpDir({
+          preferredDir: mockOpenClawDir,
+          tmpdir: () => mockParentRoot,
+          warn: vi.fn(),
+        }),
+      );
 
       let observedDir = "";
-      const value = await withTempDir("openclaw-test-", async (tmpDir) => {
+      const value = await withInstallWorkspace("openclaw-test-", async (tmpDir) => {
         observedDir = tmpDir;
         expect(path.dirname(tmpDir)).toBe(canonicalOpenClawDir);
+        expect((await fs.stat(mockOpenClawDir)).mode & 0o7777).toBe(0o700);
+        expect((await fs.stat(tmpDir)).mode & 0o7777).toBe(0o700);
         await fs.writeFile(path.join(tmpDir, "marker.txt"), "ok");
         return "done";
       });

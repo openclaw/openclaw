@@ -1,13 +1,10 @@
 import { getPublicKey, nip19 } from "nostr-tools";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { assertSecretOwnerAvailable } from "openclaw/plugin-sdk/channel-secret-owner-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  hasConfiguredSecretInput,
-  normalizeSecretInputString,
-} from "openclaw/plugin-sdk/secret-input";
+import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { BuzzConfig, BuzzConfigInput } from "./config-schema.js";
-import { parseBuzzTarget } from "./target.js";
+import { resolveBuzzAccountConfig } from "./account-config.js";
+import type { BuzzConfig } from "./config-schema.js";
 
 export interface ResolvedBuzzAccount {
   accountId: string;
@@ -18,20 +15,8 @@ export interface ResolvedBuzzAccount {
   privateKey: string;
   authTag: string;
   publicKey: string;
+  tokenStatus?: "available" | "configured_unavailable" | "missing";
   config: BuzzConfig;
-}
-
-function resolveChannelConfig(cfg: OpenClawConfig): BuzzConfigInput | undefined {
-  return (cfg.channels as Record<string, unknown> | undefined)?.buzz as BuzzConfigInput | undefined;
-}
-
-function normalizeBuzzGroups(groups: BuzzConfigInput["groups"]): BuzzConfig["groups"] {
-  if (!groups) {
-    return undefined;
-  }
-  return Object.fromEntries(
-    Object.entries(groups).map(([channelId, group]) => [parseBuzzTarget(channelId), group]),
-  );
 }
 
 export function decodeBuzzPrivateKey(value: string): Uint8Array {
@@ -50,34 +35,31 @@ export function resolveBuzzPublicKey(privateKey: string): string {
   return getPublicKey(decodeBuzzPrivateKey(privateKey));
 }
 
-export function listBuzzAccountIds(cfg: OpenClawConfig): string[] {
-  const config = resolveChannelConfig(cfg);
-  const relayUrl = config?.relayUrl?.trim() || process.env.BUZZ_RELAY_URL?.trim();
-  const privateKeyConfigured =
-    hasConfiguredSecretInput(config?.privateKey, cfg.secrets?.defaults) ||
-    Boolean(process.env.BUZZ_PRIVATE_KEY?.trim());
-  return relayUrl || privateKeyConfigured ? [DEFAULT_ACCOUNT_ID] : [];
-}
-
-export function resolveDefaultBuzzAccountId(_cfg: OpenClawConfig): string {
-  return DEFAULT_ACCOUNT_ID;
-}
-
 export function resolveBuzzAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedBuzzAccount {
-  const rawConfig = resolveChannelConfig(params.cfg) ?? {};
-  const config: BuzzConfig = {
-    ...rawConfig,
-    groupPolicy: rawConfig.groupPolicy ?? "allowlist",
-    groups: normalizeBuzzGroups(rawConfig.groups),
-  };
-  const relayUrl = config.relayUrl?.trim() || process.env.BUZZ_RELAY_URL?.trim() || "";
+  const { accountId, config, configPath, allowEnv } = resolveBuzzAccountConfig(params);
+  const relayUrl =
+    config.relayUrl?.trim() || (allowEnv ? process.env.BUZZ_RELAY_URL?.trim() : "") || "";
+  const resolveCredential = (field: "privateKey" | "authTag") =>
+    resolveSecretInputString({
+      value: config[field],
+      path: `${configPath}.${field}`,
+      mode: "inspect",
+    });
+  const privateKeyResolution = resolveCredential("privateKey");
+  const authTagResolution = resolveCredential("authTag");
   const privateKey =
-    normalizeSecretInputString(config.privateKey) || process.env.BUZZ_PRIVATE_KEY?.trim() || "";
+    privateKeyResolution.value ??
+    (allowEnv && privateKeyResolution.status === "missing"
+      ? process.env.BUZZ_PRIVATE_KEY?.trim() || ""
+      : "");
   const authTag =
-    normalizeSecretInputString(config.authTag) || process.env.BUZZ_AUTH_TAG?.trim() || "";
+    authTagResolution.value ??
+    (allowEnv && authTagResolution.status === "missing"
+      ? process.env.BUZZ_AUTH_TAG?.trim() || ""
+      : "");
   let publicKey = "";
   if (privateKey) {
     try {
@@ -87,14 +69,29 @@ export function resolveBuzzAccount(params: {
     }
   }
   return {
-    accountId: DEFAULT_ACCOUNT_ID,
+    accountId,
     name: normalizeOptionalString(config.name) ?? "OpenClaw",
     enabled: config.enabled !== false,
-    configured: Boolean(relayUrl && privateKey),
+    configured: Boolean(relayUrl && (privateKey || privateKeyResolution.ref)),
     relayUrl,
     privateKey,
     authTag,
     publicKey,
+    tokenStatus:
+      privateKeyResolution.ref || authTagResolution.ref
+        ? "configured_unavailable"
+        : privateKey
+          ? "available"
+          : "missing",
     config,
   };
+}
+
+export function assertBuzzAccountAvailable(account: ResolvedBuzzAccount): void {
+  assertSecretOwnerAvailable("account", `buzz:${account.accountId}`);
+  if (account.tokenStatus === "configured_unavailable") {
+    throw new Error(
+      `Buzz credentials for account "${account.accountId}" are configured but unavailable.`,
+    );
+  }
 }

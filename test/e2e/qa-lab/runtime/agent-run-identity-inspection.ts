@@ -1,19 +1,46 @@
 // QA Lab producer proves exact-run identity inspection through a real local turn and Gateway.
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { WebSocket, type ClientOptions } from "ws";
+import { identityRepeatedTurnEntrypoint } from "../../../../extensions/qa-lab/src/agent-run-identity-runtime.test-support.js";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
+import {
+  createQaGatewayChild,
+  type QaGatewayChild,
+} from "../../../../extensions/qa-lab/src/gateway-child.js";
+import { startQaGatewayRpcClient } from "../../../../extensions/qa-lab/src/gateway-rpc-client.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_OWNER_PROFILE_ID,
+  type UsersSelfResult,
+} from "../../../../packages/gateway-protocol/src/schema/users.js";
+import { createVitestWorkerRun } from "../../../../scripts/lib/vitest-worker-run.mts";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
-import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../../src/infra/runtime-worker-url.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import {
+  proveHotExecutionIdentity,
+  patchExecutionIdentity,
+  runIdentityGatewayTurn,
+  waitForIdentityAuditFence,
+} from "./agent-run-identity-hot-reload.js";
+import { connectHotReloadClient } from "./gateway-config-hot-reload-fixtures.js";
+import { createQaScriptEvidenceWriter } from "./script-evidence.js";
+import { parseQaProducerOptions, type QaProducerOptions } from "./script-options.js";
+import { produceQaScriptProof } from "./script-proof.js";
 
 const SCENARIO_ID = "agent-run-identity-inspection";
 const SNAPSHOT_FILE = `${SCENARIO_ID}-summary.json`;
@@ -37,50 +64,72 @@ const IDENTITY_FIELDS = [
   "Applicable grants",
   "Assurance",
 ] as const;
+const FRAME_TIMEOUT_MS = 20_000;
 
-type ProducerOptions = {
-  artifactBase: string;
-  repoRoot: string;
-};
-
-type ProofResult = {
-  artifacts?: Array<{ filePath: string; kind: string }>;
-  details?: string;
-  durationMs: number;
-  status: QaScriptEvidenceStatus;
-};
-
-async function updateExecutionIdentityConfig(
-  configPath: string,
-  values: { enabled?: boolean; executionIdentity: boolean },
-) {
-  const raw = await fs.readFile(configPath, "utf8");
-  const config = parseJson(raw || "{}", "QA Gateway config") as Record<string, unknown>;
-  const logging =
-    config.logging && typeof config.logging === "object"
-      ? (config.logging as Record<string, unknown>)
-      : {};
-  const audit =
-    logging.audit && typeof logging.audit === "object"
-      ? (logging.audit as Record<string, unknown>)
-      : {};
-  config.logging = { ...logging, audit: { ...audit, ...values } };
-  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+async function assertUntrustedProxyHeadersRejected(
+  url: string,
+  headers: Record<string, string>,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const socket = new WebSocket(url, { headers } satisfies ClientOptions);
+    const timeout = setTimeout(() => {
+      socket.terminate();
+      reject(new Error("timed out waiting for spoofed proxy-header rejection"));
+    }, FRAME_TIMEOUT_MS);
+    socket.once("open", () => {
+      clearTimeout(timeout);
+      socket.terminate();
+      reject(new Error("Gateway accepted proxy-shaped headers from an untrusted peer"));
+    });
+    socket.once("unexpected-response", (_request, response) => {
+      clearTimeout(timeout);
+      response.resume();
+      if (response.statusCode === 403) {
+        resolve();
+      } else {
+        reject(new Error(`spoofed proxy headers returned HTTP ${response.statusCode}`));
+      }
+    });
+    socket.once("error", () => undefined);
+  });
 }
 
-function parseOptions(argv: readonly string[]): ProducerOptions {
-  const readValue = (name: string) => {
-    const index = argv.indexOf(name);
-    return index >= 0 ? argv[index + 1] : undefined;
-  };
-  const artifactBase = readValue("--artifact-base");
-  if (!artifactBase) {
-    throw new Error("--artifact-base is required");
+async function assertSharedOwnerReadOnlyScope(gateway: QaGatewayChild, sessionKey: string) {
+  const reader = await startQaGatewayRpcClient({
+    wsUrl: gateway.wsUrl,
+    token: gateway.token,
+    scopes: ["operator.read"],
+    logs: () => "",
+  });
+  try {
+    const self = (await reader.request(
+      "users.self",
+      {},
+      {
+        timeoutMs: FRAME_TIMEOUT_MS,
+      },
+    )) as UsersSelfResult;
+    if (self.profile.id !== GATEWAY_OWNER_PROFILE_ID) {
+      throw new Error("read-only Gateway client did not retain the shared owner profile");
+    }
+    await assert.rejects(
+      reader.request(
+        "sessions.patch",
+        { key: sessionKey, label: "READ-ONLY-WRITE-MUST-BE-REJECTED" },
+        { timeoutMs: FRAME_TIMEOUT_MS },
+      ),
+      (error: unknown) =>
+        error instanceof Error &&
+        isRecord(error.cause) &&
+        error.cause.code === "FORBIDDEN" &&
+        isRecord(error.cause.details) &&
+        error.cause.details.code === "MISSING_SCOPE" &&
+        error.cause.details.missingScope === "operator.write",
+      "shared-owner attribution must not authorize a read-only client to write",
+    );
+  } finally {
+    await reader.stop();
   }
-  return {
-    artifactBase: path.resolve(artifactBase),
-    repoRoot: path.resolve(readValue("--repo-root") ?? process.cwd()),
-  };
 }
 
 function parseJson(raw: string, label: string): unknown {
@@ -121,8 +170,15 @@ function assertTextProjection(text: string) {
 
 function assertJsonProjection(result: AuditRunInspectResult, runId: string) {
   const context = requireIdentityContext(result);
-  if (result.run.runId !== runId || result.coverage.state !== context.coverageState) {
-    throw new Error(`audit JSON projection did not preserve exact-run coverage: ${runId}`);
+  if (result.run.runId !== runId) {
+    throw new Error(`audit JSON projection selected the wrong run: ${runId}`);
+  }
+  if (
+    result.coverage.state !== "unknown" ||
+    !result.coverage.missingEvidence.includes("decision.display_provenance") ||
+    !result.decisionDisplays.some((receipt) => receipt.provenance.state === "unverified")
+  ) {
+    throw new Error(`audit JSON projection overstated generic decision coverage: ${runId}`);
   }
   if (
     context.ingress.kind !== "local-cli" ||
@@ -131,8 +187,9 @@ function assertJsonProjection(result: AuditRunInspectResult, runId: string) {
   ) {
     throw new Error("local agent run did not retain authoritative local-CLI ingress");
   }
-  const admission = result.decisions.find(
-    (receipt) => receipt.action.family === "run" && receipt.action.operation === "admission",
+  const admission = result.decisionDisplays.find(
+    (receipt) =>
+      receipt.provenance.state === "verified" && receipt.provenance.producer === "run-admission",
   );
   if (
     !admission ||
@@ -143,7 +200,42 @@ function assertJsonProjection(result: AuditRunInspectResult, runId: string) {
   }
 }
 
-function findLocalRunId(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>) {
+function assertSharedOwnerGatewayIdentityProjection(result: AuditRunInspectResult) {
+  const context = requireIdentityContext(result);
+  if (
+    context.ingress.kind !== "gateway-client" ||
+    context.ingress.state !== "present" ||
+    context.ingress.boundary !== "gateway.ws.authenticated-connect"
+  ) {
+    throw new Error("Gateway run did not retain its authenticated connection ingress");
+  }
+  if (
+    context.invoker.state !== "present" ||
+    context.invoker.principal?.kind !== "person" ||
+    context.coverageState !== "attribution-only" ||
+    context.representedSubject !== undefined ||
+    context.applicableGrants.length !== 0
+  ) {
+    throw new Error(
+      "shared-owner Gateway identity lost attribution or implied delegated authority",
+    );
+  }
+  if (
+    !context.assurance.some(
+      (item) => item.kind === "durable-profile" && item.strength === "boundary-verified",
+    ) ||
+    !context.assurance.some(
+      (item) => item.kind === "local-process" && item.strength === "boundary-verified",
+    ) ||
+    context.assurance.some(
+      (item) => item.kind === "trusted-proxy" || item.kind === "tailscale-whois",
+    )
+  ) {
+    throw new Error("shared-owner Gateway assurance lost its profile or claimed a verified login");
+  }
+}
+
+function findLocalRunId(gateway: QaGatewayChild) {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -174,7 +266,7 @@ function findLocalRunId(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>
   }
 }
 
-function inspectExecutionIdentityStorage(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>) {
+function inspectExecutionIdentityStorage(gateway: QaGatewayChild) {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -198,10 +290,41 @@ function inspectExecutionIdentityStorage(gateway: Awaited<ReturnType<typeof star
   }
 }
 
-async function runLocalTurn(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  message: string,
-) {
+function inspectPersistedSessionCreator(gateway: QaGatewayChild, sessionKey: string) {
+  const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
+  const agentId = sessionKey.split(":")[1];
+  if (!stateDir || !agentId) {
+    throw new Error("QA Gateway did not expose the session creator database owner");
+  }
+  const database = new DatabaseSync(
+    path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
+    { readOnly: true },
+  );
+  try {
+    const row = database
+      .prepare(
+        "SELECT created_actor_type, created_actor_id, entry_json FROM session_nodes WHERE session_key = ?",
+      )
+      .get(sessionKey) as
+      | { created_actor_id: string | null; created_actor_type: string | null; entry_json: string }
+      | undefined;
+    if (!row) {
+      throw new Error(`persisted session creator row is missing: ${sessionKey}`);
+    }
+    const entry = parseJson(row.entry_json, `persisted session ${sessionKey}`);
+    const actor = isRecord(entry) && isRecord(entry.createdActor) ? entry.createdActor : undefined;
+    return {
+      id: row.created_actor_id,
+      labelPersisted: actor ? Object.hasOwn(actor, "label") : false,
+      source: actor?.source,
+      type: row.created_actor_type,
+    };
+  } finally {
+    database.close();
+  }
+}
+
+async function runLocalTurn(gateway: QaGatewayChild, message: string) {
   await gateway.runCli([
     "agent",
     "--local",
@@ -219,10 +342,7 @@ async function runLocalTurn(
   ]);
 }
 
-function findRunExecutions(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  runId: string,
-) {
+function findRunExecutions(gateway: QaGatewayChild, runId: string) {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -246,74 +366,115 @@ function findRunExecutions(
   }
 }
 
+function assertPersistedContextBytes(
+  gateway: QaGatewayChild,
+  runId: string,
+  expectedContext: string,
+): void {
+  const rows = findRunExecutions(gateway, runId);
+  if (rows.length !== 1 || rows[0]?.context_json !== expectedContext) {
+    throw new Error(`RPC context bytes differ from persisted bytes: ${runId}`);
+  }
+}
+
 async function runRepeatedIngressTurns(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  gateway: QaGatewayChild,
   repoRoot: string,
   sessionId: string,
 ): Promise<void> {
-  const script = path.join(
-    repoRoot,
-    "test/e2e/qa-lab/runtime/agent-run-identity-repeated-turn-child.ts",
-  );
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", script, sessionId], {
+  const workers = createVitestWorkerRun(process.env);
+  try {
+    // Compile the maintained child before its fixed cold-process execution deadline.
+    await workers.prepare();
+    const childUrl = resolveRuntimeWorkerUrl({
+      ...identityRepeatedTurnEntrypoint,
+      root: workers.descriptor.directory,
+    });
+    const env = { ...process.env, ...gateway.runtimeEnv };
+    delete env.NODE_OPTIONS;
+    delete env.NODE_PATH;
+    delete env.NODE_V8_COVERAGE;
+    delete env.OPENCLAW_DEV_SOURCE_ROOT;
+    const child = spawn(process.execPath, [...resolveRuntimeWorkerArgv(childUrl), sessionId], {
       cwd: repoRoot,
-      env: { ...process.env, ...gateway.runtimeEnv },
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let output = "";
-    const collect = (chunk: Buffer) => {
-      if (output.length < 8_192) {
-        output += chunk.toString("utf8").slice(0, 8_192 - output.length);
-      }
-    };
-    child.stdout?.on("data", collect);
-    child.stderr?.on("data", collect);
-    const timer = setTimeout(() => child.kill("SIGTERM"), 120_000);
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+    const completion = new Promise<void>((resolve, reject) => {
+      let output = "";
+      const collect = (chunk: Buffer) => {
+        if (output.length < 8_192) {
+          output += chunk.toString("utf8").slice(0, 8_192 - output.length);
+        }
+      };
+      child.stdout?.on("data", collect);
+      child.stderr?.on("data", collect);
+      const timer = setTimeout(() => child.kill("SIGTERM"), 120_000);
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.once("exit", (code, signal) => {
+        clearTimeout(timer);
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(
+            new Error(
+              `repeated ingress child failed code=${String(code)} signal=${String(signal)}: ${output}`,
+            ),
+          );
+        }
+      });
     });
-    child.once("exit", (code, signal) => {
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(
-          new Error(
-            `repeated ingress child failed code=${String(code)} signal=${String(signal)}: ${output}`,
-          ),
-        );
-      }
-    });
-  });
+    await workers.borrow(child, completion);
+  } finally {
+    await workers.dispose();
+  }
 }
 
-async function runProof(options: ProducerOptions): Promise<string> {
+async function runProof(options: QaProducerOptions): Promise<string> {
   const mock = await startQaMockOpenAiServer();
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
-      useRepoCli: true,
+      initializeCurrentRuntimeState: true,
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [path.join(options.repoRoot, "dist/index.js")],
+        cwd: options.repoRoot,
+        usePackagedPlugins: true,
+      },
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,
+      mutateConfig: (cfg) => ({
+        ...cfg,
+        gateway: {
+          ...cfg.gateway,
+          auth: { ...cfg.gateway?.auth, allowTailscale: true },
+        },
+      }),
     });
-    await runLocalTurn(gateway, "Reply exactly: IDENTITY-DISABLED-FRESH");
+    await gateway.restartAfterStateMutation(async () => {
+      await runLocalTurn(gateway!, "Reply exactly: IDENTITY-DISABLED-FRESH");
+    });
     if (inspectExecutionIdentityStorage(gateway).tablePresent) {
       throw new Error("fresh-install default unexpectedly created execution identity storage");
     }
-    await gateway.restartAfterStateMutation(async () => {});
-    await runLocalTurn(gateway, "Reply exactly: IDENTITY-DISABLED-UPGRADE");
+    await gateway.restartAfterStateMutation(async () => {
+      await runLocalTurn(gateway!, "Reply exactly: IDENTITY-DISABLED-UPGRADE");
+    });
     if (inspectExecutionIdentityStorage(gateway).tablePresent) {
       throw new Error("existing-install restart unexpectedly created execution identity storage");
     }
-    await gateway.restartAfterStateMutation(async ({ configPath }) => {
-      await updateExecutionIdentityConfig(configPath, { executionIdentity: true });
+    const hotReload = await proveHotExecutionIdentity(gateway);
+    await gateway.restartAfterStateMutation(async () => {
+      await runLocalTurn(gateway!, "Reply exactly: IDENTITY-INSPECTION-OK");
     });
-    await runLocalTurn(gateway, "Reply exactly: IDENTITY-INSPECTION-OK");
     const runId = findLocalRunId(gateway);
     const beforeText = await gateway.runCli(["audit", "--run", runId, "--explain"]);
     assertTextProjection(beforeText);
@@ -323,10 +484,88 @@ async function runProof(options: ProducerOptions): Promise<string> {
     ) as AuditRunInspectResult;
     assertJsonProjection(before, runId);
     const beforeContext = normalizedContextJson(before);
+    assertPersistedContextBytes(gateway, runId, beforeContext);
+
+    const sharedOwnerSessionKey = `agent:qa:i1-shared-owner-${randomUUID()}`;
+    const sharedOwnerStarted = (await gateway.call("agent", {
+      sessionKey: sharedOwnerSessionKey,
+      message: "Reply exactly: I1-SHARED-OWNER",
+      deliver: false,
+      idempotencyKey: randomUUID(),
+    })) as { runId?: unknown; status?: unknown };
+    if (sharedOwnerStarted.status !== "accepted" || typeof sharedOwnerStarted.runId !== "string") {
+      throw new Error(
+        `shared-owner Gateway run did not start: ${JSON.stringify(sharedOwnerStarted)}`,
+      );
+    }
+    const sharedOwnerTerminal = (await gateway.call("agent.wait", {
+      runId: sharedOwnerStarted.runId,
+      timeoutMs: 60_000,
+    })) as { status?: unknown };
+    if (sharedOwnerTerminal.status !== "ok") {
+      throw new Error(
+        `shared-owner Gateway run did not finish: ${JSON.stringify(sharedOwnerTerminal)}`,
+      );
+    }
+    const sharedOwnerRunId = sharedOwnerStarted.runId;
+
+    await assertUntrustedProxyHeadersRejected(gateway.wsUrl, {
+      "tailscale-user-login": "operator@example.com",
+      "tailscale-user-name": "Operator",
+      "x-forwarded-for": "100.64.0.11",
+      "x-forwarded-host": "gateway.qa.test",
+      "x-forwarded-proto": "https",
+    });
+
+    const sharedOwnerText = await gateway.runCli(["audit", "--run", sharedOwnerRunId, "--explain"]);
+    assertTextProjection(sharedOwnerText);
+    if (
+      !sharedOwnerText.includes("Invoker [present]") ||
+      !sharedOwnerText.includes("Represented subject [absent]")
+    ) {
+      throw new Error(
+        "shared-owner text inspection lost its invoker or fabricated a represented subject",
+      );
+    }
+    const sharedOwnerBefore = parseJson(
+      await gateway.runCli(["audit", "--run", sharedOwnerRunId, "--explain", "--json"]),
+      "shared-owner Gateway inspection",
+    ) as AuditRunInspectResult;
+    assertSharedOwnerGatewayIdentityProjection(sharedOwnerBefore);
+    const sharedOwnerContext = normalizedContextJson(sharedOwnerBefore);
+    assertPersistedContextBytes(gateway, sharedOwnerRunId, sharedOwnerContext);
+
+    const listed = (await gateway.call("sessions.list", {})) as {
+      sessions?: Array<{
+        key?: string;
+        createdActor?: { id?: string; label?: string; type?: string };
+      }>;
+    };
+    const sharedOwnerSession = listed.sessions?.find(
+      (session) => session.key === sharedOwnerSessionKey,
+    );
+    if (
+      sharedOwnerSession?.createdActor?.type !== "human" ||
+      sharedOwnerSession.createdActor.id !== GATEWAY_OWNER_PROFILE_ID
+    ) {
+      throw new Error("shared-owner Gateway session did not project its canonical creator");
+    }
+    const sharedOwnerCreator = inspectPersistedSessionCreator(gateway, sharedOwnerSessionKey);
+    if (
+      sharedOwnerCreator.type !== "human" ||
+      sharedOwnerCreator.id !== GATEWAY_OWNER_PROFILE_ID ||
+      sharedOwnerCreator.source !== "profile" ||
+      sharedOwnerCreator.labelPersisted
+    ) {
+      throw new Error("shared-owner Gateway session lost creator provenance or persisted a label");
+    }
+    await assertSharedOwnerReadOnlyScope(gateway, sharedOwnerSessionKey);
 
     const repeatedRunId = `identity-repeated-${randomUUID()}`;
+    let repeatedRows: ReturnType<typeof findRunExecutions> = [];
+    const repeatedBeforeRestart = new Map<string, string>();
     await runRepeatedIngressTurns(gateway, options.repoRoot, repeatedRunId);
-    const repeatedRows = findRunExecutions(gateway, repeatedRunId);
+    repeatedRows = findRunExecutions(gateway, repeatedRunId);
     if (
       repeatedRows.length !== 2 ||
       new Set(repeatedRows.map((row) => row.execution_id)).size !== 2 ||
@@ -350,7 +589,6 @@ async function runProof(options: ProducerOptions): Promise<string> {
     if (discovery.identity.state !== "ambiguous" || discovery.identity.candidates.length !== 2) {
       throw new Error("repeated same-session run was not reported as two ambiguous executions");
     }
-    const repeatedBeforeRestart = new Map<string, string>();
     for (const row of repeatedRows) {
       const text = await gateway.runCli(["audit", "--execution", row.execution_id, "--explain"]);
       assertTextProjection(text);
@@ -389,6 +627,20 @@ async function runProof(options: ProducerOptions): Promise<string> {
     if (afterContext !== beforeContext) {
       throw new Error("normalized execution identity context bytes changed across Gateway restart");
     }
+    const sharedOwnerAfter = parseJson(
+      await gateway.runCli(["audit", "--run", sharedOwnerRunId, "--explain", "--json"]),
+      `post-restart Gateway run ${sharedOwnerRunId}`,
+    ) as AuditRunInspectResult;
+    assertSharedOwnerGatewayIdentityProjection(sharedOwnerAfter);
+    if (normalizedContextJson(sharedOwnerAfter) !== sharedOwnerContext) {
+      throw new Error(`Gateway execution changed across restart: ${sharedOwnerRunId}`);
+    }
+    if (
+      JSON.stringify(inspectPersistedSessionCreator(gateway, sharedOwnerSessionKey)) !==
+      JSON.stringify(sharedOwnerCreator)
+    ) {
+      throw new Error("shared-owner session creator changed across Gateway restart");
+    }
     for (const [executionId, expectedContext] of repeatedBeforeRestart) {
       const afterExact = parseJson(
         await gateway.runCli(["audit", "--execution", executionId, "--explain", "--json"]),
@@ -399,22 +651,42 @@ async function runProof(options: ProducerOptions): Promise<string> {
       }
     }
     const retainedBeforeGlobalDisable = inspectExecutionIdentityStorage(gateway).rowCount;
-    await gateway.restartAfterStateMutation(async ({ configPath }) => {
-      await updateExecutionIdentityConfig(configPath, {
+    const globalDisableConnection = await connectHotReloadClient(gateway);
+    let globalDisabledRunId: string;
+    try {
+      await patchExecutionIdentity(gateway, globalDisableConnection, {
         enabled: false,
         executionIdentity: true,
       });
-    });
-    await runLocalTurn(gateway, "Reply exactly: IDENTITY-DISABLED-GLOBAL");
-    if (inspectExecutionIdentityStorage(gateway).rowCount !== retainedBeforeGlobalDisable) {
-      throw new Error("global audit disable unexpectedly retained a new execution context");
+      globalDisabledRunId = await runIdentityGatewayTurn(gateway, "IDENTITY-DISABLED-GLOBAL");
+      const afterGlobalDisable = parseJson(
+        await gateway.runCli(["audit", "--run", runId, "--explain", "--json"]),
+        "global-disabled retained inspection",
+      ) as AuditRunInspectResult;
+      if (normalizedContextJson(afterGlobalDisable) !== beforeContext) {
+        throw new Error("global audit disable hid or changed retained identity evidence");
+      }
+      await patchExecutionIdentity(gateway, globalDisableConnection, {
+        enabled: true,
+        executionIdentity: true,
+      });
+      const fenceRunId = await runIdentityGatewayTurn(gateway, "IDENTITY-GLOBAL-REENABLED");
+      await waitForIdentityAuditFence(gateway, fenceRunId);
+    } finally {
+      await globalDisableConnection.client.stopAndWait({ timeoutMs: 2_000 });
     }
-    const afterGlobalDisable = parseJson(
-      await gateway.runCli(["audit", "--run", runId, "--explain", "--json"]),
-      "global-disabled retained inspection",
-    ) as AuditRunInspectResult;
-    if (normalizedContextJson(afterGlobalDisable) !== beforeContext) {
-      throw new Error("global audit disable hid or changed retained identity evidence");
+    // A later identity and terminal event have crossed the same writer FIFO;
+    // agent.wait alone does not settle queued audit persistence.
+    if (inspectExecutionIdentityStorage(gateway).rowCount !== retainedBeforeGlobalDisable + 1) {
+      throw new Error(
+        "global audit disable unexpectedly retained or backfilled an execution context",
+      );
+    }
+    const disabledActivity = (await gateway.call("audit.activity.list", {
+      runId: globalDisabledRunId,
+    })) as { events: unknown[] };
+    if (disabledActivity.events.length !== 0) {
+      throw new Error("hot global audit disable recorded activity for a subsequent run");
     }
 
     const snapshotPath = path.join(options.artifactBase, SNAPSHOT_FILE);
@@ -424,16 +696,25 @@ async function runProof(options: ProducerOptions): Promise<string> {
       `${JSON.stringify(
         {
           runId,
+          gatewayRuns: {
+            sharedOwner: {
+              runId: sharedOwnerRunId,
+              contextSha256: sha256(sharedOwnerContext),
+              readOnlyWriteRejected: true,
+            },
+            spoofedProxyHeadersRejected: true,
+          },
           repeatedRunId,
           repeatedExecutions: repeatedRows.map((row) => ({
             executionId: row.execution_id,
             contextId: row.context_id,
           })),
           coverage: before.coverage,
-          decision: before.decisions[0]?.decision,
+          decision: before.decisionDisplays[0]?.decision,
           contextSha256: sha256(beforeContext),
           byteEquivalentAfterRestart: true,
           byteEquivalentPersistedReadback: true,
+          hotReload,
           optIn: {
             explicitEnablement: true,
             freshInstallDisabled: true,
@@ -450,33 +731,15 @@ async function runProof(options: ProducerOptions): Promise<string> {
       )}\n`,
       "utf8",
     );
-    return `local run=${runId}; repeated run=${repeatedRunId} executions=${repeatedRows.map((row) => row.execution_id).join(",")}; Gateway pid=${gateway.pid ?? "unknown"}; text+JSON exact selection passed before/after replacement; normalized context sha256=${sha256(beforeContext)}`;
+    const repeatedDetails = `repeated run=${repeatedRunId} executions=${repeatedRows.map((row) => row.execution_id).join(",")}; exact selection passed`;
+    return `local run=${runId}; shared-owner Gateway run=${sharedOwnerRunId}; spoofed proxy headers rejected; ${repeatedDetails}; Gateway pid=${gateway.pid ?? "unknown"}; text+JSON and persisted bytes passed before/after replacement; normalized context sha256=${sha256(beforeContext)}`;
   } finally {
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
   }
 }
 
-async function produceProof(options: ProducerOptions): Promise<ProofResult> {
-  const startedAt = Date.now();
-  try {
-    const details = await runProof(options);
-    return {
-      artifacts: [{ filePath: SNAPSHOT_FILE, kind: "summary" }],
-      details,
-      durationMs: Math.max(1, Date.now() - startedAt),
-      status: "pass",
-    };
-  } catch (error) {
-    return {
-      details: formatErrorMessage(error),
-      durationMs: Math.max(1, Date.now() - startedAt),
-      status: "fail",
-    };
-  }
-}
-
-async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJson> {
+async function runProducer(options: QaProducerOptions): Promise<QaEvidenceSummaryJson> {
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: `${SCENARIO_ID}.log`,
@@ -499,13 +762,13 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
       ],
     },
   });
-  const result = await produceProof(options);
+  const result = await produceQaScriptProof(options, runProof, SNAPSHOT_FILE);
   writer.appendLog(`${result.status}: ${result.details ?? "no details"}\n`);
   return await writer.write(result);
 }
 
 async function main(argv: readonly string[]) {
-  const evidence = await runProducer(parseOptions(argv));
+  const evidence = await runProducer(parseQaProducerOptions(argv));
   const status = evidence.entries[0]?.result.status;
   console.log(`Agent-run identity evidence: ${QA_EVIDENCE_FILENAME}`);
   console.log(`Agent-run identity status: ${status}`);

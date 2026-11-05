@@ -1,220 +1,140 @@
-// Slack plugin module implements interactions behavior.
-import { truncateSlackText } from "../../truncate.js";
+import type { AllMiddlewareArgs, SlackShortcutMiddlewareArgs } from "@slack/bolt";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
-import { registerSlackBlockActionHandler, summarizeAction } from "./interactions.block-actions.js";
+import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
+import { resolveSlackInteractionEventScope } from "../event-scope.js";
+import {
+  captureSlackInteractionEventRoute,
+  enqueueSlackInteractionEvent,
+} from "./interaction-event.js";
+import { registerSlackBlockActionHandler } from "./interactions.block-actions.js";
 import { registerModalLifecycleHandler } from "./interactions.modal.js";
-import { registerSlackShortcutHandler } from "./interactions.shortcuts.js";
-import type { ModalInputSummary } from "./modal-input-summary.js";
 
-const SLACK_INTERACTION_EVENT_PREFIX = "Slack interaction: ";
-const REDACTED_INTERACTION_VALUE = "[redacted]";
-const SLACK_INTERACTION_EVENT_MAX_CHARS = 2400;
-const SLACK_INTERACTION_STRING_MAX_CHARS = 160;
-const SLACK_INTERACTION_ARRAY_MAX_ITEMS = 64;
-const SLACK_INTERACTION_COMPACT_INPUTS_MAX_ITEMS = 3;
-const SLACK_INTERACTION_REDACTED_KEYS = new Set([
-  "triggerId",
-  "responseUrl",
-  "workflowTriggerUrl",
-  "privateMetadata",
-  "viewHash",
-]);
-
-function sanitizeSlackInteractionPayloadValue(value: unknown, key?: string): unknown {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (key && SLACK_INTERACTION_REDACTED_KEYS.has(key)) {
-    if (typeof value !== "string" || value.trim().length === 0) {
-      return undefined;
-    }
-    return REDACTED_INTERACTION_VALUE;
-  }
-  if (typeof value === "string") {
-    return truncateSlackText(value, SLACK_INTERACTION_STRING_MAX_CHARS);
-  }
-  if (Array.isArray(value)) {
-    const sanitized = value
-      .slice(0, SLACK_INTERACTION_ARRAY_MAX_ITEMS)
-      .map((entry) => sanitizeSlackInteractionPayloadValue(entry))
-      .filter((entry) => entry !== undefined);
-    if (value.length > SLACK_INTERACTION_ARRAY_MAX_ITEMS) {
-      sanitized.push(`…+${value.length - SLACK_INTERACTION_ARRAY_MAX_ITEMS} more`);
-    }
-    return sanitized;
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  const output: Record<string, unknown> = {};
-  for (const [entryKey, entryValue] of Object.entries(value as Record<string, unknown>)) {
-    const sanitized = sanitizeSlackInteractionPayloadValue(entryValue, entryKey);
-    if (sanitized === undefined) {
-      continue;
-    }
-    if (typeof sanitized === "string" && sanitized.length === 0) {
-      continue;
-    }
-    if (Array.isArray(sanitized) && sanitized.length === 0) {
-      continue;
-    }
-    output[entryKey] = sanitized;
-  }
-  return output;
-}
-
-function buildCompactSlackInteractionPayload(
-  payload: Record<string, unknown>,
-): Record<string, unknown> {
-  const rawInputs = Array.isArray(payload.inputs) ? payload.inputs : [];
-  const compactInputs = rawInputs
-    .slice(0, SLACK_INTERACTION_COMPACT_INPUTS_MAX_ITEMS)
-    .flatMap((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return [];
-      }
-      const typed = entry as Record<string, unknown>;
-      return [
-        {
-          actionId: typed.actionId,
-          blockId: typed.blockId,
-          actionType: typed.actionType,
-          inputKind: typed.inputKind,
-          selectedValues: typed.selectedValues,
-          selectedLabels: typed.selectedLabels,
-          inputValue: typed.inputValue,
-          inputNumber: typed.inputNumber,
-          selectedDate: typed.selectedDate,
-          selectedTime: typed.selectedTime,
-          selectedDateTime: typed.selectedDateTime,
-          richTextPreview: typed.richTextPreview,
-        },
-      ];
-    });
-
-  return {
-    interactionType: payload.interactionType,
-    actionId: payload.actionId,
-    callbackId: payload.callbackId,
-    actionType: payload.actionType,
-    actionTs: payload.actionTs,
-    userId: payload.userId,
-    teamId: payload.teamId,
-    channelId: payload.channelId ?? payload.routedChannelId,
-    messageTs: payload.messageTs,
-    threadTs: payload.threadTs,
-    messageUserId: payload.messageUserId,
-    messageText: payload.messageText,
-    viewId: payload.viewId,
-    isCleared: payload.isCleared,
-    selectedValues: payload.selectedValues,
-    selectedLabels: payload.selectedLabels,
-    selectedDate: payload.selectedDate,
-    selectedTime: payload.selectedTime,
-    selectedDateTime: payload.selectedDateTime,
-    workflowId: payload.workflowId,
-    routedChannelType: payload.routedChannelType,
-    pluginHandled: payload.pluginHandled,
-    pluginNamespace: payload.pluginNamespace,
-    pluginDuplicate: payload.pluginDuplicate,
-    pluginSystemEvent: payload.pluginSystemEvent,
-    inputs: compactInputs.length > 0 ? compactInputs : undefined,
-    inputsOmitted:
-      rawInputs.length > SLACK_INTERACTION_COMPACT_INPUTS_MAX_ITEMS
-        ? rawInputs.length - SLACK_INTERACTION_COMPACT_INPUTS_MAX_ITEMS
-        : undefined,
-    payloadTruncated: true,
-  };
-}
-
-function formatSlackInteractionSystemEvent(payload: Record<string, unknown>): string {
-  const toEventText = (value: Record<string, unknown>): string =>
-    `${SLACK_INTERACTION_EVENT_PREFIX}${JSON.stringify(value)}`;
-
-  const sanitizedPayload =
-    (sanitizeSlackInteractionPayloadValue(payload) as Record<string, unknown> | undefined) ?? {};
-  let eventText = toEventText(sanitizedPayload);
-  if (eventText.length <= SLACK_INTERACTION_EVENT_MAX_CHARS) {
-    return eventText;
-  }
-
-  const compactPayload = sanitizeSlackInteractionPayloadValue(
-    buildCompactSlackInteractionPayload(sanitizedPayload),
-  ) as Record<string, unknown>;
-  eventText = toEventText(compactPayload);
-  if (eventText.length <= SLACK_INTERACTION_EVENT_MAX_CHARS) {
-    return eventText;
-  }
-
-  return toEventText({
-    interactionType: sanitizedPayload.interactionType,
-    actionId: sanitizedPayload.actionId ?? "unknown",
-    userId: sanitizedPayload.userId,
-    channelId: sanitizedPayload.channelId ?? sanitizedPayload.routedChannelId,
-    payloadTruncated: true,
-  });
-}
-
-function summarizeViewState(values: unknown): ModalInputSummary[] {
-  if (!values || typeof values !== "object") {
-    return [];
-  }
-  const entries: ModalInputSummary[] = [];
-  for (const [blockId, blockValue] of Object.entries(values as Record<string, unknown>)) {
-    if (!blockValue || typeof blockValue !== "object") {
-      continue;
-    }
-    for (const [actionId, rawAction] of Object.entries(blockValue as Record<string, unknown>)) {
-      if (!rawAction || typeof rawAction !== "object") {
-        continue;
-      }
-      const actionSummary = summarizeAction(rawAction as Record<string, unknown>);
-      entries.push({
-        blockId,
-        actionId,
-        ...actionSummary,
-      });
-    }
-  }
-  return entries;
-}
+type SlackShortcutHandlerArgs = SlackShortcutMiddlewareArgs &
+  Pick<AllMiddlewareArgs, "context" | "client">;
 
 export function registerSlackInteractionEvents(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
 }) {
   const { ctx, trackEvent } = params;
-  registerSlackBlockActionHandler({
-    ctx,
-    trackEvent,
-    formatSystemEvent: formatSlackInteractionSystemEvent,
-  });
-  registerSlackShortcutHandler({
-    ctx,
-    trackEvent,
-    formatSystemEvent: formatSlackInteractionSystemEvent,
-  });
+  registerSlackBlockActionHandler(params);
+  params.ctx.app.shortcut(/.+/, async (args: SlackShortcutHandlerArgs) => {
+    const { ack, body } = args;
+    await ack();
+    const runtimeContext = await params.ctx.readRuntimeContext();
+    const eventScope = resolveSlackInteractionEventScope(runtimeContext, args, "shortcut");
+    if (eventScope === null) {
+      return;
+    }
 
-  if (typeof ctx.app.view !== "function") {
-    return;
-  }
-  const modalMatcher = /.*/;
+    const callbackId = body.callback_id?.trim();
+    const userId = body.user?.id?.trim();
+    if (!callbackId || !userId) {
+      runtimeContext.runtime.log?.("slack:interaction drop shortcut reason=invalid-payload");
+      return;
+    }
+    params.trackEvent?.();
+
+    const isMessageShortcut = body.type === "message_action";
+    const messageBody = isMessageShortcut ? body : undefined;
+    const channelId = messageBody?.channel.id?.trim() || undefined;
+    if (isMessageShortcut && !channelId) {
+      runtimeContext.runtime.log?.(
+        `slack:interaction drop shortcut callback=${callbackId} user=${userId} reason=missing-channel`,
+      );
+      return;
+    }
+    const threadTs = normalizeOptionalString(messageBody?.message.thread_ts);
+    const auth = await authorizeSlackSystemEventSender({
+      ctx: runtimeContext,
+      eventScope,
+      senderId: userId,
+      channelId,
+      channelType: isMessageShortcut ? undefined : "im",
+      expectedSenderId: userId,
+      interactiveEvent: true,
+    });
+    if (!auth.allowed) {
+      runtimeContext.runtime.log?.(
+        `slack:interaction drop shortcut callback=${callbackId} user=${userId} reason=${auth.reason ?? "unauthorized"}`,
+      );
+      return;
+    }
+
+    const interactionType = isMessageShortcut ? "message_shortcut" : "global_shortcut";
+    const messageTs = messageBody?.message.ts || messageBody?.message_ts;
+    const teamId = args.context.teamId;
+    const deferredTarget = resolveSlackDeferredActionTarget({
+      eventScope,
+      kind: auth.channelType === "im" ? "user" : "channel",
+      id: auth.channelType === "im" ? userId : (channelId ?? ""),
+    });
+    const eventPayload = {
+      interactionType,
+      actionId: `shortcut:${callbackId}`,
+      callbackId,
+      userId,
+      teamId,
+      triggerId: body.trigger_id,
+      actionTs: body.action_ts,
+      channelId,
+      channelName: messageBody?.channel.name,
+      messageTs,
+      threadTs,
+      messageUserId: messageBody?.message.user,
+      messageText: messageBody?.message.text,
+      responseUrl: messageBody?.response_url,
+    };
+    const destination = await runtimeContext.resolveSlackSystemEventRoute({
+      channelId,
+      channelType: auth.channelType,
+      senderId: userId,
+      threadTs,
+      eventScope,
+    });
+    const route = await captureSlackInteractionEventRoute(destination, runtimeContext.runtime.log);
+    if (!route || !runtimeContext.isRuntimePolicyCurrent()) {
+      return;
+    }
+    const contextKey = [
+      "slack:interaction:shortcut",
+      interactionType,
+      teamId,
+      callbackId,
+      channelId,
+      messageTs,
+      body.action_ts,
+    ]
+      .filter(Boolean)
+      .join(":");
+
+    runtimeContext.runtime.log?.(
+      `slack:interaction ${interactionType} callback=${callbackId} user=${userId} channel=${channelId ?? "direct"}`,
+    );
+    await enqueueSlackInteractionEvent(
+      eventPayload,
+      route,
+      {
+        contextKey,
+        deliveryContext: {
+          channel: "slack",
+          to: deferredTarget.target,
+          accountId: runtimeContext.accountId,
+          threadId: threadTs,
+        },
+      },
+      runtimeContext.runtime.log,
+    );
+  });
 
   // Bolt routes both modal lifecycles through view constraints; there is no viewClosed API.
-  for (const [interactionType, contextPrefix] of [
-    ["view_submission", "slack:interaction:view"],
-    ["view_closed", "slack:interaction:view-closed"],
-  ] as const) {
+  for (const interactionType of ["view_submission", "view_closed"] as const) {
     registerModalLifecycleHandler({
-      register: (matcher, handler) =>
-        ctx.app.view({ callback_id: matcher, type: interactionType }, handler),
-      matcher: modalMatcher,
       ctx,
       trackEvent,
       interactionType,
-      contextPrefix,
-      summarizeViewState,
-      formatSystemEvent: formatSlackInteractionSystemEvent,
     });
   }
 }

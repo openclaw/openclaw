@@ -1,33 +1,33 @@
-// Migrate Claude helper module supports helpers behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
   markMigrationItemError,
+  markMigrationItemSkipped,
   MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
 } from "openclaw/plugin-sdk/migration";
+import { safeStat } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
-import { appendRegularFile, pathExists } from "openclaw/plugin-sdk/security-runtime";
-import { isRecord as sharedIsRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { decodeUtf8Input } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import {
+  appendRegularFile,
+  pathExists,
+  readRegularFile,
+} from "openclaw/plugin-sdk/security-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function resolveHomePath(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) {
     return trimmed;
   }
-  return path.resolve(trimmed.replace(/^~(?=$|[\\/])/u, os.homedir()));
+  return path.resolve(trimmed.replace(/^~(?=$|[\\/])/u, () => os.homedir()));
 }
 
-export async function exists(filePath: string): Promise<boolean> {
-  return await pathExists(filePath);
-}
+export { pathExists as exists };
 
 export async function isDirectory(dirPath: string): Promise<boolean> {
-  try {
-    return (await fs.stat(dirPath)).isDirectory();
-  } catch {
-    return false;
-  }
+  return (await safeStat(dirPath))?.isDirectory() === true;
 }
 
 export function sanitizeName(name: string): string {
@@ -38,24 +38,23 @@ export function sanitizeName(name: string): string {
     .replaceAll(/^-+|-+$/g, "");
 }
 
-export async function readText(filePath: string | undefined): Promise<string | undefined> {
-  if (!filePath) {
-    return undefined;
-  }
-  try {
-    return await fs.readFile(filePath, "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
 export async function readJsonObject(
   filePath: string | undefined,
 ): Promise<Record<string, unknown>> {
-  const content = await readText(filePath);
-  if (!content) {
+  const opened = filePath
+    ? await fs
+        .realpath(filePath)
+        .then((resolvedPath) => readRegularFile({ filePath: resolvedPath }))
+        .catch(() => undefined)
+    : undefined;
+  if (!opened) {
     return {};
   }
+  // Encoding errors must not become an optional JSON parse fallback.
+  const content = decodeUtf8Input(
+    opened.buffer,
+    `Claude configuration file ${filePath} (re-save or re-encode it as UTF-8, then rerun the migration)`,
+  );
   try {
     const parsed = JSON.parse(content) as unknown;
     return isRecord(parsed) ? parsed : {};
@@ -64,31 +63,35 @@ export async function readJsonObject(
   }
 }
 
-export const isRecord = sharedIsRecord;
-
-export function childRecord(
-  root: Record<string, unknown> | undefined,
-  key: string,
-): Record<string, unknown> {
-  const value = root?.[key];
-  return isRecord(value) ? value : {};
-}
-
 export async function appendItem(item: MigrationItem): Promise<MigrationItem> {
   if (!item.source || !item.target) {
     return markMigrationItemError(item, MIGRATION_REASON_MISSING_SOURCE_OR_TARGET);
   }
   try {
-    const content = await fs.readFile(item.source, "utf8");
+    const { buffer } = await readRegularFile({ filePath: await fs.realpath(item.source) });
+    const content = decodeUtf8Input(
+      buffer,
+      `Claude instruction file ${item.source} (re-save or re-encode it as UTF-8, then rerun the migration)`,
+    );
     const label =
       typeof item.details?.sourceLabel === "string"
         ? item.details.sourceLabel
         : path.basename(item.source);
-    const header = `\n\n<!-- Imported from Claude: ${label} -->\n\n`;
+    const body = content.trimEnd();
+    if (!body) {
+      return markMigrationItemSkipped(item, "source file is empty");
+    }
+    const importBlock = `\n\n<!-- Imported from Claude: ${label} -->\n\n${body}\n`;
+    const existing = (await pathExists(item.target))
+      ? (await readRegularFile({ filePath: item.target })).buffer.toString("utf8")
+      : "";
+    if (existing.includes(importBlock)) {
+      return markMigrationItemSkipped(item, "already imported from Claude");
+    }
     await fs.mkdir(path.dirname(item.target), { recursive: true });
     await appendRegularFile({
       filePath: item.target,
-      content: `${header}${content.trimEnd()}\n`,
+      content: importBlock,
       rejectSymlinkParents: true,
     });
     return { ...item, status: "migrated" };

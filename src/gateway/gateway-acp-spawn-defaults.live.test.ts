@@ -3,17 +3,17 @@
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { isLiveTestEnabled, readLiveTestConfig } from "../agents/live-test-helpers.js";
-import { isSpawnAcpAcceptedResult, spawnAcpDirect } from "../agents/subagents/spawn/acp-spawn.js";
+import { spawnAcpDirect } from "../agents/subagents/spawn/acp-spawn.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -22,6 +22,7 @@ import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { sleep } from "../utils.js";
+import { waitForGatewayPort } from "./gateway-port.test-support.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
 import { startGatewayServer } from "./server.js";
 
@@ -152,35 +153,6 @@ async function prepareCodexHomeForLiveSpawnDefaultsTest(tempRoot: string): Promi
   process.env.CODEX_HOME = codexHome;
 }
 
-async function waitForGatewayPort(params: {
-  host: string;
-  port: number;
-  timeoutMs?: number;
-}): Promise<void> {
-  const timeoutMs = params.timeoutMs ?? CONNECT_TIMEOUT_MS;
-  const startedAt = Date.now();
-
-  while (Date.now() - startedAt < timeoutMs) {
-    const connected = await new Promise<boolean>((resolve) => {
-      const socket = net.createConnection({ host: params.host, port: params.port });
-      const finish = (ok: boolean) => {
-        socket.removeAllListeners();
-        socket.destroy();
-        resolve(ok);
-      };
-      socket.once("connect", () => finish(true));
-      socket.once("error", () => finish(false));
-      socket.setTimeout(1_000, () => finish(false));
-    });
-    if (connected) {
-      return;
-    }
-    await sleep(250);
-  }
-
-  throw new Error(`timed out waiting for gateway port ${params.host}:${String(params.port)}`);
-}
-
 async function getFreeGatewayPort(): Promise<number> {
   const { getFreePortBlockWithPermissionFallback } = await import("../test-utils/ports.js");
   return await getFreePortBlockWithPermissionFallback({
@@ -193,11 +165,10 @@ async function waitForAcpBackendReady(timeoutMs = CONNECT_TIMEOUT_MS): Promise<v
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const backend = getAcpRuntimeBackend("acpx");
-    const runtime = backend?.runtime as { probeAvailability?: () => Promise<void> } | undefined;
     if (backend && (!backend.healthy || backend.healthy())) {
       return;
     }
-    await runtime?.probeAvailability?.().catch(() => {});
+    await backend?.runtime.doctor?.().catch(() => {});
     if (backend && (!backend.healthy || backend.healthy())) {
       return;
     }
@@ -212,7 +183,7 @@ async function waitForSessionEntry(params: {
   timeoutMs?: number;
 }): Promise<SessionEntry> {
   const timeoutMs = params.timeoutMs ?? 20_000;
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: "codex" });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId: "codex" });
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const entry = loadSessionEntry({
@@ -248,13 +219,20 @@ async function runOpenCodeThinkingControlProof(params: {
   });
   params.sessionKeys.push(sessionKey);
 
+  const requestId = randomUUID();
   await manager.runTurn({
     cfg: params.cfg,
     sessionKey,
     provenance: "system",
     text: "Reply with exactly LIVE-ACP-SPAWN-DEFAULTS-OK",
     mode: "prompt",
-    requestId: randomUUID(),
+    requestId,
+    admittedRunContext: await prepareSystemAgentRunAdmission(
+      params.cfg,
+      requestId,
+      "opencode",
+      "gateway-acp-spawn-defaults.live",
+    ).admit("acp"),
   });
   const status = await manager.getSessionStatus({ cfg: params.cfg, sessionKey });
   expect(status.runtimeOptions).toMatchObject({
@@ -299,13 +277,20 @@ async function runCodexThinkingControlProof(params: {
   });
   params.sessionKeys.push(sessionKey);
 
+  const initialRequestId = randomUUID();
   await manager.runTurn({
     cfg: params.cfg,
     sessionKey,
     provenance: "system",
     text: "Reply with exactly LIVE-ACP-SPAWN-DEFAULTS-OK",
     mode: "prompt",
-    requestId: randomUUID(),
+    requestId: initialRequestId,
+    admittedRunContext: await prepareSystemAgentRunAdmission(
+      params.cfg,
+      initialRequestId,
+      "codex",
+      "gateway-acp-spawn-defaults.live",
+    ).admit("acp"),
   });
   const initialStatus = await manager.getSessionStatus({ cfg: params.cfg, sessionKey });
   const initialReasoningEffortOption = findRuntimeConfigOption(
@@ -321,13 +306,20 @@ async function runCodexThinkingControlProof(params: {
     sessionKey,
     patch: { thinking: params.thinking },
   });
+  const updatedRequestId = randomUUID();
   await manager.runTurn({
     cfg: params.cfg,
     sessionKey,
     provenance: "system",
     text: "Reply with exactly LIVE-ACP-SPAWN-DEFAULTS-OK",
     mode: "prompt",
-    requestId: randomUUID(),
+    requestId: updatedRequestId,
+    admittedRunContext: await prepareSystemAgentRunAdmission(
+      params.cfg,
+      updatedRequestId,
+      "codex",
+      "gateway-acp-spawn-defaults.live",
+    ).admit("acp"),
   });
   const status = await manager.getSessionStatus({ cfg: params.cfg, sessionKey });
   expect(status.capabilities.configOptionKeys).toContain("reasoning_effort");
@@ -366,17 +358,16 @@ function createConfig(params: {
 
   return {
     agents: {
-      list: params.includePrimaryOnlyAcpAgent
-        ? [
-            {
-              id: "codex-acp-primary-only",
+      entries: params.includePrimaryOnlyAcpAgent
+        ? {
+            "codex-acp-primary-only": {
               runtime: {
                 type: "acp",
                 acp: { agent: params.acpAgentId },
               },
               model: "anthropic/claude-sonnet-4-6",
             },
-          ]
+          }
         : undefined,
       defaults: {
         model: {
@@ -497,12 +488,12 @@ describeLive("gateway live (ACP spawn defaults)", () => {
           },
           { agentSessionKey: "agent:main:main" },
         );
-        if (!isSpawnAcpAcceptedResult(configuredDefaultResult)) {
+        if (configuredDefaultResult.status !== "accepted") {
           throw new Error(
             `configured default ACP spawn failed (${configuredDefaultResult.errorCode}): ${configuredDefaultResult.error}`,
           );
         }
-        expect(isSpawnAcpAcceptedResult(configuredDefaultResult)).toBe(true);
+        expect(configuredDefaultResult.status).toBe("accepted");
         sessionKeys.push(configuredDefaultResult.childSessionKey);
         const configuredDefaultEntry = await waitForSessionEntry({
           cfg: runtimeCfg,
@@ -520,12 +511,12 @@ describeLive("gateway live (ACP spawn defaults)", () => {
           },
           { agentSessionKey: "agent:main:main" },
         );
-        if (!isSpawnAcpAcceptedResult(primaryOnlyResult)) {
+        if (primaryOnlyResult.status !== "accepted") {
           throw new Error(
             `primary-only ACP spawn failed (${primaryOnlyResult.errorCode}): ${primaryOnlyResult.error}`,
           );
         }
-        expect(isSpawnAcpAcceptedResult(primaryOnlyResult)).toBe(true);
+        expect(primaryOnlyResult.status).toBe("accepted");
         sessionKeys.push(primaryOnlyResult.childSessionKey);
         const primaryOnlyEntry = await waitForSessionEntry({
           cfg: runtimeCfg,

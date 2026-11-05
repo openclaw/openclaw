@@ -1,4 +1,3 @@
-// Signal API module exposes the plugin public contract.
 export { signalPlugin } from "./src/channel.js";
 export { signalSetupPlugin } from "./src/channel.setup.js";
 export {
@@ -26,15 +25,7 @@ export {
   resolveSignalSender,
   type SignalSender,
 } from "./src/identity.js";
-export {
-  extractSignalCliArchive,
-  installSignalCli,
-  looksLikeArchive,
-  type NamedAsset,
-  pickAsset,
-  type ReleaseAsset,
-  type SignalInstallResult,
-} from "./src/install-signal-cli.js";
+export { installSignalCli, type SignalInstallResult } from "./src/install-signal-cli.js";
 export { signalMessageActions } from "./src/message-actions.js";
 export { type MonitorSignalOpts, monitorSignalProvider } from "./src/monitor.js";
 export { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./src/normalize.js";

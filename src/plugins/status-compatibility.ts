@@ -1,0 +1,17 @@
+/** Lightweight formatting contract for plugin compatibility notices. */
+import type { PluginCompatCode } from "./compat/registry.js";
+
+export type PluginCompatibilityNotice = {
+  pluginId: string;
+  code: "hook-only" | "removed-session-transcript-file-api" | "deprecated-sdk-api";
+  compatCode?: PluginCompatCode;
+  severity: "warn" | "info";
+  message: string;
+  removalDate?: string;
+  migrationGuideUrl?: string;
+  apis?: import("./sdk-deprecation-usage.js").PluginSdkDeprecatedApi[];
+};
+
+export function formatPluginCompatibilityNotice(notice: PluginCompatibilityNotice): string {
+  return `${notice.pluginId} ${notice.message}`;
+}

@@ -10,7 +10,6 @@ export type UnitFastAnalysisOptions = {
 };
 
 export const forcedUnitFastTestFiles: string[];
-export function classifyUnitFastTestFileContent(source: string): string[];
 export function collectUnitFastTestCandidates(cwd?: string): string[];
 export function collectBroadUnitFastTestCandidates(cwd?: string): string[];
 export function collectUnitFastTestFileAnalysis(
@@ -21,9 +20,9 @@ export function getUnitFastTestFilesForIncludePatterns(
   includePatterns: string[],
   options?: { dir?: string },
 ): string[];
-export function getUnitFastTestFiles(): string[];
-export function getUnitFastIsolatedTestFiles(): string[];
-export function getUnitFastTimerTestFiles(): string[];
+export function getUnitFastTestFiles(includePatterns?: string[] | null): string[];
+export function getUnitFastIsolatedTestFiles(includePatterns?: string[] | null): string[];
+export function getUnitFastTimerTestFiles(includePatterns?: string[] | null): string[];
 export function isUnitFastTestFile(file: string): boolean;
 export function isUnitFastIsolatedTestFile(file: string): boolean;
 export function isUnitFastTimerTestFile(file: string): boolean;

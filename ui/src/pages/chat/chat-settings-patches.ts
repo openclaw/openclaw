@@ -1,10 +1,12 @@
-import type { SessionsPatchResult } from "../../api/types.ts";
-import {
-  resolveSessionKey,
-  type SessionCapability,
-  type SessionPatch,
-  type SessionScopeHost,
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
+import type {
+  SessionCapability,
+  SessionPatch,
+  SessionPatchResult,
+  SessionScopeHost,
 } from "../../lib/sessions/index.ts";
+import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
@@ -16,7 +18,6 @@ import {
   resolveUiDefaultAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalLowercaseString } from "../../lib/string-coerce.ts";
 
 type ChatPickerPatchHost = SessionScopeHost & { sessions: SessionCapability };
 type ChatCommandSettingsContext = {
@@ -24,9 +25,34 @@ type ChatCommandSettingsContext = {
   defaultAgentId?: string;
   agentId?: string;
 };
-type PendingPatchStore = WeakMap<SessionCapability, Map<string, Promise<boolean>>>;
+type PendingChatPickerPatch = {
+  ready: Promise<boolean>;
+  receipt: ReturnType<typeof createChatPickerPatchReceipt>;
+};
+const pendingChatPickerPatches = new WeakMap<
+  SessionCapability,
+  Map<string, PendingChatPickerPatch>
+>();
 
-const pendingChatPickerPatches: PendingPatchStore = new WeakMap();
+function createChatPickerPatchReceipt(sessions: SessionCapability) {
+  const scope = sessions.captureConnectionScope();
+  const isCurrent = () => Boolean(scope && sessions.isConnectionScopeCurrent(scope));
+  let confirmed: SessionPatchResult | null = null;
+  const listeners = createChangeListeners({ snapshot: true });
+  return {
+    isCurrent,
+    read: () => (isCurrent() ? confirmed : null),
+    subscribe: listeners.subscribe,
+    confirm: (receipt: SessionPatchResult) => {
+      if (!isCurrent()) {
+        return;
+      }
+      confirmed = receipt;
+      // Decoration can change subscriptions while this receipt is being published.
+      listeners.publish();
+    },
+  };
+}
 
 function resolveChatPickerPatchKey(
   host: ChatPickerPatchHost,
@@ -64,88 +90,67 @@ function resolveChatPickerPatchKey(
   return `agent:${normalizeAgentId(resolvedAgentId)}:${settingsKey}`;
 }
 
-function getPendingPatch(
-  store: PendingPatchStore,
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  agentId?: string,
-): Promise<boolean> | undefined {
-  const patchKey = resolveChatPickerPatchKey(host, sessionKey, agentId);
-  return store.get(host.sessions)?.get(patchKey);
-}
-
-function trackLatestPatch(
-  store: PendingPatchStore,
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  patchPromise: Promise<boolean>,
-  agentId?: string,
-): void {
-  const pendingBySession = store.get(host.sessions) ?? new Map<string, Promise<boolean>>();
-  store.set(host.sessions, pendingBySession);
-  const patchKey = resolveChatPickerPatchKey(host, sessionKey, agentId);
-  pendingBySession.set(patchKey, patchPromise);
-  void patchPromise.finally(() => {
-    if (pendingBySession.get(patchKey) === patchPromise) {
-      pendingBySession.delete(patchKey);
-    }
-  });
-}
-
 export function getPendingChatPickerPatch(
   host: ChatPickerPatchHost,
   sessionKey: string,
   agentId?: string,
 ): Promise<boolean> | undefined {
-  return getPendingPatch(pendingChatPickerPatches, host, sessionKey, agentId);
-}
-
-function trackPendingChatSettingsPatch(
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  patchPromise: Promise<boolean>,
-  agentId?: string,
-): void {
-  trackLatestPatch(pendingChatPickerPatches, host, sessionKey, patchPromise, agentId);
+  const patchKey = resolveChatPickerPatchKey(host, sessionKey, agentId);
+  return pendingChatPickerPatches.get(host.sessions)?.get(patchKey)?.ready;
 }
 
 export function patchChatSessionSettings(
   host: ChatPickerPatchHost,
   sessionKey: string,
-  patch: Pick<SessionPatch, "model" | "thinkingLevel" | "fastMode" | "toolOverrides">,
+  patch: SessionPatch,
   options: {
     agentId?: string;
-    deferModelOverride?: boolean;
+    expectedSessionId?: string;
     ownsModelOverride?: () => boolean;
-    reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
+    canDispatch?: (receipt: SessionPatchResult | null) => boolean;
+    onRejected?: (error: unknown, receipt: SessionPatchResult | null) => void;
   } = {},
-): Promise<SessionsPatchResult | null> {
-  const previous = getPendingChatPickerPatch(host, sessionKey, options.agentId);
-  const operation = (async () => {
-    // Model-dependent settings and sends share this canonical per-session tail.
-    // The capability captures this route before waiting, so a reconnect cannot
-    // redirect queued intent to a replacement Gateway.
-    const result = await host.sessions.patch(sessionKey, patch, {
-      agentId: options.agentId,
-      deferModelOverride: options.deferModelOverride,
-      ownsModelOverride: options.ownsModelOverride,
-      waitFor: previous,
-    });
-    if (result) {
-      await options.reconcile?.(result);
-    }
-    return result;
-  })();
-  trackPendingChatSettingsPatch(
-    host,
-    sessionKey,
-    operation.then(
+): Promise<SessionPatchResult | null> {
+  const sessions = host.sessions;
+  const patchKey = resolveChatPickerPatchKey(host, sessionKey, options.agentId);
+  const pendingBySession =
+    pendingChatPickerPatches.get(sessions) ?? new Map<string, PendingChatPickerPatch>();
+  pendingChatPickerPatches.set(sessions, pendingBySession);
+  const previous = pendingBySession.get(patchKey);
+  const waitFor = previous?.ready;
+  // One flat receipt source survives failed intermediate writes without retaining
+  // settled predecessors. Each pending capability claim owns its subscription.
+  const receipt = previous?.receipt.isCurrent()
+    ? previous.receipt
+    : createChatPickerPatchReceipt(sessions);
+  const canDispatch = options.canDispatch;
+  // Run-affecting settings and sends share this canonical per-session tail.
+  // The capability captures this route before waiting, so a reconnect cannot
+  // redirect queued intent to a replacement Gateway.
+  const operation = sessions.patch(sessionKey, patch, {
+    agentId: options.agentId,
+    expectedSessionId: options.expectedSessionId,
+    ownsModelOverride: options.ownsModelOverride,
+    canDispatch: canDispatch ? () => canDispatch(receipt.read()) : undefined,
+    onConfirmed: receipt.confirm,
+    onRejected: (error) => options.onRejected?.(error, receipt.read()),
+    waitFor,
+    ...(waitFor ? { predecessorReceipt: receipt } : {}),
+  });
+  const pending: PendingChatPickerPatch = {
+    ready: operation.then(
       (result) => result !== null,
       () => false,
     ),
-    options.agentId,
-  );
-  return operation;
+    receipt,
+  };
+  pendingBySession.set(patchKey, pending);
+  void pending.ready.finally(() => {
+    if (pendingBySession.get(patchKey) === pending) {
+      pendingBySession.delete(patchKey);
+    }
+  });
+  return operation.then((result) => (result && "queued" in result ? null : result));
 }
 
 export function selectedGlobalScope(
@@ -169,9 +174,7 @@ export async function patchChatCommandSessionSettings(
   sessionKey: string,
   patch: SessionPatch,
   options: {
-    deferModelOverride?: boolean;
     ownsModelOverride?: () => boolean;
-    reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
   } = {},
 ): Promise<NonNullable<Awaited<ReturnType<SessionCapability["patch"]>>>> {
   const result = await patchChatSessionSettings(

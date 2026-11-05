@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { runAndroidSigningCommandSync } from "./lib/android-release-signing-process.mjs";
 import { parseFlagArgs, stringFlag } from "./lib/arg-utils.runtime.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const rootDir = resolveRepoRoot(import.meta.url);
 const defaultManifestPath = path.join(rootDir, "apps", "android", "Config", "ReleaseSigning.json");
@@ -99,11 +100,6 @@ function requireString(value, key) {
   return value.trim();
 }
 
-// This release entrypoint runs before dependencies are installed.
-function asRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
-}
-
 function requireGradlePropertyNames(value) {
   if (
     !Array.isArray(value) ||
@@ -119,7 +115,8 @@ function requireGradlePropertyNames(value) {
 }
 
 function readManifest(manifestPath) {
-  const parsed = asRecord(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
+  const value = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const parsed = isRecord(value) ? value : {};
   const manifest = {
     signingRepo: requireString(parsed.signingRepo, "signingRepo"),
     signingBranch: requireString(parsed.signingBranch, "signingBranch"),
@@ -195,20 +192,11 @@ function requireMatchPassword() {
   }
 }
 
-function run(command, args, options = {}) {
+function run(command, args, { cwd } = {}) {
   runAndroidSigningCommandSync(command, args, {
-    cwd: options.cwd,
-    env: options.env || process.env,
-    stdio: options.stdio || "pipe",
-  });
-}
-
-function runText(command, args, options = {}) {
-  return runAndroidSigningCommandSync(command, args, {
-    cwd: options.cwd,
-    env: options.env || process.env,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
+    cwd,
+    env: process.env,
+    stdio: "pipe",
   });
 }
 
@@ -451,7 +439,12 @@ function syncPush(manifest, options) {
   writeSigningRepoManifest(workspace, manifest);
 
   run("git", ["add", manifest.assetPath], { cwd: workspace });
-  const status = runText("git", ["status", "--porcelain"], { cwd: workspace }).trim();
+  const status = runAndroidSigningCommandSync("git", ["status", "--porcelain"], {
+    cwd: workspace,
+    env: process.env,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
   if (!status) {
     process.stdout.write("Android release signing assets were already up to date.\n");
     return;

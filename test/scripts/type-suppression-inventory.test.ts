@@ -1,34 +1,53 @@
-// Type Suppression Inventory tests cover AST detection and the repository suppression ratchet.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { collectTypeSuppressionReport } from "../../scripts/type-suppression-inventory.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
-const temporaryDirectories: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function createFixture(files: Record<string, string>): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-type-suppressions-"));
-  temporaryDirectories.push(root);
+function reportFixture(files: Record<string, string>) {
+  const f = fixtureFiles(tempDirs.make("openclaw-type-suppressions-"));
   for (const [relativePath, source] of Object.entries(files)) {
-    const absolutePath = path.join(root, relativePath);
-    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
-    fs.writeFileSync(absolutePath, source);
+    f.write(relativePath, source);
   }
-  return root;
+  return collectTypeSuppressionReport({ files: Object.keys(files), repoRoot: f.root });
 }
 
-afterEach(() => {
-  for (const directory of temporaryDirectories.splice(0)) {
-    fs.rmSync(directory, { force: true, recursive: true });
-  }
+it.each(["\n", "\r\n"])("reports comment markers once with %j line endings", (newline) => {
+  const report = reportFixture({
+    "src/comments.ts": [
+      'const text = "\u{1f680} @ts-expect-error string";',
+      "const template = `@ts-expect-error template`;",
+      "function example() {",
+      "  /* @ts-expect-error first",
+      "   * @ts-expect-error second",
+      "   */",
+      "} // @ts-expect-error trailing",
+      'consume("\u96ea"); /* @ts-expect-error left */ /* @ts-expect-error right */',
+      "consume(",
+      "  1",
+      "  // @ts-expect-error closing token",
+      ");",
+      "// @ts-expect-error eof",
+    ].join(newline),
+  });
+
+  const suffixes = ["first", "second", "trailing", "left */", "right */", "closing token", "eof"];
+  expect(report.findings).toEqual(
+    suffixes.map((suffix, index) => ({
+      excerpt: `@ts-expect-error ${suffix}`,
+      line: [4, 5, 7, 8, 8, 11, 13][index],
+      file: "src/comments.ts",
+      kind: "expect-error",
+    })),
+  );
 });
 
-describe("type suppression inventory", () => {
-  it("detects syntax suppressions without counting prose", () => {
-    const fixtureRoot = createFixture({
-      "src/example.ts": `
+it("detects syntax suppressions without counting prose", () => {
+  const report = reportFixture({
+    "src/example.ts": `
         const prose = "as any and @ts-expect-error";
         const interpolated = \`value: \${value}\`;
         const first = value as any;
@@ -41,43 +60,26 @@ describe("type suppression inventory", () => {
         // @ts-expect-error invalid contract fixture
         consume({ invalid: true });
       `,
-      "src/plain.ts": "export const value = 1;",
-    });
-
-    const report = collectTypeSuppressionReport({
-      files: ["src/example.ts", "src/plain.ts"],
-      repoRoot: fixtureRoot,
-    });
-
-    expect(report.summary).toMatchObject({
-      findingCount: 6,
-      kindCounts: {
-        "as-any": 3,
-        "expect-error": 1,
-        "type-assertion-any": 2,
-      },
-      scannedFileCount: 2,
-      touchedFileCount: 1,
-    });
+    "src/plain.ts": "export const value = 1;",
   });
 
-  it("keeps unchecked any casts at zero and negative type assertions explicit", () => {
-    const report = collectTypeSuppressionReport({ repoRoot });
-
-    expect(report.summary.kindCounts["as-any"]).toBe(0);
-    expect(report.summary.kindCounts["type-assertion-any"]).toBe(0);
-    expect(
-      report.findings
-        .filter((finding) => finding.kind === "expect-error")
-        .map((finding) => `${finding.file}:${finding.line}:${finding.excerpt}`),
-    ).toEqual([
-      "src/infra/kysely-sync.types.test.ts:49:@ts-expect-error Kysely checks selected column string literals.",
-      "src/infra/kysely-sync.types.test.ts:52:@ts-expect-error Kysely checks table string literals.",
-      "src/infra/kysely-sync.types.test.ts:55:@ts-expect-error Kysely checks where-reference string literals.",
-      "src/infra/kysely-sync.types.test.ts:58:@ts-expect-error Kysely checks grouped column string literals.",
-      "src/infra/kysely-sync.types.test.ts:61:@ts-expect-error Kysely checks order references and selected aliases.",
-      "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:8:@ts-expect-error Trigger eligibility is only supported for before_agent_reply.",
-      "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:10:@ts-expect-error An empty trigger list cannot prove that a hook is inactive.",
-    ]);
+  expect(report.summary).toMatchObject({
+    findingCount: 6,
+    kindCounts: { "as-any": 3, "expect-error": 1, "type-assertion-any": 2 },
+    scannedFileCount: 2,
+    touchedFileCount: 1,
   });
+  expect(report.findings.map(({ kind, line }) => [kind, line])).toEqual([
+    ["as-any", 4],
+    ["type-assertion-any", 5],
+    ["as-any", 6],
+    ["type-assertion-any", 7],
+    ["as-any", 8],
+    ["expect-error", 11],
+  ]);
+});
+
+it("keeps unchecked any casts at zero", () => {
+  const report = collectTypeSuppressionReport({ repoRoot });
+  expect(report.summary.kindCounts).toMatchObject({ "as-any": 0, "type-assertion-any": 0 });
 });

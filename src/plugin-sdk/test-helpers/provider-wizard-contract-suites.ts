@@ -1,249 +1,76 @@
-/**
- * Contract suites for provider setup wizard choices, options, and model pickers.
- */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { resolveProviderPluginChoice } from "../../plugins/provider-auth-choice.runtime.js";
-import {
-  buildProviderPluginMethodChoice,
-  resolveProviderModelPickerEntries,
-  resolveProviderWizardOptions,
-  setProviderWizardProvidersResolverForTest,
-} from "../../plugins/provider-wizard.js";
+import { resolveProviderModelPickerEntries } from "../../plugins/provider-wizard.js";
+import * as providerRuntime from "../../plugins/providers.runtime.js";
 import type { ProviderAuthMethod } from "../plugin-entry.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";
 
-const resolvePluginProvidersMock = vi.fn();
-let restoreProviderResolver: (() => void) | undefined;
-
-function createAuthMethod(
-  params: Pick<ProviderAuthMethod, "id" | "label"> &
-    Partial<Pick<ProviderAuthMethod, "hint" | "wizard">>,
-): ProviderAuthMethod {
+function createAuthMethod(id: string, wizard?: ProviderAuthMethod["wizard"]): ProviderAuthMethod {
   return {
-    id: params.id,
-    label: params.label,
-    ...(params.hint ? { hint: params.hint } : {}),
-    ...(params.wizard ? { wizard: params.wizard } : {}),
+    id,
+    label: id,
+    ...(wizard ? { wizard } : {}),
     kind: "api_key",
     run: async () => ({ profiles: [] }),
   };
 }
 
-const TEST_PROVIDERS: ProviderPlugin[] = [
-  {
-    id: "alpha",
-    label: "Alpha",
-    auth: [
-      createAuthMethod({
-        id: "api-key",
-        label: "API key",
-        wizard: {
-          choiceLabel: "Alpha key",
-          choiceHint: "Use an API key",
-          groupId: "alpha",
-          groupLabel: "Alpha",
-          onboardingScopes: ["text-inference"],
-        },
-      }),
-      createAuthMethod({
-        id: "oauth",
-        label: "OAuth",
-        wizard: {
-          choiceId: "alpha-oauth",
-          choiceLabel: "Alpha OAuth",
-          groupId: "alpha",
-          groupLabel: "Alpha",
-          groupHint: "Recommended",
-        },
-      }),
-    ],
-    wizard: {
-      modelPicker: {
-        label: "Alpha custom",
-        hint: "Pick Alpha models",
-        methodId: "oauth",
-      },
-    },
-  },
-  {
-    id: "beta",
-    label: "Beta",
-    auth: [createAuthMethod({ id: "token", label: "Token" })],
-    wizard: {
-      setup: {
-        choiceLabel: "Beta setup",
-        groupId: "beta",
-        groupLabel: "Beta",
-      },
-      modelPicker: {
-        label: "Beta custom",
-      },
-    },
-  },
-  {
-    id: "gamma",
-    label: "Gamma",
-    auth: [
-      createAuthMethod({ id: "default", label: "Default auth" }),
-      createAuthMethod({ id: "alt", label: "Alt auth" }),
-    ],
-    wizard: {
-      setup: {
-        methodId: "alt",
-        choiceId: "gamma-alt",
-        choiceLabel: "Gamma alt",
-        groupId: "gamma",
-        groupLabel: "Gamma",
-      },
-    },
-  },
-];
+const createProvider = (
+  id: string,
+  auth: ProviderAuthMethod[],
+  wizard: ProviderPlugin["wizard"],
+): ProviderPlugin => ({ id, label: id, auth, wizard });
 
-const TEST_PROVIDER_IDS = TEST_PROVIDERS.map((provider) => provider.id).toSorted((left, right) =>
-  left.localeCompare(right),
+const alpha = createProvider(
+  "alpha",
+  [createAuthMethod("api-key", {}), createAuthMethod("oauth", { choiceId: "alpha-oauth" })],
+  { modelPicker: { label: "Alpha custom", hint: "Pick Alpha models", methodId: "oauth" } },
 );
-
-function sortedValues(values: readonly string[]) {
-  return [...values].toSorted((left, right) => left.localeCompare(right));
-}
-
-function expectUniqueValues(values: readonly string[]) {
-  expect(values).toEqual([...new Set(values)]);
-}
-
-function resolveExpectedWizardChoiceValues(providers: ProviderPlugin[]) {
-  return sortedValues(
-    providers.flatMap((provider) => {
-      const methodSetups = provider.auth.filter((method) => method.wizard);
-      if (methodSetups.length > 0) {
-        return methodSetups.map(
-          (method) =>
-            method.wizard?.choiceId?.trim() ||
-            buildProviderPluginMethodChoice(provider.id, method.id),
-        );
-      }
-
-      const setup = provider.wizard?.setup;
-      if (!setup) {
-        return [];
-      }
-
-      const explicitMethodId = setup.methodId?.trim();
-      if (explicitMethodId && provider.auth.some((method) => method.id === explicitMethodId)) {
-        return [
-          setup.choiceId?.trim() || buildProviderPluginMethodChoice(provider.id, explicitMethodId),
-        ];
-      }
-
-      if (provider.auth.length === 1) {
-        return [setup.choiceId?.trim() || provider.id];
-      }
-
-      return provider.auth.map((method) => buildProviderPluginMethodChoice(provider.id, method.id));
-    }),
-  );
-}
-
-function resolveExpectedModelPickerValues(providers: ProviderPlugin[]) {
-  return sortedValues(
-    providers.flatMap((provider) => {
-      const modelPicker = provider.wizard?.modelPicker;
-      if (!modelPicker) {
-        return [];
-      }
-      const explicitMethodId = modelPicker.methodId?.trim();
-      if (explicitMethodId) {
-        return [buildProviderPluginMethodChoice(provider.id, explicitMethodId)];
-      }
-      if (provider.auth.length === 1) {
-        return [provider.id];
-      }
-      return [buildProviderPluginMethodChoice(provider.id, provider.auth[0]?.id ?? "default")];
-    }),
-  );
-}
-
-function expectAllChoicesResolve(
-  values: readonly string[],
-  resolver: (choice: string) => ReturnType<typeof resolveProviderPluginChoice>,
-) {
-  expect(
-    values.every((value) => Boolean(resolver(value))),
-    values.join(", "),
-  ).toBe(true);
-}
-
-beforeEach(() => {
-  resolvePluginProvidersMock.mockReset();
-  resolvePluginProvidersMock.mockReturnValue(TEST_PROVIDERS);
-  restoreProviderResolver?.();
-  restoreProviderResolver = setProviderWizardProvidersResolverForTest((params) =>
-    resolvePluginProvidersMock(params),
-  );
+const beta = createProvider("beta", [createAuthMethod("token")], {
+  setup: {},
+  modelPicker: { label: "Beta custom" },
 });
-
-afterEach(() => {
-  restoreProviderResolver?.();
-  restoreProviderResolver = undefined;
+const gamma = createProvider("gamma", [createAuthMethod("default"), createAuthMethod("alt")], {
+  setup: { methodId: "alt", choiceId: "gamma-alt" },
 });
-
-export function describeProviderWizardSetupOptionsContract() {
-  describe("provider wizard setup options contract", () => {
-    it("exposes every wizard setup choice through the shared wizard layer", () => {
-      const options = resolveProviderWizardOptions({
-        config: {
-          plugins: {
-            enabled: true,
-            allow: TEST_PROVIDER_IDS,
-            slots: {
-              memory: "none",
-            },
-          },
-        },
-        env: process.env,
-      });
-
-      expect(sortedValues(options.map((option) => option.value))).toEqual(
-        resolveExpectedWizardChoiceValues(TEST_PROVIDERS),
-      );
-      expectUniqueValues(options.map((option) => option.value));
-    });
-  });
-}
+const TEST_PROVIDERS = [alpha, beta, gamma];
 
 export function describeProviderWizardChoiceResolutionContract() {
-  describe("provider wizard choice resolution contract", () => {
-    it("round-trips every shared wizard choice back to its provider and auth method", () => {
-      const options = resolveProviderWizardOptions({ config: {}, env: process.env });
+  it.each([
+    ["provider-plugin:alpha:api-key", alpha, 0, "method"],
+    ["alpha", alpha, 0, "method"],
+    ["alpha-oauth", alpha, 1, "method"],
+    ["beta", beta, 0, "provider"],
+    ["gamma-alt", gamma, 1, "provider"],
+  ] as const)(
+    "provider wizard choice resolution contract: %s resolves the exact provider, method, and wizard",
+    (choice, provider, methodIndex, source) => {
+      const method = expectDefined(provider.auth[methodIndex], "fixture auth method");
+      const wizard = source === "method" ? method.wizard : provider.wizard?.setup;
+      const resolved = resolveProviderPluginChoice({ providers: TEST_PROVIDERS, choice });
 
-      expectAllChoicesResolve(
-        options.map((option) => option.value),
-        (choice) =>
-          resolveProviderPluginChoice({
-            providers: TEST_PROVIDERS,
-            choice,
-          }),
-      );
-    });
-  });
+      expect(resolved?.provider).toBe(provider);
+      expect(resolved?.method).toBe(method);
+      expect(resolved?.wizard).toBe(wizard);
+    },
+  );
 }
 
 export function describeProviderWizardModelPickerContract() {
-  describe("provider wizard model picker contract", () => {
-    it("exposes every model-picker entry through the shared wizard layer", () => {
-      const entries = resolveProviderModelPickerEntries({ config: {}, env: process.env });
+  it("provider wizard model picker contract: exposes every model-picker entry through the shared wizard layer", () => {
+    const resolver = vi.spyOn(providerRuntime, "resolvePluginProvidersCore");
+    resolver.mockReturnValue(TEST_PROVIDERS);
+    onTestFinished(() => resolver.mockRestore());
+    const entries = resolveProviderModelPickerEntries({ config: {}, env: process.env });
 
-      expect(sortedValues(entries.map((entry) => entry.value))).toEqual(
-        resolveExpectedModelPickerValues(TEST_PROVIDERS),
-      );
-      expectAllChoicesResolve(
-        entries.map((entry) => entry.value),
-        (choice) =>
-          resolveProviderPluginChoice({
-            providers: TEST_PROVIDERS,
-            choice,
-          }),
-      );
-    });
+    const values = entries.map((entry) => entry.value);
+    expect(values.toSorted()).toEqual(["beta", "provider-plugin:alpha:oauth"]);
+    expect(
+      values.every((choice) =>
+        Boolean(resolveProviderPluginChoice({ providers: TEST_PROVIDERS, choice })),
+      ),
+      values.join(", "),
+    ).toBe(true);
   });
 }

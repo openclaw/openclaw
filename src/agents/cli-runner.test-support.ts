@@ -1,16 +1,13 @@
-/** Shared CLI runner test doubles for supervisor, bootstrap, and heartbeat seams. */
+/** Shared CLI runner test doubles for supervisor, bootstrap, and session-event seams. */
 import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
-import { getClaudeLiveSessionGenerationForOwner } from "./cli-runner/claude-live-session.js";
-import { createManagedRun, supervisorSpawnMock } from "./cli-runner/execute.test-support.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.test-support.js";
-import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 export {
   createManagedRun,
-  enqueueSystemEventMock,
-  requestHeartbeatMock,
+  enqueueSessionEventMock,
   supervisorSpawnMock,
 } from "./cli-runner/execute.test-support.js";
 
@@ -40,32 +37,6 @@ setCliRunnerPrepareTestDeps({
   resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
   resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
 });
-
-/** Queue one successful CLI supervisor run. */
-export function mockSuccessfulCliRun(stdout = "ok") {
-  supervisorSpawnMock.mockResolvedValueOnce(
-    createManagedRun({
-      reason: "exit",
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 50,
-      stdout,
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-    }),
-  );
-}
-
-/** Restore prepare-time CLI runner test dependencies after a test overrides them. */
-export function restoreCliRunnerPrepareTestDeps() {
-  setCliRunnerPrepareTestDeps({
-    makeBootstrapWarn: () => () => {},
-    resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
-    resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
-    getClaudeLiveSessionGenerationForOwner,
-  });
-}
 
 beforeEach(() => {
   vi.unstubAllEnvs();

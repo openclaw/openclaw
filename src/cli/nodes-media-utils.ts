@@ -1,14 +1,7 @@
-// Media utility adapters for node CLI commands and temporary media outputs.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-export { asFiniteNumber as asNumber } from "../../packages/normalization-core/src/number-coercion.js";
-import { readStringValue } from "../../packages/normalization-core/src/string-coerce.js";
-export { asRecord } from "../../packages/normalization-core/src/record-coerce.js";
-export { asBoolean } from "../utils/boolean.js";
-
-export const asString = readStringValue;
 
 function normalizeMediaExtension(value: string): string | undefined {
   const raw = (value.startsWith(".") ? value.slice(1) : value).toLowerCase();
@@ -43,11 +36,7 @@ export function mediaPathMatchesFormat(filePath: string, format: string): boolea
   return !desired || normalizeMediaExtension(current) === desired;
 }
 
-export function resolveTempPathParts(opts: { ext: string; tmpDir?: string; id?: string }): {
-  ext: string;
-  tmpDir: string;
-  id: string;
-} {
+export function resolveTempPathParts(opts: { ext: string; tmpDir?: string; id?: string }) {
   // Restrict extensions before writing temp media paths derived from CLI/user input.
   const tmpDir = opts.tmpDir ?? resolvePreferredOpenClawTmpDir();
   const rawExt = opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`;

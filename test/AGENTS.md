@@ -1,3 +1,3 @@
 # Test Rules
 
-- Fake-timer tests in `unit-fast` belong in `vitest.unit-fast-fake-timers`: `unit-fast` is `isolate: false` and parallel, so fake timers share worker globals and can hang unrelated real-timer tests.
+- Fake timers: call `vi.useFakeTimers()` directly in the test file; the unit-fast classifier routes on that call into `vitest.unit-fast-fake-timers`. Parallel `unit-fast` uses `isolate: false`; shared timer globals can hang real-timer tests.

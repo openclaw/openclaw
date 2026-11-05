@@ -1,8 +1,8 @@
-/** Pure order-and-size layout for the session dashboard board. */
+import { BOARD_GRID_COLUMNS } from "./grid-constants.ts";
 
-export const BOARD_GRID_COLUMNS = 12;
 export const BOARD_GRID_ROW_HEIGHT = 56;
 export const BOARD_GRID_GAP = 12;
+export const BOARD_DOCUMENT_AUTO_MAX_ROWS = 240;
 const BOARD_GRID_MAX_HEIGHT = 20;
 
 export type BoardGridItem = {
@@ -27,11 +27,6 @@ type BoardGridCell = {
 
 export type BoardGridDirection = "left" | "right" | "up" | "down";
 
-type BoardGridPreview = {
-  items: BoardGridItem[];
-  rects: BoardGridRect[];
-};
-
 function clampInteger(value: number, minimum: number, maximum: number): number {
   const integer = Number.isFinite(value) ? Math.round(value) : minimum;
   return Math.min(maximum, Math.max(minimum, integer));
@@ -41,43 +36,40 @@ function withOrder(item: BoardGridItem, order: number): BoardGridItem {
   return { name: item.name, w: item.w, h: item.h, order };
 }
 
-function canonicalItems(items: readonly BoardGridItem[]): BoardGridItem[] {
+function canonicalItems(
+  items: readonly BoardGridItem[],
+  maxItemHeight = BOARD_GRID_MAX_HEIGHT,
+): BoardGridItem[] {
   return items
     .map((item) => ({
       name: item.name,
       w: clampInteger(item.w, 1, BOARD_GRID_COLUMNS),
-      h: clampInteger(item.h, 1, BOARD_GRID_MAX_HEIGHT),
+      h: clampInteger(item.h, 1, maxItemHeight),
       order: Number.isFinite(item.order) ? item.order : 0,
     }))
     .toSorted((left, right) => left.order - right.order || left.name.localeCompare(right.name))
     .map(withOrder);
 }
 
-function fits(occupied: readonly boolean[][], x: number, y: number, w: number, h: number): boolean {
+function fits(occupied: readonly number[], x: number, y: number, w: number, h: number): boolean {
+  // The fixed 12-column grid fits in one occupancy mask per row.
+  const columns = ((1 << w) - 1) << x;
   for (let row = y; row < y + h; row += 1) {
-    for (let column = x; column < x + w; column += 1) {
-      if (occupied[row]?.[column]) {
-        return false;
-      }
+    if ((occupied[row] ?? 0) & columns) {
+      return false;
     }
   }
   return true;
 }
 
-function occupy(occupied: boolean[][], rect: BoardGridRect): void {
-  for (let row = rect.y; row < rect.y + rect.h; row += 1) {
-    const cells = occupied[row] ?? Array.from({ length: BOARD_GRID_COLUMNS }, () => false);
-    occupied[row] = cells;
-    for (let column = rect.x; column < rect.x + rect.w; column += 1) {
-      cells[column] = true;
-    }
-  }
-}
-
-function firstFit(occupied: readonly boolean[][], item: BoardGridItem): BoardGridRect {
+function placeFirstFit(occupied: number[], item: BoardGridItem): BoardGridRect {
   for (let y = 0; ; y += 1) {
     for (let x = 0; x <= BOARD_GRID_COLUMNS - item.w; x += 1) {
       if (fits(occupied, x, y, item.w, item.h)) {
+        const columns = ((1 << item.w) - 1) << x;
+        for (let row = y; row < y + item.h; row += 1) {
+          occupied[row] = (occupied[row] ?? 0) | columns;
+        }
         return { name: item.name, x, y, w: item.w, h: item.h };
       }
     }
@@ -88,15 +80,25 @@ function firstFit(occupied: readonly boolean[][], item: BoardGridItem): BoardGri
  * Places canonical-order items at the first available row-major cell. Earlier
  * items therefore keep priority while every later item is gravity-tight.
  */
-export function layout(items: readonly BoardGridItem[]): BoardGridRect[] {
-  const occupied: boolean[][] = [];
-  const rects: BoardGridRect[] = [];
-  for (const item of canonicalItems(items)) {
-    const placed = firstFit(occupied, item);
-    occupy(occupied, placed);
-    rects.push(placed);
+export function layout(
+  items: readonly BoardGridItem[],
+  maxItemHeight = BOARD_GRID_MAX_HEIGHT,
+): BoardGridRect[] {
+  return layoutCanonicalItems(canonicalItems(items, maxItemHeight));
+}
+
+function layoutCanonicalItems(items: readonly BoardGridItem[]): BoardGridRect[] {
+  if (items.every((item) => item.w === BOARD_GRID_COLUMNS)) {
+    // Full-width widgets leave no gaps for later widgets to fill.
+    let y = 0;
+    return items.map((item) => {
+      const rect = { name: item.name, x: 0, y, w: item.w, h: item.h };
+      y += item.h;
+      return rect;
+    });
   }
-  return rects;
+  const occupied: number[] = [];
+  return items.map((item) => placeFirstFit(occupied, item));
 }
 
 function contains(rect: BoardGridRect, cell: BoardGridCell): boolean {
@@ -106,35 +108,33 @@ function contains(rect: BoardGridRect, cell: BoardGridCell): boolean {
 }
 
 /**
- * Reorders one item around the target cell, then fully reflows the board.
- * Occupied targets insert before their occupant: that item and its followers
- * are pushed aside by the normal first-fit pass.
+ * Reorders against a named current rectangle or the fallback grid cell.
+ * Resolve targets before removing the moving item so responsive card stacking
+ * and successive previews keep the same logical target through pointerup.
  */
 export function previewDrag(
   items: readonly BoardGridItem[],
   name: string,
-  targetCell: BoardGridCell,
-): BoardGridPreview {
+  target: BoardGridCell & { name: string | undefined },
+): BoardGridItem[] {
   const canonical = canonicalItems(items);
   const movingIndex = canonical.findIndex((item) => item.name === name);
   if (movingIndex < 0) {
-    return { items: canonical, rects: layout(canonical) };
+    return canonical;
   }
 
-  const currentRects = layout(canonical);
+  const currentRects = layoutCanonicalItems(canonical);
+  const targetCell = currentRects.find((rect) => rect.name === target.name) ?? target;
   const cell = {
     x: clampInteger(targetCell.x, 0, BOARD_GRID_COLUMNS - 1),
     y: Math.max(0, Number.isFinite(targetCell.y) ? Math.floor(targetCell.y) : 0),
   };
   const currentRect = currentRects.find((rect) => rect.name === name);
   if (currentRect && contains(currentRect, cell)) {
-    return { items: canonical, rects: currentRects };
+    return canonical;
   }
 
-  const [moving] = canonical.splice(movingIndex, 1);
-  if (!moving) {
-    return { items: canonical, rects: layout(canonical) };
-  }
+  const moving = canonical.splice(movingIndex, 1);
   const occupiedTarget = currentRects.find((rect) => rect.name !== name && contains(rect, cell));
   const nextRect =
     occupiedTarget ??
@@ -147,12 +147,10 @@ export function previewDrag(
   const insertionIndex = nextRect
     ? canonical.findIndex((item) => item.name === nextRect.name)
     : canonical.length;
-  canonical.splice(Math.max(0, insertionIndex), 0, moving);
-  const reordered = canonical.map(withOrder);
-  return { items: reordered, rects: layout(reordered) };
+  canonical.splice(Math.max(0, insertionIndex), 0, ...moving);
+  return canonical.map(withOrder);
 }
 
-/** Returns a new canonical item list with one clamped size change. */
 export function resize(
   items: readonly BoardGridItem[],
   name: string,
@@ -185,21 +183,16 @@ export function nudge(
   const delta = direction === "left" || direction === "up" ? -1 : 1;
   const target = Math.min(canonical.length - 1, Math.max(0, index + delta));
   if (target !== index) {
-    const [moving] = canonical.splice(index, 1);
-    if (moving) {
-      canonical.splice(target, 0, moving);
-    }
+    canonical.splice(target, 0, ...canonical.splice(index, 1));
   }
   return canonical.map(withOrder);
 }
 
-/** CSS grid lines are one-based; engine cells are zero-based. */
-export function toCssPlacement(rect: BoardGridRect): string {
-  return `grid-column: ${rect.x + 1} / span ${rect.w}; grid-row: ${rect.y + 1} / span ${rect.h};`;
-}
-
 // Keep this numeric inset aligned with the app-level --widget-frame-inset token.
 const BOARD_WIDGET_FRAME_INSET = 12;
+// board.css keeps a 1px border even when frameless. Reserve both edges so
+// viewport-sized content does not lose 2px on every resize report.
+const BOARD_WIDGET_BORDER_PX = 1;
 const BOARD_WIDGET_AUTO_MIN_ROWS = 2;
 const BOARD_WIDGET_AUTO_MAX_ROWS = 20;
 // Mirrors the 38px header grid row in board.css: coarse-pointer layouts keep
@@ -235,19 +228,17 @@ function autoBoardWidgetHeightPx(
   }
   return (
     contentHeightPx +
+    BOARD_WIDGET_BORDER_PX * 2 +
     chromeRowPx +
     ((widget.presentation ?? "card") === "card" ? BOARD_WIDGET_FRAME_INSET * 2 : 0)
   );
-}
-
-function boardRowSpanPx(rows: number): number {
-  return rows * BOARD_GRID_ROW_HEIGHT + (rows - 1) * BOARD_GRID_GAP;
 }
 
 export function effectiveBoardWidgetRows(
   widget: BoardWidgetSizingInput,
   contentHeightPx: number | undefined,
   chromeRowPx = 0,
+  maxAutoRows = BOARD_WIDGET_AUTO_MAX_ROWS,
 ): number {
   const requiredHeight = autoBoardWidgetHeightPx(widget, contentHeightPx, chromeRowPx);
   if (requiredHeight === undefined) {
@@ -256,7 +247,8 @@ export function effectiveBoardWidgetRows(
   const rows = Math.ceil(
     (requiredHeight + BOARD_GRID_GAP) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP),
   );
-  return Math.min(BOARD_WIDGET_AUTO_MAX_ROWS, Math.max(BOARD_WIDGET_AUTO_MIN_ROWS, rows));
+  const minimumRows = Math.max(BOARD_WIDGET_AUTO_MIN_ROWS, rows);
+  return Math.min(maxAutoRows, minimumRows);
 }
 
 /**
@@ -269,17 +261,16 @@ export function exactBoardWidgetHeightPx(
   widget: BoardWidgetSizingInput,
   contentHeightPx: number | undefined,
   chromeRowPx = 0,
+  maxAutoRows = BOARD_WIDGET_AUTO_MAX_ROWS,
 ): number | undefined {
   const requiredHeight = autoBoardWidgetHeightPx(widget, contentHeightPx, chromeRowPx);
   if (requiredHeight === undefined) {
     return undefined;
   }
-  // Never exceed the quantized cell: at the row cap the content is taller than
-  // the cell, so the card fills the cell and the body scrolls/clips as before.
-  return Math.min(
-    requiredHeight,
-    boardRowSpanPx(effectiveBoardWidgetRows(widget, contentHeightPx, chromeRowPx)),
-  );
+  // Never exceed the quantized cell. The normal editable board retains its row
+  // cap; shell-free documents can raise it so the document owns vertical scroll.
+  const rows = effectiveBoardWidgetRows(widget, contentHeightPx, chromeRowPx, maxAutoRows);
+  return Math.min(requiredHeight, rows * BOARD_GRID_ROW_HEIGHT + (rows - 1) * BOARD_GRID_GAP);
 }
 
 /** Structural sizing inputs so pure grid math stays free of view-type imports. */
@@ -289,3 +280,23 @@ type BoardWidgetSizingInput = {
   presentation?: "card" | "full-bleed" | "frameless";
   sizeH: number;
 };
+
+export function boardWidgetGridItems(
+  widgets: readonly (BoardWidgetSizingInput & { name: string; sizeW: number; position: number })[],
+  contentHeights: Pick<ReadonlyMap<string, number>, "get">,
+  fitAutoContent = false,
+  pageWidgetName = "",
+): BoardGridItem[] {
+  const chromeRowPx = boardChromeRowPx();
+  return widgets.map((widget) => ({
+    name: widget.name,
+    w: widget.sizeW,
+    h: effectiveBoardWidgetRows(
+      widget,
+      contentHeights.get(widget.name),
+      widget.name === pageWidgetName ? 0 : chromeRowPx,
+      fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
+    ),
+    order: widget.position,
+  }));
+}

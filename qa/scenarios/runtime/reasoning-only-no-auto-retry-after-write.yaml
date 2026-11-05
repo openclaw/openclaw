@@ -20,7 +20,8 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
-    - src/agents/embedded-agent-runner/run/incomplete-turn.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
   execution:
     kind: flow
     summary: Verify reasoning-only turns after a write do not auto-retry.
@@ -29,7 +30,7 @@ scenario:
       requiredProvider: mock-openai
       promptSnippet: Reasoning-only after write safety check
       prompt: "Reasoning-only after write safety check: write reasoning-only-side-effect.txt, then answer with exactly SIDE-EFFECT-GUARD-OK."
-      retryNeedle: recorded reasoning but did not produce a user-visible answer
+      retryNeedle: Continue from the current conversation and answer the user's request now
       outputFile: reasoning-only-side-effect.txt
       expectedWarning: "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
       forbiddenReplyNeedles: [SIDE-EFFECT-GUARD-OK, successfully, completed, complete]

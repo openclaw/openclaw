@@ -1,4 +1,3 @@
-// Imessage plugin module normalizes equivalent provider conversation identifiers.
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageService, IMessageTarget } from "./targets.js";
@@ -38,6 +37,17 @@ function parseDirectChatIdentity(raw: string): IMessageDirectChatIdentity | unde
   return undefined;
 }
 
+export function resolveIMessageDirectChatService(
+  configuredService?: IMessageService | null,
+  chatGuid?: string | null,
+): Exclude<IMessageService, "auto"> | undefined {
+  if (configuredService === "imessage" || configuredService === "sms") {
+    return configuredService;
+  }
+  const observedService = chatGuid ? parseDirectChatIdentity(chatGuid)?.service : undefined;
+  return observedService === "imessage" || observedService === "sms" ? observedService : undefined;
+}
+
 export function isIMessageEmailChatIdentifier(raw: string): boolean {
   const identity = parseDirectChatIdentity(raw);
   return Boolean(identity && EMAIL_HANDLE_PATTERN.test(identity.identifier));
@@ -69,7 +79,7 @@ export function chatContextFromIMessageTarget(
   const trimmedHandle = target.to.trim();
   const canonicalHandle = trimmedHandle.startsWith("+")
     ? normalizeE164(trimmedHandle)
-    : /^[^\s@]+@[^\s@]+$/u.test(trimmedHandle)
+    : EMAIL_HANDLE_PATTERN.test(trimmedHandle)
       ? trimmedHandle.toLowerCase()
       : undefined;
   if (!canonicalHandle) {
@@ -122,26 +132,15 @@ export function resolveIMessageChatMatch(
   cached: IMessageChatContext,
   current: IMessageChatContext,
 ): "match" | "mismatch" | "unknown" {
-  const cachedChatGuid = normalizeOptionalString(cached.chatGuid);
-  const currentChatGuid = normalizeOptionalString(current.chatGuid);
-  const cachedChatIdentifier = normalizeOptionalString(cached.chatIdentifier);
-  const currentChatIdentifier = normalizeOptionalString(current.chatIdentifier);
   const comparisons = [
-    compareChatSelector(cachedChatGuid, currentChatGuid),
-    compareChatSelector(cachedChatIdentifier, currentChatIdentifier),
+    compareChatSelector(cached.chatGuid, current.chatGuid),
+    compareChatSelector(cached.chatIdentifier, current.chatIdentifier),
     compareOptional(cached.chatId, current.chatId),
-    compareChatSelector(cachedChatGuid, currentChatIdentifier, true),
-    compareChatSelector(cachedChatIdentifier, currentChatGuid, true),
+    compareChatSelector(cached.chatGuid, current.chatIdentifier, true),
+    compareChatSelector(cached.chatIdentifier, current.chatGuid, true),
   ].filter((comparison): comparison is boolean => comparison !== undefined);
   if (comparisons.length === 0) {
     return "unknown";
   }
   return comparisons.every(Boolean) ? "match" : "mismatch";
-}
-
-export function isPositiveIMessageChatMatch(
-  cached: IMessageChatContext,
-  current: IMessageChatContext,
-): boolean {
-  return resolveIMessageChatMatch(cached, current) === "match";
 }

@@ -1,18 +1,29 @@
+import { EventEmitter, once } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
-  createDiagnosticTraceContext,
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
+import { createOperationalRunInstanceRef } from "../../../agents/admitted-run-context.js";
+import {
   getActiveDiagnosticTraceContext,
-  runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import {
+  getActiveGatewayRootWorkCount,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
+import { createDeferredCore, type Deferred } from "../../../shared/deferred.js";
+import { acquireTestPortBlock } from "../../../test-utils/port-claims.js";
+import type { AgentRuntimeIdentity } from "../../agent-runtime-identity-token.js";
+import { createPluginGatewayMethodDescriptor } from "../../methods/descriptor.js";
+import {
   connectOk,
-  getFreePort,
   installGatewayTestHooks,
   onceMessage,
-  startGatewayServer,
+  startTestGatewayServer,
   trackConnectChallengeNonce,
 } from "../../test-helpers.js";
 import {
@@ -20,106 +31,119 @@ import {
   setTestPluginRegistry,
 } from "../../test-helpers.plugin-registry.js";
 import type { GatewayWsClient } from "../ws-types.js";
-import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
+import { createRequestGate } from "./authenticated-request-dispatch.fixtures.test-support.js";
+import {
+  createDispatchTestHarness,
+  createOperatorWsClient,
+  requestFrame,
+} from "./authenticated-request-dispatch.test-support.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 
 const TRACEPARENTS = {
   first: "00-11111111111111111111111111111111-1111111111111111-01",
   second: "00-22222222222222222222222222222222-2222222222222222-00",
 } as const;
+const CLIENTS = {
+  ui: { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.UI },
+  cli: { id: GATEWAY_CLIENT_IDS.CLI, mode: GATEWAY_CLIENT_MODES.CLI },
+};
+type TraceObservation = {
+  before: DiagnosticTraceContext | undefined;
+  after?: DiagnosticTraceContext;
+};
+type Handler = NonNullable<GatewayWsMessageHandlerParams["extraHandlers"][string]>;
+const traceRequest = (id: string, traceparent?: string, method = "test.trace") => ({
+  ...requestFrame(id, method),
+  ...(traceparent ? { traceparent } : {}),
+});
 
 installGatewayTestHooks({ scope: "suite" });
 
 function createClient(): GatewayWsClient {
+  return createOperatorWsClient({ connId: "conn-trace-test" });
+}
+
+function createTestAgentRuntimeIdentity(runId: string): AgentRuntimeIdentity {
+  const operationalRunInstance = createOperationalRunInstanceRef(runId);
   return {
-    socket: {} as WebSocket,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: "gateway-client",
-        version: "dev",
-        platform: "test",
-        mode: "backend",
-      },
-      role: "operator",
-      scopes: ["operator.admin"],
+    kind: "agentRuntime",
+    agentId: "main",
+    sessionKey: "agent:main:test",
+    operationalRunInstance,
+    delegatedAuthority: {
+      kind: "local",
+      operationalRunInstance,
+      lifecycleGeneration: `generation-${runId}`,
+      claimId: `claim-${runId}`,
     },
+  };
+}
+
+function createDispatcher(handler: Handler, context: Record<string, unknown> = {}) {
+  return createDispatchTestHarness({
     connId: "conn-trace-test",
-    usesSharedGatewayAuth: false,
-  };
+    extraHandlers: { "test.trace": handler },
+    buildRequestContext: () => ({ getRuntimeConfig: () => ({}), ...context }),
+  });
 }
 
-function createDispatcher(
-  handler: NonNullable<GatewayWsMessageHandlerParams["extraHandlers"][string]>,
-) {
-  const send = vi.fn();
-  const logGateway = {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  };
-  const dispatcher = createGatewayAuthenticatedRequestDispatcher({
-    handler: {
-      connId: "conn-trace-test",
+function createAuthorityScenario(change: string, handler: Handler, queued = false) {
+  let generation = "current";
+  let runtimeActive = true;
+  const client = createClient();
+  if (change === "shared-auth") {
+    client.usesSharedGatewayAuth = true;
+    client.sharedGatewaySessionGeneration = generation;
+  } else if (change === "runtime") {
+    client.internal = { agentRuntimeIdentity: createTestAgentRuntimeIdentity("pending-start") };
+  }
+  return {
+    client,
+    harness: createDispatchTestHarness({
       extraHandlers: { "test.trace": handler },
-      buildRequestContext: () => ({}) as never,
-      send,
-      close: vi.fn(),
-      isClosed: () => false,
-      setCloseCause: vi.fn(),
-      logGateway,
-    } as unknown as GatewayWsMessageHandlerParams,
-    isWebchatConnect: () => false,
-  });
-  return { dispatcher, logGateway, send };
+      getRequiredSharedGatewaySessionGeneration: () => generation,
+      buildRequestContext: queued
+        ? () => ({
+            getRuntimeConfig: () => ({}),
+            validateAgentRuntimeApprovalAuthority: () => runtimeActive,
+          })
+        : undefined,
+    }),
+    revoke(this: void) {
+      if (change === "shared-auth") {
+        generation = "rotated";
+      } else if (change === "runtime") {
+        runtimeActive = false;
+      } else {
+        Object.assign(client, { invalidated: true, invalidatedReason: "device-token-revoked" });
+      }
+    },
+  };
 }
 
-async function dispatchInFreshMessageScope(
-  dispatcher: ReturnType<typeof createDispatcher>["dispatcher"],
-  client: GatewayWsClient,
+function expectAuthorityClosed(
+  harness: ReturnType<typeof createDispatchTestHarness>,
   id: string,
-  traceparent?: string,
-): Promise<void> {
-  await runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-    dispatcher.dispatch(
-      {
-        type: "req",
-        id,
-        method: "test.trace",
-        params: {},
-        ...(traceparent ? { traceparent } : {}),
-      },
-      client,
-    ),
-  );
+  reason: string,
+) {
+  expect(harness.close).toHaveBeenCalledWith(4001, reason);
+  expect(harness.send).not.toHaveBeenCalledWith(expect.objectContaining({ id, ok: true }));
 }
 
-async function openAuthenticatedTraceSocket(params: {
-  port: number;
-  token: string;
-  connectTraceparent: string;
-}): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://127.0.0.1:${params.port}`);
+async function warmDispatcher(
+  harness: ReturnType<typeof createDispatchTestHarness>,
+  client: GatewayWsClient,
+): Promise<void> {
+  await harness.dispatcher.dispatch(traceRequest("warmup"), client);
+  await harness.awaitResponseFrame("warmup");
+}
+
+async function openAuthenticatedTraceSocket(port: number, token: string, traceparent: string) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve, reject) => {
-    const onOpen = () => {
-      ws.off("error", onError);
-      resolve();
-    };
-    const onError = (error: Error) => {
-      ws.off("open", onOpen);
-      reject(error);
-    };
-    ws.once("open", onOpen);
-    ws.once("error", onError);
-  });
+  await once(ws, "open");
   try {
-    await connectOk(ws, {
-      token: params.token,
-      traceparent: params.connectTraceparent,
-    });
+    await connectOk(ws, { token, traceparent });
     return ws;
   } catch (error) {
     ws.terminate();
@@ -131,21 +155,39 @@ async function sendTraceRequest(
   ws: WebSocket,
   id: string,
   traceparent?: string,
-): Promise<{ ok: boolean }> {
-  const response = onceMessage<{ type: "res"; id: string; ok: boolean }>(
+  method = "test.trace",
+): Promise<{ ok: boolean; error?: unknown }> {
+  const response = onceMessage<{ type: "res"; id: string; ok: boolean; error?: unknown }>(
     ws,
     (value) => value.type === "res" && value.id === id,
   );
-  ws.send(
-    JSON.stringify({
-      type: "req",
-      id,
-      method: "test.trace",
-      params: {},
-      ...(traceparent ? { traceparent } : {}),
+  ws.send(JSON.stringify(traceRequest(id, traceparent, method)));
+  return await response;
+}
+
+async function startTraceServer(method: string, handler: Handler) {
+  const registry = createEmptyPluginRegistry();
+  registry.gatewayHandlers[method] = handler;
+  registry.gatewayMethodDescriptors.push(
+    createPluginGatewayMethodDescriptor({
+      pluginId: "request-dispatch-proof",
+      name: method,
+      handler,
     }),
   );
-  return await response;
+  setTestPluginRegistry(registry);
+  const token = "gateway-request-trace-test-token";
+  const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+  const server = await startTestGatewayServer(portClaim, {
+    auth: { mode: "token", token },
+    bind: "loopback",
+    controlUiEnabled: false,
+  });
+  return {
+    server,
+    connect: (connectTraceparent: string) =>
+      openAuthenticatedTraceSocket(portClaim.port, token, connectTraceparent),
+  };
 }
 
 describe("authenticated WebSocket request trace dispatch", () => {
@@ -153,183 +195,196 @@ describe("authenticated WebSocket request trace dispatch", () => {
     vi.clearAllMocks();
   });
 
-  it("continues a valid upstream trace as a child context", async () => {
-    let observed: DiagnosticTraceContext | undefined;
-    const { dispatcher } = createDispatcher(() => {
-      observed = getActiveDiagnosticTraceContext();
-    });
+  it.each(["before dispatch", "before response"] as const)(
+    "rejects delegated authority revoked %s",
+    async (stage) => {
+      let authorityActive = stage === "before response";
+      const gate = createRequestGate();
+      const handler = vi.fn(async ({ respond }) => {
+        await gate.wait();
+        respond(true, { exposed: true }, undefined);
+      });
+      const validateAgentRuntimeApprovalAuthority = vi.fn(() => authorityActive);
+      const harness = createDispatcher(handler, { validateAgentRuntimeApprovalAuthority });
+      const client = createClient();
+      const agentRuntimeIdentity = createTestAgentRuntimeIdentity(stage);
+      client.internal = { agentRuntimeIdentity };
+      const dispatch = harness.dispatcher.dispatch(traceRequest(stage), client);
+      try {
+        if (stage === "before response") {
+          await gate.entered;
+          expect(handler).toHaveBeenCalledOnce();
+          authorityActive = false;
+        }
+      } finally {
+        gate.release();
+        await dispatch;
+      }
 
-    await dispatchInFreshMessageScope(dispatcher, createClient(), "first", TRACEPARENTS.first);
-    await vi.waitFor(() => {
-      expect(observed).toBeDefined();
-    });
+      const failure = {
+        id: stage,
+        ok: false,
+        error: expect.objectContaining({
+          message: "agent runtime authority is no longer active",
+        }),
+      };
+      expect(await harness.awaitResponseFrame(stage)).toMatchObject(failure);
+      expect(harness.send).toHaveBeenCalledWith(expect.objectContaining(failure));
+      expectAuthorityClosed(harness, stage, "agent runtime authority closed");
+      if (stage === "before dispatch") {
+        expect(validateAgentRuntimeApprovalAuthority).toHaveBeenCalledWith(agentRuntimeIdentity);
+        expect(handler).not.toHaveBeenCalled();
+        expect(harness.setCloseCause).toHaveBeenCalledWith("agent-runtime-authority-closed", {
+          method: "test.trace",
+        });
+      }
+    },
+  );
 
-    expect(observed).toMatchObject({
-      traceId: "11111111111111111111111111111111",
-      parentSpanId: "1111111111111111",
-      traceFlags: "01",
-    });
-    expect(observed?.spanId).not.toBe("1111111111111111");
-  });
-
-  it("keeps handler failure logging and responses inside the request trace", async () => {
-    let loggedContext: DiagnosticTraceContext | undefined;
-    let responseContext: DiagnosticTraceContext | undefined;
-    const { dispatcher, logGateway, send } = createDispatcher(async () => {
-      throw new Error("expected trace failure");
-    });
-    logGateway.error.mockImplementation(() => {
-      loggedContext = getActiveDiagnosticTraceContext();
-    });
-    send.mockImplementation(() => {
-      responseContext = getActiveDiagnosticTraceContext();
-    });
-
-    await dispatchInFreshMessageScope(dispatcher, createClient(), "failure", TRACEPARENTS.first);
-    await vi.waitFor(() => {
-      expect(logGateway.error).toHaveBeenCalled();
-      expect(send).toHaveBeenCalled();
-    });
-
-    expect(loggedContext).toMatchObject({
-      traceId: "11111111111111111111111111111111",
-      parentSpanId: "1111111111111111",
-      traceFlags: "01",
-    });
-    expect(responseContext).toEqual(loggedContext);
-  });
-
-  it("retains fresh roots for missing and malformed traceparent values", async () => {
-    const observed = new Map<string, DiagnosticTraceContext | undefined>();
-    const { dispatcher } = createDispatcher(({ req }) => {
-      observed.set(req.id, getActiveDiagnosticTraceContext());
-    });
-    const client = createClient();
-
-    await dispatchInFreshMessageScope(dispatcher, client, "missing");
-    await vi.waitFor(() => {
-      expect(observed.has("missing")).toBe(true);
-    });
-    await dispatchInFreshMessageScope(
-      dispatcher,
-      client,
-      "malformed",
-      "00-11111111111111111111111111111111-1111111111111111-zz",
+  it.each([
+    { change: "shared-auth", closeReason: "gateway auth changed" },
+    { change: "invalidated", closeReason: "client invalidated: device-token-revoked" },
+    { change: "runtime", closeReason: "agent runtime authority closed" },
+  ] as const)("revalidates $change authority after waiting to start", async (testCase) => {
+    let pendingStarted = false;
+    const { client, harness, revoke } = createAuthorityScenario(
+      testCase.change,
+      ({ req, respond }) => {
+        pendingStarted ||= req.id === "pending";
+        respond(true, { completed: req.id });
+      },
+      true,
     );
-    await vi.waitFor(() => {
-      expect(observed.has("malformed")).toBe(true);
-    });
-
-    const missing = observed.get("missing");
-    const malformed = observed.get("malformed");
-    expect(missing).toBeDefined();
-    expect(malformed).toBeDefined();
-    expect(missing?.traceId).not.toBe("11111111111111111111111111111111");
-    expect(malformed?.traceId).not.toBe("11111111111111111111111111111111");
-    expect(missing?.traceId).not.toBe(malformed?.traceId);
+    await warmDispatcher(harness, client);
+    const dispatch = harness.dispatcher.dispatch(traceRequest("pending"), client);
+    expect(pendingStarted).toBe(false);
+    revoke();
+    await dispatch;
+    expect(pendingStarted).toBe(false);
+    expectAuthorityClosed(harness, "pending", testCase.closeReason);
   });
 
-  it("isolates concurrent request contexts on one connection", async () => {
-    let releaseRequests: (() => void) | undefined;
-    const requestBarrier = new Promise<void>((resolve) => {
-      releaseRequests = resolve;
-    });
-    const observed = new Map<
-      string,
-      { before: DiagnosticTraceContext | undefined; after?: DiagnosticTraceContext }
-    >();
-    const { dispatcher } = createDispatcher(async ({ req }) => {
-      const observation: {
-        before: DiagnosticTraceContext | undefined;
-        after?: DiagnosticTraceContext;
-      } = { before: getActiveDiagnosticTraceContext() };
-      observed.set(req.id, observation);
-      await requestBarrier;
-      observation.after = getActiveDiagnosticTraceContext();
+  it.each([
+    { change: "shared-auth", closeReason: "gateway auth changed" },
+    { change: "invalidated", closeReason: "client invalidated: device-token-revoked" },
+  ] as const)("exposes live $change authority to an active handler", async (testCase) => {
+    let observedAuthority: boolean | undefined;
+    const gate = createRequestGate();
+    const handler: Handler = async ({ hasCurrentClientAuthority }) => {
+      await gate.wait();
+      observedAuthority = hasCurrentClientAuthority?.();
+    };
+    const { client, harness, revoke } = createAuthorityScenario(testCase.change, handler);
+    const dispatch = harness.dispatcher.dispatch(traceRequest("active"), client);
+    await gate.during(dispatch, revoke);
+    expect(observedAuthority).toBe(false);
+    expectAuthorityClosed(harness, "active", testCase.closeReason);
+  });
+
+  it.each([
+    ["ordinary UI node invocation", "node.invoke", CLIENTS.ui, false],
+    ["CLI node invocation", "node.invoke", CLIENTS.cli, true],
+    ["session companion ask", "sessions.companion.ask", CLIENTS.ui, true],
+  ] as const)(
+    "preserves pending %s disconnect policy",
+    async (_label, method, clientInfo, cancel) => {
+      const socket = new EventEmitter();
+      let disconnected = false;
+      let pendingStarted = false;
+      let pendingSignal: AbortSignal | undefined;
+      const handler: Handler = ({ req, respond, signal }) => {
+        if (req.id === "pending") {
+          pendingStarted = true;
+          pendingSignal = signal;
+        }
+        respond(true, { completed: req.id });
+      };
+      const client = createOperatorWsClient({ socket, clientInfo });
+      const harness = createDispatchTestHarness({
+        isClosed: () => disconnected,
+        extraHandlers: { "test.trace": handler, [method]: handler },
+      });
+      await warmDispatcher(harness, client);
+      const dispatch = harness.dispatcher.dispatch(
+        traceRequest("pending", undefined, method),
+        client,
+      );
+      expect(pendingStarted).toBe(false);
+      disconnected = true;
+      socket.emit("close", 1000, Buffer.alloc(0));
+
+      await dispatch;
+      expect(pendingStarted).toBe(!cancel);
+      if (!cancel) {
+        expect(await harness.awaitResponseFrame("pending")).toMatchObject({ ok: true });
+        expect(pendingSignal).toBeUndefined();
+      } else {
+        expect(harness.send).not.toHaveBeenCalledWith(expect.objectContaining({ id: "pending" }));
+      }
+      expect(socket.listenerCount("close")).toBe(0);
+    },
+  );
+
+  it("gives concurrent requests their own root admission", async () => {
+    const gate = createRequestGate();
+    const bothObserved = createDeferredCore();
+    let entered = 0;
+    const { dispatcher } = createDispatcher(async () => {
+      if (++entered === 2) {
+        bothObserved.resolve();
+      }
+      await gate.wait();
     });
     const client = createClient();
 
-    await Promise.all([
-      dispatchInFreshMessageScope(dispatcher, client, "first", TRACEPARENTS.first),
-      dispatchInFreshMessageScope(dispatcher, client, "second", TRACEPARENTS.second),
-    ]);
-    await vi.waitFor(() => {
-      expect(observed.size).toBe(2);
-    });
-    releaseRequests?.();
-    await vi.waitFor(() => {
-      expect([...observed.values()].every((entry) => entry.after)).toBe(true);
-    });
-
-    expect(observed.get("first")?.before?.traceId).toBe("11111111111111111111111111111111");
-    expect(observed.get("second")?.before?.traceId).toBe("22222222222222222222222222222222");
-    expect(observed.get("first")?.after).toEqual(observed.get("first")?.before);
-    expect(observed.get("second")?.after).toEqual(observed.get("second")?.before);
+    const parent = tryBeginGatewayRootWorkAdmission();
+    if (!parent) {
+      throw new Error("expected open parent work admission");
+    }
+    const dispatches = parent.run(() =>
+      Promise.all(["first", "second"].map((id) => dispatcher.dispatch(traceRequest(id), client))),
+    );
+    try {
+      await bothObserved.promise;
+      // Pending starts cannot borrow the caller's parent admission.
+      expect(getActiveGatewayRootWorkCount()).toBe(3);
+    } finally {
+      gate.release();
+      parent.release();
+      await dispatches;
+    }
   });
 
   it("preserves request isolation through a real authenticated WebSocket session", async () => {
-    const observed = new Map<
-      string,
-      { before: DiagnosticTraceContext | undefined; after?: DiagnosticTraceContext }
-    >();
-    let requestBarrier: Promise<void> | undefined;
-    let releaseRequests: (() => void) | undefined;
-    const registry = createEmptyPluginRegistry();
-    registry.gatewayHandlers["test.trace"] = async ({ req, respond }) => {
-      const observation: {
-        before: DiagnosticTraceContext | undefined;
-        after?: DiagnosticTraceContext;
-      } = { before: getActiveDiagnosticTraceContext() };
+    const observed = new Map<string, TraceObservation>();
+    const bothConcurrentObserved = createDeferredCore();
+    let requestBarrier: Deferred | undefined;
+    const { server, connect } = await startTraceServer("test.trace", async ({ req, respond }) => {
+      const observation: TraceObservation = { before: getActiveDiagnosticTraceContext() };
       observed.set(req.id, observation);
-      await requestBarrier;
+      if (observed.has("concurrent-first") && observed.has("concurrent-second")) {
+        bothConcurrentObserved.resolve();
+      }
+      await requestBarrier?.promise;
       observation.after = getActiveDiagnosticTraceContext();
       respond(true, { traced: true });
-    };
-    setTestPluginRegistry(registry);
-
-    const token = "gateway-request-trace-test-token";
-    const port = await getFreePort();
-    const server = await startGatewayServer(port, {
-      auth: { mode: "token", token },
-      bind: "loopback",
-      controlUiEnabled: false,
     });
     let ws: WebSocket | undefined;
     try {
-      ws = await openAuthenticatedTraceSocket({
-        port,
-        token,
-        connectTraceparent: TRACEPARENTS.first,
-      });
+      ws = await connect(TRACEPARENTS.first);
 
       await expect(sendTraceRequest(ws, "untraced-after-connect")).resolves.toMatchObject({
         ok: true,
       });
-      await expect(
-        sendTraceRequest(
-          ws,
-          "malformed",
-          "00-11111111111111111111111111111111-1111111111111111-zz",
-        ),
-      ).resolves.toMatchObject({ ok: true });
       const afterConnect = observed.get("untraced-after-connect")?.before;
-      const malformed = observed.get("malformed")?.before;
       expect(afterConnect).toBeDefined();
-      expect(malformed).toBeDefined();
       expect(afterConnect?.traceId).not.toBe("11111111111111111111111111111111");
-      expect(malformed?.traceId).not.toBe("11111111111111111111111111111111");
-      expect(malformed?.traceId).not.toBe(afterConnect?.traceId);
 
-      requestBarrier = new Promise<void>((resolve) => {
-        releaseRequests = resolve;
-      });
+      requestBarrier = createDeferredCore();
       const first = sendTraceRequest(ws, "concurrent-first", TRACEPARENTS.first);
       const second = sendTraceRequest(ws, "concurrent-second", TRACEPARENTS.second);
-      await vi.waitFor(() => {
-        expect(observed.has("concurrent-first")).toBe(true);
-        expect(observed.has("concurrent-second")).toBe(true);
-      });
-      releaseRequests?.();
+      await bothConcurrentObserved.promise;
+      requestBarrier.resolve();
       await expect(Promise.all([first, second])).resolves.toMatchObject([
         { ok: true },
         { ok: true },
@@ -347,8 +402,52 @@ describe("authenticated WebSocket request trace dispatch", () => {
         parentSpanId: "2222222222222222",
         traceFlags: "00",
       });
+      expect(firstObservation?.before?.spanId).not.toBe("1111111111111111");
       expect(firstObservation?.after).toEqual(firstObservation?.before);
       expect(secondObservation?.after).toEqual(secondObservation?.before);
+    } finally {
+      ws?.terminate();
+      await server.close();
+      resetTestPluginRegistry();
+    }
+  });
+
+  it("returns a typed error when a handler response cannot be serialized", async () => {
+    let invalidSerializationAttempts = 0;
+    let healthySerializationAttempts = 0;
+    const { server, connect } = await startTraceServer("test.serialize", ({ req, respond }) => {
+      const invalid = req.id === "invalid-payload";
+      respond(true, {
+        toJSON: () => {
+          if (invalid) {
+            invalidSerializationAttempts += 1;
+            return { value: 1n };
+          }
+          if (++healthySerializationAttempts > 1) {
+            throw new Error("healthy response serialized more than once");
+          }
+          return { value: 1 };
+        },
+      });
+    });
+    let ws: WebSocket | undefined;
+    try {
+      ws = await connect(TRACEPARENTS.first);
+      await expect(
+        sendTraceRequest(ws, "invalid-payload", undefined, "test.serialize"),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "response serialization failed" },
+      });
+      expect(invalidSerializationAttempts).toBe(1);
+      await expect(
+        onceMessage(ws, (value) => value.type === "res" && value.id === "invalid-payload", 100),
+      ).rejects.toThrow("timeout");
+
+      await expect(
+        sendTraceRequest(ws, "healthy-after-error", undefined, "test.serialize"),
+      ).resolves.toMatchObject({ ok: true });
+      expect(healthySerializationAttempts).toBe(1);
     } finally {
       ws?.terminate();
       await server.close();

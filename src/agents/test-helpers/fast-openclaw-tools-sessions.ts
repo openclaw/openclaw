@@ -23,7 +23,7 @@ vi.mock("../tools/gateway-tool.js", () => ({
   createGatewayTool: () => stubTool("gateway"),
 }));
 
-vi.mock("../tools/message-tool.js", () => ({
+vi.mock("../tools/message-tool-execution.js", () => ({
   createMessageTool: () => stubTool("message"),
 }));
 
@@ -47,17 +47,20 @@ vi.mock("../tools/tts-tool.js", () => ({
   createTtsTool: () => stubTool("tts"),
 }));
 
-vi.mock("../tools/update-plan-tool.js", () => ({
-  createUpdatePlanTool: () => stubTool("update_plan"),
-}));
-
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: () => null,
   normalizeChannelId: (channel?: string) => normalizeOptionalLowercaseString(channel),
   listChannelPlugins: () => [],
 }));
 
+// mock-isolation: Keep session-tool fixtures independent of activated channel registries and artifact fallback.
 vi.mock("../../channels/plugins/session-conversation.js", () => ({
+  resolveSessionConversation: ({ rawId }: { rawId: string }) => ({
+    id: rawId,
+    threadId: undefined,
+    baseConversationId: rawId,
+    parentConversationCandidates: [],
+  }),
   resolveSessionConversationRef: (sessionKey: string) => {
     const match =
       /^(?:agent:[^:]+:)?(?<channel>[^:]+):(?<kind>group|channel):(?<id>[^:]+)(?::topic:(?<threadId>[^:]+))?$/u.exec(

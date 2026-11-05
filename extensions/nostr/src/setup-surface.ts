@@ -1,10 +1,9 @@
-// Nostr plugin module implements setup surface behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
-import type { ChannelSetupDmPolicy, ChannelSetupWizard, DmPolicy } from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import {
   createSetupTranslator,
   createTopLevelChannelDmPolicy,
@@ -16,8 +15,9 @@ import {
   patchTopLevelChannelConfigSection,
   setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup";
+import { getNostrConfig } from "./accounts.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
-import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-key-utils.js";
+import { normalizePubkey } from "./nostr-key-utils.js";
 import {
   buildNostrSetupPatch,
   createNostrSetupAdapter,
@@ -74,20 +74,12 @@ const nostrDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   channel,
   policyKey: "channels.nostr.dmPolicy",
   allowFromKey: "channels.nostr.allowFrom",
-  getCurrent: (cfg) => (cfg.channels?.nostr?.dmPolicy as DmPolicy | undefined) ?? "pairing",
+  getCurrent: (cfg) => getNostrConfig(cfg)?.dmPolicy ?? "pairing",
   promptAllowFrom: promptNostrAllowFrom,
 });
 
 export const nostrSetupAdapter = createNostrSetupAdapter({
   resolveAccountId: (cfg, accountId) => accountId?.trim() || resolveDefaultNostrAccountId(cfg),
-  validatePrivateKey: (privateKey) => {
-    try {
-      getPublicKeyFromPrivate(privateKey);
-      return true;
-    } catch {
-      return false;
-    }
-  },
 });
 export const nostrSetupContract = createNostrSetupContract(nostrSetupAdapter);
 
@@ -157,7 +149,7 @@ export const nostrSetupWizard: ChannelSetupWizard = {
       helpLines: [t("wizard.nostr.relaysWsOnly"), t("wizard.nostr.helpRelaysOptional")],
       currentValue: ({ cfg, accountId }) => {
         const account = resolveNostrAccount({ cfg, accountId });
-        const configuredRelays = cfg.channels?.nostr?.relays as string[] | undefined;
+        const configuredRelays = account.config.relays;
         const relays = configuredRelays && configuredRelays.length > 0 ? account.relays : [];
         return relays.join(", ");
       },

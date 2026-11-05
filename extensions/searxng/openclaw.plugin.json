@@ -1,6 +1,6 @@
 {
   "id": "searxng",
-  "icon": "https://cdn.simpleicons.org/searxng",
+  "categories": ["web"],
   "activation": {
     "onStartup": false
   },
@@ -21,6 +21,14 @@
   "contracts": {
     "webSearchProviders": ["searxng"]
   },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

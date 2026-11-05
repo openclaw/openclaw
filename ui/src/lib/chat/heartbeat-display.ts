@@ -1,103 +1,23 @@
-// Control UI chat module implements heartbeat display behavior.
-import { escapeRegExp } from "../../../../src/shared/regexp.js";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  stripHeartbeatToken,
+} from "../../../../src/auto-reply/heartbeat.js";
 
-const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
-const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
-
-export function stripHeartbeatTokenForDisplay(
-  raw: string,
-  maxAckChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-): { shouldSkip: boolean; text: string } {
-  let text = raw.trim();
-  if (!text) {
-    return { shouldSkip: true, text: "" };
-  }
-  const strippedMarkup = text
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/^[*`~_]+/, "")
-    .replace(/[*`~_]+$/, "");
-  if (!text.includes(HEARTBEAT_TOKEN) && !strippedMarkup.includes(HEARTBEAT_TOKEN)) {
-    // strippedMarkup exists only to DETECT tokens hidden behind markup; without
-    // a token, returning it would corrupt legitimate angle-bracket prose.
-    return { shouldSkip: false, text };
-  }
-
-  const tokenAtEnd = new RegExp(`${escapeRegExp(HEARTBEAT_TOKEN)}[^\\w]{0,4}$`);
-  let changed = true;
-  let didStrip = false;
-  text = strippedMarkup.trim();
-  while (changed) {
-    changed = false;
-    const next = text.trim();
-    if (next.startsWith(HEARTBEAT_TOKEN)) {
-      text = next.slice(HEARTBEAT_TOKEN.length).trimStart();
-      didStrip = true;
-      changed = true;
-      continue;
-    }
-    if (tokenAtEnd.test(next)) {
-      const index = next.lastIndexOf(HEARTBEAT_TOKEN);
-      const before = next.slice(0, index).trimEnd();
-      const after = next.slice(index + HEARTBEAT_TOKEN.length).trimStart();
-      text = before ? `${before}${after}`.trimEnd() : "";
-      didStrip = true;
-      changed = true;
-    }
-  }
-
-  if (!didStrip) {
-    return { shouldSkip: false, text };
-  }
-  return { shouldSkip: !text || text.length <= maxAckChars, text };
-}
-
-function isHiddenDisplayBlockType(type: unknown): boolean {
-  return type === "thinking" || type === "reasoning";
-}
-
-function resolveDisplayContent(content: unknown): {
-  text: string;
-  hasVisibleNonTextContent: boolean;
-} {
-  if (typeof content === "string") {
-    return { text: content, hasVisibleNonTextContent: false };
-  }
-  if (!Array.isArray(content)) {
-    return { text: "", hasVisibleNonTextContent: content != null };
-  }
-  let hasVisibleNonTextContent = false;
-  const text = content
-    .filter((block): block is { type: "text"; text: string } => {
-      if (!block || typeof block !== "object" || !("type" in block)) {
-        hasVisibleNonTextContent = true;
-        return false;
-      }
-      if ((block as { type?: unknown }).type !== "text") {
-        if (!isHiddenDisplayBlockType((block as { type?: unknown }).type)) {
-          hasVisibleNonTextContent = true;
-        }
-        return false;
-      }
-      if (typeof (block as { text?: unknown }).text !== "string") {
-        hasVisibleNonTextContent = true;
-        return false;
-      }
-      return true;
-    })
-    .map((block) => block.text)
-    .join("");
-  return { text, hasVisibleNonTextContent };
+export function stripHeartbeatTokenForDisplay(raw: string): { shouldSkip: boolean; text: string } {
+  const result = stripHeartbeatToken(raw, { mode: "message" });
+  const text = result.didStrip && /^[*`~_]+$/.test(result.text) ? "" : result.text;
+  return {
+    shouldSkip:
+      result.shouldSkip || (result.didStrip && text.length <= DEFAULT_HEARTBEAT_ACK_MAX_CHARS),
+    text,
+  };
 }
 
 export function isAssistantHeartbeatAckForDisplay(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as Record<string, unknown>;
-  const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role !== "assistant") {
+  const entry = asOptionalObjectRecord(message);
+  if (!entry || normalizeLowercaseStringOrEmpty(entry.role) !== "assistant") {
     return false;
   }
   if (typeof entry.senderLabel === "string" && entry.senderLabel.trim()) {
@@ -106,9 +26,27 @@ export function isAssistantHeartbeatAckForDisplay(message: unknown): boolean {
 
   const content =
     typeof entry.content === "string" || Array.isArray(entry.content) ? entry.content : entry.text;
-  const { text, hasVisibleNonTextContent } = resolveDisplayContent(content);
+  let text = "";
+  let hasVisibleNonTextContent = false;
+  if (typeof content === "string") {
+    text = content;
+  } else if (Array.isArray(content)) {
+    const parts: string[] = [];
+    content.forEach((block) => {
+      const blockEntry = asOptionalObjectRecord(block);
+      if (blockEntry?.type === "text" && typeof blockEntry.text === "string") {
+        parts.push(blockEntry.text);
+      } else if (blockEntry?.type !== "thinking" && blockEntry?.type !== "reasoning") {
+        hasVisibleNonTextContent = true;
+      }
+    });
+    text = parts.join("");
+  } else {
+    hasVisibleNonTextContent = content != null;
+  }
   if (hasVisibleNonTextContent) {
     return false;
   }
-  return stripHeartbeatTokenForDisplay(text).shouldSkip;
+  // Reasoning-only rows have no answer text, but that is not a heartbeat acknowledgement.
+  return text.trim().length > 0 && stripHeartbeatTokenForDisplay(text).shouldSkip;
 }

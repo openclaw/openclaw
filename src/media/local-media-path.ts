@@ -1,6 +1,6 @@
 import path from "node:path";
+import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
-import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolveUserPath } from "../utils.js";
 
 const DATA_URL_RE = /^data:/i;
@@ -12,7 +12,7 @@ export function resolveLocalMediaPath(source: string): string | undefined {
   if (!trimmed || isPassThroughRemoteMediaSource(trimmed) || DATA_URL_RE.test(trimmed)) {
     return undefined;
   }
-  if (/^file:\/\//iu.test(trimmed)) {
+  if (/^file:/iu.test(trimmed)) {
     try {
       return safeFileURLToPath(trimmed);
     } catch {

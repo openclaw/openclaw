@@ -9,6 +9,7 @@ struct TalkRealtimeClientCreateParams: Encodable {
     var brain = "agent-consult"
     var model: String?
     var voice: String?
+    var voiceChangeId: String?
     var capabilities: [String]
 }
 
@@ -22,10 +23,15 @@ struct TalkRealtimeClientSession: Decodable {
     let model: String?
     let voice: String?
     let expiresAt: Double?
+    let clientControl: TalkRealtimeClientControl?
 
     var isWebRTC: Bool {
         self.transport.caseInsensitiveCompare("webrtc") == .orderedSame
     }
+}
+
+struct TalkRealtimeClientControl: Decodable {
+    let owner: String
 }
 
 enum TalkRealtimeTranscriptRole: String, Encodable {
@@ -42,19 +48,17 @@ struct TalkRealtimeTranscriptParams: Encodable {
     let timestamp: Double?
 }
 
-struct TalkRealtimeClientCloseParams: Encodable {
-    let sessionKey: String
-    let voiceSessionId: String
-}
-
 struct TalkRealtimeToolCallResponse: Decodable {
     let runId: String?
     let idempotencyKey: String?
+    let agentId: String?
+    let agentSessionKey: String?
 }
 
 struct TalkRealtimeServerEvent: Decodable {
     let type: String
     let error: TalkRealtimeServerError?
+    let reason: String?
     let itemId: String?
     let item: TalkRealtimeServerItem?
     let turn: TalkRealtimeServerTurn?
@@ -68,6 +72,7 @@ struct TalkRealtimeServerEvent: Decodable {
     enum CodingKeys: String, CodingKey {
         case type
         case error
+        case reason
         case itemId = "item_id"
         case item
         case turn
@@ -96,8 +101,17 @@ struct TalkRealtimeServerEvent: Decodable {
     }
 
     var isMaximumDurationError: Bool {
-        guard self.type == "error", let message = self.error?.message?.lowercased() else { return false }
+        guard self.type == "error", let message = error?.message?.lowercased() else { return false }
         return message.contains("session") && message.contains("maximum duration")
+    }
+
+    var sessionCloseFailureStatus: String? {
+        guard self.type == "session.closed" else { return nil }
+        return switch self.reason {
+        case "content": "Realtime error"
+        case "connection_lost": "Realtime disconnected"
+        default: nil
+        }
     }
 }
 
@@ -126,5 +140,32 @@ struct TalkRealtimeServerItem: Decodable {
         case callId = "call_id"
         case name
         case arguments
+    }
+}
+
+/// Live speech overlaps, so caption fragments accumulate independently for each speaker.
+struct TalkRealtimeLiveCaptionBuffer {
+    struct Entry {
+        let role: TalkRealtimeTranscriptRole
+        let text: String
+    }
+
+    private var textByRole: [TalkRealtimeTranscriptRole: String] = [:]
+
+    mutating func append(_ event: TalkRealtimeServerEvent) -> Entry? {
+        let role: TalkRealtimeTranscriptRole
+        switch event.type {
+        case "session.input_transcript.delta": role = .user
+        case "session.output_transcript.delta": role = .assistant
+        default: return nil
+        }
+        guard let delta = event.delta, !delta.isEmpty else { return nil }
+        let text = String(((textByRole[role] ?? "") + delta).suffix(8192))
+        self.textByRole[role] = text
+        return Entry(role: role, text: text)
+    }
+
+    mutating func reset() {
+        self.textByRole.removeAll(keepingCapacity: true)
     }
 }

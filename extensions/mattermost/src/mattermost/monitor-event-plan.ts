@@ -1,11 +1,9 @@
-// Mattermost plugin module prepares shared routing and reply facts for monitor events.
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveMattermostReplyToMode } from "./accounts.js";
 import type { MattermostChannel } from "./client.js";
 import { resolveMattermostTrustedChatKind } from "./monitor-auth.js";
 import { resolveMattermostThreadSessionContext } from "./monitor-context.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
-import { createMattermostReplyDeliveryBarrier } from "./reply-delivery.js";
 import { logTypingFailure } from "./runtime-api.js";
 
 type MattermostEventPlanParams = {
@@ -59,34 +57,37 @@ export async function buildMattermostEventPlan(
     threadRootId: params.threadRootId,
   });
   const to = kind === "direct" ? `user:${params.senderId}` : `channel:${params.channelId}`;
+  const from =
+    kind === "direct"
+      ? `mattermost:${params.senderId}`
+      : kind === "group"
+        ? `mattermost:group:${params.channelId}`
+        : `mattermost:channel:${params.channelId}`;
 
   return {
     channelId: params.channelId,
     senderId: params.senderId,
-    channelInfo,
     kind,
-    teamId,
-    channelName,
     channelDisplay,
+    channelName,
+    teamId,
     roomLabel,
     route,
     thread,
     to,
+    from,
     finalizeContext: <T extends Record<string, unknown>>(context: T) =>
       finalizeInboundContext({
         ...context,
-        From:
-          kind === "direct"
-            ? `mattermost:${params.senderId}`
-            : kind === "group"
-              ? `mattermost:group:${params.channelId}`
-              : `mattermost:channel:${params.channelId}`,
+        From: from,
         To: to,
         SessionKey: thread.sessionKey,
         DmScope: route.dmScope,
         ParentSessionKey: thread.parentSessionKey,
         AccountId: route.accountId,
         ChatType: kind,
+        ConversationRouteContextObserved: true,
+        ConversationRoutePeerId: kind === "direct" ? params.senderId : params.channelId,
         GroupChannel: channelName ? `#${channelName}` : undefined,
         GroupSpace: teamId,
         SenderId: params.senderId,
@@ -94,49 +95,44 @@ export async function buildMattermostEventPlan(
         Surface: "mattermost" as const,
         ReplyToId: thread.effectiveReplyToId,
         MessageThreadId: thread.effectiveReplyToId,
+        NativeChannelId: params.channelId,
+        InboundAccessAuthorized: true,
         OriginatingChannel: "mattermost" as const,
         OriginatingTo: to,
       }),
-    createReplyPlan: () => {
-      const deliveryBarrier = createMattermostReplyDeliveryBarrier({
-        isDirect: kind === "direct",
-        dmRetryOptions: monitor.account.config.dmChannelRetry,
-      });
-      return {
-        textLimit: monitor.core.channel.text.resolveTextChunkLimit(
-          monitor.cfg,
-          "mattermost",
-          monitor.account.accountId,
-          { fallbackLimit: monitor.account.textChunkLimit ?? 4000 },
-        ),
-        tableMode: monitor.core.channel.text.resolveMarkdownTableMode({
-          cfg: monitor.cfg,
-          channel: "mattermost",
-          accountId: monitor.account.accountId,
-        }),
-        deliveryBarrier,
-        replyPipeline: {
-          typing: {
-            start: () =>
-              monitor.resources.sendTypingIndicator(params.channelId, thread.effectiveReplyToId),
-            onStartError: (error: unknown) => {
-              logTypingFailure({
-                log: monitor.logDebugMessage,
-                channel: "mattermost",
-                target: params.channelId,
-                error,
-              });
-            },
+    createReplyPlan: () => ({
+      textLimit: monitor.core.channel.text.resolveTextChunkLimit(
+        monitor.cfg,
+        "mattermost",
+        monitor.account.accountId,
+        { fallbackLimit: monitor.account.textChunkLimit ?? 4000 },
+      ),
+      tableMode: monitor.core.channel.text.resolveMarkdownTableMode({
+        cfg: monitor.cfg,
+        channel: "mattermost",
+        accountId: monitor.account.accountId,
+      }),
+      replyPipeline: {
+        typing: {
+          start: () =>
+            monitor.resources.sendTypingIndicator(params.channelId, thread.effectiveReplyToId),
+          onStartError: (error: unknown) => {
+            logTypingFailure({
+              log: monitor.logDebugMessage,
+              channel: "mattermost",
+              target: params.channelId,
+              error,
+            });
           },
         },
-        replyOptions: {
-          disableBlockStreaming:
-            typeof monitor.account.blockStreaming === "boolean"
-              ? !monitor.account.blockStreaming
-              : undefined,
-        },
-      };
-    },
+      },
+      replyOptions: {
+        disableBlockStreaming:
+          monitor.account.blockStreaming === undefined
+            ? undefined
+            : !monitor.account.blockStreaming,
+      },
+    }),
   };
 }
 

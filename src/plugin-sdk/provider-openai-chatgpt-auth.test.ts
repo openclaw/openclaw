@@ -27,6 +27,7 @@ describe("OpenAI Codex provider auth helpers", () => {
           email: "codex@example.com",
         },
       }),
+      email: "credential@example.com",
     });
 
     expect(identity).toEqual({
@@ -43,36 +44,34 @@ describe("OpenAI Codex provider auth helpers", () => {
     });
   });
 
-  it("builds stable imported profile names from subject claims before account fallback", () => {
-    const identity = resolveOpenAICodexAuthIdentity({
-      access: jwt({
-        sub: "jwt-subject",
-        "https://api.openai.com/auth": {
-          chatgpt_account_user_id: "user-123__acct-456",
-        },
+  it("falls back to credential email before synthetic ids", () => {
+    expect(
+      resolveOpenAICodexAuthIdentity({
+        access: jwt({ sub: "jwt-subject" }),
+        email: "credential@example.com",
       }),
-      accountId: "acct/fallback",
+    ).toEqual({
+      email: "credential@example.com",
+      profileName: "credential@example.com",
     });
-
-    expect(identity).toEqual({
-      accountId: "acct/fallback",
-      profileName: `id-${Buffer.from("user-123__acct-456").toString("base64url")}`,
-    });
-    expect(resolveOpenAICodexImportProfileName(identity, "codex-import")).toBe(
-      "account-acct-fallback",
-    );
   });
 
-  it("falls back to account id when the access token has no stable subject", () => {
-    const identity = resolveOpenAICodexAuthIdentity({
-      access: jwt({}),
-      accountId: "acct_only",
+  it("uses the OIDC issuer pair without treating workspace ids as user subjects", () => {
+    expect(
+      resolveOpenAICodexAuthIdentity({
+        access: jwt({ iss: "https://accounts.openai.com", sub: "user-abc" }),
+      }),
+    ).toEqual({
+      profileName: `id-${Buffer.from("https://accounts.openai.com|user-abc").toString("base64url")}`,
     });
 
-    expect(identity).toEqual({
-      accountId: "acct_only",
-      profileName: `id-${Buffer.from("acct_only").toString("base64url")}`,
-    });
+    expect(
+      resolveOpenAICodexAuthIdentity({
+        access: jwt({
+          "https://api.openai.com/auth": { chatgpt_account_id: "workspace-only" },
+        }),
+      }),
+    ).toEqual({ accountId: "workspace-only" });
   });
 
   it("resolves access-token expiry from numeric and string JWT exp claims", () => {

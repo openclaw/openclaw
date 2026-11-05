@@ -1,7 +1,9 @@
-import {
-  ClawHubTrustErrorCodes,
-  readClawHubTrustErrorDetails,
-} from "../../../../packages/gateway-protocol/src/clawhub-trust-error-details.js";
+import type {
+  SkillsDetailResult,
+  SkillsSecurityVerdictsResult,
+  SkillsSkillCardResult,
+} from "@openclaw/gateway-protocol";
+import { readClawHubTrustErrorDetails } from "../../../../packages/gateway-protocol/src/clawhub-trust-error-details.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
@@ -9,111 +11,103 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
-import { formatUiError } from "../format-error.ts";
-import type { ClawHubSearchResult } from "./clawhub-search.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
+import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import {
-  normalizeSkillApiKeyReplacement,
-  runSkillConfigMutation,
-  skillConfigMutationSuccess,
-  type SkillConfigMutationOwner,
-} from "./config-mutations.ts";
+  createConfigMutationRunner,
+  type ConfigMutationOwner,
+} from "../config/config-mutation-runner.ts";
+import { formatUiError, formatUiExternalText } from "../format-error.ts";
+import { registerEnglishCatalog } from "../reactive/i18n.ts";
+import type { ClawHubSearchResult } from "./clawhub-search.ts";
+import { loadSkillStatusReport } from "./status-report.ts";
 
-export type ClawHubSkillDetail = {
-  skill: {
-    slug: string;
-    displayName: string;
-    summary?: string;
-    icon?: string | null;
-    tags?: Record<string, string>;
-    channel?: string | null;
-    isOfficial?: boolean | null;
-    createdAt: number;
-    updatedAt: number;
-  } | null;
-  latestVersion?: {
-    version: string;
-    createdAt: number;
-    changelog?: string;
-  } | null;
-  metadata?: {
-    os?: string[] | null;
-    systems?: string[] | null;
-  } | null;
-  owner?: {
-    handle?: string | null;
-    displayName?: string | null;
-    image?: string | null;
-    official?: boolean | null;
-    channel?: string | null;
-    isOfficial?: boolean | null;
-  } | null;
-};
+registerEnglishCatalog(registerSkillsBrowserEnglish);
 
-export type ClawHubSkillSecurityVerdict = {
-  registry: string;
-  ok: boolean;
-  decision: string;
-  reasons: string[];
-  requestedSlug: string;
-  requestedOwnerHandle?: string;
-  requestedVersion: string;
-  slug?: string | null;
-  version?: string | null;
-  displayName?: string | null;
-  publisherHandle?: string | null;
-  publisherDisplayName?: string | null;
-  createdAt?: number | null;
-  checkedAt?: number | null;
-  skillUrl?: string | null;
-  securityAuditUrl?: string | null;
-  securityStatus?: string | null;
-  securityPassed?: boolean | null;
-  error?: {
-    code?: string;
-    message?: string;
+export type ClawHubSkillDetail = SkillsDetailResult;
+export type ClawHubSkillSecurityVerdict = SkillsSecurityVerdictsResult["items"][number];
+
+type SkillsReadResult<T> = { value: T; error: string | null };
+type SkillsRead<T> = { completion: Promise<SkillsReadResult<T>> };
+const readRetirements = new WeakMap<object, () => void>();
+
+function createSkillsRead<T>(retiredValue: T) {
+  const { promise, resolve } = Promise.withResolvers<SkillsReadResult<T>>();
+  const read: SkillsRead<T> = { completion: promise };
+  const finish = (result: SkillsReadResult<T>) => {
+    readRetirements.delete(read);
+    resolve(result);
   };
-};
+  readRetirements.set(read, () => finish({ value: retiredValue, error: null }));
+  return { read, finish };
+}
 
-type SkillsState = {
+function retireSkillsRead(read: SkillsRead<unknown> | null | undefined) {
+  if (read) {
+    readRetirements.get(read)?.();
+  }
+}
+
+export function retireSkillsReads(state: SkillsState) {
+  // Release presentation before publishing a new scope, even if transport stays pending.
+  retireSkillsRead(state.skillsRead);
+  retireSkillsRead(state.clawhubVerdictsRead);
+  Object.values(state.skillCardReads).forEach(retireSkillsRead);
+  state.skillsRead = null;
+  state.clawhubVerdictsRead = null;
+  state.skillCardReads = {};
+  activeSkillCardReads.get(state)?.clear();
+  activeSkillCardReads.delete(state);
+}
+
+type SkillCardRead = SkillsRead<string | undefined> & { cacheKey: string };
+type ActiveSkillCardRead = SkillCardRead & {
+  client: GatewayBrowserClient;
+  agentId: string | null;
+  agentRevision: number;
+};
+const activeSkillCardReads = new WeakMap<SkillsState, Map<string, ActiveSkillCardRead>>();
+
+const runSkillConfigMutation = createConfigMutationRunner(
+  "Connection changed before the skill update started.",
+);
+
+export type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
-  runtimeConfig: SkillConfigMutationOwner;
+  runtimeConfig: ConfigMutationOwner;
   skillsAgentId: string | null;
   skillsAgentRevision: number;
   skillsLoading: boolean;
   skillsReport: SkillStatusReport | null;
+  skillsRead: SkillsRead<SkillStatusReport | null> | null;
   skillsError: string | null;
   skillOperation: SkillOperation;
   skillEdits: Record<string, string>;
-  skillMessages: SkillMessageMap;
-  clawhubSearchQuery: string;
+  skillMessages: Record<string, SkillMessage>;
   clawhubSearchResults: ClawHubSearchResult[] | null;
-  clawhubSearchLoading: boolean;
-  clawhubSearchError: string | null;
+  clawhubIconUrls: Record<string, string>;
   clawhubDetail: ClawHubSkillDetail | null;
-  clawhubDetailSlug: string | null;
-  clawhubDetailLoading: boolean;
+  clawhubDetailRef: string | null;
   clawhubDetailError: string | null;
   clawhubInstallMessage: {
+    ref: string;
     kind: "success" | "error";
     text: string;
-    acknowledgeSlug?: string;
-    acknowledgeVersion?: string;
-    acknowledgeLabel?: string;
   } | null;
   clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict>;
-  clawhubVerdictsLoading: boolean;
+  clawhubVerdictsRead: SkillsRead<Record<string, ClawHubSkillSecurityVerdict>> | null;
   clawhubVerdictsError: string | null;
   skillCardContents: Record<string, string>;
   skillCardContentKeys: Record<string, string>;
-  skillCardLoadingKey: string | null;
   skillCardErrors: Record<string, string>;
+  skillCardReads: Record<string, SkillCardRead>;
 };
 
 export type SkillOperation =
   | { kind: "refresh" }
   | { kind: "skill"; skillKey: string }
-  | { kind: "clawhub"; slug: string }
+  | { kind: "clawhub"; ref: string }
   | null;
 
 type ActiveSkillOperation = Exclude<SkillOperation, null>;
@@ -139,8 +133,6 @@ type SkillMessage = {
   message: string;
 };
 
-export type SkillMessageMap = Record<string, SkillMessage>;
-
 function setSkillMessage(state: SkillsState, key: string, message: SkillMessage) {
   if (!key.trim()) {
     return;
@@ -152,18 +144,11 @@ function getClawHubTrustDetailsFromError(err: unknown) {
   if (!err || typeof err !== "object" || !("details" in err)) {
     return undefined;
   }
-  return readClawHubTrustErrorDetails((err as { details?: unknown }).details);
+  return readClawHubTrustErrorDetails(err.details);
 }
 
 const formatClawHubInstallMessage = (message: string, warning?: string): string =>
   warning ? `${message}\n\n${warning}` : message;
-
-function formatClawHubAcknowledgementMessage(warning?: string): string {
-  return formatClawHubInstallMessage(
-    "Review the ClawHub warning before installing this skill.",
-    warning,
-  );
-}
 
 export function clawhubVerdictKey(target: {
   registry: string;
@@ -180,16 +165,11 @@ function isValidClawHubLink(
   return Boolean(link && link.status === "linked" && link.valid);
 }
 
-function reportHasLinkedClawHubSkills(report: SkillStatusReport): boolean {
-  return report.skills.some((skill) => isValidClawHubLink(skill.clawhub));
-}
-
 function skillCardCacheKey(skill: SkillStatusEntry): string | undefined {
   if (!skill.skillCard?.present) {
     return undefined;
   }
-  const installedVersion =
-    skill.clawhub?.status === "linked" && skill.clawhub.valid ? skill.clawhub.installedVersion : "";
+  const installedVersion = isValidClawHubLink(skill.clawhub) ? skill.clawhub.installedVersion : "";
   return `${skill.skillCard.path}\0${skill.skillCard.sizeBytes}\0${installedVersion}`;
 }
 
@@ -198,71 +178,30 @@ function currentSkillCardCacheKey(state: SkillsState, skillKey: string): string 
   return skill ? skillCardCacheKey(skill) : undefined;
 }
 
-function skillsAgentParams(agentId: string | null | undefined): { agentId?: string } {
-  const normalized = agentId?.trim();
-  return normalized ? { agentId: normalized } : {};
-}
-
 function stateSkillsAgentParams(state: Pick<SkillsState, "skillsAgentId">): { agentId?: string } {
   const agentId = state.skillsAgentId?.trim();
   return agentId ? { agentId } : {};
 }
 
-export async function loadSkillStatusReport(
-  client: GatewayBrowserClient,
-  agentId: string | null | undefined,
-): Promise<SkillStatusReport | undefined> {
-  return client.request<SkillStatusReport | undefined>("skills.status", skillsAgentParams(agentId));
-}
-
-type SkillsAgentScope = {
-  agentId: string | null;
-  revision: number;
-};
-
 function captureSkillsAgentScope(
   state: Pick<SkillsState, "skillsAgentId" | "skillsAgentRevision">,
-): SkillsAgentScope {
-  return {
-    agentId: state.skillsAgentId,
-    revision: state.skillsAgentRevision,
-  };
+): () => boolean {
+  const { skillsAgentId, skillsAgentRevision } = state;
+  return () =>
+    state.skillsAgentId === skillsAgentId && state.skillsAgentRevision === skillsAgentRevision;
 }
 
-function isSkillsAgentScopeCurrent(
-  state: Pick<SkillsState, "skillsAgentId" | "skillsAgentRevision">,
-  scope: SkillsAgentScope,
-): boolean {
-  return state.skillsAgentId === scope.agentId && state.skillsAgentRevision === scope.revision;
-}
-
-async function runStaleAwareRequest<T>(
-  isCurrent: () => boolean,
-  request: () => Promise<T>,
-  onSuccess: (value: T) => void,
-  onError: (err: unknown) => void,
-  onFinally: () => void,
+export function setSkillsAgentId(
+  state: SkillsState,
+  agentId: string | null,
+  beforeRetarget?: () => void,
 ) {
-  try {
-    const result = await request();
-    if (!isCurrent()) {
-      return;
-    }
-    onSuccess(result);
-  } catch (err) {
-    if (!isCurrent()) {
-      return;
-    }
-    onError(err);
-  }
-  onFinally();
-}
-
-export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
   const nextAgentId = agentId?.trim() || null;
   if (state.skillsAgentId === nextAgentId) {
     return;
   }
+  beforeRetarget?.();
+  retireSkillsReads(state);
   state.skillsAgentId = nextAgentId;
   state.skillsAgentRevision++;
   state.skillsLoading = false;
@@ -272,25 +211,26 @@ export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
   state.skillMessages = {};
   state.clawhubInstallMessage = null;
   state.clawhubVerdicts = {};
-  state.clawhubVerdictsLoading = false;
   state.clawhubVerdictsError = null;
   state.skillCardContents = {};
   state.skillCardContentKeys = {};
-  state.skillCardLoadingKey = null;
   state.skillCardErrors = {};
 }
 
 export function reconcileSkillsAgentId(
   state: SkillsState,
   agentsList: AgentsListResult | null | undefined,
+  beforeRetarget?: () => void,
 ) {
-  if (
-    agentsList &&
-    state.skillsAgentId &&
-    !agentsList.agents.some((agent) => agent.id === state.skillsAgentId)
-  ) {
-    setSkillsAgentId(state, null);
+  if (!agentsList) {
+    return;
   }
+  const selectedAgentId = agentsList.agents.some((agent) => agent.id === state.skillsAgentId)
+    ? state.skillsAgentId
+    : agentsList.agents.some((agent) => agent.id === agentsList.defaultId)
+      ? agentsList.defaultId
+      : null;
+  setSkillsAgentId(state, selectedAgentId, beforeRetarget);
 }
 
 export async function loadSkills(
@@ -301,8 +241,10 @@ export async function loadSkills(
   },
 ) {
   const client = state.client;
+  const agentId = state.skillsAgentId?.trim();
   if (
     !client ||
+    !agentId ||
     !state.connected ||
     state.skillsLoading ||
     (state.skillOperation && state.skillOperation !== options?.operation)
@@ -312,23 +254,25 @@ export async function loadSkills(
   if (options?.clearMessages && Object.keys(state.skillMessages).length > 0) {
     state.skillMessages = {};
   }
-  const agentScope = captureSkillsAgentScope(state);
+  const isCurrentAgent = captureSkillsAgentScope(state);
   const ownsLoad = () =>
     state.client === client &&
-    isSkillsAgentScopeCurrent(state, agentScope) &&
+    isCurrentAgent() &&
+    state.skillsRead === read &&
     (!options?.operation || state.skillOperation === options.operation);
   const isCurrent = () => state.connected && ownsLoad();
+  retireSkillsRead(state.skillsRead);
+  const { read, finish } = createSkillsRead(state.skillsReport);
+  state.skillsRead = read;
   state.skillsLoading = true;
   state.skillsError = null;
   try {
-    const res = await loadSkillStatusReport(client, state.skillsAgentId);
+    const res = await loadSkillStatusReport(client, agentId);
     if (!isCurrent()) {
       return;
     }
     if (res && Array.isArray(res.skills)) {
-      state.skillsReport = res;
-      pruneSkillCardState(state, res);
-      void loadClawHubSecurityVerdicts(state, res);
+      acceptSkillsReport(state, res);
     }
   } catch (err) {
     if (!isCurrent()) {
@@ -341,26 +285,60 @@ export async function loadSkills(
     if (ownsLoad()) {
       state.skillsLoading = false;
     }
+    finish({
+      value: isCurrent() ? state.skillsReport : null,
+      error: isCurrent() ? state.skillsError : null,
+    });
   }
 }
 
-async function loadCurrentSkillsForOperation(
-  state: SkillsState,
-  client: GatewayBrowserClient,
-  operation: ActiveSkillOperation,
-  clearMessages = false,
-) {
-  let shouldClearMessages = clearMessages;
-  // Reconciliation can change scope while a status request is pending. Keep
-  // the operation owner until one response belongs to the current scope.
-  while (ownsSkillOperation(state, client, operation)) {
-    const scope = captureSkillsAgentScope(state);
-    await loadSkills(state, { clearMessages: shouldClearMessages, operation });
-    shouldClearMessages = false;
-    if (!ownsSkillOperation(state, client, operation) || isSkillsAgentScopeCurrent(state, scope)) {
+export function acceptSkillsReport(state: SkillsState, report: SkillStatusReport) {
+  state.skillsReport = report;
+  const result = state.clawhubInstallMessage;
+  if (
+    result?.kind === "success" &&
+    !report.skills.some(
+      ({ clawhub }) =>
+        isValidClawHubLink(clawhub) &&
+        (clawhub.requestedReference === result.ref ||
+          clawhub.slug === result.ref ||
+          `@${clawhub.ownerHandle}/${clawhub.slug}` === result.ref),
+    )
+  ) {
+    // A later inventory can disprove an earlier successful install, including after removal.
+    state.clawhubInstallMessage = null;
+  }
+  pruneSkillCardState(state, report);
+  void loadClawHubSecurityVerdicts(state, report);
+}
+
+/**
+ * skills.update answers before the Gateway reloads its config, so the status read behind a
+ * toggle can predate it. The Gateway sends skills.changed once it caught up. A change that
+ * arrives while a read or write is running is replayed when that work settles.
+ */
+export function createSkillsChangeReloader(state: SkillsState) {
+  let queued = false;
+  const reload = () => {
+    if (!state.connected || state.skillsLoading || state.skillOperation) {
+      queued = true;
       return;
     }
-  }
+    queued = false;
+    void loadSkills(state);
+  };
+  return {
+    onEvent: (event: { event: string }) => {
+      if (event.event === "skills.changed") {
+        reload();
+      }
+    },
+    onStateChange: () => {
+      if (queued) {
+        reload();
+      }
+    },
+  };
 }
 
 export async function refreshSkills(state: SkillsState, loadAgents: () => Promise<void>) {
@@ -377,7 +355,11 @@ export async function refreshSkills(state: SkillsState, loadAgents: () => Promis
     if (!ownsSkillOperation(state, client, operation)) {
       return;
     }
-    await loadCurrentSkillsForOperation(state, client, operation, true);
+    const isCurrentAgent = captureSkillsAgentScope(state);
+    await loadSkills(state, { clearMessages: true, operation });
+    if (ownsSkillOperation(state, client, operation) && !isCurrentAgent()) {
+      await loadSkills(state, { operation });
+    }
   } finally {
     releaseSkillOperation(state, operation);
   }
@@ -402,16 +384,22 @@ function pruneSkillCardState(state: SkillsState, report: SkillStatusReport) {
   state.skillCardErrors = Object.fromEntries(
     Object.entries(state.skillCardErrors).filter(([key]) => cacheKeys.has(key)),
   );
-  if (state.skillCardLoadingKey && !cacheKeys.has(state.skillCardLoadingKey)) {
-    state.skillCardLoadingKey = null;
-  }
+  state.skillCardReads = Object.fromEntries(
+    Object.entries(state.skillCardReads).filter(([key, read]) => {
+      if (read.cacheKey === cacheKeys.get(key)) {
+        return true;
+      }
+      retireSkillsRead(read);
+      return false;
+    }),
+  );
 }
 
 export async function loadSkillCard(state: SkillsState, skillKey: string) {
+  const client = state.client;
   if (
-    !state.client ||
+    !client ||
     !state.connected ||
-    state.skillCardLoadingKey === skillKey ||
     (state.skillCardContents[skillKey] !== undefined &&
       state.skillCardContentKeys[skillKey] === currentSkillCardCacheKey(state, skillKey))
   ) {
@@ -421,59 +409,93 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
   if (!cacheKey) {
     return;
   }
-  const agentScope = captureSkillsAgentScope(state);
+  let active = activeSkillCardReads.get(state);
+  if (!active) {
+    active = new Map();
+    activeSkillCardReads.set(state, active);
+  }
+  const previous = active.get(skillKey);
+  if (
+    previous?.client === client &&
+    previous.agentId === state.skillsAgentId &&
+    previous.agentRevision === state.skillsAgentRevision &&
+    previous.cacheKey === cacheKey
+  ) {
+    await previous.completion;
+    return;
+  }
+  retireSkillsRead(previous);
+  const receipt = createSkillsRead(state.skillCardContents[skillKey]);
+  const read = Object.assign(receipt.read, {
+    client,
+    agentId: state.skillsAgentId,
+    agentRevision: state.skillsAgentRevision,
+    cacheKey,
+  });
+  active.set(skillKey, read);
+  state.skillCardReads = { ...state.skillCardReads, [skillKey]: read };
+  const isCurrentAgent = captureSkillsAgentScope(state);
+  const isCurrent = () =>
+    state.connected &&
+    state.client === client &&
+    isCurrentAgent() &&
+    active.get(skillKey) === read &&
+    currentSkillCardCacheKey(state, skillKey) === cacheKey;
   const requestParams = { ...stateSkillsAgentParams(state), skillKey };
-  state.skillCardLoadingKey = skillKey;
   const { [skillKey]: _previousError, ...nextErrors } = state.skillCardErrors;
   state.skillCardErrors = nextErrors;
   try {
-    const response = await state.client.request<{
-      schema: "openclaw.skills.skill-card.v1";
-      skillKey: string;
-      path: string;
-      sizeBytes: number;
-      content: string;
-    }>("skills.skillCard", requestParams);
-    if (
-      isSkillsAgentScopeCurrent(state, agentScope) &&
-      response?.skillKey === skillKey &&
-      typeof response.content === "string" &&
-      currentSkillCardCacheKey(state, skillKey) === cacheKey
-    ) {
+    const response = await client.request<SkillsSkillCardResult>("skills.skillCard", requestParams);
+    if (isCurrent() && response?.skillKey === skillKey && typeof response.content === "string") {
       state.skillCardContents = { ...state.skillCardContents, [skillKey]: response.content };
       state.skillCardContentKeys = { ...state.skillCardContentKeys, [skillKey]: cacheKey };
     }
   } catch (err) {
-    if (isSkillsAgentScopeCurrent(state, agentScope)) {
+    if (isCurrent()) {
       state.skillCardErrors = {
         ...state.skillCardErrors,
         [skillKey]: formatUiError(err),
       };
     }
   } finally {
-    if (isSkillsAgentScopeCurrent(state, agentScope) && state.skillCardLoadingKey === skillKey) {
-      state.skillCardLoadingKey = null;
+    receipt.finish({
+      value: isCurrent() ? state.skillCardContents[skillKey] : undefined,
+      error: isCurrent() ? (state.skillCardErrors[skillKey] ?? null) : null,
+    });
+    if (active.get(skillKey) === read) {
+      active.delete(skillKey);
     }
   }
 }
 
 async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
   const client = state.client;
-  const agentScope = captureSkillsAgentScope(state);
-  if (!client || !state.connected || !reportHasLinkedClawHubSkills(report)) {
+  const isCurrentAgent = captureSkillsAgentScope(state);
+  retireSkillsRead(state.clawhubVerdictsRead);
+  if (
+    !client ||
+    !state.connected ||
+    !report.skills.some((skill) => isValidClawHubLink(skill.clawhub))
+  ) {
     state.clawhubVerdicts = {};
-    state.clawhubVerdictsLoading = false;
+    state.clawhubVerdictsRead = null;
     state.clawhubVerdictsError = null;
     return;
   }
-  state.clawhubVerdictsLoading = true;
+  const { read, finish } = createSkillsRead(state.clawhubVerdicts);
+  state.clawhubVerdictsRead = read;
+  const isCurrent = () =>
+    state.connected &&
+    state.client === client &&
+    isCurrentAgent() &&
+    state.clawhubVerdictsRead === read;
   state.clawhubVerdictsError = null;
   try {
-    const response = await client.request<{
-      schema: "openclaw.skills.security-verdicts.v1";
-      items: ClawHubSkillSecurityVerdict[];
-    }>("skills.securityVerdicts", stateSkillsAgentParams(state));
-    if (!isSkillsAgentScopeCurrent(state, agentScope)) {
+    const response = await client.request<SkillsSecurityVerdictsResult>(
+      "skills.securityVerdicts",
+      stateSkillsAgentParams(state),
+    );
+    if (!isCurrent()) {
       return;
     }
     state.clawhubVerdicts = Object.fromEntries(
@@ -488,15 +510,16 @@ async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStat
       ]),
     );
   } catch (err) {
-    if (!isSkillsAgentScopeCurrent(state, agentScope)) {
+    if (!isCurrent()) {
       return;
     }
     state.clawhubVerdicts = {};
     state.clawhubVerdictsError = formatUiError(err);
   } finally {
-    if (isSkillsAgentScopeCurrent(state, agentScope)) {
-      state.clawhubVerdictsLoading = false;
-    }
+    finish({
+      value: isCurrent() ? state.clawhubVerdicts : {},
+      error: isCurrent() ? state.clawhubVerdictsError : null,
+    });
   }
 }
 
@@ -509,54 +532,60 @@ export function updateSkillEdit(state: SkillsState, skillKey: string, value: str
 
 async function runSkillMutation(
   state: SkillsState,
-  skillKey: string,
+  operation: Exclude<ActiveSkillOperation, { kind: "refresh" }>,
   run: (client: GatewayBrowserClient) => Promise<SkillMessage>,
 ) {
   const client = state.client;
   if (!client || !state.connected || state.skillsLoading || state.skillOperation) {
     return;
   }
-  const agentScope = captureSkillsAgentScope(state);
-  const operation = { kind: "skill", skillKey } as const;
+  const isCurrentAgent = captureSkillsAgentScope(state);
+  const isCurrent = () => ownsSkillOperation(state, client, operation) && isCurrentAgent();
   // All writes share one owner: overlapping refreshes can otherwise publish
   // a stale snapshot after both Gateway mutations have already succeeded.
   state.skillOperation = operation;
-  state.skillsError = null;
+  if (operation.kind === "skill") {
+    state.skillsError = null;
+  } else {
+    state.clawhubInstallMessage = null;
+  }
   try {
     const message = await run(client);
-    if (!ownsSkillOperation(state, client, operation)) {
-      return;
-    }
-    if (!isSkillsAgentScopeCurrent(state, agentScope)) {
+    if (!isCurrent()) {
       return;
     }
     await loadSkills(state, { operation });
-    if (
-      !ownsSkillOperation(state, client, operation) ||
-      !isSkillsAgentScopeCurrent(state, agentScope)
-    ) {
+    if (!isCurrent()) {
       return;
     }
-    setSkillMessage(state, skillKey, message);
+    if (operation.kind === "skill") {
+      setSkillMessage(state, operation.skillKey, message);
+    } else {
+      state.clawhubInstallMessage = {
+        ref: operation.ref,
+        kind: message.kind,
+        text: message.message,
+      };
+    }
   } catch (err) {
-    if (
-      !ownsSkillOperation(state, client, operation) ||
-      !isSkillsAgentScopeCurrent(state, agentScope)
-    ) {
+    if (!isCurrent()) {
       return;
     }
     const message = formatUiError(err);
-    state.skillsError = message;
-    setSkillMessage(state, skillKey, {
-      kind: "error",
-      message,
-    });
+    if (operation.kind === "skill") {
+      state.skillsError = message;
+      setSkillMessage(state, operation.skillKey, { kind: "error", message });
+    } else {
+      const trustDetails = getClawHubTrustDetailsFromError(err);
+      state.clawhubInstallMessage = {
+        ref: operation.ref,
+        kind: "error",
+        text: formatClawHubInstallMessage(message, trustDetails?.warning),
+      };
+    }
   } finally {
-    if (
-      ownsSkillOperation(state, client, operation) &&
-      !isSkillsAgentScopeCurrent(state, agentScope)
-    ) {
-      await loadCurrentSkillsForOperation(state, client, operation);
+    if (ownsSkillOperation(state, client, operation) && !isCurrentAgent()) {
+      await loadSkills(state, { operation });
     }
     releaseSkillOperation(state, operation);
   }
@@ -572,7 +601,7 @@ export async function updateSkillEnabled(
     state,
     skillKey,
     { enabled },
-    enabled ? "Skill enabled" : "Skill disabled",
+    i18n.t(enabled ? "skillsPage.skillEnabled" : "skillsPage.skillDisabled"),
     canDispatch,
   );
 }
@@ -584,17 +613,18 @@ async function runSkillConfigUpdate(
   message: string,
   canDispatch: () => boolean,
 ) {
-  await runSkillMutation(state, skillKey, async (client) =>
-    skillConfigMutationSuccess(
-      message,
-      await runSkillConfigMutation(
-        state.runtimeConfig,
-        client,
-        { skillKey, ...patch },
-        canDispatch,
-      ),
-    ),
-  );
+  await runSkillMutation(state, { kind: "skill", skillKey }, async (client) => {
+    const configPatch = { skillKey, ...patch };
+    // Settings autosave and skills.update persist the same config; one owner
+    // prevents a pending draft from restoring an older skill credential/toggle.
+    const { refreshError } = await runSkillConfigMutation(
+      state.runtimeConfig,
+      client,
+      (current) => current.request("skills.update", configPatch),
+      { canDispatch, dispatchError: "Access changed before the skill update started." },
+    );
+    return { kind: "success", message: refreshError ? `${message}\n${refreshError}` : message };
+  });
 }
 
 export async function saveSkillApiKey(
@@ -602,7 +632,8 @@ export async function saveSkillApiKey(
   skillKey: string,
   canDispatch: () => boolean = () => true,
 ) {
-  const apiKey = normalizeSkillApiKeyReplacement(state.skillEdits[skillKey]);
+  // Blank skills.update API keys clear credentials; this UI only replaces them.
+  const apiKey = state.skillEdits[skillKey]?.trim();
   if (!apiKey) {
     return;
   }
@@ -622,123 +653,68 @@ export async function installSkill(
   installId: string,
   dangerouslyForceUnsafeInstall = false,
 ) {
-  await runSkillMutation(state, skillKey, async (client) => {
+  await runSkillMutation(state, { kind: "skill", skillKey }, async (client) => {
     const result = await client.request<{ message?: string }>("skills.install", {
       ...stateSkillsAgentParams(state),
       name,
       installId,
       dangerouslyForceUnsafeInstall,
-      timeoutMs: 120000,
     });
     return {
       kind: "success",
-      message: result?.message ?? "Installed",
+      message: formatUiExternalText(result?.message, "Installed"),
     };
   });
 }
 
-export async function loadClawHubDetail(state: SkillsState, slug: string) {
+export async function loadClawHubDetail(state: SkillsState, ref: string) {
   if (!state.client || !state.connected) {
     return;
   }
   const client = state.client;
-  const agentScope = captureSkillsAgentScope(state);
-  state.clawhubDetailSlug = slug;
-  state.clawhubDetailLoading = true;
+  const isCurrentAgent = captureSkillsAgentScope(state);
+  state.clawhubDetailRef = ref;
   state.clawhubDetailError = null;
   state.clawhubDetail = null;
-  await runStaleAwareRequest(
-    () =>
-      state.connected &&
-      state.client === client &&
-      slug === state.clawhubDetailSlug &&
-      isSkillsAgentScopeCurrent(state, agentScope),
-    () => client.request<ClawHubSkillDetail>("skills.detail", { slug }),
-    (res) => {
-      state.clawhubDetail = res ?? null;
-    },
-    (err) => {
-      state.clawhubDetailError = formatUiError(err);
-    },
-    () => {
-      state.clawhubDetailLoading = false;
-    },
-  );
+  const isCurrent = () =>
+    state.connected &&
+    state.client === client &&
+    ref === state.clawhubDetailRef &&
+    isCurrentAgent();
+  try {
+    const res = await client.request<ClawHubSkillDetail>("skills.detail", { slug: ref });
+    if (!isCurrent()) {
+      return;
+    }
+    state.clawhubDetail = res ?? null;
+  } catch (err) {
+    if (!isCurrent()) {
+      return;
+    }
+    state.clawhubDetailError = formatUiError(err);
+  }
 }
 
 export function closeClawHubDetail(state: SkillsState) {
-  state.clawhubDetailSlug = null;
+  state.clawhubDetailRef = null;
   state.clawhubDetail = null;
   state.clawhubDetailError = null;
-  state.clawhubDetailLoading = false;
 }
 
-export async function installFromClawHub(
-  state: SkillsState,
-  slug: string,
-  acknowledgeClawHubRisk = false,
-  version?: string,
-) {
-  const client = state.client;
-  if (!client || !state.connected || state.skillsLoading || state.skillOperation) {
-    return;
-  }
-  const agentScope = captureSkillsAgentScope(state);
-  const operation = { kind: "clawhub", slug } as const;
-  state.skillOperation = operation;
-  state.clawhubInstallMessage = null;
-  try {
+export async function installFromClawHub(state: SkillsState, ref: string, version?: string) {
+  await runSkillMutation(state, { kind: "clawhub", ref }, async (client) => {
     const result = await client.request<{ message?: string; warning?: string }>("skills.install", {
       ...stateSkillsAgentParams(state),
       source: "clawhub",
-      slug,
+      slug: ref,
       ...(version ? { version } : {}),
-      ...(acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
     });
-    if (!ownsSkillOperation(state, client, operation)) {
-      return;
-    }
-    if (!isSkillsAgentScopeCurrent(state, agentScope)) {
-      return;
-    }
-    await loadSkills(state, { operation });
-    if (
-      !ownsSkillOperation(state, client, operation) ||
-      !isSkillsAgentScopeCurrent(state, agentScope)
-    ) {
-      return;
-    }
-    state.clawhubInstallMessage = {
+    return {
       kind: "success",
-      text: formatClawHubInstallMessage(result?.message ?? `Installed ${slug}`, result?.warning),
+      message: formatClawHubInstallMessage(
+        formatUiExternalText(result?.message, i18n.t("skillsPage.installedRef", { ref })),
+        result?.warning ? formatUiExternalText(result.warning) : undefined,
+      ),
     };
-  } catch (err) {
-    if (
-      ownsSkillOperation(state, client, operation) &&
-      isSkillsAgentScopeCurrent(state, agentScope)
-    ) {
-      const trustDetails = getClawHubTrustDetailsFromError(err);
-      const needsAcknowledgement =
-        trustDetails?.clawhubTrustCode === ClawHubTrustErrorCodes.RISK_ACKNOWLEDGEMENT_REQUIRED;
-      state.clawhubInstallMessage = {
-        kind: "error",
-        text: needsAcknowledgement
-          ? formatClawHubAcknowledgementMessage(trustDetails?.warning)
-          : formatClawHubInstallMessage(formatUiError(err), trustDetails?.warning),
-        ...(needsAcknowledgement ? { acknowledgeSlug: slug } : {}),
-        ...(needsAcknowledgement && trustDetails?.version
-          ? { acknowledgeVersion: trustDetails.version }
-          : {}),
-        ...(needsAcknowledgement ? { acknowledgeLabel: "Acknowledge risk and install" } : {}),
-      };
-    }
-  } finally {
-    if (
-      ownsSkillOperation(state, client, operation) &&
-      !isSkillsAgentScopeCurrent(state, agentScope)
-    ) {
-      await loadCurrentSkillsForOperation(state, client, operation);
-    }
-    releaseSkillOperation(state, operation);
-  }
+  });
 }

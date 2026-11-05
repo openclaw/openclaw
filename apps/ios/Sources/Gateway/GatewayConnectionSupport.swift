@@ -1,0 +1,227 @@
+import Foundation
+import OpenClawKit
+
+enum GatewaySetupRouteProbeBudget {
+    static let tcpConnectTimeoutSeconds = 2.0
+}
+
+struct GatewaySetupAttempt: Equatable {
+    private let id = UUID()
+    let admissionCheckpoint: UInt64
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        // The UUID identifies the attempt; its admission checkpoint is immutable payload.
+        lhs.id == rhs.id
+    }
+}
+
+struct GatewayPendingTrustConnect {
+    let url: URL
+    let stableID: String
+    let isManual: Bool
+    let authOverride: GatewayConnectionController.ManualAuthOverride?
+    let allowStoredDeviceAuth: Bool
+    let suppressionLease: GatewayConnectionController.AutoConnectSuppressionLease
+    let gatewayGeneration: UInt64?
+    let admissionCheckpoint: UInt64
+    var userInitiated = true
+}
+
+extension GatewayConnectionController {
+    struct TrustPrompt: Identifiable, Equatable {
+        let stableID: String
+        let gatewayName: String
+        let host: String
+        let port: Int
+        let fingerprintSha256: String
+        let isManual: Bool
+        let attemptGeneration: UInt64
+
+        var id: String {
+            self.stableID
+        }
+    }
+
+    func admitSetupLifetime(_ auth: ManualAuthOverride?, stableID: String, generation: UInt64?) -> Bool {
+        guard let auth, let expiry = auth.expiresAtMs,
+              expiry <= Int64(now().timeIntervalSince1970 * 1000)
+        else { return true }
+        let instanceID = GatewaySettingsStore.currentInstanceID()
+        let stored = GatewaySettingsStore.loadGatewayCredentials(instanceId: instanceID, gatewayStableID: stableID)
+        // The form persists setup credentials before admission. Remove only this
+        // expired bootstrap; a newer scan or Gateway device credentials must survive.
+        let saved = stored.bootstrapToken != auth.bootstrapToken || GatewaySettingsStore.saveGatewayCredentials(
+            token: stored.token,
+            bootstrapToken: nil,
+            password: stored.password,
+            gatewayStableID: stableID,
+            suppressStoredDeviceAuth: stored.suppressStoredDeviceAuth,
+            instanceId: instanceID)
+        let problem = GatewayConnectionProblem(
+            kind: .bootstrapTokenInvalid,
+            owner: .iphone,
+            title: "Setup code expired",
+            message: saved ? "Scan a new setup code. Cloudflare Access sign-in is still available." :
+                "Could not clear the expired setup code. Scan a new code to replace it.",
+            actionLabel: "Scan new code",
+            retryable: false,
+            pauseReconnect: true)
+        self.appModel?.failGatewayPreconnectVerification(
+            problem, stableID: stableID, host: nil, expectedGeneration: generation)
+        return false
+    }
+
+    func clearLegacyManualGatewayDefaults(matching stableID: String) {
+        let defaults = UserDefaults.standard
+        let host = defaults.string(forKey: "gateway.manual.host")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let port = Self.resolvedManualPort(
+            host: host,
+            port: defaults.integer(forKey: "gateway.manual.port"))
+        guard !host.isEmpty,
+              let port,
+              GatewayStableIdentifier.matches(self.manualStableID(host: host, port: port), stableID)
+        else { return }
+        defaults.set(false, forKey: "gateway.manual.enabled")
+        defaults.removeObject(forKey: "gateway.manual.host")
+        defaults.removeObject(forKey: "gateway.manual.port")
+        defaults.removeObject(forKey: "gateway.manual.tls")
+    }
+
+    enum ConnectionAttemptResult: Equatable {
+        case accepted
+        case failed(String)
+        case superseded
+    }
+
+    enum DiscoveredGatewayConnectionAvailability: Equatable {
+        case available
+        case secureTransportRequired
+
+        var canConnect: Bool {
+            self == .available
+        }
+
+        var actionTitle: String {
+            switch self {
+            case .available:
+                String(localized: "Connect")
+            case .secureTransportRequired:
+                String(localized: "TLS required")
+            }
+        }
+
+        var guidanceText: String? {
+            switch self {
+            case .available:
+                nil
+            case .secureTransportRequired:
+                String(localized: """
+                Enable Gateway TLS, or enter your Tailscale Serve HTTPS host in Manual Setup. \
+                Use Unencrypted only with a trusted private-LAN address.
+                """)
+            }
+        }
+    }
+
+    func discoveredGatewayConnectionAvailability(
+        _ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> DiscoveredGatewayConnectionAvailability
+    {
+        if gateway.tlsEnabled || GatewayTLSStore.loadFingerprint(stableID: gateway.stableID) != nil {
+            return .available
+        }
+        return .secureTransportRequired
+    }
+
+    func preferredDiscoveredGateway() -> GatewayDiscoveryModel.DiscoveredGateway? {
+        self.gateways.first(where: {
+            self.discoveredGatewayConnectionAvailability($0).canConnect
+        }) ?? self.gateways.first
+    }
+
+    func mostRecentlyConnectedManualGateway() -> GatewaySettingsStore.GatewayRegistryEntry? {
+        GatewaySettingsStore.loadGatewayRegistry().entries
+            .filter { $0.kind == .manual }
+            .max { lhs, rhs in
+                let lhsConnected = lhs.lastConnectedAtMs ?? Int.min
+                let rhsConnected = rhs.lastConnectedAtMs ?? Int.min
+                if lhsConnected != rhsConnected { return lhsConnected < rhsConnected }
+                return GatewayStableIdentifier.sortsBefore(rhs.stableID, lhs.stableID)
+            }
+    }
+
+    func updateLastDiscoveredGateway(from gateways: [GatewayDiscoveryModel.DiscoveredGateway]) {
+        let defaults = UserDefaults.standard
+        let preferred = GatewayStableIdentifier.exact(
+            defaults.string(forKey: "gateway.preferredStableID"))
+        let existingLast = GatewayStableIdentifier.exact(
+            defaults.string(forKey: "gateway.lastDiscoveredStableID"))
+
+        // Avoid overriding user intent (preferred/lastDiscovered are also set on manual Connect).
+        guard preferred == nil, existingLast == nil else { return }
+        guard let first = gateways.first else { return }
+
+        defaults.set(first.stableID, forKey: "gateway.lastDiscoveredStableID")
+        GatewaySettingsStore.saveDiscoveredGatewayStableID(first.stableID)
+    }
+
+    func tlsProbeFailureProblem(
+        _ failure: GatewayTLSFingerprintProbeFailure,
+        host: String,
+        port: Int) -> GatewayConnectionProblem
+    {
+        let kind: GatewayConnectionProblem.Kind
+        let title: String
+        let message: String
+        switch failure {
+        case .endpointUnreachable:
+            kind = .reachabilityFailed
+            title = "Gateway is not reachable"
+            message = String(
+                format: String(localized: """
+                Can't reach gateway at %1$@:%2$@. Check the address and your network connection.
+                """),
+                host,
+                String(port))
+        case .tlsHandshakeTimeout:
+            kind = .timeout
+            title = "TLS verification timed out"
+            message = String(
+                format: String(localized: """
+                TLS fingerprint verification timed out for %1$@:%2$@. \
+                The host was reached, but TLS did not finish in time.
+                """),
+                host,
+                String(port))
+        case .tlsUnavailable:
+            kind = .tlsCertificateUnavailable
+            title = "Secure gateway unavailable"
+            message = String(
+                format: String(localized: """
+                No secure gateway endpoint was detected at %1$@:%2$@. \
+                Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address \
+                with Unencrypted selected.
+                """),
+                host,
+                String(port))
+        case .certificateUnavailable:
+            kind = .tlsCertificateUnavailable
+            title = "Gateway certificate unavailable"
+            message = String(
+                format: String(
+                    localized: "Could not read the TLS certificate from %1$@:%2$@."),
+                host,
+                String(port))
+        }
+        return GatewayConnectionProblem(
+            kind: kind,
+            owner: .network,
+            title: title,
+            message: message,
+            actionLabel: "Retry",
+            messagePresentation: .verbatim(message),
+            docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
+            retryable: true,
+            pauseReconnect: false)
+    }
+}

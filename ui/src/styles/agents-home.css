@@ -1,0 +1,141 @@
+.agents-home__template-card,
+.agents-home__template-skeleton {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+.agents-home__template-skeleton {
+  min-height: 168px;
+  background: var(--bg-accent);
+}
+
+.agents-home__template-card {
+  position: relative;
+  /* Card width, not viewport width, decides the title row: multi-column grids
+     make cards narrow on laptop-sized screens. */
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agents-home__template-card-link {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  cursor: var(--cursor-action);
+}
+
+.agents-home__template-card-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+
+.agents-home__template-card-link:disabled {
+  cursor: default;
+}
+
+.agents-home__template-head {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-areas: "art identity add";
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  pointer-events: none;
+}
+
+/* Narrow cards: give the name the full card width instead of the gap between
+   the artwork and Add, which otherwise breaks names one or two words per line. */
+@container (max-width: 279px) {
+  .agents-home__template-head {
+    grid-template-areas:
+      "art . add"
+      "identity identity identity";
+    align-items: center;
+  }
+}
+
+.agents-home__template-head .btn {
+  position: relative;
+  z-index: 3;
+  pointer-events: auto;
+}
+
+.agents-home__template-art {
+  grid-area: art;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--bg-accent);
+  color: var(--accent);
+}
+
+.agents-home__template-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.agents-home__template-art svg {
+  width: 20px;
+  height: 20px;
+}
+
+.agents-home__template-identity {
+  grid-area: identity;
+  min-width: 0;
+}
+
+.agents-home__template-identity h3 {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  font-size: 15px;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.agents-home__template-identity span {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agents-home__template-add {
+  grid-area: add;
+}
+
+.agents-home__template-summary {
+  position: relative;
+  z-index: 2;
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  pointer-events: none;
+}
+
+.agents-home__template-empty {
+  margin: 0 0 16px;
+  color: var(--muted);
+}

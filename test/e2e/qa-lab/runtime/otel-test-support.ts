@@ -1,9 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { gunzipSync } from "node:zlib";
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { DiagnosticTraceContext } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../../../src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 
 export type OtlpSignal = "logs" | "metrics" | "traces";
 
@@ -37,10 +34,12 @@ type OtlpScopeSpans = {
 };
 
 type OtlpResourceSpans = {
+  serviceName?: string;
   scopeSpans?: OtlpScopeSpans[];
 };
 
 export type CapturedRequest = {
+  headerValues?: Record<string, string | undefined>;
   bytes: number;
   contentEncoding?: string;
   logCount: number;
@@ -53,6 +52,7 @@ export type CapturedRequest = {
 };
 
 export type CapturedSpan = {
+  serviceName?: string;
   attributes: Record<string, string | number | boolean | string[]>;
   endTimeMs?: number;
   name: string;
@@ -73,34 +73,47 @@ export type CapturedLogRecord = {
   traceId: string;
 };
 
-export function runModelCallAndCaptureTraceparent(params: {
-  trace: DiagnosticTraceContext;
-  runId: string;
-  callId: string;
-  provider: string;
-  model: string;
-}): string | undefined {
-  let outboundTraceparent: string | undefined;
-  const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
-    ((
-      _model: Parameters<StreamFn>[0],
-      _context: Parameters<StreamFn>[1],
-      options: Parameters<StreamFn>[2],
-    ) => {
-      outboundTraceparent = options?.headers?.traceparent;
-      return undefined as never;
-    }) as StreamFn,
-    {
-      runId: params.runId,
-      provider: params.provider,
-      model: params.model,
-      trace: params.trace,
-      nextCallId: () => params.callId,
-      suppressPluginHooks: true,
+type CapturedTraceSummary = {
+  traceId: string;
+  names: Record<string, number>;
+};
+
+const MAX_RECENT_TRACE_SUMMARIES = 8;
+const MAX_SPAN_NAMES_PER_TRACE_SUMMARY = 16;
+const OTHER_SPAN_NAME = "other";
+
+export function createRecentTraceSummary() {
+  const traces = new Map<string, Map<string, number>>();
+
+  return {
+    add(spans: readonly CapturedSpan[]): void {
+      for (const span of spans) {
+        const traceId = span.traceId || "missing";
+        const names = traces.get(traceId) ?? new Map<string, number>();
+        const name =
+          names.has(span.name) || names.size < MAX_SPAN_NAMES_PER_TRACE_SUMMARY - 1
+            ? span.name
+            : OTHER_SPAN_NAME;
+        names.set(name, (names.get(name) ?? 0) + 1);
+
+        // Map insertion order owns recency; reinserting keeps the latest active trace last.
+        traces.delete(traceId);
+        traces.set(traceId, names);
+        if (traces.size > MAX_RECENT_TRACE_SUMMARIES) {
+          const oldestTraceId = traces.keys().next().value;
+          if (oldestTraceId !== undefined) {
+            traces.delete(oldestTraceId);
+          }
+        }
+      }
     },
-  );
-  void wrapped({} as never, {} as never);
-  return outboundTraceparent;
+    read: (): CapturedTraceSummary[] => {
+      return [...traces].map(([traceId, names]) => ({
+        traceId,
+        names: Object.fromEntries(names),
+      }));
+    },
+  };
 }
 
 const OTLP_SIGNAL_PATHS = new Map<string, OtlpSignal>([
@@ -360,6 +373,22 @@ class ProtoReader {
   }
 }
 
+function visitRepeatedMessages(
+  message: Uint8Array,
+  fieldNumber: number,
+  visit: (message: Uint8Array) => void,
+): void {
+  const reader = new ProtoReader(message);
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === fieldNumber && wire === 2) {
+      visit(reader.bytes());
+    } else {
+      reader.skip(wire);
+    }
+  }
+}
+
 function decodeAnyValue(message: Uint8Array): OtlpAnyValue {
   const reader = new ProtoReader(message);
   const value: OtlpAnyValue = {};
@@ -387,16 +416,8 @@ function decodeAnyValue(message: Uint8Array): OtlpAnyValue {
 }
 
 function decodeArrayValue(message: Uint8Array): { values?: OtlpAnyValue[] } {
-  const reader = new ProtoReader(message);
   const values: OtlpAnyValue[] = [];
-  while (!reader.done()) {
-    const { field, wire } = reader.tag();
-    if (field === 1 && wire === 2) {
-      values.push(decodeAnyValue(reader.bytes()));
-    } else {
-      reader.skip(wire);
-    }
-  }
+  visitRepeatedMessages(message, 1, (nested) => values.push(decodeAnyValue(nested)));
   return { values };
 }
 
@@ -417,16 +438,8 @@ function decodeKeyValue(message: Uint8Array): OtlpKeyValue {
 }
 
 function decodeKeyValueList(message: Uint8Array): { values?: OtlpKeyValue[] } {
-  const reader = new ProtoReader(message);
   const values: OtlpKeyValue[] = [];
-  while (!reader.done()) {
-    const { field, wire } = reader.tag();
-    if (field === 1 && wire === 2) {
-      values.push(decodeKeyValue(reader.bytes()));
-    } else {
-      reader.skip(wire);
-    }
-  }
+  visitRepeatedMessages(message, 1, (nested) => values.push(decodeKeyValue(nested)));
   return { values };
 }
 
@@ -472,44 +485,33 @@ function decodeSpan(message: Uint8Array): OtlpSpan {
 }
 
 function decodeScopeSpans(message: Uint8Array): OtlpScopeSpans {
-  const reader = new ProtoReader(message);
   const spans: OtlpSpan[] = [];
-  while (!reader.done()) {
-    const { field, wire } = reader.tag();
-    if (field === 2 && wire === 2) {
-      spans.push(decodeSpan(reader.bytes()));
-    } else {
-      reader.skip(wire);
-    }
-  }
+  visitRepeatedMessages(message, 2, (nested) => spans.push(decodeSpan(nested)));
   return { spans };
 }
 
 function decodeResourceSpans(message: Uint8Array): OtlpResourceSpans {
   const reader = new ProtoReader(message);
   const scopeSpans: OtlpScopeSpans[] = [];
+  let serviceName: string | undefined;
   while (!reader.done()) {
     const { field, wire } = reader.tag();
-    if (field === 2 && wire === 2) {
+    if (field === 1 && wire === 2) {
+      serviceName = decodeKeyValueList(reader.bytes()).values?.find(
+        (attribute) => attribute.key === "service.name",
+      )?.value?.stringValue;
+    } else if (field === 2 && wire === 2) {
       scopeSpans.push(decodeScopeSpans(reader.bytes()));
     } else {
       reader.skip(wire);
     }
   }
-  return { scopeSpans };
+  return { scopeSpans, serviceName };
 }
 
 function decodeTraceRequest(body: Buffer): CapturedSpan[] {
-  const reader = new ProtoReader(body);
   const resourceSpans: OtlpResourceSpans[] = [];
-  while (!reader.done()) {
-    const { field, wire } = reader.tag();
-    if (field === 1 && wire === 2) {
-      resourceSpans.push(decodeResourceSpans(reader.bytes()));
-    } else {
-      reader.skip(wire);
-    }
-  }
+  visitRepeatedMessages(body, 1, (nested) => resourceSpans.push(decodeResourceSpans(nested)));
   const spans: CapturedSpan[] = [];
   for (const resource of resourceSpans) {
     for (const scopeSpans of resource.scopeSpans ?? []) {
@@ -520,6 +522,7 @@ function decodeTraceRequest(body: Buffer): CapturedSpan[] {
         }
         spans.push({
           attributes: spanAttributes(span),
+          ...(resource.serviceName ? { serviceName: resource.serviceName } : {}),
           endTimeMs: span.endTimeMs,
           name,
           parent: (span.parentSpanId?.length ?? 0) > 0,
@@ -550,47 +553,25 @@ function decodeMetric(message: Uint8Array): CapturedMetric | undefined {
 }
 
 function decodeScopeMetrics(message: Uint8Array): CapturedMetric[] {
-  const reader = new ProtoReader(message);
   const metrics: CapturedMetric[] = [];
-  while (!reader.done()) {
-    const { field, wire } = reader.tag();
-    if (field === 2 && wire === 2) {
-      const metric = decodeMetric(reader.bytes());
-      if (metric) {
-        metrics.push(metric);
-      }
-    } else {
-      reader.skip(wire);
+  visitRepeatedMessages(message, 2, (nested) => {
+    const metric = decodeMetric(nested);
+    if (metric) {
+      metrics.push(metric);
     }
-  }
+  });
   return metrics;
 }
 
 function decodeResourceMetrics(message: Uint8Array): CapturedMetric[] {
-  const reader = new ProtoReader(message);
   const metrics: CapturedMetric[] = [];
-  while (!reader.done()) {
-    const { field, wire } = reader.tag();
-    if (field === 2 && wire === 2) {
-      metrics.push(...decodeScopeMetrics(reader.bytes()));
-    } else {
-      reader.skip(wire);
-    }
-  }
+  visitRepeatedMessages(message, 2, (nested) => metrics.push(...decodeScopeMetrics(nested)));
   return metrics;
 }
 
 function decodeMetricRequest(body: Buffer): CapturedMetric[] {
-  const reader = new ProtoReader(body);
   const metrics: CapturedMetric[] = [];
-  while (!reader.done()) {
-    const { field, wire } = reader.tag();
-    if (field === 1 && wire === 2) {
-      metrics.push(...decodeResourceMetrics(reader.bytes()));
-    } else {
-      reader.skip(wire);
-    }
-  }
+  visitRepeatedMessages(body, 1, (nested) => metrics.push(...decodeResourceMetrics(nested)));
   return metrics;
 }
 
@@ -615,63 +596,33 @@ function decodeLogRecord(message: Uint8Array): CapturedLogRecord {
 }
 
 function decodeScopeLogs(message: Uint8Array): CapturedLogRecord[] {
-  const reader = new ProtoReader(message);
   const records: CapturedLogRecord[] = [];
-  while (!reader.done()) {
-    const { field, wire } = reader.tag();
-    if (field === 2 && wire === 2) {
-      records.push(decodeLogRecord(reader.bytes()));
-    } else {
-      reader.skip(wire);
-    }
-  }
+  visitRepeatedMessages(message, 2, (nested) => records.push(decodeLogRecord(nested)));
   return records;
 }
 
 function decodeResourceLogs(message: Uint8Array): CapturedLogRecord[] {
-  const reader = new ProtoReader(message);
   const records: CapturedLogRecord[] = [];
-  while (!reader.done()) {
-    const { field, wire } = reader.tag();
-    if (field === 2 && wire === 2) {
-      records.push(...decodeScopeLogs(reader.bytes()));
-    } else {
-      reader.skip(wire);
-    }
-  }
+  visitRepeatedMessages(message, 2, (nested) => records.push(...decodeScopeLogs(nested)));
   return records;
 }
 
 function decodeLogRequest(body: Buffer): CapturedLogRecord[] {
-  const reader = new ProtoReader(body);
   const records: CapturedLogRecord[] = [];
-  while (!reader.done()) {
-    const { field, wire } = reader.tag();
-    if (field === 1 && wire === 2) {
-      records.push(...decodeResourceLogs(reader.bytes()));
-    } else {
-      reader.skip(wire);
-    }
-  }
+  visitRepeatedMessages(body, 1, (nested) => records.push(...decodeResourceLogs(nested)));
   return records;
 }
 
-function closeLocalOtlpReceiverConnections(
-  server: ReturnType<typeof createServer>,
-  sockets: Set<Socket>,
-): void {
-  for (const socket of sockets) {
-    socket.destroy();
-  }
-  server.closeAllConnections();
-}
-
-export function startLocalOtlpReceiver(disallowedBodyNeedles: string[] = []) {
+export function startLocalOtlpReceiver(
+  disallowedBodyNeedles: string[] = [],
+  captureHeaderNames: string[] = [],
+) {
   const capturedRequests: CapturedRequest[] = [];
   const capturedSpans: CapturedSpan[] = [];
   const capturedMetrics: CapturedMetric[] = [];
   const capturedLogRecords: CapturedLogRecord[] = [];
   const capturedBodyText: Partial<Record<OtlpSignal, string[]>> = {};
+  const recentTraceSummary = createRecentTraceSummary();
   const sockets = new Set<Socket>();
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
@@ -736,11 +687,19 @@ export function startLocalOtlpReceiver(disallowedBodyNeedles: string[] = []) {
         return;
       }
       capturedSpans.push(...spans);
+      recentTraceSummary.add(spans);
       capturedMetrics.push(...metrics);
       capturedLogRecords.push(...logRecords);
       capturedRequests.push({
         path: requestPath,
         signal,
+        ...(captureHeaderNames.length > 0
+          ? {
+              headerValues: Object.fromEntries(
+                captureHeaderNames.map((name) => [name, headerValue(req.headers[name])]),
+              ),
+            }
+          : {}),
         bytes: body.length,
         contentEncoding,
         receivedAtMs: Date.now(),
@@ -767,6 +726,7 @@ export function startLocalOtlpReceiver(disallowedBodyNeedles: string[] = []) {
     capturedMetrics,
     capturedLogRecords,
     capturedBodyText,
+    recentTraceSummary: recentTraceSummary.read,
     async listen(): Promise<number> {
       await new Promise<void>((resolve) => {
         server.listen(0, "127.0.0.1", resolve);
@@ -779,9 +739,11 @@ export function startLocalOtlpReceiver(disallowedBodyNeedles: string[] = []) {
     },
     async close(): Promise<void> {
       closePromise ??= new Promise<void>((resolve, reject) => {
-        closeLocalOtlpReceiverConnections(server, sockets);
         server.close((error) => (error ? reject(error) : resolve()));
-        closeLocalOtlpReceiverConnections(server, sockets);
+        // Stop accepting first, then abort owned requests without stopping Bun's listener twice.
+        for (const socket of sockets) {
+          socket.destroy();
+        }
       });
       await closePromise;
     },

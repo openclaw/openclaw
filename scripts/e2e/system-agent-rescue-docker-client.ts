@@ -1,13 +1,34 @@
 // OpenClaw rescue-message Docker harness.
 // Imports packaged dist modules so the Docker lane verifies the npm tarball,
 // while this small test driver stays mounted from the checkout.
+import childProcess from "node:child_process";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { handleSystemAgentCommand } from "../../dist/auto-reply/reply/commands-system-agent.js";
-import { clearConfigCache } from "../../dist/config/config.js";
+import { mock } from "node:test";
 import type { OpenClawConfig } from "../../dist/config/types.openclaw.js";
-import { runSystemAgentRescueMessage } from "../../dist/system-agent/rescue-message.js";
 import { createE2eStateDir } from "./lib/temp-state-dir.ts";
+
+// This lane proves persistence and approval, not live provider credentials.
+const inference = await import("../../dist/system-agent/setup-inference.js");
+let inferenceChecks = 0;
+const verifySetupInferenceConfig: typeof inference.verifySetupInferenceConfig = async () => {
+  inferenceChecks += 1;
+  return { ok: true, modelRef: "openai/gpt-5.2", latencyMs: 1 };
+};
+const inferenceMock = mock.module(
+  new URL("../../dist/system-agent/setup-inference.js", import.meta.url).href,
+  { namedExports: { ...inference, verifySetupInferenceConfig } },
+);
+const { handleSystemAgentCommand } =
+  await import("../../dist/auto-reply/reply/commands-system-agent.js");
+const { clearConfigCache } = await import("../../dist/config/config.js");
+const { createSqliteAuditRecordStore } =
+  await import("../../dist/infra/sqlite-audit-record-store.js");
+const { SYSTEM_AGENT_AUDIT_MAX_ENTRIES, SYSTEM_AGENT_AUDIT_SCOPE } =
+  await import("../../dist/system-agent/audit.js");
+const { runSystemAgentRescueMessage } = await import("../../dist/system-agent/rescue-message.js");
+type SystemAgentAuditEntry = import("../../dist/system-agent/audit.js").SystemAgentAuditEntry;
 
 type CommandResult = Awaited<ReturnType<typeof handleSystemAgentCommand>>;
 
@@ -51,18 +72,13 @@ async function invoke(commandBody: string, cfg: OpenClawConfig, isGroup = false)
   return text;
 }
 
-async function invokeWithDeps(
-  commandBody: string,
-  cfg: OpenClawConfig,
-  deps: NonNullable<Parameters<typeof runSystemAgentRescueMessage>[0]["deps"]>,
-): Promise<string> {
+async function invokeRescue(commandBody: string, cfg: OpenClawConfig): Promise<string> {
   const result = await runSystemAgentRescueMessage({
     cfg,
     command: makeParams(commandBody, cfg).command,
     commandBody,
     agentId: "default",
     isGroup: false,
-    deps,
   });
   assert(typeof result === "string", `Direct rescue command did not return text: ${commandBody}`);
   return result;
@@ -80,7 +96,7 @@ async function main() {
     configPath,
     JSON.stringify(
       {
-        meta: { lastTouchedVersion: "docker-e2e", lastTouchedAt: new Date(0).toISOString() },
+        meta: { lastTouchedVersion: "docker-e2e" },
         agents: { defaults: {} },
       },
       null,
@@ -96,30 +112,18 @@ async function main() {
   assert(denied.includes("sandboxing is active"), "sandboxed rescue was not denied");
 
   const cfg: OpenClawConfig = {};
-  const deterministicInference = {
-    verifyInferenceConfig: async () => ({
-      ok: true as const,
-      modelRef: "openai/gpt-5.2",
-      latencyMs: 1,
-    }),
-  };
   const refusedTui = await invoke("/openclaw talk to agent", cfg);
   assert(
     refusedTui.includes("cannot open the local TUI"),
     "remote rescue TUI handoff was not refused",
   );
 
-  // This packaged smoke verifies rescue persistence, not live provider credentials.
-  const plan = await invokeWithDeps(
-    "/openclaw set default model openai/gpt-5.2",
-    cfg,
-    deterministicInference,
-  );
+  const plan = await invokeRescue("/openclaw set default model openai/gpt-5.2", cfg);
   assert(
     plan.includes("Reply /openclaw yes to apply"),
     "persistent change did not require approval",
   );
-  const applied = await invokeWithDeps("/openclaw yes", cfg, deterministicInference);
+  const applied = await invokeRescue("/openclaw yes", cfg);
   assert(applied.includes("Default model: openai/gpt-5.2"), "approved change did not apply");
 
   const configValid = await invoke("/openclaw validate config", cfg);
@@ -144,6 +148,15 @@ async function main() {
   const refApplied = await invoke("/openclaw yes", cfg);
   assert(refApplied.includes("[openclaw] done: config.setRef"), "SecretRef set failed");
 
+  // Fresh setup chooses the workspace before an authored fleet owns it.
+  const setupPlan = await invokeRescue(
+    "/openclaw setup workspace /tmp/openclaw-setup model openai/gpt-5.2",
+    cfg,
+  );
+  assert(setupPlan.includes("Reply /openclaw yes to apply"), "setup did not require approval");
+  const setupApplied = await invokeRescue("/openclaw yes", cfg);
+  assert(setupApplied.includes("[openclaw] done: openclaw.setup"), "setup did not apply");
+
   const agentPlan = await invoke("/openclaw create agent work workspace /tmp/openclaw-work", cfg);
   assert(
     agentPlan.includes("Reply /openclaw yes to apply"),
@@ -152,105 +165,78 @@ async function main() {
   const agentApplied = await invoke("/openclaw yes", cfg);
   assert(agentApplied.includes("[openclaw] done: agents.create"), "agent creation did not apply");
 
-  const setupPlan = await invokeWithDeps(
-    "/openclaw setup workspace /tmp/openclaw-setup model openai/gpt-5.2",
-    cfg,
-    deterministicInference,
-  );
-  assert(setupPlan.includes("Reply /openclaw yes to apply"), "setup did not require approval");
-  const setupApplied = await invokeWithDeps("/openclaw yes", cfg, deterministicInference);
-  assert(setupApplied.includes("[openclaw] done: openclaw.setup"), "setup did not apply");
-
   const gatewayRestarts: string[] = [];
   const gatewayCommand = makeParams("/openclaw restart gateway", cfg).command;
-  const gatewayPlan = await runSystemAgentRescueMessage({
-    cfg,
-    command: gatewayCommand,
-    commandBody: "/openclaw restart gateway",
-    agentId: "default",
-    isGroup: false,
-    deps: {
-      runGatewayRestart: async () => {
-        gatewayRestarts.push("restart");
-      },
+  const gatewayHostLifecycle: NonNullable<
+    NonNullable<Parameters<typeof runSystemAgentRescueMessage>[0]["deps"]>["gatewayHostLifecycle"]
+  > = {
+    request: async (action, assertCaller) => {
+      assertCaller();
+      gatewayRestarts.push(action);
+      return { ok: true, value: { outcome: "scheduled" } };
     },
-  });
+  };
+  const runGatewayCommand = (commandBody: string) =>
+    runSystemAgentRescueMessage({
+      cfg,
+      command: gatewayCommand,
+      commandBody,
+      agentId: "default",
+      isGroup: false,
+      deps: { setupSurface: "gateway", gatewayHostLifecycle },
+    });
+  const gatewayPlan = await runGatewayCommand("/openclaw restart gateway");
   assert(
     gatewayPlan?.includes("Reply /openclaw yes to apply"),
     "gateway restart did not require approval",
   );
-  const pluginList = await runSystemAgentRescueMessage({
-    cfg,
-    command: gatewayCommand,
-    commandBody: "/openclaw plugins list",
-    agentId: "default",
-    isGroup: false,
-    deps: {
-      runPluginsList: async (runtime) => runtime.log("plugin rows"),
-    },
-  });
-  assert(pluginList === "plugin rows", "read-only rescue command did not run");
-  const revokedApproval = await runSystemAgentRescueMessage({
-    cfg,
-    command: gatewayCommand,
-    commandBody: "/openclaw yes",
-    agentId: "default",
-    isGroup: false,
-    deps: {
-      runGatewayRestart: async () => {
-        gatewayRestarts.push("restart");
-      },
-    },
-  });
+  const pluginList = await runGatewayCommand("/openclaw plugins list");
+  assert(
+    pluginList?.includes("Plugins") || pluginList?.includes("No plugins found."),
+    "read-only rescue command did not return the packaged plugin inventory",
+  );
+  const revokedApproval = await runGatewayCommand("/openclaw yes");
   assert(
     revokedApproval === "No pending OpenClaw rescue change is waiting for approval.",
     "fresh rescue command did not revoke the older pending change",
   );
   assert(gatewayRestarts.length === 0, "revoked gateway restart was invoked");
-  await runSystemAgentRescueMessage({
-    cfg,
-    command: gatewayCommand,
-    commandBody: "/openclaw restart gateway",
-    agentId: "default",
-    isGroup: false,
-  });
-  const gatewayApplied = await runSystemAgentRescueMessage({
-    cfg,
-    command: gatewayCommand,
-    commandBody: "/openclaw yes",
-    agentId: "default",
-    isGroup: false,
-    deps: {
-      runGatewayRestart: async () => {
-        gatewayRestarts.push("restart");
-      },
-    },
-  });
+  await runGatewayCommand("/openclaw restart gateway");
+  const gatewayApplied = await runGatewayCommand("/openclaw yes");
   assert(
     gatewayApplied?.includes("[openclaw] done: gateway.restart"),
     "gateway restart did not apply",
   );
-  assert(gatewayRestarts.length === 1, "gateway restart dependency was not invoked once");
+  assert(gatewayRestarts.length === 1, "gateway host restart was not requested once");
+  assert(gatewayRestarts[0] === "restart", "gateway requested the wrong host action");
 
   const doctorRuns: string[] = [];
   const doctorCommand = makeParams("/openclaw doctor fix", cfg).command;
-  const doctorReply = await runSystemAgentRescueMessage({
-    cfg,
-    command: doctorCommand,
-    commandBody: "/openclaw doctor fix",
-    agentId: "default",
-    isGroup: false,
-    deps: {
-      runDoctor: async (_runtime, options) => {
-        doctorRuns.push(options.repair ? "repair" : "check");
-      },
-    },
+  // Refusal must not launch the packaged Doctor subprocess.
+  const doctorSpawn = mock.method(childProcess, "spawn", () => {
+    doctorRuns.push("doctor");
+    throw new Error("Remote rescue unexpectedly launched a Doctor subprocess");
   });
+  syncBuiltinESMExports();
+  let doctorReply: string | null;
+  try {
+    doctorReply = await runSystemAgentRescueMessage({
+      cfg,
+      command: doctorCommand,
+      commandBody: "/openclaw doctor fix",
+      agentId: "default",
+      isGroup: false,
+    });
+  } finally {
+    doctorSpawn.mock.restore();
+    syncBuiltinESMExports();
+  }
   assert(
     doctorReply?.includes("openclaw doctor --fix"),
     "remote doctor fix did not point to the local repair command",
   );
   assert(doctorRuns.length === 0, "remote rescue must not invoke doctor repair");
+  assert(inferenceChecks > 0, "packaged inference fixture was not invoked");
 
   const updatedConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
   const updatedModel = updatedConfig.agents?.defaults?.model;
@@ -275,26 +261,23 @@ async function main() {
     "agent config was not updated",
   );
 
-  const auditPath = path.join(stateDir, "audit", "system-agent.jsonl");
-  const auditLines = (await fs.readFile(auditPath, "utf8")).trim().split("\n");
-  assert(auditLines.length >= 2, "audit log did not record both operations");
-  const audits = auditLines.map((line) => JSON.parse(line));
-  assert(
-    audits.some((audit) => audit.operation === "config.setDefaultModel"),
-    "model audit operation missing",
-  );
-  assert(
-    audits.some((audit) => audit.operation === "config.set"),
-    "config set audit missing",
-  );
-  assert(
-    audits.some((audit) => audit.operation === "config.setRef"),
-    "SecretRef config audit missing",
-  );
-  assert(
-    audits.some((audit) => audit.operation === "openclaw.setup"),
-    "setup audit missing",
-  );
+  const audits = createSqliteAuditRecordStore<SystemAgentAuditEntry>({
+    scope: SYSTEM_AGENT_AUDIT_SCOPE,
+    maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
+  })
+    .entries()
+    .map((entry) => entry.value);
+  for (const [operation, message] of [
+    ["config.setDefaultModel", "model audit operation missing"],
+    ["config.set", "config set audit missing"],
+    ["config.setRef", "SecretRef config audit missing"],
+    ["openclaw.setup", "setup audit missing"],
+  ] as const) {
+    assert(
+      audits.some((audit) => audit.operation === operation),
+      message,
+    );
+  }
   const agentAudit = audits.find((audit) => audit.operation === "agents.create");
   assert(agentAudit, "agent audit operation missing");
   assert(agentAudit.details?.rescue === true, "audit rescue marker missing");
@@ -309,7 +292,9 @@ async function main() {
   console.log("OpenClaw rescue Docker E2E passed");
 }
 
-main().catch((err: unknown) => {
-  console.error(err);
-  process.exit(1);
-});
+main()
+  .finally(() => inferenceMock.restore())
+  .catch((err: unknown) => {
+    console.error(err);
+    process.exit(1);
+  });

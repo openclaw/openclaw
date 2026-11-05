@@ -1,22 +1,12 @@
-// Defines Zod schema fragments for channel configuration.
 import { z } from "zod";
 import type { ChannelsConfig } from "./types.channels.js";
-import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
+import { ChannelBotLoopProtectionSchema } from "./zod-schema.channel-bot-loop.js";
 import { ContextVisibilityModeSchema, GroupPolicySchema } from "./zod-schema.core.js";
 import { ChannelImplicitMentionsSchema } from "./zod-schema.implicit-mentions.js";
 
 const ChannelModelByChannelSchema = z
   .record(z.string(), z.record(z.string(), z.string()))
   .optional();
-
-export const ChannelBotLoopProtectionSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    maxEventsPerWindow: z.number().int().positive().optional(),
-    windowSeconds: z.number().int().positive().optional(),
-    cooldownSeconds: z.number().int().positive().optional(),
-  })
-  .strict();
 
 function addLegacyChannelAcpBindingIssues(
   value: unknown,
@@ -53,14 +43,12 @@ function addLegacyChannelAcpBindingIssues(
 export const ChannelsSchema: z.ZodType<ChannelsConfig | undefined> = z
   .object({
     defaults: z
-      .object({
+      .strictObject({
         groupPolicy: GroupPolicySchema.optional(),
         contextVisibility: ContextVisibilityModeSchema.optional(),
-        heartbeatVisibility: ChannelHeartbeatVisibilitySchema,
         botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
         implicitMentions: ChannelImplicitMentionsSchema.optional(),
       })
-      .strict()
       .optional(),
     modelByChannel: ChannelModelByChannelSchema,
   })

@@ -1,0 +1,8 @@
+name: iOS signing keychain
+description: Create and clean up the job-owned keychain used for readonly iOS release signing.
+
+runs:
+  using: node24
+  main: keychain.mjs
+  post: post.mjs
+  post-if: always()

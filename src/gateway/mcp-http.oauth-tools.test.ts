@@ -1,6 +1,10 @@
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { jsonResult } from "../agents/tools/common.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveMcpLoopbackScopedTools } from "./mcp-http.runtime.js";
 
@@ -14,7 +18,7 @@ vi.mock("../plugins/tools.js", async (importOriginal) => ({
 }));
 
 describe("MCP loopback OAuth tools", () => {
-  it("exposes a plugin tool backed by a prepared OAuth profile", () => {
+  it("exposes a plugin tool backed by a prepared OAuth profile", async () => {
     pluginTools.resolve.mockImplementation(
       (params: {
         context?: { activeModel?: { provider?: string; modelId?: string } };
@@ -35,16 +39,21 @@ describe("MCP loopback OAuth tools", () => {
           : [],
     );
 
-    const result = resolveMcpLoopbackScopedTools({
-      cfg: {
-        auth: { order: { xai: ["xai:oauth"] } },
-        plugins: { allow: ["xai"] },
-      } as OpenClawConfig,
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      modelProvider: "anthropic",
-      modelId: "claude-haiku-4-5",
-      senderIsOwner: true,
+    const cfg: OpenClawConfig = {
+      auth: { order: { xai: ["xai:oauth"] } },
+      plugins: { allow: ["xai"] },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    onTestFinished(clearRuntimeConfigSnapshot);
+    const result = await resolveMcpLoopbackScopedTools({
+      cfg,
+      context: {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        modelProvider: "anthropic",
+        modelId: "claude-haiku-4-5",
+        senderIsOwner: true,
+      },
       authProfileStore: {
         version: 1,
         profiles: {

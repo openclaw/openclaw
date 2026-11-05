@@ -15,7 +15,7 @@ Default rulepack: ${DEFAULT_RULEPACK}
 `);
 }
 
-export async function readRules(rulepackPath) {
+async function readRules(rulepackPath) {
   const raw = await fs.readFile(rulepackPath, "utf8");
   const doc = parseDocument(raw, { keepSourceTokens: false });
   if (doc.errors.length > 0) {
@@ -30,7 +30,7 @@ export async function readRules(rulepackPath) {
   return data.rules;
 }
 
-function hasNonEmptyString(value) {
+function hasRuleMetadataText(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
@@ -68,7 +68,7 @@ export function validateRuleMetadata(rules) {
     const advisoryId = String(metadata["advisory-id"] ?? metadata.ghsa ?? "")
       .trim()
       .toUpperCase();
-    if (!hasNonEmptyString(advisoryId)) {
+    if (!hasRuleMetadataText(advisoryId)) {
       violations.push(`${label}: missing metadata.advisory-id or metadata.ghsa`);
     } else if (idMatch && idMatch[1] !== sanitizeSourceIdComponent(advisoryId)) {
       violations.push(
@@ -88,7 +88,7 @@ export function validateRuleMetadata(rules) {
     const expectedGhsaUrl = GHSA_RE.test(advisoryId)
       ? `https://github.com/openclaw/openclaw/security/advisories/${advisoryId}`
       : "";
-    if (!hasNonEmptyString(advisoryUrl)) {
+    if (!hasRuleMetadataText(advisoryUrl)) {
       violations.push(`${label}: missing metadata.advisory-url`);
     } else if (expectedGhsaUrl && advisoryUrl !== expectedGhsaUrl) {
       violations.push(`${label}: metadata.advisory-url must be ${expectedGhsaUrl}`);
@@ -97,7 +97,7 @@ export function validateRuleMetadata(rules) {
     if (metadata["detector-bucket"] !== "precise") {
       violations.push(`${label}: metadata.detector-bucket must be precise`);
     }
-    if (!hasNonEmptyString(metadata["source-rule-id"])) {
+    if (!hasRuleMetadataText(metadata["source-rule-id"])) {
       violations.push(`${label}: missing metadata.source-rule-id`);
     }
   }
@@ -105,12 +105,12 @@ export function validateRuleMetadata(rules) {
   return violations;
 }
 
-export async function checkRulepack(rulepackPath = DEFAULT_RULEPACK) {
+async function checkRulepack(rulepackPath = DEFAULT_RULEPACK) {
   const rules = await readRules(rulepackPath);
   return validateRuleMetadata(rules);
 }
 
-export async function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help") || argv.includes("-h")) {
     printHelp();
     return 0;

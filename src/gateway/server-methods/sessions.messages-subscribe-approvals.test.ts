@@ -1,287 +1,170 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionApprovalReplay } from "../../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
+import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
 } from "./types.js";
 
-const loadSessionEntryMock = vi.fn((sessionKey: string, _opts?: { agentId?: string }) => ({
-  canonicalKey: sessionKey,
-}));
-
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+function createClient(scopes = ["operator.admin"], deviceId?: string): GatewayClient {
   return {
-    ...actual,
-    loadSessionEntry: (...args: unknown[]) =>
-      loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
-    loadSessionEntryReadOnly: (...args: unknown[]) =>
-      loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
+    ...sharingPolicyClient({ scopes, deviceId }),
+    connId: "conn-approval-reviewer",
   };
-});
-
-import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
-
-function createClient(params: {
-  scopes: string[];
-  deviceId?: string;
-  connId?: string;
-}): GatewayClient {
-  return {
-    connId: params.connId ?? "conn-approval-reviewer",
-    connect: {
-      client: { id: "approval-subscribe-test", displayName: "Approval Subscribe Test" },
-      scopes: params.scopes,
-      ...(params.deviceId ? { device: { id: params.deviceId } } : {}),
-    },
-  } as unknown as GatewayClient;
 }
 
-function createContext(params: {
-  replay?: SessionApprovalReplay;
-  replayError?: Error;
-  globalScope?: boolean;
-  mainKey?: string;
-  agents?: Array<{ id: string; default?: boolean }>;
-}) {
-  const rollbackSubscription = vi.fn();
-  const subscribeSessionMessageEvents = vi.fn(() => rollbackSubscription);
-  const listSessionPendingApprovals = vi.fn(() => {
-    if (params.replayError) {
-      throw params.replayError;
-    }
-    return params.replay;
+function approvalReplay(sessionKey = "agent:main:child"): SessionApprovalReplay {
+  return { sessionKey, updatedAtMs: 42, approvals: [], truncated: false };
+}
+
+function createContext(
+  params: {
+    replay?: SessionApprovalReplay;
+    config?: OpenClawConfig;
+    client?: GatewayClient;
+  } = {},
+) {
+  const client = params.client ?? createClient();
+  const registry = createSessionMessageSubscriberRegistry();
+  const register = vi.fn((...args: Parameters<typeof registry.subscribe>) => {
+    const rollback = registry.subscribe(...args);
+    return rollback && Object.assign(vi.fn(rollback), { commit: rollback.commit });
   });
-  const logError = vi.fn();
+  const read = vi.fn(async () =>
+    params.replay
+      ? { replay: params.replay, isCurrent: (): boolean => true, release: vi.fn() }
+      : undefined,
+  );
   const context = {
-    getRuntimeConfig: () => ({
-      agents: { list: params.agents ?? [{ id: "main", default: true }] },
-      ...(params.globalScope || params.mainKey
-        ? {
-            session: {
-              ...(params.globalScope ? { scope: "global" as const } : {}),
-              ...(params.mainKey ? { mainKey: params.mainKey } : {}),
-            },
-          }
-        : {}),
-    }),
-    listSessionPendingApprovals,
-    logGateway: { error: logError },
-    subscribeSessionMessageEvents,
+    getRuntimeConfig: () => params.config ?? { agents: { entries: { main: {} } } },
+    listSessionPendingApprovals: read,
+    logGateway: { error: vi.fn() },
+    subscribeSessionMessageEvents: register,
+    unsubscribeSessionMessageEvents: registry.unsubscribe,
   } as unknown as GatewayRequestContext;
   return {
-    context,
-    listSessionPendingApprovals,
-    logError,
-    rollbackSubscription,
-    subscribeSessionMessageEvents,
+    client,
+    registry,
+    read,
+    register,
+    request: async (body: Record<string, unknown>, method = "sessions.messages.subscribe") => {
+      const respond = vi.fn();
+      await expectDefined(
+        sessionSubscriptionHandlers[method],
+        `session subscription handler ${method}`,
+      )({
+        req: { id: "req-subscribe-approvals" } as never,
+        params: body,
+        respond,
+        context,
+        client,
+        isWebchatConnect: () => false,
+      } satisfies GatewayRequestHandlerOptions);
+      return respond;
+    },
   };
 }
 
-async function subscribe(params: {
-  body: Record<string, unknown>;
-  client: GatewayClient;
-  context: GatewayRequestContext;
-}) {
-  const respond = vi.fn();
-  await expectDefined(
-    sessionSubscriptionHandlers["sessions.messages.subscribe"],
-    'sessionSubscriptionHandlers["sessions.messages.subscribe"] test invariant',
-  )({
-    req: { id: "req-subscribe-approvals" } as never,
-    params: params.body,
-    respond,
-    context: params.context,
-    client: params.client,
-    isWebchatConnect: () => false,
-  } satisfies GatewayRequestHandlerOptions);
-  return respond;
+type Response = Awaited<ReturnType<ReturnType<typeof createContext>["request"]>>;
+
+function expectSuccess(respond: Response, payload: unknown) {
+  expect(respond).toHaveBeenCalledWith(true, payload, undefined);
+}
+
+function expectError(respond: Response, error: Record<string, unknown> = { code: "UNAVAILABLE" }) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
 }
 
 describe("sessions.messages.subscribe approval opt-in", () => {
-  beforeEach(() => {
-    loadSessionEntryMock.mockReset();
+  it("replaces narration through a configured main alias without changing approval delivery", async () => {
+    const key = "agent:main:work";
+    const replay = approvalReplay(key);
+    const { registry, client, request } = createContext({
+      config: { agents: { entries: { main: {} } }, session: { mainKey: "work" } },
+      replay,
+    });
+    const body = { key: "main", includeApprovals: true };
+
+    const narration = await request({ ...body, mode: "narration" });
+    expectSuccess(narration, expect.any(Object));
+    expect([...registry.getNarration(key)]).toEqual([client.connId]);
+
+    const foreground = await request(body);
+    expectSuccess(foreground, { subscribed: true, key, agentId: "main", approvalReplay: replay });
+    expect([...registry.get(key)]).toEqual([client.connId]);
+    expect([...registry.getNarration(key)]).toEqual([]);
+    expect([...registry.getApprovals(key)]).toEqual([client.connId]);
   });
 
-  it("allows an admin without a paired device and uses the exact scoped subscription key", async () => {
-    const approvalReplay = {
-      sessionKey: "agent:work:global",
-      updatedAtMs: 42,
-      approvals: [],
-      truncated: false,
-    } satisfies SessionApprovalReplay;
-    const { context, listSessionPendingApprovals, subscribeSessionMessageEvents } = createContext({
-      replay: approvalReplay,
-      globalScope: true,
-      agents: [{ id: "main", default: true }, { id: "work" }],
+  it("retains the foreground global observer after narration rollback and release", async () => {
+    const key = "agent:work:global";
+    const { registry, client, request, read } = createContext({
+      config: { session: { scope: "global" }, agents: { entries: { main: {}, work: {} } } },
+      replay: approvalReplay(key),
     });
+    const foreground = await request({ key, subscriptionId: "foreground" });
+    expectSuccess(foreground, { subscribed: true, key, agentId: "work" });
+    const observer = { key: "global", agentId: "work", subscriptionId: "narration" };
+    const narrationOptions = { mode: "narration", includeApprovals: true };
+    const narration = await request({ ...observer, ...narrationOptions });
+    expectSuccess(narration, expect.objectContaining({ key: "global", agentId: "work" }));
+    expect([...registry.getNarration(key)]).toEqual([]);
+    expect([...registry.getApprovals(key)]).toEqual([client.connId]);
 
-    const respond = await subscribe({
-      body: { key: "global", agentId: "work", includeApprovals: true },
-      client: createClient({ scopes: ["operator.admin"], connId: " conn-admin " }),
-      context,
-    });
+    read.mockRejectedValueOnce(new Error("replay failed"));
+    expectError(await request({ key, subscriptionId: "failed", ...narrationOptions }));
+    expect([...registry.getNarration(key)]).toEqual([]);
 
-    expect(listSessionPendingApprovals).toHaveBeenCalledWith(
-      "agent:work:global",
-      expect.objectContaining({ connId: " conn-admin " }),
-    );
-    expect(subscribeSessionMessageEvents.mock.invocationCallOrder[0]).toBeLessThan(
-      listSessionPendingApprovals.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith("conn-admin", "agent:work:global", {
-      includeApprovals: true,
-      provisional: true,
-    });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { subscribed: true, key: "global", approvalReplay },
-      undefined,
-    );
-    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expectSuccess(await request(observer, "sessions.messages.unsubscribe"), expect.any(Object));
+    expect([...registry.get(key)]).toEqual([client.connId]);
+    expect([...registry.getNarration(key)]).toEqual([]);
+    expect([...registry.getApprovals(key)]).toEqual([]);
   });
 
-  it("allows a paired device with approval scope", async () => {
-    const approvalReplay = {
-      sessionKey: "agent:main:child",
-      updatedAtMs: 43,
-      approvals: [],
-      truncated: false,
-    } satisfies SessionApprovalReplay;
-    const { context, subscribeSessionMessageEvents } = createContext({ replay: approvalReplay });
+  it.each(["stale", "missing"])(
+    "rolls back a %s replay without losing the prior subscription",
+    async (snapshot) => {
+      const replay = approvalReplay();
+      const { client, registry, request, read, register } = createContext({
+        client: createClient(["operator.approvals"], "phone"),
+      });
+      registry.subscribe(client.connId!, replay.sessionKey);
+      const release = vi.fn();
+      if (snapshot === "stale") {
+        read.mockResolvedValueOnce({ replay, isCurrent: () => false, release });
+      }
 
-    const respond = await subscribe({
-      body: { key: "child", includeApprovals: true },
-      client: createClient({ scopes: ["operator.approvals"], deviceId: "phone" }),
-      context,
-    });
-
-    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
-      "conn-approval-reviewer",
-      "agent:main:child",
-      { includeApprovals: true, provisional: true },
-    );
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { subscribed: true, key: "agent:main:child", approvalReplay },
-      undefined,
-    );
-  });
+      const respond = await request({ key: "child", includeApprovals: true });
+      expectError(respond);
+      expect(respond).toHaveBeenCalledOnce();
+      expect([...registry.get(replay.sessionKey)]).toEqual([client.connId]);
+      expect([...registry.getApprovals(replay.sessionKey)]).toEqual([]);
+      expect(release).toHaveBeenCalledTimes(snapshot === "stale" ? 1 : 0);
+      expect(read).toHaveBeenCalledOnce();
+      expect(register.mock.invocationCallOrder[0]).toBeLessThan(
+        read.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(register.mock.results[0]?.value).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
-    {
-      name: "approval scope without a paired device",
-      client: createClient({ scopes: ["operator.approvals"] }),
-    },
-    {
-      name: "paired device without approval authority",
-      client: createClient({ scopes: ["operator.read"], deviceId: "phone" }),
-    },
-  ])("rejects $name", async ({ client }) => {
-    const { context, listSessionPendingApprovals, subscribeSessionMessageEvents } = createContext(
-      {},
-    );
+    ["approval scope without a paired device", createClient(["operator.approvals"])],
+    ["paired device without approval authority", createClient(["operator.read"], "phone")],
+  ] as const)("rejects %s", async (_name, client) => {
+    const { read, register, request } = createContext({ client });
+    const respond = await request({ key: "agent:main:child", includeApprovals: true });
 
-    const respond = await subscribe({
-      body: { key: "agent:main:child", includeApprovals: true },
-      client,
-      context,
+    expect(read).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+    expectError(respond, {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("operator.approvals"),
     });
-
-    expect(listSessionPendingApprovals).not.toHaveBeenCalled();
-    expect(subscribeSessionMessageEvents).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("operator.approvals"),
-      }),
-    );
-  });
-
-  it("keeps the non-approval response shape and skips replay", async () => {
-    const { context, listSessionPendingApprovals, subscribeSessionMessageEvents } = createContext(
-      {},
-    );
-
-    const respond = await subscribe({
-      body: { key: "child" },
-      client: createClient({ scopes: ["operator.read"] }),
-      context,
-    });
-
-    expect(listSessionPendingApprovals).not.toHaveBeenCalled();
-    expect(subscribeSessionMessageEvents).toHaveBeenCalled();
-    expect(subscribeSessionMessageEvents.mock.calls[0]?.slice(0, 2)).toEqual([
-      "conn-approval-reviewer",
-      "agent:main:child",
-    ]);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { subscribed: true, key: "agent:main:child" },
-      undefined,
-    );
-    expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("approvalReplay");
-  });
-
-  it("canonicalizes configured main aliases without loading the session store", async () => {
-    const { context, subscribeSessionMessageEvents } = createContext({ mainKey: "work" });
-
-    const respond = await subscribe({
-      body: { key: "main" },
-      client: createClient({ scopes: ["operator.read"] }),
-      context,
-    });
-
-    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
-      "conn-approval-reviewer",
-      "agent:main:work",
-    );
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { subscribed: true, key: "agent:main:work" },
-      undefined,
-    );
-    expect(loadSessionEntryMock).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { name: "throws", replayError: new Error("database unavailable") },
-    { name: "returns no snapshot", replayError: undefined },
-  ])("restores the prior subscription when replay $name", async ({ replayError }) => {
-    const {
-      context,
-      listSessionPendingApprovals,
-      logError,
-      rollbackSubscription,
-      subscribeSessionMessageEvents,
-    } = createContext({ replayError });
-
-    const respond = await subscribe({
-      body: { key: "agent:main:child", includeApprovals: true },
-      client: createClient({ scopes: ["operator.admin"] }),
-      context,
-    });
-
-    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
-      "conn-approval-reviewer",
-      "agent:main:child",
-      { includeApprovals: true, provisional: true },
-    );
-    expect(subscribeSessionMessageEvents.mock.invocationCallOrder[0]).toBeLessThan(
-      listSessionPendingApprovals.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(rollbackSubscription).toHaveBeenCalledTimes(1);
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
-    if (replayError) {
-      expect(logError).toHaveBeenCalledWith(expect.stringContaining("database unavailable"));
-    }
   });
 });

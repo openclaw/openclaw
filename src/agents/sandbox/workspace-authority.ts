@@ -15,20 +15,20 @@ import { isToolAllowedByPolicies } from "../tool-policy-match.js";
 import {
   expandToolGroups,
   mergeAlsoAllowPolicy,
-  normalizeToolName,
+  normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../tool-policy.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
-import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import type { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import type { SandboxToolPolicy } from "./types.js";
 
-type WorkspaceToolPolicy = { allow?: string[]; deny?: string[] };
-type RestrictiveWorkspaceToolPolicy = WorkspaceToolPolicy & { allow: string[] };
+type RestrictiveWorkspaceToolPolicy = SandboxToolPolicy & { allow: string[] };
 
 const WORKSPACE_CONFINED_SANDBOX_TOOLS = new Set([
   "apply_patch",
   "edit",
   "exec",
-  "image",
+  "view_image",
   "process",
   "read",
   "session_status",
@@ -36,14 +36,14 @@ const WORKSPACE_CONFINED_SANDBOX_TOOLS = new Set([
   "sessions_list",
   "sessions_search",
   "sessions_yield",
-  "update_plan",
+  "progress_card",
   "web_fetch",
   "web_search",
   "write",
 ]);
 
 function findUnconfinedAllowedTool(
-  policies: Array<WorkspaceToolPolicy | undefined>,
+  policies: Array<SandboxToolPolicy | undefined>,
   confinedToolNames: ReadonlySet<string>,
 ) {
   const candidatePolicy = policies
@@ -54,7 +54,7 @@ function findUnconfinedAllowedTool(
   }
   for (const entry of candidatePolicy.allow) {
     for (const candidate of expandToolGroups([entry])) {
-      const normalized = normalizeToolName(candidate);
+      const normalized = normalizeToolPolicyName(candidate);
       if (!isToolAllowedByPolicies(normalized, policies)) {
         continue;
       }
@@ -65,68 +65,6 @@ function findUnconfinedAllowedTool(
     }
   }
   return undefined;
-}
-
-function resolveWorkspaceToolPolicies(params: {
-  config: OpenClawConfig;
-  agentId: string;
-  sessionKey: string;
-  modelProvider: string;
-  modelId: string;
-  sandboxPolicy: WorkspaceToolPolicy;
-}): Array<WorkspaceToolPolicy | undefined> {
-  const effective = resolveEffectiveToolPolicy({
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-  });
-  return [
-    mergeAlsoAllowPolicy(resolveToolProfilePolicy(effective.profile), effective.profileAlsoAllow),
-    mergeAlsoAllowPolicy(
-      resolveToolProfilePolicy(effective.providerProfile),
-      effective.providerProfileAlsoAllow,
-    ),
-    effective.globalPolicy,
-    effective.globalProviderPolicy,
-    effective.agentPolicy,
-    effective.agentProviderPolicy,
-    params.sandboxPolicy,
-    resolveSubagentToolPolicyForSession(params.config, params.sessionKey),
-    resolveInheritedToolPolicyForSession(params.config, params.sessionKey),
-  ];
-}
-
-function resolveWorkspaceAuthorityModel(params: {
-  config: OpenClawConfig;
-  agentId: string;
-  sessionEntry?: Pick<
-    SessionEntry,
-    "model" | "modelProvider" | "modelOverride" | "providerOverride"
-  >;
-  modelProvider?: string;
-  modelId?: string;
-}): { provider: string; model: string } {
-  const selected = resolveSessionModelRef(params.config, params.sessionEntry, params.agentId);
-  const explicitProvider = params.modelProvider?.trim();
-  const explicitModel = params.modelId?.trim();
-  if (!explicitModel) {
-    return { provider: explicitProvider ?? selected.provider, model: selected.model };
-  }
-  const defaultProvider = explicitProvider ?? selected.provider;
-  const raw =
-    explicitProvider && !explicitModel.includes("/")
-      ? `${explicitProvider}/${explicitModel}`
-      : explicitModel;
-  return (
-    resolveModelRefFromString({
-      cfg: params.config,
-      raw,
-      defaultProvider,
-      aliasIndex: buildModelAliasIndex({ cfg: params.config, defaultProvider }),
-    })?.ref ?? { provider: defaultProvider, model: explicitModel }
-  );
 }
 
 type SandboxWorkspaceAuthority = {
@@ -147,12 +85,9 @@ export function resolveSandboxWorkspaceAuthority(params: {
   requiredToolNames?: readonly string[];
   modelProvider?: string;
   modelId?: string;
+  preparedRuntimeStatus: ReturnType<typeof resolveSandboxRuntimeStatus>;
 }): SandboxWorkspaceAuthority {
-  const runtime = resolveSandboxRuntimeStatus({
-    cfg: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
+  const runtime = params.preparedRuntimeStatus;
   const sandbox = resolveSandboxConfigForAgent(params.config, runtime.agentId);
   if (!runtime.sandboxed) {
     return { sandboxed: false, workspaceAccess: sandbox.workspaceAccess };
@@ -161,7 +96,7 @@ export function resolveSandboxWorkspaceAuthority(params: {
   let confinementError: string | undefined;
   if (backend !== "docker" && backend !== "podman") {
     confinementError = "target sandbox backend does not provide local workspace confinement.";
-  } else if (sandbox.scope !== "session") {
+  } else if (runtime.sandboxRequired || sandbox.scope !== "session") {
     confinementError = "target sandbox is not exclusive to this worker session.";
   } else if (
     sandbox.docker.dangerouslyAllowExternalBindSources === true ||
@@ -179,7 +114,7 @@ export function resolveSandboxWorkspaceAuthority(params: {
     const sessionExecHost = normalizeExecTarget(rawSessionExecHost);
     const execHost =
       sessionExecHost ??
-      resolveAgentConfig(params.config, runtime.agentId)?.tools?.exec?.host ??
+      agentConfig?.tools?.exec?.host ??
       params.config.tools?.exec?.host ??
       "auto";
     if (!confinementError && rawSessionExecHost && !sessionExecHost) {
@@ -200,30 +135,56 @@ export function resolveSandboxWorkspaceAuthority(params: {
     ) {
       confinementError = "target sandbox allows access to host-wide sessions.";
     } else if (!confinementError) {
-      const model = resolveWorkspaceAuthorityModel({
-        config: params.config,
-        agentId: runtime.agentId,
-        sessionEntry: params.sessionEntry,
-        modelProvider: params.modelProvider,
-        modelId: params.modelId,
-      });
-      const policies = resolveWorkspaceToolPolicies({
+      const selected = resolveSessionModelRef(params.config, params.sessionEntry, runtime.agentId);
+      const explicitProvider = params.modelProvider?.trim();
+      const explicitModel = params.modelId?.trim();
+      let model = { provider: explicitProvider ?? selected.provider, model: selected.model };
+      if (explicitModel) {
+        const defaultProvider = explicitProvider ?? selected.provider;
+        const raw =
+          explicitProvider && !explicitModel.includes("/")
+            ? `${explicitProvider}/${explicitModel}`
+            : explicitModel;
+        model = resolveModelRefFromString({
+          cfg: params.config,
+          raw,
+          defaultProvider,
+          aliasIndex: buildModelAliasIndex({ cfg: params.config, defaultProvider }),
+        })?.ref ?? { provider: defaultProvider, model: explicitModel };
+      }
+      const effective = resolveEffectiveToolPolicy({
         config: params.config,
         agentId: runtime.agentId,
         sessionKey: params.sessionKey,
         modelProvider: model.provider,
         modelId: model.model,
-        sandboxPolicy: sandbox.tools,
       });
+      const policies = [
+        mergeAlsoAllowPolicy(
+          resolveToolProfilePolicy(effective.profile),
+          effective.profileAlsoAllow,
+        ),
+        mergeAlsoAllowPolicy(
+          resolveToolProfilePolicy(effective.providerProfile),
+          effective.providerProfileAlsoAllow,
+        ),
+        effective.globalPolicy,
+        effective.globalProviderPolicy,
+        effective.agentPolicy,
+        effective.agentProviderPolicy,
+        sandbox.tools,
+        resolveSubagentToolPolicyForSession(params.config, params.sessionKey),
+        resolveInheritedToolPolicyForSession(params.config, params.sessionKey),
+      ];
       const unavailableTool = (params.requiredToolNames ?? [])
-        .map(normalizeToolName)
+        .map(normalizeToolPolicyName)
         .find((name) => !isToolAllowedByPolicies(name, policies));
       if (unavailableTool) {
         confinementError = `target tool policy blocks required tool ${unavailableTool}.`;
       } else {
         const unsafeTool = findUnconfinedAllowedTool(
           policies,
-          new Set((params.confinedToolNames ?? []).map(normalizeToolName)),
+          new Set((params.confinedToolNames ?? []).map(normalizeToolPolicyName)),
         );
         if (unsafeTool) {
           confinementError = `target sandbox allows unclassified tool surface ${unsafeTool}.`;
@@ -233,7 +194,7 @@ export function resolveSandboxWorkspaceAuthority(params: {
   }
   return {
     sandboxed: true,
-    workspaceAccess: sandbox.workspaceAccess,
+    workspaceAccess: runtime.sandboxRequired ? runtime.workspaceAccess : sandbox.workspaceAccess,
     ...(confinementError ? { confinementError } : {}),
   };
 }

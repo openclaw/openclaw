@@ -1,5 +1,3 @@
-// GitHub Copilot data-residency domain resolution.
-//
 // The allowlist and env/config precedence are provider policy. Deprecated SDK
 // facades keep their dated compatibility copy until its removal window closes.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -26,9 +24,24 @@ export function normalizeGithubCopilotDomain(raw: string | undefined | null): st
     : PUBLIC_GITHUB_COPILOT_DOMAIN;
 }
 
+/** Normalize legacy OAuth URL/domain spellings without accepting unsupported tenants. */
+export function normalizeGithubCopilotOAuthScope(raw: string | undefined): string | undefined {
+  // Match credential formatting: absent/empty is public; whitespace-only is invalid.
+  if (!raw) {
+    return PUBLIC_GITHUB_COPILOT_DOMAIN;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const hostname = URL.parse(trimmed.includes("://") ? trimmed : `https://${trimmed}`)?.hostname;
+  return hostname && isSupportedGithubCopilotDomain(hostname)
+    ? normalizeGithubCopilotDomain(hostname)
+    : undefined;
+}
+
 function readConfiguredGithubCopilotDomain(config?: OpenClawConfig): string | undefined {
-  const params = config?.models?.providers?.["github-copilot"]?.params;
-  const value = params && typeof params === "object" ? params.githubDomain : undefined;
+  const value = config?.models?.providers?.["github-copilot"]?.params?.githubDomain;
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
@@ -36,8 +49,7 @@ function readConfiguredGithubCopilotDomain(config?: OpenClawConfig): string | un
  * Resolve the GitHub Copilot host for this provider from (in priority order) the
  * `COPILOT_GITHUB_DOMAIN` env override, the persisted
  * `models.providers.github-copilot.params.githubDomain` config, then public
- * `github.com`. The result always passes through the SDK allowlist
- * (`normalizeGithubCopilotDomain`) so an unsafe value fails closed.
+ * `github.com`. The provider allowlist rejects unsafe values.
  */
 export function resolveGithubCopilotDomain(params?: {
   env?: NodeJS.ProcessEnv;
@@ -53,38 +65,4 @@ export function resolveGithubCopilotDomain(params?: {
     return normalizeGithubCopilotDomain(params.explicit);
   }
   return normalizeGithubCopilotDomain(readConfiguredGithubCopilotDomain(params?.config));
-}
-
-// Shortcut login must persist its token's tenant. A missing domain would route
-// the tenant token back to github.com after the environment override is removed.
-export function withGithubCopilotDomainConfig(cfg: OpenClawConfig, domain: string): OpenClawConfig {
-  const models: NonNullable<OpenClawConfig["models"]> = cfg.models ?? {};
-  const providers: NonNullable<typeof models.providers> = models.providers ?? {};
-  const provider = providers["github-copilot"];
-  const params = provider?.params;
-  const isDefault = domain === PUBLIC_GITHUB_COPILOT_DOMAIN;
-  if (isDefault && !(params && "githubDomain" in params)) {
-    return cfg;
-  }
-  const nextParams: Record<string, unknown> = { ...params };
-  if (isDefault) {
-    delete nextParams.githubDomain;
-  } else {
-    nextParams.githubDomain = domain;
-  }
-  const nextProviders = { ...providers };
-  if (provider) {
-    nextProviders["github-copilot"] = { ...provider, params: nextParams };
-  } else {
-    // Source config accepts partial provider inputs; catalog materialization
-    // supplies baseUrl/models before runtime consumption.
-    Object.assign(nextProviders, { "github-copilot": { params: nextParams } });
-  }
-  return {
-    ...cfg,
-    models: {
-      ...models,
-      providers: nextProviders,
-    },
-  };
 }

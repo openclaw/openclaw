@@ -1,113 +1,158 @@
-// Control UI E2E tests cover approval queue behavior through the Gateway WebSocket.
 import type { Page } from "playwright";
-import { afterEach, expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { expect, it } from "vitest";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI approval flow",
+  trackBrowserContexts: true,
 });
 
-// Browser contexts preserve test isolation; keep one process warm for this file.
-let page: Page | undefined;
-function approval(id: string, command: string, createdAtMs: number) {
+const activeSessionKey = "agent:main:main";
+
+function approval(id: string, command: string, createdAtMs: number, sessionKey = activeSessionKey) {
   return {
     id,
     createdAtMs,
     expiresAtMs: Date.now() + 60_000,
-    request: { command },
+    request: { command, agentId: "main", sessionKey },
   };
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
+function approvalInboxButton(page: Page) {
+  return page.locator("openclaw-sidebar-attention .sidebar-issues-button");
+}
+
+function approvalInboxPanel(page: Page) {
+  return page.locator("openclaw-sidebar-attention #sidebar-issues-panel");
+}
+const inlineApproval = (page: Page, id: string) =>
+  page.locator(`.chat-inline-approval [data-approval-id="${id}"]`);
+async function openChat(options: Parameters<typeof installMockGateway>[1] = {}) {
+  const context = await suite.newBrowserContext({
+    viewport: { height: 800, width: 1200 },
+  });
+  const page = await context.newPage();
+  const gateway = await installMockGateway(page, options);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, activeSessionKey));
+  await gateway.waitForRequest("sessions.list");
+  const request = (...args: Parameters<typeof approval>) =>
+    gateway.emitGatewayEvent("exec.approval.requested", approval(...args));
+  return { page, gateway, request };
 }
 
 suite.define(() => {
-  afterEach(async () => {
-    await page
-      ?.context()
-      .close()
-      .catch(() => {});
-    page = undefined;
-  });
-
-  it("keeps a resolve failure scoped to its approval when a newer one arrives", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
-    const currentPage = await context.newPage();
-    page = currentPage;
-    const gateway = await installMockGateway(currentPage);
-
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
-    await gateway.waitForRequest("sessions.list");
-    await gateway.deferNext("exec.approval.resolve");
-    await gateway.emitGatewayEvent(
-      "exec.approval.requested",
-      approval("approval-active", "echo active", 1_000),
-    );
-    await currentPage.getByText("echo active", { exact: true }).waitFor();
-    await currentPage.getByRole("button", { name: "Allow once" }).click();
-
-    await gateway.emitGatewayEvent(
-      "exec.approval.requested",
-      approval("approval-newer", "echo newer", 2_000),
-    );
-    await currentPage.getByText("echo newer", { exact: true }).waitFor();
-    await gateway.rejectDeferred("exec.approval.resolve", {
-      code: "UNAVAILABLE",
-      message: "gateway unavailable",
+  it("keeps approvals passive through detail review and queued decisions", async () => {
+    const currentSession = {
+      key: activeSessionKey,
+      label: "Main",
+      kind: "direct",
+      updatedAt: 1_000,
+    };
+    const sourceSession = {
+      key: "agent:main:other",
+      label: "Review navigation",
+      kind: "direct",
+      updatedAt: 2_000,
+      worktree: { id: "review", branch: "review/navigation", repoRoot: "/projects/atlas" },
+      spawnedCwd: "/projects/atlas-review",
+    };
+    const sessions = [currentSession, sourceSession];
+    const { page, gateway, request } = await openChat({ sessionKey: activeSessionKey, sessions });
+    const initial = approval("approval-inline", "echo inline", 1_000);
+    await gateway.emitGatewayEvent("exec.approval.requested", {
+      ...initial,
+      request: { ...initial.request, host: "sandbox", resolvedPath: "/usr/bin/echo" },
     });
 
-    await expect
-      .poll(() =>
-        currentPage
-          .locator('[data-approval-id="approval-active"] .exec-approval-error')
-          .textContent(),
-      )
-      .toBe("Approval failed: gateway unavailable");
+    await inlineApproval(page, "approval-inline").waitFor();
+    expect(
+      await inlineApproval(page, "approval-inline")
+        .locator(".exec-approval-prompt .exec-approval-host")
+        .count(),
+    ).toBe(0);
+    expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+    await inlineApproval(page, initial.id)
+      .getByRole("button", { name: "Request details", exact: true })
+      .click();
+    const details = page.getByRole("dialog", { name: "Request details", exact: true });
+    await details.getByText("/usr/bin/echo", { exact: true }).waitFor();
+    expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
+    await page.keyboard.press("Escape");
+    await details.waitFor({ state: "hidden" });
 
-    await currentPage.getByText("echo newer", { exact: true }).click();
+    await request("approval-other", "echo other", 2_000, "agent:main:other");
+
+    await approvalInboxButton(page).waitFor();
+    expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+    expect(await page.getByText("echo other", { exact: true }).count()).toBe(0);
+
+    await approvalInboxButton(page).click();
+    const inboxPanel = approvalInboxPanel(page);
+    await inboxPanel.locator('[data-approval-id="approval-inline"]').waitFor();
+    await inboxPanel.locator('[data-approval-id="approval-other"]').waitFor();
+    await expect.poll(() => inboxPanel.locator("[data-approval-id]").count()).toBe(2);
+    await inboxPanel.getByRole("tab", { name: "Approvals 2" }).waitFor();
+    await page.keyboard.press("Escape");
+    await inlineApproval(page, "approval-inline")
+      .getByRole("button", { name: "1 more pending" })
+      .click();
+    const modal = page.locator("openclaw-exec-approval .exec-approval-card");
+    await modal.locator(".exec-approval-list__item", { hasText: "echo other" }).click();
+    await expect.poll(() => modal.getAttribute("data-approval-id")).toBe("approval-other");
+    expect(await modal.locator(".exec-approval-title").textContent()).toContain(
+      "Review navigation",
+    );
+    const renamed = { ...sourceSession, label: "Review navigation updated", updatedAt: Date.now() };
+    await gateway.setSessionsListResponse(chatSessionListResponse([currentSession, renamed]));
+    await gateway.emitGatewayEvent("sessions.changed", { agentId: "main", reason: "update" });
     await expect
-      .poll(() => currentPage.locator(".exec-approval-card").getAttribute("data-approval-id"))
-      .toBe("approval-newer");
-    await expect.poll(() => currentPage.locator(".exec-approval-error").count()).toBe(0);
+      .poll(() => modal.locator(".exec-approval-title").textContent(), { timeout: 15_000 })
+      .toContain("Review navigation updated");
+    await page.keyboard.press("Escape");
+    await page.locator("openclaw-modal-dialog").waitFor({ state: "hidden" });
+    await inlineApproval(page, "approval-inline")
+      .getByRole("button", { name: "1 more pending" })
+      .click();
     await expect
-      .poll(() => currentPage.getByRole("button", { name: "Deny" }).isEnabled())
-      .toBe(true);
+      .poll(() => modal.locator(".exec-approval-title").textContent())
+      .toContain("Review navigation updated");
+    expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
+    await gateway.deferNext("exec.approval.resolve", { id: "approval-other" });
+    const allow = modal.getByRole("button", { name: "Allow once", exact: true });
+    await allow.click();
+    const decision = await gateway.waitForRequest("exec.approval.resolve");
+    expect(decision.params).toEqual({ id: "approval-other", decision: "allow-once" });
+    await expect.poll(() => allow.isDisabled()).toBe(true);
+    await gateway.resolveDeferred("exec.approval.resolve");
+    await expect.poll(() => modal.getAttribute("data-approval-id")).toBe("approval-inline");
+    await expect.poll(() => modal.getByRole("button", { name: /echo other/ }).count()).toBe(0);
+    expect(await modal.locator(".exec-approval-source").count()).toBe(0);
   });
 
-  it("sends a typed approval command immediately while the active run waits", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
-    const currentPage = await context.newPage();
-    page = currentPage;
-    const gateway = await installMockGateway(currentPage);
+  it("keeps no-auth Inbox approvals readable while blocking decisions", async () => {
+    const { page, request } = await openChat({
+      omitConnectHelloAuth: true,
+      sessionKey: activeSessionKey,
+    });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
-    await gateway.waitForRequest("sessions.list");
+    await request("approval-review-only", "echo review only", 1_000);
+    const card = inlineApproval(page, "approval-review-only");
+    await card.getByText("View only", { exact: true }).waitFor();
+    expect(await card.locator(".exec-approval-actions button").count()).toBe(0);
 
-    const composer = currentPage.locator(".agent-chat__composer-combobox textarea");
-    await composer.fill("run a command that needs approval");
-    await currentPage.getByRole("button", { name: "Send message" }).click();
-    const firstSend = requireRecord((await gateway.waitForRequest("chat.send")).params);
-    expect(firstSend.message).toBe("run a command that needs approval");
-    await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
-
-    await composer.fill("/approve approval-123 allow-once");
-    await currentPage.getByRole("button", { name: "Send message" }).click();
-
+    await approvalInboxButton(page).click();
+    const inboxPanel = approvalInboxPanel(page);
+    const inboxRow = inboxPanel.locator('[data-approval-id="approval-review-only"]');
     await expect
-      .poll(async () => (await gateway.getRequests("chat.send")).length, { timeout: 10_000 })
-      .toBe(2);
-    const sends = await gateway.getRequests("chat.send");
-    const approvalSend = requireRecord(sends[1]?.params);
-    expect(approvalSend.message).toBe("/approve approval-123 allow-once");
-    expect(approvalSend.deliver).toBe(false);
-    expect(typeof approvalSend.idempotencyKey).toBe("string");
-    expect(await currentPage.locator(".chat-queue").count()).toBe(0);
-    expect(await composer.inputValue()).toBe("");
-    expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(1);
+      .poll(() => inboxRow.locator(".sidebar-approval-row__command").textContent())
+      .toContain("echo review only");
+    await inboxRow.getByText("You need approval access to approve.", { exact: true }).waitFor();
+    expect(
+      await inboxRow
+        .locator(".sidebar-approval-row__actions button")
+        .evaluateAll((items) => items.map((button) => (button as HTMLButtonElement).disabled)),
+    ).toEqual([true, true, true]);
   });
 });

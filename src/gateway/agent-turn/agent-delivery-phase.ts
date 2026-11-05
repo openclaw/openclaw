@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -10,30 +9,29 @@ import {
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import {
+  getRpcSourceIdentity,
+  isRpcSourceActive,
+  listRpcSourceEntries,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
+import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
+import { errorShapeFromError } from "../error-shape.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
-import { formatForLog } from "../ws-log.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import { captureRpcSourceScopeMatcher } from "../session-runtime-scope.js";
 import type { AgentTurnContext, AgentTurnPrincipal } from "./types.js";
 
-type DeliveryPlan = Awaited<ReturnType<typeof resolveAgentDeliveryPlanWithSessionRoute>>;
-
-export type AgentDeliveryPhaseResult = {
-  activeSessionAgentId: string;
-  deliveryPlan: DeliveryPlan;
-  resolvedChannel: DeliveryPlan["resolvedChannel"];
-  deliveryTargetMode: DeliveryPlan["deliveryTargetMode"];
-  resolvedAccountId: DeliveryPlan["resolvedAccountId"];
-  resolvedTo: DeliveryPlan["resolvedTo"];
-  originMessageChannel: string;
-  deliver: boolean;
-  explicitThreadId?: string;
-};
+export type AgentDeliveryPhaseResult = NonNullable<
+  Awaited<ReturnType<typeof resolveAgentDeliveryPhase>>
+>;
 
 export async function resolveAgentDeliveryPhase(params: {
   request: AgentRunRequest;
@@ -42,6 +40,7 @@ export async function resolveAgentDeliveryPhase(params: {
   sessionEntry?: SessionEntry;
   resolvedSessionKey?: string;
   resolvedSessionAgentId?: string;
+  storePath?: string;
   agentId?: string;
   replyTo: string;
   to: string;
@@ -55,38 +54,92 @@ export async function resolveAgentDeliveryPhase(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
   onRunObserved?: (runId: string) => void;
-}): Promise<AgentDeliveryPhaseResult | undefined> {
-  const activeSessionAgentId =
-    params.resolvedSessionKey === "global" && params.resolvedSessionAgentId
-      ? params.resolvedSessionAgentId
-      : params.resolvedSessionKey
-        ? resolveAgentIdFromSessionKey(params.resolvedSessionKey)
-        : (params.agentId ?? resolveDefaultAgentId(params.cfgForAgent ?? params.cfg));
+}) {
+  const isIncognito =
+    params.sessionEntry?.incognito === true || isIncognitoSessionKey(params.resolvedSessionKey);
+  const respond: typeof params.respond = (ok, payload, error) => {
+    if (isIncognito && error) {
+      // The caller retains the failure; response diagnostics must not retain its content.
+      params.respond(ok, payload, error, { errorMessage: "Incognito agent error." });
+      return;
+    }
+    params.respond(ok, payload, error);
+  };
+  const activeSessionAgentId = params.resolvedSessionAgentId
+    ? params.resolvedSessionAgentId
+    : params.resolvedSessionKey
+      ? resolveAgentIdFromSessionKey(params.resolvedSessionKey, params.agentId)
+      : params.agentId;
+  if (!activeSessionAgentId) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "agent selection is required for this session"),
+    );
+    return undefined;
+  }
 
   if (params.onRunObserved) {
     params.onRunObserved(params.runId);
-    for (const [activeRunId, active] of params.context.chatAbortControllers) {
-      const sameSession = active.sessionKey === params.resolvedSessionKey;
-      const sameSelectedGlobalAgent =
-        params.resolvedSessionKey === "global" ? active.agentId === activeSessionAgentId : true;
-      if (activeRunId !== params.runId && sameSession && sameSelectedGlobalAgent) {
+    const compatibilityOwnerAgentId = params.resolvedSessionKey
+      ? tryResolveSessionCompatibilityOwnerAgentId(
+          params.cfgForAgent ?? params.cfg,
+          params.resolvedSessionKey,
+        )
+      : undefined;
+    const matchesScope = params.storePath
+      ? captureRpcSourceScopeMatcher({
+          storePath: params.storePath,
+          resolveGatewayContext: params.context.resolveGatewayContext,
+        })
+      : undefined;
+    for (const [activeRunId, active] of listRpcSourceEntries()) {
+      const identity = getRpcSourceIdentity(active);
+      const sameSession = identity.sessionKey === params.resolvedSessionKey;
+      const activeOwner = resolveChatRunOwnerAgentId({
+        agentId: identity.agentId,
+        sessionKey: identity.sessionKey,
+        defaultAgentId: compatibilityOwnerAgentId,
+      });
+      if (
+        activeRunId !== params.runId &&
+        sameSession &&
+        activeOwner === activeSessionAgentId &&
+        matchesScope?.(active) &&
+        isRpcSourceActive(active)
+      ) {
         params.onRunObserved(activeRunId);
       }
     }
   }
 
-  const wantsDelivery = params.request.deliver === true;
-  const explicitThreadId = normalizeOptionalString(params.recipientThreadId);
-  const turnSourceChannel = normalizeOptionalString(params.recipientChannel);
+  const turnSourceChannel = normalizeMessageChannel(params.recipientChannel);
+  const webchatClient = params.client?.connect && params.isWebchatConnect(params.client.connect);
+  const requestedChannel = normalizeMessageChannel(
+    params.request.replyChannel ?? turnSourceChannel,
+  );
+  // WebChat owns its reply; saved external routes are only a fallback for unbound callers.
+  const sessionOnly =
+    requestedChannel === INTERNAL_MESSAGE_CHANNEL ||
+    (webchatClient &&
+      (!requestedChannel || requestedChannel === "last") &&
+      !params.replyTo &&
+      !params.to);
+  const wantsDelivery = params.request.deliver === true && !sessionOnly;
+  const explicitThreadId = sessionOnly
+    ? undefined
+    : normalizeOptionalString(params.recipientThreadId);
   const deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
     cfg: params.cfgForAgent ?? params.cfg,
     agentId: activeSessionAgentId,
     currentSessionKey: params.resolvedSessionKey,
-    sessionEntry: params.sessionEntry,
-    requestedChannel: params.request.replyChannel ?? params.recipientChannel,
-    explicitTo: params.replyTo || params.to || undefined,
+    sessionEntry: sessionOnly ? undefined : params.sessionEntry,
+    requestedChannel: sessionOnly ? INTERNAL_MESSAGE_CHANNEL : requestedChannel,
+    explicitTo: sessionOnly ? undefined : params.replyTo || params.to || undefined,
     explicitThreadId,
-    accountId: params.request.replyAccountId ?? params.recipientAccountId,
+    accountId: sessionOnly
+      ? undefined
+      : (params.request.replyAccountId ?? params.recipientAccountId),
     wantsDelivery,
     turnSourceChannel,
     turnSourceTo: params.to || undefined,
@@ -99,7 +152,7 @@ export async function resolveAgentDeliveryPhase(params: {
   const resolvedAccountId = deliveryPlan.resolvedAccountId;
   let resolvedTo = deliveryPlan.resolvedTo;
   let effectivePlan = deliveryPlan;
-  let deliveryDowngradeReason: string | null = null;
+  let deliveryResolutionError: string | null = null;
   let deliveryTargetResolutionError: Error | undefined = deliveryPlan.targetResolutionError;
 
   if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
@@ -124,32 +177,24 @@ export async function resolveAgentDeliveryPhase(params: {
           resolvedChannel,
         })
       ) {
-        params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+        respond(false, undefined, errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
         return undefined;
       }
-      deliveryDowngradeReason = String(err);
+      deliveryResolutionError = String(err);
     }
   }
 
-  if (wantsDelivery && deliveryTargetResolutionError) {
-    if (!params.bestEffortDeliver) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, String(deliveryTargetResolutionError)),
-      );
-      return undefined;
-    }
-    deliveryDowngradeReason = String(deliveryTargetResolutionError);
-    resolvedChannel = INTERNAL_MESSAGE_CHANNEL;
-    deliveryTargetMode = undefined;
-    resolvedTo = undefined;
-    const { plugin: _plugin, ...pluginFreePlan } = deliveryPlan;
-    effectivePlan = { ...pluginFreePlan, resolvedChannel, resolvedTo, deliveryTargetMode };
+  if (wantsDelivery && deliveryTargetResolutionError && !params.bestEffortDeliver) {
+    respond(
+      false,
+      undefined,
+      errorShapeFromError(ErrorCodes.INVALID_REQUEST, deliveryTargetResolutionError),
+    );
+    return undefined;
   }
 
   if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
-    const fallback = resolveAgentOutboundTarget({
+    const fallback = await resolveAgentOutboundTarget({
       cfg: params.cfgForAgent ?? params.cfg,
       plan: effectivePlan,
       targetMode: deliveryTargetMode ?? "implicit",
@@ -162,58 +207,38 @@ export async function resolveAgentDeliveryPhase(params: {
     }
   }
 
-  if (wantsDelivery && isDeliverableMessageChannel(resolvedChannel) && !resolvedTo) {
+  const missingTarget = isDeliverableMessageChannel(resolvedChannel) && !resolvedTo;
+  if (wantsDelivery && (missingTarget || resolvedChannel === INTERNAL_MESSAGE_CHANNEL)) {
     if (!params.bestEffortDeliver) {
-      params.respond(
+      respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          deliveryTargetResolutionError
-            ? String(deliveryTargetResolutionError)
-            : `delivery target is required for ${resolvedChannel}: pass --to/--reply-to or configure a default target`,
-        ),
+        missingTarget && deliveryTargetResolutionError
+          ? errorShapeFromError(ErrorCodes.INVALID_REQUEST, deliveryTargetResolutionError)
+          : errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              missingTarget
+                ? `delivery target is required for ${resolvedChannel}: pass --to/--reply-to or configure a default target`
+                : "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
+            ),
       );
       return undefined;
     }
     params.context.logGateway.info(
-      deliveryTargetResolutionError
-        ? `agent delivery target missing (bestEffortDeliver): ${String(deliveryTargetResolutionError)}`
-        : "agent delivery target missing (bestEffortDeliver): no deliverable target",
+      missingTarget
+        ? deliveryTargetResolutionError && !isIncognito
+          ? `agent delivery target missing (bestEffortDeliver): ${String(deliveryTargetResolutionError)}`
+          : "agent delivery target missing (bestEffortDeliver): no deliverable target"
+        : deliveryResolutionError && !isIncognito
+          ? `agent delivery unresolved (bestEffortDeliver); final delivery will report: ${deliveryResolutionError}`
+          : "agent delivery unresolved (bestEffortDeliver); final delivery will report: no deliverable channel",
     );
   }
 
-  if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
-    if (
-      !shouldDowngradeDeliveryToSessionOnly({
-        wantsDelivery,
-        bestEffortDeliver: params.bestEffortDeliver,
-        resolvedChannel,
-      })
-    ) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
-        ),
-      );
-      return undefined;
-    }
-    params.context.logGateway.info(
-      deliveryDowngradeReason
-        ? `agent delivery downgraded to session-only (bestEffortDeliver): ${deliveryDowngradeReason}`
-        : "agent delivery downgraded to session-only (bestEffortDeliver): no deliverable channel",
-    );
-  }
-
-  const normalizedTurnSource = normalizeMessageChannel(turnSourceChannel);
   const turnSourceMessageChannel =
-    normalizedTurnSource &&
-    (isGatewayMessageChannel(normalizedTurnSource) ||
-      isInternalNonDeliveryChannel(normalizedTurnSource))
-      ? normalizedTurnSource
+    turnSourceChannel &&
+    (isGatewayMessageChannel(turnSourceChannel) || isInternalNonDeliveryChannel(turnSourceChannel))
+      ? turnSourceChannel
       : undefined;
   return {
     activeSessionAgentId,
@@ -224,10 +249,14 @@ export async function resolveAgentDeliveryPhase(params: {
     resolvedTo,
     originMessageChannel:
       turnSourceMessageChannel ??
-      (params.client?.connect && params.isWebchatConnect(params.client.connect)
+      (webchatClient
         ? INTERNAL_MESSAGE_CHANNEL
-        : resolvedChannel),
-    deliver: wantsDelivery && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL,
+        : resolvedChannel !== INTERNAL_MESSAGE_CHANNEL ||
+            deliveryPlan.baseDelivery.channel ||
+            normalizeMessageChannel(params.request.replyChannel) === INTERNAL_MESSAGE_CHANNEL
+          ? resolvedChannel
+          : undefined),
+    deliver: wantsDelivery,
     explicitThreadId,
   };
 }

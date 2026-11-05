@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
-// Checks core web-fetch surfaces for provider-owned Firecrawl coupling.
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
+import { mapSourceFileContents } from "./lib/source-file-scan-cache.mts";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const scanExtensions = new Set([".ts", ".js", ".mjs", ".cjs"]);
@@ -17,7 +16,6 @@ const ignoredDirNames = new Set([
   "node_modules",
 ]);
 const allowedFiles = new Set([
-  "src/agents/tools/web-fetch.test-harness.ts",
   "src/config/legacy-web-fetch.ts",
   "src/config/zod-schema.agent-runtime.ts",
   "src/secrets/target-registry-data.ts",
@@ -31,102 +29,50 @@ const suspiciousPatterns = [
   /id:\s*"firecrawl"/,
 ];
 
-type ScriptIo = {
-  stdout: { write(chunk: string): unknown };
-  stderr: { write(chunk: string): unknown };
-};
-
-async function scanWebFetchProviderBoundaryViolations() {
-  const violations = [];
-  const files = await collectSourceFileContents({
-    repoRoot,
-    scanRoots: ["src"],
-    scanExtensions,
-    ignoredDirNames,
-  });
-  for (const { relativeFile, content } of files) {
-    if (
-      allowedFiles.has(relativeFile) ||
-      relativeFile.includes(".test.") ||
-      relativeFile.includes("test-support")
-    ) {
-      continue;
-    }
-    const lines = content.split(/\r?\n/);
-    for (const [index, line] of lines.entries()) {
-      if (!line.includes("firecrawl") && !line.includes("Firecrawl")) {
-        continue;
+async function main() {
+  const perFileViolations = await mapSourceFileContents(
+    {
+      repoRoot,
+      scanRoots: ["src"],
+      scanExtensions,
+      ignoredDirNames,
+    },
+    ({ relativeFile, content }) => {
+      if (
+        allowedFiles.has(relativeFile) ||
+        relativeFile.includes(".test.") ||
+        relativeFile.includes("test-support")
+      ) {
+        return [];
       }
-      if (!suspiciousPatterns.some((pattern) => pattern.test(line))) {
-        continue;
+      const violations = [];
+      const lines = content.split(/\r?\n/);
+      for (const [index, line] of lines.entries()) {
+        if (!line.includes("firecrawl") && !line.includes("Firecrawl")) {
+          continue;
+        }
+        if (!suspiciousPatterns.some((pattern) => pattern.test(line))) {
+          continue;
+        }
+        violations.push({
+          file: relativeFile,
+          line: index + 1,
+          reason: "core web-fetch runtime/tooling contains Firecrawl-specific fetch logic",
+        });
       }
-      violations.push({
-        file: relativeFile,
-        line: index + 1,
-        reason: "core web-fetch runtime/tooling contains Firecrawl-specific fetch logic",
-      });
-    }
-  }
-  return violations.toSorted(
-    (left, right) => left.file.localeCompare(right.file) || left.line - right.line,
+      return violations;
+    },
   );
+  const violations = perFileViolations.flat();
+  for (const violation of violations.toSorted(
+    (left, right) => left.file.localeCompare(right.file) || left.line - right.line,
+  )) {
+    process.stderr.write(`${violation.file}:${violation.line} ${violation.reason}\n`);
+  }
+  if (violations.length > 0) {
+    process.exit(1);
+  }
+  return 0;
 }
 
-let webFetchProviderViolationsPromise:
-  | ReturnType<typeof scanWebFetchProviderBoundaryViolations>
-  | undefined;
-
-/**
- * Collects web-fetch provider boundary violations in core source files.
- */
-async function collectWebFetchProviderBoundaryViolations() {
-  if (!webFetchProviderViolationsPromise) {
-    webFetchProviderViolationsPromise = scanWebFetchProviderBoundaryViolations();
-    try {
-      return await webFetchProviderViolationsPromise;
-    } catch (error) {
-      webFetchProviderViolationsPromise = undefined;
-      throw error;
-    }
-  }
-  return await webFetchProviderViolationsPromise;
-}
-
-/**
- * Runs the web-fetch provider boundary check.
- */
-export async function main(argv?: string[], io?: ScriptIo) {
-  const args = argv ?? process.argv.slice(2);
-  const json = args.includes("--json");
-  const violations = await collectWebFetchProviderBoundaryViolations();
-  const writeStdout = (chunk: string) => {
-    if (io?.stdout?.write) {
-      io.stdout.write(chunk);
-      return;
-    }
-    process.stdout.write(chunk);
-  };
-  const writeStderr = (chunk: string) => {
-    if (io?.stderr?.write) {
-      io.stderr.write(chunk);
-      return;
-    }
-    process.stderr.write(chunk);
-  };
-  if (json) {
-    writeStdout(`${JSON.stringify(violations, null, 2)}\n`);
-  } else if (violations.length > 0) {
-    for (const violation of violations) {
-      writeStderr(`${violation.file}:${violation.line} ${violation.reason}\n`);
-    }
-  }
-  return violations.length === 0 ? 0 : 1;
-}
-
-runAsScript(import.meta.url, async (argv?: string[], io?: ScriptIo) => {
-  const exitCode = await main(argv, io);
-  if (!io && exitCode !== 0) {
-    process.exit(exitCode);
-  }
-  return exitCode;
-});
+runAsScript(import.meta.url, main);

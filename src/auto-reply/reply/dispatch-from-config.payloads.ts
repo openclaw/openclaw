@@ -1,27 +1,28 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
+import type { PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   type ReplyPayload,
 } from "../reply-payload.js";
-import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import { prepareReplyPayloadForDispatcher } from "./reply-dispatcher.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 
-export const NO_VISIBLE_REPLY_FALLBACK_TEXT =
-  "No reply was generated for this message. This is usually a temporary model failure - please try again.";
-
 export const QUEUE_CAP_REJECTION_TEXT =
   "This message was not queued because the session queue is full. Please try again after the current response finishes.";
+
+export const COLLABORATIVE_STEERING_DISABLED_TEXT =
+  "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.";
 
 type SourceReplySuppressionState = {
   ctx: { InboundEventKind?: InboundEventKind };
@@ -42,17 +43,12 @@ export function shouldDeliverDespiteSourceReplySuppression(
   );
 }
 
-export function readAskUserQuestionId(payload: ReplyPayload): string | undefined {
-  const askUser = payload.channelData?.askUser;
-  if (!isRecord(askUser)) {
-    return undefined;
-  }
-  const questionId = askUser.questionId;
-  return typeof questionId === "string" ? questionId : undefined;
-}
-
 export function hasExecApprovalPayload(payload: ReplyPayload): boolean {
   return isRecord(payload.channelData?.execApproval);
+}
+
+export function hasExecApprovalUnavailablePayload(payload: ReplyPayload): boolean {
+  return isRecord(payload.channelData?.execApprovalUnavailable);
 }
 
 export function hasAskUserPayload(payload: ReplyPayload): boolean {
@@ -63,6 +59,7 @@ export function requiresDurableToolResultDelivery(payload: ReplyPayload): boolea
   return (
     resolveSendableOutboundReplyParts(payload).hasMedia ||
     hasExecApprovalPayload(payload) ||
+    hasExecApprovalUnavailablePayload(payload) ||
     hasAskUserPayload(payload)
   );
 }
@@ -85,6 +82,8 @@ export function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): stri
       replyToTag: payload.replyToTag,
       replyToCurrent: payload.replyToCurrent,
       audioAsVoice: payload.audioAsVoice,
+      videoAsNote: payload.videoAsNote === true,
+      location: payload.location,
       spokenText: payload.spokenText,
       ttsSupplement: payload.ttsSupplement,
       isError: payload.isError,
@@ -107,45 +106,23 @@ export function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): stri
   });
 }
 
-export function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
-  const metadata = getReplyPayloadMetadata(reply);
-  const text = normalizeOptionalString(reply.text);
-  const textPreview = text ? truncateUtf16Safe(text.replace(/\s+/g, " "), 160) : undefined;
-  const sendableParts = resolveSendableOutboundReplyParts(reply);
-  const richParts = [
-    reply.presentation ? "presentation" : undefined,
-    reply.interactive ? "interactive" : undefined,
-    reply.channelData ? "channelData" : undefined,
-  ].filter(Boolean);
-  return [
-    `textChars=${text?.length ?? 0}`,
-    `media=${sendableParts.mediaCount}`,
-    `rich=${richParts.length ? richParts.join("|") : "none"}`,
-    `error=${reply.isError === true}`,
-    `beforeAgentRunBlocked=${metadata?.beforeAgentRunBlocked === true}`,
-    `deliverDespiteSuppression=${metadata?.deliverDespiteSourceReplySuppression === true}`,
-    textPreview ? `textPreview=${JSON.stringify(textPreview)}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
-
-async function maybeApplyTtsToReplyPayload(
+export async function maybeApplyTtsToReplyPayload(
   params: Parameters<
     Awaited<ReturnType<typeof ttsRuntimeLoader.load>>["maybeApplyTtsToPayload"]
-  >[0],
+  >[0] & { preparedTtsPreferences: PreparedTtsPreferences },
 ) {
   if (isReplyPayloadStatusNotice(params.payload)) {
     return params.payload;
   }
   if (
-    !shouldAttemptTtsPayload({
+    !(await shouldAttemptTtsPayload({
       cfg: params.cfg,
+      preparedTtsPreferences: params.preparedTtsPreferences,
       ttsAuto: params.ttsAuto,
       agentId: params.agentId,
       channelId: params.channel,
       accountId: params.accountId,
-    })
+    }))
   ) {
     return params.payload;
   }
@@ -156,27 +133,29 @@ async function maybeApplyTtsToReplyPayload(
     : copyReplyPayloadMetadata(params.payload, ttsPayload);
 }
 
-export function createFinalizationAwareTtsPayloadApplier(params: {
-  getReplyOperation: () => ReplyOperation | undefined;
-  hasInboundAudio: () => boolean;
-}) {
-  return async (
-    ttsParams: Omit<Parameters<typeof maybeApplyTtsToReplyPayload>[0], "inboundAudio">,
-  ) => {
-    const replyOperation = params.getReplyOperation();
-    // Provider fallbacks can outlive the default lease, but remain bounded by
-    // the same hard no-progress ceiling used for stale run takeover.
-    const finishFinalizationWork = replyOperation
-      ? beginReplyOperationFinalizationWork(replyOperation, RUN_STALE_TAKEOVER_MS)
-      : undefined;
-    try {
-      return await maybeApplyTtsToReplyPayload({
-        ...ttsParams,
-        inboundAudio: params.hasInboundAudio(),
-      });
-    } finally {
-      finishFinalizationWork?.();
-      replyOperation?.recordActivity();
+/** Applies dispatcher normalization before TTS or transcript-visible side effects. */
+export function prepareReplyPayloadForSideEffects(
+  dispatcher: ReplyDispatcher,
+  kind: ReplyDispatchKind,
+  payload: ReplyPayload | null | undefined,
+  state: { acceptedReplyPayload: boolean; channelTransformSuppressed: boolean },
+  onVisibleAccepted?: () => void,
+): ReplyPayload | null {
+  if (!payload) {
+    return null;
+  }
+  const outcome = prepareReplyPayloadForDispatcher(dispatcher, kind, payload);
+  if (outcome.kind === "deliver") {
+    state.acceptedReplyPayload = true;
+    if (
+      outcome.payload.isReasoning !== true &&
+      outcome.payload.isCommentary !== true &&
+      hasOutboundReplyContent(outcome.payload, { trimText: true })
+    ) {
+      onVisibleAccepted?.();
     }
-  };
+    return outcome.payload;
+  }
+  state.channelTransformSuppressed ||= outcome.reason === "channel_transform";
+  return null;
 }

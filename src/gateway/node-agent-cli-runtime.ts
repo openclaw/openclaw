@@ -1,18 +1,28 @@
 /** In-process Gateway seam for streaming a Claude CLI turn from a paired node. */
 import { randomUUID } from "node:crypto";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
-import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
+import {
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  NODE_CLAUDE_NATIVE_AUTH_CAPABILITY,
+} from "../infra/node-commands.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  invokeNodeClaudeSkillRuntime,
+  type NodeClaudeSkillRuntime,
+} from "./node-claude-skill-runtime.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeInvokeResult } from "./node-registry.js";
-import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 
 export async function invokeNodeClaudeCliRun(params: {
+  assertCurrent?: () => void;
+  assertReadable?: () => void | Promise<void>;
   nodeId: string;
   argv: string[];
   stdin: string;
   cwd?: string;
   env?: Record<string, string>;
   clearEnv?: string[];
+  nativeAuthOnly?: true;
   systemPrompt?: string;
   agentId?: string;
   sessionKey?: string;
@@ -22,8 +32,9 @@ export async function invokeNodeClaudeCliRun(params: {
   idleTimeoutMs: number;
   onProgress: (chunk: string) => void;
   signal?: AbortSignal;
+  skillRuntime?: NodeClaudeSkillRuntime;
 }): Promise<NodeInvokeResult> {
-  const context = getFallbackGatewayContext();
+  const context = getPluginRuntimeGatewayRequestScope()?.context;
   if (!context) {
     return {
       ok: false,
@@ -58,7 +69,9 @@ export async function invokeNodeClaudeCliRun(params: {
       },
     };
   }
-  return await context.nodeRegistry.invoke({
+  params.skillRuntime?.assertCurrent();
+  const assertReadable = params.assertReadable;
+  const invocation: Parameters<typeof context.nodeRegistry.invoke>[0] = {
     nodeId: params.nodeId,
     expectedConnId: node.connId,
     ...(node.pairingGeneration ? { expectedPairingGeneration: node.pairingGeneration } : {}),
@@ -69,6 +82,10 @@ export async function invokeNodeClaudeCliRun(params: {
       ...(params.cwd ? { cwd: params.cwd } : {}),
       ...(params.env ? { env: params.env } : {}),
       ...(params.clearEnv ? { clearEnv: params.clearEnv } : {}),
+      // Older, independently updated nodes reject unknown invocation fields.
+      ...(params.nativeAuthOnly && node.caps.includes(NODE_CLAUDE_NATIVE_AUTH_CAPABILITY)
+        ? { nativeAuthOnly: true }
+        : {}),
       ...(params.systemPrompt !== undefined ? { systemPrompt: params.systemPrompt } : {}),
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
@@ -76,11 +93,31 @@ export async function invokeNodeClaudeCliRun(params: {
       ...(params.systemRunPlan ? { systemRunPlan: params.systemRunPlan } : {}),
       idleTimeoutMs: params.idleTimeoutMs,
       timeoutMs: params.timeoutMs,
+      ...(params.skillRuntime ? { skillRuntime: true } : {}),
     },
     timeoutMs: params.timeoutMs,
     idleTimeoutMs: params.idleTimeoutMs,
     idempotencyKey: randomUUID(),
     onProgress: params.onProgress,
     ...(params.signal ? { signal: params.signal } : {}),
-  });
+    authorizeDispatch: assertReadable
+      ? async () => {
+          await assertReadable();
+          params.assertCurrent?.();
+          return true;
+        }
+      : undefined,
+    isDispatchAuthorized: () => {
+      params.assertCurrent?.();
+      return true;
+    },
+  };
+  return params.skillRuntime
+    ? await invokeNodeClaudeSkillRuntime({
+        registry: context.nodeRegistry,
+        invocation,
+        runtime: params.skillRuntime,
+        onProgress: params.onProgress,
+      })
+    : await context.nodeRegistry.invoke(invocation);
 }

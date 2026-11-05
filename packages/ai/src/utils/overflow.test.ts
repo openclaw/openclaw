@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../types.js";
-import { isConfiguredContextSizeOverflowError, isContextOverflow } from "./overflow.js";
+import { createZeroUsage } from "../usage.test-support.js";
+import { isContextOverflow, matchesContextOverflowMessage } from "./overflow.js";
+
+type ContextUsage = AssistantMessage["usage"]["contextUsage"];
 
 function errorMessage(message: string): AssistantMessage {
   return {
@@ -9,93 +12,77 @@ function errorMessage(message: string): AssistantMessage {
     api: "test-api",
     provider: "test-provider",
     model: "test-model",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "error",
     errorMessage: message,
     timestamp: 1,
   };
 }
 
-function successfulMessage(
-  contextUsage?: AssistantMessage["usage"]["contextUsage"],
-): AssistantMessage {
+function successfulMessage(contextUsage?: ContextUsage): AssistantMessage {
   return {
     ...errorMessage(""),
     usage: {
+      ...createZeroUsage(),
       input: 12,
       output: 15_104,
       cacheRead: 1_100_000,
       cacheWrite: 93_130,
       ...(contextUsage ? { contextUsage } : {}),
       totalTokens: 1_208_246,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop",
     errorMessage: undefined,
   };
 }
 
-describe("configured context size overflow", () => {
-  it.each([
-    "400 Prompt has 256468 tokens, but the configured context size is 256000 tokens",
-    "Prompt has 5,958,968 tokens, but the configured context size is 256,000 tokens",
-  ])("detects %s", (text) => {
-    expect(isConfiguredContextSizeOverflowError(text)).toBe(true);
-    expect(isContextOverflow(errorMessage(text), 256_000)).toBe(true);
-  });
-});
-
 describe("provider overflow messages", () => {
   it.each([
-    "Error: 400 Input length (265330) exceeds model's maximum context length (262144).",
-    "Provider returned error: Input length 131393 exceeds the maximum allowed input length of 131,040 tokens.",
-    "Input length 131393 exceeds maximum allowed input length of 131040 token",
-    "code 1210: tokens in request more than max tokens allowed",
-    "code 1261: Prompt exceeds max length",
+    { type: "provider_refusal", overflow: false },
+    { type: "provider_fallback", overflow: true },
+  ])("preserves $type when the error text mentions overflow", ({ type, overflow }) => {
+    const message = errorMessage("prompt is too long: 1200 tokens > 1000 maximum");
+    message.diagnostics = [{ type, timestamp: 1 }];
+    expect(isContextOverflow(message, 1000)).toBe(overflow);
+  });
+
+  it.each([
+    "Context window exceeded: estimated input 35137 leaves only 0 output tokens within the 32768-token context.",
+    "Input validation error: `inputs` tokens + `max_new_tokens` must be <= 32768. Given: 28897 `inputs` tokens and 3872 `max_new_tokens`",
+    "Input validation error: `inputs` must have less than 32768 tokens. Given: 40000",
+    "Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input.",
+    "400 <400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
+    '400 {"code":20015,"message":"length of prompt_tokens (51353) must be less than max_seq_len (32768).","data":null}',
+    "400 The decoder prompt (length 40000) is longer than the maximum model length of 32768. Make sure that `max_model_len` is no smaller than the number of text tokens.",
+    "400 The decoder prompt (length 32768) plus the number of requested output tokens (at least 1) is longer than the maximum model length of 32768.",
+    "400 The engine prompt length 40000 exceeds the max_model_len 32768. Please reduce prompt.",
   ])("detects %s", (text) => {
     expect(isContextOverflow(errorMessage(text), 262_144)).toBe(true);
   });
-});
 
-describe("bodyless HTTP errors", () => {
-  it("does not treat an ambiguous 400 as context overflow", () => {
-    expect(isContextOverflow(errorMessage("400 status code (no body)"), 262_144)).toBe(false);
+  it("does not compact an output-only TGI validation error", () => {
+    const text = "Input validation error: `max_new_tokens` must be <= 4096. Given: 8192";
+    expect(isContextOverflow(errorMessage(text))).toBe(false);
   });
-
-  it("preserves Cerebras 413 overflow recovery", () => {
-    expect(isContextOverflow(errorMessage("413 status code (no body)"), 262_144)).toBe(true);
+  it("does not compact an output-only SiliconFlow parameter error", () => {
+    const text =
+      '400 {"code":20015,"message":"max_tokens must be less than or equal to 16384.","data":null}';
+    expect(isContextOverflow(errorMessage(text))).toBe(false);
   });
-});
-
-describe("usage-based overflow", () => {
-  it("prefers an available context snapshot over aggregate billing usage", () => {
-    expect(
-      isContextOverflow(
-        successfulMessage({
-          state: "available",
-          promptTokens: 148_874,
-          totalTokens: 163_978,
-        }),
-        1_000_000,
-      ),
-    ).toBe(false);
+  it("does not compact a vLLM output-only max_tokens validation error", () => {
+    const text = "400 max_tokens must be at least 1, got -5.";
+    expect(isContextOverflow(errorMessage(text))).toBe(false);
   });
-
-  it("does not infer overflow from aggregate billing when context is unavailable", () => {
-    expect(isContextOverflow(successfulMessage({ state: "unavailable" }), 1_000_000)).toBe(false);
+  it("recognizes the provider input-length wording in the strict failover scope", () => {
+    const text = "input length 14295 tokens exceeds the model limit";
+    expect(matchesContextOverflowMessage(text, "failover-explicit")).toBe(true);
   });
-
-  it("counts cache-write tokens toward the context when no snapshot is available", () => {
-    // input + cacheRead alone is 1_100_012, under this window; the 93_130 cache-write
-    // tokens are prompt tokens too, and providers that report them separately keep
-    // them out of `input`. Omitting the bucket silently under-counts the context.
-    expect(isContextOverflow(successfulMessage(), 1_150_000)).toBe(true);
+  it.each<[ContextUsage, number, boolean]>([
+    [{ state: "available", promptTokens: 148_874, totalTokens: 163_978 }, 1_000_000, false],
+    [{ state: "unavailable" }, 1_000_000, false],
+    // input + cacheRead is below this window; cacheWrite must also count.
+    [undefined, 1_150_000, true],
+  ])("uses context %j before billing usage", (context, window, overflow) => {
+    expect(isContextOverflow(successfulMessage(context), window)).toBe(overflow);
   });
 });

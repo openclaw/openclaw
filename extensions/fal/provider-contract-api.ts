@@ -1,8 +1,22 @@
-// Fal API module exposes the plugin public contract.
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 
 const PROVIDER_ID = "fal";
-const FAL_DEFAULT_IMAGE_MODEL_REF = "fal/fal-ai/flux/dev";
+
+export function createFalAuthMethodMetadata() {
+  return {
+    label: "fal API key",
+    hint: "Image, video, and music generation API key",
+    wizard: {
+      choiceId: "fal-api-key",
+      choiceLabel: "fal API key",
+      choiceHint: "Image, video, and music generation API key",
+      groupId: "fal",
+      groupLabel: "fal",
+      groupHint: "Image, video, and music generation",
+      onboardingScopes: ["image-generation", "music-generation"],
+    },
+  } satisfies Pick<ProviderPlugin["auth"][number], "label" | "hint" | "wizard">;
+}
 
 export function createFalProvider(): ProviderPlugin {
   return {
@@ -14,18 +28,8 @@ export function createFalProvider(): ProviderPlugin {
       {
         id: "api-key",
         kind: "api_key",
-        label: "fal API key",
-        hint: "Image, video, and music generation API key",
-        run: async () => ({ profiles: [], defaultModel: FAL_DEFAULT_IMAGE_MODEL_REF }),
-        wizard: {
-          choiceId: "fal-api-key",
-          choiceLabel: "fal API key",
-          choiceHint: "Image, video, and music generation API key",
-          groupId: "fal",
-          groupLabel: "fal",
-          groupHint: "Image, video, and music generation",
-          onboardingScopes: ["image-generation", "music-generation"],
-        },
+        ...createFalAuthMethodMetadata(),
+        run: async () => ({ profiles: [] }),
       },
     ],
   };

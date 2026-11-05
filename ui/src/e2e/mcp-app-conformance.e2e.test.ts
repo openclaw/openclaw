@@ -3,697 +3,757 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
-import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
-import {
-  chromium,
-  type Browser,
-  type BrowserContext,
-  type Frame,
-  type Locator,
-  type Page,
-} from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { materializeBundleMcpToolsForRun } from "../../../src/agents/agent-bundle-mcp-materialize.js";
+import type { Frame, Page } from "playwright";
+import { expect, it } from "vitest";
 import {
   disposeAllSessionMcpRuntimes,
-  getOrCreateSessionMcpRuntime,
-} from "../../../src/agents/agent-bundle-mcp-runtime.js";
+  setSessionMcpRuntimeScheduler,
+} from "../../../src/agents/agent-bundle-mcp-manager-api.js";
+import { getOrCreateSessionMcpRuntime } from "../../../src/agents/agent-bundle-mcp-manager.test-support.js";
+import { materializeBundleMcpToolsForRun } from "../../../src/agents/agent-bundle-mcp-materialize.js";
+import { getMcpAppModelContext } from "../../../src/agents/mcp-app-model-context.js";
 import { getMcpAppViewLease } from "../../../src/agents/mcp-ui-resource.js";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  readConfigFileSnapshotWithPluginMetadata,
-} from "../../../src/config/config.js";
+import { readConfigFileSnapshotWithPluginMetadata } from "../../../src/config/config.js";
+import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { startGatewayServer } from "../../../src/gateway/server.js";
-import { getFreeGatewayPort } from "../../../src/gateway/test-helpers.e2e.js";
-import { captureEnv, setTestEnvValue } from "../../../src/test-utils/env.js";
+import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
+import { createTestGatewayScheduler } from "../../../src/test-utils/gateway-scheduler-clock.js";
+import * as testStateFixture from "../../../src/test-utils/openclaw-test-state.ts";
+import type { TestPortClaim } from "../../../src/test-utils/port-claims.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import {
-  canRunPlaywrightChromium,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+  appHtml,
+  createMcpAppFixtureControl,
+  createMcpAppTeardownRecorder,
+  type McpAppFixtureEvent as FixtureEvent,
+  observeMcpAppHttpResponses,
+  observeMcpAppRequests,
+  findAppFrame,
+  mountControlUiHost,
+  requestStandaloneUrl,
+  readMcpAppModule,
+  waitForText,
+  waitForTextContaining,
+  writeFixtureServer,
+} from "../test-helpers/mcp-app-conformance-fixture.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { seedMcpAppConformanceSession } from "./mcp-app-conformance-session.test-support.ts";
+import {
+  assertMcpAppTimingEvents,
+  waitForMcpAppTimingEvents,
+} from "./mcp-app-timing.test-support.ts";
 
-const require = createRequire(import.meta.url);
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeConformance = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const authValue = "test";
 const sessionKey = "agent:main:mcp-app-conformance";
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+let proofDir: string;
 
-let browser: Browser;
-let controlUiServer: ControlUiE2eServer;
-let gateway: Awaited<ReturnType<typeof startGatewayServer>>;
+let state: testStateFixture.OpenClawTestState | undefined;
+let gatewayStartup: ReturnType<typeof startGatewayServer> | undefined;
+let runtimeStartup: ReturnType<typeof getOrCreateSessionMcpRuntime> | undefined;
+let mcpScheduler: ReturnType<typeof createTestGatewayScheduler> | undefined;
 let gatewayPort: number;
 let sandboxPort: number;
+// Each claim is held until the listener bound to its port has closed.
+const portClaims: Partial<Record<"appAsset" | "gateway" | "sandbox", TestPortClaim>> = {};
 let tempRoot: string;
 let viewId: string;
 let appAssetServer: HttpServer | undefined;
 let runtime: Awaited<ReturnType<typeof getOrCreateSessionMcpRuntime>>;
-let envSnapshot: ReturnType<typeof captureEnv>;
+let fixtureControlPath: string;
+let fixtureEventsPath: string;
+let fixtureHistoryUrl: string;
+let fixture: ReturnType<typeof createMcpAppFixtureControl>;
+let showFixture: (callId: string) => Promise<string>;
 
-const openContexts = new Set<BrowserContext>();
-
-async function waitForText(locator: Locator, expected: string): Promise<void> {
-  await expect.poll(() => locator.textContent({ timeout: 500 })).toBe(expected);
-}
-
-async function waitForTextContaining(
-  locator: Locator,
-  expected: string,
-  present = true,
-): Promise<void> {
-  const assertion = expect.poll(() => locator.textContent());
-  if (present) {
-    await assertion.toContain(expected);
-  } else {
-    await assertion.not.toContain(expected);
+async function capture(page: Page, name: string) {
+  if (captureUiProof) {
+    await page.screenshot({ path: path.join(proofDir, name + ".png") });
   }
 }
-
-function appHtml(appModuleUrl: string): string {
-  return `<!doctype html>
-<meta charset="utf-8" />
-<style>
-  :root {
-    --color-background-primary: #f6f5f3;
-    --color-text-primary: #17171a;
-    --app-accent: #ff4f4f;
+async function clickFor(app: Frame, button: string, output: string, text: string) {
+  await app.locator("#" + button).click();
+  await waitForTextContaining(app.locator("#" + output), text);
+}
+function viewLease() {
+  const lease = getMcpAppViewLease(viewId, runtime);
+  if (!lease) {
+    throw new Error("MCP App conformance view expired");
   }
-  #theme-surface {
-    background: var(--color-background-primary);
-    color: var(--color-text-primary);
-    border-left: 4px solid var(--app-accent);
-  }
-</style>
-<div id="theme-surface">Host-themed surface</div>
-<button id="call-app">Call app tool</button>
-<button id="call-model">Call model tool</button>
-<button id="read-resource">Read resource</button>
-<button id="update-context">Update context</button>
-<button id="send-message">Send message</button>
-<button id="request-teardown">Request teardown</button>
-<output id="initialized">pending</output>
-<output id="capabilities"></output>
-<output id="ping"></output>
-<output id="input"></output>
-<output id="result"></output>
-<output id="app-tool"></output>
-<output id="model-tool"></output>
-<output id="resource"></output>
-<output id="context-update"></output>
-<output id="message"></output>
-<output id="teardown"></output>
-<output id="isolation"></output>
-<output id="host-theme"></output>
-<output id="host-variables"></output>
-<output id="computed-theme"></output>
-<script type="module">
-import {
-  App,
-  McpUiResourceTeardownResultSchema,
-  applyDocumentTheme,
-  applyHostStyleVariables,
-} from ${JSON.stringify(appModuleUrl)};
-const write = (id, value) => { document.getElementById(id).textContent = value; };
-try { void window.top.document; write("isolation", "failed"); } catch { write("isolation", "isolated"); }
-const app = new App({ name: "OpenClaw conformance fixture", version: "1.0.0" });
-const applyHostContext = () => {
-  const context = app.getHostContext();
-  if (context?.theme) applyDocumentTheme(context.theme);
-  if (context?.styles?.variables) applyHostStyleVariables(context.styles.variables);
-  const surface = getComputedStyle(document.getElementById("theme-surface"));
-  write("host-theme", context?.theme ?? "missing");
-  write("host-variables", JSON.stringify(context?.styles?.variables ?? {}));
-  write("computed-theme", JSON.stringify({
-    background: surface.backgroundColor,
-    color: surface.color,
-    accent: surface.borderLeftColor,
-  }));
-};
-app.onhostcontextchanged = applyHostContext;
-app.ontoolinput = ({ arguments: args }) => write("input", JSON.stringify(args ?? {}));
-app.ontoolresult = (value) => write("result", JSON.stringify(value.structuredContent ?? value));
-app.onteardown = async () => {
-  write("teardown", "received");
-  console.info("mcp-conformance-teardown-received");
-  return {};
-};
-app.onerror = (error) => console.error("mcp-conformance-app", error);
-document.getElementById("call-app").onclick = async () => {
-  try {
-    const value = await app.callServerTool({ name: "app_companion", arguments: {} });
-    write("app-tool", JSON.stringify(value.structuredContent ?? value));
-  } catch (error) { write("app-tool", "denied:" + error); }
-};
-document.getElementById("call-model").onclick = async () => {
-  try { await app.callServerTool({ name: "model_only", arguments: {} }); write("model-tool", "allowed"); }
-  catch (error) { write("model-tool", "denied:" + error); }
-};
-document.getElementById("read-resource").onclick = async () => {
-  try {
-    const value = await app.readServerResource({ uri: "data://conformance/value" });
-    write("resource", JSON.stringify(value));
-  } catch (error) { write("resource", "denied:" + error); }
-};
-document.getElementById("update-context").onclick = async () => {
-  try {
-    await app.updateModelContext({ content: [{ type: "text", text: "selected item 42" }] });
-    write("context-update", "accepted");
-  } catch (error) { write("context-update", "denied:" + error); }
-};
-document.getElementById("send-message").onclick = async () => {
-  try {
-    const value = await app.sendMessage({
-      role: "user",
-      content: [{ type: "text", text: "summarize selection" }],
-    });
-    write("message", value.isError ? "denied" : "accepted");
-  } catch (error) { write("message", "denied:" + error); }
-};
-document.getElementById("request-teardown").onclick = () => app.requestTeardown();
-await app.connect();
-applyHostContext();
-write("capabilities", JSON.stringify(app.getHostCapabilities() ?? {}));
-write("ping", JSON.stringify(await app.request(
-  { method: "ping", params: {} },
-  McpUiResourceTeardownResultSchema,
-)));
-write("initialized", "ready");
-</script>`;
+  return lease;
 }
 
-async function writeFixtureServer(
-  serverPath: string,
-  html: string,
-  resourceOrigin: string,
-): Promise<void> {
-  const sdkMcpServerPath = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
-  const sdkStdioServerPath = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
-  await fs.writeFile(
-    serverPath,
-    `#!/usr/bin/env node
-import { McpServer } from ${JSON.stringify(sdkMcpServerPath)};
-import { StdioServerTransport } from ${JSON.stringify(sdkStdioServerPath)};
-const appUri = "ui://conformance/app";
-const server = new McpServer({ name: "mcp-app-conformance", version: "1.0.0" });
-const show = server.tool("show", "Show the conformance app", async () => ({
-  content: [{ type: "text", text: "initial-result" }],
-  structuredContent: { value: "initial-result" },
-}));
-show.update({ _meta: { ui: { resourceUri: appUri } } });
-const appOnly = server.tool("app_companion", "App-only companion", async () => ({
-  content: [{ type: "text", text: "companion-called" }],
-  structuredContent: { value: "companion-called" },
-}));
-appOnly.update({ _meta: { ui: { visibility: ["app"] } } });
-const modelOnly = server.tool("model_only", "Model-only tool", async () => ({
-  content: [{ type: "text", text: "model-called" }],
-}));
-modelOnly.update({ _meta: { ui: { visibility: ["model"] } } });
-server.registerResource("conformance_app", appUri, { mimeType: "text/html;profile=mcp-app" }, async (uri) => ({
-  contents: [{
-    uri: uri.href,
-    mimeType: "text/html;profile=mcp-app",
-    text: ${JSON.stringify(html)},
-    _meta: { ui: { csp: { resourceDomains: [${JSON.stringify(resourceOrigin)}] } } },
-  }],
-}));
-server.registerResource("conformance_data", "data://conformance/value", { mimeType: "text/plain" }, async (uri) => ({
-  contents: [{ uri: uri.href, mimeType: "text/plain", text: "resource-ok" }],
-}));
-await server.connect(new StdioServerTransport());
-`,
-    { encoding: "utf8", mode: 0o755 },
+async function expectBridge(app: Frame, contextSupported: boolean) {
+  await waitForText(app.locator("#input"), '{"city":"Paris"}');
+  await waitForTextContaining(app.locator("#result"), "initial-result");
+  for (const capability of ["serverTools", "serverResources"]) {
+    await waitForTextContaining(app.locator("#capabilities"), capability);
+  }
+  await waitForTextContaining(app.locator("#capabilities"), "updateModelContext", contextSupported);
+  await waitForText(app.locator("#ping"), "{}");
+  await clickFor(app, "list-tools", "tools", "app_companion");
+  await waitForTextContaining(app.locator("#tools"), "model_only", false);
+  await waitForText(app.locator("#isolation"), "isolated");
+}
+async function expectAppTools(app: Frame) {
+  await clickFor(app, "call-app", "app-tool", "companion-called");
+  await clickFor(app, "call-model", "model-tool", "denied:");
+  await clickFor(app, "read-resource", "resource", "resource-ok");
+}
+async function expectTheme(app: Frame, theme: "light" | "dark") {
+  const [background, color, backgroundRgb, colorRgb] =
+    theme === "dark"
+      ? ["#161920", "#d4d4d8", "rgb(22, 25, 32)", "rgb(212, 212, 216)"]
+      : ["#ffffff", "#403c35", "rgb(255, 255, 255)", "rgb(64, 60, 53)"];
+  await waitForText(app.locator("#host-theme"), theme);
+  // A light proxy between dark documents paints an opaque UA canvas.
+  await expect
+    .poll(() =>
+      app.parentFrame()?.evaluate(() => getComputedStyle(document.documentElement).colorScheme),
+    )
+    .toBe(theme);
+  await waitForTextContaining(
+    app.locator("#host-variables"),
+    `"--color-background-primary":"${background}"`,
+  );
+  await waitForTextContaining(app.locator("#host-variables"), `"--color-text-primary":"${color}"`);
+  await waitForText(
+    app.locator("#computed-theme"),
+    JSON.stringify({
+      background: backgroundRgb,
+      color: colorRgb,
+      accent: "rgb(255, 79, 79)",
+    }),
   );
 }
 
-async function findAppFrame(page: Page): Promise<Frame> {
-  try {
-    await expect
-      .poll(
-        async () => {
-          for (const frame of page.frames()) {
-            if ((await frame.locator("#initialized").count()) > 0) {
-              return 1;
-            }
-          }
-          return 0;
-        },
-        { timeout: 20_000 },
-      )
-      .toBeGreaterThan(0);
-  } catch (error) {
-    const component = await page.evaluate(() => {
-      const view = document.querySelector("mcp-app-view");
-      return {
-        exists: Boolean(view),
-        error: view?.shadowRoot?.querySelector(".error")?.textContent ?? null,
-        shadow: view?.shadowRoot?.textContent ?? null,
-      };
-    });
-    throw new Error(
-      `MCP App inner frame not found: ${JSON.stringify({ component, frames: page.frames().map((frame) => frame.url()) })}`,
-      { cause: error },
-    );
-  }
-  let frame: Frame | undefined;
-  for (const candidate of page.frames()) {
-    if ((await candidate.locator("#initialized").count()) > 0) {
-      frame = candidate;
-      break;
-    }
-  }
-  if (!frame) {
-    throw new Error("MCP App inner frame not found");
-  }
-  await waitForText(frame.locator("#initialized"), "ready");
-  return frame;
-}
-
-async function mountControlUiHost(page: Page): Promise<void> {
-  await page.route(`${controlUiServer.baseUrl}mcp-conformance`, async (route) => {
-    await route.fulfill({
-      contentType: "text/html",
-      body: `<!doctype html><main id="mount"></main>
-<script type="module">
-import { GatewayBrowserClient } from "/src/api/gateway.ts";
-import "/src/components/mcp-app-view-registration.ts";
-import { WIDGET_PROMPT_EVENT } from "/src/components/mcp-app-security.ts";
-window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
-document.addEventListener(WIDGET_PROMPT_EVENT, (event) => {
-  window.mcpConformancePrompt = event.detail.text;
-});
-window.mcpConformanceUnmount = async () => {
-  const mount = document.getElementById("mount");
-  const view = window.mcpConformanceView;
-  if (!mount || !view) return;
-  const frame = view.shadowRoot?.querySelector("iframe");
-  await view.teardown();
-  if (frame?.isConnected) throw new Error("MCP App frame remained mounted");
-  console.info("mcp-conformance-frame-detached");
-  mount.replaceChildren();
-};
-</script>`,
-    });
+function mountHost(page: Page) {
+  return mountControlUiHost(page, {
+    baseUrl: suite.server.baseUrl,
+    gatewayPort,
+    authValue,
+    sessionKey,
+    viewId,
   });
-  await page.goto(`${controlUiServer.baseUrl}mcp-conformance`, { waitUntil: "domcontentloaded" });
-  await page.waitForFunction(
-    () => Reflect.get(window, "mcpConformanceGatewayBrowserClient") !== undefined,
-    undefined,
-    { timeout: 30_000 },
-  );
-  await page.evaluate(
-    async (params) => {
-      const GatewayBrowserClient = Reflect.get(
-        window,
-        "mcpConformanceGatewayBrowserClient",
-      ) as new (options: Record<string, unknown>) => {
-        start(): void;
-        request(method: string, params: unknown): Promise<unknown>;
-      };
-      let resolveHello!: () => void;
-      let rejectHello!: (error: Error) => void;
-      const connected = new Promise<void>((resolve, reject) => {
-        resolveHello = resolve;
-        rejectHello = reject;
-      });
-      const client = new GatewayBrowserClient({
-        url: params.gatewayUrl,
-        token: params.authValue,
-        onHello: () => resolveHello(),
-        onClose: (info: { code: number; reason: string; error?: unknown; willRetry: boolean }) => {
-          if (!info.willRetry) {
-            rejectHello(new Error(`Gateway connection closed: ${JSON.stringify(info)}`));
-          }
+}
+function configureImmediate(scenario: string) {
+  return fixture.configure({ scenario, callDelayMs: 0 });
+}
+function companionEvents(events: FixtureEvent[], event: string) {
+  return events.filter((entry) => entry.event === event && entry.tool === "app_companion");
+}
+async function waitForFixtureEvent(scenario: string, event: string, timeout?: number) {
+  await expect
+    .poll(
+      async () =>
+        (await fixture.readEvents(scenario)).filter((entry) => entry.event === event).length,
+      { timeout },
+    )
+    .toBe(1);
+}
+
+const failures: Array<{ step: string; error: string }> = [];
+async function settleCleanup(step: string, cleanup: () => Promise<unknown>): Promise<boolean> {
+  try {
+    await cleanup();
+    return true;
+  } catch (error) {
+    failures.push({ step, error: String(error) });
+    return false;
+  }
+}
+
+const suite = createControlUiE2eSuite({
+  name: "MCP App Control UI and standalone host conformance",
+  startServer: () => startControlUiE2eServer(undefined, { source: true }),
+  startServerBeforeBrowser: true,
+  setupTimeoutMs: 120_000,
+  teardownTimeoutMs: 120_000,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+  resources: {
+    retainedState: () => state?.root,
+    run: async (signal) => {
+      // Both tests share retained reports even when screenshots and video are disabled.
+      proofDir = createControlUiE2eArtifactDir("mcp-app-request-lifetime");
+      signal.throwIfAborted();
+      state = await testStateFixture.createOpenClawTestState({
+        prefix: "openclaw-mcp-app-conformance-",
+        applyEnv: false,
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: authValue,
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_SKIP_PROVIDERS: "1",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+          OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
         },
       });
-      client.start();
-      await Promise.race([
-        connected,
-        new Promise((_, reject) => {
-          setTimeout(() => reject(new Error("Gateway connection timed out")), 60_000);
-        }),
-      ]);
-      const view = document.createElement("mcp-app-view");
-      const root = document.documentElement;
-      const themeListeners = new Set<() => void>();
-      const setTheme = (theme: "light" | "dark") => {
-        root.dataset.themeMode = theme;
-        root.style.setProperty("--card", theme === "light" ? "#ffffff" : "#161920");
-        root.style.setProperty("--text", theme === "light" ? "#403c35" : "#d4d4d8");
-        for (const listener of themeListeners) {
-          listener();
+      signal.throwIfAborted();
+      tempRoot = state.root;
+      const fixturePath = state.path("fixture-server.mjs");
+      fixtureControlPath = state.path("fixture-control.json");
+      fixtureEventsPath = state.path("fixture-events.jsonl");
+      fixture = createMcpAppFixtureControl(fixtureControlPath, fixtureEventsPath);
+      await configureImmediate("setup");
+      await fs.writeFile(fixtureEventsPath, "");
+      const bundledPluginsDir = state.path("empty-plugins");
+      await fs.mkdir(bundledPluginsDir, { recursive: true });
+      // The state owner already captured this key; its value needs the allocated root.
+      state.envVars.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+      const appModuleSource = await readMcpAppModule();
+      portClaims.appAsset = await acquireGatewayE2ePortBlock();
+      const appAssetPort = portClaims.appAsset.port;
+      signal.throwIfAborted();
+      const fixtureAssetServer = createHttpServer((request, response) => {
+        if (request.url === "/history-away") {
+          response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          response.end("<!doctype html><title>History control</title><p>History control</p>");
+          return;
         }
-      };
-      setTheme("dark");
-      Reflect.set(view, "context", {
+        if (request.url !== "/app.js") {
+          response.writeHead(404).end();
+          return;
+        }
+        response.writeHead(200, {
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "no-store",
+          "Content-Type": "text/javascript; charset=utf-8",
+          "Cross-Origin-Resource-Policy": "cross-origin",
+        });
+        response.end(appModuleSource);
+      });
+      appAssetServer = fixtureAssetServer;
+      await new Promise<void>((resolve, reject) => {
+        fixtureAssetServer.once("error", reject);
+        fixtureAssetServer.listen(appAssetPort, "127.0.0.1", () => {
+          fixtureAssetServer.off("error", reject);
+          resolve();
+        });
+      });
+      signal.throwIfAborted();
+      const appModuleUrl = `http://127.0.0.1:${appAssetPort}/app.js`;
+      fixtureHistoryUrl = `http://127.0.0.1:${appAssetPort}/history-away`;
+      const resourceOrigin = new URL(appModuleUrl).origin;
+      const controlUiOrigin = new URL(suite.server.baseUrl).origin;
+      await writeFixtureServer(
+        fixturePath,
+        appHtml(appModuleUrl),
+        resourceOrigin,
+        fixtureControlPath,
+        fixtureEventsPath,
+      );
+      portClaims.gateway = await acquireGatewayE2ePortBlock();
+      gatewayPort = portClaims.gateway.port;
+      signal.throwIfAborted();
+      // A held claim keeps the sandbox block distinct from the Gateway block.
+      portClaims.sandbox = await acquireGatewayE2ePortBlock();
+      sandboxPort = portClaims.sandbox.port;
+      const cfg: OpenClawConfig = {
         gateway: {
-          snapshot: { client },
-          connection: { gatewayUrl: params.gatewayUrl },
+          auth: { mode: "token", token: authValue },
+          controlUi: { allowedOrigins: [controlUiOrigin] },
         },
-        theme: {
-          subscribe(listener: () => void) {
-            themeListeners.add(listener);
-            return () => themeListeners.delete(listener);
+        mcp: {
+          apps: { enabled: true, sandboxPort },
+          servers: {
+            conformance: {
+              command: process.execPath,
+              args: [fixturePath],
+              cwd: tempRoot,
+              requestTimeoutMs: 10_000,
+              // This keyless fixture proves transport lifetime, not interactive approval.
+              codex: { defaultToolsApprovalMode: "approve" },
+            },
           },
         },
-      });
-      view.sessionKey = params.sessionKey;
-      view.viewId = params.viewId;
-      view.title = "Conformance app";
-      document.getElementById("mount")?.appendChild(view);
-      Object.assign(window, {
-        mcpConformanceClient: client,
-        mcpConformanceView: view,
-        mcpConformanceSetTheme: setTheme,
-      });
-    },
-    {
-      gatewayUrl: `ws://127.0.0.1:${gatewayPort}`,
-      authValue,
-      sessionKey,
-      viewId,
-    },
-  );
-}
-
-async function requestStandaloneUrl(page: Page): Promise<string> {
-  return await page.evaluate(
-    async (params) => {
-      const client = Reflect.get(window, "mcpConformanceClient") as {
-        request(method: string, params: unknown): Promise<unknown>;
       };
-      const payload = (await client.request("mcp.app.view", {
-        sessionKey: params.sessionKey,
-        viewId: params.viewId,
-      })) as {
-        standaloneUrl: string;
-      };
-      return payload.standaloneUrl;
-    },
-    { sessionKey, viewId },
-  );
-}
-
-describeConformance("MCP App Control UI and standalone host conformance", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    envSnapshot = captureEnv([
-      "HOME",
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_CONFIG_PATH",
-      "OPENCLAW_GATEWAY_TOKEN",
-      "OPENCLAW_SKIP_CHANNELS",
-      "OPENCLAW_SKIP_CRON",
-      "OPENCLAW_SKIP_PROVIDERS",
-      "OPENCLAW_TEST_MINIMAL_GATEWAY",
-      "OPENCLAW_BUNDLED_PLUGINS_DIR",
-    ]);
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-app-conformance-"));
-    const stateDir = path.join(tempRoot, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const fixturePath = path.join(tempRoot, "fixture-server.mjs");
-    await fs.mkdir(path.join(tempRoot, "empty-plugins"), { recursive: true });
-    controlUiServer = await startControlUiE2eServer(undefined, { source: true });
-    const appEntryPath = require.resolve("@modelcontextprotocol/ext-apps/app-with-deps");
-    const appModuleSource = await fs.readFile(appEntryPath, "utf8");
-    const appAssetPort = await getFreeGatewayPort();
-    const fixtureAssetServer = createHttpServer((request, response) => {
-      if (request.url !== "/app.js") {
-        response.writeHead(404).end();
-        return;
+      await state.writeConfig(cfg);
+      signal.throwIfAborted();
+      state.applyEnv();
+      setRuntimeConfigSnapshot(cfg);
+      mcpScheduler = createTestGatewayScheduler();
+      await setSessionMcpRuntimeScheduler(mcpScheduler);
+      signal.throwIfAborted();
+      // Keep rejected acquisitions: no returned handle does not prove cleanup succeeded.
+      runtimeStartup = getOrCreateSessionMcpRuntime({
+        sessionId: `mcp-app-conformance-${randomUUID()}`,
+        sessionKey,
+        workspaceDir: tempRoot,
+        cfg,
+      });
+      runtime = await runtimeStartup;
+      signal.throwIfAborted();
+      await seedMcpAppConformanceSession(runtime, state.env);
+      const materialized = await materializeBundleMcpToolsForRun({ runtime, agentId: "main" });
+      signal.throwIfAborted();
+      materialized.restrictAppTools?.([...materialized.tools, ...(materialized.appTools ?? [])]);
+      const show = materialized.tools.find((tool) => tool.name === "conformance__show");
+      if (!show) {
+        throw new Error("Official MCP App fixture tool did not materialize");
       }
-      response.writeHead(200, {
-        "Access-Control-Allow-Origin": "*",
-        "Cache-Control": "no-store",
-        "Content-Type": "text/javascript; charset=utf-8",
-        "Cross-Origin-Resource-Policy": "cross-origin",
+      showFixture = async (callId) => {
+        const nextResult = await show.execute(callId, { city: "Paris" });
+        const nextViewId = (
+          nextResult.details as { mcpAppPreview?: { mcpApp?: { viewId?: string } } }
+        ).mcpAppPreview?.mcpApp?.viewId;
+        if (!nextViewId) {
+          throw new Error("Fixture did not create a view: " + callId);
+        }
+        return nextViewId;
+      };
+      viewId = await showFixture("mcp-app-conformance-call");
+      signal.throwIfAborted();
+      const startupConfigSnapshotRead = await readConfigFileSnapshotWithPluginMetadata({
+        observe: false,
       });
-      response.end(appModuleSource);
-    });
-    appAssetServer = fixtureAssetServer;
-    await new Promise<void>((resolve) => {
-      fixtureAssetServer.listen(appAssetPort, "127.0.0.1", resolve);
-    });
-    const appModuleUrl = `http://127.0.0.1:${appAssetPort}/app.js`;
-    const resourceOrigin = new URL(appModuleUrl).origin;
-    const controlUiOrigin = new URL(controlUiServer.baseUrl).origin;
-    await writeFixtureServer(fixturePath, appHtml(appModuleUrl), resourceOrigin);
-    gatewayPort = await getFreeGatewayPort();
-    do {
-      sandboxPort = await getFreeGatewayPort();
-    } while (sandboxPort === gatewayPort);
-    const cfg: OpenClawConfig = {
-      gateway: {
+      signal.throwIfAborted();
+      gatewayStartup = startGatewayServer(gatewayPort, {
+        bind: "loopback",
         auth: { mode: "token", token: authValue },
-        controlUi: { allowedOrigins: [controlUiOrigin] },
-      },
-      mcp: {
-        apps: { enabled: true, sandboxPort },
-        servers: { conformance: { command: process.execPath, args: [fixturePath], cwd: tempRoot } },
-      },
-    };
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
-    setTestEnvValue("HOME", tempRoot);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", authValue);
-    setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
-    setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
-    setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "1");
-    setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "1");
-    setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(tempRoot, "empty-plugins"));
-    clearConfigCache();
-    clearRuntimeConfigSnapshot();
-    runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: `mcp-app-conformance-${randomUUID()}`,
-      sessionKey,
-      workspaceDir: tempRoot,
-      cfg,
-    });
-    const materialized = await materializeBundleMcpToolsForRun({ runtime });
-    materialized.restrictAppTools?.([...materialized.tools, ...(materialized.appTools ?? [])]);
-    const show = materialized.tools.find((tool) => tool.name === "conformance__show");
-    if (!show) {
-      throw new Error("Official MCP App fixture tool did not materialize");
-    }
-    const result = await show.execute("mcp-app-conformance-call", { city: "Paris" });
-    viewId =
-      (result.details as { mcpAppPreview?: { mcpApp?: { viewId?: string } } }).mcpAppPreview?.mcpApp
-        ?.viewId ?? "";
-    if (!viewId) {
-      throw new Error("MCP App fixture did not create a view");
-    }
-    const startupConfigSnapshotRead = await readConfigFileSnapshotWithPluginMetadata({
-      observe: false,
-    });
-    gateway = await startGatewayServer(gatewayPort, {
-      bind: "loopback",
-      auth: { mode: "token", token: authValue },
-      controlUiEnabled: false,
-      startupConfigSnapshotRead,
-    });
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  }, 120_000);
-
-  afterAll(async () => {
-    for (const context of openContexts) {
-      await context.close();
-    }
-    await browser?.close();
-    await gateway?.close({ reason: "MCP App conformance complete" });
-    await disposeAllSessionMcpRuntimes();
-    if (appAssetServer) {
-      await new Promise<void>((resolve, reject) => {
-        appAssetServer?.close((error) => (error ? reject(error) : resolve()));
+        controlUiEnabled: false,
+        startupConfigSnapshotRead,
       });
-    }
-    await controlUiServer?.close();
-    clearConfigCache();
-    clearRuntimeConfigSnapshot();
-    envSnapshot?.restore();
-    if (tempRoot) {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
-  }, 120_000);
-
-  it("drives the authenticated Control UI and ticketed standalone bridges", async () => {
-    const controlContext = await browser.newContext({ permissions: ["local-network-access"] });
-    openContexts.add(controlContext);
-    const controlPage = await controlContext.newPage();
-    const browserDiagnostics: string[] = [];
-    controlPage.on("console", (message) => {
-      browserDiagnostics.push(`console:${message.type()}:${message.text()}`);
-    });
-    controlPage.on("requestfailed", (request) => {
-      browserDiagnostics.push(`requestfailed:${request.url()}:${request.failure()?.errorText}`);
-    });
-    controlPage.on("response", (response) => {
-      if (response.url().includes("mcp-app-sandbox")) {
-        browserDiagnostics.push(`response:${response.status()}:${response.url()}`);
-      }
-    });
-    await mountControlUiHost(controlPage);
-    let app: Frame;
-    try {
-      app = await findAppFrame(controlPage);
-    } catch (error) {
-      throw new Error(`${String(error)}; browser=${JSON.stringify(browserDiagnostics)}`, {
-        cause: error,
+      await gatewayStartup;
+      signal.throwIfAborted();
+    },
+    close: async () => {
+      const gatewayClosed = await settleCleanup("gateway", async () => {
+        const gateway = await gatewayStartup;
+        await gateway?.close({ reason: "MCP App conformance complete" });
       });
-    }
-    await waitForText(app.locator("#input"), '{"city":"Paris"}');
-    await waitForTextContaining(app.locator("#result"), "initial-result");
-    await waitForTextContaining(app.locator("#capabilities"), "serverTools");
-    await waitForTextContaining(app.locator("#capabilities"), "serverResources");
-    await waitForTextContaining(app.locator("#capabilities"), "updateModelContext");
-    await waitForText(app.locator("#ping"), "{}");
-    await waitForText(app.locator("#isolation"), "isolated");
-    await waitForText(app.locator("#host-theme"), "dark");
-    await waitForTextContaining(
-      app.locator("#host-variables"),
-      '"--color-background-primary":"#161920"',
-    );
-    await waitForTextContaining(app.locator("#host-variables"), '"--color-text-primary":"#d4d4d8"');
-    await waitForText(
-      app.locator("#computed-theme"),
-      JSON.stringify({
-        background: "rgb(22, 25, 32)",
-        color: "rgb(212, 212, 216)",
-        accent: "rgb(255, 79, 79)",
-      }),
-    );
-    await controlPage.evaluate(() => {
-      const setTheme = Reflect.get(window, "mcpConformanceSetTheme") as
-        | ((theme: "light" | "dark") => void)
-        | undefined;
-      setTheme?.("light");
-    });
-    await waitForText(app.locator("#host-theme"), "light");
-    await waitForTextContaining(
-      app.locator("#host-variables"),
-      '"--color-background-primary":"#ffffff"',
-    );
-    await waitForTextContaining(app.locator("#host-variables"), '"--color-text-primary":"#403c35"');
-    await waitForText(
-      app.locator("#computed-theme"),
-      JSON.stringify({
-        background: "rgb(255, 255, 255)",
-        color: "rgb(64, 60, 53)",
-        accent: "rgb(255, 79, 79)",
-      }),
-    );
-    await app.locator("#call-app").click();
-    await waitForTextContaining(app.locator("#app-tool"), "companion-called");
-    await app.locator("#call-model").click();
-    await waitForTextContaining(app.locator("#model-tool"), "denied:");
-    await app.locator("#read-resource").click();
-    await waitForTextContaining(app.locator("#resource"), "resource-ok");
-    const confirmedPrompts: string[] = [];
-    controlPage.on("dialog", async (dialog) => {
-      confirmedPrompts.push(dialog.message());
-      await dialog.accept();
-    });
-    await app.locator("#update-context").click();
-    await waitForText(app.locator("#context-update"), "accepted");
-    await app.locator("#send-message").click();
-    await waitForText(app.locator("#message"), "accepted");
-    await expect
-      .poll(() => controlPage.evaluate(() => Reflect.get(window, "mcpConformancePrompt") as string))
-      .toBe("summarize selection");
-    expect(confirmedPrompts).toEqual(["Confirm:\n\nsummarize selection"]);
-    expect(runtime.pendingMcpAppModelContext).toMatchObject({ text: "selected item 42" });
-
-    const standaloneUrl = await requestStandaloneUrl(controlPage);
-    await controlPage.evaluate(async () => {
-      const unmount = Reflect.get(window, "mcpConformanceUnmount") as
-        | (() => Promise<void>)
-        | undefined;
-      await unmount?.();
-    });
-    const teardownDiagnostic = browserDiagnostics.findIndex((entry) =>
-      entry.includes("mcp-conformance-teardown-received"),
-    );
-    const detachedDiagnostic = browserDiagnostics.findIndex((entry) =>
-      entry.includes("mcp-conformance-frame-detached"),
-    );
-    expect(teardownDiagnostic).toBeGreaterThanOrEqual(0);
-    expect(detachedDiagnostic).toBeGreaterThan(teardownDiagnostic);
-    await expect.poll(() => controlPage.frames().length).toBe(1);
-
-    const standaloneContext = await browser.newContext({ permissions: ["local-network-access"] });
-    openContexts.add(standaloneContext);
-    const authorizationHeaders: string[] = [];
-    const requestUrls: string[] = [];
-    const referrers: string[] = [];
-    const standaloneDiagnostics: string[] = [];
-    standaloneContext.on("request", (request) => {
-      requestUrls.push(request.url());
-      const authorization = request.headers().authorization;
-      if (authorization) {
-        authorizationHeaders.push(authorization);
+      const mcpStartupSettled = await settleCleanup("MCP startup", async () => {
+        await runtimeStartup;
+      });
+      const mcpClosed = await settleCleanup("MCP runtimes", () => disposeAllSessionMcpRuntimes());
+      await settleCleanup("MCP scheduler", async () => {
+        await mcpScheduler?.stop();
+      });
+      const assetServerClosed = appAssetServer
+        ? await settleCleanup(
+            "asset server",
+            () =>
+              new Promise<void>((resolve, reject) => {
+                appAssetServer?.close((error) => (error ? reject(error) : resolve()));
+              }),
+          )
+        : true;
+      // Incomplete cleanup can leave a listener bound; keep its port claimed.
+      const releasable = [
+        gatewayClosed && portClaims.gateway,
+        gatewayClosed && mcpStartupSettled && mcpClosed && portClaims.sandbox,
+        assetServerClosed && portClaims.appAsset,
+      ].filter((claim): claim is TestPortClaim => Boolean(claim));
+      await settleCleanup("port claims", () =>
+        Promise.all(releasable.map((claim) => claim.release())),
+      );
+      if (tempRoot) {
+        await settleCleanup("archive fixture events", () =>
+          fs.copyFile(fixtureEventsPath, path.join(proofDir, "fixture-events.jsonl")),
+        );
       }
-      const referrer = request.headers().referer;
-      if (referrer) {
-        referrers.push(referrer);
-      }
+      expect(failures).toEqual([]);
+    },
+    release: async () => {
+      // The suite joins setup and cases, then all required closes, before releasing selectors.
+      await settleCleanup("fixture temp root", async () => state?.cleanup());
+      expect(failures).toEqual([]);
+    },
+  },
+});
+
+async function newProofContext() {
+  const context = await suite.newBrowserContext({
+    permissions: ["local-network-access"],
+    ...(captureUiProof
+      ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 800 } } }
+      : {}),
+  });
+  // Preserve the original Playwright operation timeout, not the suite's shorter default.
+  context.setDefaultTimeout(30_000);
+  return context;
+}
+
+suite.define(() => {
+  it("drives the authenticated Control UI and ticketed standalone bridges", async (context) => {
+    await suite.runScenario(context, {
+      run: async (signal) => {
+        signal.throwIfAborted();
+        const teardownProof = createMcpAppTeardownRecorder(proofDir, fixtureEventsPath);
+        const controlContext = await newProofContext();
+        const controlPage = await controlContext.newPage();
+        await mountHost(controlPage);
+        let app = await findAppFrame(controlPage);
+        await expectBridge(app, true);
+        await expectTheme(app, "dark");
+        await controlPage.evaluate(() => {
+          const setTheme = Reflect.get(window, "mcpConformanceSetTheme") as
+            | ((theme: "light" | "dark") => void)
+            | undefined;
+          setTheme?.("light");
+        });
+        await expectTheme(app, "light");
+        await expectAppTools(app);
+        await capture(controlPage, "control-ui-resource-allowed");
+        await app.locator("#update-context").click();
+        await waitForText(app.locator("#context-update"), "accepted");
+        await app.locator("#send-message").click();
+        const confirmation = controlPage.getByRole("alertdialog");
+        await waitForTextContaining(confirmation, "summarize selection");
+        expect(
+          await controlPage.evaluate(() => Reflect.get(window, "mcpConformancePrompt")),
+        ).toBeUndefined();
+        await confirmation.getByRole("button", { name: "Send", exact: true }).click();
+        await waitForText(app.locator("#message"), "accepted");
+        await expect
+          .poll(() =>
+            controlPage.evaluate(() => Reflect.get(window, "mcpConformancePrompt") as string),
+          )
+          .toBe("summarize selection");
+        const currentView = viewLease();
+        expect(getMcpAppModelContext(runtime, currentView)).toMatchObject({
+          content: [{ type: "text", text: "selected item 42" }],
+        });
+
+        const standaloneUrl = await requestStandaloneUrl(controlPage, { sessionKey, viewId });
+        await configureImmediate("control-ui-graceful-teardown");
+        await teardownProof.run("control-ui-graceful-teardown", controlPage, app, async () => {
+          await controlPage.evaluate(async () => {
+            const unmount = Reflect.get(window, "mcpConformanceUnmount") as
+              | (() => Promise<void>)
+              | undefined;
+            await unmount?.();
+          });
+        });
+
+        const standaloneContext = await newProofContext();
+        const authorizationHeaders: string[] = [];
+        const requestUrls: string[] = [];
+        const referrers: string[] = [];
+        const standaloneDiagnostics: string[] = [];
+        standaloneContext.on("request", (request) => {
+          requestUrls.push(request.url());
+          const authorization = request.headers().authorization;
+          if (authorization) {
+            authorizationHeaders.push(authorization);
+          }
+          const referrer = request.headers().referer;
+          if (referrer) {
+            referrers.push(referrer);
+          }
+        });
+        const standalonePage = await standaloneContext.newPage();
+        standalonePage.on("console", (message) => standaloneDiagnostics.push(message.text()));
+        await configureImmediate("standalone-bridge");
+        const absoluteStandaloneUrl = `http://127.0.0.1:${gatewayPort}${standaloneUrl}`;
+        const ticket = standaloneUrl.split("#")[1] ?? "";
+        await standalonePage.goto(absoluteStandaloneUrl);
+        app = await findAppFrame(standalonePage);
+        await expectBridge(app, false);
+        await expectAppTools(app);
+        expect(authorizationHeaders.length).toBeGreaterThanOrEqual(3);
+        expect(authorizationHeaders.every((value) => value.startsWith("MCP-App v1."))).toBe(true);
+        expect(authorizationHeaders.some((value) => value === `Bearer ${authValue}`)).toBe(false);
+        expect(ticket).not.toBe("");
+        expect(requestUrls.some((value) => value.includes(ticket))).toBe(false);
+        expect(referrers.some((value) => value.includes(ticket))).toBe(false);
+        expect(standaloneDiagnostics.some((value) => value.includes(ticket))).toBe(false);
+
+        await configureImmediate("standalone-graceful-teardown");
+        await teardownProof.run("standalone-graceful-teardown", standalonePage, app, async () => {
+          await app.locator("#request-teardown").click();
+        });
+        for (const { events } of teardownProof.records) {
+          const calls = events.filter(
+            (event) => event.event === "incoming" && event.tool === "cleanup_save",
+          );
+          expect(calls).toHaveLength(1);
+          const id = calls[0]?.id;
+          expect(id).toBeDefined();
+          expect(events.filter((event) => event.event === "cleanup-save")).toMatchObject([
+            { requestId: id },
+          ]);
+          expect(
+            events.filter(
+              (event) => event.event === "response-written" && event.tool === "cleanup_save",
+            ),
+          ).toMatchObject([{ id, isError: false }]);
+        }
+        await configureImmediate("standalone-after-teardown");
+        await standalonePage.reload();
+        app = await findAppFrame(standalonePage);
+        await waitForTextContaining(app.locator("#result"), "initial-result");
+        await clickFor(app, "call-app", "app-tool", "companion-called");
+
+        const activeView = viewLease();
+        activeView.authorizeAppInteraction = async () => false;
+
+        // The already-initialized App retains its capability snapshot, so the
+        // authoritative request-time check must still withhold the resource.
+        await clickFor(app, "read-resource", "resource", "denied:");
+        await waitForTextContaining(app.locator("#resource"), "resource-ok", false);
+        await capture(standalonePage, "standalone-resource-revoked");
+
+        await standalonePage.reload();
+        app = await findAppFrame(standalonePage);
+        await waitForTextContaining(app.locator("#capabilities"), "serverResources", false);
+        await clickFor(app, "read-resource", "resource", "denied:");
+
+        const revokedControlPage = await controlContext.newPage();
+        await mountHost(revokedControlPage);
+        const revokedControlApp = await findAppFrame(revokedControlPage);
+        await waitForTextContaining(
+          revokedControlApp.locator("#capabilities"),
+          "serverResources",
+          false,
+        );
+        await clickFor(revokedControlApp, "read-resource", "resource", "denied:");
+        await capture(revokedControlPage, "control-ui-resource-revoked");
+        await revokedControlPage.close();
+
+        const tampered = `${absoluteStandaloneUrl.slice(0, -1)}${absoluteStandaloneUrl.endsWith("a") ? "b" : "a"}`;
+        const tamperedPage = await standaloneContext.newPage();
+        await tamperedPage.goto(tampered);
+        await tamperedPage.reload();
+        await waitForText(tamperedPage.locator(".error"), "MCP App ticket was rejected");
+        await tamperedPage.close();
+
+        const lease = viewLease();
+        lease.expiresAtMs = Date.now() - 1;
+        await app.locator("#call-app").click();
+        await waitForText(standalonePage.locator(".error"), "MCP App ticket was rejected");
+      },
     });
-    const standalonePage = await standaloneContext.newPage();
-    standalonePage.on("console", (message) => standaloneDiagnostics.push(message.text()));
-    const absoluteStandaloneUrl = `http://127.0.0.1:${gatewayPort}${standaloneUrl}`;
-    const ticket = standaloneUrl.split("#")[1] ?? "";
-    await standalonePage.goto(absoluteStandaloneUrl);
-    app = await findAppFrame(standalonePage);
-    await waitForText(app.locator("#input"), '{"city":"Paris"}');
-    await waitForTextContaining(app.locator("#result"), "initial-result");
-    await waitForTextContaining(app.locator("#capabilities"), "serverTools");
-    await waitForTextContaining(app.locator("#capabilities"), "serverResources");
-    await waitForTextContaining(app.locator("#capabilities"), "updateModelContext", false);
-    await waitForText(app.locator("#ping"), "{}");
-    await waitForText(app.locator("#isolation"), "isolated");
-    await app.locator("#call-app").click();
-    await waitForTextContaining(app.locator("#app-tool"), "companion-called");
-    await app.locator("#call-model").click();
-    await waitForTextContaining(app.locator("#model-tool"), "denied:");
-    await app.locator("#read-resource").click();
-    await waitForTextContaining(app.locator("#resource"), "resource-ok");
-    expect(authorizationHeaders.length).toBeGreaterThanOrEqual(3);
-    expect(authorizationHeaders.every((value) => value.startsWith("MCP-App v1."))).toBe(true);
-    expect(authorizationHeaders.some((value) => value === `Bearer ${authValue}`)).toBe(false);
-    expect(ticket).not.toBe("");
-    expect(requestUrls.some((value) => value.includes(ticket))).toBe(false);
-    expect(referrers.some((value) => value.includes(ticket))).toBe(false);
-    expect(standaloneDiagnostics.some((value) => value.includes(ticket))).toBe(false);
-
-    await app.locator("#request-teardown").click();
-    await expect.poll(() => standalonePage.frames().length).toBe(1);
-    await standalonePage.reload();
-    app = await findAppFrame(standalonePage);
-    await waitForTextContaining(app.locator("#result"), "initial-result");
-    await app.locator("#call-app").click();
-    await waitForTextContaining(app.locator("#app-tool"), "companion-called");
-
-    const tampered = `${absoluteStandaloneUrl.slice(0, -1)}${absoluteStandaloneUrl.endsWith("a") ? "b" : "a"}`;
-    const tamperedPage = await standaloneContext.newPage();
-    await tamperedPage.goto(tampered);
-    await tamperedPage.reload();
-    await waitForText(tamperedPage.locator(".error"), "MCP App ticket was rejected");
-    await tamperedPage.close();
-
-    const lease = getMcpAppViewLease(viewId, runtime);
-    if (!lease) {
-      throw new Error("MCP App view lease missing");
-    }
-    lease.expiresAtMs = Date.now() - 1;
-    await app.locator("#call-app").click();
-    await waitForText(standalonePage.locator(".error"), "MCP App ticket was rejected");
   }, 90_000);
+
+  it("preserves composed operations and propagates caller cancellation through real transports", async (context) => {
+    await suite.runScenario(context, {
+      run: async (signal) => {
+        signal.throwIfAborted();
+        const http = observeMcpAppHttpResponses(gatewayPort);
+        try {
+          await configureImmediate("timing-setup");
+          viewId = await showFixture("timing-view");
+          const controlContext = await newProofContext();
+          const standaloneContext = await newProofContext();
+          try {
+            const controlPage = await controlContext.newPage();
+            await mountHost(controlPage);
+            await findAppFrame(controlPage);
+            const standaloneUrl = await requestStandaloneUrl(controlPage, { sessionKey, viewId });
+            const standalonePage = await standaloneContext.newPage();
+            const requests = observeMcpAppRequests(standalonePage);
+            await standalonePage.goto("http://127.0.0.1:" + gatewayPort + standaloneUrl);
+            let app = await findAppFrame(standalonePage);
+            // Each RPC stays below 10s; their composition must cross the former 15s HTTP cutoff.
+            const timingSpec = { scenario: "list8-call8", callDelayMs: 8000 };
+            await fixture.configure(timingSpec);
+            await app.locator("#arm-refresh").click();
+            await waitForText(app.locator("#arm-result"), "armed");
+            // The real notification owns this transition. No catalog field is assigned.
+            await expect.poll(() => runtime.peekCatalog()).toBeNull();
+            await app.locator("#call-app").click();
+            await expect
+              .poll(() => app.locator("#app-tool").textContent(), { timeout: 25_000 })
+              .not.toBe("pending");
+            const output = await app.locator("#app-tool").textContent();
+            const timingEvents = await waitForMcpAppTimingEvents(
+              fixture.readEvents,
+              timingSpec.scenario,
+            );
+
+            assertMcpAppTimingEvents(timingEvents, timingSpec);
+            expect(output).toContain("companion-called");
+            const initializations = (await fixture.readEvents()).filter(
+              (event) => event.method === "initialize",
+            ).length;
+            for (const spec of [
+              { scenario: "caller-timeout", action: "timeout" },
+              { scenario: "caller-abort", action: "abort" },
+              {
+                scenario: "caller-cooperative",
+                action: "abort",
+                callDelayMs: 5000,
+                cooperative: true,
+              },
+              { scenario: "frame-teardown", action: "teardown" },
+              { scenario: "pagehide", action: "pagehide" },
+            ]) {
+              const releasePath = spec.cooperative
+                ? undefined
+                : path.join(tempRoot, spec.scenario + ".released");
+              await fixture.configure({ ...spec, releasePath });
+              const httpStart = http.responses.length;
+              try {
+                await app
+                  .locator(spec.action === "timeout" ? "#call-expiring" : "#call-app")
+                  .click();
+                await waitForFixtureEvent(spec.scenario, "tool-start");
+                const startedResponses = http.responses.slice(httpStart);
+                expect(startedResponses).toHaveLength(1);
+                const response = startedResponses[0]!;
+                if (spec.action === "abort") {
+                  await app.locator("#cancel-call").click();
+                }
+                if (spec.action === "teardown") {
+                  await app.locator("#request-teardown").click();
+                  await expect.poll(() => standalonePage.frames().length).toBe(1);
+                } else if (spec.action === "pagehide") {
+                  await standalonePage.goto("about:blank");
+                } else {
+                  await waitForTextContaining(app.locator("#app-tool"), "denied:");
+                }
+                await waitForFixtureEvent(spec.scenario, "tool-cancellation-observed");
+                // Release noncooperative work only after cancellation really reached the SDK.
+                if (releasePath) {
+                  await fs.writeFile(releasePath, "released");
+                }
+                // The SDK suppresses late replies even when a server ignores cancellation.
+                await waitForFixtureEvent(
+                  spec.scenario,
+                  spec.cooperative ? "tool-stopped" : "tool-complete",
+                  8000,
+                );
+                const events = await fixture.readEvents(spec.scenario);
+                const calls = companionEvents(events, "incoming");
+                expect(calls).toHaveLength(1);
+                const call = calls[0]!;
+                expect(
+                  events.filter(
+                    (event) =>
+                      event.method === "notifications/cancelled" && event.requestId === call.id,
+                  ),
+                ).toHaveLength(1);
+                expect(events.filter((event) => event.event === "tool-complete")).toMatchObject(
+                  spec.cooperative ? [] : [{ requestId: call.id, aborted: true }],
+                );
+                // Chromium may omit requestfailed when navigation destroys the old document.
+                // Observe the exact Gateway response, not an unrelated teardown/control POST.
+                await expect.poll(() => response.destroyed).toBe(true);
+                expect(response.writableFinished).toBe(false);
+              } finally {
+                if (releasePath) {
+                  await fs.writeFile(releasePath, "released");
+                }
+              }
+              if (spec.action === "teardown" || spec.action === "pagehide") {
+                const reopenNetworkStart = requests.length;
+                const previousTimeOrigin = await standalonePage.evaluate(
+                  () => performance.timeOrigin,
+                );
+                // Navigating to the same fragment URL need not replace a closed heap.
+                const response =
+                  spec.action === "teardown"
+                    ? await standalonePage.reload()
+                    : await standalonePage.goto("http://127.0.0.1:" + gatewayPort + standaloneUrl);
+                const timeOrigin = await standalonePage.evaluate(() => performance.timeOrigin);
+                expect(response?.status()).toBe(200);
+                expect(timeOrigin).not.toBe(previousTimeOrigin);
+                app = await findAppFrame(standalonePage);
+                for (const pathname of ["/__openclaw__/mcp-app", "/__openclaw__/mcp-app/view"]) {
+                  expect(
+                    requests
+                      .slice(reopenNetworkStart)
+                      .filter((event) => event.method === "GET" && event.pathname === pathname),
+                  ).toHaveLength(1);
+                }
+              }
+              await configureImmediate(spec.scenario + "-control");
+              const controlHttpStart = http.responses.length;
+              await clickFor(app, "call-app", "app-tool", "companion-called");
+              const controlResponses = http.responses.slice(controlHttpStart);
+              expect(controlResponses).toHaveLength(1);
+              expect(controlResponses[0]?.writableFinished).toBe(true);
+              const controlEvents = await fixture.readEvents(spec.scenario + "-control");
+              expect(companionEvents(controlEvents, "incoming")).toHaveLength(1);
+              expect(companionEvents(controlEvents, "response-written")).toHaveLength(1);
+              // A subsequent real response is a causal barrier for the cancelled handler's late reply.
+              const settledEvents = await fixture.readEvents(spec.scenario);
+              expect(companionEvents(settledEvents, "response-written")).toEqual([]);
+              expect(companionEvents(settledEvents, "incoming")).toHaveLength(1);
+            }
+            expect(
+              (await fixture.readEvents()).filter((event) => event.method === "initialize"),
+            ).toHaveLength(initializations);
+
+            // Playwright does not support BFCache restoration; use its supported history flow.
+            // App documents stay uncached; the public versioned sandbox shell is immutable.
+            const historyContext = await newProofContext();
+            const historyPage = await historyContext.newPage();
+            try {
+              const responses: Array<{
+                pathname: string;
+                version: string | null;
+                status: number;
+                cacheControl: string | undefined;
+              }> = [];
+              historyPage.on("response", (response) => {
+                if (response.url().includes("mcp-app")) {
+                  const url = new URL(response.url());
+                  responses.push({
+                    pathname: url.pathname,
+                    version: url.searchParams.get("v"),
+                    status: response.status(),
+                    cacheControl: response.headers()["cache-control"],
+                  });
+                }
+              });
+              await configureImmediate("history-forward");
+              await historyPage.goto(fixtureHistoryUrl);
+              await historyPage.goto("http://127.0.0.1:" + gatewayPort + standaloneUrl);
+              await findAppFrame(historyPage);
+              await historyPage.goBack({ timeout: 15_000 });
+              expect(historyPage.url()).toBe(fixtureHistoryUrl);
+              await waitForText(historyPage.locator("p"), "History control");
+              await historyPage.goForward({ timeout: 15_000 });
+              const historyApp = await findAppFrame(historyPage);
+              await historyApp.locator("#call-app").click();
+              await waitForTextContaining(historyApp.locator("#app-tool"), "companion-called");
+
+              const historyEvents = (await fixture.readEvents("history-forward")).filter(
+                (event) => event.tool === "app_companion",
+              );
+              const historyCalls = historyEvents.filter((event) => event.event === "incoming");
+              expect(historyCalls).toHaveLength(1);
+              const historyCallId = historyCalls[0]?.id;
+              expect(historyCallId).toBeDefined();
+              expect(
+                historyEvents.filter((event) => event.event === "response-written"),
+              ).toMatchObject([{ id: historyCallId, isError: false }]);
+              for (const pathname of ["/__openclaw__/mcp-app", "/__openclaw__/mcp-app/view"]) {
+                expect(responses.filter((response) => response.pathname === pathname)).toEqual(
+                  expect.arrayContaining([
+                    expect.objectContaining({ status: 200, cacheControl: "no-store" }),
+                  ]),
+                );
+              }
+              const sandboxResponses = responses.filter(
+                (response) => response.pathname === "/mcp-app-sandbox",
+              );
+              expect(sandboxResponses.length).toBeGreaterThan(0);
+              for (const response of sandboxResponses) {
+                expect(response.version).toMatch(/^[a-f0-9]{64}$/);
+                expect(response).toMatchObject({
+                  status: 200,
+                  cacheControl: "public, max-age=31536000, immutable",
+                });
+              }
+            } finally {
+              await suite.closeBrowserContext(historyContext);
+            }
+          } finally {
+            await Promise.allSettled([
+              suite.closeBrowserContext(controlContext),
+              suite.closeBrowserContext(standaloneContext),
+            ]);
+          }
+        } finally {
+          http.stop();
+          await fs.copyFile(fixtureEventsPath, path.join(proofDir, "fixture-events.jsonl"));
+        }
+      },
+    });
+  }, 240_000);
 });

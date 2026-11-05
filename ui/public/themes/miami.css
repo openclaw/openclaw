@@ -1,0 +1,103 @@
+/* Miami palette; selected by index.html and app/theme.ts. */
+
+:root[data-theme="miami"] {
+  /*
+   * Accent — hot magenta and cyan on violet-black.
+   */
+  --ring: #f472b6;
+  --accent: #f472b6;
+  --accent-hover: #f78fc5;
+  --accent-muted: #f472b6;
+  --accent-subtle: rgba(244, 114, 182, 0.13);
+  --accent-glow: rgba(244, 114, 182, 0.22);
+  --primary: #f472b6;
+  --primary-hover: #f78fc5;
+  --primary-foreground: #3c0a24;
+  --accent-foreground: #3c0a24;
+
+  --destructive: #ef5d78;
+  --destructive-hover: #e84763;
+  --destructive-foreground: #3a0712;
+
+  --focus: rgba(244, 114, 182, 0.18);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 75%, transparent);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
+
+  --bg-content: #140f1e;
+
+  --card-foreground: #efeaf9;
+  --card-highlight: rgba(220, 213, 242, 0.05);
+  --popover-foreground: #efeaf9;
+
+  --text: #cfc7e8;
+  --text-strong: #efeaf9;
+  --chat-text: #cfc7e8;
+  --muted: #968bbd;
+  --muted-strong: #aa9fce;
+  --muted-foreground: #968bbd;
+
+  --secondary-foreground: #efeaf9;
+  --accent-2: #5fd7e8;
+  --accent-2-muted: rgba(95, 215, 232, 0.7);
+  --accent-2-subtle: rgba(95, 215, 232, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(4, 0, 14, 0.45);
+  --shadow-lg: 0 12px 32px rgba(4, 0, 14, 0.65);
+
+  --grid-line: rgba(220, 213, 242, 0.04);
+
+  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: var(--font-body);
+  --font-chat: var(--font-body);
+  --link: var(--accent);
+  --link-on-tint: #ff7dc0;
+}
+
+:root[data-theme="miami-light"] {
+  /*
+   * Accent — deep magenta on lightly tinted daylight.
+   */
+  --ring: #b0246f;
+  --accent: #b0246f;
+  --accent-hover: #971d5e;
+  --accent-muted: #b0246f;
+  --accent-subtle: rgba(176, 36, 111, 0.09);
+  --accent-glow: rgba(176, 36, 111, 0.14);
+  --primary: #b0246f;
+  --primary-hover: var(--accent-hover);
+  --primary-foreground: #ffffff;
+  --accent-foreground: #ffffff;
+
+  --destructive: #c22f4f;
+  --destructive-hover: #ac2844;
+
+  --bg-content: #f6f2f5;
+
+  --card-foreground: #241c2b;
+  --card-highlight: rgba(60, 30, 60, 0.02);
+  --popover-foreground: #241c2b;
+  --session-hovercard-surface: var(--card);
+
+  --text: #3c3244;
+  --text-strong: #241c2b;
+  --chat-text: #3c3244;
+  --muted: #6b5f74;
+  --muted-strong: #574c60;
+  --muted-foreground: #6b5f74;
+
+  --secondary-foreground: #3c3244;
+  --accent-2: #0f6f7d;
+  --accent-2-muted: rgba(15, 111, 125, 0.75);
+  --accent-2-subtle: rgba(15, 111, 125, 0.1);
+
+  --shadow-sm: 0 1px 2px rgba(60, 25, 55, 0.05);
+  --shadow-lg: 0 12px 28px rgba(60, 25, 55, 0.09);
+
+  --grid-line: rgba(60, 30, 60, 0.04);
+
+  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: var(--font-body);
+  --font-chat: var(--font-body);
+  --link: #aa1d6a;
+  --link-on-tint: #9f0a61;
+}

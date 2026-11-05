@@ -1,5 +1,6 @@
-import Darwin
+import ConcurrencyExtras
 import Foundation
+import Subprocess
 
 final class MacNodeCodexThreadCatalogClient: @unchecked Sendable {
     private let loadRoot: () -> [String: Any]
@@ -34,21 +35,9 @@ final class MacNodeCodexThreadCatalogClient: @unchecked Sendable {
 }
 
 final class CodexAppServerThreadClient: @unchecked Sendable {
-    private final class CancellationState: @unchecked Sendable {
-        private let lock = NSLock()
-        private var cancelled = false
-
-        func cancel() {
-            self.lock.lock()
-            self.cancelled = true
-            self.lock.unlock()
-        }
-
-        func isCancelled() -> Bool {
-            self.lock.lock()
-            defer { self.lock.unlock() }
-            return self.cancelled
-        }
+    struct Response: Sendable {
+        let data: Data
+        let sourceHomeId: String
     }
 
     private final class PendingRequest: @unchecked Sendable {
@@ -56,24 +45,30 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         let invocation: MacNodeCodexThreadCatalog.ResolvedInvocation
         let method: String
         let requestParamsData: Data
+        let sourceHomeId: String?
         let maxLineBytes: Int
         var requestID: Int?
         var requestData: Data?
-        var continuation: CheckedContinuation<Data, Error>?
+        var continuation: CheckedContinuation<Response, Error>?
         var timer: DispatchSourceTimer?
+        /// One requeue budget for the child-exit race: a failed stdin write was
+        /// never delivered, so a single retry on a fresh child cannot duplicate.
+        var redelivered = false
 
         init(
             token: UUID,
             invocation: MacNodeCodexThreadCatalog.ResolvedInvocation,
             method: String,
             requestParamsData: Data,
+            sourceHomeId: String?,
             maxLineBytes: Int,
-            continuation: CheckedContinuation<Data, Error>)
+            continuation: CheckedContinuation<Response, Error>)
         {
             self.token = token
             self.invocation = invocation
             self.method = method
             self.requestParamsData = requestParamsData
+            self.sourceHomeId = sourceHomeId
             self.maxLineBytes = maxLineBytes
             self.continuation = continuation
         }
@@ -83,14 +78,14 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         let generation = UUID()
         let invocation: MacNodeCodexThreadCatalog.ResolvedInvocation
         let initializeRequestID: Int
-        let process = Process()
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
+        var process: ManagedProcess?
+        var cleanupTask: Task<Void, Never>?
+        var readers: [PipeReadStream] = []
         var stdoutBuffer = Data()
-        var initialized = false
-        var exited = false
-        var stdoutReachedEOF = false
+        var sourceHomeId: String?
 
         init(
             invocation: MacNodeCodexThreadCatalog.ResolvedInvocation,
@@ -98,11 +93,15 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         {
             self.invocation = invocation
             self.initializeRequestID = initializeRequestID
+            // The App Server child can exit between requests; without this an
+            // in-flight stdin write raises SIGPIPE and kills the app.
+            self.stdinPipe.fileHandleForWriting.disableSIGPIPE()
         }
     }
 
     private static let maxQueuedRequests = 64
-    private static let maxStdoutDrainBytes = 256 * 1024
+    private static let gracefulShutdownTimeout: Duration = .seconds(
+        AppTerminationTiming.cleanupDeadlineSeconds * 0.75)
 
     private let queue = DispatchQueue(label: "ai.openclaw.codex-thread-catalog")
     private let idleTimeoutSeconds: Double
@@ -123,24 +122,25 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
 
     deinit {
         self.cancelIdleTimer()
-        self.stopConnection()
+        self.connection?.process?.requestTermination()
     }
 
     func request(
         invocation: MacNodeCodexThreadCatalog.ResolvedInvocation,
         method: String,
         requestParams: [String: Any],
+        sourceHomeId: String? = nil,
         timeoutSeconds: Double,
-        maxLineBytes: Int) async throws -> Data
+        maxLineBytes: Int) async throws -> Response
     {
         try Task.checkCancellation()
-        let requestParamsData = try Self.jsonData(requestParams)
+        let requestParamsData = try JSONSerialization.data(withJSONObject: requestParams)
         let token = UUID()
-        let cancellationState = CancellationState()
-        let result: Data = try await withTaskCancellationHandler {
+        let cancellationState = LockIsolated(false)
+        let result: Response = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 self.queue.async {
-                    guard !cancellationState.isCancelled() else {
+                    guard !cancellationState.value else {
                         continuation.resume(throwing: CancellationError())
                         return
                     }
@@ -156,6 +156,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
                         invocation: invocation,
                         method: method,
                         requestParamsData: requestParamsData,
+                        sourceHomeId: sourceHomeId,
                         maxLineBytes: max(1, maxLineBytes),
                         continuation: continuation)
                     // Callers pass the operation's remaining wall-clock deadline.
@@ -169,9 +170,9 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
                 }
             }
         } onCancel: {
-            cancellationState.cancel()
+            cancellationState.setValue(true)
             self.queue.async {
-                self.cancel(token: token)
+                self.failRequest(token: token, error: CancellationError())
             }
         }
         try Task.checkCancellation()
@@ -179,7 +180,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
     }
 
     func shutdown() async {
-        await withCheckedContinuation { continuation in
+        let cleanup: Task<Void, Never>? = await withCheckedContinuation { continuation in
             self.queue.async {
                 self.cancelIdleTimer()
                 if let active = self.active {
@@ -191,10 +192,10 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
                 for request in pending {
                     self.complete(request, with: .failure(CancellationError()))
                 }
-                self.stopConnection()
-                continuation.resume()
+                continuation.resume(returning: self.stopConnection(abortive: false))
             }
         }
+        await cleanup?.value
     }
 
     private func takeRequestIDOnQueue() -> Int {
@@ -207,7 +208,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         let timer = DispatchSource.makeTimerSource(queue: self.queue)
         timer.schedule(deadline: .now() + max(0.01, timeoutSeconds))
         timer.setEventHandler { [weak self] in
-            self?.timeout(token: token)
+            self?.failRequest(token: token, error: MacNodeCodexThreadCatalog.CatalogError.timedOut)
         }
         timer.resume()
         return timer
@@ -220,20 +221,25 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
             }
             return
         }
-        let request = self.pending.removeFirst()
-        self.active = request
-        if let connection = self.connection,
-           connection.exited ||
-           !connection.process.isRunning ||
-           connection.invocation != request.invocation
-        {
-            self.stopConnection()
+        let request = self.pending[0]
+        if let connection = self.connection {
+            guard connection.cleanupTask == nil else { return }
+            if connection.process?.isRunning != true ||
+                connection.invocation != request.invocation
+            {
+                // Invocation replacement is graceful, but the successor remains
+                // fenced until this connection's process and stdout have closed.
+                self.stopConnection(abortive: false)
+                return
+            }
         }
+        self.pending.removeFirst()
+        self.active = request
         guard let connection = self.connection else {
             self.startConnection(for: request)
             return
         }
-        guard connection.initialized else { return }
+        guard connection.sourceHomeId != nil else { return }
         self.sendActiveRequest(over: connection)
     }
 
@@ -242,46 +248,78 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
             invocation: request.invocation,
             initializeRequestID: self.takeRequestIDOnQueue())
         self.connection = connection
-        let process = connection.process
-        process.executableURL = URL(fileURLWithPath: request.invocation.executable)
-        process.arguments = request.invocation.arguments
-        process.currentDirectoryURL = request.invocation.cwd
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         for key in request.invocation.clearEnv {
             environment.removeValue(forKey: key)
         }
-        process.environment = environment
-        process.standardInput = connection.stdinPipe
-        process.standardOutput = connection.stdoutPipe
-        process.standardError = connection.stderrPipe
-
-        // DispatchSource readability callbacks may be followed by future drain
-        // loops. Keep both pipes non-blocking so an open App Server cannot stall
-        // the catalog handshake after emitting one JSON-RPC frame.
-        Self.setNonBlocking(connection.stdoutPipe.fileHandleForReading)
-        Self.setNonBlocking(connection.stderrPipe.fileHandleForReading)
         let generation = connection.generation
-        connection.stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            guard let self else { return }
-            self.queue.async {
-                self.drainStdout(from: handle, generation: generation)
-            }
-        }
-        connection.stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-            if Self.drainAvailable(from: handle) {
-                handle.readabilityHandler = nil
-            }
-        }
-        process.terminationHandler = { [weak self] _ in
-            guard let self else { return }
-            self.queue.async {
-                self.handleTermination(generation: generation)
-            }
-        }
-
         do {
-            try process.run()
+            connection.readers = try [
+                PipeReadStream(
+                    handle: connection.stdoutPipe.fileHandleForReading,
+                    queue: self.queue,
+                    onData: { [weak self] data in
+                        guard let self, let current = self.connection,
+                              current.generation == generation else { return }
+                        self.consumeStdout(data, connection: current)
+                    }),
+                PipeReadStream(
+                    handle: connection.stderrPipe.fileHandleForReading,
+                    queue: self.queue,
+                    onData: { _ in }),
+            ]
+        } catch {
+            self.retireConnection(connection)
+            self.finishActive(
+                .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
+                restartConnection: false)
+            return
+        }
+        let configuration = Subprocess.Configuration(
+            executable: .path(.init(request.invocation.executable)),
+            arguments: Arguments(request.invocation.arguments),
+            environment: ManagedProcess.environment(from: environment),
+            workingDirectory: request.invocation.cwd.map { .init($0.path) })
+        // Leave enough of the app's cleanup budget for group termination and joined reaping.
+        let process = ManagedProcess.launch(
+            configuration: configuration,
+            stdin: connection.stdinPipe.fileHandleForReading,
+            stdout: connection.stdoutPipe.fileHandleForWriting,
+            stderr: connection.stderrPipe.fileHandleForWriting,
+            closeStdinForGracefulShutdown: connection.stdinPipe.fileHandleForWriting,
+            gracefulShutdownTimeout: Self.gracefulShutdownTimeout)
+        connection.process = process
+        Task { [weak self] in
+            let started = await (try? process.waitUntilStarted()) != nil
+            self?.queue.async { [weak self] in
+                self?.finishConnectionLaunch(started: started, generation: generation)
+            }
+        }
+    }
+
+    private func finishConnectionLaunch(
+        started: Bool,
+        generation: UUID)
+    {
+        guard let connection = self.connection,
+              connection.generation == generation,
+              connection.cleanupTask == nil
+        else { return }
+        guard started, let process = connection.process else {
+            self.retireConnection(connection)
+            self.finishActive(
+                .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
+                restartConnection: false)
+            return
+        }
+        Task { [weak self, completionTask = process.completionTask] in
+            _ = await completionTask.value
+            self?.queue.async { [weak self] in
+                self?.handleTermination(generation: generation)
+            }
+        }
+        do {
             try self.write(
                 Self.initializeRequestData(id: connection.initializeRequestID),
                 over: connection)
@@ -294,13 +332,20 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
 
     private func sendActiveRequest(over connection: Connection) {
         guard let active = self.active else { return }
+        if let sourceHomeId = active.sourceHomeId, sourceHomeId != connection.sourceHomeId {
+            self.finishActive(
+                .failure(MacNodeCodexThreadCatalog.CatalogError.invalidParams(
+                    "Codex session source changed; refresh the catalog and retry")),
+                restartConnection: false)
+            return
+        }
         do {
             if active.requestData == nil {
                 let requestID = self.takeRequestIDOnQueue()
                 let requestParams = try JSONSerialization.jsonObject(
                     with: active.requestParamsData)
                 active.requestID = requestID
-                active.requestData = try Self.jsonData([
+                active.requestData = try JSONSerialization.data(withJSONObject: [
                     "id": requestID,
                     "method": active.method,
                     "params": requestParams,
@@ -311,55 +356,19 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
             }
             try self.write(requestData, over: connection)
         } catch {
-            self.finishActive(
-                .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
-                restartConnection: true)
-        }
-    }
-
-    private func drainStdout(from handle: FileHandle, generation: UUID) {
-        guard let connection = self.connection, connection.generation == generation else { return }
-        var drainedBytes = 0
-        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
-        while true {
-            // Yield after a bounded batch so request timers, cancellation, and
-            // shutdown work queued behind a noisy App Server can still run.
-            if drainedBytes >= Self.maxStdoutDrainBytes {
-                self.queue.async { [weak self] in
-                    self?.drainStdout(from: handle, generation: generation)
-                }
+            // A warm connection can outlive its child; the exit race surfaces
+            // here as EPIPE before termination is observed. The frame was never
+            // delivered, so requeue once onto a fresh child instead of failing.
+            guard !active.redelivered else {
+                self.finishActive(
+                    .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
+                    restartConnection: true)
                 return
             }
-            let count = buffer.withUnsafeMutableBytes { bytes in
-                Darwin.read(handle.fileDescriptor, bytes.baseAddress, bytes.count)
-            }
-            if count > 0 {
-                drainedBytes += count
-                self.consumeStdout(
-                    Data(buffer.prefix(count)),
-                    connection: connection)
-                guard self.connection?.generation == generation else { return }
-                continue
-            }
-            if count == 0 {
-                connection.stdoutReachedEOF = true
-                handle.readabilityHandler = nil
-                self.finishTerminatedConnectionIfNeeded(generation: generation)
-                return
-            }
-            if errno == EINTR { continue }
-            if errno == EAGAIN || errno == EWOULDBLOCK {
-                if connection.exited {
-                    self.queue.asyncAfter(deadline: .now() + .milliseconds(1)) { [weak self] in
-                        self?.drainStdout(from: handle, generation: generation)
-                    }
-                }
-                return
-            }
-            connection.stdoutReachedEOF = true
-            handle.readabilityHandler = nil
-            self.finishTerminatedConnectionIfNeeded(generation: generation)
-            return
+            active.redelivered = true
+            self.active = nil
+            self.pending.insert(active, at: 0)
+            self.stopConnection(abortive: true)
         }
     }
 
@@ -390,7 +399,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
 
     private func rejectOversizedFrame() {
         if self.active == nil {
-            self.stopConnection()
+            self.stopConnection(abortive: true)
             self.startNextIfNeeded()
         } else {
             self.finishActive(
@@ -405,15 +414,19 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         else { return }
 
         if id == connection.initializeRequestID {
-            guard message["error"] == nil, message["result"] is [String: Any] else {
+            guard message["error"] == nil,
+                  let result = message["result"] as? [String: Any],
+                  let codexHome = result["codexHome"] as? String,
+                  let sourceHomeId = try? MacNodeCodexThreadCatalog.sourceHomeId(codexHome: codexHome)
+            else {
                 self.finishActive(
                     .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
                     restartConnection: true)
                 return
             }
-            connection.initialized = true
+            connection.sourceHomeId = sourceHomeId
             do {
-                try self.write(Self.initializedNotificationData(), over: connection)
+                try self.write(JSONSerialization.data(withJSONObject: ["method": "initialized"]), over: connection)
                 self.sendActiveRequest(over: connection)
             } catch {
                 self.finishActive(
@@ -426,81 +439,51 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         guard let active = self.active, id == active.requestID else { return }
         guard message["error"] == nil,
               let result = message["result"] as? [String: Any],
-              let resultData = try? Self.jsonData(result)
+              let sourceHomeId = connection.sourceHomeId,
+              let resultData = try? JSONSerialization.data(withJSONObject: result)
         else {
             self.finishActive(
                 .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
                 restartConnection: message["error"] == nil)
             return
         }
-        self.finishActive(.success(resultData), restartConnection: false)
+        self.finishActive(
+            .success(Response(data: resultData, sourceHomeId: sourceHomeId)),
+            restartConnection: false)
     }
 
     private func handleTermination(generation: UUID) {
         guard let connection = self.connection, connection.generation == generation else { return }
-        connection.exited = true
-        // A short-lived server can exit before its readability callback runs.
-        // Drain its final frame before projecting termination onto the request.
-        self.drainStdout(
-            from: connection.stdoutPipe.fileHandleForReading,
-            generation: generation)
-        self.finishTerminatedConnectionIfNeeded(generation: generation)
+        self.stopConnection(abortive: false)
     }
 
-    private func finishTerminatedConnectionIfNeeded(generation: UUID) {
-        guard let connection = self.connection,
-              connection.generation == generation,
-              connection.exited,
-              connection.stdoutReachedEOF
-        else { return }
-        if self.active != nil {
-            self.finishActive(
-                .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
-                restartConnection: true)
-        } else {
-            self.stopConnection()
-            self.startNextIfNeeded()
-        }
-    }
-
-    private func timeout(token: UUID) {
+    private func failRequest(token: UUID, error: Error) {
         if let index = self.pending.firstIndex(where: { $0.token == token }) {
             let request = self.pending.remove(at: index)
-            self.complete(
-                request,
-                with: .failure(MacNodeCodexThreadCatalog.CatalogError.timedOut))
+            self.complete(request, with: .failure(error))
+            if self.active == nil {
+                self.stopConnection(abortive: true)
+            }
             return
         }
         guard self.active?.token == token else { return }
-        self.finishActive(
-            .failure(MacNodeCodexThreadCatalog.CatalogError.timedOut),
-            restartConnection: true)
-    }
-
-    private func cancel(token: UUID) {
-        if let index = self.pending.firstIndex(where: { $0.token == token }) {
-            let request = self.pending.remove(at: index)
-            self.complete(request, with: .failure(CancellationError()))
-            return
-        }
-        guard self.active?.token == token else { return }
-        self.finishActive(.failure(CancellationError()), restartConnection: true)
+        self.finishActive(.failure(error), restartConnection: true)
     }
 
     private func finishActive(
-        _ result: Result<Data, Error>,
+        _ result: Result<Response, Error>,
         restartConnection: Bool)
     {
         guard let active = self.active else { return }
         self.active = nil
         self.complete(active, with: result)
         if restartConnection {
-            self.stopConnection()
+            self.stopConnection(abortive: true)
         }
         self.startNextIfNeeded()
     }
 
-    private func complete(_ request: PendingRequest, with result: Result<Data, Error>) {
+    private func complete(_ request: PendingRequest, with result: Result<Response, Error>) {
         request.timer?.cancel()
         request.timer = nil
         guard let continuation = request.continuation else { return }
@@ -509,13 +492,16 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
     }
 
     private func scheduleIdleShutdown() {
-        guard self.connection != nil, self.idleTimer == nil else { return }
+        guard let connection = self.connection,
+              connection.cleanupTask == nil,
+              self.idleTimer == nil
+        else { return }
         let timer = DispatchSource.makeTimerSource(queue: self.queue)
         timer.schedule(deadline: .now() + self.idleTimeoutSeconds)
         timer.setEventHandler { [weak self] in
             guard let self, self.active == nil, self.pending.isEmpty else { return }
             self.cancelIdleTimer()
-            self.stopConnection()
+            self.stopConnection(abortive: false)
         }
         self.idleTimer = timer
         timer.resume()
@@ -526,16 +512,56 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         self.idleTimer = nil
     }
 
-    private func stopConnection() {
-        guard let connection = self.connection else { return }
-        self.connection = nil
-        connection.stdoutPipe.fileHandleForReading.readabilityHandler = nil
-        connection.stderrPipe.fileHandleForReading.readabilityHandler = nil
-        connection.process.terminationHandler = nil
-        try? connection.stdinPipe.fileHandleForWriting.close()
-        if connection.process.isRunning {
-            connection.process.terminate()
+    @discardableResult
+    private func stopConnection(abortive: Bool) -> Task<Void, Never>? {
+        guard let connection = self.connection else { return nil }
+        if let cleanupTask = connection.cleanupTask {
+            if abortive {
+                connection.process?.requestTermination(gracefully: false)
+            }
+            return cleanupTask
         }
+        guard let process = connection.process else { return nil }
+        let generation = connection.generation
+        let readers = connection.readers
+        let cleanupTask = Task { [weak self] in
+            await process.terminate(gracefully: !abortive)
+            // A short-lived server can exit before its final frame is consumed.
+            // Join both bounded pipe readers before failing the request or admitting a successor.
+            for reader in readers {
+                await reader.finish()
+            }
+            await withCheckedContinuation { continuation in
+                guard let self else {
+                    continuation.resume()
+                    return
+                }
+                self.queue.async {
+                    if let current = self.connection, current.generation == generation {
+                        self.retireConnection(current)
+                        if self.active != nil {
+                            self.finishActive(
+                                .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
+                                restartConnection: false)
+                        } else {
+                            self.startNextIfNeeded()
+                        }
+                    }
+                    continuation.resume()
+                }
+            }
+        }
+        connection.cleanupTask = cleanupTask
+        return cleanupTask
+    }
+
+    private func retireConnection(_ connection: Connection) {
+        guard self.connection?.generation == connection.generation else { return }
+        self.connection = nil
+        connection.readers.forEach { $0.close() }
+        try? connection.stdinPipe.fileHandleForWriting.close()
+        try? connection.stdoutPipe.fileHandleForReading.close()
+        try? connection.stderrPipe.fileHandleForReading.close()
     }
 
     private func write(_ data: Data, over connection: Connection) throws {
@@ -545,7 +571,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
     }
 
     private static func initializeRequestData(id: Int) throws -> Data {
-        try self.jsonData([
+        try JSONSerialization.data(withJSONObject: [
             "id": id,
             "method": "initialize",
             "params": [
@@ -557,41 +583,5 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
                 "capabilities": ["experimentalApi": true],
             ],
         ])
-    }
-
-    private static func initializedNotificationData() throws -> Data {
-        try self.jsonData(["method": "initialized"])
-    }
-
-    private static func jsonData(_ object: Any) throws -> Data {
-        try JSONSerialization.data(withJSONObject: object)
-    }
-
-    private static func drainAvailable(from handle: FileHandle) -> Bool {
-        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
-        while true {
-            let count = buffer.withUnsafeMutableBytes { bytes in
-                Darwin.read(handle.fileDescriptor, bytes.baseAddress, bytes.count)
-            }
-            if count > 0 {
-                continue
-            }
-            if count == 0 {
-                return true
-            }
-            if errno == EINTR { continue }
-            if errno == EAGAIN || errno == EWOULDBLOCK {
-                return false
-            }
-            return true
-        }
-    }
-
-    private static func setNonBlocking(_ handle: FileHandle) {
-        let descriptor = handle.fileDescriptor
-        let flags = Darwin.fcntl(descriptor, F_GETFL)
-        if flags >= 0 {
-            _ = Darwin.fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)
-        }
     }
 }

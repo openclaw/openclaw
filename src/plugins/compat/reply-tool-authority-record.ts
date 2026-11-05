@@ -1,0 +1,25 @@
+import type { PluginCompatRecord } from "./types.js";
+
+export const REPLY_TOOL_AUTHORITY_COMPAT_RECORD = {
+  code: "reply-tool-authority-sync-preparation",
+  status: "deprecated",
+  owner: "sdk",
+  deprecated: "2026-10-04",
+  warningStarts: "2026-10-04",
+  removeAfter: "2026-12-31",
+  replacement:
+    "Await the Async reply-operation, fingerprint, and V2 queue companions. Question dispatchers await authority.assertCurrentAsync after transport preparation and assert current authority immediately before I/O. Released synchronous contracts remain through 2026-12-31; removal ships in the first January 2027 stable release without an SDK major.",
+  docsPath: "/plugins/sdk-migration/how-to-migrate#await-reply-tool-authority",
+  surfaces: [
+    "EmbeddedRunAttemptParams.replyOperation",
+    "EmbeddedRunAttemptParamsV2.replyOperation",
+    "AgentHarnessAttemptParams.replyOperation",
+    "AgentHarnessAttemptParamsV2.replyOperation",
+    "ReplyToolAuthoritySnapshot.fingerprint and project",
+    "ReplyBackendMessageInjectionV2.queueMessage, claimPendingUserInputAnswer, and cancelPendingUserInput",
+    "AgentQuestionDispatcher.authority.assertCurrent",
+  ],
+  diagnostics: [
+    "TypeScript @deprecated annotations and bounded warnings on legacy preparation or injection fallbacks; supported prepared projections and live effect assertions remain silent",
+  ],
+} as const satisfies PluginCompatRecord;

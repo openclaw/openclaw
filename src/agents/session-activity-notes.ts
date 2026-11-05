@@ -1,14 +1,17 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
+import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "./agent-run-terminal-outcome.js";
+import { normalizeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
+import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -26,6 +29,7 @@ export type SessionActivityNoteState = {
   lastAssistantBufferAt: number;
   lastAssistantNote?: string;
   planProgress?: { completed: number; total: number };
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 const MAX_NOTES = 40;
@@ -70,30 +74,25 @@ function syncAssistantBuffer(state: SessionActivityNoteState, at = Date.now()): 
   if (!state.assistantBufferDirty) {
     return;
   }
-  state.assistantBuffer = assembleAssistantBuffer(
-    state.assistantRawBuffer,
-    ASSISTANT_BUFFER_MAX_CHARS,
-  );
+  const buffer = assembleAssistantBuffer(state.assistantRawBuffer, ASSISTANT_BUFFER_MAX_CHARS);
+  // A retained V8 slice otherwise keeps the complete assistant snapshot alive.
+  state.assistantBuffer = Buffer.from(buffer, "utf16le").toString("utf16le");
+  state.assistantRawBuffer = "";
   state.assistantBufferDirty = false;
   state.lastAssistantBufferAt = at;
 }
 
 function keepUtf16SafeTail(value: string, maxChars: number): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  let start = value.length - maxChars;
+  let start = Math.max(0, value.length - maxChars);
   const lead = value.charCodeAt(start);
-  if (lead >= 0xdc00 && lead <= 0xdfff) {
+  if (start > 0 && lead >= 0xdc00 && lead <= 0xdfff) {
     start += 1;
   }
   return value.slice(start);
 }
 
 function sanitizeActivityText(value: string, maxChars: number): string {
-  const normalized = redactToolPayloadText(stripInternalRuntimeContext(value))
-    .replace(/\s+/gu, " ")
-    .trim();
+  const normalized = stripInternalRuntimeContext(value).replace(/\s+/gu, " ").trim();
   return truncateUtf16Safe(normalized, maxChars);
 }
 
@@ -120,7 +119,7 @@ function summarizeToolArgs(args: unknown): string {
   ]) {
     const value = record[key];
     if (typeof value === "string") {
-      summary[key] = redactToolPayloadText(value);
+      summary[key] = value;
     } else if (typeof value === "number" || typeof value === "boolean") {
       summary[key] = value;
     }
@@ -161,14 +160,13 @@ function rememberItemStatus(
   state: SessionActivityNoteState,
   itemId: string,
   status: string,
-  limit: number,
 ): boolean {
   if (state.itemStatuses.get(itemId) === status) {
     return false;
   }
   state.itemStatuses.delete(itemId);
   state.itemStatuses.set(itemId, status);
-  pruneMapToMaxSize(state.itemStatuses, limit);
+  pruneMapToMaxSize(state.itemStatuses, MAX_ITEM_STATUSES);
   return true;
 }
 
@@ -178,13 +176,17 @@ export function flushSessionActivityAssistantNote(
 ): void {
   // Consumers force the latest cumulative snapshot; periodic assembly only keeps live state warm.
   syncAssistantBuffer(state);
-  // Redact assembled prose so split secrets match and raw fragments do not count as notes.
   if (!state.assistantBuffer || state.assistantBuffer.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN)) {
     return;
   }
   const sanitized = sanitizeActivityText(state.assistantBuffer, ASSISTANT_BUFFER_MAX_CHARS);
   const visible = keepUtf16SafeTail(sanitized, ASSISTANT_NOTE_MAX_CHARS).trim();
-  if (!visible || visible === HEARTBEAT_TOKEN || visible === HEARTBEAT_TRANSCRIPT_PROMPT) {
+  if (
+    !visible ||
+    visible === HEARTBEAT_TOKEN ||
+    Object.values(INTERNAL_WAKE_TRANSCRIPT_PROMPTS).some((prompt) => visible === prompt) ||
+    state.terminalReply?.disposition === "silent"
+  ) {
     return;
   }
   if (visible === state.lastAssistantNote) {
@@ -200,17 +202,23 @@ export function noteSessionActivityEvent(
   noteMaxChars: number = DEFAULT_NOTE_MAX_CHARS,
 ): void {
   const data = event.data;
+  const addNote = (text: string) => addActivityNote(state, text, noteMaxChars);
   switch (event.stream) {
     case "lifecycle": {
       const phase = data.phase;
       if (phase === "start") {
-        addActivityNote(state, "Run started", noteMaxChars);
+        addNote("Run started");
       } else if (phase === "finishing") {
-        addActivityNote(state, "Run is wrapping up", noteMaxChars);
+        addNote("Run is wrapping up");
       } else if (phase === "end" || phase === "error") {
         const health = terminalHealthFor(event);
-        const error = readString(data.error);
-        addActivityNote(state, error ? `Run ${health}: ${error}` : `Run ${health}`, noteMaxChars);
+        const error = readNonBlankString(data.error);
+        addNote(error ? `Run ${health}: ${error}` : `Run ${health}`);
+        const terminalReply = normalizeAgentRunTerminalReplySnapshot(data.terminalReply);
+        state.terminalReply = terminalReply;
+        if (terminalReply?.disposition === "visible") {
+          addNote(`Assistant: ${terminalReply.text}`);
+        }
       }
       return;
     }
@@ -220,39 +228,35 @@ export function noteSessionActivityEvent(
       if (data.phase !== "start") {
         return;
       }
-      const name = readString(data.name) ?? "tool";
+      const name = readNonBlankString(data.name) ?? "tool";
       const args = summarizeToolArgs(data.args);
-      addActivityNote(state, args ? `Tool ${name}: ${args}` : `Tool ${name}`, noteMaxChars);
+      addNote(args ? `Tool ${name}: ${args}` : `Tool ${name}`);
       return;
     }
     case "command_output": {
       if (data.phase !== "end") {
         return;
       }
-      const title = readString(data.title) ?? readString(data.name) ?? "command";
-      const exitCode = readFiniteNumber(data.exitCode);
-      const status = readString(data.status) ?? (exitCode === 0 ? "completed" : "failed");
-      addActivityNote(
-        state,
-        `${title}: ${status}${exitCode === undefined ? "" : ` (exit ${exitCode})`}`,
-        noteMaxChars,
-      );
+      const title = readNonBlankString(data.title) ?? readNonBlankString(data.name) ?? "command";
+      const exitCode = asFiniteNumber(data.exitCode);
+      const status = readNonBlankString(data.status) ?? (exitCode === 0 ? "completed" : "failed");
+      addNote(`${title}: ${status}${exitCode === undefined ? "" : ` (exit ${exitCode})`}`);
       return;
     }
     case "item": {
-      const status = readString(data.status);
-      const title = readString(data.title);
-      const itemId = readString(data.itemId) ?? title;
+      const status = readNonBlankString(data.status);
+      const title = readNonBlankString(data.title);
+      const itemId = readNonBlankString(data.itemId) ?? title;
       if (!status || !title || !itemId) {
         return;
       }
       if (!["running", "completed", "failed", "blocked"].includes(status)) {
         return;
       }
-      if (!rememberItemStatus(state, itemId, status, MAX_ITEM_STATUSES)) {
+      if (!rememberItemStatus(state, itemId, status)) {
         return;
       }
-      addActivityNote(state, `${title}: ${status}`, noteMaxChars);
+      addNote(`${title}: ${status}`);
       return;
     }
     case "plan": {
@@ -266,17 +270,17 @@ export function noteSessionActivityEvent(
       };
       for (const [index, step] of steps.entries()) {
         const itemId = `plan:${index}:${step.step}`;
-        if (!rememberItemStatus(state, itemId, step.status, MAX_ITEM_STATUSES)) {
+        if (!rememberItemStatus(state, itemId, step.status)) {
           continue;
         }
         const status = step.status === "in_progress" ? "running" : step.status;
-        addActivityNote(state, `Plan: ${step.step}: ${status}`, noteMaxChars);
+        addNote(`Plan: ${step.step}: ${status}`);
       }
       return;
     }
     case "assistant": {
-      const full = readString(data.text);
-      const delta = readString(data.delta);
+      const full = readNonBlankString(data.text);
+      const delta = readNonBlankString(data.delta);
       if (full) {
         state.assistantRawBuffer = full;
       } else if (delta) {
@@ -287,7 +291,6 @@ export function noteSessionActivityEvent(
           state.assistantBuffer + delta,
           ASSISTANT_BUFFER_MAX_CHARS,
         );
-        state.assistantRawBuffer = state.assistantBuffer;
         state.lastAssistantBufferAt = event.ts;
         return;
       } else {
@@ -305,24 +308,12 @@ export function noteSessionActivityEvent(
       if (data.status !== "pending" && data.phase !== "requested") {
         return;
       }
-      addActivityNote(
-        state,
-        `Waiting for approval: ${readString(data.title) ?? "user action"}`,
-        noteMaxChars,
-      );
+      addNote(`Waiting for approval: ${readNonBlankString(data.title) ?? "user action"}`);
       break;
     }
     default:
       break;
   }
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-export function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 export function terminalHealthFor(event: AgentEventPayload): "done" | "failed" {

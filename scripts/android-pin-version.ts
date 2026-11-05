@@ -1,4 +1,3 @@
-// Android Pin Version script supports OpenClaw repository automation.
 import path from "node:path";
 import {
   canonicalAndroidVersionCode,
@@ -9,6 +8,7 @@ import {
   syncAndroidVersioning,
   writeAndroidVersionManifest,
 } from "./lib/android-version.ts";
+import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 type CliOptions = {
@@ -53,68 +53,56 @@ function parseExplicitVersionCode(raw: string): number {
 }
 
 export function parseArgs(argv: string[]): CliOptions {
-  let explicitVersion: string | null = null;
-  let explicitVersionCode: number | null = null;
-  let fromGateway = false;
-  let rootDir = path.resolve(".");
-  let sync = true;
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case "--from-gateway": {
-        fromGateway = true;
-        break;
-      }
-      case "--version": {
-        explicitVersion = readOptionValue(argv, index, "--version");
-        index += 1;
-        break;
-      }
-      case "--version-code": {
-        const value = readOptionValue(argv, index, "--version-code");
-        explicitVersionCode = parseExplicitVersionCode(value);
-        index += 1;
-        break;
-      }
-      case "--no-sync": {
-        sync = false;
-        break;
-      }
-      case "--root": {
-        const value = readOptionValue(argv, index, "--root");
-        rootDir = path.resolve(value);
-        index += 1;
-        break;
-      }
-      case "-h":
-      case "--help": {
-        console.log(`${usage()}\n`);
-        process.exit(0);
-      }
-      default: {
+  const options: CliOptions = {
+    explicitVersion: null,
+    explicitVersionCode: null,
+    fromGateway: false,
+    rootDir: path.resolve("."),
+    sync: true,
+  };
+  parseFlagArgs(
+    argv,
+    options,
+    [
+      booleanFlag("--from-gateway", "fromGateway", true, { repeatable: true }),
+      booleanFlag("--no-sync", "sync", false, { repeatable: true }),
+      ...(
+        [
+          ["--version", "explicitVersion", undefined],
+          ["--version-code", "explicitVersionCode", parseExplicitVersionCode],
+          ["--root", "rootDir", path.resolve],
+        ] as const
+      ).map(([flag, key, transform]) =>
+        stringFlag(flag, key, {
+          allowInline: false,
+          missingValueMessage: `Missing value for ${flag}.`,
+          rejectShortOptions: true,
+          repeatable: true,
+          transform,
+        }),
+      ),
+    ],
+    {
+      ignoreDoubleDash: false,
+      onUnhandledArg(arg) {
+        if (arg === "-h" || arg === "--help") {
+          console.log(`${usage()}\n`);
+          process.exit(0);
+        }
         throw new Error(`Unknown argument: ${arg}`);
-      }
-    }
-  }
+      },
+    },
+  );
 
-  if (fromGateway === (explicitVersion !== null)) {
+  if (options.fromGateway === (options.explicitVersion !== null)) {
     throw new Error("Choose exactly one of --from-gateway or --version <YYYY.M.PATCH>.");
   }
 
-  if (explicitVersion !== null && !explicitVersion.trim()) {
+  if (options.explicitVersion !== null && !options.explicitVersion.trim()) {
     throw new Error("Missing value for --version.");
   }
 
-  return { explicitVersion, explicitVersionCode, fromGateway, rootDir, sync };
-}
-
-function readOptionValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`Missing value for ${flag}.`);
-  }
-  return value;
+  return options;
 }
 
 export function pinAndroidVersion(params: CliOptions): PinAndroidVersionResult {

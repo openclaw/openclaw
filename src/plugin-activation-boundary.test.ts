@@ -1,8 +1,6 @@
-// Tests plugin activation boundaries during root package startup.
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { normalizeModelRef } from "./agents/model-ref-shared.js";
 import { isStaticallyChannelConfigured } from "./config/channel-configured-shared.js";
-import { parseBrowserMajorVersion } from "./plugin-sdk/browser-host-inspection.js";
 
 const testModelIdNormalization = {
   providers: {
@@ -12,73 +10,26 @@ const testModelIdNormalization = {
         "gemini-3-pro-preview": "gemini-3.1-pro-preview",
       },
     },
-    xai: {
-      aliases: {
-        "grok-4-fast-reasoning": "grok-4-fast",
-      },
-    },
+    xai: { aliases: { "grok-4-fast-reasoning": "grok-4-fast" } },
   },
 };
 
-const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() =>
-  vi.fn((params: { artifactBasename: string }) => {
-    if (params.artifactBasename === "browser-host-inspection.js") {
-      return {
-        parseBrowserMajorVersion: (raw: string | null | undefined) => {
-          const match = raw?.match(/\b(\d+)\./u);
-          return match?.[1] ? Number(match[1]) : null;
-        },
-        readBrowserVersion: () => null,
-        resolveGoogleChromeExecutableForPlatform: () => null,
-      };
-    }
-    throw new Error(`unexpected public surface load: ${params.artifactBasename}`);
-  }),
-);
+const loadBundledPluginPublicSurfaceModuleSyncCore = vi.hoisted(() => vi.fn());
 
-const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() =>
-  vi.fn(() => ({
-    diagnostics: [],
-    plugins: [
-      {
-        id: "test-channel-fixture",
-        channels: ["discord", "irc", "slack", "telegram"],
-        providers: [],
-        cliBackends: [],
-        packageChannel: {
-          id: "discord",
-          configuredState: { env: { anyOf: ["DISCORD_BOT_TOKEN"] } },
-        },
-        modelIdNormalization: testModelIdNormalization,
-        skills: [],
-        hooks: [],
-        origin: "bundled",
-        rootDir: "/tmp/openclaw-test-channel-fixture",
-        source: "bundled",
-        manifestPath: "/tmp/openclaw-test-channel-fixture/openclaw.plugin.json",
-      },
-    ],
-  })),
-);
+const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() => vi.fn());
+const channelEnvs = vi.hoisted((): Record<string, NodeJS.ProcessEnv> => ({
+  telegram: { TELEGRAM_BOT_TOKEN: "token" },
+  discord: { DISCORD_BOT_TOKEN: "token" },
+  slack: { SLACK_BOT_TOKEN: "xoxb-test" },
+  irc: { IRC_HOST: "irc.example.com", IRC_NICK: "openclaw" },
+}));
 
-const facadeMockHelpers = vi.hoisted(() => {
-  const createLazyFacadeObjectValue = <T extends object>(load: () => T): T =>
-    new Proxy(
-      {},
-      {
-        get(_target, property, receiver) {
-          return Reflect.get(load(), property, receiver);
-        },
-      },
-    ) as T;
-  const createLazyFacadeArrayValue = <T extends readonly unknown[]>(load: () => T): T =>
-    new Proxy([], {
-      get(_target, property, receiver) {
-        return Reflect.get(load(), property, receiver);
-      },
-    }) as unknown as T;
-  return { createLazyFacadeArrayValue, createLazyFacadeObjectValue };
-});
+const facadeMockHelpers = vi.hoisted(() => ({
+  createLazyFacadeObjectValue: <T extends object>(load: () => T): T =>
+    new Proxy({} as T, {
+      get: (_target, property, receiver) => Reflect.get(load(), property, receiver),
+    }),
+}));
 
 vi.mock("./plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry,
@@ -89,22 +40,15 @@ vi.mock("./plugins/plugin-registry.js", () => ({
   }),
 }));
 
+// mock-isolation: Keep channel environment lookup independent of runtime plugin discovery.
 vi.mock("./secrets/channel-env-vars.js", () => ({
-  getChannelEnvVars: (channelId: string) => {
-    const varsByChannel: Record<string, string[]> = {
-      discord: ["DISCORD_BOT_TOKEN"],
-      irc: ["IRC_HOST", "IRC_NICK"],
-      slack: ["SLACK_BOT_TOKEN"],
-      telegram: ["TELEGRAM_BOT_TOKEN"],
-    };
-    return varsByChannel[channelId] ?? [];
-  },
+  getChannelEnvVars: (channelId: string) => Object.keys(channelEnvs[channelId] ?? {}),
 }));
 
 vi.mock("./plugin-sdk/facade-loader.js", () => ({
   ...facadeMockHelpers,
   listImportedBundledPluginFacadeIds: () => [],
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSyncCore,
   loadFacadeModuleAtLocationSync: vi.fn(),
   resetFacadeLoaderStateForTest: vi.fn(),
 }));
@@ -112,53 +56,32 @@ vi.mock("./plugin-sdk/facade-loader.js", () => ({
 vi.mock("./plugin-sdk/facade-runtime.js", () => ({
   ...facadeMockHelpers,
   testing: {},
-  canLoadActivatedBundledPluginPublicSurface: () => true,
   listImportedBundledPluginFacadeIds: () => [],
-  loadActivatedBundledPluginPublicSurfaceModuleSync: loadBundledPluginPublicSurfaceModuleSync,
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadActivatedBundledPluginPublicSurfaceModuleSync: loadBundledPluginPublicSurfaceModuleSyncCore,
+  loadBundledPluginPublicSurfaceModuleSyncCore,
   resetFacadeRuntimeStateForTest: vi.fn(),
-  tryLoadActivatedBundledPluginPublicSurfaceModuleSync: loadBundledPluginPublicSurfaceModuleSync,
+  tryLoadActivatedBundledPluginPublicSurfaceModuleSync:
+    loadBundledPluginPublicSurfaceModuleSyncCore,
 }));
 
-describe("plugin activation boundary", () => {
-  it("keeps generic boundaries cold and loads only narrow browser helper surfaces on use", () => {
-    loadBundledPluginPublicSurfaceModuleSync.mockReset();
+it("keeps generic channel and model-normalization boundaries cold", () => {
+  loadBundledPluginPublicSurfaceModuleSyncCore.mockReset();
 
-    expect(isStaticallyChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(
-      true,
-    );
-    expect(isStaticallyChannelConfigured({}, "discord", { DISCORD_BOT_TOKEN: "token" })).toBe(true);
-    expect(isStaticallyChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(true);
-    expect(
-      isStaticallyChannelConfigured({}, "irc", {
-        IRC_HOST: "irc.example.com",
-        IRC_NICK: "openclaw",
-      }),
-    ).toBe(true);
-    expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
-    const staticNormalize = {
-      allowPluginNormalization: false,
-      manifestPlugins: [{ modelIdNormalization: testModelIdNormalization }],
-    };
-    expect(normalizeModelRef("google", "gemini-3.1-pro", staticNormalize)).toEqual({
-      provider: "google",
-      model: "gemini-3.1-pro-preview",
-    });
-    expect(normalizeModelRef("google", "gemini-3-pro-preview", staticNormalize)).toEqual({
-      provider: "google",
-      model: "gemini-3.1-pro-preview",
-    });
-    expect(normalizeModelRef("xai", "grok-4-fast-reasoning", staticNormalize)).toEqual({
-      provider: "xai",
-      model: "grok-4-fast",
-    });
-    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
-
-    expect(parseBrowserMajorVersion("Google Chrome 144.0.7534.0")).toBe(144);
-    expect(
-      loadBundledPluginPublicSurfaceModuleSync.mock.calls.map(
-        ([params]) => params.artifactBasename,
-      ),
-    ).toEqual(["browser-host-inspection.js"]);
-  });
+  for (const [channel, env] of Object.entries(channelEnvs)) {
+    expect(isStaticallyChannelConfigured({}, channel, env)).toBe(true);
+  }
+  expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
+  const staticNormalize = {
+    allowPluginNormalization: false,
+    manifestPlugins: [{ modelIdNormalization: testModelIdNormalization }],
+  };
+  for (const [provider, input, model] of [
+    ["google", "gemini-3.1-pro", "gemini-3.1-pro-preview"],
+    ["google", "gemini-3-pro-preview", "gemini-3.1-pro-preview"],
+    ["xai", "grok-4-fast-reasoning", "grok-4-fast"],
+  ] as const) {
+    expect(normalizeModelRef(provider, input, staticNormalize)).toEqual({ provider, model });
+  }
+  expect(loadBundledPluginPublicSurfaceModuleSyncCore).not.toHaveBeenCalled();
+  expect(loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
 });

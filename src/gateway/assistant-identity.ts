@@ -1,11 +1,16 @@
-// Gateway assistant identity resolver.
-// Combines UI, agent config, and workspace identity files for Control UI display.
+// Combines agent config and workspace identity files for Control UI display.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import {
+  loadAgentIdentityFromWorkspaceAsync,
+  type AgentIdentityFile,
+} from "../agents/identity-file.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
-import { loadAgentIdentity } from "../commands/agents.config.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   AVATAR_MAX_DATA_URL_CHARS,
@@ -17,20 +22,42 @@ import {
   isWindowsAbsolutePath,
   looksLikeAvatarPath,
 } from "../shared/avatar-policy.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 
 const ASSISTANT_IDENTITY_LIMITS = {
   name: 50,
   emoji: 16,
 } as const;
-type AssistantIdentityField = keyof typeof ASSISTANT_IDENTITY_LIMITS;
-
 type AssistantIdentity = {
   name: string;
   avatar: string;
   emoji?: string;
 };
 
-type ResolvedAssistantIdentity = AssistantIdentity & { agentId: string };
+type AssistantIdentityNameSource = "agent" | "workspace" | "default";
+type ResolvedAssistantIdentity = AssistantIdentity & {
+  agentId: string;
+  nameSource: AssistantIdentityNameSource;
+};
+type AssistantIdentityParams = {
+  cfg: OpenClawConfig;
+  agentId?: string | null;
+  workspaceDir?: string | null;
+};
+
+const preparedIdentities = new WeakMap<
+  OpenClawConfig,
+  Map<
+    string,
+    {
+      file: AgentIdentityFile | null;
+      name?: string;
+      emoji?: string;
+      avatar?: string;
+      identity: ResolvedAssistantIdentity;
+    }
+  >
+>();
 
 export const DEFAULT_ASSISTANT_IDENTITY: AssistantIdentity = {
   name: "Assistant",
@@ -38,7 +65,7 @@ export const DEFAULT_ASSISTANT_IDENTITY: AssistantIdentity = {
 };
 
 function normalizeIdentityValue(
-  field: AssistantIdentityField,
+  field: keyof typeof ASSISTANT_IDENTITY_LIMITS,
   value: string | undefined,
 ): string | undefined {
   const trimmed = normalizeOptionalString(value);
@@ -72,17 +99,7 @@ function normalizeAvatarValue(value: string | undefined): string | undefined {
 }
 
 function normalizeEmojiValue(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  let hasNonAscii = false;
-  for (let i = 0; i < value.length; i += 1) {
-    if (value.charCodeAt(i) > 127) {
-      hasNonAscii = true;
-      break;
-    }
-  }
-  if (!hasNonAscii) {
+  if (!value || !/\P{ASCII}/u.test(value)) {
     return undefined;
   }
   if (
@@ -95,46 +112,107 @@ function normalizeEmojiValue(value: string | undefined): string | undefined {
   return value;
 }
 
+// Presentation may choose the first roster entry even when ambient work needs an explicit owner.
+export function resolveAssistantAgentId(cfg: OpenClawConfig, agentId?: string | null): string {
+  return normalizeAgentId(
+    agentId ?? tryResolveLegacyCompatibilityAgentId(cfg) ?? listAgentEntries(cfg)[0]?.id ?? "main",
+  );
+}
+
+/** Name-only reads need workspace fallback only when the configured name is absent. */
+export async function resolveAssistantIdentityName(
+  params: AssistantIdentityParams,
+): Promise<Pick<ResolvedAssistantIdentity, "agentId" | "name">> {
+  const agentId = resolveAssistantAgentId(params.cfg, params.agentId);
+  const name = normalizeIdentityValue("name", resolveAgentIdentity(params.cfg, agentId)?.name);
+  if (name) {
+    return { agentId, name };
+  }
+  const identity = await resolveAssistantIdentity({ ...params, agentId });
+  return { agentId, name: identity.name };
+}
+
+/** Avatar requests need workspace fallback only when no configured source is usable. */
+export async function resolveAssistantIdentityAvatar(
+  params: AssistantIdentityParams,
+): Promise<Pick<ResolvedAssistantIdentity, "agentId" | "avatar">> {
+  const agentId = resolveAssistantAgentId(params.cfg, params.agentId);
+  const configured = resolveAgentIdentity(params.cfg, agentId);
+  const avatar =
+    normalizeAvatarValue(configured?.avatar) ?? normalizeAvatarValue(configured?.emoji);
+  if (avatar) {
+    return { agentId, avatar };
+  }
+  const identity = await resolveAssistantIdentity({ ...params, agentId });
+  return { agentId, avatar: identity.avatar };
+}
+
 /** Resolve the display name/avatar/emoji for an agent-facing assistant identity. */
-export function resolveAssistantIdentity(params: {
-  cfg: OpenClawConfig;
-  agentId?: string | null;
-  workspaceDir?: string | null;
-}): ResolvedAssistantIdentity {
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
-  const agentId = normalizeAgentId(params.agentId ?? defaultAgentId);
-  const isDefaultAgent = agentId === defaultAgentId;
+export async function resolveAssistantIdentity(
+  params: AssistantIdentityParams,
+): Promise<ResolvedAssistantIdentity> {
+  const agentId = resolveAssistantAgentId(params.cfg, params.agentId);
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
-  const configAssistant = params.cfg.ui?.assistant;
-  const agentIdentity = resolveAgentIdentity(params.cfg, agentId);
-  const fileIdentity = workspaceDir ? loadAgentIdentity(workspaceDir) : null;
+  const {
+    name: configuredName,
+    emoji: configuredEmoji,
+    avatar: configuredAvatar,
+  } = resolveAgentIdentity(params.cfg, agentId) ?? {};
+  const agentName = normalizeIdentityValue("name", configuredName);
+  const agentAvatar =
+    normalizeAvatarValue(configuredAvatar) ?? normalizeAvatarValue(configuredEmoji);
+  const agentEmoji = normalizeEmojiValue(normalizeIdentityValue("emoji", configuredEmoji));
+  // A complete configured identity has no workspace fallback to refresh.
+  const fileIdentity =
+    workspaceDir && (!agentName || !agentAvatar || !agentEmoji)
+      ? await loadAgentIdentityFromWorkspaceAsync(workspaceDir)
+      : null;
+  const prepared = getOrCreateWeakOwnerMap(preparedIdentities, params.cfg);
+  const key = JSON.stringify([agentId, workspaceDir]);
+  const cached = prepared.get(key);
+  if (
+    cached &&
+    cached.file === fileIdentity &&
+    cached.name === configuredName &&
+    cached.emoji === configuredEmoji &&
+    cached.avatar === configuredAvatar
+  ) {
+    prepared.delete(key);
+    prepared.set(key, cached);
+    return cached.identity;
+  }
 
-  const uiName = normalizeIdentityValue("name", configAssistant?.name);
-  const agentName = normalizeIdentityValue("name", agentIdentity?.name);
   const fileName = normalizeIdentityValue("name", fileIdentity?.name);
-  const name =
-    (isDefaultAgent ? (uiName ?? agentName ?? fileName) : (agentName ?? fileName ?? uiName)) ??
-    DEFAULT_ASSISTANT_IDENTITY.name;
+  const resolvedName: [string, AssistantIdentityNameSource] | undefined = agentName
+    ? [agentName, "agent"]
+    : fileName
+      ? [fileName, "workspace"]
+      : undefined;
+  const [name, nameSource] = resolvedName ?? [DEFAULT_ASSISTANT_IDENTITY.name, "default"];
 
-  const uiAvatar = normalizeAvatarValue(configAssistant?.avatar);
-  const agentAvatarCandidates = [
-    normalizeAvatarValue(agentIdentity?.avatar),
-    normalizeAvatarValue(agentIdentity?.emoji),
+  const avatarCandidates = [
+    agentAvatar,
     normalizeAvatarValue(fileIdentity?.avatar),
     normalizeAvatarValue(fileIdentity?.emoji),
   ];
-  const avatarCandidates = isDefaultAgent
-    ? [uiAvatar, ...agentAvatarCandidates]
-    : [...agentAvatarCandidates, uiAvatar];
   const avatar = avatarCandidates.find(Boolean) ?? DEFAULT_ASSISTANT_IDENTITY.avatar;
 
   const emojiCandidates = [
-    normalizeIdentityValue("emoji", agentIdentity?.emoji),
     normalizeIdentityValue("emoji", fileIdentity?.emoji),
-    normalizeIdentityValue("emoji", agentIdentity?.avatar),
+    normalizeIdentityValue("emoji", configuredAvatar),
     normalizeIdentityValue("emoji", fileIdentity?.avatar),
   ];
-  const emoji = emojiCandidates.map((candidate) => normalizeEmojiValue(candidate)).find(Boolean);
+  const emoji =
+    agentEmoji ?? emojiCandidates.map((candidate) => normalizeEmojiValue(candidate)).find(Boolean);
 
-  return { agentId, name, avatar, emoji };
+  const identity = { agentId, name, nameSource, avatar, emoji };
+  prepared.set(key, {
+    file: fileIdentity,
+    name: configuredName,
+    emoji: configuredEmoji,
+    avatar: configuredAvatar,
+    identity,
+  });
+  pruneMapToMaxSize(prepared, 4);
+  return identity;
 }

@@ -1,0 +1,211 @@
+import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
+import { expect } from "vitest";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { resolveTestOpenAIProviderCapabilities as resolveTestCapabilities } from "../providers/openai-provider.test-support.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
+import type { Model } from "../types.js";
+import { createAssistantOutput } from "./assistant-output.js";
+import { encodedModelRequestBodyStream } from "./model-request-body.js";
+import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
+import type { processCompletionsStream } from "./openai-completions-stream.js";
+
+export type OpenAICompletionsOutput = Parameters<typeof processCompletionsStream>[1];
+type CompletionsModel = Model<"openai-completions">;
+
+export type CapturedStreamEvent = {
+  type?: string;
+  contentIndex?: number;
+  delta?: string;
+  content?: string;
+  partial?: unknown;
+};
+
+const baseTestHost = getAiTransportHost();
+configureAiTransportHost({
+  ...baseTestHost,
+  buildModelFetch: () => async (input, init) => {
+    const response = await globalThis.fetch(input, init);
+    const contentType = response.headers.get("content-type") ?? "";
+    if (
+      !response.ok ||
+      !response.body ||
+      !contentType.includes("application/json") ||
+      encodedModelRequestBodyStream(init?.body) === false
+    ) {
+      return response;
+    }
+    const headers = new Headers(response.headers);
+    headers.set("content-type", "text/event-stream; charset=utf-8");
+    return new Response(`data: ${await response.text()}\n\ndata: [DONE]\n\n`, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  },
+  resolveOpenAIStrictToolSetting: (_model, options) =>
+    options?.supportsStrictMode ? true : undefined,
+  resolveProviderRequestCapabilities: resolveTestCapabilities,
+  resolveModelRequestTimeoutMs: (model) => {
+    const value = (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
+    return typeof value === "number" && Number.isFinite(value) && value > 0
+      ? Math.floor(value)
+      : undefined;
+  },
+});
+
+export function makeCompletionsModel(overrides: Partial<CompletionsModel> = {}): CompletionsModel {
+  const id = overrides.id ?? "test-model";
+  return makeProviderModel("openai-completions", "openai", id, {
+    baseUrl: "https://api.openai.com/v1",
+    contextWindow: 200_000,
+    ...overrides,
+  });
+}
+function modelFixture(id: string, overrides: Partial<CompletionsModel> = {}) {
+  return makeCompletionsModel({ ...overrides, id, name: id });
+}
+
+export function makeCompletionsChunk(
+  delta: unknown,
+  finishReason: unknown = null,
+  overrides: Record<string, unknown> = {},
+): ChatCompletionChunk {
+  return {
+    id: "chatcmpl-test",
+    object: "chat.completion.chunk",
+    created: 1,
+    model: "test-model",
+    choices: [
+      {
+        index: 0,
+        delta: delta as ChatCompletionChunk["choices"][number]["delta"],
+        logprobs: null,
+        finish_reason: finishReason as ChatCompletionChunk["choices"][number]["finish_reason"],
+      },
+    ],
+    ...overrides,
+  } as ChatCompletionChunk;
+}
+
+export function makeCompletionsToolDelta(id: string, name: string, args: string) {
+  return {
+    tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: args } }],
+  };
+}
+
+export function createDeepSeekCompletionsModel(): CompletionsModel {
+  return modelFixture("deepseek-v4-pro", {
+    ...nativeDeepSeekModel,
+    compat: { thinkingFormat: "deepseek" },
+  });
+}
+
+export { createAssistantOutput };
+
+export function expectedRecoveredTool(name: string, args: Record<string, unknown>) {
+  return {
+    type: "toolCall",
+    id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
+    name,
+    arguments: args,
+  };
+}
+
+export async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<never> {
+  for (const chunk of chunks) {
+    yield chunk as never;
+  }
+}
+
+export { expectObjectFields as expectRecordFields } from "../../../../src/test-utils/mock-call-assertions.js";
+
+export const openRouterModel = modelFixture("deepseek/deepseek-v4-flash", {
+  provider: "openrouter",
+  baseUrl: "https://openrouter.ai/api/v1",
+});
+
+export const openRouterAnthropicModel = modelFixture(
+  "anthropic/claude-sonnet-4.6",
+  openRouterModel,
+);
+
+export const openRouterXaiModel = modelFixture("x-ai/grok-4.3", openRouterModel);
+
+export const openAIModel = modelFixture("gpt-5.4-mini");
+
+export const nativeDeepSeekModel = modelFixture("deepseek-v4-flash", {
+  provider: "deepseek",
+  baseUrl: "https://api.deepseek.com",
+  contextWindow: 1_000_000,
+  maxTokens: 384_000,
+});
+
+export const nativeZaiModel = modelFixture("glm-5.1", {
+  provider: "zai",
+  baseUrl: "https://api.z.ai/api/paas/v4",
+});
+
+export const xiaomiModel = modelFixture("mimo-v2.5-pro", {
+  provider: "xiaomi",
+  baseUrl: "https://api.xiaomimimo.com/v1",
+});
+
+export const customMiMoProxyModel: CompletionsModel = {
+  ...xiaomiModel,
+  provider: "xiaomi-orbit",
+  baseUrl: "https://proxy.example.com/v1",
+};
+
+export const customKimiProxyModel = modelFixture("moonshotai/kimi-k2.6", {
+  provider: "custom-openai-proxy",
+  baseUrl: "https://proxy.example.com/v1",
+});
+
+export const staleKimiK27Model = modelFixture("kimi-k2.7-code", {
+  ...customKimiProxyModel,
+  provider: "moonshot",
+  baseUrl: "https://api.moonshot.ai/v1",
+  reasoning: false,
+});
+
+export const customQwenReasoningModel = modelFixture("Qwen3.6-35B-A3B", customKimiProxyModel);
+
+export function getAssistantMessage(params: { messages: unknown }) {
+  expect(Array.isArray(params.messages)).toBe(true);
+  const list = params.messages as Array<Record<string, unknown>>;
+  const assistant = list.find((message) => message.role === "assistant");
+  expect(assistant).toBeDefined();
+  return assistant as Record<string, unknown>;
+}
+
+export function buildReplayParams(model: CompletionsModel, thinkingSignature: string) {
+  return buildOpenAICompletionsParams(
+    model,
+    {
+      systemPrompt: "system",
+      messages: [
+        { role: "user", content: "hello" },
+        {
+          ...createAssistantOutput(model),
+          timestamp: 0,
+          content: [
+            {
+              type: "thinking",
+              thinking: "Need to answer politely.",
+              thinkingSignature,
+            },
+            { type: "text", text: "Hello!" },
+          ],
+        },
+        { role: "user", content: "again" },
+      ],
+      tools: [],
+    } as never,
+    undefined,
+  ) as { messages: unknown };
+}
+
+export const customReasoningProxyModel = modelFixture("my-proxy/r1-pro", {
+  provider: "custom-openai-proxy",
+  baseUrl: "https://my-proxy.example.com/v1",
+});

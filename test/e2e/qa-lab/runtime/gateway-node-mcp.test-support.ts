@@ -1,0 +1,527 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { once } from "node:events";
+import { watch } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { createInterface } from "node:readline";
+import { setTimeout as delay } from "node:timers/promises";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { expect, vi } from "vitest";
+import type { createQaGatewayChild, QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
+import type { McpServerConfig } from "../../../../src/config/types.mcp.js";
+import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { hasErrnoCode } from "../../../../src/infra/errno.js";
+import { signalProcessTree } from "../../../../src/process/kill-tree.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../helpers/promise.js";
+
+export const TEST_TIMEOUT_MS = 180_000;
+const WAIT_TIMEOUT_MS = 30_000;
+const FIXTURE_READY_TYPE = "openclaw-mcp-parity-ready";
+const NODE_DISPLAY_NAME = "QA MCP parity node";
+export const NODE_MCP_COMMAND = "mcp.tools.call.v1";
+export const WAIT_OPTIONS = { timeout: WAIT_TIMEOUT_MS, interval: 100 };
+
+export type GatewayHandle = QaGatewayChild;
+export type CapturedChild = {
+  child: ChildProcess;
+  exited: Promise<void>;
+  logs: () => string;
+  signalTree: (signal: "SIGTERM" | "SIGKILL") => Promise<void>;
+};
+export type HttpFixture = CapturedChild & {
+  pid: number;
+  urls: Record<"streamableHttp" | "sse", string>;
+};
+type NodeRead = {
+  nodeId: string;
+  displayName?: string;
+  approvalState?: string;
+  paired?: boolean;
+  connected?: boolean;
+  nodePluginTools?: NodePluginToolDescriptor[];
+};
+export type ProbeResult = {
+  label: string;
+  marker: string;
+  pid: number;
+};
+const CHILD_ENV_KEYS = ["PATH", "PATHEXT", "SystemRoot", "WINDIR", "ComSpec"] as const;
+
+export async function createMcpPlacement(root: string, placement: "node" | "session") {
+  const at = (name: string) => path.join(root, placement, name);
+  const home = at("home"),
+    tempDir = at("tmp");
+  const stateDir = at("state"),
+    workspaceDir = at("workspace");
+  const configPath = at("openclaw.json");
+  await Promise.all(
+    [home, tempDir, placement === "node" ? stateDir : workspaceDir].map((dir) =>
+      fs.mkdir(dir, { recursive: true }),
+    ),
+  );
+  const env = (extra?: Record<string, string>) => createChildEnv({ home, tempDir, extra });
+  return {
+    configPath,
+    workspaceDir,
+    env,
+    servers: (fixture: HttpFixture, extra?: Record<string, string>) =>
+      createMcpServers({
+        placement,
+        fixture,
+        stdioEnv: env(extra),
+        repoRoot: process.cwd(),
+        fixturePath: path.join(
+          process.cwd(),
+          "test/e2e/qa-lab/runtime/gateway-node-mcp.fixture.mjs",
+        ),
+      }),
+    hostEnv: (token: string) =>
+      env({
+        OPENCLAW_HOME: home,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_GATEWAY_TOKEN: token,
+        OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+      }),
+  };
+}
+
+export function startMcpGateway(
+  owner: ReturnType<typeof createQaGatewayChild>,
+  configure: (cfg: OpenClawConfig) => OpenClawConfig = (cfg) => cfg,
+): Promise<GatewayHandle> {
+  const repoRoot = process.cwd();
+  return owner.start({
+    repoRoot,
+    command: {
+      executablePath: process.execPath,
+      argsPrefix: ["dist/index.js"],
+      cwd: repoRoot,
+      // MCP transport recovery needs no packaged-install repair.
+      usePackagedPlugins: false,
+    },
+    transportBaseUrl: "http://127.0.0.1",
+    controlUiEnabled: false,
+    runtimeEnvPatch: {
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_SKIP_PROVIDERS: "1",
+      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+    },
+    mutateConfig: (cfg) =>
+      configure({
+        ...cfg,
+        plugins: { enabled: false },
+        gateway: {
+          ...cfg.gateway,
+          nodes: {
+            ...cfg.gateway?.nodes,
+            commands: { allow: [NODE_MCP_COMMAND] },
+            pairing: { ...cfg.gateway?.nodes?.pairing, autoApproveLocal: false },
+          },
+        },
+      }),
+  });
+}
+
+export async function waitForMcpFixtureGate(filePath: string, signal: AbortSignal): Promise<void> {
+  try {
+    await fs.access(filePath);
+    return;
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+  }
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      signal.removeEventListener("abort", aborted);
+      clearInterval(poll);
+      watcher.close();
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const inspect = () => {
+      void fs.access(filePath).then(
+        () => finish(),
+        (error: unknown) => {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            finish(toErrorObject(error, "Fixture gate inspection failed"));
+          }
+        },
+      );
+    };
+    const watcher = watch(path.dirname(filePath), (_event, filename) => {
+      if (!filename || filename === path.basename(filePath)) {
+        inspect();
+      }
+    });
+    const aborted = () =>
+      finish(
+        new Error(`timed out waiting for fixture gate: ${path.basename(filePath)}`, {
+          cause: signal.reason,
+        }),
+      );
+    // oxlint-disable-next-line no-warning-comments -- remove after the upstream Bun fs.watch fix ships.
+    // TODO(bun): remove polling when Bun's fs.watch reliably reports file creation.
+    const poll = setInterval(inspect, 50);
+    poll.unref();
+    watcher.once("error", finish);
+    signal.addEventListener("abort", aborted, { once: true });
+    if (signal.aborted) {
+      aborted();
+    } else {
+      inspect();
+    }
+  });
+}
+
+export function descriptorFor(
+  descriptors: readonly NodePluginToolDescriptor[],
+  server: string,
+): NodePluginToolDescriptor {
+  const descriptor = descriptors.find((entry) => entry.mcp?.server === server);
+  if (!descriptor) {
+    throw new Error(`missing ${server} MCP descriptor`);
+  }
+  return descriptor;
+}
+
+function spawnCaptured(args: string[], env: NodeJS.ProcessEnv): CapturedChild {
+  return captureChild(
+    spawn(process.execPath, args, {
+      cwd: process.cwd(),
+      detached: process.platform !== "win32",
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
+}
+
+function captureChild(child: ChildProcess): CapturedChild {
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (chunk: Buffer) => {
+    stdout = (stdout + chunk.toString()).slice(-200_000);
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderr = (stderr + chunk.toString()).slice(-200_000);
+  });
+  const pid = child.pid;
+  const signals: Partial<Record<"SIGTERM" | "SIGKILL", Promise<void>>> = {};
+  const signalTree = (signal: "SIGTERM" | "SIGKILL") => {
+    return (signals[signal] ??= new Promise<void>((resolve) => {
+      if (pid === undefined) {
+        resolve();
+        return;
+      }
+      signalProcessTree(pid, signal, {
+        detached: process.platform !== "win32",
+        onComplete: resolve,
+      });
+    }));
+  };
+  const exited = once(child, "exit").then(async () => {
+    // The root PID still identifies this task-owned tree at exit delivery. Reap
+    // descendants before any retained numeric process-group authority can age.
+    await signalTree("SIGKILL");
+  });
+  return {
+    child,
+    exited,
+    logs: () => `stdout:\n${stdout}\nstderr:\n${stderr}`,
+    signalTree,
+  };
+}
+
+export function createChildEnv(params: {
+  home: string;
+  tempDir: string;
+  extra?: Record<string, string>;
+}): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of CHILD_ENV_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined) {
+      env[key] = value;
+    }
+  }
+  return {
+    ...env,
+    HOME: params.home,
+    USERPROFILE: params.home,
+    XDG_CACHE_HOME: path.join(params.home, ".cache"),
+    XDG_CONFIG_HOME: path.join(params.home, ".config"),
+    XDG_DATA_HOME: path.join(params.home, ".local", "share"),
+    TMPDIR: params.tempDir,
+    TMP: params.tempDir,
+    TEMP: params.tempDir,
+    ...params.extra,
+  };
+}
+
+export async function startHttpFixture(params: {
+  fixturePath: string;
+  labelPrefix: "session" | "node";
+  env: NodeJS.ProcessEnv;
+  signal: AbortSignal;
+}): Promise<HttpFixture> {
+  const captured = spawnCaptured(
+    [params.fixturePath, "http", "--label-prefix", params.labelPrefix],
+    params.env,
+  );
+  let transferred = false;
+  let lines: ReturnType<typeof createInterface> | undefined;
+  try {
+    const pid = captured.child.pid;
+    if (pid === undefined) {
+      throw new Error("HTTP MCP fixture did not start");
+    }
+    if (!captured.child.stdout) {
+      throw new Error("HTTP MCP fixture stdout was not piped");
+    }
+    lines = createInterface({ input: captured.child.stdout });
+    const line = await withinTest(
+      awaitGateBeforeSettlement(
+        new Promise<string>((resolve) => {
+          lines?.once("line", resolve);
+        }),
+        captured.exited.then(() => {
+          throw new Error(`HTTP MCP fixture exited before readiness:\n${captured.logs()}`);
+        }),
+        "HTTP MCP fixture exited before readiness",
+      ),
+      params.signal,
+    );
+    const value: unknown = JSON.parse(line);
+    if (
+      !isRecord(value) ||
+      value.type !== FIXTURE_READY_TYPE ||
+      !isRecord(value.urls) ||
+      typeof value.urls.streamableHttp !== "string" ||
+      typeof value.urls.sse !== "string"
+    ) {
+      throw new Error(`HTTP MCP fixture returned invalid readiness: ${line}`);
+    }
+    transferred = true;
+    return {
+      ...captured,
+      pid,
+      urls: { streamableHttp: value.urls.streamableHttp, sse: value.urls.sse },
+    };
+  } finally {
+    lines?.close();
+    if (!transferred) {
+      await stopChild(captured);
+    }
+  }
+}
+
+export function startNodeProcess(gatewayPort: number, nodeEnv: NodeJS.ProcessEnv): CapturedChild {
+  return spawnCaptured(
+    [
+      "dist/index.js",
+      "node",
+      "run",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(gatewayPort),
+      "--display-name",
+      NODE_DISPLAY_NAME,
+    ],
+    nodeEnv,
+  );
+}
+
+export async function stopChild(captured: CapturedChild | undefined): Promise<void> {
+  if (!captured || captured.child.exitCode !== null || captured.child.signalCode !== null) {
+    await captured?.exited.catch(() => {});
+    return;
+  }
+  await captured.signalTree("SIGTERM");
+  const graceful = await Promise.race([
+    captured.exited.then(() => true),
+    delay(10_000, false, { ref: false }),
+  ]);
+  if (!graceful) {
+    await captured.signalTree("SIGKILL");
+  }
+  await captured.exited;
+}
+
+export function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+export async function waitForProcessExit(pid: number): Promise<void> {
+  await vi.waitFor(() => expect(processIsAlive(pid)).toBe(false), WAIT_OPTIONS);
+}
+
+export async function approvePairing(
+  gateway: GatewayHandle,
+  kind: "device" | "node",
+  nodeId?: string,
+): Promise<string> {
+  let requestId = "";
+  let approvedId = "";
+  await vi.waitFor(async () => {
+    const result = (await gateway.call(`${kind}.pair.list`, {})) as {
+      pending?: Array<{
+        requestId?: string;
+        deviceId?: string;
+        nodeId?: string;
+        role?: string;
+      }>;
+    };
+    const pending = result.pending?.find((entry) =>
+      kind === "device" ? entry.role === "node" : entry.nodeId === nodeId,
+    );
+    expect(pending?.requestId, gateway.logs()).toBeTruthy();
+    requestId = pending?.requestId ?? "";
+    approvedId = kind === "device" ? (pending?.deviceId ?? "") : (pending?.nodeId ?? "");
+    expect(approvedId, gateway.logs()).toBeTruthy();
+  }, WAIT_OPTIONS);
+  await gateway.call(`${kind}.pair.approve`, { requestId });
+  return approvedId;
+}
+
+export async function readNode(
+  gateway: GatewayHandle,
+  nodeId: string,
+): Promise<NodeRead | undefined> {
+  const result = (await gateway.call("node.list", {})) as { nodes?: NodeRead[] };
+  return result.nodes?.find((entry) => entry.nodeId === nodeId);
+}
+
+export async function waitForNode(
+  gateway: GatewayHandle,
+  nodeId: string,
+  toolCount?: number,
+): Promise<NodeRead> {
+  let node: NodeRead | undefined;
+  await vi.waitFor(async () => {
+    node = await readNode(gateway, nodeId);
+    expect(node, gateway.logs()).toMatchObject({
+      nodeId,
+      displayName: NODE_DISPLAY_NAME,
+      approvalState: "approved",
+      paired: true,
+      connected: true,
+    });
+    if (toolCount !== undefined) {
+      expect(node?.nodePluginTools ?? [], gateway.logs()).toHaveLength(toolCount);
+    }
+  }, WAIT_OPTIONS);
+  if (!node) {
+    throw new Error(`node ${nodeId} did not connect:\n${gateway.logs()}`);
+  }
+  return node;
+}
+
+export function parseNodeMcpTextRecord(value: unknown): Record<string, unknown> {
+  const payload = isRecord(value) && isRecord(value.payload) ? value.payload : value;
+  if (!isRecord(payload) || !Array.isArray(payload.content)) {
+    throw new Error(`MCP result omitted content: ${JSON.stringify(value)}`);
+  }
+  const text = payload.content.find(
+    (item) => isRecord(item) && item.type === "text" && typeof item.text === "string",
+  );
+  if (!isRecord(text) || typeof text.text !== "string") {
+    throw new Error(`MCP result omitted text: ${JSON.stringify(value)}`);
+  }
+  const parsed: unknown = JSON.parse(text.text);
+  if (!isRecord(parsed)) {
+    throw new Error(`MCP text was not an object: ${text.text}`);
+  }
+  return parsed;
+}
+
+function parseProbeResult(value: unknown): ProbeResult {
+  const parsed = parseNodeMcpTextRecord(value);
+  const { label, marker, pid } = parsed;
+  if (typeof label !== "string" || typeof marker !== "string" || typeof pid !== "number") {
+    throw new Error(`MCP result had invalid probe data: ${JSON.stringify(parsed)}`);
+  }
+  return { label, marker, pid };
+}
+
+export async function invokeNodeMcpPayload(params: {
+  gateway: GatewayHandle;
+  nodeId: string;
+  descriptor: NodePluginToolDescriptor;
+  marker: string;
+}): Promise<unknown> {
+  const mcp = params.descriptor.mcp;
+  if (!mcp) {
+    throw new Error(`node descriptor ${params.descriptor.name} omitted MCP routing`);
+  }
+  return await params.gateway.call(
+    "node.invoke",
+    {
+      nodeId: params.nodeId,
+      command: NODE_MCP_COMMAND,
+      params: { server: mcp.server, tool: mcp.tool, arguments: { marker: params.marker } },
+      timeoutMs: WAIT_TIMEOUT_MS,
+      idempotencyKey: randomUUID(),
+    },
+    { timeoutMs: WAIT_TIMEOUT_MS },
+  );
+}
+
+export async function invokeNodeMcp(
+  params: Parameters<typeof invokeNodeMcpPayload>[0],
+): Promise<ProbeResult> {
+  return parseProbeResult(await invokeNodeMcpPayload(params));
+}
+
+function createMcpServers(params: {
+  placement: "session" | "node";
+  fixture: HttpFixture;
+  stdioEnv: Record<string, string>;
+  fixturePath: string;
+  repoRoot: string;
+}): Record<string, McpServerConfig> {
+  const common = {
+    connectionTimeoutMs: WAIT_TIMEOUT_MS,
+    requestTimeoutMs: WAIT_TIMEOUT_MS,
+    toolFilter: { include: ["parity_*"], exclude: ["*_hidden"] },
+  };
+  return {
+    stdio: {
+      ...common,
+      transport: "stdio",
+      command: process.execPath,
+      args: [params.fixturePath, "stdio", "--label", `${params.placement}-stdio`],
+      cwd: params.repoRoot,
+      env: params.stdioEnv,
+    },
+    streamableHttp: {
+      ...common,
+      transport: "streamable-http",
+      url: params.fixture.urls.streamableHttp,
+    },
+    sse: {
+      ...common,
+      transport: "sse",
+      url: params.fixture.urls.sse,
+    },
+  };
+}

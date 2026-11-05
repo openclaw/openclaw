@@ -1,0 +1,380 @@
+import fs from "node:fs/promises";
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
+import { expect, type TestContext } from "vitest";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import type { VitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { runVitestShutdownCommand } from "../../test/helpers/vitest-shutdown-command.js";
+
+export function createGatewayFixtureFork(
+  workerRun: VitestWorkerRun,
+  registerCleanup: (cleanup: () => Promise<void>) => unknown,
+  maxBytes = 4 * 1024 * 1024,
+) {
+  const lifetime = createFixtureLifetime();
+  registerCleanup(() => lifetime.cleanup());
+  const repoRoot = path.resolve(import.meta.dirname, "../..");
+  const artifactsRoot = path.join(repoRoot, ".artifacts");
+  let project: Promise<{ config: string }> | undefined;
+  const prepareProject = () =>
+    (project ??= (async () => {
+      const root = lifetime.createTempDir("gateway-fixture-code-");
+      await fs.mkdir(artifactsRoot, { recursive: true });
+      await fs.symlink(
+        path.join(repoRoot, "node_modules"),
+        path.join(root, "node_modules"),
+        "junction",
+      );
+      const config = path.join(root, "vitest.config.ts");
+      await fs.writeFile(
+        config,
+        `
+import { defineConfig } from "vitest/config";
+import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.shared.config.ts"))};
+export default defineConfig({
+  envDir: false,
+  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
+  plugins: sharedVitestConfig.plugins,
+  resolve: sharedVitestConfig.resolve,
+  test: {
+    pool: "forks", isolate: true, maxWorkers: 1, fileParallelism: false,
+    environment: sharedVitestConfig.test.environment,
+    include: ["fixture.test.ts"],
+    testTimeout: sharedVitestConfig.test.testTimeout,
+    hookTimeout: sharedVitestConfig.test.hookTimeout,
+    deps: sharedVitestConfig.test.deps,
+    server: sharedVitestConfig.test.server,
+    fsModuleCache: sharedVitestConfig.test.fsModuleCache,
+    fsModuleCachePath: ${JSON.stringify(path.join(root, "modules"))},
+  },
+});
+`,
+      );
+      return { config };
+    })());
+
+  return function runGatewayFixtureFork(
+    context: Pick<TestContext, "signal" | "onTestFinished">,
+    source: (repoRoot: string, root: string, codeRoot: string) => string,
+    assertJournal?: (journal: unknown, text: string) => void,
+  ): Promise<void> {
+    const run = lifetime.run(async () => {
+      context.signal.throwIfAborted();
+      const root = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "gateway-close-fork-")),
+      );
+      let joined = false;
+      try {
+        // Failed child claims stay private; only transformed code is shared across fresh forks.
+        createVitestResourceOwner(root);
+        const prepared = await prepareProject();
+        const require = createRequire(import.meta.url);
+        const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
+        // Vite's native runner needs generated tests and their imports under the same root.
+        const codeRoot = lifetime.createTempDir("gateway-fixture-code-", artifactsRoot);
+        await fs.mkdir(path.join(root, "home"));
+        await fs.mkdir(path.join(root, "tmp"));
+        await fs.writeFile(
+          path.join(codeRoot, "fixture.test.ts"),
+          source(repoRoot, root, codeRoot),
+        );
+        const output = await runVitestShutdownCommand({
+          workerRun,
+          args: [
+            path.join(vitestPackageDir, "vitest.mjs"),
+            "run",
+            "--root",
+            repoRoot,
+            "--dir",
+            codeRoot,
+            "--config",
+            prepared.config,
+            "--configLoader",
+            "runner",
+            "--reporter=verbose",
+          ],
+          cwd: repoRoot,
+          signal: context.signal,
+          timeoutMs: 90_000,
+          maxBytes,
+          env: {
+            PATH: process.env.PATH,
+            OPENCLAW_VITEST_FS_MODULE_CACHE: process.env.OPENCLAW_VITEST_FS_MODULE_CACHE,
+            HOME: path.join(root, "home"),
+            USERPROFILE: path.join(root, "home"),
+            OPENCLAW_HOME: path.join(root, "home"),
+            OPENCLAW_STATE_DIR: path.join(root, "home/.openclaw"),
+            OPENCLAW_CONFIG_PATH: path.join(root, "home/.openclaw/openclaw.json"),
+            TMPDIR: path.join(root, "tmp"),
+            TMP: path.join(root, "tmp"),
+            TEMP: path.join(root, "tmp"),
+            CI: "1",
+            NO_COLOR: "1",
+          },
+        });
+        const diagnostics = `${output.stdout}\n${output.stderr}`;
+        const pid = Number(await fs.readFile(path.join(root, "worker.pid"), "utf8"));
+        expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+        expect(() => process.kill(pid, 0), "native worker must exit before root release").toThrow(
+          expect.objectContaining({ code: "ESRCH" }),
+        );
+        joined = true;
+        expect(output.code, diagnostics).toBe(0);
+        if (assertJournal) {
+          const journal = await fs.readFile(path.join(root, "journal.json"), "utf8");
+          assertJournal(JSON.parse(journal), journal);
+        }
+      } finally {
+        if (joined) {
+          await fs.rm(root, { recursive: true, force: true });
+        } else {
+          // Missing join receipts retain shared code even after ordinary assertion/IO failures.
+          void lifetime.verifyCleanup(async () => {
+            throw new Error(`Unjoined native Gateway fixture still owns shared code: ${root}`);
+          });
+          console.warn(`Retained unjoined native Gateway fixture: ${root}`);
+        }
+      }
+    });
+    context.onTestFinished(() => run);
+    return run;
+  };
+}
+
+export type GatewayStartupFixtureCase = {
+  id: string;
+  missingTls: boolean;
+  failCleanup: boolean;
+  requiredJoin: boolean;
+};
+
+export function gatewayStartupFixtureSource(
+  repoRoot: string,
+  root: string,
+  scenario: GatewayStartupFixtureCase,
+): string {
+  const source = (file: string) => JSON.stringify(path.join(repoRoot, file));
+  return `
+import fs from "node:fs";
+import net from "node:net";
+import path from "node:path";
+import { vi } from "vitest";
+const hooks = vi.hoisted(() => ({ setup: [], cleanup: [], reset: [], afterEach: [] }));
+vi.mock("vitest", async (importOriginal) => ({
+  ...(await importOriginal()),
+  beforeAll: (fn) => hooks.setup.push(fn),
+  afterAll: (fn) => hooks.cleanup.push(fn),
+  beforeEach: (fn) => hooks.reset.push(fn),
+  afterEach: (fn) => hooks.afterEach.push(fn),
+}));
+const { test, expect } = await vi.importActual("vitest");
+fs.writeFileSync(${JSON.stringify(path.join(root, "worker.pid"))}, String(process.pid));
+const gateway = await import(${source("src/gateway/test-helpers.server.ts")});
+const lifetimeModule = await import(${source("src/gateway/gateway-fixture-lifetime.test-support.ts")});
+const lifecycleModule = await import(${source("src/gateway/server-lifecycle.ts")});
+const kernelModule = await import(${source("src/gateway/server-kernel.ts")});
+const listenModule = await import(${source("src/gateway/server/http-listen.ts")});
+const metadataModule = await import(${source("src/plugins/plugin-metadata-lifecycle.ts")});
+const scenario = ${JSON.stringify(scenario)};
+const takeHooks = () => Object.fromEntries(
+  Object.entries(hooks).map(([name, callbacks]) => [name, callbacks.splice(0)]),
+);
+async function runHooks(callbacks, context) {
+  for (const callback of callbacks) await callback(context);
+}
+function containsError(error, expected) {
+  return expected !== undefined && (error === expected || (error instanceof Error && (
+    containsError(error.cause, expected) ||
+    (error instanceof AggregateError && error.errors.some(item => containsError(item, expected)))
+  )));
+}
+function listenOwned(server) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => { server.off("error", failed); server.off("listening", ready); };
+    const failed = error => { cleanup(); reject(error); };
+    const ready = () => { cleanup(); resolve(); };
+    server.once("error", failed);
+    server.once("listening", ready);
+    try { server.listen(0, "127.0.0.1"); } catch (error) { failed(error); }
+  });
+}
+function closeOwned(server) {
+  return server.listening ? new Promise((resolve, reject) => {
+    server.close(error => error ? reject(error) : resolve());
+  }) : Promise.resolve();
+}
+
+test("observes startup cleanup ownership through fixture teardown", async (context) => {
+  const originals = [];
+  const own = promise => { originals.push(promise); return promise; };
+  const restorers = [];
+  const spy = (target, method, wrap) => {
+    const original = target[method];
+    const handle = vi.spyOn(target, method).mockImplementation((...args) => wrap(original, ...args));
+    restorers.push(() => handle.mockRestore());
+  };
+  const capture = (list, promise) => {
+    const pending = own(promise);
+    list.push(pending);
+    return pending;
+  };
+  const blocker = net.createServer();
+  const probe = net.createServer();
+  const fault = new Error("synthetic startup probe cleanup failure");
+  const nativeCloses = [];
+  const nativeListens = [];
+  let acquisition, kernelStart, lifecycle, journal, tlsError;
+  let metadataRetains = 0, metadataReleases = 0, lowerStops = 0;
+  const homeBefore = process.env.HOME;
+  const stopProbe = vi.fn(() => own(scenario.failCleanup ? Promise.reject(fault) : closeOwned(probe)));
+  const sidecar = { stop: scenario.requiredJoin ? async () => { lowerStops++; } : stopProbe };
+  try {
+    gateway.installGatewayTestHooks({ scope: "suite" });
+    const fixture = takeHooks();
+    await own(runHooks(fixture.setup));
+    await own(runHooks(fixture.reset, context));
+    const home = process.env.HOME;
+    const state = process.env.OPENCLAW_STATE_DIR;
+    if (!home || !state) throw new Error("expected isolated Gateway fixture selectors");
+    const markers = { home: path.join(home, "owned.txt"), state: path.join(state, "owned.txt") };
+    for (const file of Object.values(markers)) fs.writeFileSync(file, "owned");
+    const opened = await Promise.allSettled([own(listenOwned(blocker)), own(listenOwned(probe))]);
+    expect(opened.map(result => result.status)).toEqual(["fulfilled", "fulfilled"]);
+    const address = blocker.address();
+    if (!address || typeof address === "string") throw new Error("expected owned TCP blocker");
+    spy(metadataModule, "retainGatewayPluginMetadata", (retain, ...metadataArgs) => {
+      const owner = retain(...metadataArgs);
+      metadataRetains++;
+      return { ...owner, close: async (...args) => {
+        const result = await own(owner.close(...args));
+        metadataReleases++;
+        return result;
+      } };
+    });
+    spy(lifecycleModule, "prepareGatewayLifecycle", (prepare, ...args) => {
+      const preparing = own(prepare(...args));
+      return own(preparing.then(async runtime => {
+        lifecycle = runtime;
+        tlsError = runtime.gatewayTls.error;
+        runtime.registerGatewayLifetimeSidecars(sidecar);
+        spy(runtime, "closeOnStartupFailure", close => capture(nativeCloses, close()));
+        if (scenario.requiredJoin) {
+          const cleanup = own(runtime.connectionWork.trackCleanup(stopProbe));
+          await Promise.allSettled([cleanup]);
+        }
+        return runtime;
+      }));
+    });
+    spy(kernelModule, "createGatewayKernel", (createKernel, ...args) =>
+      (kernelStart = own(createKernel(...args))));
+    spy(listenModule, "listenGatewayHttpServer", (listen, params) => {
+      // The owned blocker cannot leave; retry policy has its own listener tests.
+      return capture(nativeListens, listen({ ...params, retryEaddrinuse: false }));
+    });
+    if (scenario.missingTls) {
+      const config = await import(${source("src/config/config.ts")});
+      const snapshot = await config.readConfigFileSnapshot();
+      const dir = path.dirname(snapshot.path);
+      await own(config.writeConfigFile({ gateway: { tls: {
+        enabled: true, autoGenerate: false,
+        certPath: path.join(dir, "synthetic-missing-cert.pem"),
+        keyPath: path.join(dir, "synthetic-missing-key.pem"),
+      } } }));
+    }
+    const startupOptions = {
+      bind: "loopback", auth: { mode: "none" }, controlUiEnabled: false,
+    };
+    acquisition = own(scenario.failCleanup && !scenario.missingTls
+      ? gateway.startGatewayServerWithRetries({ port: address.port, opts: startupOptions })
+      : gateway.startTestGatewayServer(address.port, startupOptions));
+    const [acquired] = await Promise.allSettled([acquisition]);
+    expect(acquired.status).toBe("rejected");
+    const failure = acquired.reason;
+    const [closed] = await Promise.allSettled(nativeCloses);
+    const [kernelResult] = await Promise.allSettled([kernelStart]);
+    const listenResults = await Promise.allSettled(nativeListens);
+    const startupError = scenario.missingTls
+      ? failure?.cause
+      : listenResults[0]?.status === "rejected" ? listenResults[0].reason : undefined;
+    const containsStartup = error => scenario.missingTls
+      ? error instanceof Error && (error.message === tlsError || containsStartup(error.cause) ||
+          (error instanceof AggregateError && error.errors.some(containsStartup)))
+      : containsError(error, startupError);
+    const cleanupError = closed?.status === "rejected" ? closed.reason : undefined;
+    const nativeStartupMatches = scenario.missingTls
+      ? startupError?.message === tlsError && tlsError?.includes("cert/key missing")
+      : listenResults[0]?.status === "rejected" && startupError === listenResults[0].reason;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "synthetic-retained-startup-token";
+    const selectors = new Map([
+      "HOME", "USERPROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_AGENT_DIR", "OPENCLAW_GATEWAY_TOKEN",
+    ].map(key => [key, process.env[key]]));
+    const readState = () => ({
+      ...Object.fromEntries(Object.entries(markers).map(([name, file]) => {
+        try { return [name, fs.readFileSync(file, "utf8") === "owned"]; }
+        catch { return [name, false]; }
+      })),
+      selectorsIntact: [...selectors].every(([key, value]) => process.env[key] === value),
+    });
+    const observe = async run => {
+      const [result] = await Promise.allSettled([own(Promise.resolve().then(run))]);
+      return {
+        rejected: result.status === "rejected",
+        startupPreserved: result.status === "rejected" && containsStartup(result.reason),
+        cleanupPreserved: result.status === "rejected" && containsError(result.reason, cleanupError),
+      };
+    };
+    const beforeCleanup = readState();
+    const fixtureRelease = await observe(() => lifetimeModule.gatewayFixtureLifetime.assertReleased());
+    // Expected owner refusals are asserted by the outer test, not unhandled suite-hook failures.
+    const afterEach = await observe(() => runHooks(fixture.afterEach, context));
+    const cleanup = await observe(() => runHooks(fixture.cleanup.toReversed()));
+    const afterCleanup = readState();
+    const homeRestored = process.env.HOME === homeBefore;
+    gateway.installGatewayTestHooks({ scope: "suite" });
+    const successor = takeHooks();
+    let successorStarted = false;
+    const successorSetup = await observe(async () => {
+      await runHooks(successor.setup);
+      successorStarted = true;
+    });
+    if (successorStarted) await own(runHooks(successor.cleanup.toReversed()));
+    journal = {
+      combinedFailure: failure instanceof AggregateError && containsStartup(failure) && containsError(failure, cleanupError),
+      nativeStartupMatches: Boolean(nativeStartupMatches),
+      startupCode: startupError?.cause?.code,
+      startupCausePreserved: failure instanceof AggregateError && failure.cause === startupError && failure.errors.includes(startupError),
+      cleanupIdentityPreserved: failure instanceof AggregateError && failure.errors.includes(cleanupError),
+      cleanupFaultPreserved: containsError(cleanupError, fault),
+      nativeCloseCalls: nativeCloses.length, nativeCloseStatus: closed?.status,
+      kernelReturned: kernelResult.status === "fulfilled", listenCalls: nativeListens.length,
+      probeListening: probe.listening, blockerListening: blocker.listening,
+      stopCalls: stopProbe.mock.calls.length, lowerStops, metadataRetains, metadataReleases,
+      nativeOwnerRetained: lifecycle.runtimeState.gatewayLifetimeSidecars.snapshot().includes(sidecar),
+      fixtureRelease, afterEach, cleanup, successorSetup, successorStarted, homeRestored,
+      beforeCleanup, afterCleanup, afterSuccessor: readState(),
+    };
+  } finally {
+    const [acquired] = await Promise.allSettled(acquisition ? [acquisition] : []);
+    if (acquired?.status === "fulfilled") {
+      own(acquired.value.close({ reason: "unexpected successful fixture startup" }));
+    }
+    await Promise.allSettled(originals);
+    const listenersClosed = await Promise.allSettled([closeOwned(blocker), closeOwned(probe)]);
+    for (const restore of restorers.toReversed()) restore();
+    if (journal) {
+      journal.finally = {
+        originalsJoined: true,
+        nativeCloseCalls: nativeCloses.length,
+        listenerResults: listenersClosed.map(result => result.status),
+        probeListening: probe.listening, blockerListening: blocker.listening,
+      };
+      fs.writeFileSync(${JSON.stringify(path.join(root, "journal.json"))}, JSON.stringify(journal));
+    }
+    // Only owned listeners close here. Native cleanup is never retried or unpoisoned.
+  }
+});
+`;
+}

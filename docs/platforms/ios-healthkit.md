@@ -47,7 +47,7 @@ Add `health.summary` to the existing `gateway.nodes.commands.allow` array in
 
 `health.summary` is classified as privacy-heavy and is never allowed by the
 iOS platform default. An entry in `gateway.nodes.commands.deny` overrides the
-allow entry. See [Node command policy](/nodes#command-policy).
+allow entry. See [Node command policy](/nodes/command-policy#command-policy).
 
 ### 2. Enable sharing on the iOS device
 
@@ -172,5 +172,5 @@ summaries are not supported.
 
 - [iOS app](/platforms/ios)
 - [Nodes](/nodes)
-- [Gateway configuration reference](/gateway/configuration-reference#gateway)
+- [Gateway configuration reference](/gateway/config-gateway#gateway)
 - [Security audit](/gateway/security)

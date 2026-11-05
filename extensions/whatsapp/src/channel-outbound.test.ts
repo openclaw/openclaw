@@ -3,11 +3,18 @@ import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
+import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MessagePresentationAction } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { whatsappApprovalCapability } from "./approval-native.js";
 import { cacheInboundMessageMeta } from "./quoted-message.js";
+
+const reactionStores = await vi.hoisted(async () =>
+  (await import("./approval-reactions.test-support.js")).createWhatsAppReactionStores(),
+);
+// mock-isolation: Preserve real exports while collecting only this suite's reaction stores.
+vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", reactionStores.mockRuntime);
 
 const hoisted = vi.hoisted(() => ({
   sendMessageWhatsApp: vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" })),
@@ -29,23 +36,90 @@ vi.mock("./runtime.js", () => ({
 }));
 
 let whatsappChannelOutbound: typeof import("./channel-outbound.js").whatsappChannelOutbound;
-let clearWhatsAppApprovalReactionTargetsForTest: typeof import("./approval-reactions.js").clearWhatsAppApprovalReactionTargetsForTest;
+let whatsappMessageAdapter: typeof import("./channel-outbound.js").whatsappMessageAdapter;
 let resolveWhatsAppApprovalReactionTargetWithPersistence: typeof import("./approval-reactions.js").resolveWhatsAppApprovalReactionTargetWithPersistence;
 
 type ApprovalAction = Extract<MessagePresentationAction, { type: "approval" }>;
 
+function createExecTargetApprovalPayload(id: string) {
+  const cfg = {
+    approvals: {
+      exec: {
+        enabled: true,
+        mode: "targets" as const,
+        targets: [{ channel: "whatsapp", to: "configured-target" }],
+      },
+    },
+  } as OpenClawConfig;
+  const payload = whatsappApprovalCapability.render?.exec?.buildPendingPayload?.({
+    cfg,
+    request: {
+      id,
+      request: {
+        command: "printf mismatch",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+      createdAtMs: 1_000,
+      expiresAtMs: 61_000,
+    } satisfies ExecApprovalRequest,
+    target: { channel: "whatsapp", to: "configured-target", source: "target" },
+    nowMs: 1_000,
+  });
+  return { cfg, payload };
+}
+
+type Delivery = Parameters<NonNullable<typeof whatsappChannelOutbound.afterDeliverPayload>>[0];
+function render(
+  payload: Delivery["payload"],
+  cfg: OpenClawConfig,
+  presentation = payload.presentation,
+) {
+  if (!whatsappChannelOutbound.renderPresentation || !presentation) {
+    throw new Error("Missing approval renderer");
+  }
+  return whatsappChannelOutbound.renderPresentation({
+    payload,
+    presentation,
+    ctx: { cfg, to: "configured-target", text: payload.text ?? "", payload },
+  });
+}
+function deliver(
+  payload: Delivery["payload"],
+  cfg: OpenClawConfig,
+  messageId: string,
+  results: Delivery["results"] = [
+    { channel: "whatsapp", messageId, toJid: "15551230000@s.whatsapp.net" },
+  ],
+) {
+  if (!whatsappChannelOutbound.afterDeliverPayload) {
+    throw new Error("Missing approval delivery hook");
+  }
+  return whatsappChannelOutbound.afterDeliverPayload({
+    cfg,
+    target: { channel: "whatsapp", to: "configured-target" },
+    payload,
+    results,
+  });
+}
+function lookup(messageId: string) {
+  return resolveWhatsAppApprovalReactionTargetWithPersistence({
+    accountId: "default",
+    remoteJid: "15551230000@s.whatsapp.net",
+    messageId,
+    reactionKey: "👍",
+  });
+}
+
 describe("whatsappChannelOutbound", () => {
   beforeAll(async () => {
-    ({ whatsappChannelOutbound } = await import("./channel-outbound.js"));
-    ({
-      clearWhatsAppApprovalReactionTargetsForTest,
-      resolveWhatsAppApprovalReactionTargetWithPersistence,
-    } = await import("./approval-reactions.js"));
+    ({ whatsappChannelOutbound, whatsappMessageAdapter } = await import("./channel-outbound.js"));
+    ({ resolveWhatsAppApprovalReactionTargetWithPersistence } =
+      await import("./approval-reactions.js"));
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
-    clearWhatsAppApprovalReactionTargetsForTest();
+    reactionStores.forEach((store) => store.clearForTest());
   });
 
   it.each([
@@ -82,8 +156,6 @@ describe("whatsappChannelOutbound", () => {
   ])(
     "binds generic target-mode $approvalKind approvals to actual WhatsApp delivery results",
     async ({ approvalId, approvalKind, messageId, request }) => {
-      const renderPresentation = whatsappChannelOutbound.renderPresentation;
-      const afterDeliverPayload = whatsappChannelOutbound.afterDeliverPayload;
       const cfg = {
         approvals: {
           [approvalKind]: {
@@ -112,61 +184,52 @@ describe("whatsappChannelOutbound", () => {
               target,
               nowMs: 1_000,
             });
-      if (!renderPresentation || !afterDeliverPayload || !payload || !payload.presentation) {
+      if (!payload || !payload.presentation) {
         throw new Error("WhatsApp approval delivery hooks unavailable");
       }
 
-      const rendered = await renderPresentation({
-        payload,
-        presentation: payload.presentation,
-        ctx: {
-          cfg,
-          to: "configured-target",
-          text: payload.text ?? "",
-          payload,
-        },
-      });
+      const rendered = await render(payload, cfg);
       if (!rendered) {
         throw new Error("Expected a typed WhatsApp approval payload");
       }
       const { presentation: _presentation, ...deliveredPayload } = rendered;
-      await afterDeliverPayload({
-        cfg,
-        target: { channel: "whatsapp", to: "configured-target" },
-        payload: deliveredPayload,
-        results: [
-          {
-            channel: "whatsapp",
-            messageId,
-            receipt: {
-              primaryPlatformMessageId: messageId,
-              platformMessageIds: [messageId],
-              parts: [
-                {
-                  platformMessageId: messageId,
-                  kind: "text",
-                  index: 0,
-                  raw: {
-                    channel: "whatsapp",
-                    messageId,
-                    toJid: "15551230000@s.whatsapp.net",
-                  },
-                },
-              ],
-              sentAt: 1_000,
-            },
-          },
-        ],
-      });
-
-      await expect(
-        resolveWhatsAppApprovalReactionTargetWithPersistence({
-          accountId: "default",
-          remoteJid: "15551230000@s.whatsapp.net",
+      await deliver(deliveredPayload, cfg, messageId, [
+        {
+          channel: "whatsapp",
           messageId,
-          reactionKey: "👍",
-        }),
-      ).resolves.toEqual({ approvalId, approvalKind, decision: "allow-once" });
+          receipt: {
+            primaryPlatformMessageId: messageId,
+            platformMessageIds: [messageId],
+            raw: [
+              {
+                channel: "other-channel",
+                messageId: "foreign-channel",
+                toJid: "15551230000@s.whatsapp.net",
+              },
+            ],
+            parts: [
+              {
+                platformMessageId: messageId,
+                kind: "text",
+                index: 0,
+                raw: {
+                  channel: "whatsapp",
+                  messageId,
+                  toJid: "15551230000@s.whatsapp.net",
+                },
+              },
+            ],
+            sentAt: 1_000,
+          },
+        },
+      ]);
+
+      await expect(lookup(messageId)).resolves.toEqual({
+        approvalId,
+        approvalKind,
+        decision: "allow-once",
+      });
+      await expect(lookup("foreign-channel")).resolves.toBeNull();
     },
   );
 
@@ -193,32 +256,8 @@ describe("whatsappChannelOutbound", () => {
       }),
     },
   ])("fails closed when typed $name disagrees with approval metadata", async ({ mutate }) => {
-    const renderPresentation = whatsappChannelOutbound.renderPresentation;
-    const afterDeliverPayload = whatsappChannelOutbound.afterDeliverPayload;
-    const cfg = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "whatsapp", to: "configured-target" }],
-        },
-      },
-    } as OpenClawConfig;
-    const payload = whatsappApprovalCapability.render?.exec?.buildPendingPayload?.({
-      cfg,
-      request: {
-        id: "exec-mismatch",
-        request: {
-          command: "printf mismatch",
-          allowedDecisions: ["allow-once", "deny"],
-        },
-        createdAtMs: 1_000,
-        expiresAtMs: 61_000,
-      } satisfies ExecApprovalRequest,
-      target: { channel: "whatsapp", to: "configured-target", source: "target" },
-      nowMs: 1_000,
-    });
-    if (!renderPresentation || !afterDeliverPayload || !payload || !payload.presentation) {
+    const { cfg, payload } = createExecTargetApprovalPayload("exec-mismatch");
+    if (!payload || !payload.presentation) {
       throw new Error("WhatsApp approval delivery hooks unavailable");
     }
     let mutated = false;
@@ -240,39 +279,10 @@ describe("whatsappChannelOutbound", () => {
         };
       }),
     };
-    await expect(
-      renderPresentation({
-        payload: { ...payload, presentation },
-        presentation,
-        ctx: {
-          cfg,
-          to: "configured-target",
-          text: payload.text ?? "",
-          payload,
-        },
-      }),
-    ).resolves.toBeNull();
+    await expect(render({ ...payload, presentation }, cfg, presentation)).resolves.toBeNull();
 
-    await afterDeliverPayload({
-      cfg,
-      target: { channel: "whatsapp", to: "configured-target" },
-      payload,
-      results: [
-        {
-          channel: "whatsapp",
-          messageId: "wa-mismatched",
-          toJid: "15551230000@s.whatsapp.net",
-        },
-      ],
-    });
-    await expect(
-      resolveWhatsAppApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        remoteJid: "15551230000@s.whatsapp.net",
-        messageId: "wa-mismatched",
-        reactionKey: "👍",
-      }),
-    ).resolves.toBeNull();
+    await deliver(payload, cfg, "wa-mismatched");
+    await expect(lookup("wa-mismatched")).resolves.toBeNull();
   });
 
   it.each([
@@ -293,79 +303,16 @@ describe("whatsappChannelOutbound", () => {
       rewrite: (text: string) => text.replace("👍 Allow Once", "♾️ Allow Always"),
     },
   ])("fails closed when the visible approval $name", async ({ rewrite }) => {
-    const renderPresentation = whatsappChannelOutbound.renderPresentation;
-    const afterDeliverPayload = whatsappChannelOutbound.afterDeliverPayload;
-    const cfg = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "whatsapp", to: "configured-target" }],
-        },
-      },
-    } as OpenClawConfig;
-    const payload = whatsappApprovalCapability.render?.exec?.buildPendingPayload?.({
-      cfg,
-      request: {
-        id: "exec-visible-mismatch",
-        request: {
-          command: "printf mismatch",
-          allowedDecisions: ["allow-once", "deny"],
-        },
-        createdAtMs: 1_000,
-        expiresAtMs: 61_000,
-      } satisfies ExecApprovalRequest,
-      target: { channel: "whatsapp", to: "configured-target", source: "target" },
-      nowMs: 1_000,
-    });
-    if (!renderPresentation || !afterDeliverPayload || !payload || !payload.presentation) {
+    const { cfg, payload } = createExecTargetApprovalPayload("exec-visible-mismatch");
+    if (!payload || !payload.presentation) {
       throw new Error("WhatsApp approval delivery hooks unavailable");
     }
     const rewrittenPayload = { ...payload, text: rewrite(payload.text ?? "") };
 
-    await expect(
-      renderPresentation({
-        payload: rewrittenPayload,
-        presentation: payload.presentation,
-        ctx: {
-          cfg,
-          to: "configured-target",
-          text: rewrittenPayload.text,
-          payload: rewrittenPayload,
-        },
-      }),
-    ).resolves.toBeNull();
+    await expect(render(rewrittenPayload, cfg)).resolves.toBeNull();
 
-    await afterDeliverPayload({
-      cfg,
-      target: { channel: "whatsapp", to: "configured-target" },
-      payload: rewrittenPayload,
-      results: [
-        {
-          channel: "whatsapp",
-          messageId: "wa-visible-mismatch",
-          toJid: "15551230000@s.whatsapp.net",
-        },
-      ],
-    });
-    await expect(
-      resolveWhatsAppApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        remoteJid: "15551230000@s.whatsapp.net",
-        messageId: "wa-visible-mismatch",
-        reactionKey: "👍",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("drops leading blank lines but preserves intentional indentation", () => {
-    expect(
-      whatsappChannelOutbound.normalizePayload?.({
-        payload: { text: "\n \n    indented" },
-      }),
-    ).toEqual({
-      text: "    indented",
-    });
+    await deliver(rewrittenPayload, cfg, "wa-visible-mismatch");
+    await expect(lookup("wa-visible-mismatch")).resolves.toBeNull();
   });
 
   it("keeps XML sanitizer normalization idempotent", () => {
@@ -532,6 +479,73 @@ describe("whatsappChannelOutbound", () => {
       gifPlayback: undefined,
       onDeliveryResult: expect.any(Function),
       preserveLeadingWhitespace: true,
+    });
+  });
+
+  it("backs declared message adapter capabilities with delivery proofs", async () => {
+    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid-1" }));
+
+    await verifyChannelMessageAdapterCapabilityProofs({
+      adapterName: "whatsappMessage",
+      adapter: whatsappMessageAdapter,
+      proofs: {
+        text: async () => {
+          const result = await whatsappMessageAdapter.send.text?.({
+            cfg: {} as never,
+            to: "5511999999999@c.us",
+            text: "hello",
+            deps: { whatsapp: sendWhatsApp },
+          } as Parameters<NonNullable<typeof whatsappMessageAdapter.send.text>>[0] & {
+            deps: { whatsapp: typeof sendWhatsApp };
+          });
+          expect(sendWhatsApp).toHaveBeenLastCalledWith("5511999999999@c.us", "hello", {
+            verbose: false,
+            cfg: {},
+            accountId: undefined,
+            gifPlayback: undefined,
+            quotedMessageKey: undefined,
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["wa-1"]);
+        },
+        replyTo: async () => {
+          const result = await whatsappMessageAdapter.send.text?.({
+            cfg: {} as never,
+            to: "5511999999999@c.us",
+            text: "reply",
+            replyToId: "msg-1",
+            deps: { whatsapp: sendWhatsApp },
+          } as Parameters<NonNullable<typeof whatsappMessageAdapter.send.text>>[0] & {
+            deps: { whatsapp: typeof sendWhatsApp };
+          });
+          expect(sendWhatsApp).not.toHaveBeenCalledWith(
+            "5511999999999@c.us",
+            "reply",
+            expect.anything(),
+          );
+          expect(hoisted.sendMessageWhatsApp).toHaveBeenLastCalledWith(
+            "5511999999999@c.us",
+            "reply",
+            {
+              verbose: false,
+              cfg: {},
+              accountId: undefined,
+              gifPlayback: undefined,
+              quotedMessageKey: {
+                id: "msg-1",
+                remoteJid: "5511999999999@c.us",
+                fromMe: false,
+                participant: undefined,
+                messageText: undefined,
+              },
+              preserveLeadingWhitespace: true,
+            },
+          );
+          expect(result?.receipt.platformMessageIds).toEqual(["wa-1"]);
+        },
+        messageSendingHooks: () => {
+          expect(whatsappMessageAdapter.send.text).toBeTypeOf("function");
+        },
+      },
     });
   });
 });

@@ -1,114 +1,77 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 // @vitest-environment node
 // Control UI tests cover localized update and recovery status copy.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
+import type { GatewayHelloOk } from "../api/gateway.ts";
+import type { UpdateScheduleState } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
-import type {
-  ApplicationStatusBanner,
-  PendingUpdateReconciliation,
+import { client } from "./overlays-access.test-support.ts";
+import {
+  createUpdateStatusRefresher,
+  projectUpdateSentinel,
+  projectUpdateStatusResponse,
+  resolveUpdateStatusBanner,
+  resolveUpdateStatusCheckBanner,
 } from "./update-overlay-helpers.ts";
 import {
-  createUpdateVerificationController,
   formatUpdateCampaignLabel,
-  readUpdateAvailable,
-  readUpdateSchedule,
-  resolveUpdateStatusBanner,
-} from "./update-overlay-helpers.ts";
+  projectConnectedUpdateSnapshot,
+} from "./update-schedule-projection.ts";
 
-const translations: Record<string, string> = {
-  "updates.status": "Update {status}: {reason}. {guidance}",
-  "updates.failureReasons.dirty": "Commit or stash changes, then retry.",
-  "updates.failureReasons.default":
-    "See the gateway logs for the exact failure and retry once the cause is fixed.",
-  "updates.verificationFailed":
-    "Update installed but running version did not change — restart may have been blocked.",
-  "updates.verificationFailedWithVersions":
-    "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
-  "updates.verificationFailedWithIdentity":
-    "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
-  "updates.outcomeUnknown": "The update outcome is unknown.",
-  "common.unknown": "Unknown",
-  "updates.postRestart.restartUnhealthy":
-    "The replacement process never became healthy and the previous process stayed up.",
-  "updates.postRestart.default": "Check the gateway logs for the replacement failure.",
-  "updates.handoffTimeout":
-    "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
-  "updates.campaign.countdown": "Updating in {time}",
-  "updates.campaign.held": "Update held · resumes in {time}",
-  "updates.campaign.waitingForIdle": "Waiting for active work · forced update in {time}",
-};
-
-function installTranslations() {
-  return vi.spyOn(i18n, "t").mockImplementation((key, params) => {
-    const template = translations[key] ?? key;
-    return template.replace(/\{(\w+)\}/g, (_match, name: string) => params?.[name] ?? `{${name}}`);
+it("awaits status projection and retires a refresh whose authority changes while projecting", async () => {
+  const entered = createDeferred();
+  const pending = createDeferred();
+  let current = true;
+  let published = false;
+  const gatewayClient = client(async () => ({}));
+  const refresh = createUpdateStatusRefresher({
+    getClient: () => gatewayClient,
+    getEpoch: () => 1,
+    getAuthorization: () => undefined,
+    canRefresh: () => current,
+    isCurrent: () => current,
+    onRefreshing: () => {},
+    onStatus: async (_response, isCurrent) => {
+      entered.resolve();
+      await pending.promise;
+      published = isCurrent();
+    },
+    onError: () => {},
   });
-}
+  const result = refresh("background");
+  await entered.promise;
+  current = false;
+  pending.resolve();
+  await expect(result).resolves.toBe(false);
+  expect(published).toBe(false);
+});
+
+it("reports a failed status projection without completing the refresh", async () => {
+  const error = new Error("Update report could not load");
+  const onError = vi.fn();
+  const gatewayClient = client(async () => ({}));
+  const refresh = createUpdateStatusRefresher({
+    getClient: () => gatewayClient,
+    getEpoch: () => 1,
+    getAuthorization: () => undefined,
+    canRefresh: () => true,
+    isCurrent: () => true,
+    onRefreshing: () => {},
+    onStatus: async () => {
+      throw error;
+    },
+    onError,
+  });
+  await expect(refresh("completion")).resolves.toBe(false);
+  expect(onError).toHaveBeenLastCalledWith(error, "completion");
+});
 
 afterEach(() => {
-  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
-async function verifyUpdate(params: {
-  pending: PendingUpdateReconciliation;
-  response: unknown;
-  hello?: GatewayHelloOk | null;
-  advanceToMs?: number;
-  onVerifiedInstall?: (identity: { version: string | null; sha: string | null }) => void;
-}): Promise<ApplicationStatusBanner | null | undefined> {
-  vi.useFakeTimers();
-  vi.setSystemTime(0);
-  let banner: ApplicationStatusBanner | null | undefined;
-  const client = {
-    request: vi.fn(async () => {
-      if (params.advanceToMs !== undefined) {
-        vi.setSystemTime(params.advanceToMs);
-      }
-      return params.response;
-    }),
-  } as unknown as GatewayBrowserClient;
-  const controller = createUpdateVerificationController({
-    getPending: () => params.pending,
-    clearPending: vi.fn(),
-    isCurrent: () => true,
-    getHello: () => params.hello ?? null,
-    publish: vi.fn(),
-    publishBanner: (value) => {
-      banner = value;
-    },
-    ...(params.onVerifiedInstall ? { onVerifiedInstall: params.onVerifiedInstall } : {}),
-  });
-
-  await controller.verify(client, 1);
-  return banner;
-}
-
 describe("update schedule hydration", () => {
-  it("preserves an active hold deadline after reconnect", () => {
-    const holdUntilMs = 3_601_000;
-    const hello = {
-      snapshot: {
-        updateSchedule: {
-          channel: "stable",
-          autoEnabled: true,
-          target: { kind: "package", version: "2.0.0" },
-          campaign: {
-            id: "campaign-held",
-            state: "waiting-for-idle",
-            announcedAtMs: 1_000,
-            holdUntilMs,
-            forceAtMs: 4_501_000,
-            updatedAtMs: 2_000,
-          },
-        },
-      },
-    } as GatewayHelloOk;
-
-    expect(readUpdateSchedule(hello)?.campaign?.holdUntilMs).toBe(holdUntilMs);
-  });
-
-  it("preserves additive git availability and the hello schedule DTO", () => {
+  it("hydrates git availability and a held campaign from the Gateway snapshot", () => {
     const updateSchedule = {
       channel: "dev",
       autoEnabled: true,
@@ -117,6 +80,8 @@ describe("update schedule hydration", () => {
         git: {
           status: "behind",
           currentSha: "a".repeat(40),
+          upstreamSha: "b".repeat(40),
+          repositoryUrl: "https://github.com/example/openclaw",
           commitAtMs: 1_000,
           installedAtMs: 2_000,
           commitsBehind: 3,
@@ -137,40 +102,40 @@ describe("update schedule hydration", () => {
         updatedAtMs: 2_000,
       },
     } as const;
-    const hello = {
-      snapshot: {
-        updateAvailable: {
-          currentVersion: "2026.8.1",
-          latestVersion: "2026.8.1",
-          channel: "dev",
-          currentSha: "a".repeat(40),
-          upstreamRef: "origin/main",
-          upstreamSha: "b".repeat(40),
-          commitsBehind: 3,
-          commits: [
-            { sha: "b0b0b0b", subject: "Improve update scheduling" },
-            { sha: "a0a0a0a", subject: "Tighten update checks" },
-          ],
-        },
-        updateSchedule,
-      },
-    } as GatewayHelloOk;
-
-    expect(readUpdateAvailable(hello)).toMatchObject({
+    const updateAvailable = {
+      currentVersion: "2026.8.1",
+      latestVersion: "2026.8.1",
+      channel: "dev",
       currentSha: "a".repeat(40),
       upstreamRef: "origin/main",
       upstreamSha: "b".repeat(40),
+      repositoryUrl: "https://github.com/example/openclaw",
       commitsBehind: 3,
       commits: [
         { sha: "b0b0b0b", subject: "Improve update scheduling" },
         { sha: "a0a0a0a", subject: "Tighten update checks" },
       ],
+    };
+    const hello = { snapshot: { updateAvailable, updateSchedule } } as GatewayHelloOk;
+
+    const projected = projectConnectedUpdateSnapshot(
+      {
+        updateAvailable: null,
+        updateSchedule: null,
+        heldUpdateCampaignId: null,
+        updateCampaignStatusHydrated: false,
+      },
+      hello,
+    );
+    expect(projected).toEqual({
+      updateAvailable,
+      updateSchedule,
+      heldUpdateCampaignId: "campaign-1",
+      updateCampaignStatusHydrated: false,
     });
-    expect(readUpdateSchedule(hello)).toEqual(updateSchedule);
   });
 
   it("formats countdown deadlines with a stable minutes-and-seconds shape", () => {
-    installTranslations();
     const schedule = {
       channel: "stable",
       autoEnabled: true,
@@ -183,181 +148,181 @@ describe("update schedule hydration", () => {
       },
     } as const;
 
-    expect(formatUpdateCampaignLabel(schedule, 1_000)).toBe(
-      "Waiting for active work · forced update in 0:54",
-    );
-    expect(
+    const label = (
+      campaign: Partial<NonNullable<UpdateScheduleState["campaign"]>> = {},
+      now = 1_000,
+    ) =>
       formatUpdateCampaignLabel(
-        {
-          ...schedule,
-          campaign: { ...schedule.campaign, state: "countdown", applyAtMs: 762_000 },
-        },
-        1_000,
-      ),
-    ).toBe("Updating in 12:41");
-    expect(formatUpdateCampaignLabel(schedule, 56_000)).toBe(
-      "Waiting for active work · forced update in 0:00",
-    );
-    expect(
-      formatUpdateCampaignLabel(
-        {
-          ...schedule,
-          campaign: { ...schedule.campaign, holdUntilMs: 762_000 },
-        },
-        1_000,
-      ),
-    ).toBe("Update held · resumes in 12:41");
+        { ...schedule, campaign: { ...schedule.campaign, ...campaign } },
+        now,
+      );
+    expect(label()).toBe("Waiting for active work · forced update in 0:54");
+    expect(label({ state: "countdown", applyAtMs: 762_000 })).toBe("Updating in 12:41");
+    expect(label({}, 56_000)).toBe("Waiting for active work · forced update in 0:00");
+    expect(label({ holdUntilMs: 762_000 })).toBe("Update held · resumes in 12:41");
+    expect(label({ state: "applying", holdUntilMs: 762_000 })).toBe("Applying update…");
   });
 });
 
 describe("update status localization", () => {
-  it("localizes known update failure guidance", () => {
-    const translate = installTranslations();
-
-    expect(resolveUpdateStatusBanner({ status: "skipped", reason: "dirty" })).toEqual({
-      tone: "warn",
-      text: "Update skipped: dirty. Commit or stash changes, then retry.",
+  it("keeps external supervisor refusals visible without launching failure triage", () => {
+    const projected = projectUpdateSentinel({
+      kind: "update",
+      status: "skipped",
+      ts: 123,
+      stats: { reason: "external-supervisor-update-required" },
     });
-    expect(translate).toHaveBeenCalledWith("updates.failureReasons.dirty", undefined);
+
+    expect(projected?.banner?.tone).toBe("warn");
+    expect(projected?.banner?.text).toContain("managed by an external supervisor");
+    expect(projected?.banner?.text).toContain("Use your server or deployment's update workflow");
+    expect(projected?.banner?.text).not.toContain("openclaw triage");
+    expect(projected?.attempt?.reason).toBe("external-supervisor-update-required");
+    expect(projected?.failure).toBeNull();
+  });
+
+  it("distinguishes a failed status check from a failed update", () => {
+    const error = "gateway request timed out after 5000ms: update.status";
+    expect(resolveUpdateStatusCheckBanner(new Error(error))).toEqual({
+      tone: "warn",
+      text: `Couldn’t check for updates. ${error}`,
+    });
+    expect(resolveUpdateStatusBanner({ status: "error", reason: "build-failed" })).toMatchObject({
+      tone: "danger",
+      text: expect.stringContaining("Couldn’t update OpenClaw. build-failed"),
+    });
+  });
+
+  it("projects the recorded update attempt without inferring from localized text", () => {
+    const projected = projectUpdateStatusResponse(
+      {
+        sentinel: {
+          kind: "update",
+          status: "error",
+          ts: 123,
+          stats: {
+            mode: "git",
+            reason: "build-failed",
+            before: { sha: "before" },
+            after: { sha: "after" },
+            steps: [
+              {
+                name: "build",
+                log: { exitCode: 1, stderrTail: "first line\nType check failed" },
+              },
+            ],
+          },
+        },
+      },
+      {
+        updateStatusBanner: null,
+        recordedUpdateAttempt: null,
+        heldUpdateCampaignId: null,
+      },
+    );
+
+    expect(projected.recordedUpdateAttempt).toEqual({
+      timestampMs: 123,
+      status: "error",
+      reason: "build-failed",
+      installKind: "git",
+      beforeVersion: null,
+      beforeSha: "before",
+      afterVersion: null,
+      afterSha: "after",
+      failure: { step: "build", detail: "Type check failed" },
+    });
+  });
+
+  it.each([
+    { reason: "dirty", key: "dirty", guidance: "Commit or stash changes, then retry." },
+    {
+      reason: "managed-service-handoff-unavailable",
+      key: "managedServiceHandoffUnavailable",
+      guidance:
+        "Stop the foreground Gateway, run `openclaw update`, then launch it again. For automatic updates, install a managed Gateway service.",
+    },
+  ])("localizes known update failure guidance for $reason", ({ reason, key, guidance }) => {
+    const translate = vi.spyOn(i18n, "t");
+
+    expect(resolveUpdateStatusBanner({ status: "skipped", reason })).toEqual({
+      tone: "warn",
+      text: `Update skipped: ${reason}. ${guidance}`,
+    });
+    expect(translate).toHaveBeenCalledWith(`updates.failureReasons.${key}`, undefined);
     expect(translate).toHaveBeenCalledWith("updates.status", {
       status: "skipped",
-      reason: "dirty",
-      guidance: "Commit or stash changes, then retry.",
+      reason,
+      guidance,
     });
   });
 
-  it("preserves unknown status details inside localized fallback guidance", () => {
-    const translate = installTranslations();
-
-    expect(resolveUpdateStatusBanner({ status: "error", reason: "disk-read-only" })).toEqual({
-      tone: "danger",
-      text: "Update error: disk-read-only. See the gateway logs for the exact failure and retry once the cause is fixed.",
-    });
-    expect(translate).toHaveBeenCalledWith("updates.failureReasons.default", undefined);
-  });
-
-  it("localizes restart verification with and without version diagnostics", async () => {
-    installTranslations();
-
-    await expect(
-      verifyUpdate({
-        pending: { kind: "restart", expectedVersion: "2.0.0", expectedSha: null },
-        response: {
-          sentinel: {
-            kind: "update",
-            status: "ok",
-            stats: { after: { version: "1.9.0" } },
-          },
+  it("names the recorded cause instead of the reason slug when a retained step failed", () => {
+    expect(
+      projectUpdateSentinel({
+        kind: "update",
+        status: "error",
+        ts: 1_000,
+        stats: {
+          reason: "deps-install-failed",
+          steps: [
+            { name: "fetch", log: { exitCode: 0, stderrTail: "done" } },
+            {
+              name: "install",
+              log: {
+                exitCode: 1,
+                stderrTail: "Progress: resolved 1\nENOSPC: no space left on device, write",
+              },
+            },
+          ],
         },
-      }),
-    ).resolves.toEqual({
+      })?.banner,
+    ).toEqual({
       tone: "danger",
-      text: "Update finished, but the running install does not match the expected revision. Expected v2.0.0, running v1.9.0.",
-    });
-    await expect(
-      verifyUpdate({
-        pending: { kind: "restart", expectedVersion: "2.0.0", expectedSha: null },
-        response: null,
-        advanceToMs: 10_000,
-      }),
-    ).resolves.toEqual({
-      tone: "danger",
-      text: "Update finished, but the running install does not match the expected revision. Expected v2.0.0, running Unknown.",
+      text: "Couldn’t complete install: ENOSPC: no space left on device, write. Couldn’t install dependencies. Fix the install error and retry. If Ask OpenClaw is unavailable, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
     });
   });
 
-  it("verifies the restarted Git revision before reporting success", async () => {
-    installTranslations();
-    const onVerifiedInstall = vi.fn();
-
-    await expect(
-      verifyUpdate({
-        pending: {
-          kind: "restart",
-          expectedVersion: "2.0.0",
-          expectedSha: "abcdef0123456789",
-        },
-        response: {
-          sentinel: {
-            kind: "update",
-            status: "ok",
-            stats: { after: { version: "2.0.0", sha: "abcdef0" } },
-          },
-        },
-        onVerifiedInstall,
-      }),
-    ).resolves.toBeNull();
-    expect(onVerifiedInstall).toHaveBeenCalledWith({ version: "2.0.0", sha: "abcdef0" });
-
-    await expect(
-      verifyUpdate({
-        pending: {
-          kind: "restart",
-          expectedVersion: "2.0.0",
-          expectedSha: "abcdef0123456789",
-        },
-        response: {
-          sentinel: {
-            kind: "update",
-            status: "ok",
-            stats: { after: { version: "2.0.0", sha: "1234567" } },
-          },
-        },
-      }),
-    ).resolves.toEqual({
-      tone: "danger",
-      text: "Update finished, but the running install does not match the expected revision. Expected abcdef012345, running 1234567.",
-    });
-  });
-
-  it("localizes post-restart and handoff timeout guidance", async () => {
-    installTranslations();
-
-    await expect(
-      verifyUpdate({
-        pending: { kind: "restart", expectedVersion: "2.0.0", expectedSha: null },
-        response: {
+  it.each(["stderrTail", "stdoutTail"])(
+    "redacts credentials in %s before shortening the recorded cause",
+    (stream) => {
+      const password = "synthetic-password-value";
+      const prefix = "npm ERR! fetch failed ";
+      const userinfo = `https://build:${password}`;
+      const line = `${prefix}${"x".repeat(180 - prefix.length - userinfo.length - 1)} ${userinfo}@registry.example.test/package`;
+      const projected = projectUpdateStatusResponse(
+        {
           sentinel: {
             kind: "update",
             status: "error",
-            stats: { reason: "restart-unhealthy" },
+            ts: 1_000,
+            stats: {
+              reason: "global-install-failed",
+              steps: [{ name: "global update", log: { exitCode: 1, [stream]: line } }],
+            },
           },
         },
-      }),
-    ).resolves.toEqual({
-      tone: "danger",
-      text: "Update error: restart-unhealthy. The replacement process never became healthy and the previous process stayed up.",
-    });
-    await expect(
-      verifyUpdate({
-        pending: { kind: "restart", expectedVersion: "2.0.0", expectedSha: null },
-        response: {
-          sentinel: {
-            kind: "update",
-            status: "error",
-            stats: { reason: "supervisor-exited" },
-          },
-        },
-      }),
-    ).resolves.toEqual({
-      tone: "danger",
-      text: "Update error: supervisor-exited. Check the gateway logs for the replacement failure.",
-    });
-    await expect(
-      verifyUpdate({
-        pending: { kind: "handoff", expectedVersion: null, expectedSha: null },
-        response: {
-          sentinel: {
-            kind: "update",
-            status: "skipped",
-            stats: { reason: "managed-service-handoff-started" },
-          },
-        },
-        advanceToMs: 35 * 60_000,
-      }),
-    ).resolves.toEqual({
-      tone: "danger",
-      text: "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
-    });
-  });
+        { updateStatusBanner: null, recordedUpdateAttempt: null, heldUpdateCampaignId: null },
+      );
+
+      const detail = projected.failure?.attempt?.failure?.detail;
+      expect(detail).toContain(prefix);
+      expect(detail).not.toContain(password);
+      expect(detail?.length).toBeLessThanOrEqual(180);
+      expect(projected.updateStatusBanner?.text).not.toContain(password);
+    },
+  );
+
+  it.each(["disk-read-only", "constructor", "__proto__", "toString"])(
+    "preserves unknown status %s inside localized fallback guidance",
+    (reason) => {
+      const translate = vi.spyOn(i18n, "t");
+
+      expect(resolveUpdateStatusBanner({ status: "error", reason })).toEqual({
+        tone: "danger",
+        text: `Couldn’t update OpenClaw. ${reason}. See the Gateway logs for the exact failure and retry once the cause is fixed.`,
+      });
+      expect(translate).toHaveBeenCalledWith("updates.failureReasons.default", undefined);
+    },
+  );
 });

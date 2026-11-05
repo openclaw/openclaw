@@ -1,15 +1,24 @@
+import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 // Moonshot tests cover moonshot plugin behavior.
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   streamSimple,
   type AssistantMessage,
   type Context,
   type Model,
+  type ProviderContext,
   type Tool,
 } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
+import { RED_H264_VIDEO_BASE64 as KIMI_K3_LIVE_RED_VIDEO_BASE64 } from "../test-support/native-video-fixture.test-support.js";
 import plugin from "./index.js";
 import { buildMoonshotProvider, MOONSHOT_CN_BASE_URL } from "./provider-catalog.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
@@ -17,10 +26,13 @@ import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 const KIMI_SEARCH_KEY =
   process.env.KIMI_API_KEY?.trim() || process.env.MOONSHOT_API_KEY?.trim() || "";
 const MOONSHOT_API_KEY = process.env.MOONSHOT_API_KEY?.trim() || "";
+const MOONSHOT_CN_API_KEY = process.env.MOONSHOT_CN_API_KEY?.trim() || "";
 const describeLive = isLiveTestEnabled() && KIMI_SEARCH_KEY.length > 0 ? describe : describe.skip;
 const describeModelLive =
   isLiveTestEnabled() && MOONSHOT_API_KEY.length > 0 ? describe : describe.skip;
 const KIMI_LIVE_SEARCH_TIMEOUT_SECONDS = 60;
+const itInternationalVideoLive = isLiveTestEnabled() && MOONSHOT_API_KEY.length > 0 ? it : it.skip;
+const itChinaVideoLive = isLiveTestEnabled() && MOONSHOT_CN_API_KEY.length > 0 ? it : it.skip;
 
 function isTransientKimiSearchError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -70,7 +82,7 @@ describeLive("moonshot plugin live", () => {
       },
     } as never);
 
-    let result: { provider?: string; content?: unknown; citations?: unknown } | undefined;
+    let result: Record<string, unknown> | undefined;
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
@@ -93,15 +105,34 @@ describeLive("moonshot plugin live", () => {
     }
 
     expect(result?.provider).toBe("kimi");
-    expect(typeof result?.content).toBe("string");
-    expect((result!.content as string).length).toBeGreaterThan(20);
-    expect(Array.isArray(result?.citations)).toBe(true);
+    expect(result?.count).toBe(1);
+    expect(result?.results).toEqual([
+      expect.objectContaining({
+        title: expect.stringContaining("<<<EXTERNAL_UNTRUSTED_CONTENT"),
+        url: expect.stringMatching(/^https?:\/\//),
+        description: expect.any(String),
+      }),
+    ]);
   }, 180_000);
 });
 
-function resolveMoonshotModels(modelId: string): Model<"openai-completions">[] {
+function resolveMoonshotModels(
+  modelId: string,
+): [Model<"openai-completions">, Model<"openai-completions">] {
   const provider = buildMoonshotProvider();
-  const model = provider.models.find((entry) => entry.id === modelId);
+  // K2.6 still has a documented replay contract outside the recommended model catalog.
+  const model =
+    modelId === "kimi-k2.6"
+      ? {
+          id: modelId,
+          name: "Kimi K2.6",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 262_144,
+          maxTokens: 32_768,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        }
+      : provider.models.find((entry) => entry.id === modelId);
   if (!model) {
     throw new Error(`Moonshot catalog does not include ${modelId}`);
   }
@@ -114,6 +145,26 @@ function resolveMoonshotModels(modelId: string): Model<"openai-completions">[] {
   return [defaultModel, { ...defaultModel, baseUrl: MOONSHOT_CN_BASE_URL }];
 }
 
+async function runMoonshotRegionScenario(
+  modelId: string,
+  fallbackMessage: string,
+  runScenario: (model: Model<"openai-completions">) => Promise<void>,
+) {
+  let lastAuthError: unknown;
+  for (const model of resolveMoonshotModels(modelId)) {
+    try {
+      await runScenario(model);
+      return;
+    } catch (error) {
+      if (!isMoonshotAuthDrift(error)) {
+        throw error;
+      }
+      lastAuthError = error;
+    }
+  }
+  throw toLintErrorObject(lastAuthError, fallbackMessage);
+}
+
 function createNoopTool(): Tool {
   return {
     name: "noop",
@@ -122,11 +173,9 @@ function createNoopTool(): Tool {
   };
 }
 
-async function collectDoneMessage(
-  stream: AsyncIterable<{ type: string; message?: AssistantMessage; error?: AssistantMessage }>,
-): Promise<AssistantMessage> {
+async function collectDoneMessage(stream: ReturnType<StreamFn>): Promise<AssistantMessage> {
   let doneMessage: AssistantMessage | undefined;
-  for await (const event of stream) {
+  for await (const event of await stream) {
     if (event.type === "error") {
       throw new Error(event.error?.errorMessage || "Moonshot live request failed");
     }
@@ -139,6 +188,139 @@ async function collectDoneMessage(
   }
   return doneMessage;
 }
+
+async function proveK3NativeVideoRegion(baseUrl: string, apiKey: string) {
+  const provider = await registerSingleProviderPlugin(plugin);
+  const catalog = buildMoonshotProvider();
+  const definition = catalog.models.find((model) => model.id === "kimi-k3");
+  if (!definition) {
+    throw new Error("Moonshot catalog does not include kimi-k3");
+  }
+  const model = provider.normalizeResolvedModel?.({
+    provider: "moonshot",
+    modelId: "kimi-k3",
+    model: {
+      ...definition,
+      provider: "moonshot",
+      api: "openai-completions",
+      baseUrl,
+    },
+  } as never) as Model<"openai-completions"> | undefined;
+  const wrapped = provider.wrapStreamFn?.({
+    provider: "moonshot",
+    modelId: "kimi-k3",
+    thinkingLevel: "max",
+    streamFn: streamSimple,
+  } as never);
+  if (!model?.input.includes("video" as never) || !wrapped) {
+    throw new Error("registered Moonshot provider did not prepare K3 native video");
+  }
+  const context: ProviderContext = {
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "What single color fills this video? Reply with exactly RED, BLUE, or GREEN.",
+          },
+          { type: "video", mimeType: "video/mp4", data: KIMI_K3_LIVE_RED_VIDEO_BASE64 },
+        ],
+        timestamp: Date.now(),
+      },
+    ],
+  };
+  const response = await collectDoneMessage(
+    wrapped(model, context as never, { apiKey, maxTokens: 128 }),
+  );
+  const answer = response.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join(" ");
+  expect(answer).toMatch(/\bRED\b/iu);
+}
+
+describe("moonshot K3 native video live", () => {
+  itInternationalVideoLive(
+    "independently understands red video on api.moonshot.ai",
+    async () => await proveK3NativeVideoRegion("https://api.moonshot.ai/v1", MOONSHOT_API_KEY),
+    120_000,
+  );
+
+  itChinaVideoLive(
+    "independently understands red video on api.moonshot.cn",
+    async () => await proveK3NativeVideoRegion(MOONSHOT_CN_BASE_URL, MOONSHOT_CN_API_KEY),
+    120_000,
+  );
+});
+
+describeModelLive("moonshot typed union branches live", () => {
+  it("accepts typed union branches through the plugin and managed transport", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const model = resolveMoonshotModels("kimi-k2.6")[0];
+    const context: Context = {
+      messages: [{ role: "user", content: "Reply with exactly: ok", timestamp: Date.now() }],
+      tools: [
+        {
+          name: "probe",
+          description: "Accept a string or number.",
+          parameters: Type.Unsafe({
+            type: "object",
+            properties: { v: { anyOf: [{ enum: ["x", "y"] }, { minimum: 1 }] } },
+            required: ["v"],
+          }),
+        },
+      ],
+    };
+
+    // The SDK facade installs the production host before the managed transport reuses it.
+    for (const route of ["plugin", "managed"] as const) {
+      const wrappedStream = provider.wrapStreamFn?.({
+        provider: "moonshot",
+        modelId: model.id,
+        thinkingLevel: "off",
+        streamFn: route === "plugin" ? streamSimple : createOpenAICompletionsTransportStreamFn(),
+      } as never);
+      if (!wrappedStream) {
+        throw new Error("Moonshot provider did not register a stream wrapper");
+      }
+      let payload: unknown;
+      const response = await collectDoneMessage(
+        wrappedStream(model, context, {
+          apiKey: MOONSHOT_API_KEY,
+          maxTokens: 128,
+          onPayload: (value) => {
+            payload = value;
+          },
+        }),
+      );
+
+      expect(response.stopReason, route).not.toBe("error");
+      expect(payload, route).toMatchObject({
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "probe",
+              parameters: {
+                type: "object",
+                properties: {
+                  v: {
+                    anyOf: [
+                      { type: "string", enum: ["x", "y"] },
+                      { type: "number", minimum: 1 },
+                    ],
+                  },
+                },
+                required: ["v"],
+              },
+            },
+          },
+        ],
+      });
+    }
+  }, 120_000);
+});
 
 describeModelLive("moonshot K2.6 replay live", () => {
   it("accepts a cross-model tool-call replay after backfilling reasoning_content", async () => {
@@ -156,11 +338,7 @@ describeModelLive("moonshot K2.6 replay live", () => {
     const tool = createNoopTool();
     const replayContext: Context = {
       messages: [
-        {
-          role: "user",
-          content: "Call the noop tool.",
-          timestamp: Date.now(),
-        },
+        makeUserMessage("Call the noop tool.", Date.now()),
         {
           role: "assistant",
           api: "openai-responses",
@@ -170,19 +348,8 @@ describeModelLive("moonshot K2.6 replay live", () => {
           content: [{ type: "toolCall", id: "call_cross_model", name: "noop", arguments: {} }],
           timestamp: Date.now(),
         } as AssistantMessage,
-        {
-          role: "toolResult",
-          toolCallId: "call_cross_model",
-          toolName: "noop",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-          timestamp: Date.now(),
-        },
-        {
-          role: "user",
-          content: "The tool returned ok. Reply with exactly: ok",
-          timestamp: Date.now(),
-        },
+        makeTextToolResult("call_cross_model", "noop", "ok", false, Date.now()),
+        makeUserMessage("The tool returned ok. Reply with exactly: ok", Date.now()),
       ],
       tools: [tool],
     };
@@ -196,11 +363,7 @@ describeModelLive("moonshot K2.6 replay live", () => {
           onPayload: (value) => {
             payload = value as Record<string, unknown>;
           },
-        }) as AsyncIterable<{
-          type: string;
-          message?: AssistantMessage;
-          error?: AssistantMessage;
-        }>,
+        }),
       );
 
       const messages = payload?.messages as Array<Record<string, unknown>> | undefined;
@@ -211,19 +374,11 @@ describeModelLive("moonshot K2.6 replay live", () => {
       expect(response.stopReason).not.toBe("error");
     };
 
-    let lastAuthError: unknown;
-    for (const model of resolveMoonshotModels("kimi-k2.6")) {
-      try {
-        await runScenario(model);
-        return;
-      } catch (error) {
-        if (!isMoonshotAuthDrift(error)) {
-          throw error;
-        }
-        lastAuthError = error;
-      }
-    }
-    throw toLintErrorObject(lastAuthError, "Moonshot K2.6 rejected the API key in both regions");
+    await runMoonshotRegionScenario(
+      "kimi-k2.6",
+      "Moonshot K2.6 rejected the API key in both regions",
+      runScenario,
+    );
   }, 180_000);
 });
 
@@ -242,11 +397,10 @@ describeModelLive("moonshot K2.7 Code live", () => {
     }
 
     const tool = createNoopTool();
-    const firstUser = {
-      role: "user" as const,
-      content: "Call the noop tool with {}. Do not answer directly.",
-      timestamp: Date.now(),
-    };
+    const firstUser = makeUserMessage(
+      "Call the noop tool with {}. Do not answer directly.",
+      Date.now(),
+    );
 
     const runScenario = async (model: Model<"openai-completions">) => {
       let firstPayload: Record<string, unknown> | undefined;
@@ -262,11 +416,7 @@ describeModelLive("moonshot K2.7 Code live", () => {
               firstPayload = payload as Record<string, unknown>;
             },
           },
-        ) as AsyncIterable<{
-          type: string;
-          message?: AssistantMessage;
-          error?: AssistantMessage;
-        }>,
+        ),
       );
 
       expect(firstPayload).toBeDefined();
@@ -288,19 +438,8 @@ describeModelLive("moonshot K2.7 Code live", () => {
         messages: [
           firstUser,
           first,
-          {
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: Date.now(),
-          },
-          {
-            role: "user",
-            content: "Reply with exactly: ok",
-            timestamp: Date.now(),
-          },
+          makeTextToolResult(toolCall.id, toolCall.name, "ok", false, Date.now()),
+          makeUserMessage("Reply with exactly: ok", Date.now()),
         ],
         tools: [tool],
       };
@@ -312,11 +451,7 @@ describeModelLive("moonshot K2.7 Code live", () => {
           onPayload: (payload) => {
             secondPayload = payload as Record<string, unknown>;
           },
-        }) as AsyncIterable<{
-          type: string;
-          message?: AssistantMessage;
-          error?: AssistantMessage;
-        }>,
+        }),
       );
 
       expect(secondPayload).toBeDefined();
@@ -330,21 +465,10 @@ describeModelLive("moonshot K2.7 Code live", () => {
       expect(text).toMatch(/^ok[.!]?$/i);
     };
 
-    let lastAuthError: unknown;
-    for (const model of resolveMoonshotModels("kimi-k2.7-code")) {
-      try {
-        await runScenario(model);
-        return;
-      } catch (error) {
-        if (!isMoonshotAuthDrift(error)) {
-          throw error;
-        }
-        lastAuthError = error;
-      }
-    }
-    throw toLintErrorObject(
-      lastAuthError,
+    await runMoonshotRegionScenario(
+      "kimi-k2.7-code",
       "Moonshot K2.7 Code rejected the API key in both regions",
+      runScenario,
     );
   }, 180_000);
 });
@@ -370,11 +494,7 @@ describeModelLive("moonshot K3 live", () => {
           model,
           {
             messages: [
-              {
-                role: "user",
-                content: "Call the noop tool with {}. Do not answer directly.",
-                timestamp: Date.now(),
-              },
+              makeUserMessage("Call the noop tool with {}. Do not answer directly.", Date.now()),
             ],
             tools: [createNoopTool()],
           },
@@ -395,11 +515,7 @@ describeModelLive("moonshot K3 live", () => {
               payload.tool_choice = "required";
             },
           },
-        ) as AsyncIterable<{
-          type: string;
-          message?: AssistantMessage;
-          error?: AssistantMessage;
-        }>,
+        ),
       );
 
       expect(capturedPayload).toBeDefined();
@@ -423,32 +539,10 @@ describeModelLive("moonshot K3 live", () => {
       expect(toolCall.name).toBe("noop");
     };
 
-    let lastAuthError: unknown;
-    for (const model of resolveMoonshotModels("kimi-k3")) {
-      try {
-        await runScenario(model, MOONSHOT_API_KEY);
-        return;
-      } catch (error) {
-        if (!isMoonshotAuthDrift(error)) {
-          throw error;
-        }
-        lastAuthError = error;
-      }
-    }
-    throw toLintErrorObject(lastAuthError, "Moonshot K3 rejected the API key in both regions");
+    await runMoonshotRegionScenario(
+      "kimi-k3",
+      "Moonshot K3 rejected the API key in both regions",
+      (model) => runScenario(model, MOONSHOT_API_KEY),
+    );
   }, 180_000);
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

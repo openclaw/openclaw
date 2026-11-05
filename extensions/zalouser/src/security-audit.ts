@@ -1,4 +1,3 @@
-// Zalouser plugin module implements security audit behavior.
 import { buildMutableAllowEntryDetector } from "openclaw/plugin-sdk/channel-policy";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import type { ResolvedZalouserAccount } from "./accounts.js";

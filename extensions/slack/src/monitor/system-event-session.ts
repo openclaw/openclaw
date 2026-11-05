@@ -1,70 +1,71 @@
-// Slack plugin module resolves system events to the same sessions as message events.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-runtime";
+import { resolveRuntimeConversationBindingRouteAsync } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackMessageEvent } from "../types.js";
+import { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
 import type { SlackEventScope } from "./event-scope.js";
-import {
-  qualifySlackConversationId,
-  qualifySlackRoutePeerId,
-  resolveSlackEnterpriseMainDmSessionKey,
-} from "./workspace-routing.js";
+import { qualifySlackConversationId, resolveSlackAgentRoute } from "./workspace-routing.js";
 
-export function resolveSlackSystemEventRouteSessionKey(params: {
+export function createSlackSystemEventRouteResolver(params: {
   cfg: OpenClawConfig;
   accountId: string;
-  teamId: string;
+  getTeamId: () => string;
+  mainKey: string;
   threadInheritParent: boolean;
-  channelId: string;
-  channelType: SlackMessageEvent["channel_type"];
-  senderId: string;
-  threadTs?: string | null;
-  eventScope?: SlackEventScope;
-}): string | undefined {
-  const isDirectMessage = params.channelType === "im";
-  const peerId = isDirectMessage ? params.senderId : params.channelId;
-  if (!peerId) {
-    return undefined;
-  }
-
-  try {
-    const peerKind = isDirectMessage
-      ? "direct"
-      : params.channelType === "mpim"
-        ? "group"
-        : "channel";
-    let route = resolveAgentRoute({
-      cfg: params.cfg,
-      channel: "slack",
-      accountId: params.accountId,
-      teamId: params.eventScope?.teamId ?? params.teamId,
-      peer: {
-        kind: peerKind,
-        id: qualifySlackRoutePeerId({
-          id: peerId,
-          kind: isDirectMessage ? "user" : "channel",
-          eventScope: params.eventScope,
-        }),
-      },
-    });
-    if (params.eventScope && isDirectMessage && route.dmScope === "main") {
-      const sessionKey = resolveSlackEnterpriseMainDmSessionKey({
-        baseSessionKey: route.sessionKey,
+  recallSlackChannelType: (
+    channelId: string | null | undefined,
+    eventScope?: SlackEventScope,
+  ) => SlackMessageEvent["channel_type"] | undefined;
+}) {
+  return async (event: {
+    channelId?: string | null;
+    channelType?: string | null;
+    senderId?: string | null;
+    threadTs?: string | null;
+    eventScope?: SlackEventScope;
+  }) => {
+    const channelId = normalizeOptionalString(event.channelId) ?? "";
+    const senderId = normalizeOptionalString(event.senderId) ?? "";
+    // System events can omit channel_type too; prefer a type already seen on events
+    // for this channel over C-prefix inference so they key the same session (#102676).
+    const channelType = normalizeSlackChannelType(
+      event.channelType ?? params.recallSlackChannelType(channelId, event.eventScope),
+      channelId,
+    );
+    const isDirectMessage = channelType === "im";
+    if (!channelId && (!isDirectMessage || !senderId)) {
+      const route = resolveAgentRoute({
+        cfg: params.cfg,
+        channel: "slack",
         accountId: params.accountId,
-        eventScope: params.eventScope,
+        teamId: event.eventScope?.teamId ?? params.getTeamId(),
       });
-      route = { ...route, sessionKey, mainSessionKey: sessionKey };
+      return { agentId: route.agentId, sessionKey: params.mainKey };
     }
+    const peerId = isDirectMessage ? senderId : channelId;
+    if (!peerId) {
+      throw new Error("Slack system event route requires a peer");
+    }
+    const route = resolveSlackAgentRoute({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      teamId: event.eventScope?.teamId ?? params.getTeamId(),
+      peer: {
+        kind: resolveSlackChatType(channelType),
+        id: peerId,
+      },
+      eventScope: event.eventScope,
+    });
 
-    const threadTs = normalizeOptionalString(params.threadTs);
+    const threadTs = normalizeOptionalString(event.threadTs);
     const baseConversationId = qualifySlackConversationId(
-      isDirectMessage ? `user:${params.senderId}` : params.channelId,
-      params.eventScope,
+      isDirectMessage ? `user:${senderId}` : channelId,
+      event.eventScope,
     );
     const threadBindingRoute =
-      !params.eventScope && threadTs
-        ? resolveRuntimeConversationBindingRoute({
+      !event.eventScope && threadTs
+        ? await resolveRuntimeConversationBindingRouteAsync({
             route,
             conversation: {
               channel: "slack",
@@ -74,11 +75,11 @@ export function resolveSlackSystemEventRouteSessionKey(params: {
             },
           })
         : null;
-    const runtimeRoute = params.eventScope
+    const runtimeRoute = event.eventScope
       ? { route, bindingRecord: null, boundSessionKey: undefined }
       : threadBindingRoute?.boundSessionKey || threadBindingRoute?.bindingRecord
         ? threadBindingRoute
-        : resolveRuntimeConversationBindingRoute({
+        : await resolveRuntimeConversationBindingRouteAsync({
             route,
             conversation: {
               channel: "slack",
@@ -87,15 +88,14 @@ export function resolveSlackSystemEventRouteSessionKey(params: {
             },
           });
     if (runtimeRoute.boundSessionKey) {
-      return runtimeRoute.route.sessionKey;
+      return runtimeRoute.route;
     }
-    return resolveThreadSessionKeys({
+    const sessionKey = resolveThreadSessionKeys({
       baseSessionKey: runtimeRoute.route.sessionKey,
       threadId: threadTs,
       parentSessionKey:
         threadTs && params.threadInheritParent ? runtimeRoute.route.sessionKey : undefined,
     }).sessionKey;
-  } catch {
-    return undefined;
-  }
+    return { agentId: runtimeRoute.route.agentId, sessionKey };
+  };
 }

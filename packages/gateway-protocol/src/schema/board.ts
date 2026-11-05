@@ -1,5 +1,6 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "./canvas.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -54,6 +55,42 @@ export const BoardTabSchema = closedObject({
 });
 export type BoardTab = Static<typeof BoardTabSchema>;
 
+export const BOARD_GITHUB_ACTIONS_QUERY_FIELDS = [
+  "total_count",
+  "id",
+  "name",
+  "display_title",
+  "head_branch",
+  "status",
+  "conclusion",
+  "html_url",
+  "run_started_at",
+  "created_at",
+  "updated_at",
+  "event",
+  "workflow_id",
+  "run_attempt",
+] as const;
+export const BoardWidgetDataQuerySchema = closedObject({
+  name: BoardWidgetNameSchema,
+  bindingId: Type.Literal("github.actions.runs"),
+  params: closedObject({
+    repository: Type.String({ minLength: 1, maxLength: 140 }),
+    workflow: Type.Union([
+      Type.String({ minLength: 1, maxLength: 255 }),
+      Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.Null(),
+    ]),
+    branch: Type.Union([Type.String({ minLength: 1, maxLength: 255 }), Type.Null()]),
+    status: Type.Union([Type.String({ minLength: 1, maxLength: 32 }), Type.Null()]),
+    created: Type.Union([Type.String({ minLength: 1, maxLength: 32 }), Type.Null()]),
+    perPage: Type.Integer({ minimum: 1, maximum: 30 }),
+    excludePullRequests: Type.Boolean(),
+  }),
+  fields: Type.Array(Type.Enum(BOARD_GITHUB_ACTIONS_QUERY_FIELDS), { minItems: 1, maxItems: 14 }),
+});
+export type BoardWidgetDataQuery = Static<typeof BoardWidgetDataQuerySchema>;
+
 export const BoardWidgetDeclaredSchema = closedObject({
   netOrigins: Type.Optional(
     Type.Array(Type.String({ minLength: 1, maxLength: 2048 }), { maxItems: 32 }),
@@ -61,6 +98,13 @@ export const BoardWidgetDeclaredSchema = closedObject({
   tools: Type.Optional(
     Type.Array(Type.String({ minLength: 1, maxLength: BOARD_WIDGET_TOOL_MAX_LENGTH }), {
       maxItems: 64,
+    }),
+  ),
+  queries: Type.Optional(
+    Type.Array(BoardWidgetDataQuerySchema, {
+      maxItems: 8,
+      description:
+        "Named live GitHub Actions queries shared with session readers using the agent's credentials. Fix every selector, result limit, and response field; use null explicitly for all workflows/branches or no filter. Changed definitions require renewed approval. For saved summaries, use session:report instead.",
     }),
   ),
 });
@@ -71,6 +115,11 @@ export const BoardWidgetSchema = closedObject({
   tabId: BoardTabIdSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
   contentKind: Type.Union([Type.Literal("html"), Type.Literal("mcp-app"), Type.Literal("plugin")]),
+  contentOwner: Type.Optional(
+    Type.Enum(["html", "mcp-app", "plugin", "registered"] as const, { type: "string" }),
+  ),
+  // Read-only v4 metadata from older Gateways; new stores never emit registered content.
+  registeredContentKind: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" })),
   pluginKind: Type.Optional(BoardWidgetPluginKindSchema),
   props: Type.Optional(BoardWidgetPluginPropsSchema),
   presentation: Type.Optional(BoardWidgetPresentationSchema),
@@ -95,6 +144,7 @@ export const BoardWidgetSchema = closedObject({
   sandboxUrl: Type.Optional(Type.String()),
   sandboxPort: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })),
   sandboxOrigin: Type.Optional(Type.String()),
+  kindLabel: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
 });
 export type BoardWidget = Static<typeof BoardWidgetSchema>;
 
@@ -157,11 +207,15 @@ export const BoardOpSchema = Type.Union([
 ]);
 export type BoardOp = Static<typeof BoardOpSchema>;
 
-export const BoardGetParamsSchema = closedObject({ sessionKey: NonEmptyString });
+export const BoardGetParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+});
 export type BoardGetParams = Static<typeof BoardGetParamsSchema>;
 
 export const BoardUpdateParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   ops: Type.Array(BoardOpSchema),
 });
 export type BoardUpdateParams = Static<typeof BoardUpdateParamsSchema>;
@@ -176,7 +230,7 @@ export type BoardMcpAppDescriptor = Static<typeof BoardMcpAppDescriptorSchema>;
 
 export const BoardWidgetHtmlContentSchema = closedObject({
   kind: Type.Literal("html"),
-  html: Type.String({ maxLength: 262_144 }),
+  html: Type.String({ maxLength: WIDGET_HTML_MAX_UTF8_BYTES }),
 });
 export const BoardWidgetMcpAppContentSchema = closedObject({
   kind: Type.Literal("mcp-app"),
@@ -191,17 +245,24 @@ export const BoardWidgetPluginContentSchema = closedObject({
   pluginKind: BoardWidgetPluginKindSchema,
   props: Type.Optional(BoardWidgetPluginPropsSchema),
 });
+// Keep retired v4 content wire-valid for older clients and Gateways. The put
+// handler reports its removal; this is never materialized or rendered.
+export const BoardWidgetRegisteredContentSchema = closedObject({
+  kind: Type.Literal("registered"),
+  contentKind: Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" }),
+  source: Type.String({ maxLength: 262_144 }),
+});
 export const BoardWidgetContentSchema = Type.Union([
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppContentSchema,
   BoardWidgetPluginContentSchema,
+  BoardWidgetRegisteredContentSchema,
 ]);
 export type BoardWidgetContent = Static<typeof BoardWidgetContentSchema>;
 export type BoardWidgetMaterializedContent =
   | Static<typeof BoardWidgetHtmlContentSchema>
   | (Static<typeof BoardWidgetMcpAppContentSchema> & { interactive: boolean })
   | Static<typeof BoardWidgetPluginContentSchema>;
-
 export const BoardCanvasDocumentSourceSchema = closedObject({
   kind: Type.Literal("canvas-doc"),
   docId: NonEmptyString,
@@ -212,12 +273,14 @@ export const BoardWidgetPutContentSchema = Type.Union([
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppPutContentSchema,
   BoardWidgetPluginContentSchema,
+  BoardWidgetRegisteredContentSchema,
   BoardCanvasDocumentSourceSchema,
 ]);
 export type BoardWidgetPutContent = Static<typeof BoardWidgetPutContentSchema>;
 
 export const BoardWidgetPutParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   name: BoardWidgetNameSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
   content: BoardWidgetPutContentSchema,
@@ -246,6 +309,7 @@ export type BoardWidgetPutResult = Static<typeof BoardWidgetPutResultSchema>;
 
 export const BoardWidgetGrantParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   name: BoardWidgetNameSchema,
   decision: Type.Union([Type.Literal("granted"), Type.Literal("rejected")]),
   revision: Type.Integer({ minimum: 1 }),
@@ -255,6 +319,7 @@ export type BoardWidgetGrantParams = Static<typeof BoardWidgetGrantParamsSchema>
 
 export const BoardWidgetAppViewParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   name: BoardWidgetNameSchema,
   revision: Type.Integer({ minimum: 1 }),
   instanceId: NonEmptyString,
@@ -271,6 +336,7 @@ export const BoardViewTicketSchema = Type.String({ minLength: 1, maxLength: 2048
 
 export const BoardLegacyEventParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   widget: BoardWidgetNameSchema,
   payload: Type.Unknown(),
 });
@@ -289,15 +355,21 @@ export const BoardPromptAuthorizeParamsSchema = closedObject({
 });
 export type BoardPromptAuthorizeParams = Static<typeof BoardPromptAuthorizeParamsSchema>;
 
-export const BoardDataReadParamsSchema = closedObject({
-  ticket: BoardViewTicketSchema,
-  bindingId: Type.String({ minLength: 1, maxLength: BOARD_DATA_BINDING_ID_MAX_LENGTH }),
-  params: Type.Optional(
-    Type.Record(Type.String({ minLength: 1, maxLength: 80 }), Type.Unknown(), {
-      maxProperties: 64,
-    }),
-  ),
-});
+export const BoardDataReadParamsSchema = Type.Union([
+  closedObject({
+    ticket: BoardViewTicketSchema,
+    bindingId: Type.String({ minLength: 1, maxLength: BOARD_DATA_BINDING_ID_MAX_LENGTH }),
+    params: Type.Optional(
+      Type.Record(Type.String({ minLength: 1, maxLength: 80 }), Type.Unknown(), {
+        maxProperties: 64,
+      }),
+    ),
+  }),
+  closedObject({
+    ticket: BoardViewTicketSchema,
+    queryName: BoardWidgetNameSchema,
+  }),
+]);
 export type BoardDataReadParams = Static<typeof BoardDataReadParamsSchema>;
 
 export const BoardCronActionParamsSchema = closedObject({

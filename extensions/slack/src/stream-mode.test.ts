@@ -3,100 +3,63 @@ import { describe, expect, it } from "vitest";
 import { applyAppendOnlyStreamUpdate, resolveSlackStreamingConfig } from "./stream-mode.js";
 
 describe("resolveSlackStreamingConfig", () => {
-  it("defaults to partial mode with native streaming enabled", () => {
+  it("defaults to progress mode with native streaming enabled", () => {
     expect(resolveSlackStreamingConfig({})).toEqual({
-      mode: "partial",
-      nativeStreaming: true,
-      draftMode: "replace",
-    });
-  });
-
-  it("maps legacy streamMode values to unified streaming modes", () => {
-    expect(resolveSlackStreamingConfig({ streamMode: "append" })).toEqual({
-      mode: "block",
-      nativeStreaming: true,
-      draftMode: "append",
-    });
-    expect(resolveSlackStreamingConfig({ streamMode: "status_final" })).toEqual({
       mode: "progress",
       nativeStreaming: true,
-      draftMode: "status_final",
     });
   });
 
-  it("maps legacy streaming booleans to unified mode and native streaming toggle", () => {
-    expect(resolveSlackStreamingConfig({ streaming: false })).toEqual({
-      mode: "off",
+  it("keeps explicit partial mode on the replace draft path", () => {
+    expect(
+      resolveSlackStreamingConfig({ streaming: { mode: "partial", nativeTransport: false } }),
+    ).toEqual({
+      mode: "partial",
       nativeStreaming: false,
-      draftMode: "replace",
-    });
-    expect(resolveSlackStreamingConfig({ streaming: true })).toEqual({
-      mode: "partial",
-      nativeStreaming: true,
-      draftMode: "replace",
-    });
-  });
-
-  it("accepts unified enum values directly", () => {
-    expect(resolveSlackStreamingConfig({ streaming: "off" })).toEqual({
-      mode: "off",
-      nativeStreaming: true,
-      draftMode: "replace",
-    });
-    expect(resolveSlackStreamingConfig({ streaming: "progress" })).toEqual({
-      mode: "progress",
-      nativeStreaming: true,
-      draftMode: "status_final",
     });
   });
 });
 
 describe("applyAppendOnlyStreamUpdate", () => {
-  it("starts with first incoming text", () => {
-    const next = applyAppendOnlyStreamUpdate({
-      incoming: "hello",
-      rendered: "",
-      source: "",
+  for (const { name, input, expected } of [
+    {
+      name: "starts with first incoming text",
+      input: { incoming: "hello", rendered: "", source: "" },
+      expected: { rendered: "hello", source: "hello", changed: true },
+    },
+    {
+      name: "uses cumulative incoming text when it extends prior source",
+      input: { incoming: "hello world", rendered: "hello", source: "hello" },
+      expected: { rendered: "hello world", source: "hello world", changed: true },
+    },
+    {
+      name: "ignores regressive shorter incoming text",
+      input: { incoming: "hello", rendered: "hello world", source: "hello world" },
+      expected: { rendered: "hello world", source: "hello world", changed: false },
+    },
+    {
+      name: "extends rendered when source continues after an appended chunk",
+      input: {
+        incoming: "next chunk grows",
+        rendered: "hello world\nnext chunk",
+        source: "next chunk",
+      },
+      expected: {
+        rendered: "hello world\nnext chunk grows",
+        source: "next chunk grows",
+        changed: true,
+      },
+    },
+    {
+      name: "appends non-prefix incoming chunks",
+      input: { incoming: "next chunk", rendered: "hello world", source: "hello world" },
+      expected: { rendered: "hello world\nnext chunk", source: "next chunk", changed: true },
+    },
+  ]) {
+    it(name, () => {
+      // Keep each invocation's input and expectation fresh, including retries.
+      const next = applyAppendOnlyStreamUpdate({ ...input });
+      expect(next).toEqual({ ...expected });
     });
-    expect(next).toEqual({ rendered: "hello", source: "hello", changed: true });
-  });
-
-  it("uses cumulative incoming text when it extends prior source", () => {
-    const next = applyAppendOnlyStreamUpdate({
-      incoming: "hello world",
-      rendered: "hello",
-      source: "hello",
-    });
-    expect(next).toEqual({
-      rendered: "hello world",
-      source: "hello world",
-      changed: true,
-    });
-  });
-
-  it("ignores regressive shorter incoming text", () => {
-    const next = applyAppendOnlyStreamUpdate({
-      incoming: "hello",
-      rendered: "hello world",
-      source: "hello world",
-    });
-    expect(next).toEqual({
-      rendered: "hello world",
-      source: "hello world",
-      changed: false,
-    });
-  });
-
-  it("appends non-prefix incoming chunks", () => {
-    const next = applyAppendOnlyStreamUpdate({
-      incoming: "next chunk",
-      rendered: "hello world",
-      source: "hello world",
-    });
-    expect(next).toEqual({
-      rendered: "hello world\nnext chunk",
-      source: "next chunk",
-      changed: true,
-    });
-  });
+  }
 });

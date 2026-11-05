@@ -1,13 +1,59 @@
 /** Normalizes accepted child-session spawn results from loose tool payloads. */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 
-// Helpers for recognizing accepted session-spawn tool results in loosely typed
-// tool payloads and persisted delivery metadata.
+// Helpers for recognizing accepted session-spawn tool results.
 export type AcceptedSessionSpawn = {
   runId: string;
   childSessionKey: string;
+  sessionUrl?: string;
+  publicRead?: boolean;
+  label?: string;
+  /** True only when this child owns a terminal completion for its requester. */
+  expectsCompletionMessage?: boolean;
 };
+
+// Accounting follows the exact admission through provider fallback and plugin
+// refresh. A reused run ID must never inherit another operational instance's children.
+const acceptedSpawnsByRun = resolveGlobalSingleton(
+  Symbol.for("openclaw.acceptedSessionSpawnsByRun"),
+  () => new WeakMap<OperationalRunInstanceRef, Map<string, AcceptedSessionSpawn>>(),
+);
+
+export function mergeAcceptedSessionSpawnsForRun(
+  instance: OperationalRunInstanceRef,
+  accepted: readonly AcceptedSessionSpawn[] = [],
+): AcceptedSessionSpawn[] {
+  let receipts = acceptedSpawnsByRun.get(instance);
+  if (!receipts && accepted.length > 0) {
+    receipts = new Map();
+    acceptedSpawnsByRun.set(instance, receipts);
+  }
+  for (const spawn of accepted) {
+    // The producer owns acceptance and completion retirement; a later harness
+    // projection cannot erase acceptance or revive a cancelled obligation.
+    receipts?.set(spawn.runId, receipts.get(spawn.runId) ?? spawn);
+  }
+  return receipts ? [...receipts.values()] : [];
+}
+
+/** A confirmed cancellation preserves acceptance but ends its owed completion. */
+export function retireAcceptedSessionSpawnCompletionForRun(
+  instance: OperationalRunInstanceRef,
+  spawn: Pick<AcceptedSessionSpawn, "runId" | "childSessionKey">,
+): void {
+  const receipts = acceptedSpawnsByRun.get(instance);
+  const accepted = receipts?.get(spawn.runId);
+  if (
+    receipts &&
+    accepted?.childSessionKey === spawn.childSessionKey &&
+    accepted.expectsCompletionMessage === true
+  ) {
+    receipts.set(spawn.runId, { ...accepted, expectsCompletionMessage: false });
+  }
+}
 
 /** Normalize a tool result that accepted a child session spawn. */
 export function normalizeAcceptedSessionSpawnResult(result: unknown): AcceptedSessionSpawn | null {
@@ -20,18 +66,29 @@ export function normalizeAcceptedSessionSpawnResult(result: unknown): AcceptedSe
   if (!runId || !childSessionKey) {
     return null;
   }
-  return { runId, childSessionKey };
+  const sessionUrl = normalizeOptionalString(details.sessionUrl);
+  const url = sessionUrl ? URL.parse(sessionUrl) : null;
+  const label = normalizeOptionalString(details.label);
+  return {
+    runId,
+    childSessionKey,
+    ...(url?.protocol === "http:" || url?.protocol === "https:" ? { sessionUrl } : {}),
+    ...(label ? { label } : {}),
+    ...(details.publicRead === true ? { publicRead: true } : {}),
+    expectsCompletionMessage: details.expectsCompletionMessage === true,
+  };
 }
 
 /** Return true when a collection contains at least one accepted child spawn. */
-export function hasAcceptedSessionSpawn(acceptedSessionSpawns?: readonly unknown[]): boolean {
-  return (acceptedSessionSpawns ?? []).some((spawn) => {
-    const record = asOptionalRecord(spawn);
-    if (!record) {
-      return false;
-    }
-    return Boolean(
-      normalizeOptionalString(record.runId) && normalizeOptionalString(record.childSessionKey),
-    );
-  });
+export function hasAcceptedSessionSpawn(
+  acceptedSessionSpawns?: readonly AcceptedSessionSpawn[],
+): boolean {
+  return Boolean(acceptedSessionSpawns?.length);
+}
+
+/** Return true when an accepted child owns the requester's terminal completion. */
+export function hasCompletionMessageSessionSpawn(
+  acceptedSessionSpawns?: readonly AcceptedSessionSpawn[],
+): boolean {
+  return acceptedSessionSpawns?.some((spawn) => spawn.expectsCompletionMessage === true) === true;
 }

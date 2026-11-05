@@ -1,4 +1,6 @@
-/** Timeout watchdogs for isolated cron agent setup and execution phases. */
+/** Timeout watchdogs for cron runner setup and execution phases. */
+import { raceWithTimeout } from "@openclaw/retry";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import type {
   CronAgentExecutionPhase,
   CronAgentExecutionPhaseUpdate,
@@ -19,7 +21,8 @@ const CRON_AGENT_PRE_EXECUTION_MIN_WATCHDOG_MS = 1_000;
 
 type CronAgentWatchdogState =
   | "waiting_for_runner"
-  | "waiting_for_execution"
+  | "waiting_for_initial_progress"
+  | "waiting_for_fallback_execution"
   | "executing"
   | "timed_out"
   | "disposed";
@@ -45,32 +48,22 @@ const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
   model_call_started: "execution",
 } as const satisfies Record<CronAgentExecutionPhase, CronAgentPhaseWatchdogStage>;
 
-/** Handle for feeding isolated-agent progress into cron timeout watchdogs. */
-type CronAgentWatchdog = {
-  start: () => void;
-  noteLaneWait: () => void;
-  noteLaneAdmitted: () => void;
-  noteRunnerStarted: (info?: CronAgentExecutionStarted) => void;
-  notePhase: (info: CronAgentExecutionPhaseUpdate) => void;
-  activeExecution: () => CronAgentExecutionStarted | undefined;
-  deadlineAtMs: () => number | undefined;
-  observedLaneWait: () => boolean;
-  dispose: () => void;
-};
-
-/** Tracks isolated-agent setup/execution progress and fires the correct cron timeout reason. */
+/** Tracks runner setup/execution progress and fires the owning timeout reason. */
 export function createCronAgentWatchdog(params: {
+  executionKind?: "agent" | "command";
   deferUntilRunner: boolean;
   jobTimeoutMs: number;
   triggerTimeout: (reason: string) => void;
-}): CronAgentWatchdog {
+}) {
   let state: CronAgentWatchdogState = params.deferUntilRunner ? "waiting_for_runner" : "executing";
   let timeoutId: NodeJS.Timeout | undefined;
+  // The job budget is process-local, so it is measured on the monotonic clock:
+  // lane waits pause it with `remainingTimeoutMs` and `setTimeout` consumes it.
+  let timeoutStartedAt = 0;
+  let remainingTimeoutMs = params.jobTimeoutMs;
   let setupTimeoutId: NodeJS.Timeout | undefined;
   let preExecutionTimeoutId: NodeJS.Timeout | undefined;
   let activeExecution: CronAgentExecutionStarted | undefined;
-  let deadlineAtMs: number | undefined;
-  let observedLaneWait = false;
   let waitingForLane = false;
 
   const setTimedOut = (reason: string) => {
@@ -81,13 +74,13 @@ export function createCronAgentWatchdog(params: {
     params.triggerTimeout(reason);
   };
   const startTimeout = () => {
-    if (timeoutId || state === "disposed") {
+    if (timeoutId || waitingForLane || state === "disposed" || state === "timed_out") {
       return;
     }
-    deadlineAtMs = Date.now() + params.jobTimeoutMs;
+    timeoutStartedAt = monotonicNow();
     timeoutId = setTimeout(() => {
       setTimedOut(timeoutErrorMessage(activeExecution));
-    }, params.jobTimeoutMs);
+    }, remainingTimeoutMs);
   };
   const clearSetupTimeout = () => {
     if (!setupTimeoutId) {
@@ -103,7 +96,11 @@ export function createCronAgentWatchdog(params: {
     }
     setupTimeoutId = setTimeout(() => {
       if (state === "waiting_for_runner" && !waitingForLane) {
-        setTimedOut(setupTimeoutErrorMessage(activeExecution));
+        setTimedOut(
+          params.executionKind === "command"
+            ? `${timeoutErrorMessage()} (command setup before runner start)`
+            : setupTimeoutErrorMessage(activeExecution),
+        );
       }
     }, CRON_AGENT_SETUP_WATCHDOG_MS);
   };
@@ -114,12 +111,14 @@ export function createCronAgentWatchdog(params: {
     clearTimeout(preExecutionTimeoutId);
     preExecutionTimeoutId = undefined;
   };
+  const isWaitingForExecution = () =>
+    state === "waiting_for_initial_progress" || state === "waiting_for_fallback_execution";
   const startPreExecutionTimeout = () => {
-    if (preExecutionTimeoutId || state !== "waiting_for_execution") {
+    if (preExecutionTimeoutId || waitingForLane || !isWaitingForExecution()) {
       return;
     }
     preExecutionTimeoutId = setTimeout(() => {
-      if (state === "waiting_for_execution") {
+      if (isWaitingForExecution()) {
         setTimedOut(preExecutionTimeoutErrorMessage(activeExecution));
       }
     }, resolveCronAgentPreExecutionWatchdogMs(params.jobTimeoutMs));
@@ -128,24 +127,15 @@ export function createCronAgentWatchdog(params: {
     if (!info) {
       return;
     }
-    const previousPhase = activeExecution?.phase;
     activeExecution = { ...activeExecution, ...info };
     const stage = info.phase ? CRON_AGENT_PHASE_WATCHDOG_STAGE[info.phase] : undefined;
-    // A fallback attempt can return to setup-like phases after execution began;
-    // re-arm pre-execution timing so the fallback path cannot stall silently.
-    if (
-      state === "executing" &&
-      previousPhase !== undefined &&
-      CRON_AGENT_PHASE_WATCHDOG_STAGE[previousPhase] === "execution" &&
-      stage === "pre_execution"
-    ) {
-      // Model fallback can move from an execution phase back into setup-like
-      // phases; restart the pre-execution watchdog so fallback stalls are seen.
-      state = "waiting_for_execution";
-      startPreExecutionTimeout();
-      return;
-    }
-    if (stage === "execution") {
+    const observedInitialProgress =
+      state === "waiting_for_initial_progress" &&
+      info.phase !== undefined &&
+      info.phase !== "runner_entered";
+    const observedFallbackExecution =
+      state === "waiting_for_fallback_execution" && stage === "execution";
+    if (observedInitialProgress || observedFallbackExecution) {
       state = "executing";
       clearPreExecutionTimeout();
     }
@@ -153,25 +143,27 @@ export function createCronAgentWatchdog(params: {
 
   return {
     start: () => {
+      // Bound silent setup and teardown stalls, but pause explicit capacity waits.
+      startTimeout();
       if (params.deferUntilRunner) {
         startSetupTimeout();
-        return;
       }
-      startTimeout();
     },
     noteLaneWait: () => {
-      if (state === "waiting_for_runner") {
-        observedLaneWait = true;
-        waitingForLane = true;
-        clearSetupTimeout();
+      waitingForLane = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+        remainingTimeoutMs -= monotonicNow() - timeoutStartedAt;
       }
+      clearSetupTimeout();
+      clearPreExecutionTimeout();
     },
     noteLaneAdmitted: () => {
-      if (state === "waiting_for_runner") {
-        observedLaneWait = false;
-        waitingForLane = false;
-        startSetupTimeout();
-      }
+      waitingForLane = false;
+      startTimeout();
+      startSetupTimeout();
+      startPreExecutionTimeout();
     },
     noteRunnerStarted: (info?: CronAgentExecutionStarted) => {
       if (state === "disposed" || state === "timed_out") {
@@ -179,8 +171,17 @@ export function createCronAgentWatchdog(params: {
       }
       clearSetupTimeout();
       startTimeout();
-      if (state !== "executing") {
-        state = "waiting_for_execution";
+      if (params.executionKind === "command") {
+        state = "executing";
+        clearPreExecutionTimeout();
+        noteExecutionProgress(info);
+        return;
+      }
+      if (info?.isFallback === true) {
+        clearPreExecutionTimeout();
+        state = "waiting_for_fallback_execution";
+      } else if (state === "waiting_for_runner") {
+        state = "waiting_for_initial_progress";
       }
       noteExecutionProgress(info);
       startPreExecutionTimeout();
@@ -192,8 +193,7 @@ export function createCronAgentWatchdog(params: {
       noteExecutionProgress(info);
     },
     activeExecution: () => activeExecution,
-    deadlineAtMs: () => deadlineAtMs,
-    observedLaneWait: () => observedLaneWait,
+    observedLaneWait: () => waitingForLane,
     dispose: () => {
       state = "disposed";
       if (timeoutId) {
@@ -205,33 +205,29 @@ export function createCronAgentWatchdog(params: {
   };
 }
 
-/** Runs timeout cleanup with a guard so stuck cleanup cannot block the cron lane. */
-export async function cleanupTimedOutCronAgentRun(
+/** Joins timeout cleanup and command settlement without wedging the cron lane. */
+export async function settleTimedOutCronRun(
   state: CronServiceState,
   job: CronJob,
   timeoutMs: number,
   execution?: CronAgentExecutionStarted,
+  commandSettlement?: Promise<unknown>,
 ): Promise<void> {
-  if (!state.deps.cleanupTimedOutAgentRun) {
+  const cleanupPromise = state.deps.cleanupTimedOutAgentRun?.({ job, timeoutMs, execution });
+  if (!cleanupPromise && !commandSettlement) {
     return;
   }
-  let settleTimer: NodeJS.Timeout | undefined;
-  const cleanupPromise = state.deps.cleanupTimedOutAgentRun({ job, timeoutMs, execution });
-  const settleTimeout = new Promise<void>((resolve) => {
-    settleTimer = setTimeout(resolve, CRON_TIMEOUT_CLEANUP_GUARD_MS);
-  });
-  try {
-    await Promise.race([cleanupPromise, settleTimeout]);
-  } catch (err) {
+  const cleanup = cleanupPromise?.catch((err: unknown) => {
     state.deps.log.warn(
       { jobId: job.id, err: String(err) },
       "cron: timed-out agent cleanup failed",
     );
-  } finally {
-    if (settleTimer) {
-      clearTimeout(settleTimer);
-    }
-  }
+  });
+  await raceWithTimeout(
+    Promise.allSettled([cleanup, commandSettlement]),
+    CRON_TIMEOUT_CLEANUP_GUARD_MS,
+    () => undefined,
+  );
 }
 
 function resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs: number): number {

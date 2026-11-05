@@ -1,14 +1,20 @@
 import type { ChannelInboundMediaInput } from "openclaw/plugin-sdk/channel-inbound";
-// Signal plugin helpers isolate active-run control scheduling from the inbound handler.
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   listChatCommands,
   maybeResolveTextAlias,
   normalizeCommandBody,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SignalIngressLifecycle } from "../signal-ingress.js";
 
 export type SignalInboundEntry = {
+  /** Admission and buffered dispatch share this receipt-time snapshot. */
+  cfg: OpenClawConfig;
   senderName: string;
   senderDisplay: string;
   senderRecipient: string;
@@ -26,12 +32,15 @@ export type SignalInboundEntry = {
   media?: ChannelInboundMediaInput[];
   commandAuthorized: boolean;
   canDetectMention?: boolean;
-  requireMention?: boolean;
   wasMentioned?: boolean;
   replyToBody?: string;
   replyToSender?: string;
   replyToIsQuote?: boolean;
   turnAdoptionLifecycle?: SignalIngressLifecycle;
+  channelIngress?: readonly ResolvedChannelMessageIngress[];
+  resolveChannelIngress: (
+    contextBinding: ChannelIngressContextBinding,
+  ) => Promise<ResolvedChannelMessageIngress>;
 };
 
 type TrackedSignalInboundLane = {
@@ -79,7 +88,7 @@ function isSignalActiveRunControlText(text: string): boolean {
   if (isAbortRequestText(text)) {
     return true;
   }
-  const normalizedBody = normalizeCommandBody(text.trim());
+  const normalizedBody = normalizeCommandBody(text);
   const alias = maybeResolveTextAlias(normalizedBody);
   if (!alias) {
     return false;
@@ -106,41 +115,20 @@ export function resolveSignalControlLaneKey(
 }
 
 export function createSignalPendingInboundRegistry(accountId: string) {
-  const trackedEntries = new WeakMap<SignalInboundEntry, TrackedSignalInboundLane>();
-  const countsByConversation = new Map<string, Map<string, number>>();
+  const trackedEntries = new Map<SignalInboundEntry, TrackedSignalInboundLane>();
 
   const track = (entry: SignalInboundEntry) => {
-    if (trackedEntries.has(entry)) {
-      return;
-    }
     const conversationKey = resolveSignalInboundConversationKey(accountId, entry);
     const inboundKey = resolveSignalInboundDebounceKey(accountId, entry);
     if (!conversationKey || !inboundKey) {
       return;
     }
-    const counts = countsByConversation.get(conversationKey) ?? new Map<string, number>();
-    counts.set(inboundKey, (counts.get(inboundKey) ?? 0) + 1);
-    countsByConversation.set(conversationKey, counts);
     trackedEntries.set(entry, { conversationKey, inboundKey });
   };
 
   const complete = (entries: SignalInboundEntry[]) => {
     for (const entry of entries) {
-      const tracked = trackedEntries.get(entry);
-      if (!tracked) {
-        continue;
-      }
       trackedEntries.delete(entry);
-      const counts = countsByConversation.get(tracked.conversationKey);
-      const nextCount = (counts?.get(tracked.inboundKey) ?? 0) - 1;
-      if (nextCount > 0) {
-        counts?.set(tracked.inboundKey, nextCount);
-        continue;
-      }
-      counts?.delete(tracked.inboundKey);
-      if (counts?.size === 0) {
-        countsByConversation.delete(tracked.conversationKey);
-      }
     }
   };
 
@@ -154,7 +142,13 @@ export function createSignalPendingInboundRegistry(accountId: string) {
     }
     // Group members have distinct normal debounce keys, but stop applies to the shared session.
     // Cancel every still-tracked sender lane before core interrupts the active run.
-    for (const inboundKey of countsByConversation.get(conversationKey)?.keys() ?? []) {
+    const inboundKeys = new Set<string>();
+    for (const tracked of trackedEntries.values()) {
+      if (tracked.conversationKey === conversationKey) {
+        inboundKeys.add(tracked.inboundKey);
+      }
+    }
+    for (const inboundKey of inboundKeys) {
       cancelKey(inboundKey);
     }
   };

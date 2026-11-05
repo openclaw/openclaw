@@ -1,11 +1,15 @@
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
-import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  MarkdownTableMode,
+  OpenClawConfig,
+  ReplyToMode,
+} from "openclaw/plugin-sdk/config-contracts";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
-import type { TelegramApi, TelegramApiOverride } from "./send-context.js";
-import type { OpenClawConfig } from "./send.runtime.js";
+import type { TelegramApiOverride } from "./send-context.js";
 
 export type TelegramSendOpts = {
   cfg: OpenClawConfig;
@@ -13,6 +17,7 @@ export type TelegramSendOpts = {
   accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
+  mediaUrls?: readonly string[];
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -21,7 +26,11 @@ export type TelegramSendOpts = {
   api?: TelegramApiOverride;
   retry?: RetryConfig;
   textMode?: "markdown" | "html";
+  /** Per-message link-preview override for literal copied content. */
+  linkPreview?: boolean;
   tableMode?: MarkdownTableMode;
+  textLimit?: number;
+  chunkMode?: ChunkMode;
   /** Send audio as voice message instead of audio file. Defaults to false. */
   asVoice?: boolean;
   /** Send video as video note instead of regular video. Defaults to false. */
@@ -41,14 +50,24 @@ export type TelegramSendOpts = {
   replyToMode?: ReplyToMode;
   /** Quote text for Telegram reply_parameters. */
   quoteText?: string;
+  /** Bot API message_effect_id for the first sent message; private chats only. */
+  messageEffectId?: string;
   /** Forum topic thread ID (for forum supergroups) */
   messageThreadId?: number;
+  /** Channel Direct Messages topic ID. */
+  directMessagesTopicId?: number;
   /** Inline keyboard buttons (reply markup). */
   buttons?: TelegramInlineButtons;
   /** Send image as document to avoid Telegram compression. Defaults to false. */
   forceDocument?: boolean;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: TelegramSendResult) => Promise<void> | void;
+  /** @internal Cancel remaining physical sends for the current delivery. */
+  signal?: AbortSignal;
+  /** @internal Revalidate durable custody before a send operation, not after throttle waits. */
+  onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Synchronously fence custody after refresh and immediately before Telegram I/O. */
+  assertPlatformSendAuthorized?: () => void;
 };
 
 export type TelegramApiCallOpts = Pick<
@@ -57,11 +76,10 @@ export type TelegramApiCallOpts = Pick<
 >;
 
 export type TelegramThreadedSendOpts = TelegramApiCallOpts &
-  Pick<TelegramSendOpts, "replyToMessageId" | "messageThreadId">;
+  Pick<TelegramSendOpts, "replyToMessageId" | "messageThreadId" | "assertPlatformSendAuthorized">;
 
-export type TelegramMessageActionOpts = TelegramApiCallOpts & { notify?: boolean };
-
-export type TelegramSendMessageParams = Parameters<TelegramApi["sendMessage"]>[2];
+export type TelegramMessageActionOpts = TelegramApiCallOpts &
+  Pick<TelegramSendOpts, "signal" | "assertPlatformSendAuthorized"> & { notify?: boolean };
 
 export type TelegramSendResult = {
   messageId: string;
@@ -76,5 +94,12 @@ export type TelegramSendResult = {
 export type TelegramLocationSendOpts = TelegramThreadedSendOpts &
   Pick<
     TelegramSendOpts,
-    "buttons" | "quoteText" | "promptContextProjectionPlan" | "silent" | "onDeliveryResult"
+    | "buttons"
+    | "quoteText"
+    | "messageEffectId"
+    | "promptContextProjectionPlan"
+    | "silent"
+    | "onDeliveryResult"
+    | "onPlatformSendDispatch"
+    | "assertPlatformSendAuthorized"
   >;

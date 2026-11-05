@@ -1,59 +1,75 @@
-// Canonical SQLite row helpers for exec approval policy state.
-import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { sha256Hex } from "./crypto-digest.js";
+import { formatErrorMessage } from "./errors.js";
 import {
+  createFailClosedExecApprovalsFallback,
+  LEGACY_EXEC_APPROVALS_DIAGNOSTIC,
   normalizeExecApprovalsInternal,
+  parsePersistedExecApprovals,
+  resolveExecApprovalsDisplayPath,
   tryParsePersistedExecApprovals,
+  stripExecApprovalsSocketCredentials,
+  stripExecApprovalsRawSocketCredentials,
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
+import {
+  ExecApprovalsMigrationRequiredError,
+  resetExecApprovalsMigrationGateForTest,
+} from "./exec-approvals-migration-gate.js";
+import { assertExecApprovalsHostPolicyUnchanged } from "./exec-approvals-policy.js";
+import { execApprovalsPublication } from "./exec-approvals-publication.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+// Canonical SQLite row helpers for exec approval policy state.
+import type { EngineConnection } from "./sql-connection.js";
 
 const EXEC_APPROVALS_CONFIG_KEY = "current";
-export const EXEC_APPROVALS_MUTATION_LEASE_SCOPE = "exec-approvals";
-export const EXEC_APPROVALS_MUTATION_LEASE_KEY = "mutation";
 
 type ExecApprovalsDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "exec_approvals_config" | "state_leases"
+  "agent_deletion_journal" | "exec_approvals_config"
 >;
 
-export type ExecApprovalsMutationLeaseOwner = Pick<
-  OpenClawStateLeaseContext,
-  "assertOwnedInTransaction"
->;
-
-class ExecApprovalsMutationFencedError extends Error {
+export class ExecApprovalsMutationFencedError extends Error {
   constructor() {
     super("Exec approvals cannot be changed while agent deletion is in progress; retry.");
     this.name = "ExecApprovalsMutationFencedError";
   }
 }
 
-function assertExecApprovalsMutationAllowed(params: {
-  db: DatabaseSync;
-  leaseOwner?: ExecApprovalsMutationLeaseOwner;
-  now?: number;
+export function assertExecApprovalsMutationAllowed(params: {
+  db: EngineConnection;
+  current: ExecApprovalsFile;
+  next: ExecApprovalsFile;
+  agentId?: string;
 }): void {
-  if (params.leaseOwner) {
-    params.leaseOwner.assertOwnedInTransaction(params.db);
+  const current = normalizeExecApprovalsInternal(params.current);
+  const next = normalizeExecApprovalsInternal(params.next);
+  const changed = [
+    ...new Set([...Object.keys(current.agents ?? {}), ...Object.keys(next.agents ?? {})]),
+  ].filter((agentId) => !isDeepStrictEqual(current.agents?.[agentId], next.agents?.[agentId]));
+  const agentIds = new Set(changed.map(normalizeAgentId));
+  if (params.agentId) {
+    agentIds.add(normalizeAgentId(params.agentId));
+  }
+  if (agentIds.size === 0) {
     return;
   }
-  const activeLease = executeSqliteQueryTakeFirstSync(
+  const journal = executeSqliteQueryTakeFirstSync(
     params.db,
     getNodeSqliteKysely<ExecApprovalsDatabase>(params.db)
-      .selectFrom("state_leases")
-      .select("owner")
-      .where("scope", "=", EXEC_APPROVALS_MUTATION_LEASE_SCOPE)
-      .where("lease_key", "=", EXEC_APPROVALS_MUTATION_LEASE_KEY)
-      .where("expires_at", ">", params.now ?? Date.now()),
+      .selectFrom("agent_deletion_journal")
+      .select("agent_id")
+      .where("agent_id", "in", [...agentIds])
+      .limit(1),
   );
-  if (activeLease) {
+  if (journal) {
     throw new ExecApprovalsMutationFencedError();
   }
 }
@@ -70,7 +86,9 @@ export function serializeExecApprovals(file: ExecApprovalsFile): string {
   return `${JSON.stringify(file, null, 2)}\n`;
 }
 
-export function readExecApprovalsConfigRow(db: DatabaseSync): ExecApprovalsConfigRow | undefined {
+export function readExecApprovalsConfigRow(
+  db: EngineConnection,
+): ExecApprovalsConfigRow | undefined {
   return executeSqliteQueryTakeFirstSync(
     db,
     getNodeSqliteKysely<ExecApprovalsDatabase>(db)
@@ -95,7 +113,11 @@ export function snapshotFromExecApprovalsRow(params: {
       hash: hashExecApprovalsRaw(null),
     };
   }
-  const parsed = tryParsePersistedExecApprovals(raw);
+  const result = parsePersistedExecApprovals(raw);
+  if (!result.ok && result.error === LEGACY_EXEC_APPROVALS_DIAGNOSTIC) {
+    throw new ExecApprovalsMigrationRequiredError(params.path, undefined, result.error);
+  }
+  const parsed = result.ok ? result.value : null;
   if (!parsed) {
     params.onMalformed?.();
   }
@@ -103,28 +125,29 @@ export function snapshotFromExecApprovalsRow(params: {
     path: params.path,
     exists: true,
     raw,
-    file:
-      parsed ??
-      normalizeExecApprovalsInternal({
-        version: 1,
-        defaults: {
-          security: "deny",
-          ask: "off",
-          askFallback: "deny",
-          autoAllowSkills: false,
-        },
-        agents: {},
-      }),
+    file: parsed ?? createFailClosedExecApprovalsFallback(),
     hash: hashExecApprovalsRaw(raw),
   };
+}
+
+export function snapshotFromReadReply(
+  reply: { row: ExecApprovalsConfigRow | undefined } | undefined,
+  displayPath: () => string,
+): ExecApprovalsSnapshot {
+  return snapshotFromExecApprovalsRow({
+    path: displayPath(),
+    row: reply?.row,
+    onMalformed: () =>
+      warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
+  });
 }
 
 export function projectionValues(file: ExecApprovalsFile) {
   const normalized = normalizeExecApprovalsInternal(file);
   const agents = Object.values(normalized.agents ?? {});
   return {
-    socket_path: normalized.socket?.path ?? null,
-    has_socket_token: normalized.socket?.token ? 1 : 0,
+    socket_path: null,
+    has_socket_token: 0,
     default_security: normalized.defaults?.security ?? null,
     default_ask: normalized.defaults?.ask ?? null,
     default_ask_fallback: normalized.defaults?.askFallback ?? null,
@@ -140,51 +163,129 @@ export function projectionValues(file: ExecApprovalsFile) {
 }
 
 export function writeExecApprovalsConfigRow(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   file: ExecApprovalsFile;
   raw?: string;
   now?: number;
-  leaseOwner?: ExecApprovalsMutationLeaseOwner;
-}): void {
-  assertExecApprovalsMutationAllowed({ db: params.db, leaseOwner: params.leaseOwner });
-  const raw = params.raw ?? serializeExecApprovals(params.file);
+  change?: "policy" | "usage";
+}): string {
+  const inputPolicy = stripExecApprovalsSocketCredentials(params.file);
+  const normalized = normalizeExecApprovalsInternal(inputPolicy);
+  const authored =
+    params.raw === undefined
+      ? serializeExecApprovals(inputPolicy)
+      : stripExecApprovalsRawSocketCredentials(params.raw);
+  const parsed = parsePersistedExecApprovals(authored);
+  // Malformed policy must remain visible to the fail-closed reader, not become partial defaults.
+  const raw =
+    params.raw === undefined && !parsed.ok && parsed.error === LEGACY_EXEC_APPROVALS_DIAGNOSTIC
+      ? serializeExecApprovals(normalized)
+      : authored;
   const values = {
-    config_key: EXEC_APPROVALS_CONFIG_KEY,
     raw_json: raw,
-    ...projectionValues(params.file),
+    ...projectionValues(normalized),
     updated_at_ms: params.now ?? Date.now(),
   };
   executeSqliteQuerySync(
     params.db,
     getNodeSqliteKysely<ExecApprovalsDatabase>(params.db)
       .insertInto("exec_approvals_config")
-      .values(values)
-      .onConflict((conflict) =>
-        conflict.column("config_key").doUpdateSet({
-          raw_json: values.raw_json,
-          socket_path: values.socket_path,
-          has_socket_token: values.has_socket_token,
-          default_security: values.default_security,
-          default_ask: values.default_ask,
-          default_ask_fallback: values.default_ask_fallback,
-          auto_allow_skills: values.auto_allow_skills,
-          agent_count: values.agent_count,
-          allowlist_count: values.allowlist_count,
-          updated_at_ms: values.updated_at_ms,
-        }),
-      ),
+      .values({ config_key: EXEC_APPROVALS_CONFIG_KEY, ...values })
+      .onConflict((conflict) => conflict.column("config_key").doUpdateSet(values)),
   );
+  const persisted = raw === authored ? parsed : parsePersistedExecApprovals(raw);
+  const file = persisted.ok ? persisted.value : createFailClosedExecApprovalsFallback();
+  const { socket: _socket, ...policy } = file;
+  execApprovalsPublication.stagePostimages(params.db, [
+    { file: policy, change: params.change ?? "policy" },
+  ]);
+  return raw;
 }
 
-export function deleteExecApprovalsConfigRow(
-  db: DatabaseSync,
-  leaseOwner?: ExecApprovalsMutationLeaseOwner,
-): void {
-  assertExecApprovalsMutationAllowed({ db, leaseOwner });
+export function deleteExecApprovalsConfigRow(db: EngineConnection): void {
   executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<ExecApprovalsDatabase>(db)
       .deleteFrom("exec_approvals_config")
       .where("config_key", "=", EXEC_APPROVALS_CONFIG_KEY),
   );
+  execApprovalsPublication.stageDeletions(db, [EXEC_APPROVALS_CONFIG_KEY]);
+}
+
+/** Called only inside the approval owner's winning resolution transaction. */
+export function mintMcpToolGrantLocked(
+  db: EngineConnection,
+  grant: { agentId: string; server: string; tool: string },
+  nowMs: number,
+): void {
+  const row = readExecApprovalsConfigRow(db);
+  const current: ExecApprovalsFile | null = row
+    ? tryParsePersistedExecApprovals(row.raw_json)
+    : { version: 1 };
+  if (!current) {
+    throw new Error("Cannot save MCP tool grant: invalid exec approvals document");
+  }
+  const agent = current.agents?.[grant.agentId];
+  if (
+    agent?.mcpTools?.some((entry) => entry.server === grant.server && entry.tool === grant.tool)
+  ) {
+    return;
+  }
+  const next = {
+    ...current,
+    agents: {
+      ...current.agents,
+      [grant.agentId]: {
+        ...agent,
+        mcpTools: [
+          ...(agent?.mcpTools ?? []),
+          {
+            server: grant.server,
+            tool: grant.tool,
+            source: "allow-always" as const,
+            addedAt: nowMs,
+          },
+        ],
+      },
+    },
+  };
+  assertExecApprovalsHostPolicyUnchanged(current, next);
+  assertExecApprovalsMutationAllowed({ db, current, next });
+  writeExecApprovalsConfigRow({ db, file: next, now: nowMs });
+}
+
+const log = createSubsystemLogger("infra/exec-approvals");
+const WARN_INTERVAL_MS = 60_000;
+let lastWarnAt: number | undefined;
+
+export function warnFailClosed(message: string, error?: unknown): void {
+  const now = Date.now();
+  if (lastWarnAt !== undefined && now - lastWarnAt < WARN_INTERVAL_MS) {
+    return;
+  }
+  lastWarnAt = now;
+  log.warn(message, error === undefined ? undefined : { error: formatErrorMessage(error) });
+}
+
+export function snapshotFromExecApprovalsDatabase(
+  db: EngineConnection,
+  displayPath = resolveExecApprovalsDisplayPath(),
+): ExecApprovalsSnapshot {
+  return snapshotFromExecApprovalsRow({
+    path: displayPath,
+    row: readExecApprovalsConfigRow(db),
+    onMalformed: () =>
+      warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
+  });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  Object.assign(globalThis, {
+    [Symbol.for("openclaw.execApprovalsStoreTestApi")]: {
+      reset(): void {
+        resetExecApprovalsMigrationGateForTest();
+        lastWarnAt = undefined;
+      },
+    },
+  });
 }

@@ -1,8 +1,3 @@
-/**
- * Channel directory adapter helpers.
- *
- * Provides null/empty defaults for plugins without directory support.
- */
 import type { ChannelDirectoryAdapter } from "./types.adapters.js";
 
 export const nullChannelDirectorySelf: NonNullable<ChannelDirectoryAdapter["self"]> = async () =>
@@ -19,12 +14,11 @@ export function createChannelDirectoryAdapter(
   } = {},
 ): ChannelDirectoryAdapter {
   return {
-    self: params.self ?? nullChannelDirectorySelf,
     ...params,
+    self: params.self ?? nullChannelDirectorySelf,
   };
 }
 
-/** Build the common empty directory surface for channels without directory support. */
 export function createEmptyChannelDirectoryAdapter(): ChannelDirectoryAdapter {
   return createChannelDirectoryAdapter({
     listPeers: emptyChannelDirectoryList,

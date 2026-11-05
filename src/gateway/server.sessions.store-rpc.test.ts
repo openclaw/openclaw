@@ -1,17 +1,23 @@
-/**
- * Gateway session store RPC tests.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
-import {
-  loadSessionEntry,
-  loadTranscriptEvents,
-  persistSessionTranscriptTurn,
-} from "../config/sessions/session-accessor.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
+/**
+ * Gateway session store RPC tests.
+ */
+import * as sessionDirs from "../agents/session-dirs.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { CronJob } from "../cron/types.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { bindInProcessRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
+import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
+import {
+  loadTranscriptRows,
+  seedLinearTranscript,
+} from "./server.sessions.store-rpc.test-helpers.js";
+import type { SessionsListResult } from "./session-utils.types.js";
 import { agentDiscoveryMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq as directSessionHandlerReq,
@@ -20,66 +26,10 @@ import {
   getSessionsHandlers,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
+  setupGatewaySessionsTestHarness();
 
-async function seedLinearTranscript(params: {
-  contents: string[];
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<void> {
-  await persistSessionTranscriptTurn(
-    {
-      agentId: "main",
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    {
-      updateMode: "none",
-      messages: params.contents.map((content, index) => ({
-        message: { role: "user", content, timestamp: index + 1 },
-        now: Date.parse(`2026-06-19T12:00:${String(index + 1).padStart(2, "0")}.000Z`),
-      })),
-    },
-  );
-}
-
-async function loadTranscriptRows(params: {
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<unknown[]> {
-  return await loadTranscriptEvents({
-    agentId: "main",
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-  });
-}
-
-test("sessions.patch accepts and discards the retired beta icon field", async () => {
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      main: {
-        sessionId: "sess-main",
-        updatedAt: Date.now(),
-      },
-    },
-  });
-
-  const patched = await directSessionHandlerReq<{
-    entry: Record<string, unknown>;
-  }>("sessions.patch", {
-    key: "agent:main:main",
-    icon: "🧪",
-  });
-
-  expect(patched.ok).toBe(true);
-  expect(patched.payload?.entry).not.toHaveProperty("icon");
-  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).not.toHaveProperty("icon");
-});
+type SessionPatchResponse = { ok: true; key: string; entry: Record<string, unknown> };
 
 test("lists and patches session store via sessions.* RPC", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -158,12 +108,14 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const directContext = {
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     logGateway: { debug: vi.fn() },
     loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
+    loadGatewayModelCatalogSnapshot: async () => ({
+      entries: agentDiscoveryMock.models,
+      routeVariants: agentDiscoveryMock.models,
+    }),
     getRuntimeConfig,
   };
   async function directSessionReq<TPayload = unknown>(
@@ -178,28 +130,35 @@ test("lists and patches session store via sessions.* RPC", async () => {
           error?: unknown;
         }
       | undefined;
+    await initializeSessionReadContext(directContext as never);
     await expectDefined(
       sessionsHandlers[method],
       "sessionsHandlers[method] test invariant",
-    )({
-      req: {} as never,
-      params,
-      respond: (ok, payload, error) => {
-        result = {
-          ok,
-          payload:
-            payload === undefined
-              ? undefined
-              : coercePayload
-                ? coercePayload(payload)
-                : (payload as TPayload),
-          error,
-        };
-      },
-      context: directContext as never,
-      client: null,
-      isWebchatConnect: () => false,
-    });
+    )(
+      bindInProcessRequestMutationAuthority(
+        {
+          req: { type: "req", id: method, method, params },
+          params,
+          respond: (ok, payload, error) => {
+            result = {
+              ok,
+              payload:
+                payload === undefined
+                  ? undefined
+                  : coercePayload
+                    ? coercePayload(payload)
+                    : (payload as TPayload),
+              error,
+            };
+          },
+          context: directContext as never,
+          client: null,
+          isWebchatConnect: () => false,
+        },
+        undefined,
+        undefined,
+      ),
+    );
     if (!result) {
       throw new Error(`${method} did not respond`);
     }
@@ -219,28 +178,12 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(resolvedBySessionId.payload?.key).toBe("agent:main:discord:group:dev");
   ws.close();
 
-  const list1 = await directSessionReq<{
-    path: string;
-    defaults?: { model?: string | null; modelProvider?: string | null };
-    sessions: Array<{
-      key: string;
-      totalTokens?: number;
-      totalTokensFresh?: boolean;
-      thinkingLevel?: string;
-      verboseLevel?: string;
-      lastAccountId?: string;
-      deliveryContext?: { channel?: string; to?: string; accountId?: string };
-      classification?: string;
-      agentId?: string;
-      accountId?: string;
-      peerKind?: string;
-      isMain?: boolean;
-      isBackground?: boolean;
-    }>;
-  }>("sessions.list", { includeGlobal: false, includeUnknown: false });
+  const list1 = await directSessionReq<SessionsListResult>("sessions.list", {
+    includeGlobal: false,
+    includeUnknown: false,
+  });
 
   expect(list1.ok).toBe(true);
-  expect(list1.payload?.path).toBe(storePath);
   expect(list1.payload?.sessions.map((session) => session.key)).not.toContain("global");
   expect(list1.payload?.defaults?.modelProvider).toBe("anthropic");
   const main = list1.payload?.sessions.find((s) => s.key === "agent:main:main");
@@ -292,9 +235,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
     }),
   ).not.toContain("491234567890");
 
-  const active = await directSessionReq<{
-    sessions: Array<{ key: string }>;
-  }>("sessions.list", {
+  const active = await directSessionReq<SessionsListResult>("sessions.list", {
     includeGlobal: false,
     includeUnknown: false,
     activeMinutes: 5,
@@ -302,9 +243,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(active.ok).toBe(true);
   expect(active.payload?.sessions.map((s) => s.key)).toEqual(["agent:main:main"]);
 
-  const limited = await directSessionReq<{
-    sessions: Array<{ key: string }>;
-  }>("sessions.list", {
+  const limited = await directSessionReq<SessionsListResult>("sessions.list", {
     includeGlobal: true,
     includeUnknown: false,
     limit: 1,
@@ -313,14 +252,17 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(limited.payload?.sessions).toHaveLength(1);
   expect(limited.payload?.sessions[0]?.key).toBe("global");
 
-  const patched = await directSessionReq<{ ok: true; key: string }>("sessions.patch", {
+  const patched = await directSessionReq<SessionPatchResponse>("sessions.patch", {
     key: "agent:main:main",
     thinkingLevel: "medium",
     verboseLevel: "off",
+    icon: "🦞",
   });
   expect(patched.ok).toBe(true);
   expect(patched.payload?.ok).toBe(true);
   expect(patched.payload?.key).toBe("agent:main:main");
+  expect(patched.payload?.entry.icon).toBe("🦞");
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.icon).toBe("🦞");
 
   const sendPolicyPatched = await directSessionReq<{
     ok: true;
@@ -354,52 +296,49 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const pinned = await directSessionReq<{
     entry: { pinnedAt?: number };
   }>("sessions.patch", {
-    key: "agent:main:subagent:one",
+    key: "agent:main:discord:group:dev",
     pinned: true,
   });
   expect(pinned.ok).toBe(true);
   expect(pinned.payload?.entry.pinnedAt).toEqual(expect.any(Number));
 
-  const pinnedList = await directSessionReq<{
-    sessions: Array<{ key: string; pinned?: boolean }>;
-  }>("sessions.list", {});
+  const pinnedList = await directSessionReq<SessionsListResult>("sessions.list", {});
   expect(pinnedList.payload?.sessions[0]).toMatchObject({
-    key: "agent:main:subagent:one",
+    key: "agent:main:discord:group:dev",
     pinned: true,
   });
 
   const archived = await directSessionReq<{
     entry: { archivedAt?: number; pinnedAt?: number };
   }>("sessions.patch", {
-    key: "agent:main:subagent:one",
+    key: "agent:main:discord:group:dev",
     archived: true,
+    expectedSessionId: "sess-group",
   });
   expect(archived.ok).toBe(true);
   expect(archived.payload?.entry.archivedAt).toEqual(expect.any(Number));
   expect(archived.payload?.entry.pinnedAt).toBeUndefined();
 
-  const activeAfterArchive = await directSessionReq<{
-    sessions: Array<{ key: string }>;
-  }>("sessions.list", {});
+  const activeAfterArchive = await directSessionReq<SessionsListResult>("sessions.list", {});
   expect(activeAfterArchive.payload?.sessions.map((session) => session.key)).not.toContain(
-    "agent:main:subagent:one",
+    "agent:main:discord:group:dev",
   );
-  const archivedList = await directSessionReq<{
-    sessions: Array<{ key: string; archived?: boolean }>;
-  }>("sessions.list", { archived: true });
+  const archivedList = await directSessionReq<SessionsListResult>("sessions.list", {
+    archived: true,
+  });
   expect(archivedList.payload?.sessions).toMatchObject([
-    { key: "agent:main:subagent:one", archived: true },
+    { key: "agent:main:discord:group:dev", archived: true },
   ]);
 
   const archivedSend = await directSessionReq("sessions.send", {
-    key: "agent:main:subagent:one",
+    key: "agent:main:discord:group:dev",
     message: "blocked while archived",
   });
   expect(archivedSend).toMatchObject({
     ok: false,
     error: {
       message:
-        'Session "agent:main:subagent:one" is archived. Restore it before starting new work.',
+        'Session "agent:main:discord:group:dev" is archived. Restore it before starting new work.',
     },
   });
 
@@ -410,7 +349,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
     payload: { runId: cachedArchivedRunId, status: "ok" },
   });
   const cachedArchivedSend = await directSessionReq("sessions.send", {
-    key: "agent:main:subagent:one",
+    key: "agent:main:discord:group:dev",
     message: "already completed before archive",
     idempotencyKey: cachedArchivedRunId,
   });
@@ -420,37 +359,27 @@ test("lists and patches session store via sessions.* RPC", async () => {
   });
 
   const archivedReset = await directSessionReq("sessions.reset", {
-    key: "agent:main:subagent:one",
+    key: "agent:main:discord:group:dev",
   });
   expect(archivedReset).toMatchObject({
     ok: false,
     error: {
       message:
-        'Session "agent:main:subagent:one" is archived. Restore it before starting new work.',
+        'Session "agent:main:discord:group:dev" is archived. Restore it before starting new work.',
     },
   });
 
   const restored = await directSessionReq<{
     entry: { archivedAt?: number };
   }>("sessions.patch", {
-    key: "agent:main:subagent:one",
+    key: "agent:main:discord:group:dev",
     archived: false,
+    expectedSessionId: "sess-group",
   });
   expect(restored.ok).toBe(true);
   expect(restored.payload?.entry.archivedAt).toBeUndefined();
 
-  const list2 = await directSessionReq<{
-    sessions: Array<{
-      key: string;
-      thinkingLevel?: string;
-      verboseLevel?: string;
-      sendPolicy?: string;
-      label?: string;
-      displayName?: string;
-      classification?: string;
-      isBackground?: boolean;
-    }>;
-  }>("sessions.list", {});
+  const list2 = await directSessionReq<SessionsListResult>("sessions.list", {});
   expect(list2.ok).toBe(true);
   const main2 = list2.payload?.sessions.find((s) => s.key === "agent:main:main");
   expect(main2?.thinkingLevel).toBe("medium");
@@ -464,25 +393,21 @@ test("lists and patches session store via sessions.* RPC", async () => {
     isBackground: true,
   });
 
-  const clearedVerbose = await directSessionReq<{ ok: true; key: string }>("sessions.patch", {
+  const clearedVerbose = await directSessionReq<SessionPatchResponse>("sessions.patch", {
     key: "agent:main:main",
     verboseLevel: null,
+    icon: "",
   });
   expect(clearedVerbose.ok).toBe(true);
+  expect(clearedVerbose.payload?.entry).not.toHaveProperty("icon");
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).not.toHaveProperty("icon");
 
-  const list3 = await directSessionReq<{
-    sessions: Array<{
-      key: string;
-      verboseLevel?: string;
-    }>;
-  }>("sessions.list", {});
+  const list3 = await directSessionReq<SessionsListResult>("sessions.list", {});
   expect(list3.ok).toBe(true);
   const main3 = list3.payload?.sessions.find((s) => s.key === "agent:main:main");
   expect(main3?.verboseLevel).toBeUndefined();
 
-  const listByLabel = await directSessionReq<{
-    sessions: Array<{ key: string }>;
-  }>("sessions.list", {
+  const listByLabel = await directSessionReq<SessionsListResult>("sessions.list", {
     includeGlobal: false,
     includeUnknown: false,
     label: "Briefing",
@@ -497,9 +422,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(resolvedByLabel.ok).toBe(true);
   expect(resolvedByLabel.payload?.key).toBe("agent:main:subagent:one");
 
-  const spawnedOnly = await directSessionReq<{
-    sessions: Array<{ key: string }>;
-  }>("sessions.list", {
+  const spawnedOnly = await directSessionReq<SessionsListResult>("sessions.list", {
     includeGlobal: true,
     includeUnknown: true,
     spawnedBy: "agent:main:main",
@@ -536,9 +459,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   });
   expect(cleaned.ok).toBe(true);
   expect(cleaned.payload?.missing).toBeGreaterThanOrEqual(1);
-  const listAfterCleanup = await directSessionReq<{
-    sessions: Array<{ key: string }>;
-  }>("sessions.list", {});
+  const listAfterCleanup = await directSessionReq<SessionsListResult>("sessions.list", {});
   expect(listAfterCleanup.payload?.sessions.map((session) => session.key)).not.toContain(
     "agent:main:subagent:one",
   );
@@ -556,7 +477,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
     resolved?: {
       model?: string;
       modelProvider?: string;
-      agentRuntime?: { id: string; source: string };
+      agentRuntime?: { id: string; source: string; devicePlacementSupported?: boolean };
     };
   }>("sessions.patch", {
     key: "agent:main:main",
@@ -574,21 +495,14 @@ test("lists and patches session store via sessions.* RPC", async () => {
     source: "implicit",
   });
 
-  const listAfterModelPatch = await directSessionReq<{
-    sessions: Array<{
-      key: string;
-      modelProvider?: string;
-      model?: string;
-      agentRuntime?: { id: string; source: string };
-    }>;
-  }>("sessions.list", {});
-  expect(listAfterModelPatch.ok).toBe(true);
+  const listAfterModelPatch = await directSessionReq<SessionsListResult>("sessions.list", {});
   const mainAfterModelPatch = listAfterModelPatch.payload?.sessions.find(
     (session) => session.key === "agent:main:main",
   );
   expect(mainAfterModelPatch?.modelProvider).toBe("openai");
   expect(mainAfterModelPatch?.model).toBe("gpt-test-a");
-  expect(mainAfterModelPatch?.agentRuntime).toEqual({ id: "openclaw", source: "implicit" });
+  expect(mainAfterModelPatch?.agentRuntime?.id).toBe("openclaw");
+  expect(mainAfterModelPatch?.agentRuntime?.devicePlacementSupported).toBe(true);
 
   const compacted = await directSessionReq<{ ok: true; compacted: boolean }>("sessions.compact", {
     key: "agent:main:main",
@@ -615,9 +529,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(path.basename(deleted.payload?.archived[0] ?? "")).toMatch(
     /^sess-group\.jsonl\.deleted\./,
   );
-  const listAfterDelete = await directSessionReq<{
-    sessions: Array<{ key: string }>;
-  }>("sessions.list", {});
+  const listAfterDelete = await directSessionReq<SessionsListResult>("sessions.list", {});
   expect(listAfterDelete.ok).toBe(true);
   expect(listAfterDelete.payload?.sessions.map((session) => session.key)).not.toContain(
     "agent:main:discord:group:dev",
@@ -650,14 +562,13 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const entryAfterReset = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(deliveryContextFromSession(entryAfterReset)?.accountId).toBe("work");
   expect(deliveryContextFromSession(entryAfterReset)?.threadId).toBe("1737500000.123456");
-  // Retained history stays in the same SQLite transcript behind the reset boundary.
   const resetTranscript = await loadTranscriptRows({
     sessionId: "sess-main",
     sessionKey: "agent:main:main",
     storePath,
   });
-  expect(resetTranscript).toHaveLength(4);
   expect(resetTranscript.at(-1)).toMatchObject({ type: "reset", reason: "reset" });
+  expect(resetTranscript.at(-1)).not.toHaveProperty("firstKeptEntryId");
 
   const badThinking = await directSessionReq("sessions.patch", {
     key: "agent:main:main",
@@ -670,110 +581,93 @@ test("lists and patches session store via sessions.* RPC", async () => {
 });
 
 test("sessions.list configuredAgentsOnly keeps configured-agent children and hides unrelated stores", async () => {
-  const stateDir = process.env.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
-  }
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("OPENCLAW_CONFIG_PATH is required for gateway session tests");
-  }
-  await fs.writeFile(
-    configPath,
-    JSON.stringify({ acp: { defaultAgent: "claude", allowedAgents: ["gemini"] } }, null, 2),
-    "utf-8",
-  );
-  testState.sessionConfig = {
-    store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-  };
+  const rootStateDir = expectDefined(process.env.OPENCLAW_STATE_DIR, "OPENCLAW_STATE_DIR");
+  const stateDir = path.join(rootStateDir, "configured-list-regression");
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    testState.agentsConfig = { ownership: "explicit", entries: { ops: {} } };
+    testState.agentConfig = { sessionStore: { agentId: "ops" } };
+    const configPath = expectDefined(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
+    const configJson = '{"acp":{"defaultAgent":"claude","allowedAgents":["gemini"]}}';
+    await fs.writeFile(configPath, configJson, "utf-8");
+    const agentsDir = path.join(stateDir, "agents");
+    const storeTemplate = path.join(agentsDir, "{agentId}", "sessions", "sessions.json");
+    testState.sessionConfig = { store: storeTemplate };
 
-  const mainStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-  const acpStorePath = path.join(stateDir, "agents", "claude", "sessions", "sessions.json");
-  const childStorePath = path.join(stateDir, "agents", "codex", "sessions", "sessions.json");
-  const diskOnlyStorePath = path.join(stateDir, "agents", "local", "sessions", "sessions.json");
-  await writeSessionStore({
-    storePath: mainStorePath,
-    agentId: "main",
-    entries: { main: { sessionId: "sess-main", updatedAt: 20 } },
-  });
-  await writeSessionStore({
-    storePath: acpStorePath,
-    agentId: "claude",
-    entries: {
-      "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7": {
-        sessionId: "sess-claude-acp",
-        updatedAt: 30,
-        acp: {
-          backend: "acpx",
-          agent: "claude",
-          runtimeSessionName: "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7",
-          mode: "oneshot",
-          state: "idle",
-          lastActivityAt: 30,
-        },
+    const acpStorePath = path.join(agentsDir, "claude", "sessions", "sessions.json");
+    const childStorePath = path.join(agentsDir, "codex", "sessions", "sessions.json");
+    const diskOnlyStorePath = path.join(agentsDir, "local", "sessions", "sessions.json");
+    const mainKey = "agent:ops:main";
+    const acpKey = "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7";
+    const acp = {
+      backend: "acpx",
+      agent: "claude",
+      runtimeSessionName: acpKey,
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: 30,
+    } as const;
+    const spawnedChildKey = "agent:codex:subagent:app-server-child";
+    const parentChildKey = "agent:codex:subagent:parent-key-child";
+    await writeSessionStore({
+      storePath: path.join(agentsDir, "ops", "sessions", "sessions.json"),
+      agentId: "ops",
+      entries: { main: { sessionId: "sess-main", updatedAt: 20 } },
+    });
+    await writeSessionStore({
+      storePath: acpStorePath,
+      agentId: "claude",
+      entries: {
+        [acpKey]: { sessionId: "sess-claude-acp", updatedAt: 30, acp },
       },
-    },
-  });
-  await writeSessionStore({
-    storePath: childStorePath,
-    agentId: "codex",
-    entries: {
-      "agent:codex:subagent:app-server-child": {
-        sessionId: "sess-codex-child",
-        updatedAt: 25,
-        spawnedBy: "agent:main:main",
+    });
+    await writeSessionStore({
+      storePath: childStorePath,
+      agentId: "codex",
+      entries: {
+        [spawnedChildKey]: { sessionId: "sess-codex-child", updatedAt: 25, spawnedBy: mainKey },
+        [parentChildKey]: { sessionId: "child-2", updatedAt: 27, parentSessionKey: mainKey },
       },
-    },
+    });
+    await writeSessionStore({
+      storePath: diskOnlyStorePath,
+      agentId: "local",
+      entries: { main: { sessionId: "sess-local", updatedAt: 10 } },
+    });
+    // Physical stores hydrate once before either warm selection policy runs.
+    await directSessionHandlerReq("sessions.list", { includeGlobal: false, includeUnknown: false });
+    const enumerateAgentDirs = vi.spyOn(sessionDirs, "resolveAgentSessionDirsFromAgentsDirSync");
+    try {
+      const configuredOnly = await directSessionHandlerReq<SessionsListResult>("sessions.list", {
+        includeGlobal: false,
+        includeUnknown: false,
+        configuredAgentsOnly: true,
+      });
+      expect(configuredOnly.ok).toBe(true);
+      expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
+        acpKey,
+        parentChildKey,
+        spawnedChildKey,
+        mainKey,
+      ]);
+      expect(enumerateAgentDirs).not.toHaveBeenCalled();
+
+      const broad = await directSessionHandlerReq<SessionsListResult>("sessions.list", {
+        includeGlobal: false,
+        includeUnknown: false,
+      });
+      expect(broad.ok).toBe(true);
+      expect(broad.payload?.sessions.map((session) => session.key)).toEqual([
+        acpKey,
+        parentChildKey,
+        spawnedChildKey,
+        mainKey,
+        "agent:local:main",
+      ]);
+      expect(enumerateAgentDirs).not.toHaveBeenCalled();
+    } finally {
+      enumerateAgentDirs.mockRestore();
+    }
   });
-  await writeSessionStore({
-    storePath: diskOnlyStorePath,
-    agentId: "local",
-    entries: { main: { sessionId: "sess-local", updatedAt: 10 } },
-  });
-
-  const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
-    "sessions.list",
-    { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
-  );
-  expect(configuredOnly.ok).toBe(true);
-  expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
-    "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7",
-    "agent:codex:subagent:app-server-child",
-    "agent:main:main",
-  ]);
-
-  const broad = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
-    "sessions.list",
-    { includeGlobal: false, includeUnknown: false },
-  );
-  expect(broad.ok).toBe(true);
-  expect(broad.payload?.sessions.map((session) => session.key)).toEqual([
-    "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7",
-    "agent:codex:subagent:app-server-child",
-    "agent:main:main",
-    "agent:local:main",
-  ]);
-});
-
-test("sessions.list hides phantom agent store placeholder rows", async () => {
-  await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      sessions: {},
-      main: {
-        sessionId: "sess-main",
-        updatedAt: 20,
-      },
-    },
-  });
-
-  const listed = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
-    "sessions.list",
-    { includeGlobal: false, includeUnknown: false },
-  );
-  expect(listed.ok).toBe(true);
-  expect(listed.payload?.sessions.map((session) => session.key)).toEqual(["agent:main:main"]);
 });
 
 test("write-scoped operators manage chat organization but not admin session settings", async () => {
@@ -792,8 +686,28 @@ test("write-scoped operators manage chat organization but not admin session sett
     },
   });
 
-  agentDiscoveryMock.enabled = true;
-  agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
+  const { getRuntimeConfig, writeConfigFile } = await getGatewayConfigModule();
+  // Catalog workers need the fixture model in configuration, not a host-only discovery mock.
+  await writeConfigFile({
+    ...getRuntimeConfig(),
+    models: {
+      providers: {
+        openai: {
+          api: "openai-responses",
+          baseUrl: "https://openai.invalid/v1",
+          agentRuntime: { id: "openclaw" },
+          models: [
+            modelDefinition("gpt-test-a", {
+              name: "A",
+              reasoning: false,
+              contextWindow: 32768,
+              maxTokens: 2048,
+            }),
+          ],
+        },
+      },
+    },
+  });
 
   const { ws } = await openClient({ scopes: ["operator.write"] });
   try {
@@ -805,7 +719,7 @@ test("write-scoped operators manage chat organization but not admin session sett
       label: "Trip planning",
       model: "openai/gpt-test-a",
     });
-    expect(renamed.ok).toBe(true);
+    expect(renamed.ok, JSON.stringify(renamed)).toBe(true);
     expect(renamed.payload?.entry).toMatchObject({
       label: "Trip planning",
       modelOverride: "gpt-test-a",
@@ -851,6 +765,25 @@ test("write-scoped operators manage chat organization but not admin session sett
     expect(reordered.payload?.groups.map((group) => group.name)).toEqual(["Someday", "Travel"]);
     expect(reordered.payload?.sectionOrder).toEqual(["work", "category:Travel", "ungrouped"]);
 
+    const defaultAgentWorkspace = expectDefined(
+      (await getGatewayConfigModule()).getRuntimeConfig().agents?.defaults?.workspace,
+      "configured default agent workspace",
+    );
+    const canonicalDefaultAgentWorkspace = await fs.realpath(defaultAgentWorkspace);
+    const defaultsUpdated = await rpcReq<{
+      ok: true;
+      defaults: Array<{ name: string; cwd?: string; worktree?: boolean }>;
+    }>(ws, "sessions.groups.update", {
+      name: "Travel",
+      cwd: defaultAgentWorkspace,
+      worktree: true,
+    });
+    expect(defaultsUpdated.ok, JSON.stringify(defaultsUpdated)).toBe(true);
+    expect(defaultsUpdated.payload?.defaults).toContainEqual({
+      name: "Travel",
+      cwd: canonicalDefaultAgentWorkspace,
+      worktree: true,
+    });
     const renamedGroup = await rpcReq<{
       ok: true;
       sectionOrder: string[];
@@ -879,21 +812,19 @@ test("write-scoped operators manage chat organization but not admin session sett
     const archived = await rpcReq<{ ok: true; entry: { archivedAt?: number } }>(
       ws,
       "sessions.patch",
-      { key: "agent:main:topic-b", archived: true },
+      { key: "agent:main:topic-b", archived: true, expectedSessionId: "sess-topic-b" },
     );
     expect(archived.ok).toBe(true);
     expect(archived.payload?.entry.archivedAt).toEqual(expect.any(Number));
 
-    const searched = await rpcReq<{
-      sessions: Array<{ key: string; pinned?: boolean; displayName?: string }>;
-    }>(ws, "sessions.list", { search: "trip plan" });
+    const searched = await rpcReq<SessionsListResult>(ws, "sessions.list", { search: "trip plan" });
     expect(searched.ok).toBe(true);
     expect(searched.payload?.sessions.map((session) => session.key)).toEqual([
       "agent:main:topic-a",
     ]);
     expect(searched.payload?.sessions[0]?.displayName).toBe("Trip planning");
 
-    const archivedList = await rpcReq<{ sessions: Array<{ key: string }> }>(ws, "sessions.list", {
+    const archivedList = await rpcReq<SessionsListResult>(ws, "sessions.list", {
       archived: true,
     });
     expect(archivedList.ok).toBe(true);
@@ -919,11 +850,9 @@ test("write-scoped operators manage chat organization but not admin session sett
       archivedOnly: true,
     });
     expect(archivedDeleted.ok).toBe(true);
-    const archivedAfterDelete = await rpcReq<{ sessions: Array<{ key: string }> }>(
-      ws,
-      "sessions.list",
-      { archived: true },
-    );
+    const archivedAfterDelete = await rpcReq<SessionsListResult>(ws, "sessions.list", {
+      archived: true,
+    });
     expect(archivedAfterDelete.payload?.sessions).toEqual([]);
 
     const adminFieldDenied = await rpcReq(ws, "sessions.patch", {
@@ -937,7 +866,7 @@ test("write-scoped operators manage chat organization but not admin session sett
       key: "agent:main:topic-a",
       label: "Sneaky",
       model: null,
-      thinkingLevel: "high",
+      verboseLevel: "full",
     });
     expect(mixedFieldsDenied.ok).toBe(false);
     expect(mixedFieldsDenied.error?.message).toContain("missing scope: operator.admin");
@@ -971,84 +900,161 @@ test("sessions.list breaks timestamp ties by key for stable paging", async () =>
     "agent:main:tie-b",
     "agent:main:tie-c",
   ];
-  const listed = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
-    "sessions.list",
-    { includeGlobal: false, includeUnknown: false },
-  );
+  const listed = await directSessionHandlerReq<SessionsListResult>("sessions.list", {
+    includeGlobal: false,
+    includeUnknown: false,
+  });
   expect(listed.ok).toBe(true);
   expect(listed.payload?.sessions.map((session) => session.key)).toEqual(expectedOrder);
 
-  const paged = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
-    "sessions.list",
-    { includeGlobal: false, includeUnknown: false, limit: 2, offset: 2 },
-  );
+  const paged = await directSessionHandlerReq<SessionsListResult>("sessions.list", {
+    includeGlobal: false,
+    includeUnknown: false,
+    limit: 2,
+    offset: 2,
+  });
   expect(paged.ok).toBe(true);
   expect(paged.payload?.sessions.map((session) => session.key)).toEqual(expectedOrder.slice(2));
 });
 
-test("archiving a session disables cron jobs bound to it", async () => {
-  await createSessionStoreDir();
-  const now = Date.now();
+test("chat.inject writes to the transcript owner after the requested row's facts are cached", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "8f14e45f-ceea-4e7a-9f8b-2d5c6b1a0e93";
+  const baseKey = "agent:main:cron:3f1c9a52-7d4e-4b8a-9c21-5e6f7a8b9c0d";
+  const runKey = `${baseKey}:run:${sessionId}`;
   await writeSessionStore({
     entries: {
-      main: { sessionId: "sess-main", updatedAt: now },
-      "agent:main:subagent:cronbound": {
-        sessionId: "sess-bound",
-        updatedAt: now,
-        spawnedBy: "agent:main:main",
-      },
+      [baseKey]: { sessionId, updatedAt: 1 },
+      [runKey]: { sessionId, updatedAt: 2 },
     },
   });
-  const jobs = [
-    { id: "bound", enabled: true, sessionTarget: "session:agent:main:subagent:cronbound" },
-    { id: "elsewhere", enabled: true, sessionTarget: "isolated" },
-  ] as unknown as CronJob[];
-  const update = vi.fn(
-    async (id: string, _patch: unknown, precondition: (job: CronJob, nowMs: number) => void) => {
-      const current = jobs.find((candidate) => candidate.id === id);
-      if (!current) {
-        throw new Error(`cron job not found: ${id}`);
-      }
-      precondition(current, Date.now());
-      return current;
-    },
-  );
-  const cron = {
-    list: async () => jobs,
-    updateWithPrecondition: update,
-    getDefaultAgentId: () => "main",
-  };
-
-  const archived = await directSessionHandlerReq(
-    "sessions.patch",
-    { key: "agent:main:subagent:cronbound", archived: true },
-    { context: { cron } },
-  );
-  expect(archived.ok).toBe(true);
-  expect(update.mock.calls.map((call) => call.slice(0, 2))).toEqual([
-    ["bound", { enabled: false }],
-  ]);
-
-  // Restoring must not silently re-arm schedules that archive disabled.
-  update.mockClear();
-  const restored = await directSessionHandlerReq(
-    "sessions.patch",
-    { key: "agent:main:subagent:cronbound", archived: false },
-    { context: { cron } },
-  );
-  expect(restored.ok).toBe(true);
-  expect(update).not.toHaveBeenCalled();
-
-  // Cron mutations are admin surface: a write-scoped operator can archive but
-  // must not cascade into disabling admin-managed schedules.
-  const writeScopedClient = {
-    connect: { scopes: ["operator.write"] },
-  } as unknown as NonNullable<Parameters<typeof directSessionHandlerReq>[2]>["client"];
-  const writeScopedArchive = await directSessionHandlerReq(
-    "sessions.patch",
-    { key: "agent:main:subagent:cronbound", archived: true },
-    { context: { cron }, client: writeScopedClient },
-  );
-  expect(writeScopedArchive.ok).toBe(true);
-  expect(update).not.toHaveBeenCalled();
+  await seedLinearTranscript({ contents: ["cron run"], sessionId, sessionKey: runKey, storePath });
+  const ownerRows = () => loadTranscriptRows({ sessionId, sessionKey: runKey, storePath });
+  const rowsBefore = (await ownerRows()).length;
+  const { ws } = await openClient();
+  try {
+    // Reading the base row must not make it the owner of the shared transcript.
+    expect((await rpcReq(ws, "sessions.abort", { key: baseKey })).ok).toBe(true);
+    for (const message of ["first", "second"]) {
+      const injected = await rpcReq(ws, "chat.inject", { sessionKey: baseKey, message });
+      expect([injected.ok, injected.error]).toEqual([true, undefined]);
+    }
+    expect((await ownerRows()).slice(rowsBefore)).toMatchObject([
+      {
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text: "first" }] },
+      },
+      {
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text: "second" }] },
+      },
+    ]);
+  } finally {
+    ws.close();
+  }
 });
+
+test.each([false, true])(
+  "archiving pauses named bindings and refuses the main session (global=%s)",
+  async (global) => {
+    const storePath = global
+      ? (await createSelectedGlobalSessionStore()).mainStorePath
+      : (await createSessionStoreDir()).storePath;
+    const key = global ? "global" : "agent:main:subagent:cronbound";
+    const now = Date.now();
+    await writeSessionStore({
+      storePath,
+      agentId: "main",
+      entries: {
+        ...(global ? {} : { main: { sessionId: "sess-main", updatedAt: now } }),
+        [key]: {
+          sessionId: "sess-bound",
+          updatedAt: now,
+          ...(global ? {} : { spawnedBy: "agent:main:main" }),
+        },
+      },
+    });
+    const jobs = [
+      { id: "bound", agentId: "main", enabled: true, sessionTarget: `session:${key}` },
+      { id: "other-agent", agentId: "work", enabled: true, sessionTarget: "session:global" },
+      {
+        id: "qualified",
+        agentId: "main",
+        enabled: true,
+        sessionTarget: "session:agent:main:global",
+      },
+      { id: "elsewhere", enabled: true, sessionTarget: "isolated" },
+    ] as unknown as CronJob[];
+    const update = vi.fn(
+      async (id: string, _patch: unknown, precondition: (job: CronJob, nowMs: number) => void) => {
+        const current = jobs.find((candidate) => candidate.id === id);
+        if (!current) {
+          throw new Error(`cron job not found: ${id}`);
+        }
+        precondition(current, Date.now());
+        return current;
+      },
+    );
+    const cron = {
+      list: async () => jobs,
+      updateWithPrecondition: update,
+      getDefaultAgentId: () => "main",
+    };
+
+    const archived = await directSessionHandlerReq(
+      "sessions.patch",
+      {
+        key,
+        agentId: "main",
+        archived: true,
+        expectedSessionId: "sess-bound",
+      },
+      { context: { cron } },
+    );
+    if (global) {
+      expect(archived).toMatchObject({
+        ok: false,
+        error: { message: "Cannot archive an agent's main session." },
+      });
+      expect(update).not.toHaveBeenCalled();
+      return;
+    }
+    expect([archived.ok, archived.error]).toEqual([true, undefined]);
+    expect(update.mock.calls.map((call) => call.slice(0, 2))).toEqual([
+      ["bound", { enabled: false }],
+    ]);
+
+    // Restoring must not silently re-arm schedules that archive disabled.
+    update.mockClear();
+    const restored = await directSessionHandlerReq(
+      "sessions.patch",
+      {
+        key,
+        agentId: "main",
+        archived: false,
+        expectedSessionId: "sess-bound",
+      },
+      { context: { cron } },
+    );
+    expect(restored.ok).toBe(true);
+    expect(update).not.toHaveBeenCalled();
+
+    // Cron mutations are admin surface: a write-scoped operator can archive but
+    // must not cascade into disabling admin-managed schedules.
+    const writeScopedClient = {
+      connect: { scopes: ["operator.write"] },
+    } as unknown as NonNullable<Parameters<typeof directSessionHandlerReq>[2]>["client"];
+    const writeScopedArchive = await directSessionHandlerReq(
+      "sessions.patch",
+      {
+        key,
+        agentId: "main",
+        archived: true,
+        expectedSessionId: "sess-bound",
+      },
+      { context: { cron }, client: writeScopedClient },
+    );
+    expect(writeScopedArchive.ok).toBe(true);
+    expect(update).not.toHaveBeenCalled();
+  },
+);

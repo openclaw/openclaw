@@ -1,9 +1,7 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginToolsMcpServer } from "./plugin-tools-serve.js";
+import { createMcpConnection } from "./tools-mcp.test-support.js";
 
 describe("plugin tools MCP client bridge", () => {
   it("lists and calls a plugin tool through a real MCP client", async () => {
@@ -25,16 +23,10 @@ describe("plugin tools MCP client bridge", () => {
     } as unknown as AnyAgentTool;
 
     const server = createPluginToolsMcpServer({
-      config: { plugins: { enabled: true } } as OpenClawConfig,
       tools: [tool],
     });
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client(
-      { name: "plugin-tools-test-client", version: "0.0.0" },
-      { capabilities: {} },
-    );
-
-    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const { client, connect } = createMcpConnection(server, "plugin-tools-test-client");
+    await connect();
 
     try {
       const listed = await client.listTools();
@@ -54,6 +46,33 @@ describe("plugin tools MCP client bridge", () => {
         undefined,
       );
       expect(JSON.stringify(result.content)).toContain("ORBIT-9");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("delivers resolved tool failures as MCP errors", async () => {
+    const content = [{ type: "text", text: "backend unavailable" }];
+    const tool = {
+      name: "memory_search",
+      description: "Search memory",
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn().mockResolvedValue({
+        content,
+        details: { status: "failed", error: "backend unavailable" },
+      }),
+    } as unknown as AnyAgentTool;
+    const server = createPluginToolsMcpServer({
+      tools: [tool],
+    });
+    const { client, connect } = createMcpConnection(server, "plugin-tools-error-test-client");
+    await connect();
+    try {
+      const result = await client.callTool({ name: "memory_search", arguments: {} });
+
+      expect(result.content).toEqual(content);
+      expect(result.isError).toBe(true);
     } finally {
       await client.close();
       await server.close();

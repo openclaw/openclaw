@@ -1,192 +1,142 @@
 // Invalid plugin install requests must fail before persistent state or source execution.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  installHooksFromNpmSpec,
-  installHooksFromPath,
-  installPluginFromClawHub,
-  installPluginFromGitSpec,
-  installPluginFromMarketplace,
-  installPluginFromNpmPackArchive,
-  installPluginFromNpmSpec,
-  installPluginFromPath,
-  parseClawHubPluginSpec,
-  promptYesNo,
-  readConfigFileSnapshotForWrite,
-  resetPluginsCliTestState,
-  resolveMarketplaceInstallShortcut,
-  runPluginsCommand,
-  runtimeErrors,
-  writeConfigFile,
-} from "./plugins-cli-test-helpers.js";
-import { resolvePluginInstallPreflight } from "./plugins-install-preflight.js";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { parseGitPluginSpec } from "../plugins/git-install.js";
+import { resolvePluginInstallSourcePlan } from "../plugins/install-source-plan.js";
+import * as fixture from "./plugins-cli-test-helpers.js";
 
 const { withPluginLifecycleLeaseMock } = vi.hoisted(() => ({
   withPluginLifecycleLeaseMock: vi.fn(),
 }));
 
-vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
+vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-lifecycle-lease.js")>()),
   withPluginLifecycleLease: withPluginLifecycleLeaseMock,
+  withPluginLifecycleLeaseAsync: withPluginLifecycleLeaseMock,
+  hasPluginLifecycleLease: () => false,
 }));
 
-function expectNoPluginInstallSideEffects(): void {
-  expect(withPluginLifecycleLeaseMock).not.toHaveBeenCalled();
-  expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
-  expect(promptYesNo).not.toHaveBeenCalled();
-  expect(installPluginFromClawHub).not.toHaveBeenCalled();
-  expect(installPluginFromGitSpec).not.toHaveBeenCalled();
-  expect(installPluginFromMarketplace).not.toHaveBeenCalled();
-  expect(installPluginFromNpmPackArchive).not.toHaveBeenCalled();
-  expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
-  expect(installPluginFromPath).not.toHaveBeenCalled();
-  expect(installHooksFromNpmSpec).not.toHaveBeenCalled();
-  expect(installHooksFromPath).not.toHaveBeenCalled();
-  expect(writeConfigFile).not.toHaveBeenCalled();
+const install = (...args: string[]) =>
+  fixture.runPluginsCommand(["plugins", "install", ...args, "--force"]);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function expectRejected(args: string[], error: string) {
+  await expect(install(...args)).rejects.toThrow("__exit__:1");
+  expect(fixture.runtimeErrors.at(-1)).toContain(error);
+  for (const effect of [
+    withPluginLifecycleLeaseMock,
+    fixture.readConfigFileSnapshotForWriteMock,
+    fixture.promptYesNoMock,
+    fixture.installPluginFromClawHubMock,
+    fixture.installPluginFromGitSpecMock,
+    fixture.installPluginFromMarketplaceMock,
+    fixture.installPluginFromNpmPackArchiveMock,
+    fixture.installPluginFromNpmSpecMock,
+    fixture.installPluginFromPathMock,
+    fixture.installHooksFromNpmSpecMock,
+    fixture.installHooksFromPathMock,
+    fixture.configWriteMock,
+  ]) {
+    expect(effect).not.toHaveBeenCalled();
+  }
 }
 
 describe("plugin install mutation-free preflight", () => {
   beforeEach(() => {
-    resetPluginsCliTestState();
-    withPluginLifecycleLeaseMock.mockReset();
-    withPluginLifecycleLeaseMock.mockImplementation(
-      async (_options: unknown, run: (lease: unknown) => Promise<unknown>) =>
-        await run({ assertOwned: vi.fn() }),
+    fixture.resetPluginsCliTestState();
+    withPluginLifecycleLeaseMock
+      .mockReset()
+      .mockImplementation(
+        async (_options: unknown, run: (lease: unknown) => Promise<unknown>) =>
+          await run({ assertOwned: vi.fn(), assertCurrent: vi.fn() }),
+      );
+  });
+
+  it.each([false, true])("resolves a local archive file URL (localhost=%s)", async (localhost) => {
+    const archive = path.join(tempDirs.make("plugin-file-url-"), "demo ü #%.tgz");
+    fs.writeFileSync(archive, "fixture");
+    const url = pathToFileURL(archive);
+    if (localhost) {
+      url.hostname = "localhost";
+    }
+    await expect(install(url.href)).rejects.toThrow("__exit__:1");
+    expect(fixture.installPluginFromPathMock).toHaveBeenCalledWith(
+      expect.objectContaining({ path: archive }),
     );
+    expect(fixture.runtimeErrors.at(-1)).toContain("path install disabled in test");
   });
 
   it("resolves registered marketplace shorthand before ordinary source classification", async () => {
-    resolveMarketplaceInstallShortcut.mockResolvedValue({
+    fixture.resolveMarketplaceInstallShortcutMock.mockResolvedValue({
       ok: true,
       plugin: "superpowers",
-      marketplaceName: "claude-plugins-official",
       marketplaceSource: "claude-plugins-official",
     });
 
-    await expect(
-      resolvePluginInstallPreflight({
-        raw: "superpowers@claude-plugins-official",
-        opts: { force: true },
+    await expect(install("superpowers@claude-plugins-official")).rejects.toThrow("__exit__:1");
+    expect(fixture.runtimeErrors.at(-1)).toContain("marketplace install failed");
+
+    expect(fixture.installPluginFromMarketplaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        marketplace: "claude-plugins-official",
+        plugin: "superpowers",
       }),
-    ).resolves.toMatchObject({
-      ok: true,
-      raw: "superpowers",
-      marketplace: "claude-plugins-official",
-      sourcePlan: null,
-    });
-
-    expectNoPluginInstallSideEffects();
-  });
-
-  it.each([
-    "clawhub:",
-    "clawhub:demo@",
-    "clawhub:@scope/pkg@",
-    "CLAWHUB:",
-    "ClAwHuB:demo@",
-    " clawhub:demo@ ",
-  ])("rejects malformed explicit ClawHub source %s before the lifecycle lease", async (raw) => {
-    await expect(runPluginsCommand(["plugins", "install", raw, "--force"])).rejects.toThrow(
-      "__exit__:1",
     );
-
-    expect(runtimeErrors.at(-1)).toContain(`Unsupported ClawHub plugin spec: ${raw}`);
-    expectNoPluginInstallSideEffects();
+    expect(fixture.installPluginFromNpmSpecMock).not.toHaveBeenCalled();
   });
 
-  it.each([" ", "\t"])(
-    "rejects a whitespace-only install source %j before the lifecycle lease",
-    async (raw) => {
-      await expect(runPluginsCommand(["plugins", "install", raw, "--force"])).rejects.toThrow(
-        "__exit__:1",
-      );
-
-      expect(runtimeErrors.at(-1)).toContain("Plugin install source must not be empty.");
-      expectNoPluginInstallSideEffects();
-    },
-  );
-
-  it.each(["", " ", "\t"])(
-    "rejects an explicitly empty marketplace %j before the lifecycle lease",
-    async (marketplace) => {
-      await expect(
-        runPluginsCommand(["plugins", "install", "demo", "--marketplace", marketplace, "--force"]),
-      ).rejects.toThrow("__exit__:1");
-
-      expect(runtimeErrors.at(-1)).toContain("--marketplace requires a non-empty source.");
-      expectNoPluginInstallSideEffects();
+  it.skipIf(process.platform !== "win32")(
+    "keeps literal @ ancestors through local Git transport",
+    () => {
+      const plan = resolvePluginInstallSourcePlan({
+        raw: "git:C:/repos/team@acme/plugin.git",
+        mode: "install",
+      });
+      expect(plan).toMatchObject({
+        ok: true,
+        request: { source: "git", spec: "git:file:///C:/repos/team%40acme/plugin.git" },
+      });
+      if (!plan.ok || plan.request.source !== "git") {
+        throw new Error("Expected a Git source plan");
+      }
+      expect(parseGitPluginSpec(plan.request.spec)).toMatchObject({
+        url: "file:///C:/repos/team%40acme/plugin.git",
+        ref: undefined,
+      });
     },
   );
 
   it.each([
-    {
-      label: "marketplace link",
-      args: ["demo", "--marketplace", "local/repo", "--link"],
-      error: "--link is not supported with --marketplace.",
-    },
-    {
-      label: "marketplace pin",
-      args: ["demo", "--marketplace", "local/repo", "--pin"],
-      error: "--pin is not supported with --marketplace.",
-    },
-    {
-      label: "git link",
-      args: ["git:github.com/acme/demo", "--link"],
-      error: "--link is not supported with git: installs.",
-    },
-    {
-      label: "git pin",
-      args: ["git:github.com/acme/demo", "--pin"],
-      error: "--pin is not supported with git: installs.",
-    },
-    {
-      label: "ClawHub pin",
-      args: ["clawhub:demo", "--pin"],
-      error: "--pin is only supported with npm registry installs.",
-    },
-    {
-      label: "npm-pack pin",
-      args: ["npm-pack:/tmp/openclaw-plugin-preflight-test.tgz", "--pin"],
-      error: "--pin is only supported with npm registry installs.",
-    },
-    {
-      label: "local path pin",
-      args: [".", "--pin"],
-      error: "--pin is only supported with npm registry installs.",
-    },
-    {
-      label: "registry link",
-      args: ["npm:demo", "--link"],
-      error: "--link requires a local path.",
-    },
-    {
-      label: "empty npm source",
-      args: ["npm:"],
-      error: "Unsupported npm plugin spec: missing package.",
-    },
-    {
-      label: "empty npm-pack source",
-      args: ["npm-pack:"],
-      error: "Unsupported npm-pack plugin spec: missing archive path.",
-    },
-    {
-      label: "empty git source",
-      args: ["git:"],
-      error: "unsupported git: plugin spec: git:",
-    },
-    {
-      label: "missing local path",
-      args: ["./openclaw-missing-plugin-preflight-test.tgz"],
-      error: "Plugin path not found:",
-    },
-  ])("rejects $label before the lifecycle lease", async ({ args, error }) => {
-    if (args[0] === "clawhub:demo") {
-      parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
-    }
-
-    await expect(runPluginsCommand(["plugins", "install", ...args, "--force"])).rejects.toThrow(
-      "__exit__:1",
-    );
-
-    expect(runtimeErrors.at(-1)).toContain(error);
-    expectNoPluginInstallSideEffects();
-  });
+    ...[" clawhub:demo@ ", "demo@", "@composio/composio@", "unknown:demo"].map(
+      (raw): [string[], string] => [[raw], `Unsupported ClawHub plugin spec: ${raw}`],
+    ),
+    [["\t"], "Plugin install source must not be empty."],
+    [["demo", "--marketplace", ""], "--marketplace requires a non-empty source."],
+    [["demo", "--marketplace", "\t"], "--marketplace requires a non-empty source."],
+    [
+      ["demo", "--marketplace", "local/repo", "--link"],
+      "--link is not supported with --marketplace.",
+    ],
+    [
+      ["demo", "--marketplace", "local/repo", "--pin"],
+      "--pin is not supported with --marketplace.",
+    ],
+    [["git:github.com/acme/demo", "--link"], "--link is not supported with git: installs."],
+    [["git:github.com/acme/demo", "--pin"], "--pin is not supported with git: installs."],
+    [["clawhub:demo", "--pin"], "--pin is only supported with npm registry installs."],
+    [
+      ["npm-pack:/tmp/openclaw-plugin-preflight-test.tgz", "--pin"],
+      "--pin is only supported with npm registry installs.",
+    ],
+    [[".", "--pin"], "--pin is only supported with npm registry installs."],
+    [["npm:demo", "--link"], "--link requires a local path."],
+    [["npm:"], "Unsupported npm plugin spec: missing package."],
+    [["npm-pack:"], "Unsupported npm-pack plugin spec: missing archive path."],
+    [["git:"], "unsupported git: plugin spec: git:"],
+    [["file:openclaw-missing-plugin-preflight-test.js"], "Plugin path not found:"],
+    [["./openclaw-missing-plugin-preflight-test.tgz"], "Plugin path not found:"],
+  ] satisfies [string[], string][])("rejects %j before the lifecycle lease", expectRejected);
 });

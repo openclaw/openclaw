@@ -1,12 +1,6 @@
-export type CapabilityTransport = "local" | "gateway";
+import type { NormalizedUsage } from "../../agents/usage.js";
 
-type CapabilityMetadata = {
-  id: string;
-  description: string;
-  transports: Array<CapabilityTransport>;
-  flags: string[];
-  resultShape: string;
-};
+export type CapabilityTransport = "local" | "gateway";
 
 export type CapabilityEnvelope = {
   ok: boolean;
@@ -14,6 +8,8 @@ export type CapabilityEnvelope = {
   transport: CapabilityTransport;
   provider?: string;
   model?: string;
+  usage?: NormalizedUsage;
+  lastCallUsage?: NormalizedUsage;
   attempts: Array<Record<string, unknown>>;
   inputs?: Array<Record<string, unknown>>;
   outputs: Array<Record<string, unknown>>;
@@ -21,12 +17,47 @@ export type CapabilityEnvelope = {
   error?: string;
 };
 
-export const CAPABILITY_METADATA: CapabilityMetadata[] = [
+const IMAGE_GENERATION_FLAGS = [
+  "--prompt",
+  "--model",
+  "--count",
+  "--size",
+  "--aspect-ratio",
+  "--resolution",
+  "--output-format",
+  "--background",
+  "--openai-background",
+  "--openai-moderation",
+  "--quality",
+  "--timeout-ms",
+  "--output",
+  "--agent",
+  "--json",
+];
+
+export const CAPABILITY_METADATA: {
+  id: string;
+  description: string;
+  transports: Array<CapabilityTransport>;
+  flags: string[];
+  resultShape: string;
+}[] = [
   {
     id: "model.run",
     description: "Run a one-shot inference turn through the selected model provider.",
     transports: ["local", "gateway"],
-    flags: ["--prompt", "--file", "--model", "--thinking", "--local", "--gateway", "--json"],
+    flags: [
+      "--prompt",
+      "--prompt-file",
+      "--prompt-stdin",
+      "--file",
+      "--model",
+      "--thinking",
+      "--local",
+      "--gateway",
+      "--agent",
+      "--json",
+    ],
     resultShape: "normalized payloads plus provider/model attribution",
   },
   {
@@ -47,14 +78,14 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "model.providers",
     description: "List model providers discovered from the catalog.",
     transports: ["local"],
-    flags: ["--json"],
+    flags: ["--agent", "--json"],
     resultShape: "provider ids with counts and defaults",
   },
   {
     id: "model.auth.login",
     description: "Run the existing provider auth login flow.",
     transports: ["local"],
-    flags: ["--provider", "--method"],
+    flags: ["--provider", "--method", "--agent"],
     resultShape: "interactive auth result",
   },
   {
@@ -68,87 +99,56 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "model.auth.status",
     description: "Show configured model auth state.",
     transports: ["local"],
-    flags: ["--json"],
+    flags: ["--agent", "--json"],
     resultShape: "model status summary",
   },
   {
     id: "image.generate",
     description: "Generate raster images with configured image providers.",
     transports: ["local"],
-    flags: [
-      "--prompt",
-      "--model",
-      "--count",
-      "--size",
-      "--aspect-ratio",
-      "--resolution",
-      "--output-format",
-      "--background",
-      "--openai-background",
-      "--openai-moderation",
-      "--quality",
-      "--timeout-ms",
-      "--output",
-      "--json",
-    ],
+    flags: [...IMAGE_GENERATION_FLAGS],
     resultShape: "saved image files plus attempts",
   },
   {
     id: "image.edit",
     description: "Generate edited images from one or more input files.",
     transports: ["local"],
-    flags: [
-      "--file",
-      "--prompt",
-      "--model",
-      "--count",
-      "--size",
-      "--aspect-ratio",
-      "--resolution",
-      "--output-format",
-      "--background",
-      "--openai-background",
-      "--openai-moderation",
-      "--quality",
-      "--timeout-ms",
-      "--output",
-      "--json",
-    ],
+    flags: ["--file", ...IMAGE_GENERATION_FLAGS],
     resultShape: "saved image files plus attempts",
   },
   {
     id: "image.describe",
     description: "Describe one image file through media-understanding providers.",
     transports: ["local"],
-    flags: ["--file", "--prompt", "--model", "--timeout-ms", "--json"],
+    flags: ["--file", "--prompt", "--model", "--timeout-ms", "--agent", "--json"],
     resultShape: "normalized text output",
   },
   {
     id: "image.describe-many",
     description: "Describe multiple image files independently.",
     transports: ["local"],
-    flags: ["--file", "--prompt", "--model", "--timeout-ms", "--json"],
+    flags: ["--file", "--prompt", "--model", "--timeout-ms", "--agent", "--json"],
     resultShape: "one text output per file",
   },
   {
     id: "image.providers",
     description: "List image generation providers.",
     transports: ["local"],
-    flags: ["--json"],
+    flags: ["--agent", "--json"],
     resultShape: "provider ids and defaults",
   },
   {
     id: "audio.transcribe",
     description: "Transcribe one audio file.",
     transports: ["local"],
-    flags: ["--file", "--language", "--prompt", "--model", "--json"],
+    flags: ["--file", "--agent", "--language", "--prompt", "--model", "--json"],
     resultShape: "normalized text output",
   },
   {
     id: "audio.providers",
     description: "List audio transcription providers.",
     transports: ["local"],
-    flags: ["--json"],
+    flags: ["--agent", "--json"],
     resultShape: "provider ids and capabilities",
   },
   {
@@ -179,7 +179,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "tts.providers",
     description: "List speech providers.",
     transports: ["local", "gateway"],
-    flags: ["--local", "--gateway", "--json"],
+    flags: ["--agent", "--local", "--gateway", "--json"],
     resultShape: "provider ids, configured state, models, voices",
   },
   {
@@ -239,6 +239,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
       "--watermark",
       "--timeout-ms",
       "--output",
+      "--agent",
       "--json",
     ],
     resultShape: "saved video files plus attempts",
@@ -247,14 +248,14 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "video.describe",
     description: "Describe one video file through media-understanding providers.",
     transports: ["local"],
-    flags: ["--file", "--model", "--json"],
+    flags: ["--file", "--agent", "--model", "--json"],
     resultShape: "normalized text output",
   },
   {
     id: "video.providers",
     description: "List video generation and description providers.",
     transports: ["local"],
-    flags: ["--json"],
+    flags: ["--agent", "--json"],
     resultShape: "provider ids and defaults",
   },
   {
@@ -266,34 +267,30 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
   },
   {
     id: "web.fetch",
-    description: "Fetch URL content through configured web fetch providers.",
+    description: "Fetch URL content directly or through a selected web fetch provider.",
     transports: ["local"],
     flags: ["--url", "--provider", "--format", "--json"],
-    resultShape: "fetch provider result",
+    resultShape: "page content with fetch metadata",
   },
   {
     id: "web.providers",
     description: "List web search and fetch providers.",
     transports: ["local"],
-    flags: ["--json"],
+    flags: ["--agent", "--json"],
     resultShape: "provider ids grouped by family",
   },
   {
     id: "embedding.create",
     description: "Create embeddings through embedding providers.",
     transports: ["local"],
-    flags: ["--text", "--provider", "--model", "--json"],
+    flags: ["--text", "--provider", "--model", "--agent", "--json"],
     resultShape: "vectors with provider/model attribution",
   },
   {
     id: "embedding.providers",
     description: "List embedding providers.",
     transports: ["local"],
-    flags: ["--json"],
+    flags: ["--agent", "--json"],
     resultShape: "provider ids and default models",
   },
 ];
-
-export function findCapabilityMetadata(id: string): CapabilityMetadata | undefined {
-  return CAPABILITY_METADATA.find((entry) => entry.id === id);
-}

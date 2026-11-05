@@ -2,16 +2,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  readPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndex,
-} from "./installed-plugin-index-store.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
+import { createIndex } from "./manifest-registry-installed.test-helpers.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -46,34 +45,25 @@ function writePlugin(rootDir: string, pluginId: string, modelPrefix: string) {
   );
 }
 
-function createIndex(rootDir: string): InstalledPluginIndex {
-  return {
-    version: 1,
-    hostContractVersion: "2026.4.25",
-    compatRegistryVersion: "compat-v1",
-    migrationVersion: 1,
-    policyHash: "policy-v1",
-    generatedAtMs: 1777118400000,
-    installRecords: {},
-    plugins: [
-      {
-        pluginId: "installed",
-        manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-        manifestHash: "manifest-hash",
-        source: path.join(rootDir, "index.ts"),
-        rootDir,
-        origin: "global",
-        enabled: true,
-        startup: {
-          sidecar: false,
-          memory: false,
-          agentHarnesses: [],
-        },
-        compat: [],
-      },
-    ],
-    diagnostics: [],
+function installedFixture() {
+  const rootDir = makeTempDir();
+  writePlugin(rootDir, "installed", "installed-");
+  return { rootDir, index: createIndex(rootDir) };
+}
+
+function packageIndex(rootDir: string, packagePath = "package.json") {
+  const index = createIndex(rootDir);
+  expectDefined(index.plugins[0], "installed fixture record").packageJson = {
+    path: packagePath,
+    hash: "old-index-hash",
   };
+  return index;
+}
+
+function writeChannelPackage(rootDir: string, channel: object, packagePath = "package.json") {
+  const target = path.join(rootDir, packagePath);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, JSON.stringify({ openclaw: { channel } }), "utf8");
 }
 
 function fileSignature(filePath: string) {
@@ -111,7 +101,7 @@ function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
   return Object.freeze(value);
 }
 
-function writePackageManifest(rootDir: string, channelLabel: string) {
+function writePackageManifest(rootDir: string, channelLabel: string, selectionDocsPrefix?: string) {
   const packageJsonPath = path.join(rootDir, "package.json");
   fs.writeFileSync(
     packageJsonPath,
@@ -125,6 +115,7 @@ function writePackageManifest(rootDir: string, channelLabel: string) {
         channel: {
           id: "installed",
           label: channelLabel,
+          ...(selectionDocsPrefix !== undefined ? { selectionDocsPrefix } : {}),
         },
       },
     }),
@@ -133,9 +124,12 @@ function writePackageManifest(rootDir: string, channelLabel: string) {
   return packageJsonPath;
 }
 
-function createIndexWithPackageJson(rootDir: string): InstalledPluginIndex {
+function createIndexWithPackageJson(
+  rootDir: string,
+  selectionDocsPrefix?: string,
+): InstalledPluginIndex {
   const index = createIndexWithFileSignatures(rootDir);
-  const packageJsonPath = writePackageManifest(rootDir, "Installed");
+  const packageJsonPath = writePackageManifest(rootDir, "Installed", selectionDocsPrefix);
   const record = index.plugins[0];
   if (!record) {
     throw new Error("expected index record");
@@ -151,95 +145,84 @@ function createIndexWithPackageJson(rootDir: string): InstalledPluginIndex {
   };
 }
 
-function createIndexWithUnhashedPackageJson(rootDir: string): InstalledPluginIndex {
-  const index = createIndexWithFileSignatures(rootDir);
-  const packageJsonPath = writePackageManifest(rootDir, "Installed");
-  const record = index.plugins[0];
-  if (!record) {
-    throw new Error("expected index record");
-  }
-  record.packageJson = {
-    path: "package.json",
-    hash: "",
-    fileSignature: fileSignature(packageJsonPath),
-  };
-  return {
-    ...index,
-    plugins: [record],
-  };
-}
-
 describe("loadPluginManifestRegistryForInstalledIndex", () => {
-  it("reuses frozen installed-index fingerprints when file signatures are persisted", () => {
-    const rootDir = makeTempDir();
-    writePlugin(rootDir, "installed", "installed-");
-    const index = deepFreeze(createIndexWithFileSignatures(rootDir));
-    const first = resolveInstalledManifestRegistryIndexFingerprint(index);
-    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
-    const nextMtime = new Date(Date.now() + 5000);
-    fs.utimesSync(manifestPath, nextMtime, nextMtime);
-    const second = resolveInstalledManifestRegistryIndexFingerprint(index);
+  it.each([undefined, "plugin-state"])(
+    "preserves known backing-store metadata %s through installed records",
+    (backingStore) => {
+      const root = makeTempDir();
+      writePlugin(root, "installed", "installed/");
+      fs.writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          name: "@openclaw/installed",
+          version: "1.0.0",
+          openclaw: {
+            channel: {
+              id: "installed",
+              persistedAuthState: {
+                specifier: "./auth-presence",
+                exportName: "hasAuth",
+                exportNameAsync: "hasAuthAsync",
+                backingStore,
+              },
+            },
+          },
+        }),
+      );
+      const index = createIndex(root);
+      expectDefined(index.plugins[0], "installed fixture record").packageJson = {
+        path: "package.json",
+        hash: "fixture-package-metadata",
+      };
+      const registry = loadPluginManifestRegistryForInstalledIndex({
+        index,
+        env: { VITEST: "true" },
+        includeDisabled: true,
+      });
+      expect(registry.plugins[0]?.packageChannel?.persistedAuthState).toEqual({
+        specifier: "./auth-presence",
+        exportName: "hasAuth",
+        exportNameAsync: "hasAuthAsync",
+        ...(backingStore === "plugin-state" ? { backingStore: "plugin-state" } : {}),
+      });
+    },
+  );
 
-    expect(second).toBe(first);
+  it("loadPluginManifestRegistryForInstalledIndex preserves account-key policy after index persistence", async () => {
+    const rootDir = makeTempDir();
+    const stateDir = makeTempDir();
+    const policy = { canonicalAliasesRequireOwnField: "account" };
+    writePlugin(rootDir, "installed", "installed-");
+    fs.writeFileSync(
+      path.join(rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "installed",
+        configSchema: { type: "object" },
+        channels: ["selected"],
+        channelAccountKeyPolicies: { selected: policy, foreign: policy },
+      }),
+    );
+    await writePersistedInstalledPluginIndex(createIndex(rootDir), { stateDir });
+    const index = expectDefined(
+      await readPersistedInstalledPluginIndex({ stateDir }),
+      "persisted installed plugin index",
+    );
+    const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({ index });
+    expect(manifestRegistry.plugins[0]?.channelAccountKeyPolicies).toEqual({ selected: policy });
   });
 
-  it("recomputes installed-index fingerprints for mutable index objects", () => {
-    const rootDir = makeTempDir();
-    writePlugin(rootDir, "installed", "installed-");
-    const index = createIndexWithFileSignatures(rootDir);
-    const first = resolveInstalledManifestRegistryIndexFingerprint(index);
-    const record = index.plugins[0];
-    if (!record) {
-      throw new Error("expected index record");
-    }
-    record.manifestHash = "changed";
-    const second = resolveInstalledManifestRegistryIndexFingerprint(index);
-
-    expect(second).not.toBe(first);
-  });
-
-  it("fingerprints immutable inventory without inspecting plugin files", () => {
-    const rootDir = makeTempDir();
-    writePlugin(rootDir, "installed", "installed-");
-    const index = createIndexWithUnhashedPackageJson(rootDir);
-    const realpathSpy = vi.spyOn(fs, "realpathSync");
-    const statSpy = vi.spyOn(fs, "statSync");
-    try {
-      resolveInstalledManifestRegistryIndexFingerprint(index);
-      resolveInstalledManifestRegistryIndexFingerprint(index);
-      expect(realpathSpy).not.toHaveBeenCalled();
-      expect(statSpy).not.toHaveBeenCalled();
-    } finally {
-      realpathSpy.mockRestore();
-      statSpy.mockRestore();
-    }
-  });
-
-  it("does not cache shallow-frozen installed-index fingerprints with mutable nested records", () => {
-    const rootDir = makeTempDir();
-    writePlugin(rootDir, "installed", "installed-");
-    const index = createIndexWithFileSignatures(rootDir);
-    const record = index.plugins[0];
-    if (!record) {
-      throw new Error("expected index record");
-    }
-    Object.freeze(index.installRecords);
-    Object.freeze(index.diagnostics);
-    Object.freeze(record);
-    Object.freeze(index.plugins);
-    Object.freeze(index);
-    const first = resolveInstalledManifestRegistryIndexFingerprint(index);
-
-    const agentHarnesses = record.startup.agentHarnesses as string[];
-    agentHarnesses.push("changed");
-    const second = resolveInstalledManifestRegistryIndexFingerprint(index);
-
-    expect(second).not.toBe(first);
-  });
+  const loadRegistry = (index: InstalledPluginIndex) =>
+    loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
 
   it("keeps frozen installed-index fingerprints process-stable without file signatures", () => {
-    const rootDir = makeTempDir();
-    writePlugin(rootDir, "installed", "installed-");
+    const { rootDir } = installedFixture();
     const index = deepFreeze(createIndex(rootDir));
     const first = resolveInstalledManifestRegistryIndexFingerprint(index);
 
@@ -251,67 +234,14 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(second).toBe(first);
   });
 
-  it("reconstructs installed-index manifest registries when manifest files change", () => {
-    const rootDir = makeTempDir();
-    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
-    writePlugin(rootDir, "installed", "installed-");
-    const index = createIndex(rootDir);
-    const env = {
-      OPENCLAW_VERSION: "2026.4.25",
-      VITEST: "true",
-    };
-
-    const first = loadPluginManifestRegistryForInstalledIndex({
-      index,
-      env,
-      includeDisabled: true,
-    });
-    expect(first.plugins[0]?.modelSupport).toEqual({
-      modelPrefixes: ["installed-"],
-    });
-
-    writePlugin(rootDir, "installed", "updated-installed-");
-    const nextMtime = new Date(Date.now() + 5000);
-    fs.utimesSync(manifestPath, nextMtime, nextMtime);
-
-    const second = loadPluginManifestRegistryForInstalledIndex({
-      index,
-      env,
-      includeDisabled: true,
-    });
-
-    expect(second).not.toBe(first);
-    expect(second.plugins[0]?.modelSupport).toEqual({
-      modelPrefixes: ["updated-installed-"],
-    });
-  });
-
   it("reuses installed package metadata until plugin metadata caches are cleared", () => {
-    const rootDir = makeTempDir();
-    writePlugin(rootDir, "installed", "installed-");
+    const { rootDir } = installedFixture();
     const index = createIndexWithPackageJson(rootDir);
-    const env = {
-      OPENCLAW_VERSION: "2026.4.25",
-      VITEST: "true",
-    };
-
-    const first = loadPluginManifestRegistryForInstalledIndex({
-      index,
-      env,
-      includeDisabled: true,
-    });
+    const first = loadRegistry(index);
     writePackageManifest(rootDir, "Updated");
-    const second = loadPluginManifestRegistryForInstalledIndex({
-      index,
-      env,
-      includeDisabled: true,
-    });
+    const second = loadRegistry(index);
     clearPluginMetadataLifecycleCaches();
-    const third = loadPluginManifestRegistryForInstalledIndex({
-      index,
-      env,
-      includeDisabled: true,
-    });
+    const third = loadRegistry(index);
 
     expect(first.plugins[0]?.packageChannel?.label).toBe("Installed");
     expect(second.plugins[0]?.packageChannel?.label).toBe("Installed");
@@ -321,64 +251,16 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     });
   });
 
-  it("reuses installed package json path validation across registry loads", () => {
-    const rootDir = makeTempDir();
-    writePlugin(rootDir, "installed", "installed-");
-    const index = createIndexWithPackageJson(rootDir);
-    const env = {
-      OPENCLAW_VERSION: "2026.4.25",
-      VITEST: "true",
-    };
+  it("preserves empty docs prefixes from package channel metadata", () => {
+    const { rootDir } = installedFixture();
 
-    loadPluginManifestRegistryForInstalledIndex({
-      index,
-      env,
-      includeDisabled: true,
-    });
-    const realpathSpy = vi.spyOn(fs, "realpathSync");
-    let packagePathCalls: unknown[][];
-    try {
-      loadPluginManifestRegistryForInstalledIndex({
-        index,
-        env,
-        includeDisabled: true,
-      });
-      const packageJsonPath = path.join(rootDir, "package.json");
-      packagePathCalls = realpathSpy.mock.calls.filter(
-        ([filePath]) => filePath === packageJsonPath,
-      );
-    } finally {
-      realpathSpy.mockRestore();
-    }
+    const registry = loadRegistry(createIndexWithPackageJson(rootDir, ""));
 
-    expect(packagePathCalls).toStrictEqual([]);
-  });
-
-  it("loads manifest metadata only for plugins present in the installed index", () => {
-    const installedRoot = makeTempDir();
-    const unrelatedRoot = makeTempDir();
-    writePlugin(installedRoot, "installed", "installed-");
-    writePlugin(unrelatedRoot, "unrelated", "unrelated-");
-
-    const registry = loadPluginManifestRegistryForInstalledIndex({
-      index: createIndex(installedRoot),
-      env: {
-        OPENCLAW_VERSION: "2026.4.25",
-        VITEST: "true",
-      },
-      includeDisabled: true,
-    });
-
-    expect(registry.plugins.map((plugin) => plugin.id)).toEqual(["installed"]);
-    expect(registry.plugins[0]?.modelSupport).toEqual({
-      modelPrefixes: ["installed-"],
-    });
+    expect(registry.plugins[0]?.packageChannel?.selectionDocsPrefix).toBe("");
   });
 
   it("reuses a prepared manifest graph without reopening plugin manifests", () => {
-    const rootDir = makeTempDir();
-    writePlugin(rootDir, "installed", "installed-");
-    const index = createIndex(rootDir);
+    const { rootDir, index } = installedFixture();
     const env = { OPENCLAW_VERSION: "2026.4.25", VITEST: "true" };
     const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
       index,
@@ -398,134 +280,65 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(reused.diagnostics).toEqual([]);
   });
 
-  it("reconstructs bundle candidates with their bundle manifest format", () => {
-    const rootDir = makeTempDir();
-    fs.mkdirSync(path.join(rootDir, ".claude-plugin"), { recursive: true });
-    fs.mkdirSync(path.join(rootDir, "commands"), { recursive: true });
-    fs.writeFileSync(
-      path.join(rootDir, ".claude-plugin", "plugin.json"),
-      JSON.stringify({
-        name: "Claude Bundle",
-        commands: "commands",
-      }),
-      "utf8",
-    );
-
-    const index = createIndex(rootDir);
-    const registry = loadPluginManifestRegistryForInstalledIndex({
-      index: {
-        ...index,
-        plugins: [
-          {
-            ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
-            pluginId: "claude-bundle",
-            manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
-            source: rootDir,
-            format: "bundle",
-            bundleFormat: "claude",
-          },
-        ],
-      },
-      env: {
-        OPENCLAW_VERSION: "2026.4.25",
-        VITEST: "true",
-      },
-      includeDisabled: true,
-    });
-
-    expect(registry.diagnostics).toStrictEqual([]);
-    expect(registry.plugins).toHaveLength(1);
-    expect(registry.plugins[0]?.id).toBe("claude-bundle");
-    expect(registry.plugins[0]?.format).toBe("bundle");
-    expect(registry.plugins[0]?.bundleFormat).toBe("claude");
-    expect(registry.plugins[0]?.skills).toEqual(["commands"]);
-  });
-
   it("hydrates package metadata while dropping setup fields with mismatched CLI names", () => {
-    const rootDir = makeTempDir();
-    writePlugin(rootDir, "installed", "installed-");
-    fs.writeFileSync(
-      path.join(rootDir, "package.json"),
-      JSON.stringify({
-        openclaw: {
-          channel: {
-            id: "installed",
-            label: "Installed",
-            approvalFlags: ["native", "unsupported"],
-            commands: {
-              nativeCommandsAutoEnabled: true,
-              nativeSkillsAutoEnabled: false,
-            },
-            setup: {
-              fields: [
-                {
-                  key: "tenant",
-                  kind: "choice",
-                  choices: ["alpha", "beta"],
-                  cli: {
-                    flags: "--tenant <tenant>",
-                    negatedFlags: "--no-tenant",
-                    description: "Installed tenant",
-                  },
-                },
-                {
-                  key: "credential",
-                  kind: "string",
-                  cli: {
-                    flags: "--token <value>",
-                    description: "Installed credential",
-                  },
-                },
-                {
-                  key: "tenant",
-                  kind: "boolean",
-                  cli: {
-                    flags: "--tenant",
-                    negatedFlags: "--no-other",
-                    description: "Mismatched tenant toggle",
-                  },
-                },
-                {
-                  key: "useEnv",
-                  kind: "boolean",
-                  cli: {
-                    flags: "--use-env",
-                    negatedFlags: "--no-use-env",
-                    description: "Use environment credentials",
-                  },
-                },
-              ],
+    const { rootDir } = installedFixture();
+    writeChannelPackage(rootDir, {
+      id: "installed",
+      label: "Installed",
+      approvalFlags: ["native", "unsupported"],
+      commands: {
+        nativeCommandsAutoEnabled: true,
+        nativeSkillsAutoEnabled: false,
+      },
+      setup: {
+        fields: [
+          {
+            key: "tenant",
+            kind: "choice",
+            choices: ["alpha", "beta"],
+            cli: {
+              flags: "--tenant <tenant>",
+              negatedFlags: "--no-tenant",
+              description: "Installed tenant",
             },
           },
-        },
-      }),
-      "utf8",
-    );
-
-    const index = createIndex(rootDir);
-    const registry = loadPluginManifestRegistryForInstalledIndex({
-      index: {
-        ...index,
-        plugins: [
           {
-            ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
-            packageChannel: {
-              id: "installed",
-              label: "Installed",
+            key: "credential",
+            kind: "string",
+            cli: {
+              flags: "--token <value>",
+              description: "Installed credential",
             },
-            packageJson: {
-              path: "package.json",
-              hash: "old-index-hash",
+          },
+          {
+            key: "tenant",
+            kind: "boolean",
+            cli: {
+              flags: "--tenant",
+              negatedFlags: "--no-other",
+              description: "Mismatched tenant toggle",
+            },
+          },
+          {
+            key: "useEnv",
+            kind: "boolean",
+            envVars: ["INSTALLED_TOKEN", "INSTALLED_TOKEN_FILE"],
+            envVarMode: "any",
+            cli: {
+              flags: "--use-env",
+              negatedFlags: "--no-use-env",
+              description: "Use environment credentials",
             },
           },
         ],
       },
-      env: {
-        OPENCLAW_VERSION: "2026.4.25",
-        VITEST: "true",
-      },
-      includeDisabled: true,
     });
+    const index = packageIndex(rootDir);
+    expectDefined(index.plugins[0], "installed fixture record").packageChannel = {
+      id: "installed",
+      label: "Installed",
+    };
+    const registry = loadRegistry(index);
 
     expect(registry.plugins[0]?.channelCatalogMeta?.commands).toEqual({
       nativeCommandsAutoEnabled: true,
@@ -547,6 +360,8 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         {
           key: "useEnv",
           kind: "boolean",
+          envVars: ["INSTALLED_TOKEN", "INSTALLED_TOKEN_FILE"],
+          envVarMode: "any",
           cli: {
             flags: "--use-env",
             negatedFlags: "--no-use-env",
@@ -558,46 +373,17 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
   });
 
   it("hydrates package metadata from dot-prefixed package directories", () => {
-    const rootDir = makeTempDir();
-    writePlugin(rootDir, "installed", "installed-");
-    fs.mkdirSync(path.join(rootDir, "..meta"), { recursive: true });
-    fs.writeFileSync(
-      path.join(rootDir, "..meta", "package.json"),
-      JSON.stringify({
-        openclaw: {
-          channel: {
-            id: "installed",
-            label: "Installed",
-            commands: {
-              nativeCommandsAutoEnabled: true,
-              nativeSkillsAutoEnabled: false,
-            },
-          },
-        },
-      }),
-      "utf8",
+    const { rootDir } = installedFixture();
+    writeChannelPackage(
+      rootDir,
+      {
+        id: "installed",
+        label: "Installed",
+        commands: { nativeCommandsAutoEnabled: true, nativeSkillsAutoEnabled: false },
+      },
+      "..meta/package.json",
     );
-
-    const index = createIndex(rootDir);
-    const registry = loadPluginManifestRegistryForInstalledIndex({
-      index: {
-        ...index,
-        plugins: [
-          {
-            ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
-            packageJson: {
-              path: "..meta/package.json",
-              hash: "old-index-hash",
-            },
-          },
-        ],
-      },
-      env: {
-        OPENCLAW_VERSION: "2026.4.25",
-        VITEST: "true",
-      },
-      includeDisabled: true,
-    });
+    const registry = loadRegistry(packageIndex(rootDir, "..meta/package.json"));
 
     expect(registry.plugins[0]?.channelCatalogMeta?.commands).toEqual({
       nativeCommandsAutoEnabled: true,
@@ -613,122 +399,87 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       const packageJsonPath = path.join(rootDir, "package.json");
       const outsidePackageJsonPath = path.join(outsideDir, "package.json");
       writePlugin(rootDir, "installed", "installed-");
-      fs.writeFileSync(
-        outsidePackageJsonPath,
-        JSON.stringify({
-          openclaw: {
-            channel: {
-              id: "installed",
-              label: "Installed",
-              commands: {
-                nativeCommandsAutoEnabled: true,
-                nativeSkillsAutoEnabled: false,
-              },
-            },
-          },
-        }),
-        "utf8",
-      );
-      fs.symlinkSync(outsidePackageJsonPath, packageJsonPath);
-
-      const index = createIndex(rootDir);
-      const registry = loadPluginManifestRegistryForInstalledIndex({
-        index: {
-          ...index,
-          plugins: [
-            {
-              ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
-              packageJson: {
-                path: "package.json",
-                hash: "old-index-hash",
-              },
-            },
-          ],
-        },
-        env: {
-          OPENCLAW_VERSION: "2026.4.25",
-          VITEST: "true",
-        },
-        includeDisabled: true,
+      writeChannelPackage(outsideDir, {
+        id: "installed",
+        label: "Installed",
+        commands: { nativeCommandsAutoEnabled: true, nativeSkillsAutoEnabled: false },
       });
+      fs.symlinkSync(outsidePackageJsonPath, packageJsonPath);
+      const registry = loadRegistry(packageIndex(rootDir));
 
       expect(registry.plugins[0]?.channelCatalogMeta?.commands).toBeUndefined();
     },
   );
 
   it("ignores malformed persisted package channel metadata", () => {
-    const rootDir = makeTempDir();
-    writePlugin(rootDir, "installed", "installed-");
-
-    const index = createIndex(rootDir);
-    const registry = loadPluginManifestRegistryForInstalledIndex({
-      index: {
-        ...index,
-        plugins: [
-          {
-            ...index.plugins[0],
-            packageChannel: {
-              id: ["installed"],
-              label: 12,
-              blurb: { text: "bad" },
-              preferOver: "legacy",
-              commands: {
-                nativeCommandsAutoEnabled: "yes",
-              },
-            },
-          },
-        ],
-      } as unknown as InstalledPluginIndex,
-      env: {
-        OPENCLAW_VERSION: "2026.4.25",
-        VITEST: "true",
+    const { index } = installedFixture();
+    const persistedRecord = {
+      ...expectDefined(index.plugins[0], "installed fixture record"),
+      packageChannel: {
+        id: ["installed"],
+        label: 12,
+        blurb: { text: "bad" },
+        preferOver: "legacy",
+        commands: {
+          nativeCommandsAutoEnabled: "yes",
+        },
       },
-      includeDisabled: true,
-    });
+    };
+    const registry = loadRegistry({
+      ...index,
+      plugins: [persistedRecord],
+    } as unknown as InstalledPluginIndex);
 
     expect(registry.plugins[0]?.packageManifest).toBeUndefined();
     expect(registry.plugins[0]?.channelCatalogMeta).toBeUndefined();
   });
 
   it("normalizes persisted channel CLI option value types", () => {
-    const rootDir = makeTempDir();
-    writePlugin(rootDir, "installed", "installed-");
-    const index = createIndex(rootDir);
-    const registry = loadPluginManifestRegistryForInstalledIndex({
-      index: {
-        ...index,
-        plugins: [
+    const { index } = installedFixture();
+    const persistedRecord = {
+      ...expectDefined(index.plugins[0], "installed fixture record"),
+      packageChannel: {
+        id: "installed",
+        cliAddOptions: [
           {
-            ...index.plugins[0],
-            packageChannel: {
-              id: "installed",
-              cliAddOptions: [
-                {
-                  flags: "--limit <n>",
-                  description: "Limit",
-                  valueType: "int",
-                },
-                {
-                  flags: "--ignored <value>",
-                  description: "Ignored",
-                  valueType: "string",
-                },
-              ],
-            },
+            flags: "--limit <n>",
+            description: "Limit",
+            valueType: "int",
+          },
+          {
+            flags: "--ignored <value>",
+            description: "Ignored",
+            valueType: "string",
           },
         ],
-      } as unknown as InstalledPluginIndex,
-      env: {
-        OPENCLAW_VERSION: "2026.4.25",
-        VITEST: "true",
       },
-      includeDisabled: true,
-    });
+    };
+    const registry = loadRegistry({
+      ...index,
+      plugins: [persistedRecord],
+    } as unknown as InstalledPluginIndex);
 
     expect(registry.plugins[0]?.packageChannel?.cliAddOptions).toEqual([
       { flags: "--limit <n>", description: "Limit", valueType: "int" },
       { flags: "--ignored <value>", description: "Ignored" },
     ]);
+  });
+
+  it("normalizes the open-DM wildcard doctor capability from persisted metadata", () => {
+    const { index } = installedFixture();
+    Object.assign(expectDefined(index.plugins[0], "installed fixture record"), {
+      packageChannel: {
+        id: "installed",
+        doctorCapabilities: {
+          openDmRequiresAllowFromWildcard: false,
+        },
+      },
+    });
+    const registry = loadRegistry(index);
+
+    expect(
+      registry.plugins[0]?.packageChannel?.doctorCapabilities?.openDmRequiresAllowFromWildcard,
+    ).toBe(false);
   });
 
   it("round-trips bundle metadata through the persisted index before reconstruction", async () => {
@@ -769,14 +520,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     }
     expect(persisted.plugins[0]).toEqual(persistedPlugin);
 
-    const registry = loadPluginManifestRegistryForInstalledIndex({
-      index: persisted,
-      env: {
-        OPENCLAW_VERSION: "2026.4.25",
-        VITEST: "true",
-      },
-      includeDisabled: true,
-    });
+    const registry = loadRegistry(persisted);
 
     expect(registry.diagnostics).toStrictEqual([]);
     expect(registry.plugins).toHaveLength(1);

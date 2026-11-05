@@ -1,191 +1,323 @@
+import { DatabaseSync } from "node:sqlite";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { listAuditEvents, recordAuditEvent } from "./audit-event-store.js";
-import type { AuditEventInput } from "./audit-event-types.js";
+import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { listAuditEvents, recordAuditEventInDatabase } from "./audit-event-store.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
+import {
+  input,
+  messageEvent,
+  decisionReceipt,
+  captureWork,
+} from "./audit-event-writer.test-support.js";
+import { createAuditEventRecorder } from "./audit-recorder.js";
+import { pageExecutionDecisionFactsForContextInDatabase } from "./execution-decision-facts.js";
 import {
   configureExecutionIdentityAdmissionSink,
   createExecutionIdentityAdmissionToken,
   enqueueExecutionIdentityContextAtAdmission,
-  type ExecutionIdentityAdmissionEnvelope,
-  type ExecutionIdentityAdmissionFacts,
 } from "./execution-identity-admission.js";
+import { inspectExecutionIdentityRun } from "./execution-identity-context.js";
 import {
-  inspectExecutionIdentityRun,
-  processExecutionIdentityAdmissionWork,
-} from "./execution-identity-context.js";
+  captureExecutionIdentityAdmissionEnvelope,
+  executionIdentityFacts,
+  persistExecutionIdentityAdmissionEnvelope,
+} from "./execution-identity.test-support.js";
 
-function captureExecutionIdentityAdmissionEnvelope(
-  facts: ExecutionIdentityAdmissionFacts,
-  options: {
-    contextId?: string;
-    executionId?: string;
-    now?: number;
-    runtimeInstanceId?: string;
-  } = {},
-) {
-  let captured: ExecutionIdentityAdmissionEnvelope | undefined;
-  const clear = configureExecutionIdentityAdmissionSink((work) => {
-    if (work.kind === "capture") {
-      captured = work.envelope;
-    }
-    return true;
+function defineObjectPrototypeProperties(descriptors: PropertyDescriptorMap): void {
+  // oxlint-disable-next-line no-extend-native -- Exercise hostile prototype pollution across the real clone boundary.
+  Object.defineProperties(Object.prototype, descriptors);
+}
+
+const tempDirs = createTempDirTracker();
+
+function databaseFixture() {
+  return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-audit-writer-") } };
+}
+
+function startWriter(database: ReturnType<typeof databaseFixture>, maxPending?: number) {
+  const errors: string[] = [];
+  const writer = createAuditEventWriter({
+    scheduler: createTestGatewayScheduler(),
+    stateDir: database.env.OPENCLAW_STATE_DIR,
+    maxPending,
+    onError: (error) => errors.push(error),
   });
-  const result = enqueueExecutionIdentityContextAtAdmission(facts, {
+  return { writer, errors };
+}
+
+function envelopeFor(
+  runId: string,
+  options: Parameters<typeof captureExecutionIdentityAdmissionEnvelope>[1] = {},
+  facts: Parameters<typeof executionIdentityFacts>[1] = {},
+) {
+  return captureExecutionIdentityAdmissionEnvelope(executionIdentityFacts(runId, facts), {
+    runtimeInstanceId: "runtime-1",
     ...options,
-    enabled: true,
   });
-  clear();
-  if (!result || !captured) {
-    throw new Error("expected admission envelope");
-  }
-  return captured;
 }
 
-function persistExecutionIdentityAdmissionEnvelope(
-  envelope: ExecutionIdentityAdmissionEnvelope,
-  options: Parameters<typeof processExecutionIdentityAdmissionWork>[1] = {},
-) {
-  return processExecutionIdentityAdmissionWork({ kind: "capture", envelope }, options);
+async function runIds(database: ReturnType<typeof databaseFixture>) {
+  return (await listAuditEvents({ database, limit: 10 })).events.map((event) => event.runId);
 }
 
-function input(): AuditEventInput {
-  return {
-    sourceId: "run-1:1:started",
-    sourceSequence: 1,
-    occurredAt: Date.now(),
-    kind: "agent_run",
-    action: "agent.run.started",
-    status: "started",
-    actorType: "agent",
-    actorId: "main",
-    agentId: "main",
-    runId: "run-1",
-  };
-}
-
-function captureWork(envelope: ExecutionIdentityAdmissionEnvelope) {
-  return { kind: "capture" as const, envelope };
-}
-
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  tempDirs.cleanup();
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("audit event worker", () => {
-  it("keeps first-use identity storage absent during maintenance without admission", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-writer-");
-    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
-
-    await writer.ready;
-    await writer.stop();
-
-    expect(errors).toEqual([]);
-    expect(
-      openOpenClawStateDatabase(database)
-        .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("execution_identity_contexts"),
-    ).toBeUndefined();
+describe("audit event writer", () => {
+  it("rejects one uncloneable event without disabling later audit records", async () => {
+    const database = databaseFixture();
+    const { writer, errors } = startWriter(database);
+    try {
+      await writer.ready;
+      expect(writer.record({ ...input(), sourceId: "before", runId: "before" })).toBe(true);
+      const invalid = { ...input(), uncloneable: () => {} };
+      expect(writer.record(invalid)).toBe(false);
+      expect(writer.record({ ...input(), sourceId: "after", runId: "after" })).toBe(true);
+    } finally {
+      await writer.stop();
+    }
+    expect(errors).toHaveLength(1);
+    expect(await runIds(database)).toEqual(["after", "before"]);
   });
 
-  it("keeps an established current store identity-free during maintenance", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-writer-");
-    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    recordAuditEvent(input(), database);
+  it("preserves external supervision for claimed state writes", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-external-");
+    const supervisedDatabase = {
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_SUPERVISOR_MODE: "external",
+      },
+    };
+    claimOpenClawStateOwnership("gateway-test-supervisor", supervisedDatabase);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    const write = (runId: string, supervisorMode: string | undefined) =>
+      withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: supervisorMode }, async () => {
+        const { writer, errors } = startWriter(supervisedDatabase);
+        await writer.ready;
+        expect(writer.record({ ...input(), sourceId: `${runId}:1:started`, runId })).toBe(true);
+        await writer.stop();
+        return errors;
+      });
 
+    const supervisedErrors = await write("supervised-run", "external");
+    expect(supervisedErrors).toEqual([]);
+    expect(await runIds(supervisedDatabase)).toEqual(["supervised-run"]);
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+
+    const unmarkedErrors = await write("unmarked-run", undefined);
+    expect(unmarkedErrors.some((error) => error.includes("gateway-test-supervisor"))).toBe(true);
+    expect(await runIds(supervisedDatabase)).toEqual(["supervised-run"]);
+  });
+
+  it("keeps disabled progress absent and drains accepted progress after disabling collection", async () => {
+    const database = databaseFixture();
+    let config: OpenClawConfig = { logging: { audit: { enabled: false, messages: "all" } } };
+    const { writer } = startWriter(database);
+    const recorder = createAuditEventRecorder({
+      scheduler: createTestGatewayScheduler(),
+      getConfig: () => config,
+      writer,
+    });
     await writer.ready;
-    await writer.stop();
+    expect(tableExists(openOpenClawStateDatabase(database).db, "outbound_message_progress")).toBe(
+      false,
+    );
+    recorder.recordMessage(messageEvent("message.outbound.queued"));
+    expect(tableExists(openOpenClawStateDatabase(database).db, "outbound_message_progress")).toBe(
+      false,
+    );
 
-    expect(errors).toEqual([]);
-    expect(listAuditEvents({ database, limit: 10 }).events).toHaveLength(1);
+    config = { logging: { audit: { messages: "all" } } };
+    recorder.recordMessage(messageEvent("message.outbound.queued"));
+    recorder.recordMessage(messageEvent("message.outbound.platform-started"));
+    recorder.recordMessage(messageEvent("message.outbound.finished"));
+    config = { logging: { audit: { enabled: false, messages: "all" } } };
+    recorder.recordMessage({ ...messageEvent("message.outbound.finished"), sourceId: "disabled" });
+    await recorder.stop();
+
+    const { db } = openOpenClawStateDatabase(database);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get()).toEqual({
+      count: 2,
+    });
+    expect(db.prepare("SELECT action FROM audit_events").all()).toEqual([
+      { action: "message.outbound.finished" },
+    ]);
+  });
+
+  it.each(["cold", "ready"] as const)(
+    "flushes the %s owner's audit FIFO after a competing writer releases its lock",
+    async (mode) => {
+      const database = databaseFixture();
+      const opened = openOpenClawStateDatabase(database);
+      recordAuditEventInDatabase(input(), { ...database, database: opened });
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      const contender = new DatabaseSync(opened.path);
+      const lock = () => contender.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+      if (mode === "cold") {
+        lock();
+      }
+      const { writer, errors } = startWriter(database);
+      if (mode === "ready") {
+        await writer.ready;
+        lock();
+      }
+      try {
+        for (const runId of ["contention-first", "contention-second"]) {
+          expect(writer.record({ ...input(), sourceId: runId, runId })).toBe(true);
+        }
+        await setImmediate();
+        expect(contender.isTransaction).toBe(true);
+      } finally {
+        try {
+          try {
+            contender.exec("ROLLBACK");
+          } finally {
+            contender.close();
+          }
+        } finally {
+          await writer.ready;
+          await writer.stop();
+        }
+      }
+      expect(errors).toEqual([]);
+      expect(await runIds(database)).toEqual(["contention-second", "contention-first", "run-1"]);
+    },
+  );
+
+  it("keeps the shared queue nonblocking under a held write lock and flushes before stop", async () => {
+    const database = databaseFixture();
+    recordAuditEventInDatabase(input(), {
+      ...database,
+      database: openOpenClawStateDatabase(database),
+    });
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    const { writer, errors } = startWriter(database, 3);
+    await writer.ready;
+    const { db, path } = openOpenClawStateDatabase(database);
     expect(
-      openOpenClawStateDatabase(database)
-        .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+      db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("execution_identity_contexts"),
     ).toBeUndefined();
-  });
-
-  it("returns immediately under SQLite contention and flushes before stop", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-writer-");
-    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
-    await writer.ready;
-    const { db } = openOpenClawStateDatabase(database);
-    db.exec("BEGIN IMMEDIATE");
-    const startedAt = performance.now();
-    expect(writer.record(input())).toBe(true);
-    expect(performance.now() - startedAt).toBeLessThan(250);
-    db.exec("ROLLBACK");
-
-    await writer.stop();
-    expect(errors).toEqual([]);
-    expect(listAuditEvents({ database, limit: 10 }).events).toHaveLength(1);
-  });
-
-  it("keeps first-use identity admission prompt under a held write lock", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-writer-");
-    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const { db } = openOpenClawStateDatabase(database);
     db.exec("DELETE FROM audit_identity_keys;");
-    db.exec("BEGIN IMMEDIATE");
-    const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    const contender = new DatabaseSync(path);
+    contender.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     const clearSink = configureExecutionIdentityAdmissionSink(writer.recordExecutionIdentity);
     const admittedAt = Date.now();
 
-    const startedAt = performance.now();
-    expect(
-      enqueueExecutionIdentityContextAtAdmission(
-        {
-          runId: "held-lock-run",
-          agentId: "main",
-          ingress: {
-            kind: "local-cli",
-            boundary: "agent-command.local",
-            state: "present",
-            rawSourceRef: "raw-ingress-secret",
+    try {
+      expect(writer.record({ ...input(), sourceId: "run-2:1:started", runId: "run-2" })).toBe(true);
+      expect(
+        enqueueExecutionIdentityContextAtAdmission(
+          executionIdentityFacts("held-lock-run", {
+            ingress: {
+              kind: "local-cli",
+              boundary: "agent-command.local",
+              state: "present",
+              rawSourceRef: "raw-ingress-secret",
+            },
+            invoker: {
+              state: "present",
+              kind: "local-account",
+              rawPrincipalRef: "raw-principal-secret",
+            },
+          }),
+          {
+            enabled: true,
+            contextId: "held-lock-context",
+            executionId: "held-lock-execution",
+            now: admittedAt,
+            runtimeInstanceId: "raw-runtime-secret",
           },
-          runtime: { kind: "embedded" },
-          invoker: { kind: "local-account", rawPrincipalRef: "raw-principal-secret" },
-        },
-        {
-          enabled: true,
+        ),
+      ).toEqual({
+        candidateContextId: "held-lock-context",
+        candidateExecutionId: "held-lock-execution",
+        accepted: true,
+      });
+      const receipt = {
+        ...decisionReceipt(),
+        contextId: "held-lock-context",
+        executionId: "held-lock-execution",
+        runId: "held-lock-run",
+        occurredAt: admittedAt,
+      };
+      expect(writer.recordExecutionDecision(receipt)).toBe(true);
+      await setImmediate();
+      expect(contender.isTransaction).toBe(true);
+      expect(
+        writer.recordExecutionIdentity({
+          kind: "retry-reference",
+          token: createExecutionIdentityAdmissionToken("queue-full-run", {
+            contextId: "queue-full-context",
+            executionId: "queue-full-execution",
+            now: admittedAt,
+          }),
+        }),
+      ).toBe(false);
+      expect(errors).toEqual(["audit event queue is full (3); dropping metadata"]);
+      expect(
+        db
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'execution_identity_contexts'")
+          .get(),
+      ).toBeUndefined();
+      expect(db.prepare("SELECT COUNT(*) AS count FROM audit_identity_keys").get()).toEqual({
+        count: 0,
+      });
+      let stopped = false;
+      void writer.stop().then(() => {
+        stopped = true;
+      });
+      await setImmediate();
+      expect(stopped).toBe(false);
+      expect(writer.record(input())).toBe(false);
+    } finally {
+      try {
+        contender.exec("ROLLBACK");
+        contender.close();
+      } finally {
+        clearSink();
+        await writer.stop();
+      }
+    }
+
+    expect(errors).toEqual(["audit event queue is full (3); dropping metadata"]);
+    expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(2);
+    expect(
+      pageExecutionDecisionFactsForContextInDatabase(openOpenClawStateDatabase(database).db, {
+        context: {
           contextId: "held-lock-context",
           executionId: "held-lock-execution",
-          now: admittedAt,
-          runtimeInstanceId: "raw-runtime-secret",
+          runId: "held-lock-run",
         },
+        limit: 10,
+        now: admittedAt,
+      }).receipts,
+    ).toHaveLength(1);
+    expect(
+      await inspectExecutionIdentityRun(
+        { runId: "held-lock-run" },
+        { ...database, now: admittedAt },
       ),
-    ).toEqual({
-      candidateContextId: "held-lock-context",
-      candidateExecutionId: "held-lock-execution",
-      accepted: true,
-    });
-    expect(performance.now() - startedAt).toBeLessThan(250);
-    expect(
-      db.prepare("SELECT name FROM sqlite_schema WHERE name = 'execution_identity_contexts'").get(),
-    ).toBeUndefined();
-    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_identity_keys").get()).toEqual({
-      count: 0,
-    });
-
-    db.exec("ROLLBACK");
-    clearSink();
-    await writer.stop();
-    expect(errors).toEqual([]);
-    expect(
-      inspectExecutionIdentityRun({ runId: "held-lock-run" }, { ...database, now: admittedAt }),
     ).toMatchObject({
       identity: {
         state: "present",
@@ -212,109 +344,201 @@ describe("audit event worker", () => {
     }
   });
 
-  it("prunes expired identity contexts at startup without a new run", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-writer-");
-    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    persistExecutionIdentityAdmissionEnvelope(
-      captureExecutionIdentityAdmissionEnvelope(
-        {
-          runId: "expired-before-startup",
-          agentId: "main",
-          ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-          runtime: { kind: "embedded" },
-        },
-        { now: 0, runtimeInstanceId: "runtime-1" },
-      ),
-      { ...database, now: 0 },
+  it("persists owned unknown and omits inherited evidence through the queue clone boundary", async () => {
+    const database = databaseFixture();
+    const { writer, errors } = startWriter(database);
+    const clearSink = configureExecutionIdentityAdmissionSink(writer.recordExecutionIdentity);
+    const admittedAt = Date.now();
+    const inheritedRefs = {
+      invoker: "raw-inherited-principal",
+      applicableGrants: "raw-inherited-grant",
+      assurance: "raw-inherited-assurance",
+      rawSourceRef: "raw-inherited-source",
+    } as const;
+    const prior = new Map(
+      Object.keys(inheritedRefs).map((key) => [
+        key,
+        Object.getOwnPropertyDescriptor(Object.prototype, key),
+      ]),
     );
+    let inheritedInvokerReads = 0;
+
+    try {
+      try {
+        defineObjectPrototypeProperties({
+          invoker: {
+            configurable: true,
+            enumerable: false,
+            get: () => {
+              inheritedInvokerReads += 1;
+              return {
+                state: "present",
+                kind: "local-account",
+                rawPrincipalRef: inheritedRefs.invoker,
+              };
+            },
+          },
+          applicableGrants: {
+            configurable: true,
+            enumerable: false,
+            value: [{ rawGrantRef: inheritedRefs.applicableGrants, state: "present" }],
+          },
+          assurance: {
+            configurable: true,
+            enumerable: false,
+            value: [
+              {
+                kind: "other",
+                rawEvidenceRef: inheritedRefs.assurance,
+                strength: "self-asserted",
+              },
+            ],
+          },
+          rawSourceRef: {
+            configurable: true,
+            enumerable: false,
+            value: inheritedRefs.rawSourceRef,
+          },
+        });
+        expect(
+          enqueueExecutionIdentityContextAtAdmission(executionIdentityFacts("absent-invoker-run"), {
+            enabled: true,
+            contextId: "absent-invoker-context",
+            executionId: "absent-invoker-execution",
+            now: admittedAt,
+            runtimeInstanceId: "private-absent-runtime-reference",
+          }),
+        ).toEqual({
+          candidateContextId: "absent-invoker-context",
+          candidateExecutionId: "absent-invoker-execution",
+          accepted: true,
+        });
+      } finally {
+        for (const [key, descriptor] of prior) {
+          if (descriptor) {
+            defineObjectPrototypeProperties({ [key]: descriptor });
+          } else {
+            delete (Object.prototype as Record<string, unknown>)[key];
+          }
+        }
+      }
+
+      expect(
+        enqueueExecutionIdentityContextAtAdmission(
+          executionIdentityFacts("unknown-invoker-run", {
+            invoker: { state: "unknown" },
+          }),
+          {
+            enabled: true,
+            contextId: "unknown-invoker-context",
+            executionId: "unknown-invoker-execution",
+            now: admittedAt + 1,
+            runtimeInstanceId: "private-unknown-runtime-reference",
+          },
+        ),
+      ).toEqual({
+        candidateContextId: "unknown-invoker-context",
+        candidateExecutionId: "unknown-invoker-execution",
+        accepted: true,
+      });
+    } finally {
+      clearSink();
+      await writer.ready;
+      await writer.stop();
+    }
+
+    const absentInspection = await inspectExecutionIdentityRun(
+      { executionId: "absent-invoker-execution" },
+      { ...database, now: admittedAt + 1 },
+    );
+    const unknownInspection = await inspectExecutionIdentityRun(
+      { executionId: "unknown-invoker-execution" },
+      { ...database, now: admittedAt + 1 },
+    );
+    expect(inheritedInvokerReads).toBe(0);
+    expect(errors).toEqual([]);
+    expect(absentInspection).toMatchObject({
+      identity: {
+        state: "present",
+        context: {
+          invoker: { state: "absent" },
+          ingress: { state: "present" },
+          applicableGrants: [],
+          assurance: [{ kind: "runtime-binding", strength: "boundary-verified" }],
+          coverageState: "unattributed",
+          missingEvidence: ["invoker.principal"],
+        },
+      },
+      coverage: { state: "unattributed", missingEvidence: ["invoker.principal"] },
+    });
+    expect(unknownInspection).toMatchObject({
+      identity: {
+        state: "present",
+        context: {
+          invoker: { state: "unknown" },
+          coverageState: "unknown",
+          missingEvidence: ["invoker.principal"],
+        },
+      },
+      coverage: { state: "unknown", missingEvidence: ["invoker.principal"] },
+    });
+    const persisted = openOpenClawStateDatabase(database)
+      .db.prepare(
+        "SELECT context_json FROM execution_identity_contexts WHERE execution_id IN (?, ?) ORDER BY execution_id",
+      )
+      .all("absent-invoker-execution", "unknown-invoker-execution");
+    const publicAndStored = JSON.stringify({
+      errors,
+      absentInspection,
+      unknownInspection,
+      persisted,
+    });
+    for (const rawRef of Object.values(inheritedRefs)) {
+      expect(publicAndStored).not.toContain(rawRef);
+    }
+    expect(publicAndStored).not.toContain("private-absent-runtime-reference");
+    expect(publicAndStored).not.toContain("private-unknown-runtime-reference");
+  });
+
+  it("prunes expired identity contexts before preserving exact-envelope conflicts", async () => {
+    const database = databaseFixture();
+    persistExecutionIdentityAdmissionEnvelope(envelopeFor("expired-before-startup", { now: 0 }), {
+      ...database,
+      now: 0,
+    });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
-    const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    const { writer, errors } = startWriter(database);
     await writer.ready;
-
     expect(
       openOpenClawStateDatabase(database)
         .db.prepare("SELECT COUNT(*) AS count FROM execution_identity_contexts")
         .get(),
     ).toEqual({ count: 0 });
-    await writer.stop();
-    expect(errors).toEqual([]);
-  });
-
-  it("uses one pending limit across audit events and identity envelopes", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-writer-");
-    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const { db } = openOpenClawStateDatabase(database);
-    db.exec("BEGIN IMMEDIATE");
-    const errors: string[] = [];
-    const writer = createAuditEventWriter({
-      stateDir,
-      maxPending: 1,
-      onError: (error) => errors.push(error),
-    });
-    expect(writer.record(input())).toBe(true);
-    expect(
-      writer.recordExecutionIdentity(
-        captureWork(
-          captureExecutionIdentityAdmissionEnvelope(
-            {
-              runId: "queue-full-run",
-              agentId: "main",
-              ingress: { kind: "local-cli", boundary: "agent-command.local" },
-              runtime: { kind: "embedded" },
-            },
-            { runtimeInstanceId: "runtime-1" },
-          ),
-        ),
-      ),
-    ).toBe(false);
-    expect(errors).toContain("audit event queue is full (1); dropping metadata");
-    db.exec("ROLLBACK");
-    await writer.stop();
-    expect(listAuditEvents({ database, limit: 10 }).events).toHaveLength(1);
-  });
-
-  it("preserves exact-envelope idempotency and safely reports every canonical conflict", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-writer-");
-    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
     const admittedAt = Date.now();
-    const original = captureExecutionIdentityAdmissionEnvelope(
-      {
-        runId: "ordered-run",
-        agentId: "main",
-        ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
-        runtime: { kind: "embedded" },
+    const identityOptions = {
+      contextId: "ordered-context",
+      executionId: "ordered-execution",
+      now: admittedAt,
+    };
+    const original = envelopeFor("ordered-run", identityOptions, {
+      ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
+    });
+    const factConflict = envelopeFor("ordered-run", identityOptions, {
+      agentId: "other",
+      ingress: {
+        kind: "local-cli",
+        boundary: "agent-command.local",
+        state: "present",
+        rawSourceRef: "raw-conflict-source",
       },
-      {
-        contextId: "ordered-context",
-        executionId: "ordered-execution",
-        now: admittedAt,
-        runtimeInstanceId: "runtime-1",
+      invoker: {
+        state: "present",
+        kind: "local-account",
+        rawPrincipalRef: "raw-conflict-principal",
       },
-    );
-    const factConflict = captureExecutionIdentityAdmissionEnvelope(
-      {
-        runId: "ordered-run",
-        agentId: "other",
-        ingress: {
-          kind: "local-cli",
-          boundary: "agent-command.local",
-          state: "present",
-          rawSourceRef: "raw-conflict-source",
-        },
-        runtime: { kind: "embedded" },
-        invoker: { kind: "local-account", rawPrincipalRef: "raw-conflict-principal" },
-      },
-      {
-        contextId: "ordered-context",
-        executionId: "ordered-execution",
-        now: admittedAt,
-        runtimeInstanceId: "runtime-1",
-      },
-    );
+    });
     const contextIdConflict = { ...original, contextId: "conflicting-context" };
     const createdAtConflict = { ...original, createdAt: admittedAt + 1 };
 
@@ -324,11 +548,7 @@ describe("audit event worker", () => {
     expect(
       writer.recordExecutionIdentity({
         kind: "retry-reference",
-        token: createExecutionIdentityAdmissionToken(original.runId, {
-          contextId: original.contextId,
-          executionId: original.executionId,
-          now: original.createdAt,
-        }),
+        token: createExecutionIdentityAdmissionToken(original.runId, identityOptions),
       }),
     ).toBe(true);
     expect(writer.recordExecutionIdentity(captureWork(contextIdConflict))).toBe(true);
@@ -343,7 +563,7 @@ describe("audit event worker", () => {
       "audit execution identity context conflict",
     ]);
     expect(
-      inspectExecutionIdentityRun({ runId: "ordered-run" }, { ...database, now: admittedAt }),
+      await inspectExecutionIdentityRun({ runId: "ordered-run" }, { ...database, now: admittedAt }),
     ).toMatchObject({
       identity: {
         state: "present",
@@ -363,86 +583,28 @@ describe("audit event worker", () => {
     }
   });
 
-  it("reports a lost durable recovery reference safely without blocking the caller", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-writer-");
-    const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
-    const token = createExecutionIdentityAdmissionToken("raw-run-not-a-secret", {
-      contextId: "context-missing",
-      executionId: "execution-missing",
-      now: 100,
-    });
+  it("keeps schema and insert failures off the admission path", async () => {
+    const envelope = envelopeFor("nonblocking-failure-run");
 
-    const startedAt = performance.now();
-    expect(writer.recordExecutionIdentity({ kind: "retry-reference", token })).toBe(true);
-    expect(performance.now() - startedAt).toBeLessThan(250);
-    await writer.stop();
-
-    expect(errors).toContain("audit execution identity recovery evidence unavailable");
-    expect(JSON.stringify(errors)).not.toContain(token.contextId);
-    expect(JSON.stringify(errors)).not.toContain(token.executionId);
-    expect(JSON.stringify(errors)).not.toContain(token.runId);
-    expect(
-      openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })
-        .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("execution_identity_contexts"),
-    ).toBeUndefined();
-  });
-
-  it("keeps unavailable worker, schema, and insert failures off the admission path", async () => {
-    const envelope = captureExecutionIdentityAdmissionEnvelope(
-      {
-        runId: "nonblocking-failure-run",
-        agentId: "main",
-        ingress: { kind: "local-cli", boundary: "agent-command.local" },
-        runtime: { kind: "embedded" },
-      },
-      { runtimeInstanceId: "runtime-1" },
-    );
-
-    const unavailableErrors: string[] = [];
-    const unavailableWriter = createAuditEventWriter({
-      workerUrl: new URL("./missing-audit-event-writer.worker.ts", import.meta.url),
-      onError: (error) => unavailableErrors.push(error),
-    });
-    await unavailableWriter.ready;
-    const unavailableStartedAt = performance.now();
-    expect(unavailableWriter.recordExecutionIdentity(captureWork(envelope))).toBe(false);
-    expect(performance.now() - unavailableStartedAt).toBeLessThan(250);
-    await unavailableWriter.stop();
-    expect(unavailableErrors).toContain("audit event writer is unavailable; dropping metadata");
-
-    const schemaStateDir = tempDirs.make("openclaw-audit-writer-");
-    const schemaDatabase = { env: { OPENCLAW_STATE_DIR: schemaStateDir } };
+    const schemaDatabase = databaseFixture();
     openOpenClawStateDatabase(schemaDatabase).db.exec(`
       CREATE VIEW execution_identity_contexts AS
       SELECT 'context' AS context_id, 'run' AS run_id, 0 AS created_at,
              'unattributed' AS coverage_state, 2 AS context_bytes, '{}' AS context_json;
     `);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    const schemaErrors: string[] = [];
-    const schemaWriter = createAuditEventWriter({
-      stateDir: schemaStateDir,
-      onError: (error) => schemaErrors.push(error),
-    });
+    const { writer: schemaWriter, errors: schemaErrors } = startWriter(schemaDatabase);
     const schemaStartedAt = performance.now();
     expect(schemaWriter.recordExecutionIdentity(captureWork(envelope))).toBe(true);
     expect(performance.now() - schemaStartedAt).toBeLessThan(250);
+    await schemaWriter.ready;
     await schemaWriter.stop();
     expect(schemaErrors).toContain("audit execution identity persistence failed");
 
-    const insertStateDir = tempDirs.make("openclaw-audit-writer-");
-    const insertDatabase = { env: { OPENCLAW_STATE_DIR: insertStateDir } };
+    const insertDatabase = databaseFixture();
     persistExecutionIdentityAdmissionEnvelope(
-      captureExecutionIdentityAdmissionEnvelope(
-        {
-          runId: "insert-failure-setup",
-          agentId: "main",
-          ingress: { kind: "local-cli", boundary: "agent-command.local" },
-          runtime: { kind: "embedded" },
-        },
-        { runtimeInstanceId: "runtime-setup" },
-      ),
+      envelopeFor("insert-failure-setup", { runtimeInstanceId: "runtime-setup" }),
       insertDatabase,
     );
     const insertDb = openOpenClawStateDatabase(insertDatabase).db;
@@ -453,39 +615,30 @@ describe("audit event worker", () => {
         SELECT RAISE(ABORT, 'raw-trigger-secret');
       END;
     `);
-    const insertErrors: string[] = [];
-    const insertWriter = createAuditEventWriter({
-      stateDir: insertStateDir,
-      onError: (error) => insertErrors.push(error),
-    });
+    const { writer: insertWriter, errors: insertErrors } = startWriter(insertDatabase);
     const insertStartedAt = performance.now();
     expect(insertWriter.recordExecutionIdentity(captureWork(envelope))).toBe(true);
     expect(performance.now() - insertStartedAt).toBeLessThan(250);
+    await insertWriter.ready;
     await insertWriter.stop();
     expect(insertErrors).toContain("audit execution identity persistence failed");
     expect(JSON.stringify(insertErrors)).not.toContain("raw-trigger-secret");
     insertDb.exec("DROP TRIGGER reject_identity_insert;");
     expect(
-      inspectExecutionIdentityRun({ runId: envelope.runId }, insertDatabase).identity,
+      (await inspectExecutionIdentityRun({ runId: envelope.runId }, insertDatabase)).identity,
     ).toMatchObject({ state: "unknown", reasonCode: "run_not_found" });
   });
 
-  it("keeps malformed, serialization, key, and persistence failures nonblocking and redaction-safe", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-writer-");
-    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+  it("keeps malformed, serialization, and key failures nonblocking and redaction-safe", async () => {
+    const database = databaseFixture();
     const rawSecret = "raw-worker-message-secret";
+    persistExecutionIdentityAdmissionEnvelope(envelopeFor("before-key-loss"), database);
+    openOpenClawStateDatabase(database).db.exec("DELETE FROM audit_identity_keys;");
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    const { writer, errors } = startWriter(database);
     const unserializable = {
-      ...captureExecutionIdentityAdmissionEnvelope(
-        {
-          runId: "serialization-run",
-          agentId: "main",
-          ingress: { kind: "local-cli", boundary: "agent-command.local" },
-          runtime: { kind: "embedded" },
-        },
-        { runtimeInstanceId: "runtime-1" },
-      ),
+      ...envelopeFor("serialization-run"),
       ingress: {
         kind: "local-cli",
         boundary: "agent-command.local",
@@ -494,60 +647,25 @@ describe("audit event worker", () => {
       },
     };
     expect(writer.recordExecutionIdentity(captureWork(unserializable as never))).toBe(false);
-    await writer.stop();
-    expect(errors).toContain("audit execution identity envelope could not be queued");
-    expect(JSON.stringify(errors)).not.toContain(rawSecret);
-
-    const malformedErrors: string[] = [];
-    const malformedWriter = createAuditEventWriter({
-      stateDir,
-      onError: (error) => malformedErrors.push(error),
-    });
-    expect(malformedWriter.recordExecutionIdentity({ rawSecret } as never)).toBe(true);
-    await malformedWriter.stop();
-    expect(malformedErrors).toContain("audit execution identity envelope rejected");
-    expect(JSON.stringify(malformedErrors)).not.toContain(rawSecret);
-
-    closeOpenClawStateDatabaseForTest();
-    persistExecutionIdentityAdmissionEnvelope(
-      captureExecutionIdentityAdmissionEnvelope(
-        {
-          runId: "before-key-loss",
-          agentId: "main",
-          ingress: { kind: "local-cli", boundary: "agent-command.local" },
-          runtime: { kind: "embedded" },
-        },
-        { runtimeInstanceId: "runtime-1" },
-      ),
-      database,
-    );
-    openOpenClawStateDatabase(database).db.exec("DELETE FROM audit_identity_keys;");
-    closeOpenClawStateDatabaseForTest();
-    const keyErrors: string[] = [];
-    const keyWriter = createAuditEventWriter({
-      stateDir,
-      onError: (error) => keyErrors.push(error),
-    });
+    expect(writer.recordExecutionIdentity({ rawSecret } as never)).toBe(true);
+    const invalidUnknown = {
+      ...envelopeFor("invalid-unknown-run"),
+      invoker: { state: "unknown", rawPrincipalRef: rawSecret },
+    };
+    expect(writer.recordExecutionIdentity(captureWork(invalidUnknown as never))).toBe(true);
     expect(
-      keyWriter.recordExecutionIdentity(
-        captureWork(
-          captureExecutionIdentityAdmissionEnvelope(
-            {
-              runId: "after-key-loss",
-              agentId: "main",
-              ingress: { kind: "local-cli", boundary: "agent-command.local" },
-              runtime: { kind: "embedded" },
-            },
-            { runtimeInstanceId: rawSecret },
-          ),
-        ),
+      writer.recordExecutionIdentity(
+        captureWork(envelopeFor("after-key-loss", { runtimeInstanceId: rawSecret })),
       ),
     ).toBe(true);
-    await keyWriter.stop();
-    expect(keyErrors).toContain("audit execution identity key unavailable");
-    expect(JSON.stringify(keyErrors)).not.toContain(rawSecret);
+    await writer.ready;
+    await writer.stop();
+    expect(errors).toContain("audit execution identity envelope could not be queued");
+    expect(errors).toContain("audit execution identity envelope rejected");
+    expect(errors).toContain("audit execution identity key unavailable");
+    expect(JSON.stringify(errors)).not.toContain(rawSecret);
     expect(
-      inspectExecutionIdentityRun({ runId: "after-key-loss" }, database).identity,
+      (await inspectExecutionIdentityRun({ runId: "after-key-loss" }, database)).identity,
     ).toMatchObject({ state: "unknown", reasonCode: "run_not_found" });
   });
 });

@@ -1,108 +1,158 @@
-// Litellm tests cover index plugin behavior.
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ProviderAuthMethodNonInteractiveContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  capturePluginRegistration,
+  requireRegisteredProvider,
+  runProviderCatalog,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import type {
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
+import { afterEach, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import plugin from "./index.js";
 
-const LITELLM_DEFAULT_MODEL = {
+const PROXY_URL = "https://litellm.example/v1";
+const DEFAULT_MODEL: ModelDefinitionConfig = {
   id: "claude-opus-4-6",
   name: "Claude Opus 4.6",
   reasoning: true,
   input: ["text", "image"],
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-  },
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 1_000_000,
   maxTokens: 128_000,
 };
-
-function registerProvider() {
-  const captured = capturePluginRegistration(plugin);
-  const provider = captured.providers[0];
-  expect(provider?.id).toBe("litellm");
-  return provider;
+const AUTHORED_MODEL: ModelDefinitionConfig = {
+  ...DEFAULT_MODEL,
+  id: "custom-model",
+  contextWindow: 1000,
+};
+function authored(baseUrl = PROXY_URL, apiKey = "  old-key  "): ModelProviderConfig {
+  return {
+    baseUrl,
+    apiKey,
+    api: "anthropic-messages",
+    request: { allowPrivateNetwork: true },
+    models: [structuredClone(AUTHORED_MODEL)],
+  };
 }
-
-describe("litellm plugin", () => {
-  it("honors --custom-base-url in non-interactive API-key setup", async () => {
-    const provider = registerProvider();
-    const auth = provider?.auth?.[0];
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-litellm-auth-"));
-    const resolveApiKey = vi.fn(async () => ({ key: "litellm-test-key", source: "flag" as const }));
-    const toApiKeyCredential = vi.fn(({ provider: providerId, resolved }) => ({
-      type: "api_key" as const,
-      provider: providerId,
-      key: resolved.key,
-    }));
-
-    try {
-      const result = await auth?.runNonInteractive?.({
-        authChoice: "litellm-api-key",
-        config: {},
-        baseConfig: {},
-        opts: {
-          litellmApiKey: "litellm-test-key",
-          customBaseUrl: "https://litellm.example/v1/",
-        },
-        runtime: {
-          error: vi.fn(),
-          exit: vi.fn(),
-          log: vi.fn(),
-        } as never,
-        agentDir,
-        resolveApiKey,
-        toApiKeyCredential,
-      } as never);
-
-      expect(result).toStrictEqual({
-        auth: {
-          profiles: {
-            "litellm:default": {
-              provider: "litellm",
-              mode: "api_key",
-            },
-          },
-        },
-        agents: {
-          defaults: {
-            models: {
-              "litellm/claude-opus-4-6": {
-                alias: "LiteLLM",
-              },
-            },
-            model: {
-              primary: "litellm/claude-opus-4-6",
-            },
-          },
-        },
-        models: {
-          mode: "merge",
-          providers: {
-            litellm: {
-              baseUrl: "https://litellm.example/v1",
-              api: "openai-completions",
-              models: [LITELLM_DEFAULT_MODEL],
-            },
-          },
-        },
-      });
-      expect(resolveApiKey).toHaveBeenCalledWith({
-        provider: "litellm",
-        flagValue: "litellm-test-key",
-        flagName: "--litellm-api-key",
-        envVar: "LITELLM_API_KEY",
-      });
-      expect(toApiKeyCredential).toHaveBeenCalledWith({
-        provider: "litellm",
-        resolved: { key: "litellm-test-key", source: "flag" },
-      });
-    } finally {
-      rmSync(agentDir, { recursive: true, force: true });
-    }
+function config(
+  providers: Record<string, ModelProviderConfig>,
+  mode: "merge" | "replace" = "merge",
+): OpenClawConfig {
+  return { models: { providers, mode } };
+}
+const provider = () =>
+  requireRegisteredProvider(capturePluginRegistration(plugin).providers, "litellm");
+async function authenticate(
+  cfg: OpenClawConfig,
+  opts: ProviderAuthMethodNonInteractiveContext["opts"] = {},
+) {
+  return provider().auth[0]?.runNonInteractive?.({
+    authChoice: "litellm-api-key",
+    config: cfg,
+    baseConfig: cfg,
+    opts,
+    runtime: createRuntimeSpies(),
+    resolveApiKey: async () => ({ key: "litellm-test-key", source: "profile" }),
+    toApiKeyCredential: () => null,
   });
+}
+afterEach(() => {
+  vi.unstubAllGlobals();
+  clearLiveCatalogCacheForTests();
+});
+
+it.each([false, true, "not-a-url", "localhost:4000", "ftp://litellm.example"])(
+  "preserves valid proxy settings and rejects invalid override %s",
+  async (input) => {
+    const canonical = input === true;
+    const customBaseUrl = typeof input === "string" ? input : undefined;
+    const alias = authored("https://old.example/v1");
+    const selected = canonical ? authored("https://canonical.example/v1", "canonical-key") : alias;
+    if (canonical) {
+      selected.models[0] = { ...AUTHORED_MODEL, params: { temperature: 0.3 } };
+    }
+    const expected = {
+      ...structuredClone(selected),
+      api: "openai-completions",
+      apiKey: canonical ? "canonical-key" : "old-key",
+    };
+    const result = await authenticate(
+      config({ LiteLLM: alias, ...(canonical ? { litellm: selected } : {}) }),
+      { customBaseUrl },
+    );
+    if (customBaseUrl) {
+      expect(result).toBeNull();
+    } else {
+      expect(result?.models?.providers).toStrictEqual({ litellm: expected });
+    }
+  },
+);
+
+it.each([
+  [undefined, "http://localhost:4000/v1/models"],
+  ["https://litellm.example", `${PROXY_URL}/models`],
+  [" https://proxy.example/litellm/v1// ", "https://proxy.example/litellm/v1/models"],
+  [PROXY_URL, `${PROXY_URL}/models`, "LiteLLM"],
+  [PROXY_URL, `${PROXY_URL}/models`, "LiteLLM", "https://litellm.example"],
+] as const)(
+  "discovers models from %j at %j (provider %j, canonical URL %j)",
+  async (baseUrl, endpoint, key: "litellm" | "LiteLLM" = "litellm", canonicalBaseUrl?: string) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        input === endpoint
+          ? Response.json({ data: [{ id: "proxy-model" }] })
+          : new Response("Not Found", { status: 404 }),
+      ),
+    );
+    const result = await runProviderCatalog({
+      provider: provider(),
+      config: baseUrl
+        ? config({
+            [key]: { baseUrl, models: [] },
+            ...(canonicalBaseUrl ? { litellm: { baseUrl: canonicalBaseUrl, models: [] } } : {}),
+          })
+        : {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: "LITELLM_API_KEY", discoveryApiKey: "sk-test" }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    });
+    expect(result).toMatchObject({
+      provider: { models: [expect.objectContaining({ id: "proxy-model" })] },
+      outcomes: [{ provider: "litellm", status: "ready" }],
+    });
+  },
+);
+
+it.each([
+  [PROXY_URL, [], {}],
+  ["http://localhost:4000", [DEFAULT_MODEL], {}],
+  [PROXY_URL, [AUTHORED_MODEL, DEFAULT_MODEL], config({ litellm: authored() }, "replace")],
+] as const)("configures %s without losing authored models", async (baseUrl, models, cfg) => {
+  const customBaseUrl = baseUrl === PROXY_URL ? `${baseUrl}/` : undefined;
+  const result = await authenticate(cfg, { litellmApiKey: "litellm-test-key", customBaseUrl });
+  expect(result?.auth?.profiles).toStrictEqual({
+    "litellm:default": { provider: "litellm", mode: "api_key" },
+  });
+  expect(result?.agents?.defaults).toStrictEqual({
+    models: { "litellm/claude-opus-4-6": { alias: "LiteLLM" } },
+    model: { primary: "litellm/claude-opus-4-6" },
+  });
+  expect(result?.models).toStrictEqual(
+    config(
+      {
+        litellm: {
+          baseUrl,
+          api: "openai-completions",
+          models: [...models],
+          ...("models" in cfg ? { apiKey: "old-key", request: { allowPrivateNetwork: true } } : {}),
+        },
+      },
+      "models" in cfg ? "replace" : "merge",
+    ).models,
+  );
 });

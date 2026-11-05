@@ -10,7 +10,6 @@ import {
   isAuthErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
-  isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover/classify.js";
@@ -79,22 +78,6 @@ function isLiveBillingDrift(error: unknown): boolean {
   return isBillingErrorMessage(raw) || isAnthropicBillingError(raw);
 }
 
-/** Returns whether an error is expected live rate-limit drift. */
-function isLiveRateLimitDrift(error: unknown): boolean {
-  const raw = liveProviderErrorText(error);
-  return isRateLimitErrorMessage(raw) || isApiKeyRateLimitError(raw);
-}
-
-/** Returns whether an error is expected live timeout drift. */
-function isLiveTimeoutDrift(error: unknown): boolean {
-  return isTimeoutErrorMessage(liveProviderErrorText(error));
-}
-
-/** Returns whether an error is expected live missing-model drift. */
-function isLiveModelNotFoundDrift(error: unknown): boolean {
-  return isModelNotFoundErrorMessage(liveProviderErrorText(error));
-}
-
 /** Returns whether an error is expected upstream/provider availability drift. */
 function isLiveProviderUnavailableDrift(error: unknown): boolean {
   const raw = liveProviderErrorText(error);
@@ -115,6 +98,7 @@ function isLiveProviderUnavailableDrift(error: unknown): boolean {
     msg.includes("unable to access non-serverless model") ||
     msg.includes("create and start a new dedicated endpoint") ||
     msg.includes("no available capacity was found for the model") ||
+    msg.includes("upstream request failed: model is unavailable") ||
     (msg.includes("502") && msg.includes("internal server error"))
   );
 }
@@ -133,16 +117,19 @@ export function shouldSkipLiveProviderDrift(
   if (options.allowAuth && isLiveAuthDrift(options.error)) {
     return { reason: "auth", label: "auth drift" };
   }
-  if (options.allowRateLimit && isLiveRateLimitDrift(options.error)) {
+  if (options.allowRateLimit && isApiKeyRateLimitError(liveProviderErrorText(options.error))) {
     return { reason: "rate-limit", label: "rate limit" };
   }
   if (options.allowProviderUnavailable && isLiveProviderUnavailableDrift(options.error)) {
     return { reason: "provider-unavailable", label: "provider unavailable" };
   }
-  if (options.allowTimeout && isLiveTimeoutDrift(options.error)) {
+  if (options.allowTimeout && isTimeoutErrorMessage(liveProviderErrorText(options.error))) {
     return { reason: "timeout", label: "timeout" };
   }
-  if (options.allowModelNotFound && isLiveModelNotFoundDrift(options.error)) {
+  if (
+    options.allowModelNotFound &&
+    isModelNotFoundErrorMessage(liveProviderErrorText(options.error))
+  ) {
     return { reason: "model-not-found", label: "model not found" };
   }
   return undefined;

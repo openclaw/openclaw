@@ -1,5 +1,4 @@
-// Channel action schemas describe plugin-declared actions available through channel UIs.
-
+export { imageResultFromFile } from "../agents/tool-image-result.js";
 export {
   createUnionActionGate,
   listTokenSourcedAccounts,
@@ -7,7 +6,6 @@ export {
 export { resolveReactionMessageId } from "../channels/plugins/actions/reaction-message-id.js";
 export {
   createActionGate,
-  imageResultFromFile,
   jsonResult,
   readNonNegativeIntegerParam,
   parseAvailableTags,
@@ -16,7 +14,7 @@ export {
   readReactionParams,
   readStringArrayParam,
   readStringOrNumberParam,
-  readStringParam,
+  readToolStringParam as readStringParam,
   ToolAuthorizationError,
 } from "../agents/tools/common.js";
 export type { ActionGate } from "../agents/tools/common.js";

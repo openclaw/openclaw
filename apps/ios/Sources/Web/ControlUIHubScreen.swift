@@ -1,0 +1,187 @@
+import OpenClawKit
+import SwiftUI
+
+enum ControlUIHubPage {
+    case desktop(source: String?, session: String?)
+    case terminal
+
+    var title: Text {
+        switch self {
+        case .desktop: Text("Desktop")
+        case .terminal: Text("Terminal")
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .desktop: "display"
+        case .terminal: "terminal"
+        }
+    }
+
+    var unavailableTitle: Text {
+        switch self {
+        case .desktop: Text("Desktop needs a connected gateway")
+        case .terminal: Text("Terminal needs a connected gateway")
+        }
+    }
+
+    var unavailableDetail: Text {
+        switch self {
+        case .desktop: Text("Connect to your gateway to view an observable machine.")
+        case .terminal: Text("Connect to your gateway to open a shell in the agent workspace.")
+        }
+    }
+
+    func url(config: GatewayConnectConfig?) -> URL? {
+        guard let path = self.path else { return nil }
+        return AuthenticatedControlUI.pageURL(config: config, path: path, queryItems: [])
+    }
+
+    @MainActor
+    func authUserScript(config: GatewayConnectConfig?, legacyCredentials: [String: String]? = nil) -> String? {
+        AuthenticatedControlUI.authUserScript(
+            config: config,
+            pageURL: self.url(config: config),
+            legacyCredentials: legacyCredentials)
+    }
+
+    @MainActor
+    func authUserScript(config: GatewayConnectConfig?, storedOperatorToken: String?) -> String? {
+        AuthenticatedControlUI.authUserScript(
+            config: config,
+            pageURL: self.url(config: config),
+            storedOperatorToken: storedOperatorToken)
+    }
+
+    func webContentIdentity(config: GatewayConnectConfig?, storedOperatorToken: String?) -> Int {
+        let identity = AuthenticatedControlUI.webContentIdentity(
+            config: config,
+            storedOperatorToken: storedOperatorToken,
+            authorizationRevision: config?.ingressAuthorization?.revision)
+        guard case .desktop = self else { return identity }
+        var hasher = Hasher()
+        hasher.combine(identity)
+        hasher.combine(self.path)
+        return hasher.finalize()
+    }
+
+    private var path: String? {
+        switch self {
+        case .terminal:
+            return "/focus/terminal"
+        case let .desktop(source, session):
+            for (kind, value) in [("source", source), ("session", session)] {
+                let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard !trimmed.isEmpty else { continue }
+                guard let encoded = AuthenticatedControlUI.percentEncodedPathSegment(trimmed) else { return nil }
+                return "/focus/desktop/\(kind)/\(encoded)"
+            }
+            return "/focus/desktop"
+        }
+    }
+}
+
+/// Authenticated, origin-locked Desktop and Terminal pages share native chrome
+/// and the offline fallback; the page owns its route and reload identity.
+struct ControlUIHubScreen: View {
+    @Environment(NodeAppModel.self) private var appModel
+    @State private var failedAccessBoundaryIdentity: Int?
+    let page: ControlUIHubPage
+    var headerSidebarAction: OpenClawSidebarHeaderAction?
+    var usesNativeNavigationChrome = false
+    var gatewayAction: (() -> Void)?
+
+    var body: some View {
+        let config = self.appModel.activeGatewayConnectConfig
+        let storedOperatorToken = AuthenticatedControlUI.storedOperatorToken(config: config)
+        let nativeAuthProvider = IOSDashboardNativeGatewayAuthProvider(appModel: self.appModel, config: config)
+        let authorization = config?.ingressAuthorization
+        let webContentIdentity = self.page.webContentIdentity(
+            config: config, storedOperatorToken: storedOperatorToken)
+        let url = self.page.url(config: config)
+        let accessCookieAdmission = AuthenticatedControlUI.dashboardAccessCookieAdmission(
+            url: url,
+            requiresCookie: authorization != nil,
+            cookieForURL: { authorization?.dashboardCookie($0) })
+        let authScript: String?
+        let authScriptProvider: (@MainActor () async -> String?)?
+        if authorization != nil {
+            authScript = self.page.authUserScript(config: config)
+            authScriptProvider = {
+                let credentials = await nativeAuthProvider?.legacyCredentials()
+                return self.page.authUserScript(config: config, legacyCredentials: credentials)
+            }
+        } else {
+            authScript = self.page.authUserScript(config: config, storedOperatorToken: storedOperatorToken)
+            authScriptProvider = nil
+        }
+        return ZStack {
+            OpenClawProBackground()
+            if let url,
+               accessCookieAdmission.isAvailable,
+               self.failedAccessBoundaryIdentity != webContentIdentity
+            {
+                AuthenticatedControlUIWebView(
+                    url: url,
+                    authScript: authScript,
+                    tls: config?.tls,
+                    authScriptProvider: authScriptProvider,
+                    nativeGatewayAuthProvider: nativeAuthProvider,
+                    basicProxyCredentialProvider: {
+                        AuthenticatedControlUI.basicProxyCredential(config: config)
+                    },
+                    accessCookie: accessCookieAdmission.cookie,
+                    accessAdmissionIsCurrent: authorization.map { authorization in
+                        { authorization.isCurrent() }
+                    },
+                    accessResponseCheck: authorization?.checkResponse,
+                    onAccessCookieBoundaryFailure: { self.failedAccessBoundaryIdentity = webContentIdentity })
+                    // Unrelated SwiftUI updates must not reload a live desktop or shell.
+                        .id(webContentIdentity)
+                        .ignoresSafeArea(.container, edges: .bottom)
+            } else {
+                self.unavailableCard
+            }
+        }
+        .navigationTitle(self.page.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(
+            self.usesNativeNavigationChrome || self.headerSidebarAction != nil ? .visible : .hidden,
+            for: .navigationBar)
+        .toolbar {
+            if self.usesNativeNavigationChrome, let gatewayAction {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: gatewayAction) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .font(OpenClawType.subheadSemiBold)
+                    }
+                    .accessibilityLabel("Gateway settings")
+                }
+            }
+            if let headerSidebarAction {
+                OpenClawSidebarToolbarItem(action: headerSidebarAction, placement: .topBarLeading)
+            }
+        }
+    }
+
+    private var unavailableCard: some View {
+        VStack(spacing: 12) {
+            ProIconBadge(systemName: self.page.symbol, color: OpenClawBrand.accent)
+            self.page.unavailableTitle
+                .font(OpenClawType.subheadSemiBold)
+            self.page.unavailableDetail
+                .font(OpenClawType.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            if let gatewayAction {
+                Button(action: gatewayAction) {
+                    Text("Open Gateway Settings")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                .openClawProminentButton()
+            }
+        }
+        .padding(24)
+    }
+}

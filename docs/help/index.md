@@ -14,6 +14,10 @@ Fastest path to unstuck, by symptom:
 - [Gateway troubleshooting](/gateway/troubleshooting) - gateway-specific issues
 - [Doctor](/gateway/doctor) - `openclaw doctor`: health checks, config migrations, repair steps
 
+## Support
+
+For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/). Start with the self-service guides above, or see [Get support](/help/support) for what to include and where to report bugs or security issues.
+
 ## FAQ
 
 - [FAQ](/help/faq) - day-to-day concepts and operational questions
@@ -24,13 +28,14 @@ Fastest path to unstuck, by symptom:
 
 - [Environment variables](/help/environment) - where OpenClaw loads env vars and precedence
 - [Diagnostics flags](/diagnostics/flags) - runtime diagnostics and verbose modes
-- [Node + tsx crash](/debug/node-issue) - specific Node / tsx runtime crash scenarios
+- [Node and tsx startup errors](/help/debugging#node-and-tsx-startup-errors) - capture runtime versions and the stack trace for startup failures
 
 ## Testing
 
 - [Testing](/help/testing) - test suites and Docker runners
 - [Update and plugin tests](/help/testing-updates-plugins) - package update, migration, and plugin install validation
 - [Live tests](/help/testing-live) - network-touching provider and CLI smokes
+- [Scripts](/help/scripts) - helper scripts under `scripts/` and when to prefer the CLI
 
 ## Community and meta
 

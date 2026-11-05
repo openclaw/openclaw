@@ -1,4 +1,3 @@
-// Telegram plugin module implements request timeouts behavior.
 import {
   finiteSecondsToTimerSafeMilliseconds,
   MAX_TIMER_TIMEOUT_MS,
@@ -36,14 +35,15 @@ const TELEGRAM_REQUEST_TIMEOUTS_MS = {
   setwebhook: 15_000,
 } as const;
 
-function resolveConfiguredTelegramRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
+function resolveConfiguredTimeoutMs(timeoutSeconds: unknown, minimumMs: number): number {
   if (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds)) {
-    return undefined;
+    return Math.max(minimumMs, 0);
   }
-  return (
+  return Math.max(
+    minimumMs,
     finiteSecondsToTimerSafeMilliseconds(Math.max(1, timeoutSeconds), {
       floorSeconds: true,
-    }) ?? MAX_TIMER_TIMEOUT_MS
+    }) ?? MAX_TIMER_TIMEOUT_MS,
   );
 }
 
@@ -60,7 +60,7 @@ export function resolveTelegramRequestTimeoutMs(
   const baseTimeoutMs =
     TELEGRAM_REQUEST_TIMEOUTS_MS[method as keyof typeof TELEGRAM_REQUEST_TIMEOUTS_MS] ??
     TELEGRAM_DEFAULT_REQUEST_TIMEOUT_MS;
-  return Math.max(baseTimeoutMs, resolveConfiguredTelegramRequestTimeoutMs(timeoutSeconds) ?? 0);
+  return resolveConfiguredTimeoutMs(timeoutSeconds, baseTimeoutMs);
 }
 
 export function resolveTelegramLongPollTimeoutSeconds(timeoutSeconds: unknown): number {
@@ -77,10 +77,5 @@ export function resolveTelegramLongPollTimeoutSeconds(timeoutSeconds: unknown): 
 }
 
 export function resolveTelegramStartupProbeTimeoutMs(timeoutSeconds: unknown): number {
-  const getMeTimeoutMs = resolveTelegramRequestTimeoutMs("getme") ?? 15_000;
-  if (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds)) {
-    return getMeTimeoutMs;
-  }
-  const configuredTimeoutMs = resolveConfiguredTelegramRequestTimeoutMs(timeoutSeconds) ?? 1_000;
-  return Math.max(getMeTimeoutMs, configuredTimeoutMs);
+  return resolveConfiguredTimeoutMs(timeoutSeconds, TELEGRAM_REQUEST_TIMEOUTS_MS.getme);
 }

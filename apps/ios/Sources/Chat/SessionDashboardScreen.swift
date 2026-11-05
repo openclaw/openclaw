@@ -5,23 +5,74 @@ import SwiftUI
 struct SessionDashboardScreen: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
+    @State private var showsDesktop = false
+    @State private var failedAccessBoundaryIdentity: Int?
     let sessionKey: String
+    let agentId: String?
 
     var body: some View {
         let config = self.appModel.activeGatewayConnectConfig
         let storedOperatorToken = AuthenticatedControlUI.storedOperatorToken(config: config)
-        ZStack {
+        let nativeAuthProvider = IOSDashboardNativeGatewayAuthProvider(appModel: self.appModel, config: config)
+        let authorization = config?.ingressAuthorization
+        let webContentIdentity = AuthenticatedControlUI.webContentIdentity(
+            config: config,
+            storedOperatorToken: storedOperatorToken,
+            authorizationRevision: authorization?.revision)
+        let url = Self.dashboardURL(config: config, sessionKey: self.sessionKey, agentId: self.agentId)
+        let accessCookieAdmission = AuthenticatedControlUI.dashboardAccessCookieAdmission(
+            url: url,
+            requiresCookie: authorization != nil,
+            cookieForURL: { authorization?.dashboardCookie($0) })
+        let authScript: String?
+        let authScriptProvider: (@MainActor () async -> String?)?
+        if authorization != nil {
+            authScript = AuthenticatedControlUI.authUserScript(
+                config: config,
+                pageURL: url,
+                usesNativeNavigationChrome: true)
+            authScriptProvider = {
+                let credentials = await nativeAuthProvider?.legacyCredentials()
+                return AuthenticatedControlUI.authUserScript(
+                    config: config,
+                    pageURL: url,
+                    legacyCredentials: credentials,
+                    usesNativeNavigationChrome: true)
+            }
+        } else {
+            authScript = AuthenticatedControlUI.authUserScript(
+                config: config,
+                pageURL: url,
+                storedOperatorToken: storedOperatorToken,
+                usesNativeNavigationChrome: true)
+            authScriptProvider = nil
+        }
+        return ZStack {
             OpenClawProBackground()
-            if let url = Self.dashboardURL(config: config, sessionKey: self.sessionKey) {
+            if let url,
+               accessCookieAdmission.isAvailable,
+               self.failedAccessBoundaryIdentity != webContentIdentity
+            {
                 AuthenticatedControlUIWebView(
                     url: url,
-                    authScript: AuthenticatedControlUI.authUserScript(
-                        config: config,
-                        pageURL: url,
-                        storedOperatorToken: storedOperatorToken))
-                    .id(AuthenticatedControlUI.webContentIdentity(
-                        config: config,
-                        storedOperatorToken: storedOperatorToken))
+                    authScript: authScript,
+                    tls: config?.tls,
+                    authScriptProvider: authScriptProvider,
+                    nativeGatewayAuthProvider: nativeAuthProvider,
+                    basicProxyCredentialProvider: {
+                        AuthenticatedControlUI.basicProxyCredential(config: config)
+                    },
+                    allowedMainFramePathPrefix: Self.dashboardPathPrefix(config: config),
+                    onMainFrameNavigationOutsideScope: {
+                        self.dismiss()
+                    },
+                    accessCookie: accessCookieAdmission.cookie,
+                    accessAdmissionIsCurrent: authorization.map { authorization in
+                        { authorization.isCurrent() }
+                    },
+                    accessResponseCheck: authorization?.checkResponse,
+                    onAccessCookieBoundaryFailure: { self.failedAccessBoundaryIdentity = webContentIdentity })
+                    .id(webContentIdentity)
                     .ignoresSafeArea(.container, edges: .bottom)
             } else {
                 self.unavailableCard
@@ -30,6 +81,18 @@ struct SessionDashboardScreen: View {
         .navigationTitle("Dashboard")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if self.appModel.isDesktopObserveAvailable {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        self.showsDesktop = true
+                    } label: {
+                        Image(systemName: "display")
+                            .font(OpenClawType.subheadSemiBold)
+                    }
+                    .accessibilityLabel("Open Desktop")
+                    .accessibilityIdentifier("SessionDashboard.Desktop")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     self.dismiss()
@@ -38,6 +101,9 @@ struct SessionDashboardScreen: View {
                         .font(OpenClawType.subheadSemiBold)
                 }
             }
+        }
+        .navigationDestination(isPresented: self.$showsDesktop) {
+            ControlUIHubScreen(page: .desktop(source: nil, session: self.sessionKey), usesNativeNavigationChrome: true)
         }
     }
 
@@ -54,15 +120,66 @@ struct SessionDashboardScreen: View {
         .padding(24)
     }
 
-    /// Converts the active gateway WebSocket endpoint into the one-shot
-    /// authenticated Control UI route. Credentials stay in the startup script.
-    static func dashboardURL(config: GatewayConnectConfig?, sessionKey: String) -> URL? {
+    /// Converts the active gateway WebSocket endpoint into the shell-free
+    /// dashboard focus route. Credentials stay in the startup script.
+    static func dashboardURL(
+        config: GatewayConnectConfig?,
+        sessionKey: String,
+        agentId: String? = nil) -> URL?
+    {
+        let normalizedSessionKey = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalizedSessionKey.lowercased() == "global" {
+            let normalizedAgentId = agentId?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() ?? ""
+            guard !normalizedAgentId.isEmpty,
+                  let encodedAgent = Self.encodedRouteSegment(normalizedAgentId)
+            else { return nil }
+            return AuthenticatedControlUI.pageURL(
+                config: config,
+                path: ["focus", "dashboard", encodedAgent].joined(separator: "/"),
+                queryItems: [])
+        }
+
+        let parts = normalizedSessionKey
+            .split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count >= 3,
+              parts[0].lowercased() == "agent",
+              parts.dropFirst().allSatisfy({ !$0.isEmpty })
+        else { return nil }
+
+        let encodedSegments = parts.dropFirst().map { Self.encodedRouteSegment(String($0)) }
+        let routeSegments = encodedSegments.compactMap(\.self)
+        guard routeSegments.count == encodedSegments.count,
+              let encodedAgent = routeSegments.first
+        else { return nil }
+        let route = (["focus", "dashboard", encodedAgent, "~key"] + routeSegments.dropFirst())
+            .joined(separator: "/")
+        return AuthenticatedControlUI.pageURL(
+            config: config,
+            path: route,
+            queryItems: [])
+    }
+
+    private static func encodedRouteSegment(_ value: String) -> String? {
+        if value == "." {
+            return "~dot"
+        }
+        if value == ".." {
+            return "~dotdot"
+        }
+        guard let encoded = AuthenticatedControlUI.percentEncodedPathSegment(value) else { return nil }
+        var escaped = encoded.replacingOccurrences(of: ".", with: "%2E")
+        if escaped.hasPrefix("~") {
+            escaped.insert("~", at: escaped.startIndex)
+        }
+        return escaped
+    }
+
+    static func dashboardPathPrefix(config: GatewayConnectConfig?) -> String? {
         AuthenticatedControlUI.pageURL(
             config: config,
-            path: "/chat",
-            queryItems: [
-                URLQueryItem(name: "session", value: sessionKey),
-                URLQueryItem(name: "face", value: "dashboard"),
-            ])
+            path: "focus/dashboard",
+            queryItems: [])?.path
     }
 }

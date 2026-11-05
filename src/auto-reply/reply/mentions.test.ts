@@ -1,6 +1,4 @@
-import { describe, expect, it } from "vitest";
-// Tests mention detection and command trigger matching.
-import type { MsgContext } from "../templating.js";
+import { expect, it } from "vitest";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
@@ -8,134 +6,114 @@ import {
   stripStructuralPrefixes,
 } from "./mentions.js";
 
-describe("stripStructuralPrefixes", () => {
-  it("returns empty string for undefined input at runtime", () => {
-    expect(stripStructuralPrefixes(undefined as unknown as string)).toBe("");
-  });
-
-  it("returns empty string for empty input", () => {
-    expect(stripStructuralPrefixes("")).toBe("");
-  });
-
-  it("strips sender prefix labels", () => {
-    expect(stripStructuralPrefixes("John: hello")).toBe("hello");
-  });
-
-  it("preserves colon-delimited slash commands", () => {
-    expect(stripStructuralPrefixes("/config:json")).toBe("/config:json");
-    expect(stripStructuralPrefixes("/reset: soft")).toBe("/reset: soft");
-    expect(stripStructuralPrefixes("/compact: focus on decisions")).toBe(
-      "/compact: focus on decisions",
-    );
-  });
-
-  it("strips direct envelope display labels with handles", () => {
-    expect(
-      stripStructuralPrefixes("[Telegram Alice (@alice) id:123] Alice (@alice): /status"),
-    ).toBe("/status");
-  });
-
-  it("strips direct envelope display labels with non-ascii characters", () => {
-    expect(stripStructuralPrefixes("[Telegram Jörg] Jörg: /status")).toBe("/status");
-    expect(stripStructuralPrefixes("[Telegram 山田] 山田: /status")).toBe("/status");
-  });
-
-  it("strips slash-like display labels only after an envelope", () => {
-    expect(stripStructuralPrefixes("[Telegram /reset id:123] /reset: hello")).toBe("hello");
-  });
-
-  it("passes through plain text", () => {
-    expect(stripStructuralPrefixes("just a message")).toBe("just a message");
-  });
-
-  it("does not treat a payload marker literal as structure", () => {
-    const body = "please explain [Current message - respond to this] /status";
-    expect(stripStructuralPrefixes(body)).toBe(body);
-  });
-
-  it("does not mine commands from ambiguous flat history", () => {
-    const body = [
-      "[Chat messages since your last reply - for context]",
-      "Other: quoted [Current message - respond to this] /reset",
-      "",
-      "[Current message - respond to this]",
-      "Owner: /status",
-    ].join("\n");
-    expect(stripStructuralPrefixes(body)).toBe(body);
-  });
-
-  it("preserves real line breaks in slash commands for downstream command parsing", () => {
-    expect(stripStructuralPrefixes("/reset soft\nre-read persona files")).toBe(
-      "/reset soft\nre-read persona files",
-    );
-    expect(stripStructuralPrefixes("/skill demo\nline two")).toBe("/skill demo\nline two");
-    expect(stripStructuralPrefixes("/reset \\nsoft")).toBe("/reset soft");
-  });
+const ambiguous =
+  "[Recent chat messages - for context]\nOther: quoted [Current message - respond to this] /reset\n\n[Current message - respond to this]\nOwner: /status";
+it.each([
+  ["", ""],
+  ["[Telegram /reset id:123] /reset: hello", "hello"],
+  ["please explain [Current message - respond to this] /status"],
+  [ambiguous],
+  ["/reset soft\nre-read persona files"],
+  ["/reset \\nsoft", "/reset soft"],
+])("strips only structural prefixes: %j", (text, expected = text) => {
+  expect(stripStructuralPrefixes(text)).toBe(expected);
 });
 
-describe("derived Unicode mention matching", () => {
-  function configForName(name: string) {
-    return {
-      agents: {
-        list: [{ id: "unicode-agent", identity: { name } }],
-      },
-    } as Parameters<typeof buildMentionRegexes>[0];
+type MentionCase = [string, string[], string[], [string, string][], string?];
+it.each<MentionCase>([
+  [
+    "包",
+    ["@包 你好", "包 你好"],
+    ["前包後", "包みを開ける", "包\u0301"],
+    [
+      ["@包 你好", "你好"],
+      ["包みを開ける", "包みを開ける"],
+    ],
+  ],
+  [
+    "Papillon🦋Bot",
+    ["Papillon🦋Bot help", "papillon bot help", "PapillonBot help"],
+    ["Papillon🦋🦋Bot /status", "papillon...bot help"],
+    [
+      ["Papillon🦋🦋Bot /status", "Papillon🦋🦋Bot /status"],
+      ["Papillon🦋Bot /status", "/status"],
+    ],
+  ],
+  ["Clawd ・🦋 Bot", ["clawd ・🦋 bot status"], ["clawd bot status", "clawd🦋bot status"], []],
+  ["क‍ ख", ["क ख नमस्ते"], ["कख नमस्ते"], [["क‍ ख /status", "/status"]]],
+  ["Clawd", ["👩‍👧 status", "clawd status"], [], [], "👩‍👧"],
+  [
+    "Bot1️⃣",
+    ["bot 早安", "bot1️⃣ 早安"],
+    ["bot1 早安", "botx 早安", "bot3️⃣ 早安"],
+    [
+      ["bot /status", "/status"],
+      ["bot1️⃣ /status", "/status"],
+      ["bot1 /status", "bot1 /status"],
+      ["bot3️⃣ /status", "bot3️⃣ /status"],
+    ],
+  ],
+  [
+    "Clawd 🦋 ★ Bot",
+    ["clawd 🦋 ★ bot status", "clawd🦋★bot status", "clawd bot status"],
+    ["clawd 🦋 🦋 ★ bot status", "clawdbot status", "@clawdbot status"],
+    [],
+  ],
+  [
+    "क‍",
+    ["क नमस्ते"],
+    ["कख नमस्ते"],
+    [
+      ["क‍ /status", "/status"],
+      ["क /status", "/status"],
+      ["क‍ख नमस्ते", "क‍ख नमस्ते"],
+    ],
+  ],
+  ["‍क", ["क नमस्ते"], [], [["‍क /status", "/status"]]],
+])("matches and strips %s only at Unicode boundaries", (name, matches, rejects, strips, emoji) => {
+  const cfg = { agents: { entries: { agent: { identity: { name, emoji } } } } };
+  const regexes = buildMentionRegexes(cfg, "agent");
+  for (const text of matches) {
+    expect(matchesMentionPatterns(text, regexes), text).toBe(true);
   }
-
-  it.each(["包", "苏苏", "あ", "김", "Jörg", "Б", "ع", "क"])(
-    "matches standalone %s and rejects Unicode substrings",
-    (name) => {
-      const regexes = buildMentionRegexes(configForName(name), "unicode-agent");
-
-      expect(matchesMentionPatterns(`@${name} 你好`, regexes)).toBe(true);
-      expect(matchesMentionPatterns(`${name} 你好`, regexes)).toBe(true);
-      expect(matchesMentionPatterns(`前${name}後`, regexes)).toBe(false);
-    },
-  );
-
-  it("does not match a Han name inside mixed Han/kana words", () => {
-    const regexes = buildMentionRegexes(configForName("包"), "unicode-agent");
-
-    expect(matchesMentionPatterns("包みを開ける", regexes)).toBe(false);
-    expect(matchesMentionPatterns("面包好吃", regexes)).toBe(false);
-  });
-
-  it("does not match a name inside a grapheme with combining marks", () => {
-    expect(
-      matchesMentionPatterns("कि", buildMentionRegexes(configForName("क"), "unicode-agent")),
-    ).toBe(false);
-    expect(
-      matchesMentionPatterns("e\u0301", buildMentionRegexes(configForName("e"), "unicode-agent")),
-    ).toBe(false);
-  });
-
-  it("uses the same Unicode boundaries when stripping derived mentions", () => {
-    const cfg = configForName("包");
-
-    expect(stripMentions("@包 你好", {} as MsgContext, cfg, "unicode-agent")).toBe("你好");
-    expect(stripMentions("包みを開ける", {} as MsgContext, cfg, "unicode-agent")).toBe(
-      "包みを開ける",
-    );
-  });
-
-  it("keeps explicit configured patterns on their existing regex flags", () => {
-    const regexes = buildMentionRegexes({
-      messages: { groupChat: { mentionPatterns: [String.raw`\bopenclaw\b`] } },
-    });
-
-    expect(regexes[0]?.flags).toBe("i");
-  });
+  for (const text of rejects) {
+    expect(matchesMentionPatterns(text, regexes), text).toBe(false);
+  }
+  for (const [text, expected] of strips) {
+    expect(stripMentions(text, {}, cfg, "agent"), text).toBe(expected);
+  }
 });
 
-describe("CJK single-char mention matching (regression #87303)", () => {
-  const cfgWithCjkName = {
-    agents: {
-      list: [{ id: "cjk-agent", identity: { name: "包" } }],
-    },
-  } as Parameters<typeof buildMentionRegexes>[0];
+it("keeps a slash command's line breaks and indentation when it strips mentions", () => {
+  const cfg = { messages: { groupChat: { mentionPatterns: ["@openclaw"] } } };
+  expect(stripMentions("@openclaw /loop 1h check these:\n- CI on main\n  - lint", {}, cfg)).toBe(
+    "/loop 1h check these:\n- CI on main\n  - lint",
+  );
+  expect(stripMentions("@openclaw   what changed\n since   yesterday?", {}, cfg)).toBe(
+    "what changed since yesterday?",
+  );
+});
 
-  it("matches the reported standalone Han identity", () => {
-    const regexes = buildMentionRegexes(cfgWithCjkName, "cjk-agent");
-    expect(matchesMentionPatterns("@包 你好", regexes)).toBe(true);
+it("keeps explicit configured patterns on their existing regex flags", () => {
+  const regexes = buildMentionRegexes({
+    messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
   });
+  expect(regexes[0]?.flags).toBe("i");
+});
+
+it("derives no pattern from an identity that normalization empties", () => {
+  const regexes = buildMentionRegexes(
+    { agents: { entries: { agent: { identity: { name: "\u200D" } } } } },
+    "agent",
+  );
+  expect(regexes).toHaveLength(0);
+  expect(matchesMentionPatterns("hello!", regexes)).toBe(false);
+});
+
+it("rejects a long joined suffix without quadratic stripping", () => {
+  const cfg = { agents: { entries: { agent: { identity: { name: "Bot🦋" } } } } };
+  const message = "Bot" + "\u200D".repeat(32_768) + "X /status";
+  const startedAt = performance.now();
+  expect(stripMentions(message, {}, cfg, "agent")).toBe(message);
+  expect(performance.now() - startedAt).toBeLessThan(500);
 });

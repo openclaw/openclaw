@@ -1,8 +1,10 @@
+import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
-import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
-import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
-import { normalizeMediaProviderId } from "./provider-id.js";
+import {
+  listImageCapableConfiguredProviders,
+  resolveConfiguredMediaProviderCapabilities,
+} from "./config-provider-models.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
 function mergeProviderIntoRegistry(
@@ -23,28 +25,12 @@ function mergeProviderIntoRegistry(
         documentModels: provider.documentModels ?? existing.documentModels,
       }
     : provider;
-  registry.set(normalizedKey, hydrateModelBackedMediaProvider(merged));
+  // Own undefined hooks reset earlier owners; absent hooks inherit. Dispatch
+  // supplies model-backed fallbacks without hiding the provider's native hooks.
+  registry.set(normalizedKey, merged);
 }
 
-function hydrateModelBackedMediaProvider(
-  provider: MediaUnderstandingProvider,
-): MediaUnderstandingProvider {
-  // Manifest-only image providers can still route through the generic model
-  // runtime when they declare image capability but no plugin hook.
-  if (!provider.capabilities?.includes("image")) {
-    return provider;
-  }
-  if (provider.describeImage && provider.describeImages) {
-    return provider;
-  }
-  return {
-    ...provider,
-    describeImage: provider.describeImage ?? describeImageWithModel,
-    describeImages: provider.describeImages ?? describeImagesWithModel,
-  };
-}
-
-export { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
+export { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 
 /** Builds the media-understanding provider registry from plugin capabilities and config providers. */
 export function buildMediaUnderstandingRegistry(
@@ -60,16 +46,20 @@ export function buildMediaUnderstandingRegistry(
       cfg,
     });
   for (const provider of providers) {
-    mergeProviderIntoRegistry(registry, provider);
+    mergeProviderIntoRegistry(
+      registry,
+      provider.inheritConfiguredImageCapability
+        ? { ...provider, capabilities: resolveConfiguredMediaProviderCapabilities(provider, cfg) }
+        : provider,
+    );
   }
   // Auto-register media-understanding for config providers with image-capable models (#51392)
-  for (const normalizedKey of resolveImageCapableConfigProviderIds(cfg)) {
+  for (const providerId of listImageCapableConfiguredProviders(cfg)) {
+    const normalizedKey = normalizeMediaProviderId(providerId);
     if (!registry.has(normalizedKey)) {
       mergeProviderIntoRegistry(registry, {
         id: normalizedKey,
         capabilities: ["image"],
-        describeImage: describeImageWithModel,
-        describeImages: describeImagesWithModel,
       });
     }
   }

@@ -1,4 +1,3 @@
-// Builds setup descriptors from plugin provider and manifest metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 
@@ -12,7 +11,10 @@ export function listSetupProviderIds(record: SetupDescriptorRecord): readonly st
   const providerIds = record.setup?.providers?.map((entry) => entry.id) ?? record.providers;
   const normalizedProviderIds = new Set(providerIds.map(normalizeProviderId));
   const aliases = Object.entries(record.providerAuthAliases ?? {})
-    .filter(([, target]) => normalizedProviderIds.has(normalizeProviderId(target)))
+    .filter(
+      ([, target]) =>
+        typeof target === "string" && normalizedProviderIds.has(normalizeProviderId(target)),
+    )
     .map(([alias]) => alias);
   return [...providerIds, ...aliases];
 }

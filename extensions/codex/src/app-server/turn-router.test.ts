@@ -1,70 +1,152 @@
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CodexAppServerClient } from "./client.js";
-import type { JsonValue } from "./protocol.js";
-import { createClientHarness } from "./test-support.js";
-import { getCodexAppServerTurnRouter, type CodexAppServerServerRequest } from "./turn-router.js";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { describe, expect, it, vi } from "vitest";
+import type { JsonObject } from "./protocol.js";
+import {
+  completedNotification,
+  expectDelivery,
+  unhandledToolResult,
+  useRouterHarness,
+} from "./turn-router.fixture.test-support.js";
+import { settleInput, waitForResponse } from "./turn-router.test-support.js";
 
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
+const createHarness = useRouterHarness();
+const accept = { decision: "accept" };
+const decline = { decision: "decline" };
+const toolResult = { success: true, contentItems: [] };
 
-type ClientHarness = ReturnType<typeof createClientHarness>;
+function quietWarnings() {
+  return vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+}
 
-type WireResponse = {
-  id: number | string;
-  result?: unknown;
-  error?: unknown;
-};
+function notificationRecorder() {
+  const received: string[] = [];
+  const delivered: string[] = [];
+  return {
+    received,
+    delivered,
+    onNotificationReceived: ({ method }: { method: string }) => {
+      received.push(method);
+    },
+    onNotification: ({ method }: { method: string }) => {
+      delivered.push(method);
+    },
+  };
+}
+
+function blockedNotifications() {
+  const pending = createDeferred<void>();
+  const events: string[] = [];
+  const recorder = notificationRecorder();
+  return {
+    ...recorder,
+    pending,
+    events,
+    onNotification: async ({ method }: { method: string }) => {
+      events.push(`${method}:start`);
+      if (method === "item/started") {
+        await pending.promise;
+      }
+      events.push(`${method}:end`);
+    },
+  };
+}
+
+async function bindRoute(
+  harness: ReturnType<typeof createHarness>,
+  turnId: string,
+  handlers: Parameters<typeof harness.reserve>[0] = { onNotification: vi.fn() },
+) {
+  const route = harness.reserve(handlers);
+  route.armTurn();
+  await route.bindTurn(turnId);
+  return route;
+}
 
 describe("CodexAppServerTurnRouter", () => {
-  const clients: CodexAppServerClient[] = [];
+  it.each(["reserve", "activate"] as const)(
+    "runs %s callbacks in each attempt's context on a reused transport",
+    async (registration) => {
+      const context = new AsyncLocalStorage<string>();
+      const transport = context.run("first", () => new AsyncResource("codex-test-transport"));
+      const harness = createHarness();
+      const router = harness.router;
+      try {
+        for (const owner of ["first", "second"]) {
+          const notifications: Array<[string | undefined, boolean]> = [];
+          const receipts: Array<[string | undefined, boolean]> = [];
+          const handlers = {
+            async onRequest(this: unknown) {
+              await Promise.resolve();
+              return { owner: context.getStore() ?? "missing", unbound: this === undefined };
+            },
+            async onNotification(this: unknown) {
+              await Promise.resolve();
+              notifications.push([context.getStore(), this === undefined]);
+            },
+            onNotificationReceived(this: unknown) {
+              receipts.push([context.getStore(), this === originalHandlers]);
+            },
+          };
+          const options = { threadId: "shared-thread", ...handlers };
+          const originalHandlers: object = registration === "reserve" ? options : handlers;
+          const route = context.run(registration === "reserve" ? owner : "reservation", () =>
+            router.reserveThread(
+              registration === "reserve" ? options : { threadId: "shared-thread" },
+            ),
+          );
+          if (registration === "activate") {
+            await context.run(owner, () => route.activate(handlers));
+          }
+          route.armTurn();
+          await route.bindTurn(owner);
+          const notification = {
+            method: "item/agentMessage/delta",
+            params: { threadId: "shared-thread", turnId: owner, delta: owner },
+          };
+          transport.runInAsyncScope(() => {
+            harness.send(notification);
+            harness.request(owner, "item/tool/call", {
+              threadId: "shared-thread",
+              turnId: owner,
+            });
+          });
+          expect(await waitForResponse(harness, owner)).toMatchObject({
+            result: { owner, unbound: true },
+          });
+          await route.drain();
+          expect(notifications).toEqual([[owner, true]]);
+          expect(receipts).toEqual([[owner, true]]);
+          route.release();
+        }
+      } finally {
+        transport.emitDestroy();
+        context.disable();
+      }
+    },
+  );
 
-  afterEach(() => {
-    for (const client of clients) {
-      client.close();
-    }
-    clients.length = 0;
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
-
-  function createHarness(): ClientHarness {
-    const harness = createClientHarness();
-    clients.push(harness.client);
-    return harness;
-  }
-
-  it("installs one request and notification handler per client", () => {
+  it("delivers global startup warnings to the next reserved thread", async () => {
     const harness = createHarness();
-    const addNotificationHandler = vi.spyOn(harness.client, "addNotificationHandler");
-    const addRequestHandler = vi.spyOn(harness.client, "addRequestHandler");
-    const addCloseHandler = vi.spyOn(harness.client, "addCloseHandler");
-
-    const first = getCodexAppServerTurnRouter(harness.client);
-    const second = getCodexAppServerTurnRouter(harness.client);
-
-    expect(second).toBe(first);
-    expect(addNotificationHandler).toHaveBeenCalledTimes(1);
-    expect(addRequestHandler).toHaveBeenCalledTimes(1);
-    expect(addCloseHandler).toHaveBeenCalledTimes(1);
+    const warning = { method: "configWarning", params: { summary: "Startup warning" } };
+    harness.send(warning);
+    const notifications = vi.fn();
+    await bindRoute(harness, "turn-1", { onNotification: notifications });
+    await vi.waitFor(() => expectDelivery(notifications, warning, { threadId: "thread-1" }, {}));
   });
 
   it("does not dispatch a request that times out before route activation", async () => {
     vi.useFakeTimers();
-    vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const harness = createHarness();
+    quietWarnings();
+    const harness = createHarness("thread-late", "turn-late");
     const requestHandler = vi.fn(() => ({ executed: true }));
-    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
-      threadId: "thread-late",
-    });
+    const route = harness.reserve();
 
-    harness.send({
-      id: "request-late",
-      method: "item/tool/call",
-      params: { threadId: "thread-late", turnId: "turn-late", tool: "message" },
-    });
+    harness.call("request-late", "item/tool/call", { tool: "message" });
     await vi.advanceTimersByTimeAsync(CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
     expect(await waitForResponse(harness, "request-late")).toMatchObject({
-      id: "request-late",
       result: { success: false },
     });
 
@@ -73,333 +155,229 @@ describe("CodexAppServerTurnRouter", () => {
     expect(requestHandler).not.toHaveBeenCalled();
   });
 
+  it("keeps execution budgets with the matching thread owner", async () => {
+    vi.useFakeTimers();
+    quietWarnings();
+    const harness = createHarness();
+    const router = harness.router;
+    const signals = new Map<string, AbortSignal>();
+    for (const [threadId, timeoutMs] of [
+      ["long", 900_000],
+      ["short", 60_000],
+    ] as const) {
+      const route = router.reserveThread({
+        threadId,
+        onRequest: (_request, scope, signal, setExecutionTimeoutMs) => {
+          signals.set(scope.threadId, signal);
+          setExecutionTimeoutMs?.(timeoutMs);
+          return new Promise<never>(() => {});
+        },
+      });
+      route.armTurn();
+      await route.bindTurn(`turn-${threadId}`);
+      harness.request(threadId, "item/tool/call", {
+        threadId,
+        turnId: `turn-${threadId}`,
+        tool: "node_exec",
+      });
+    }
+
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(signals.get("short")?.aborted).toBe(true);
+    expect(signals.get("long")?.aborted).toBe(false);
+    expect(harness.writes.map((line) => JSON.parse(line))).toMatchObject([
+      { id: "short", result: { success: false } },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(840_000);
+    expect(signals.get("long")?.aborted).toBe(true);
+    expect(harness.writes.map((line) => JSON.parse(line))).toMatchObject([
+      { id: "short", result: { success: false } },
+      { id: "long", result: { success: false } },
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not extend an aborted route's request with a late owner budget", async () => {
+    vi.useFakeTimers();
+    quietWarnings();
+    const harness = createHarness("released");
+    let setExecutionTimeoutMs: ((timeoutMs: number | null) => void) | undefined;
+    const route = harness.reserve({
+      onRequest: (_request, _scope, _signal, setTimeoutMs) => {
+        setExecutionTimeoutMs = setTimeoutMs;
+        return new Promise<never>(() => {});
+      },
+    });
+    harness.request("released", "item/tool/call", { threadId: "released", tool: "node_exec" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(setExecutionTimeoutMs).toBeTypeOf("function");
+    route.release();
+    setExecutionTimeoutMs?.(900_000);
+
+    await vi.advanceTimersByTimeAsync(CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
+    expect(harness.writes.map((line) => JSON.parse(line))).toMatchObject([
+      { id: "released", result: { success: false } },
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("routes concurrent traffic to the exact thread and turn", async () => {
-    const harness = createHarness();
-    const router = getCodexAppServerTurnRouter(harness.client);
-    const firstNotifications = vi.fn();
-    const secondNotifications = vi.fn();
-    const firstRequests = vi.fn(() => ({ owner: "first" }));
-    const secondRequests = vi.fn(() => ({ owner: "second" }));
-    const first = router.reserveThread({
+    const warn = quietWarnings();
+    const harness = createHarness("thread-2", "turn-2");
+    const first = notificationRecorder();
+    const second = notificationRecorder();
+    const secondHandler = vi.fn(second.onNotification);
+    for (const [number, recorder] of [
+      [1, first],
+      [2, second],
+    ] as const) {
+      const route = harness.router.reserveThread({
+        threadId: `thread-${number}`,
+        ...recorder,
+        onNotification: number === 2 ? secondHandler : recorder.onNotification,
+        onRequest: () => ({ owner: number }),
+      });
+      route.armTurn();
+      await route.bindTurn(`turn-${number}`);
+    }
+
+    harness.turn("item/agentMessage/delta", { delta: "right" });
+    harness.complete();
+    harness.turn("item/agentMessage/delta", { turnId: "turn-stale", delta: "wrong" });
+    harness.turn("item/agentMessage/delta", { turnId: "turn-stale", delta: "wrong" });
+    harness.call("request-2", "item/tool/call", { tool: "second" });
+    harness.request("request-1", "item/tool/call", {
       threadId: "thread-1",
-      onNotification: firstNotifications,
-      onRequest: firstRequests,
-    });
-    const second = router.reserveThread({
-      threadId: "thread-2",
-      onNotification: secondNotifications,
-      onRequest: secondRequests,
-    });
-    first.armTurn();
-    second.armTurn();
-    await Promise.all([first.bindTurn("turn-1"), second.bindTurn("turn-2")]);
-
-    harness.send({
-      method: "item/agentMessage/delta",
-      params: { threadId: "thread-2", turnId: "turn-2", delta: "right" },
-    });
-    harness.send({
-      method: "turn/completed",
-      params: { threadId: "thread-2", turn: { id: "turn-2", items: [] } },
-    });
-    harness.send({
-      method: "item/agentMessage/delta",
-      params: { threadId: "thread-2", turnId: "turn-stale", delta: "wrong" },
-    });
-    harness.send({
-      id: "request-2",
-      method: "item/tool/call",
-      params: { threadId: "thread-2", turnId: "turn-2", tool: "second" },
-    });
-    harness.send({
-      id: "request-1",
-      method: "item/tool/call",
-      params: { threadId: "thread-1", turnId: "turn-1", tool: "first" },
+      turnId: "turn-1",
+      tool: "first",
     });
 
-    await vi.waitFor(() => expect(secondNotifications).toHaveBeenCalledTimes(2));
-    const firstResponse = await waitForResponse(harness, "request-1");
-    const secondResponse = await waitForResponse(harness, "request-2");
-
-    expect(firstNotifications).not.toHaveBeenCalled();
-    expect(secondNotifications).toHaveBeenCalledWith(
-      {
-        method: "item/agentMessage/delta",
-        params: { threadId: "thread-2", turnId: "turn-2", delta: "right" },
-      },
+    await harness.expectResponse("request-1", { owner: 1 });
+    await harness.expectResponse("request-2", { owner: 2 });
+    expect(first.delivered).toEqual([]);
+    expect(second.delivered).toEqual(["item/agentMessage/delta", "turn/completed"]);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(secondHandler.mock.lastCall).toMatchObject([
+      { completedTurn: { id: "turn-2" } },
       { threadId: "thread-2", turnId: "turn-2" },
-    );
-    expect(secondNotifications).toHaveBeenCalledWith(
-      {
-        method: "turn/completed",
-        params: { threadId: "thread-2", turn: { id: "turn-2", items: [] } },
-      },
-      { threadId: "thread-2", turnId: "turn-2" },
-    );
-    expect(firstRequests).toHaveBeenCalledTimes(1);
-    expect(secondRequests).toHaveBeenCalledTimes(1);
-    expect(firstResponse).toEqual({ id: "request-1", result: { owner: "first" } });
-    expect(secondResponse).toEqual({ id: "request-2", result: { owner: "second" } });
-  });
-
-  it("warns once only for a thread-correlated stale turn notification", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const harness = createHarness();
-    const notifications = vi.fn();
-    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
-      threadId: "thread-1",
-      onNotification: notifications,
-    });
-    route.armTurn();
-    await route.bindTurn("turn-current");
-    const staleNotification = {
-      method: "item/agentMessage/delta",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-stale",
-        itemId: "msg-stale",
-        delta: "ignored",
-      },
-    };
-
-    harness.send(staleNotification);
-    harness.send(staleNotification);
-    harness.send({
-      method: "thread/status/changed",
-      params: { threadId: "thread-1", status: { type: "active" } },
-    });
-    harness.send({ method: "configWarning", params: { message: "global" } });
-    await settleInput();
-
-    expect(notifications).toHaveBeenCalledOnce();
-    expect(notifications).toHaveBeenCalledWith(
-      {
-        method: "thread/status/changed",
-        params: { threadId: "thread-1", status: { type: "active" } },
-      },
-      { threadId: "thread-1" },
-    );
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith("codex app-server notification ignored for inactive turn", {
-      eventKind: "item/agentMessage/delta",
-      activeThreadId: "thread-1",
-      activeTurnId: "turn-current",
-      threadId: "thread-1",
-      turnId: "turn-stale",
-      matchesActiveThread: true,
-      matchesActiveTurn: false,
-    });
-  });
-
-  it("buffers pre-bind notifications in order and filters the bound turn", async () => {
-    const harness = createHarness();
-    const methods: string[] = [];
-    const receivedMethods: string[] = [];
-    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
-      threadId: "thread-1",
-      onNotificationReceived: (notification) => {
-        receivedMethods.push(notification.method);
-      },
-      onNotification: async (notification) => {
-        await Promise.resolve();
-        methods.push(notification.method);
-      },
-    });
-    route.armTurn();
-
-    harness.send({
-      method: "thread/started",
-      params: { thread: { id: "thread-1" } },
-    });
-    harness.send({
-      method: "item/started",
-      params: { threadId: "thread-1", turnId: "turn-1" },
-    });
-    harness.send({
-      method: "thread/status/changed",
-      params: { threadId: "thread-1", status: { type: "active" } },
-    });
-    harness.send({
-      method: "item/completed",
-      params: { threadId: "thread-1", turnId: "turn-stale" },
-    });
-    harness.send({
-      method: "turn/started",
-      params: { threadId: "thread-1", turnId: "turn-1" },
-    });
-    await settleInput();
-
-    expect(methods).toEqual([]);
-    expect(receivedMethods).toEqual([]);
-    await route.bindTurn("turn-1");
-
-    expect(receivedMethods).toEqual([
-      "thread/started",
-      "item/started",
-      "thread/status/changed",
-      "turn/started",
-    ]);
-    expect(methods).toEqual([
-      "thread/started",
-      "item/started",
-      "thread/status/changed",
-      "turn/started",
     ]);
   });
 
-  it("flushes prior notifications before releasing a bound request", async () => {
-    const harness = createHarness();
-    const events: string[] = [];
-    let finishFirst!: () => void;
-    const firstPending = new Promise<void>((resolve) => {
-      finishFirst = resolve;
-    });
-    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
-      threadId: "thread-ordered",
-      onNotification: async (notification) => {
-        events.push(`${notification.method}:start`);
-        if (notification.method === "item/started") {
-          await firstPending;
+  it.each([false, true])(
+    "drains exact paused notifications (physical close: %s)",
+    async (closed) => {
+      const harness = createHarness();
+      const recorder = blockedNotifications();
+      const { events, received, pending } = recorder;
+      const beforeNotifications = createDeferred<void>();
+      const route = harness.reserve({
+        ...recorder,
+        onRequest: () => {
+          events.push("request");
+          return toolResult;
+        },
+      });
+      route.armTurn();
+      harness.notify("thread/started", { thread: { id: "thread-1" } });
+      harness.turn("item/started");
+      harness.turn("item/completed", { turnId: "turn-stale" });
+      if (!closed) {
+        harness.call("request", "item/tool/call", { tool: "message" });
+      }
+
+      const binding = route.bindTurn("turn-1", {
+        beforeNotifications: beforeNotifications.promise,
+      });
+      const drained = vi.fn();
+      const draining = route.drain().then(drained);
+      const bound = vi.fn();
+      void binding.then(bound, bound);
+      try {
+        harness.notify("configWarning", { message: "global warning" });
+        harness.send(completedNotification(route.threadId, "turn-stale"));
+        harness.complete();
+        if (closed) {
+          harness.process.emit("exit", 0, null);
+          await draining;
         }
-        events.push(`${notification.method}:end`);
-      },
-      onRequest: () => {
-        events.push("request");
-        return { success: true, contentItems: [] };
-      },
-    });
-    route.armTurn();
-    harness.send({
-      method: "item/started",
-      params: { threadId: "thread-ordered", turnId: "turn-ordered" },
-    });
-    harness.send({
-      method: "item/agentMessage/delta",
-      params: { threadId: "thread-ordered", turnId: "turn-ordered", delta: "done" },
-    });
-    harness.send({
-      id: "request-ordered",
-      method: "item/tool/call",
-      params: { threadId: "thread-ordered", turnId: "turn-ordered", tool: "message" },
-    });
+        await settleInput();
+        const expectedReceipts = [
+          "thread/started",
+          "item/started",
+          "configWarning",
+          "turn/completed",
+        ];
+        expect(received).toEqual(expectedReceipts);
+        expect(route.completed).toBe(true);
+        expect(events).toEqual([]);
+        expect(bound).not.toHaveBeenCalled();
+        expect(route.signal.aborted).toBe(closed);
+        expect(drained).toHaveBeenCalledTimes(closed ? 1 : 0);
+        expect(harness.writes).toEqual([]);
 
-    const binding = route.bindTurn("turn-ordered");
-    await vi.waitFor(() => expect(events).toEqual(["item/started:start"]));
-    expect(harness.writes).toEqual([]);
-
-    finishFirst();
-    await binding;
-    expect(await waitForResponse(harness, "request-ordered")).toEqual({
-      id: "request-ordered",
-      result: { success: true, contentItems: [] },
-    });
-    expect(events).toEqual([
-      "item/started:start",
-      "item/started:end",
-      "item/agentMessage/delta:start",
-      "item/agentMessage/delta:end",
-      "request",
-    ]);
-  });
-
-  it("records receipt synchronously and drains accepted work after release", async () => {
-    const harness = createHarness();
-    const events: string[] = [];
-    let finishFirst!: () => void;
-    const firstPending = new Promise<void>((resolve) => {
-      finishFirst = resolve;
-    });
-    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
-      threadId: "thread-receive",
-      onNotificationReceived: (notification) => {
-        events.push(`${notification.method}:received`);
-      },
-      onNotification: async (notification) => {
-        events.push(`${notification.method}:start`);
-        if (notification.method === "item/started") {
-          await firstPending;
+        beforeNotifications.resolve();
+        await vi.waitFor(() =>
+          expect(events).toEqual([
+            "thread/started:start",
+            "thread/started:end",
+            "item/started:start",
+          ]),
+        );
+        expect(bound).not.toHaveBeenCalled();
+        expect(drained).toHaveBeenCalledTimes(closed ? 1 : 0);
+        expect(harness.writes).toEqual([]);
+        pending.resolve();
+        await binding;
+        await draining;
+        if (!closed) {
+          await harness.expectResponse("request", toolResult);
         }
-        events.push(`${notification.method}:end`);
-      },
-    });
-    harness.send({
-      method: "item/started",
-      params: { threadId: "thread-receive", turnId: "turn-receive" },
-    });
-    harness.send({
-      method: "item/completed",
-      params: { threadId: "thread-receive", turnId: "turn-receive" },
-    });
+        expect(received).toEqual(expectedReceipts);
+        expect(events).toEqual([
+          ...expectedReceipts.flatMap((method) => [`${method}:start`, `${method}:end`]),
+          ...(!closed ? ["request"] : []),
+        ]);
+      } finally {
+        beforeNotifications.resolve();
+        pending.resolve();
+        route.release();
+        await binding.catch(() => undefined);
+        await draining;
+      }
+    },
+  );
 
-    await vi.waitFor(() => expect(events).toContain("item/started:start"));
-    expect(events.slice(0, 3)).toEqual([
-      "item/started:received",
-      "item/completed:received",
-      "item/started:start",
-    ]);
-
-    route.release();
-    finishFirst();
-    await route.drain();
-    expect(events).toEqual([
-      "item/started:received",
-      "item/completed:received",
-      "item/started:start",
-      "item/started:end",
-      "item/completed:start",
-      "item/completed:end",
-    ]);
-  });
-
-  it("releases routing waiters without waiting for an async notification", async () => {
+  it("drain resolves after release while a handler is blocked and routing waiters are pending", async () => {
     const harness = createHarness();
-    let notificationStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      notificationStarted = resolve;
-    });
-    const neverFinishes = new Promise<void>(() => {});
-    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
-      threadId: "thread-release-tail",
-      onNotification: async () => {
-        notificationStarted();
-        await neverFinishes;
-      },
-      onRequest: () => ({ decision: "accept" }),
+    const handler = vi.fn(() => new Promise<void>(() => {}));
+    const route = harness.reserve({
+      onNotification: handler,
+      onRequest: () => accept,
     });
     route.armTurn();
-    harness.send({
-      method: "item/started",
-      params: { threadId: "thread-release-tail", turnId: "turn-release-tail" },
-    });
-    harness.send({
-      id: "request-release-tail",
-      method: "item/commandExecution/requestApproval",
-      params: {
-        threadId: "thread-release-tail",
-        turnId: "turn-release-tail",
-        itemId: "item-1",
-      },
-    });
-    const binding = route.bindTurn("turn-release-tail");
-    await started;
-
+    harness.turn("item/started");
+    harness.call("request", "item/commandExecution/requestApproval");
+    const binding = expect(route.bindTurn("turn-1")).rejects.toThrow("thread route is released");
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    const draining = route.drain();
     route.release();
-
-    await expect(binding).rejects.toThrow("thread route is released");
-    expect(await waitForResponse(harness, "request-release-tail")).toEqual({
-      id: "request-release-tail",
-      result: { decision: "decline" },
-    });
+    await Promise.all([draining, binding]);
+    await harness.expectResponse("request", decline);
   });
 
-  it("delivers open-route notifications while an armed route waits", async () => {
+  it("receives and drains open-route notifications while an armed route waits", async () => {
     const harness = createHarness();
-    const router = getCodexAppServerTurnRouter(harness.client);
-    const threadHandler = vi.fn();
+    const router = harness.router;
+    const live = blockedNotifications();
+    const { events, pending } = live;
     const turnHandler = vi.fn();
-    router.reserveThread({
+    const liveRoute = router.reserveThread({
       threadId: "thread-live",
-      onNotification: threadHandler,
+      ...live,
+      onNotificationReceived: ({ method }) => {
+        events.push(`${method}:received`);
+      },
     });
     const turnRoute = router.reserveThread({
       threadId: "thread-buffered",
@@ -407,228 +385,87 @@ describe("CodexAppServerTurnRouter", () => {
     });
     turnRoute.armTurn();
 
-    const liveNotification = {
-      method: "thread/status/changed",
-      params: { threadId: "thread-live", status: { type: "active" } },
-    };
     const bufferedNotification = {
       method: "item/started",
       params: { threadId: "thread-buffered", turnId: "turn-buffered" },
     };
-    harness.send(liveNotification);
+    for (const method of ["item/started", "item/completed"]) {
+      harness.notify(method, { threadId: "thread-live" });
+    }
     harness.send(bufferedNotification);
-
-    await vi.waitFor(() =>
-      expect(threadHandler).toHaveBeenCalledWith(liveNotification, {
-        threadId: "thread-live",
-      }),
-    );
+    await vi.waitFor(() => expect(events).toContain("item/started:start"));
+    expect(events).toEqual([
+      "item/started:received",
+      "item/completed:received",
+      "item/started:start",
+    ]);
     expect(turnHandler).not.toHaveBeenCalled();
-
+    pending.resolve();
+    await liveRoute.drain();
+    expect(events.slice(3)).toEqual([
+      "item/started:end",
+      "item/completed:start",
+      "item/completed:end",
+    ]);
     await turnRoute.bindTurn("turn-buffered");
-    expect(turnHandler).toHaveBeenCalledWith(bufferedNotification, {
-      threadId: "thread-buffered",
-      turnId: "turn-buffered",
-    });
+    expect(turnHandler).toHaveBeenCalledOnce();
   });
 
   it("holds dormant traffic until one-shot activation", async () => {
     const harness = createHarness();
-    const events: string[] = [];
-    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
-      threadId: "thread-dormant",
-    });
+    const recorder = notificationRecorder();
+    const route = harness.reserve();
     route.armTurn();
-
-    harness.send({
-      method: "thread/status/changed",
-      params: { threadId: "thread-dormant", status: { type: "active" } },
-    });
-    harness.send({
-      method: "item/started",
-      params: { threadId: "thread-dormant", turnId: "turn-dormant" },
-    });
-    harness.send({
-      id: "request-dormant-thread",
-      method: "mcpServer/elicitation/request",
-      params: { threadId: "thread-dormant", turnId: null },
-    });
-    harness.send({
-      id: "request-dormant-turn",
-      method: "item/tool/call",
-      params: { threadId: "thread-dormant", turnId: "turn-dormant" },
-    });
+    harness.turn("thread/status/changed", { status: { type: "active" } });
+    harness.turn("item/started");
+    harness.call("thread", "mcpServer/elicitation/request", { turnId: null });
+    harness.call("turn", "item/tool/call");
+    harness.call("stale", "item/tool/call", { turnId: "turn-stale" });
     await settleInput();
-
-    expect(events).toEqual([]);
     expect(harness.writes).toEqual([]);
     expect(route.signal.aborted).toBe(false);
-    await expect(route.bindTurn("turn-dormant")).rejects.toThrow(
+    await expect(route.bindTurn("turn-1")).rejects.toThrow(
       "thread route must be activated before binding a turn",
     );
     await expect(route.activate({})).rejects.toThrow(
       "thread route requires a notification or request handler",
     );
-
     await route.activate({
-      onNotification: async (notification) => {
-        await Promise.resolve();
-        events.push(`notification:${notification.method}`);
-      },
-      onRequest: (request): JsonValue => {
-        events.push(`request:${request.method}`);
-        return request.method === "item/tool/call"
-          ? { success: true, contentItems: [] }
-          : { action: "accept" };
-      },
+      ...recorder,
+      onRequest: (request) =>
+        request.method === "item/tool/call" ? toolResult : { action: "accept" },
     });
-
-    expect(events).toEqual([]);
-    expect(harness.writes.map((line) => JSON.parse(line) as WireResponse)).not.toContainEqual(
-      expect.objectContaining({ id: "request-dormant-turn" }),
+    expect(recorder.delivered).toEqual([]);
+    expect(harness.writes.map((line) => JSON.parse(line))).not.toContainEqual(
+      expect.objectContaining({ id: "turn" }),
     );
-
-    await route.bindTurn("turn-dormant");
-    expect(events.slice(0, 2)).toEqual([
-      "notification:thread/status/changed",
-      "notification:item/started",
-    ]);
-    expect(await waitForResponse(harness, "request-dormant-thread")).toEqual({
-      id: "request-dormant-thread",
-      result: { action: "accept" },
-    });
-    expect(await waitForResponse(harness, "request-dormant-turn")).toEqual({
-      id: "request-dormant-turn",
-      result: { success: true, contentItems: [] },
-    });
-    expect(events.at(-1)).toBe("request:item/tool/call");
+    await route.bindTurn("turn-1");
+    expect(recorder.delivered).toEqual(["thread/status/changed", "item/started"]);
+    await harness.expectResponse("thread", { action: "accept" });
+    await harness.expectResponse("turn", toolResult);
+    await harness.expectResponse("stale", unhandledToolResult);
     await expect(route.activate({ onRequest: vi.fn() })).rejects.toThrow(
       "thread route already activated",
     );
-  });
-
-  it("waits for binding before validating turn-scoped requests", async () => {
-    const harness = createHarness();
-    const router = getCodexAppServerTurnRouter(harness.client);
-    const matchingHandler = vi.fn(() => ({ success: true, contentItems: [] }));
-    const matchingRoute = router.reserveThread({
-      threadId: "thread-match",
-      onRequest: matchingHandler,
-    });
-    matchingRoute.armTurn();
-
-    harness.send({
-      id: "request-match",
-      method: "item/tool/call",
-      params: { threadId: "thread-match", turnId: "turn-match", tool: "message" },
-    });
-    await settleInput();
-
-    expect(matchingHandler).not.toHaveBeenCalled();
-    expect(harness.writes).toEqual([]);
-
-    await matchingRoute.bindTurn("turn-match");
-    await expect(waitForResponse(harness, "request-match")).resolves.toEqual({
-      id: "request-match",
-      result: { success: true, contentItems: [] },
-    });
-    expect(matchingHandler).toHaveBeenCalledTimes(1);
-
-    const staleHandler = vi.fn(() => ({ success: true, contentItems: [] }));
-    const staleRoute = router.reserveThread({
-      threadId: "thread-stale",
-      onRequest: staleHandler,
-    });
-    staleRoute.armTurn();
-    harness.send({
-      id: "request-stale",
-      method: "item/tool/call",
-      params: { threadId: "thread-stale", turnId: "turn-stale", tool: "message" },
-    });
-    await settleInput();
-
-    expect(staleHandler).not.toHaveBeenCalled();
-    await staleRoute.bindTurn("turn-current");
-
-    expect(await waitForResponse(harness, "request-stale")).toEqual({
-      id: "request-stale",
-      result: {
-        contentItems: [
-          {
-            type: "inputText",
-            text: "OpenClaw did not register a handler for this app-server tool call.",
-          },
-        ],
-        success: false,
-      },
-    });
-    expect(staleHandler).not.toHaveBeenCalled();
-  });
-
-  it("routes no-turn requests immediately after activation", async () => {
-    const harness = createHarness();
-    const handleRequest = (request: CodexAppServerServerRequest): JsonValue => {
-      if (request.method === "execCommandApproval" || request.method === "applyPatchApproval") {
-        return { decision: "approved" };
-      }
-      return { action: "accept", content: { answer: "yes" } };
-    };
-    const handler = vi.fn(handleRequest);
-    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
-      threadId: "thread-1",
-    });
-
-    harness.send({
-      id: "elicitation-1",
-      method: "mcpServer/elicitation/request",
-      params: { threadId: "thread-1", turnId: null, message: "Continue?" },
-    });
-
-    await settleInput();
-
-    expect(handler).not.toHaveBeenCalled();
-    expect(harness.writes).toEqual([]);
-
-    await route.activate({ onRequest: handler });
-
-    expect(await waitForResponse(harness, "elicitation-1")).toEqual({
-      id: "elicitation-1",
-      result: { action: "accept", content: { answer: "yes" } },
-    });
-    expect(handler).toHaveBeenCalledOnce();
-    route.release();
   });
 
   it("keeps resumed-turn requests open until a new turn is armed", async () => {
     const harness = createHarness();
     const handler = vi.fn(() => undefined);
     const notificationHandler = vi.fn();
-    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
-      threadId: "thread-resumed",
-      onRequest: handler,
-      onNotification: notificationHandler,
-    });
+    const route = harness.reserve({ onRequest: handler, onNotification: notificationHandler });
 
-    harness.send({
-      id: "old-turn-request",
-      method: "item/commandExecution/requestApproval",
-      params: { threadId: "thread-resumed", turnId: "turn-old", itemId: "item-old" },
-    });
-    await expect(waitForResponse(harness, "old-turn-request")).resolves.toEqual({
-      id: "old-turn-request",
-      result: { decision: "decline" },
-    });
+    harness.call("old", "item/commandExecution/requestApproval");
+    await harness.expectResponse("old", decline);
     expect(handler).toHaveBeenCalledTimes(1);
 
     route.armTurn();
-    harness.send({
-      id: "pending-turn-request",
-      method: "item/commandExecution/requestApproval",
-      params: { threadId: "thread-resumed", turnId: "turn-next", itemId: "item-next" },
+    harness.call("next", "item/commandExecution/requestApproval", {
+      turnId: "turn-next",
     });
     const earlyError = {
       method: "error",
-      params: { threadId: "thread-resumed", message: "turn start failed" },
+      params: { threadId: "thread-1", message: "turn start failed" },
     };
     harness.send(earlyError);
     await settleInput();
@@ -636,461 +473,270 @@ describe("CodexAppServerTurnRouter", () => {
     expect(notificationHandler).not.toHaveBeenCalled();
 
     await route.cancelTurn();
-    expect(notificationHandler).toHaveBeenCalledWith(earlyError, {
-      threadId: "thread-resumed",
-    });
-    await expect(waitForResponse(harness, "pending-turn-request")).resolves.toEqual({
-      id: "pending-turn-request",
-      result: { decision: "decline" },
-    });
+    expectDelivery(notificationHandler, earlyError, { threadId: "thread-1" });
+    await harness.expectResponse("next", decline);
     expect(handler).toHaveBeenCalledTimes(2);
 
     route.armTurn();
     await route.bindTurn("turn-final");
     route.release();
   });
+});
 
-  it("consumes buffered exact native completions and clears them when arming", async () => {
+describe("CodexAppServerTurnRouter lifecycle", () => {
+  it.each<[boolean, JsonObject]>([
+    [
+      true,
+      { status: "interrupted", error: { message: "Denied", codexErrorInfo: "tooManyDenials" } },
+    ],
+    [false, {}],
+  ])("validates native completion (terminal: %s)", async (completed, fields) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const harness = createHarness();
-    const router = getCodexAppServerTurnRouter(harness.client);
-    const route = router.reserveThread({
-      threadId: "thread-native",
-    });
-    harness.send({
-      method: "turn/completed",
-      params: { threadId: "thread-native", turn: { id: "turn-native", items: [] } },
+    const route = await bindRoute(harness, "turn-1");
+    const watch = harness.watch("turn-1", { timeoutMs: 1_000 });
+    harness.notify("turn/completed", {
+      threadId: route.threadId,
+      turn: { id: "turn-1", items: [], ...fields },
     });
     await settleInput();
-    await route.activate({ onNotification: vi.fn() });
-    expect(route.observedNativeTurnId).toBe("turn-native");
-    const completion = (turnId: string, timeoutMs: number) =>
-      router.watchNativeTurnCompletion({ threadId: route.threadId, turnId, timeoutMs }).completion;
-    await expect(completion("turn-native", 10)).resolves.toBe(true);
-    await expect(completion("turn-native", 1)).resolves.toBe(false);
-
-    harness.send({
-      method: "turn/completed",
-      params: { threadId: "thread-native", turn: { id: "turn-stale", items: [] } },
-    });
-    await settleInput();
-    route.armTurn();
-    expect(route.observedNativeTurnId).toBeUndefined();
-    await expect(completion("turn-stale", 1)).resolves.toBe(false);
-    await route.cancelTurn();
+    expect(route.completed).toBe(completed);
+    expect(watch.state).toBe(completed ? "confirmed" : "pending");
+    if (!completed) {
+      harness.complete();
+    }
+    await expect(watch.completion).resolves.toBe(true);
+    expect(route.completed).toBe(true);
   });
+
+  it.each([false, true])(
+    "retains terminal facts until recovery or route renewal (bound: %s)",
+    async (bound) => {
+      const harness = createHarness();
+      const route = bound ? await bindRoute(harness, "turn-1") : harness.reserve();
+      harness.complete();
+      await settleInput();
+      if (!bound) {
+        await route.activate({ onNotification: vi.fn() });
+      }
+      expect(route.observedNativeTurnId).toBe("turn-1");
+      const completion = (turnId = "turn-1") => harness.watch(turnId, { timeoutMs: 1 }).completion;
+      await expect(completion()).resolves.toBe(true);
+      await expect(completion()).resolves.toBe(true);
+      harness.turn("turn/started", { turn: { id: "turn-1", status: "inProgress" } });
+      await settleInput();
+      await expect(completion()).resolves.toBe(false);
+      harness.complete();
+      harness.complete("turn-stale");
+      await settleInput();
+      if (bound) {
+        route.release();
+        const nextRoute = harness.reserve();
+        await expect(completion()).resolves.toBe(false);
+        nextRoute.release();
+      } else {
+        route.armTurn();
+        expect(route.observedNativeTurnId).toBeUndefined();
+        await expect(completion("turn-stale")).resolves.toBe(false);
+        await route.cancelTurn();
+      }
+    },
+  );
 
   it("keeps an observed active native turn exact across arm and stale completion", async () => {
     const harness = createHarness();
-    const router = getCodexAppServerTurnRouter(harness.client);
-    const route = router.reserveThread({
-      threadId: "thread-native-active",
-      onNotification: vi.fn(),
-    });
-    harness.send({
-      method: "turn/started",
-      params: {
-        threadId: "thread-native-active",
-        turn: { id: "turn-compact", status: "inProgress" },
-      },
-    });
+    const route = harness.reserve({ onNotification: vi.fn() });
+    harness.turn("turn/started", { turn: { id: "turn-compact", status: "inProgress" } });
     await settleInput();
 
     route.armTurn();
     expect(route.observedNativeTurnId).toBe("turn-compact");
-    harness.send({
-      method: "turn/completed",
-      params: { threadId: "thread-native-active", turn: { id: "turn-stale", items: [] } },
-    });
+    harness.complete("turn-stale");
     await settleInput();
     expect(route.observedNativeTurnId).toBe("turn-compact");
 
-    const completed = router.watchNativeTurnCompletion({
-      threadId: "thread-native-active",
-      turnId: "turn-compact",
-      timeoutMs: 100,
-    });
-    harness.send({
-      method: "turn/completed",
-      params: { threadId: "thread-native-active", turn: { id: "turn-compact", items: [] } },
-    });
+    const completed = harness.watch("turn-compact");
+    harness.complete("turn-compact");
     await expect(completed.completion).resolves.toBe(true);
     await route.cancelTurn();
   });
 
-  it("settles exact native-completion watchers on completion, abort, and route release", async () => {
+  it("settles pending and already-aborted native-turn watches", async () => {
     const harness = createHarness();
-    const router = getCodexAppServerTurnRouter(harness.client);
-    const route = router.reserveThread({
-      threadId: "thread-native-wait",
-      onNotification: vi.fn(),
-    });
-
-    const completed = router.watchNativeTurnCompletion({
-      threadId: "thread-native-wait",
-      turnId: "turn-native",
-      timeoutMs: 100,
-    });
-    harness.send({
-      method: "turn/completed",
-      params: { threadId: "thread-native-wait", turn: { id: "turn-native", items: [] } },
-    });
-    await expect(completed.completion).resolves.toBe(true);
-
     const controller = new AbortController();
-    const aborted = router.watchNativeTurnCompletion({
-      threadId: "thread-native-wait",
-      turnId: "turn-aborted",
-      timeoutMs: 100,
-      signal: controller.signal,
-    });
-    controller.abort("test");
-    await expect(aborted.completion).resolves.toBe(false);
-    const alreadyAborted = router.watchNativeTurnCompletion({
-      threadId: "thread-native-wait",
-      turnId: "turn-aborted",
-      timeoutMs: 100,
-      signal: controller.signal,
-    });
-    await expect(alreadyAborted.completion).resolves.toBe(false);
-
-    const released = router.watchNativeTurnCompletion({
-      threadId: "thread-native-wait",
-      turnId: "turn-released",
-      timeoutMs: 100,
-      signal: route.signal,
-    });
-    route.release();
-    await expect(released.completion).resolves.toBe(false);
-  });
-
-  it("watches one exact native turn without reserving its thread", async () => {
-    const harness = createHarness();
-    const router = getCodexAppServerTurnRouter(harness.client);
-    const watch = router.watchNativeTurnCompletion({
-      threadId: "thread-native-watch",
-      turnId: "turn-target",
-      timeoutMs: 100,
-    });
-    const settled = vi.fn();
-    void watch.completion.then(settled);
-
-    const route = router.reserveThread({
-      threadId: "thread-native-watch",
-      onNotification: vi.fn(),
-    });
-    route.release();
-    harness.send({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-native-watch",
-        turn: { id: "turn-other", status: "completed" },
-      },
-    });
-    await settleInput();
-    expect(settled).not.toHaveBeenCalled();
-
-    harness.send({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-native-watch",
-        turn: { id: "turn-target", status: "completed" },
-      },
-    });
-    await expect(watch.completion).resolves.toBe(true);
-  });
-
-  it("waits for completed notification after an exact non-retry error", async () => {
-    const harness = createHarness();
-    const watch = getCodexAppServerTurnRouter(harness.client).watchNativeTurnCompletion({
-      threadId: "thread-native-error",
-      turnId: "turn-native-error",
-      timeoutMs: 100,
-    });
-    const settled = vi.fn();
-    void watch.completion.then(settled);
-
-    harness.send({
-      method: "error",
-      params: {
-        threadId: "thread-native-error",
-        turnId: "turn-native-error",
-        error: { message: "retrying" },
-        willRetry: true,
-      },
-    });
-    await settleInput();
-    expect(settled).not.toHaveBeenCalled();
-
-    harness.send({
-      method: "error",
-      params: {
-        threadId: "thread-native-error",
-        turnId: "turn-native-error",
-        error: { message: "review setup failed" },
-        willRetry: false,
-      },
-    });
-    await settleInput();
-    expect(settled).not.toHaveBeenCalled();
-
-    harness.send({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-native-error",
-        turn: { id: "turn-native-error", status: "failed" },
-      },
-    });
-    await expect(watch.completion).resolves.toBe(true);
-  });
-
-  it("keeps a hard completion deadline despite exact-turn progress", async () => {
-    vi.useFakeTimers();
-    const harness = createHarness();
-    const watch = getCodexAppServerTurnRouter(harness.client).watchNativeTurnCompletion({
-      threadId: "thread-native-progress",
-      turnId: "turn-native-progress",
-      timeoutMs: 1_000,
-    });
-    const settled = vi.fn();
-    void watch.completion.then(settled);
-
-    await vi.advanceTimersByTimeAsync(900);
-    harness.send({
-      method: "item/agentMessage/delta",
-      params: {
-        threadId: "thread-native-progress",
-        turnId: "turn-native-progress",
-        delta: "working",
-      },
-    });
-    await vi.advanceTimersByTimeAsync(101);
+    const signal = controller.signal;
+    const watch = harness.watch("turn-1", { signal });
+    controller.abort();
     await expect(watch.completion).resolves.toBe(false);
-    expect(settled).toHaveBeenCalledWith(false);
+    await expect(harness.watch("turn-1", { signal }).completion).resolves.toBe(false);
   });
 
-  it("cancels a detached native-turn completion watch", async () => {
+  it("settles detached native-turn watches on client close", async () => {
     const harness = createHarness();
-    const watch = getCodexAppServerTurnRouter(harness.client).watchNativeTurnCompletion({
-      threadId: "thread-native-cancel",
-      turnId: "turn-native-cancel",
-      timeoutMs: 100,
-    });
-
-    watch.cancel();
-
-    await expect(watch.completion).resolves.toBe(false);
-  });
-
-  it("settles detached native-turn watches on timeout and client close", async () => {
-    const timeoutHarness = createHarness();
-    const timedOut = getCodexAppServerTurnRouter(timeoutHarness.client).watchNativeTurnCompletion({
-      threadId: "thread-native-timeout",
-      turnId: "turn-native-timeout",
-      timeoutMs: 1,
-    });
-    await expect(timedOut.completion).resolves.toBe(false);
-
-    const closeHarness = createHarness();
-    const closed = getCodexAppServerTurnRouter(closeHarness.client).watchNativeTurnCompletion({
-      threadId: "thread-native-close",
-      turnId: "turn-native-close",
-      timeoutMs: 100,
-    });
-    closeHarness.client.close();
-    await expect(closed.completion).resolves.toBe(false);
+    const completion = harness.watch("turn-1").completion;
+    harness.client.close();
+    await expect(completion).resolves.toBe(false);
   });
 
   it("releases pending requests and removes routes on cleanup", async () => {
     const harness = createHarness();
-    const router = getCodexAppServerTurnRouter(harness.client);
+    const router = harness.router;
     const notificationHandler = vi.fn();
-    const requestHandler = vi.fn(() => ({ decision: "accept" }));
-    const route = router.reserveThread({
-      threadId: "thread-release",
+    const requestHandler = vi.fn(() => accept);
+    const route = harness.reserve({
       onNotification: notificationHandler,
       onRequest: requestHandler,
     });
     route.armTurn();
-    harness.send({
-      id: "request-release",
-      method: "item/commandExecution/requestApproval",
-      params: {
-        threadId: "thread-release",
-        turnId: "turn-release",
-        itemId: "item-1",
-      },
-    });
+    harness.call("queued", "item/commandExecution/requestApproval");
     await settleInput();
 
     route.release();
-    harness.send({
-      method: "item/started",
-      params: { threadId: "thread-release", turnId: "turn-release" },
-    });
+    harness.turn("item/started");
 
-    expect(await waitForResponse(harness, "request-release")).toEqual({
-      id: "request-release",
-      result: { decision: "decline" },
-    });
+    await harness.expectResponse("queued", decline);
     expect(notificationHandler).not.toHaveBeenCalled();
     expect(requestHandler).not.toHaveBeenCalled();
 
-    const activeHandler = vi.fn(
-      (request: { id: number | string }, _scope: unknown, signal: AbortSignal) =>
-        new Promise<{ decision: string }>((resolve, reject) => {
+    const signals: AbortSignal[] = [];
+    const activeRoute = await bindRoute(harness, "turn-1", {
+      onRequest: (request, _scope, signal) =>
+        new Promise<typeof accept>((resolve, reject) => {
+          signals.push(signal);
           signal.addEventListener(
             "abort",
             () => {
-              if (request.id === "request-active-reject") {
+              if (request.id === "reject") {
                 reject(new Error("stale request failure"));
-                return;
+              } else {
+                resolve(accept);
               }
-              resolve({ decision: "accept" });
             },
             { once: true },
           );
         }),
-    );
-    const activeRoute = router.reserveThread({
-      threadId: "thread-active",
-      onRequest: activeHandler,
     });
-    activeRoute.armTurn();
-    await activeRoute.bindTurn("turn-active");
-    for (const [id, itemId] of [
-      ["request-active", "item-2"],
-      ["request-active-reject", "item-3"],
-    ]) {
-      harness.send({
-        id,
-        method: "item/commandExecution/requestApproval",
-        params: { threadId: "thread-active", turnId: "turn-active", itemId },
-      });
+    for (const id of ["resolve", "reject"]) {
+      harness.call(id, "item/commandExecution/requestApproval");
     }
-    await vi.waitFor(() => expect(activeHandler).toHaveBeenCalledTimes(2));
-    const activeSignals = () => activeHandler.mock.calls.map((call) => call[2].aborted);
-    expect(activeSignals()).toEqual([false, false]);
-
+    await vi.waitFor(() => expect(signals).toHaveLength(2));
+    expect(signals.map((signal) => signal.aborted)).toEqual([false, false]);
     activeRoute.release();
-    expect(activeSignals()).toEqual([true, true]);
+    expect(signals.map((signal) => signal.aborted)).toEqual([true, true]);
+    for (const id of ["resolve", "reject"]) {
+      await harness.expectResponse(id, decline);
+    }
 
-    expect(await waitForResponse(harness, "request-active")).toEqual({
-      id: "request-active",
-      result: { decision: "decline" },
+    const closingRoute = await bindRoute(harness, "turn-1", {
+      onRequest: (_request, _scope, signal) => {
+        signals.push(signal);
+        return new Promise<never>(() => {});
+      },
     });
-    expect(await waitForResponse(harness, "request-active-reject")).toEqual({
-      id: "request-active-reject",
-      result: { decision: "decline" },
-    });
-
-    const closingRoute = router.reserveThread({
-      threadId: "thread-close",
-      onRequest: activeHandler,
-    });
-    closingRoute.armTurn();
-    await closingRoute.bindTurn("turn-close");
-    harness.send({
-      id: "request-close",
-      method: "item/commandExecution/requestApproval",
-      params: { threadId: "thread-close", turnId: "turn-close", itemId: "item-4" },
-    });
-    await vi.waitFor(() => expect(activeHandler).toHaveBeenCalledTimes(3));
-    harness.process.stderr.write("fatal transport detail\n");
+    harness.call("close", "item/commandExecution/requestApproval");
+    await vi.waitFor(() => expect(signals).toHaveLength(3));
+    harness.complete();
     harness.process.emit("exit", 17, "SIGTERM");
 
-    await expect(closingRoute.bindTurn("turn-close")).rejects.toThrow("turn router closed");
-    expect(activeHandler.mock.calls[2]?.[2].aborted).toBe(true);
-    expect(closingRoute.signal.aborted).toBe(true);
-    expect(closingRoute.signal.reason).toEqual(
-      new Error("codex app-server turn router closed", {
-        cause: new Error(
-          'codex app-server exited: code=17 signal=SIGTERM stderr="fatal transport detail"',
-        ),
-      }),
-    );
+    expect(closingRoute).toMatchObject({ completed: true, signal: { aborted: true } });
+    await expect(closingRoute.bindTurn("turn-1")).rejects.toThrow("turn router closed");
+    expect(signals[2]?.aborted).toBe(true);
+    expect(closingRoute.signal.reason.cause).toBe(harness.client.getCloseError());
     expect(() =>
       router.reserveThread({ threadId: "thread-late", onRequest: requestHandler }),
     ).toThrow("turn router is closed");
   });
 
+  it("does not drain a closed route after a stale completion", async () => {
+    quietWarnings();
+    const harness = createHarness();
+    const notifications = vi.fn();
+    const route = harness.reserve({ onNotification: notifications });
+    route.armTurn();
+    harness.complete("turn-stale");
+    harness.client.close();
+    await expect(route.bindTurn("turn-1")).rejects.toThrow("turn router closed");
+    expect(route.signal.aborted).toBe(true);
+    expect(notifications).not.toHaveBeenCalled();
+  });
+
   it("releases dormant waiters and aborts the reservation", async () => {
     const harness = createHarness();
-    const router = getCodexAppServerTurnRouter(harness.client);
-    const route = router.reserveThread({ threadId: "thread-dormant-release" });
-    harness.send({
-      id: "request-dormant-release",
-      method: "item/tool/call",
-      params: { threadId: "thread-dormant-release", turnId: "turn-1" },
-    });
+    const route = harness.reserve();
+    route.armTurn();
+    harness.call("request", "item/tool/call");
+    harness.complete();
     await settleInput();
 
     route.release();
+    await harness.expectResponse("request", unhandledToolResult);
+    harness.client.close();
 
     expect(route.signal.aborted).toBe(true);
     expect(route.signal.reason).toEqual(new Error("codex app-server thread route is released"));
     await expect(route.activate({ onRequest: vi.fn() })).rejects.toThrow(
       "thread route is released",
     );
-    await expect(route.bindTurn("turn-1")).rejects.toThrow("thread route is released");
-    expect(await waitForResponse(harness, "request-dormant-release")).toEqual({
-      id: "request-dormant-release",
-      result: {
-        contentItems: [
-          {
-            type: "inputText",
-            text: "OpenClaw did not register a handler for this app-server tool call.",
-          },
-        ],
-        success: false,
-      },
-    });
-  });
-
-  it("fails and removes a route when its pre-bind buffer is full", async () => {
-    vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const harness = createHarness();
-    const router = getCodexAppServerTurnRouter(harness.client);
-    const route = router.reserveThread({
-      threadId: "thread-overflow",
-      onNotification: vi.fn(),
-    });
-    route.armTurn();
-    for (let index = 0; index <= 256; index += 1) {
-      harness.send({
-        method: "item/started",
-        params: { threadId: "thread-overflow", turnId: "turn-overflow" },
-      });
-    }
-    await settleInput();
-
-    await expect(route.bindTurn("turn-overflow")).rejects.toThrow(
-      "pre-bind notification buffer exceeded 256 entries",
+    await expect(route.bindTurn("turn-1", { completed: true })).rejects.toThrow(
+      "thread route is released",
     );
-    expect(() =>
-      router.reserveThread({
-        threadId: "thread-overflow",
-        onNotification: vi.fn(),
-      }),
-    ).not.toThrow();
   });
+
+  it.each([
+    { label: "pre-bind notifications", paused: false, overflowMethod: "item/started" },
+    { label: "paused notifications", paused: true, overflowMethod: "item/started" },
+    { label: "paused global warnings", paused: true, overflowMethod: "configWarning" },
+  ])(
+    "fails and removes a route when its buffer is full of $label",
+    async ({ paused, overflowMethod }) => {
+      quietWarnings();
+      const harness = createHarness();
+      const router = harness.router;
+      const notifications = vi.fn();
+      const requests = vi.fn(() => accept);
+      const sibling = notificationRecorder();
+      router.reserveThread({ threadId: "sibling", ...sibling });
+      const route = harness.reserve({ onNotification: notifications, onRequest: requests });
+      route.armTurn();
+      const beforeNotifications = createDeferred<void>();
+      const binding = paused
+        ? route.bindTurn("turn-1", { beforeNotifications: beforeNotifications.promise })
+        : undefined;
+      void binding?.catch(() => undefined);
+      harness.call("overflow", "item/commandExecution/requestApproval");
+      for (let index = 0; index < 256; index += 1) {
+        harness.turn("item/started");
+      }
+      await settleInput();
+      try {
+        expect(route.signal.aborted).toBe(false);
+        if (overflowMethod === "configWarning") {
+          harness.notify(overflowMethod, { message: "overflow" });
+        } else {
+          harness.turn(overflowMethod);
+        }
+        await settleInput();
+
+        expect(route.signal.aborted).toBe(true);
+        await expect(binding ?? route.bindTurn("turn-1")).rejects.toThrow(
+          "pre-bind notification buffer exceeded 256 entries",
+        );
+        await harness.expectResponse("overflow", decline);
+        beforeNotifications.resolve();
+        await settleInput();
+        expect(notifications).not.toHaveBeenCalled();
+        expect(requests).not.toHaveBeenCalled();
+
+        harness.notify("thread/status/changed", {
+          threadId: "sibling",
+          status: { type: "active" },
+        });
+        await vi.waitFor(() => expect(sibling.delivered).toEqual(["thread/status/changed"]));
+      } finally {
+        beforeNotifications.resolve();
+        route.release();
+        await binding?.catch(() => undefined);
+      }
+    },
+  );
 });
-
-async function waitForResponse(harness: ClientHarness, id: number | string): Promise<WireResponse> {
-  let response: WireResponse | undefined;
-  await vi.waitFor(() => {
-    response = harness.writes
-      .map((write) => JSON.parse(write) as WireResponse)
-      .find((candidate) => candidate.id === id);
-    expect(response).toBeDefined();
-  });
-  if (!response) {
-    throw new Error(`missing app-server response for ${id}`);
-  }
-  return response;
-}
-
-async function settleInput(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}

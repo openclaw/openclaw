@@ -5,14 +5,15 @@
  * host, and node browser integrations that need HTTP access to browser control.
  */
 import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { isIPv6, type AddressInfo } from "node:net";
+import { promisify } from "node:util";
 import express from "express";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isLoopbackHost } from "../gateway/net.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { listenBrowserHttpServer } from "./http-listen.js";
-import type { BrowserRouteRegistrar } from "./routes/types.js";
 import { stopBrowserBridgeRuntime } from "./runtime-lifecycle.js";
 import type { BrowserServerState, ProfileContext } from "./server-context.js";
 import {
@@ -21,7 +22,6 @@ import {
   installBrowserCommonMiddleware,
 } from "./server-middleware.js";
 
-/** Running bridge server details returned to callers that manage its lifecycle. */
 export type BrowserBridge = {
   server: Server;
   port: number;
@@ -36,15 +36,7 @@ async function closeBridgeHttpServer(server: Server): Promise<void> {
   if (!server.listening) {
     return;
   }
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
+  await promisify(server.close.bind(server))();
 }
 
 type ResolvedNoVncObserver = {
@@ -81,7 +73,6 @@ function buildNoVncBootstrapHtml(params: ResolvedNoVncObserver): string {
 </html>`;
 }
 
-/** Start an authenticated loopback browser bridge and register browser routes. */
 export async function startBrowserBridgeServer(params: {
   resolved: ResolvedBrowserConfig;
   host?: string;
@@ -90,7 +81,6 @@ export async function startBrowserBridgeServer(params: {
   authPassword?: string;
   onEnsureAttachTarget?: (profile: ProfileContext["profile"]) => Promise<void>;
   resolveSandboxNoVncToken?: (token: string) => ResolvedNoVncObserver | null;
-  skipRouteRegistrationForTest?: boolean;
 }): Promise<BrowserBridge> {
   const host = params.host ?? "127.0.0.1";
   if (!isLoopbackHost(host)) {
@@ -139,21 +129,15 @@ export async function startBrowserBridgeServer(params: {
     profiles: new Map(),
   };
 
-  if (params.skipRouteRegistrationForTest) {
-    app.get("/", (_req, res) => {
-      res.status(200).send("OK");
-    });
-  } else {
-    const [{ createBrowserRouteContext }, { registerBrowserRoutes }] = await Promise.all([
-      import("./server-context.js"),
-      import("./routes/index.js"),
-    ]);
-    const ctx = createBrowserRouteContext({
-      getState: () => state,
-      onEnsureAttachTarget: params.onEnsureAttachTarget,
-    });
-    registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
-  }
+  const [{ createBrowserRouteContext }, { registerBrowserRoutes }] = await Promise.all([
+    import("./server-context.js"),
+    import("./routes/index.js"),
+  ]);
+  const ctx = createBrowserRouteContext({
+    getState: () => state,
+    onEnsureAttachTarget: params.onEnsureAttachTarget,
+  });
+  registerBrowserRoutes(app, ctx);
 
   const server = await listenBrowserHttpServer(app, port, host);
 
@@ -166,7 +150,7 @@ export async function startBrowserBridgeServer(params: {
 
   setBridgeAuthForPort(resolvedPort, { token: authToken, password: authPassword });
 
-  const baseUrl = `http://${host}:${resolvedPort}`;
+  const baseUrl = `http://${isIPv6(host) ? `[${host}]` : host}:${resolvedPort}`;
   return { server, port: resolvedPort, baseUrl, state };
 }
 
@@ -195,7 +179,6 @@ async function stopBrowserBridgeServerOnce(server: Server): Promise<void> {
   }
   const runtimeClose = stopBrowserBridgeRuntime({
     current: state,
-    getState: () => bridgeStates.get(server) ?? null,
     // Retain the exact state until ingress and resource cleanup both succeed.
     clearState: () => {},
     onWarn: () => {},
@@ -210,25 +193,17 @@ async function stopBrowserBridgeServerOnce(server: Server): Promise<void> {
   bridgeStates.delete(server);
 }
 
-/** Stop a browser bridge server and clear its ephemeral port auth. */
 export function stopBrowserBridgeServer(server: Server): Promise<void> {
   const current = bridgeStopPromises.get(server);
   if (current) {
     return current;
   }
-  let resolveStop!: () => void;
-  let rejectStop!: (reason: unknown) => void;
-  const stopping = new Promise<void>((resolve, reject) => {
-    resolveStop = resolve;
-    rejectStop = reject;
-  });
+  const { promise: stopping, resolve, reject } = createDeferred<void>();
   bridgeStopPromises.set(server, stopping);
-  void stopBrowserBridgeServerOnce(server).then(resolveStop, rejectStop);
+  void stopBrowserBridgeServerOnce(server).then(resolve, reject);
   void stopping
     .finally(() => {
-      if (bridgeStopPromises.get(server) === stopping) {
-        bridgeStopPromises.delete(server);
-      }
+      bridgeStopPromises.delete(server);
     })
     .catch(() => {});
   return stopping;

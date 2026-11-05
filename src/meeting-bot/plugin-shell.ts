@@ -1,6 +1,6 @@
 import type { Command } from "commander";
-import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
+import type { OpenClawPluginCliRootCommandDescriptor } from "../plugins/plugin-registration.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
 import {
@@ -46,16 +46,14 @@ type MeetingPluginShellPlatform = {
   };
 };
 
-type MeetingPluginNodeHostOptions = {
+export function createMeetingPluginNodeHostHandler(options: {
   browserPageName: string;
   defaultAudioInputCommand: readonly string[];
   defaultAudioOutputCommand: readonly string[];
   meetingLabel: string;
   platform: MeetingPluginShellPlatform;
   sharePrerequisiteDeadline: boolean;
-};
-
-export function createMeetingPluginNodeHostHandler(options: MeetingPluginNodeHostOptions) {
+}) {
   const platform = options.platform;
   return createMeetingConfiguredNodeHost({
     ...options,
@@ -97,34 +95,6 @@ export function createMeetingPluginNodeInvokePolicy(
     useConfiguredSetupCommands: true,
     start: config.chrome,
   });
-}
-
-function createMeetingPluginCliDescriptor(name: string, description: string) {
-  return {
-    name,
-    description,
-    hasSubcommands: true,
-    machineOutput: ({ argv }: { argv: readonly string[] }) =>
-      getRootOptionAwareCommandPath(argv, 2).length === 2,
-  } as const;
-}
-
-export function createMeetingPluginCliMetadata(options: {
-  commandName: string;
-  description: string;
-  id: string;
-  name: string;
-}) {
-  const descriptor = createMeetingPluginCliDescriptor(options.commandName, options.description);
-  return {
-    id: options.id,
-    name: options.name,
-    description: `${options.name} CLI metadata`,
-    descriptor,
-    register(api: OpenClawPluginApi) {
-      api.registerCli(() => {}, { descriptors: [descriptor] });
-    },
-  };
 }
 
 export function createMeetingChromeRuntimeBindings() {
@@ -179,6 +149,7 @@ type MeetingPluginShellEntryOptions<
   | "unknownActionMessage"
 > & {
   cli: {
+    descriptor: OpenClawPluginCliRootCommandDescriptor;
     load(): Promise<(params: { program: Command; config: Config }) => void>;
   };
   browserGuestLabel: string;
@@ -225,13 +196,9 @@ export function createMeetingPluginShellEntry<
       }),
     registerCli: (api, config) => {
       api.registerCli(async ({ program }) => (await loadCli())({ program, config }), {
-        commands: [methodPrefix],
-        descriptors: [
-          createMeetingPluginCliDescriptor(
-            methodPrefix,
-            `Join and manage ${options.browserGuestLabel} guests`,
-          ),
-        ],
+        commands: [options.cli.descriptor.name],
+        // Share the metadata descriptor so help and runtime output policy cannot drift.
+        descriptors: [options.cli.descriptor],
       });
     },
   });

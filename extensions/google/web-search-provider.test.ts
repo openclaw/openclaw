@@ -1,4 +1,5 @@
 // Google tests cover web search provider plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,54 +9,55 @@ type TestModelProviderConfig = NonNullable<
   NonNullable<OpenClawConfig["models"]>["providers"]
 >[string];
 
-function installGeminiFetch() {
+function geminiAnswer(text: string, groundingMetadata: object = {}) {
+  return { candidates: [{ content: { parts: [{ text }] }, groundingMetadata }] };
+}
+function candidateResponse(candidate: unknown) {
+  return { candidates: [candidate] };
+}
+function installGeminiResponse(body: string, init?: ResponseInit) {
   const mockFetch = vi.fn((_input?: RequestInfo | URL, _init?: RequestInit) =>
-    Promise.resolve(
-      new Response(
-        JSON.stringify({
-          candidates: [
-            {
-              content: { parts: [{ text: "Grounded answer" }] },
-              groundingMetadata: {
-                groundingChunks: [{ web: { uri: "https://example.com", title: "Example" } }],
-              },
-            },
-          ],
-        }),
-      ),
-    ),
+    Promise.resolve(new Response(body, init)),
   );
   vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
   return mockFetch;
 }
+function installGeminiFetch(
+  body: unknown = geminiAnswer("Grounded answer", {
+    groundingChunks: [{ web: { uri: "https://example.com", title: "Example" } }],
+  }),
+  init?: ResponseInit,
+) {
+  return installGeminiResponse(JSON.stringify(body), init);
+}
+function postedCalls(mockFetch: ReturnType<typeof installGeminiFetch>) {
+  return mockFetch.mock.calls.filter(([, init]) => typeof init?.body === "string");
+}
 
-function createGoogleModelProviderConfig(
+function withGoogleModel(
+  config: OpenClawConfig,
   overrides: Partial<TestModelProviderConfig>,
-): TestModelProviderConfig {
+): OpenClawConfig {
   return {
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta/",
-    models: [],
-    ...overrides,
+    ...config,
+    models: {
+      providers: {
+        google: {
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta/",
+          models: [],
+          ...overrides,
+        },
+      },
+    },
   };
 }
 
-function requireFirstGeminiFetchCall(
-  mockFetch: ReturnType<typeof installGeminiFetch>,
-): [RequestInfo | URL | undefined, RequestInit | undefined] {
-  const [call] = mockFetch.mock.calls;
-  if (!call) {
-    throw new Error("expected Gemini web search fetch call");
-  }
-  return call as [RequestInfo | URL | undefined, RequestInit | undefined];
-}
-
 function getFetchHeaders(mockFetch: ReturnType<typeof installGeminiFetch>): Record<string, string> {
-  const [, init] = requireFirstGeminiFetchCall(mockFetch);
-  return Object.fromEntries(new Headers(init?.headers).entries());
+  return Object.fromEntries(new Headers(postedCalls(mockFetch)[0]?.[1]?.headers).entries());
 }
 
-function createGeminiToolWithHeaders(headers: Record<string, unknown>) {
-  return createGeminiWebSearchProvider().createTool({
+function createGeminiToolOptions(webSearch: Record<string, unknown> = {}) {
+  return {
     config: {
       plugins: {
         entries: {
@@ -63,7 +65,7 @@ function createGeminiToolWithHeaders(headers: Record<string, unknown>) {
             config: {
               webSearch: {
                 apiKey: "AIza-plugin-test",
-                headers,
+                ...webSearch,
               },
             },
           },
@@ -71,11 +73,24 @@ function createGeminiToolWithHeaders(headers: Record<string, unknown>) {
       },
     },
     searchConfig: { provider: "gemini" },
-  });
+  };
 }
 
+function createGeminiTool(
+  webSearch: Record<string, unknown> = {},
+  searchConfig: Record<string, unknown> = {},
+) {
+  const options = createGeminiToolOptions(webSearch);
+  return createGeminiWebSearchProvider().createTool({
+    ...options,
+    searchConfig: { ...options.searchConfig, ...searchConfig },
+  });
+}
+function createGeminiToolWithHeaders(headers: Record<string, unknown>) {
+  return createGeminiTool({ headers });
+}
 function getGeminiFetchUrl(mockFetch: ReturnType<typeof installGeminiFetch>): string | undefined {
-  const [input] = requireFirstGeminiFetchCall(mockFetch);
+  const input = postedCalls(mockFetch)[0]?.[0];
   if (typeof input === "string") {
     return input;
   }
@@ -85,12 +100,14 @@ function getGeminiFetchUrl(mockFetch: ReturnType<typeof installGeminiFetch>): st
   return input?.url;
 }
 
-function parseGeminiFetchBody(mockFetch: ReturnType<typeof installGeminiFetch>): {
+function parseGeminiFetchBody(
+  mockFetch: ReturnType<typeof installGeminiFetch>,
+  index = 0,
+): {
   contents?: Array<{ parts?: Array<{ text?: string }> }>;
   tools?: Array<{ google_search?: { timeRangeFilter?: unknown } }>;
 } {
-  const [, init] = requireFirstGeminiFetchCall(mockFetch);
-  const body = init?.body;
+  const body = postedCalls(mockFetch)[index]?.[1]?.body;
   if (typeof body !== "string") {
     throw new Error("Expected Gemini fetch body string");
   }
@@ -134,51 +151,50 @@ describe("google web search provider", () => {
     expect(provider.getConfiguredCredentialValue?.(config)).toBe("AIza-plugin-test");
   });
 
-  it("routes Gemini web search through plugin webSearch.baseUrl", async () => {
+  it.each([
+    [undefined, "gemini-3.6-flash"],
+    ["  ", "gemini-3.6-flash"],
+    [" gemini-3.5-flash ", "gemini-3.5-flash"],
+  ])("selects model %j as %s through plugin config", async (model, expectedModel) => {
     const mockFetch = installGeminiFetch();
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                  baseUrl: "https://generativelanguage.googleapis.com/proxy/v1beta/",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = createGeminiTool({ model }, { cacheTtlMinutes: 0 });
 
-    await tool?.execute({ query: "OpenClaw docs" });
+    const result = await tool?.execute({ query: "OpenClaw model selection" });
 
     expect(getGeminiFetchUrl(mockFetch)).toBe(
-      "https://generativelanguage.googleapis.com/proxy/v1beta/models/gemini-2.5-flash:generateContent",
+      `https://generativelanguage.googleapis.com/v1beta/models/${expectedModel}:generateContent`,
     );
+    expect(result).toMatchObject({ provider: "gemini", model: expectedModel });
+    expect(parseGeminiFetchBody(mockFetch).tools).toEqual([{ google_search: {} }]);
   });
 
-  it("sends operator headers while keeping provider-owned headers authoritative", async () => {
-    const mockFetch = installGeminiFetch();
-    const tool = createGeminiToolWithHeaders({
-      "X-Routing-Target": "staging",
-      "X-Gateway-Token": "resolved-gateway-token",
-      "X-Goog-Api-Key": "operator-value",
-    });
+  it.each([undefined, "https://ai-gateway.vercel.sh/v1beta"])(
+    "sends operator headers while keeping provider-owned headers authoritative at %s",
+    async (baseUrl) => {
+      const mockFetch = installGeminiFetch();
+      const tool = createGeminiTool({
+        baseUrl,
+        headers: {
+          "X-Routing-Target": "staging",
+          "X-Gateway-Token": "resolved-gateway-token",
+          "X-Goog-Api-Key": "operator-value",
+          "X-Title": "operator-title",
+          "HTTP-Referer": "https://operator.example/",
+        },
+      });
 
-    await tool?.execute({ query: "OpenClaw operator headers" });
+      await tool?.execute({ query: "OpenClaw operator headers" });
 
-    expect(getFetchHeaders(mockFetch)).toMatchObject({
-      "content-type": "application/json",
-      "x-gateway-token": "resolved-gateway-token",
-      "x-goog-api-key": "AIza-plugin-test",
-      "x-routing-target": "staging",
-    });
-  });
+      expect(getFetchHeaders(mockFetch)).toMatchObject({
+        "content-type": "application/json",
+        "x-gateway-token": "resolved-gateway-token",
+        "x-goog-api-key": "AIza-plugin-test",
+        "x-routing-target": "staging",
+        "x-title": baseUrl ? "OpenClaw" : "operator-title",
+        "http-referer": baseUrl ? "https://openclaw.ai" : "https://operator.example/",
+      });
+    },
+  );
 
   it("partitions cached Gemini results by operator headers", async () => {
     const mockFetch = installGeminiFetch();
@@ -190,8 +206,64 @@ describe("google web search provider", () => {
       query: "OpenClaw header cache partition",
     });
 
-    const postCalls = mockFetch.mock.calls.filter(([, init]) => typeof init?.body === "string");
+    const postCalls = postedCalls(mockFetch);
     expect(postCalls).toHaveLength(2);
+  });
+
+  it("reuses cached Gemini answers across ignored result counts while rejecting invalid counts", async () => {
+    const mockFetch = installGeminiFetch();
+    const tool = createGeminiToolWithHeaders({});
+    const query = "unique Gemini ignored result count cache regression";
+
+    await tool?.execute({ query, count: 1 });
+    await tool?.execute({ query, count: 10 });
+    await tool?.execute({ query });
+
+    await expect(tool?.execute({ query, count: 0 })).rejects.toThrow(
+      "count must be an integer from 1 to 10.",
+    );
+    const postCalls = postedCalls(mockFetch);
+    expect(postCalls).toHaveLength(1);
+  });
+
+  it.each([0, 1])("honors the current Gemini cache TTL of %s minutes", async (cacheTtlMinutes) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    let content = "Original grounded answer";
+    const mockFetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: content }] } }] })),
+    );
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
+    const createTool = (ttl: number) => createGeminiTool({}, { cacheTtlMinutes: ttl });
+    const query = `Gemini current request cache TTL ${cacheTtlMinutes}`;
+    const cachedTool = createTool(15);
+    await cachedTool?.execute({ query });
+    await expect(cachedTool?.execute({ query })).resolves.toMatchObject({
+      cached: true,
+      content: expect.stringContaining("Original grounded answer"),
+    });
+    expect(mockFetch).toHaveBeenCalledOnce();
+
+    now.mockReturnValue(1_060_000);
+    content = "Fresh grounded answer";
+    const currentTool = createTool(cacheTtlMinutes);
+    const fresh = await currentTool?.execute({ query });
+    expect(fresh).not.toHaveProperty("cached");
+    expect(fresh).toMatchObject({ content: expect.stringContaining("Fresh grounded answer") });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    if (cacheTtlMinutes === 0) {
+      await expect(currentTool?.execute({ query })).resolves.not.toHaveProperty("cached");
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      await expect(cachedTool?.execute({ query })).resolves.toMatchObject({
+        cached: true,
+        content: expect.stringContaining("Original grounded answer"),
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    } else {
+      await expect(currentTool?.execute({ query })).resolves.toEqual({ ...fresh, cached: true });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    }
   });
 
   it("does not partition cached results by overwritten provider-owned headers", async () => {
@@ -204,7 +276,7 @@ describe("google web search provider", () => {
       query: "OpenClaw provider-owned header cache",
     });
 
-    const postCalls = mockFetch.mock.calls.filter(([, init]) => typeof init?.body === "string");
+    const postCalls = postedCalls(mockFetch);
     expect(postCalls).toHaveLength(1);
     expect(getFetchHeaders(mockFetch)["x-goog-api-key"]).toBe("AIza-plugin-test");
   });
@@ -220,7 +292,7 @@ describe("google web search provider", () => {
       query: "OpenClaw case-colliding header cache",
     });
 
-    const postCalls = mockFetch.mock.calls.filter(([, init]) => typeof init?.body === "string");
+    const postCalls = postedCalls(mockFetch);
     expect(postCalls).toHaveLength(1);
     expect(getFetchHeaders(mockFetch)["x-routing-target"]).toBe("production");
   });
@@ -244,26 +316,18 @@ describe("google web search provider", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "Connection",
-    "Content-Length",
-    "Expect",
-    "Host",
-    "Keep-Alive",
-    "Proxy-Connection",
-    "TE",
-    "Trailer",
-    "Transfer-Encoding",
-    "Upgrade",
-  ])("rejects reserved or framing operator header %s before fetch", async (name) => {
-    const mockFetch = installGeminiFetch();
-    const tool = createGeminiToolWithHeaders({ [name]: "configured-value" });
+  it.each(["Connection", "Content-Length"])(
+    "rejects reserved or framing operator header %s before fetch",
+    async (name) => {
+      const mockFetch = installGeminiFetch();
+      const tool = createGeminiToolWithHeaders({ [name]: "configured-value" });
 
-    await expect(tool?.execute({ query: `OpenClaw rejects ${name}` })).rejects.toThrow(
-      `plugins.entries.google.config.webSearch.headers["${name}"] uses a reserved or framing HTTP header`,
-    );
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
+      await expect(tool?.execute({ query: `OpenClaw rejects ${name}` })).rejects.toThrow(
+        `plugins.entries.google.config.webSearch.headers["${name}"] uses a reserved or framing HTTP header`,
+      );
+      expect(mockFetch).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps unresolved explicit header SecretRefs strict", async () => {
     const mockFetch = installGeminiFetch();
@@ -285,391 +349,258 @@ describe("google web search provider", () => {
   });
 
   it("accepts Gemini success JSON with empty grounding metadata", async () => {
-    vi.stubGlobal(
-      "fetch",
-      withFetchPreconnect(
-        vi.fn(() =>
-          Promise.resolve(
-            new Response(
-              JSON.stringify({
-                candidates: [
-                  {
-                    content: { parts: [{ text: "Today's date is Sunday, June 7, 2026." }] },
-                    groundingMetadata: {},
-                  },
-                ],
-              }),
-            ),
-          ),
-        ),
-      ),
-    );
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    installGeminiFetch(geminiAnswer("Today's date is Sunday, June 7, 2026."));
+    const tool = createGeminiTool();
 
     const result = await tool?.execute({ query: "current date today" });
 
     expect(result).toMatchObject({
       citations: [],
-      model: "gemini-2.5-flash",
+      model: "gemini-3.6-flash",
       provider: "gemini",
+      content: expect.stringContaining("Today's date is Sunday, June 7, 2026."),
     });
-    expect(String(result?.content)).toContain("Today's date is Sunday, June 7, 2026.");
   });
 
-  it("reports malformed Gemini API JSON with a stable provider error", async () => {
-    vi.stubGlobal(
-      "fetch",
-      withFetchPreconnect(vi.fn(() => Promise.resolve(new Response("{ nope")))),
-    );
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+  it.each([
+    { httpStatus: 401, embedded: false },
+    { httpStatus: 403, embedded: false },
+    { httpStatus: 429, embedded: false },
+    { httpStatus: 403, embedded: true },
+  ])(
+    "preserves typed status $httpStatus (embedded=$embedded)",
+    async ({ httpStatus, embedded }) => {
+      installGeminiFetch(
+        { error: { code: httpStatus, message: "denied key=AIza-plugin-test" } },
+        { status: embedded ? 200 : httpStatus },
+      );
+      const tool = createGeminiTool();
+      await expect(
+        tool?.execute({ query: `synthetic-http-${embedded}-${httpStatus}` }),
+      ).rejects.toMatchObject({
+        status: httpStatus,
+        statusCode: httpStatus,
+        message: expect.not.stringContaining("AIza-plugin-test"),
+      });
+    },
+  );
 
-    await expect(tool?.execute({ query: "OpenClaw docs" })).rejects.toThrow(
+  it.each([
+    ["empty parts", candidateResponse({ content: { parts: [] }, finishReason: "STOP" }), " (STOP)"],
+    [
+      "missing parts",
+      candidateResponse({ content: { role: "model" }, finishReason: "STOP" }),
+      " (STOP)",
+    ],
+    ["missing content", candidateResponse({ finishReason: "STOP" }), " (STOP)"],
+    [
+      "nontext part",
+      candidateResponse({ content: { parts: [{ functionCall: {} }] }, finishReason: "STOP" }),
+      " (STOP)",
+    ],
+    ["empty candidates", { candidates: [] }, ""],
+    ["missing candidates", {}, ""],
+    ["blocked prompt", { promptFeedback: { blockReason: "SAFETY" } }, " (SAFETY)"],
+    ["blank reason", candidateResponse({ finishReason: "  " }), ""],
+  ])(
+    "reports no final answer for %s without inventing search results",
+    async (_name, body, reason) => {
+      installGeminiFetch(body);
+      const tool = createGeminiToolWithHeaders({});
+
+      await expect(tool?.execute({ query: "OpenClaw empty answer" })).rejects.toThrow(
+        `Gemini search returned no final answer${reason}.`,
+      );
+    },
+  );
+
+  it.each([
+    ["JSON syntax", "{ nope"],
+    ["array root", []],
+    ["non-array candidates", { candidates: {} }],
+    ["null candidate", candidateResponse(null)],
+    ["non-record content", candidateResponse({ content: "invalid" })],
+    ["null part", candidateResponse({ content: { parts: [null] } })],
+    ["non-string part text", candidateResponse({ content: { parts: [{ text: 7 }] } })],
+    ["non-array parts", candidateResponse({ content: { parts: {} } })],
+    ["non-record prompt feedback", { promptFeedback: [] }],
+    ["non-string block reason", { promptFeedback: { blockReason: {} } }],
+    ["non-string finish reason", candidateResponse({ finishReason: 1 })],
+    ["non-record grounding metadata", candidateResponse({ groundingMetadata: [] })],
+    [
+      "non-array grounding chunks",
+      candidateResponse({ groundingMetadata: { groundingChunks: {} } }),
+    ],
+    ["non-record error", { error: "invalid" }],
+  ])("keeps malformed %s distinct from an absent answer", async (_name, body) => {
+    installGeminiResponse(typeof body === "string" ? body : JSON.stringify(body));
+    const tool = createGeminiToolWithHeaders({});
+
+    await expect(tool?.execute({ query: "OpenClaw malformed answer" })).rejects.toThrow(
       "Gemini API error: malformed JSON response",
     );
   });
 
-  it("rejects wrong-root Gemini success JSON with a stable provider error", async () => {
-    vi.stubGlobal(
-      "fetch",
-      withFetchPreconnect(vi.fn(() => Promise.resolve(new Response(JSON.stringify([]))))),
-    );
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+  it("bounds the provider reason in an empty-answer diagnostic", async () => {
+    installGeminiFetch({ candidates: [{ finishReason: "X".repeat(1_000) }] });
+    const tool = createGeminiToolWithHeaders({});
 
-    await expect(tool?.execute({ query: "OpenClaw docs" })).rejects.toThrow(
-      "Gemini API error: malformed JSON response",
+    await expect(tool?.execute({ query: "OpenClaw bounded reason" })).rejects.toThrow(
+      `Gemini search returned no final answer (${"X".repeat(119)}…).`,
     );
   });
 
-  it("rejects Gemini success JSON without candidate text", async () => {
-    vi.stubGlobal(
-      "fetch",
-      withFetchPreconnect(
-        vi.fn(() =>
-          Promise.resolve(
-            new Response(JSON.stringify({ candidates: [{ content: { parts: [] } }] })),
-          ),
-        ),
-      ),
-    );
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
+  it("preserves text-bearing partial answers with malformed sibling parts", async () => {
+    const parts = [null, { text: 7 }, { text: "Partial answer" }];
+    installGeminiFetch({
+      candidates: [{ content: { parts }, finishReason: "MAX_TOKENS" }],
     });
+    const tool = createGeminiToolWithHeaders({});
 
-    await expect(tool?.execute({ query: "OpenClaw docs" })).rejects.toThrow(
-      "Gemini API error: malformed JSON response",
-    );
+    await expect(
+      tool?.execute({ query: `OpenClaw partial answer with ${parts.length} parts` }),
+    ).resolves.toMatchObject({
+      content: expect.stringContaining("Partial answer"),
+    });
   });
 
-  it("passes provider execution abort signals into the Gemini fetch", async () => {
+  it("does not contact Gemini for an already-cancelled search", async () => {
     const mockFetch = installGeminiFetch();
     const controller = new AbortController();
-    controller.abort();
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const reason = new Error("Gemini search cancelled before billing");
+    controller.abort(reason);
+    const tool = createGeminiTool();
 
-    await tool?.execute({ query: "OpenClaw docs" }, { signal: controller.signal });
-
-    const [, init] = requireFirstGeminiFetchCall(mockFetch);
-    expect(init?.signal?.aborted).toBe(true);
+    await expect(
+      tool?.execute({ query: "OpenClaw cancelled docs" }, { signal: controller.signal }),
+    ).rejects.toBe(reason);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("reuses the Google model provider key when no web search key or env key is set", async () => {
-    await withEnvAsync({ GEMINI_API_KEY: undefined }, async () => {
+  it("does not cache a Gemini result completed after caller cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Gemini search cancelled after response");
+    const mockFetch = installGeminiFetch();
+    mockFetch.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      return new Response(
+        JSON.stringify(
+          geminiAnswer("Cancelled grounded answer", {
+            groundingChunks: [{ web: { uri: "https://example.com/cancelled" } }],
+          }),
+        ),
+      );
+    });
+    const tool = createGeminiTool();
+    const query = "OpenClaw late-cancel Gemini cache";
+
+    await expect(tool?.execute({ query }, { signal: controller.signal })).rejects.toBe(reason);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    await tool?.execute({ query });
+
+    const postCalls = postedCalls(mockFetch);
+    expect(postCalls).toHaveLength(2);
+  });
+
+  it("cancels active citation requests without starting another batch", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Gemini search cancelled during citation resolution");
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const redirects: RequestInit[] = [];
+    const body = JSON.stringify(
+      geminiAnswer("Grounded answer", {
+        groundingChunks: Array.from({ length: 25 }, (_, index) => ({
+          web: { uri: `https://example.com/source-${index}` },
+        })),
+      }),
+    );
+    const mockFetch = installGeminiResponse(body);
+    mockFetch.mockImplementation(async (_input, init) => {
+      if (init?.method !== "HEAD") {
+        return new Response(body);
+      }
+      redirects.push(init);
+      if (redirects.length === 10) {
+        started.resolve();
+      }
+      await release.promise;
+      init.signal?.throwIfAborted();
+      return new Response(null);
+    });
+    const tool = createGeminiTool();
+    const query = "OpenClaw cancel citation batch";
+    const result = expect(tool?.execute({ query }, { signal: controller.signal })).rejects.toBe(
+      reason,
+    );
+    try {
+      await started.promise;
+      controller.abort(reason);
+    } finally {
+      release.resolve();
+    }
+    await result;
+    expect(redirects).toHaveLength(10);
+    expect(redirects.every((init) => init.signal?.aborted)).toBe(true);
+
+    await tool?.execute({ query });
+    expect(postedCalls(mockFetch)).toHaveLength(2);
+    expect(redirects).toHaveLength(35);
+  });
+
+  it.each([
+    ["provider key fallback", undefined, {}, "AIza-provider-test"],
+    [
+      "plugin key precedence",
+      "AIza-env-test",
+      createGeminiToolOptions().config,
+      "AIza-plugin-test",
+    ],
+  ] as const)("resolves %s", async (label, envKey, config, expectedKey) => {
+    await withEnvAsync({ GEMINI_API_KEY: envKey }, async () => {
       const mockFetch = installGeminiFetch();
-      const provider = createGeminiWebSearchProvider();
-      const tool = provider.createTool({
-        config: {
-          models: {
-            providers: {
-              google: createGoogleModelProviderConfig({
-                apiKey: "AIza-provider-test",
-              }),
-            },
-          },
-        },
+      const tool = createGeminiWebSearchProvider().createTool({
+        config: withGoogleModel(config, { apiKey: "AIza-provider-test" }),
         searchConfig: { provider: "gemini" },
       });
-
-      await tool?.execute({ query: "OpenClaw provider key fallback" });
-
-      expect(getFetchHeaders(mockFetch)["x-goog-api-key"]).toBe("AIza-provider-test");
+      await tool?.execute({ query: `OpenClaw ${label}` });
+      expect(getFetchHeaders(mockFetch)["x-goog-api-key"]).toBe(expectedKey);
       expect(getFetchHeaders(mockFetch)["x-goog-api-client"]).toMatch(/^openclaw\//u);
     });
   });
 
-  it("keeps plugin web search keys ahead of env and provider keys", async () => {
-    await withEnvAsync({ GEMINI_API_KEY: "AIza-env-test" }, async () => {
+  it.each([undefined, "https://generativelanguage.googleapis.com/plugin/v1beta/"])(
+    "uses plugin baseUrl %s ahead of the provider fallback",
+    async (baseUrl) => {
       const mockFetch = installGeminiFetch();
-      const provider = createGeminiWebSearchProvider();
-      const tool = provider.createTool({
-        config: {
-          plugins: {
-            entries: {
-              google: {
-                config: {
-                  webSearch: {
-                    apiKey: "AIza-plugin-test",
-                  },
-                },
-              },
-            },
-          },
-          models: {
-            providers: {
-              google: createGoogleModelProviderConfig({
-                apiKey: "AIza-provider-test",
-              }),
-            },
-          },
-        },
+      const tool = createGeminiWebSearchProvider().createTool({
+        config: withGoogleModel(createGeminiToolOptions({ baseUrl }).config, {
+          baseUrl: "https://generativelanguage.googleapis.com/provider/v1beta/",
+        }),
         searchConfig: { provider: "gemini" },
       });
-
-      await tool?.execute({ query: "OpenClaw plugin key precedence" });
-
-      expect(getFetchHeaders(mockFetch)["x-goog-api-key"]).toBe("AIza-plugin-test");
-      expect(getFetchHeaders(mockFetch)["x-goog-api-client"]).toMatch(/^openclaw\//u);
-    });
-  });
-
-  it("routes Gemini web search through provider-level google.baseUrl as a fallback", async () => {
-    const mockFetch = installGeminiFetch();
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        models: {
-          providers: {
-            google: createGoogleModelProviderConfig({
-              apiKey: "AIza-provider-test",
-              baseUrl: "https://generativelanguage.googleapis.com/provider/v1beta/",
-            }),
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
-
-    await tool?.execute({ query: "OpenClaw provider baseUrl fallback" });
-
-    expect(getGeminiFetchUrl(mockFetch)).toBe(
-      "https://generativelanguage.googleapis.com/provider/v1beta/models/gemini-2.5-flash:generateContent",
-    );
-  });
-
-  it("keeps plugin webSearch.baseUrl ahead of provider-level google.baseUrl", async () => {
-    const mockFetch = installGeminiFetch();
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                  baseUrl: "https://generativelanguage.googleapis.com/plugin/v1beta/",
-                },
-              },
-            },
-          },
-        },
-        models: {
-          providers: {
-            google: createGoogleModelProviderConfig({
-              baseUrl: "https://generativelanguage.googleapis.com/provider/v1beta/",
-            }),
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
-
-    await tool?.execute({ query: "OpenClaw plugin baseUrl precedence" });
-
-    expect(getGeminiFetchUrl(mockFetch)).toBe(
-      "https://generativelanguage.googleapis.com/plugin/v1beta/models/gemini-2.5-flash:generateContent",
-    );
-  });
-
-  it("uses a soft recency hint for Gemini day freshness shortcuts instead of a 24-hour range", async () => {
-    const mockFetch = installGeminiFetch();
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
-
-    await tool?.execute({ query: "latest ai news timestamp precision", freshness: "pd" });
-
-    const body = parseGeminiFetchBody(mockFetch);
-    expect(body.tools?.[0]?.google_search?.timeRangeFilter).toBeUndefined();
-    expect(body.contents?.[0]?.parts?.[0]?.text).toContain(
-      "Prioritize web sources published in the last 24 hours.",
-    );
-  });
-
-  it("preserves hard Gemini time ranges for wider freshness values", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
-    const mockFetch = installGeminiFetch();
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
-
-    await tool?.execute({ query: "latest ai news timestamp precision", freshness: "week" });
-
-    const body = parseGeminiFetchBody(mockFetch);
-    expect(body.contents?.[0]?.parts?.[0]?.text).toBe("latest ai news timestamp precision");
-    expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({
-      startTime: "2026-04-08T12:00:00Z",
-      endTime: "2026-04-15T12:00:00Z",
-    });
-  });
+      await tool?.execute({ query: `OpenClaw baseUrl ${baseUrl}` });
+      expect(getGeminiFetchUrl(mockFetch)).toBe(
+        `${baseUrl ?? "https://generativelanguage.googleapis.com/provider/v1beta/"}models/gemini-3.6-flash:generateContent`,
+      );
+    },
+  );
 
   it("partitions Gemini cache entries for soft day freshness, hard week freshness, and no freshness", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
     const mockFetch = installGeminiFetch();
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = createGeminiTool();
 
-    await tool?.execute({ query: "same query cache partition", freshness: "day" });
+    await tool?.execute({ query: "same query cache partition", freshness: "pd" });
     await tool?.execute({ query: "same query cache partition", freshness: "week" });
     await tool?.execute({ query: "same query cache partition" });
 
-    const postCalls = mockFetch.mock.calls.filter(([, init]) => typeof init?.body === "string");
+    const postCalls = postedCalls(mockFetch);
     expect(postCalls).toHaveLength(3);
-    const parsePostedBody = (call: (typeof postCalls)[number] | undefined) => {
-      const body = call?.[1]?.body;
-      if (typeof body !== "string") {
-        throw new Error("Expected Gemini fetch body to be a string");
-      }
-      return JSON.parse(body) as {
-        contents?: Array<{ parts?: Array<{ text?: string }> }>;
-        tools?: Array<{ google_search?: { timeRangeFilter?: unknown } }>;
-      };
-    };
-    const firstBody = parsePostedBody(postCalls[0]);
-    const secondBody = parsePostedBody(postCalls[1]);
-    const thirdBody = parsePostedBody(postCalls[2]);
+    const firstBody = parseGeminiFetchBody(mockFetch, 0);
+    const secondBody = parseGeminiFetchBody(mockFetch, 1);
+    const thirdBody = parseGeminiFetchBody(mockFetch, 2);
     expect(firstBody.tools?.[0]?.google_search?.timeRangeFilter).toBeUndefined();
     expect(firstBody.contents?.[0]?.parts?.[0]?.text).toContain(
       "Prioritize web sources published in the last 24 hours.",
@@ -683,64 +614,54 @@ describe("google web search provider", () => {
     expect(thirdBody.contents?.[0]?.parts?.[0]?.text).toBe("same query cache partition");
   });
 
-  it("strips sub-second precision from date-range timestamps so Gemini accepts them", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    // "now" with non-zero milliseconds. Without stripping, toISOString() emits
-    // "2026-04-15T12:00:00.123Z", which Gemini's google_search.time_range_filter
-    // rejects with "Granularity of nano is not supported".
-    vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
-    const mockFetch = installGeminiFetch();
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
+  it.each([
+    {
+      label: "relative freshness",
+      filter: { freshness: "week" },
+      equivalentFilter: { freshness: "pw" },
+      distinctFilter: { freshness: "month" },
+      initialTimeRange: {
+        startTime: "2026-04-08T12:00:00Z",
+        endTime: "2026-04-15T12:00:00Z",
       },
-      searchConfig: { provider: "gemini" },
-    });
+    },
+    {
+      label: "open-ended date ranges",
+      filter: { date_after: "2026-04-01" },
+      equivalentFilter: { date_after: "2026-04-01" },
+      distinctFilter: { date_after: "2026-04-02" },
+      initialTimeRange: {
+        startTime: "2026-04-01T00:00:00Z",
+        endTime: "2026-04-15T12:00:00Z",
+      },
+    },
+  ])(
+    "reuses Gemini $label cache entries as the clock advances without merging distinct filters",
+    async ({ label, filter, equivalentFilter, distinctFilter, initialTimeRange }) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
+      const mockFetch = installGeminiFetch();
+      const tool = createGeminiToolWithHeaders({});
+      const query = `unique Gemini ${label} moving-clock cache regression`;
 
-    await tool?.execute({ query: "latest ai news", date_after: "2026-04-01" });
+      await tool?.execute({ query, ...filter });
+      vi.setSystemTime(new Date("2026-04-15T12:00:02.123Z"));
+      const cached = await tool?.execute({ query, ...equivalentFilter });
 
-    const body = parseGeminiFetchBody(mockFetch);
-    const filter = body.tools?.[0]?.google_search?.timeRangeFilter as
-      | { startTime: string; endTime: string }
-      | undefined;
-    expect(filter?.startTime).not.toMatch(/\.\d+Z$/);
-    expect(filter?.endTime).not.toMatch(/\.\d+Z$/);
-    expect(filter).toEqual({
-      startTime: "2026-04-01T00:00:00Z",
-      endTime: "2026-04-15T12:00:00Z",
-    });
-  });
+      expect(cached).toMatchObject({ cached: true });
+      expect(parseGeminiFetchBody(mockFetch).tools?.[0]?.google_search?.timeRangeFilter).toEqual(
+        initialTimeRange,
+      );
+
+      await tool?.execute({ query, ...distinctFilter });
+      const postCalls = postedCalls(mockFetch);
+      expect(postCalls).toHaveLength(2);
+    },
+  );
 
   it("passes date ranges to Gemini Google Search grounding", async () => {
     const mockFetch = installGeminiFetch();
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = createGeminiTool();
 
     await tool?.execute({
       query: "OpenClaw release notes",
@@ -757,23 +678,7 @@ describe("google web search provider", () => {
 
   it("returns validation errors for invalid Gemini time filters before fetch", async () => {
     const mockFetch = installGeminiFetch();
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = createGeminiTool();
 
     await expect(
       tool?.execute({

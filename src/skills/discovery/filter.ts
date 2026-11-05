@@ -1,8 +1,4 @@
-// Skill filter helpers apply config, agent, and source filters to discovered skills.
-import {
-  normalizeStringEntries,
-  sortUniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
 /** Normalizes an optional skill filter while preserving undefined as "not configured". */
 export function normalizeSkillFilter(skillFilter?: ReadonlyArray<unknown>): string[] | undefined {
@@ -12,27 +8,18 @@ export function normalizeSkillFilter(skillFilter?: ReadonlyArray<unknown>): stri
   return normalizeStringEntries(skillFilter);
 }
 
-function normalizeSkillFilterForComparison(
-  skillFilter?: ReadonlyArray<unknown>,
-): string[] | undefined {
-  const normalized = normalizeSkillFilter(skillFilter);
-  if (normalized === undefined) {
-    return undefined;
-  }
-  return sortUniqueStrings(normalized);
-}
-
 export function matchesSkillFilter(
   cached?: ReadonlyArray<unknown>,
   next?: ReadonlyArray<unknown>,
 ): boolean {
-  const cachedNormalized = normalizeSkillFilterForComparison(cached);
-  const nextNormalized = normalizeSkillFilterForComparison(next);
+  const cachedNormalized = normalizeSkillFilter(cached);
+  const nextNormalized = normalizeSkillFilter(next);
   if (cachedNormalized === undefined || nextNormalized === undefined) {
     return cachedNormalized === nextNormalized;
   }
-  if (cachedNormalized.length !== nextNormalized.length) {
-    return false;
-  }
-  return cachedNormalized.every((entry, index) => entry === nextNormalized[index]);
+  const nextEntries = new Set(nextNormalized);
+  return (
+    new Set(cachedNormalized).size === nextEntries.size &&
+    cachedNormalized.every((entry) => nextEntries.has(entry))
+  );
 }

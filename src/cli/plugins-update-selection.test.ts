@@ -1,197 +1,89 @@
-// Plugin update selection tests cover CLI plugin update target selection.
 import { describe, expect, it } from "vitest";
-import type { HookInstallRecord } from "../config/types.hooks.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   resolveHookPackUpdateSelection,
   resolvePluginUpdateSelection,
 } from "./plugins-update-selection.js";
 
-function createNpmInstall(params: {
-  spec: string;
-  installPath?: string;
-  resolvedName?: string;
-}): PluginInstallRecord {
+function createNpmInstall(spec: string, resolvedName?: string) {
   return {
-    source: "npm",
-    spec: params.spec,
-    installPath: params.installPath ?? "/tmp/plugin",
-    ...(params.resolvedName ? { resolvedName: params.resolvedName } : {}),
-  };
-}
-
-function createNpmHookInstall(params: {
-  spec: string;
-  installPath?: string;
-  resolvedName?: string;
-}): HookInstallRecord {
-  return {
-    source: "npm",
-    spec: params.spec,
-    installPath: params.installPath ?? "/tmp/hook-pack",
-    ...(params.resolvedName ? { resolvedName: params.resolvedName } : {}),
+    source: "npm" as const,
+    spec,
+    installPath: "/tmp/plugin",
+    ...(resolvedName ? { resolvedName } : {}),
   };
 }
 
 describe("resolvePluginUpdateSelection", () => {
-  it.each(["missing-plugin", "@acme/missing-plugin@beta", "constructor"])(
-    "does not select the untracked plugin target %s",
-    (rawId) => {
-      expect(resolvePluginUpdateSelection({ installs: {}, rawId })).toEqual({ pluginIds: [] });
-    },
-  );
-
-  it("does not guess an owner when an npm package maps to multiple tracked plugins", () => {
+  it("deduplicates packed children and retains an explicit selector in input order", () => {
     expect(
       resolvePluginUpdateSelection({
         installs: {
-          alpha: createNpmInstall({ spec: "@acme/shared", resolvedName: "@acme/shared" }),
-          beta: createNpmInstall({ spec: "@acme/shared", resolvedName: "@acme/shared" }),
+          pack: createNpmInstall("@acme/pack@stable"),
+          other: createNpmInstall("@acme/other"),
         },
-        rawId: "@acme/shared@beta",
+        installOwnerByPluginId: new Map([
+          ["pack/one", "pack"],
+          ["pack/two", "pack"],
+        ]),
+        rawIds: ["pack/one", "other", "@acme/pack@beta", "pack/two", "@acme/pack@beta"],
       }),
-    ).toEqual({ pluginIds: [] });
+    ).toEqual({ pluginIds: ["pack", "other"], specOverrides: { pack: "@acme/pack@beta" } });
   });
 
-  it.each([
-    {
-      title: "maps an explicit unscoped npm dist-tag update to the tracked plugin id",
-      pluginId: "openclaw-codex-app-server",
-      packageNameWithSpec: "openclaw-codex-app-server",
-      installPath: "/tmp/openclaw-codex-app-server",
-      packageName: "openclaw-codex-app-server",
-      requestedSpec: "openclaw-codex-app-server@beta",
-      expectedPluginId: "openclaw-codex-app-server",
-      expectedTrackedId: "openclaw-codex-app-server",
-      expectedSpec: "openclaw-codex-app-server@beta",
-    },
-    {
-      title: "maps an explicit scoped npm dist-tag update to the tracked plugin id",
-      pluginId: "voice-call",
-      packageNameWithSpec: "@openclaw/voice-call",
-      installPath: "/tmp/voice-call",
-      packageName: "@openclaw/voice-call",
-      requestedSpec: "@openclaw/voice-call@beta",
-      expectedPluginId: "voice-call",
-      expectedTrackedId: "voice-call",
-      expectedSpec: "@openclaw/voice-call@beta",
-    },
-    {
-      title: "maps an explicit npm version update to the tracked plugin id",
-      pluginId: "openclaw-codex-app-server",
-      packageNameWithSpec: "openclaw-codex-app-server",
-      installPath: "/tmp/openclaw-codex-app-server",
-      packageName: "openclaw-codex-app-server",
-      requestedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
-      expectedPluginId: "openclaw-codex-app-server",
-      expectedTrackedId: "openclaw-codex-app-server",
-      expectedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
-    },
-    {
-      title: "maps a bare scoped npm package update to the tracked plugin id",
-      pluginId: "lossless-claw",
-      packageNameWithSpec: "@martian-engineering/lossless-claw@0.9.0",
-      installPath: "/tmp/lossless-claw",
-      packageName: "@martian-engineering/lossless-claw",
-      requestedSpec: "@martian-engineering/lossless-claw",
-      expectedPluginId: "lossless-claw",
-      expectedTrackedId: "lossless-claw",
-      expectedSpec: "@martian-engineering/lossless-claw",
-    },
-  ])(
-    "$title",
-    ({
-      pluginId,
-      packageNameWithSpec,
-      installPath,
-      packageName,
-      requestedSpec,
-      expectedPluginId,
-      expectedTrackedId,
-      expectedSpec,
-    }) => {
-      expect(
-        resolvePluginUpdateSelection({
-          installs: {
-            [pluginId]: createNpmInstall({
-              spec: packageNameWithSpec,
-              installPath,
-              resolvedName: packageName,
-            }),
-          },
-          rawId: requestedSpec,
-        }),
-      ).toEqual({
-        pluginIds: [expectedPluginId],
-        specOverrides: {
-          [expectedTrackedId]: expectedSpec,
-        },
-      });
-    },
-  );
-
-  it("keeps recorded npm tags when update is invoked by plugin id", () => {
+  it("does not infer a packed child owner when owner metadata is missing", () => {
     expect(
       resolvePluginUpdateSelection({
         installs: {
-          "openclaw-codex-app-server": createNpmInstall({
-            spec: "openclaw-codex-app-server@beta",
-            installPath: "/tmp/openclaw-codex-app-server",
-            resolvedName: "openclaw-codex-app-server",
-          }),
+          pack: createNpmInstall("@acme/pack", "@acme/pack"),
         },
-        rawId: "openclaw-codex-app-server",
+        rawIds: ["pack/two"],
       }),
-    ).toEqual({
-      pluginIds: ["openclaw-codex-app-server"],
-    });
+    ).toEqual({ pluginIds: [], unmatchedIds: ["pack/two"] });
   });
 
-  it("maps prototype-named npm packages by own install records", () => {
+  it.each([false, true])("rejects an ambiguous package owner (all: %s)", (all) => {
+    const installs = {
+      pack: createNpmInstall("@acme/pack"),
+      stable: createNpmInstall("@acme/stable"),
+    };
+    const rejectedPluginIds = new Map([["pack", "ambiguous pack"]]);
     expect(
       resolvePluginUpdateSelection({
-        installs: {
-          "tracked-constructor": createNpmInstall({
-            spec: "constructor",
-            resolvedName: "constructor",
-          }),
-        },
-        rawId: "constructor",
+        installs,
+        rejectedPluginIds,
+        all,
+        rawIds: all ? [] : ["pack"],
       }),
-    ).toEqual({
-      pluginIds: ["tracked-constructor"],
-      specOverrides: {
-        "tracked-constructor": "constructor",
-      },
-    });
+    ).toEqual({ pluginIds: [], error: "ambiguous pack" });
   });
-});
 
-describe("resolveHookPackUpdateSelection", () => {
-  it("does not treat inherited prototype keys as installed hook ids", () => {
+  it.each([false, true])("skips operator-managed ids (all: %s)", (all) => {
+    const installs = {
+      local: createNpmInstall("@acme/local"),
+      stable: createNpmInstall("@acme/stable"),
+    };
+    const skippedPluginIds = new Set(["local"]);
+
     expect(
-      resolveHookPackUpdateSelection({
-        installs: {},
-        rawId: "constructor",
+      resolvePluginUpdateSelection({
+        installs,
+        skippedPluginIds,
+        all,
+        rawIds: all ? [] : ["@acme/local", "stable"],
       }),
-    ).toEqual({
-      hookIds: [],
-    });
+    ).toEqual({ pluginIds: ["stable"], skippedIds: ["local"] });
   });
-
-  it("keeps own prototype-named hook ids selectable", () => {
+  it("maps an npm package spec to its tracked hook pack", () => {
     expect(
       resolveHookPackUpdateSelection({
         installs: {
-          constructor: createNpmHookInstall({
-            spec: "openclaw-hooks-constructor",
-            resolvedName: "openclaw-hooks-constructor",
-          }),
+          "demo-hooks": createNpmInstall("openclaw-demo-hooks@1.0.0", "openclaw-demo-hooks"),
         },
-        rawId: "constructor",
+        rawIds: ["openclaw-demo-hooks"],
       }),
     ).toEqual({
-      hookIds: ["constructor"],
+      hookIds: ["demo-hooks"],
+      specOverrides: { "demo-hooks": "openclaw-demo-hooks" },
     });
   });
 });

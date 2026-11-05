@@ -1,11 +1,15 @@
 {
   "id": "talk-voice",
+  "categories": ["voice"],
   "activation": {
     "onStartup": true
   },
   "enabledByDefault": true,
   "name": "Talk Voice",
   "description": "Manage Talk voice selection (list/set).",
+  "contracts": {
+    "tools": ["talk_voice"]
+  },
   "commandAliases": [
     {
       "name": "voice",

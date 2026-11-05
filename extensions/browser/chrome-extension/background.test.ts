@@ -1,866 +1,579 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  expectUnused,
+  connectRelay,
+  loadConfiguredBackground as load,
+  relayFrames,
+  relayConfig,
+  runtime,
+  waitCalled,
+} from "./background.lifecycle-test-helpers.js";
+import {
+  cleanupBackgroundHarnesses,
   loadBackground,
-  RELAY_SECRET,
-  REPLACEMENT_RELAY_SECRET,
-  sendRuntimeMessage,
+  TEST_RELAY_KEY,
+  REPLACEMENT_TEST_RELAY_KEY,
 } from "./background.test-harness.js";
-import { AUTH_INSTANCE_ID, AUTH_SERVER_NONCE, AUTH_SESSION_ID } from "./background.test-support.js";
 
-const RELAY_WATCHDOG_ALARM = "openclaw-relay-watchdog";
-const RELAY_OPENING_DEADLINE_ALARM = "openclaw-relay-opening-deadline";
-const START_TIME_MS = Date.parse("2026-07-16T08:00:00.000Z");
+const nativeSuccess = (request: unknown) => ({
+  v: 1,
+  ok: true,
+  nonce: (request as { nonce?: unknown }).nonce,
+  pairingString: `ws://127.0.0.1:18797/extension?gateway=ws%3A%2F%2F127.0.0.1%3A18789#${TEST_RELAY_KEY}`,
+});
 
-describe("persisted relay pairing validation", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    vi.useFakeTimers();
+type Harness = Awaited<ReturnType<typeof loadBackground>>;
+async function deferredNative() {
+  const response = createDeferred<unknown>();
+  const h = await loadBackground({ storedConfig: {}, nativeMessage: () => response.promise });
+  return {
+    h,
+    respond: () => response.resolve(nativeSuccess(h.sendNativeMessage.mock.calls[0]?.[1])),
+  };
+}
+const pair = (h: Harness, accessMode?: string) =>
+  runtime(h, "pair", {
+    pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_TEST_RELAY_KEY}`,
+    ...(accessMode ? { accessMode } : {}),
   });
+const retiredConfig = () => ({
+  ...relayConfig("all"),
+  copilotSessionRegistryV1: {
+    sessions: { 17: { creationPending: true } },
+    pendingArchives: [],
+  },
+});
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
+beforeEach(() => vi.resetModules());
+afterEach(async () => {
+  await cleanupBackgroundHarnesses();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
-  it("opens the canonical persisted pairing on startup", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "wss://gateway.example.com/browser/extension",
-        token: RELAY_SECRET,
-        authVersion: 2,
-        gatewayUrl: "wss://gateway.example.com",
-        groupColor: "blue",
-      },
+describe("native extension bootstrap", () => {
+  it("recovers after a repaired manifest only when automatic setup is explicitly enabled again", async () => {
+    let repaired = false;
+    const h = await loadBackground({
+      storedConfig: {},
+      nativeMessage: async (request) =>
+        repaired ? nativeSuccess(request) : { v: 1, ok: false, code: "manifest_invalid" },
     });
-
-    await vi.waitFor(() => {
-      expect(harness.relaySockets).toHaveLength(1);
-      expect(harness.gatewaySockets).toHaveLength(1);
-    });
-    expect(harness.relaySockets[0]).toMatchObject({
-      url: "wss://gateway.example.com/browser/extension",
-      protocols: ["openclaw-extension-relay.v2"],
-    });
-    expect(harness.storageRemove).not.toHaveBeenCalled();
-  });
-
-  it("migrates a canonical existing pairing to authVersion 2 before connecting", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
-        gatewayUrl: "",
-        groupColor: "orange",
-      },
-    });
-    await vi.waitFor(() => expect(harness.relaySockets).toHaveLength(1));
-    expect(harness.storageSet).toHaveBeenCalledWith({ authVersion: 2, accessMode: "selected" });
-    expect(harness.storageValues.authVersion).toBe(2);
-  });
-
-  it.each([
-    ["an invalid token", { relayUrl: "ws://127.0.0.1:18797/extension", token: "short" }],
-    [
-      "an unsafe remote relay URL",
-      { relayUrl: "ws://gateway.example.com/extension", token: RELAY_SECRET },
-    ],
-    [
-      "URL credentials",
-      { relayUrl: "wss://user:pass@gateway.example.com/extension", token: RELAY_SECRET },
-    ],
-    [
-      "an unsafe remote Gateway URL",
-      {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
-        gatewayUrl: "ws://gateway.example.com",
-      },
-    ],
-    [
-      "Gateway URL credentials",
-      {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
-        gatewayUrl: "wss://user:pass@gateway.example.com",
-      },
-    ],
-    [
-      "a Gateway URL query",
-      {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
-        gatewayUrl: "wss://gateway.example.com?token=nope",
-      },
-    ],
-    [
-      "a Gateway URL fragment",
-      {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
-        gatewayUrl: "wss://gateway.example.com#fragment",
-      },
-    ],
-    ["a malformed URL", { relayUrl: "not a URL", token: RELAY_SECRET }],
-    [
-      "an unknown query",
-      { relayUrl: "ws://127.0.0.1:18797/extension?unknown=1", token: RELAY_SECRET },
-    ],
-    ["partial state", { relayUrl: "ws://127.0.0.1:18797/extension", groupColor: "orange" }],
-    [
-      "a proxy-prefixed direct pairing",
-      { relayUrl: "wss://gateway.example.com/proxy/browser/extension", token: RELAY_SECRET },
-    ],
-    [
-      "mismatched direct state",
-      {
-        relayUrl: "wss://gateway.example.com/browser/extension",
-        token: RELAY_SECRET,
-        gatewayUrl: "wss://other.example.com",
-      },
-    ],
-  ])("clears %s before startup can open a socket", async (_label, storedConfig) => {
-    const harness = await loadBackground({ storedConfig });
-
-    expect(harness.relaySockets).toHaveLength(0);
-    expect(harness.gatewaySockets).toHaveLength(0);
-    expect(harness.storageRemove).toHaveBeenCalledWith([
-      "relayUrl",
-      "gatewayUrl",
-      "token",
-      "authVersion",
-    ]);
-    const response = vi.fn();
-    harness.messageListener({ type: "getStatus" }, {}, response);
-    await vi.waitFor(() => {
-      expect(response).toHaveBeenCalledWith(
-        expect.objectContaining({
-          paired: false,
-          state: "off",
-          accessMode: "selected",
-          accessibleTabCount: 0,
-          relayUrl: "",
-        }),
-      );
-    });
-  });
-
-  it("stays unpaired when clearing invalid persisted state fails", async () => {
-    const harness = await loadBackground({
-      rejectStorageRemove: true,
-      storedConfig: { relayUrl: "ws://gateway.example.com/extension", token: RELAY_SECRET },
-    });
-
-    const response = vi.fn();
-    harness.messageListener({ type: "getStatus" }, {}, response);
-
-    await vi.waitFor(() => {
-      expect(response).toHaveBeenCalledWith({
-        paired: false,
-        state: "off",
-        accessMode: "selected",
-        accessibleTabCount: 0,
-        relayUrl: "",
-      });
-    });
-    expect(harness.relaySockets).toHaveLength(0);
-    expect(harness.gatewaySockets).toHaveLength(0);
-    expect(harness.storageRemove).toHaveBeenCalled();
-    expect(harness.storageValues).toMatchObject({ token: RELAY_SECRET });
-  });
-
-  it("revalidates persisted state before a reconnect", async () => {
-    const harness = await loadBackground();
-    const socket = harness.sockets[0];
-    if (!socket) {
-      throw new Error("expected initial relay socket");
-    }
-    harness.storageValues.token = "invalid-after-startup";
-
-    socket.close();
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    expect(harness.sockets).toHaveLength(1);
-    expect(harness.storageRemove).toHaveBeenCalledWith([
-      "relayUrl",
-      "gatewayUrl",
-      "token",
-      "authVersion",
-    ]);
-    expect(harness.setBadgeText).toHaveBeenLastCalledWith({ text: "" });
-  });
-
-  it("disconnects both live consumers when the watchdog observes invalid state", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "wss://gateway.example.com/browser/extension",
-        token: RELAY_SECRET,
-        gatewayUrl: "wss://gateway.example.com",
-      },
-    });
-    await vi.waitFor(() => {
-      expect(harness.relaySockets).toHaveLength(1);
-      expect(harness.gatewaySockets).toHaveLength(1);
-    });
-    harness.storageValues.token = "invalid-after-startup";
-
-    harness.alarmListener({ name: RELAY_WATCHDOG_ALARM });
-
-    await vi.waitFor(() => {
-      expect(harness.relaySockets[0]?.close).toHaveBeenCalled();
-      expect(harness.gatewaySockets[0]?.close).toHaveBeenCalled();
-      expect(harness.setBadgeText).toHaveBeenLastCalledWith({ text: "" });
-    });
-    expect(harness.sockets).toHaveLength(2);
-  });
-
-  it("does not let stale invalid cleanup erase a concurrently saved pairing", async () => {
-    const harness = await loadBackground();
-    harness.storageValues.token = "invalid-after-startup";
-    const releaseRemove = harness.deferNextStorageRemove();
-    const statusResponse = vi.fn();
-    harness.messageListener({ type: "getStatus" }, {}, statusResponse);
-    await vi.waitFor(() => expect(harness.storageRemove).toHaveBeenCalled());
-    const pairResponse = vi.fn();
-    harness.messageListener(
-      {
-        type: "pair",
-        pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_RELAY_SECRET}`,
-      },
-      {},
-      pairResponse,
+    await vi.waitFor(() =>
+      expect(h.storageValues).toMatchObject({
+        nativeBootstrapState: "manual_required",
+        nativeBootstrapFailureCode: "manifest_invalid",
+      }),
     );
-
-    releaseRemove();
-
-    await vi.waitFor(() => expect(pairResponse).toHaveBeenCalledWith({ ok: true }));
-    expect(harness.storageValues).toMatchObject({
-      relayUrl: "ws://127.0.0.1:18798/extension",
-      token: REPLACEMENT_RELAY_SECRET,
-      gatewayUrl: "",
+    repaired = true;
+    h.alarmListener({ name: "openclaw-relay-watchdog" });
+    await runtime(h, "getStatus");
+    expect(h.sendNativeMessage).toHaveBeenCalledOnce();
+    expect(h.relaySockets).toHaveLength(0);
+    expect(await runtime(h, "setNativeBootstrapEnabled", { enabled: true })).toMatchObject({
+      ok: true,
     });
+    await vi.waitFor(() => expect(h.relaySockets).toHaveLength(1));
+    expect(h.storageValues.nativeBootstrapState).toBe("ready");
+    expect(h.storageValues).not.toHaveProperty("nativeBootstrapFailureCode");
+    expect(h.sendNativeMessage).toHaveBeenCalledTimes(2);
+    expect(h.relaySockets[0]?.protocols).toEqual(["openclaw-extension-relay.v2"]);
+    expect(JSON.stringify(h.relaySockets[0]?.protocols)).not.toContain(TEST_RELAY_KEY);
+  });
+  it("coalesces startup, watchdog, and popup attempts", async () => {
+    const { h, respond } = await deferredNative();
+    h.alarmListener({ name: "openclaw-relay-watchdog" });
+    const status = runtime(h, "getStatus");
+    expect(h.sendNativeMessage).toHaveBeenCalledOnce();
+    respond();
+    await status;
+    expect(h.sendNativeMessage).toHaveBeenCalledOnce();
+  });
+  it("does not overwrite a manual pairing that wins a native response race", async () => {
+    const { h, respond } = await deferredNative();
+    expect(await pair(h, "selected")).toEqual({ ok: true });
+    respond();
+    await vi.waitFor(() => expect(h.relaySockets).toHaveLength(1));
+    expect(h.storageValues).toMatchObject({
+      relayUrl: "ws://127.0.0.1:18798/extension",
+      token: REPLACEMENT_TEST_RELAY_KEY,
+      accessMode: "selected",
+    });
+  });
+  it("preserves opt-out across restart and manual pairing clears it", async () => {
+    const h = await loadBackground({
+      storedConfig: { nativeBootstrapDisabled: true, nativeBootstrapState: "disabled" },
+    });
+    expectUnused(h.sendNativeMessage);
+    expect(await pair(h)).toEqual({ ok: true });
+    expect(h.storageValues).not.toHaveProperty("nativeBootstrapDisabled");
+  });
+  it.each([
+    ["disable", "preflight"],
+    ["unpair", "save"],
+  ])("does not apply a native pairing overtaken by %s during %s", async (revocation, stage) => {
+    const { h, respond } = await deferredNative();
+    const readStorage = h.storageGet.getMockImplementation()!;
+    const blocked = createDeferred<void>();
+    let pairingReads = 0;
+    let saving = false;
+    h.storageGet.mockImplementation(async (keys) => {
+      const result = await readStorage(keys);
+      if (keys.includes("relayUrl") && ++pairingReads === 2 && stage === "preflight") {
+        await blocked.promise;
+      }
+      return result;
+    });
+    const writeStorage = h.storageSet.getMockImplementation()!;
+    h.storageSet.mockImplementation(async (values) => {
+      if (stage === "save" && values.relayUrl) {
+        saving = true;
+        await blocked.promise;
+      }
+      await writeStorage(values);
+    });
+    respond();
+    await vi.waitFor(() => expect(stage === "preflight" ? pairingReads === 2 : saving).toBe(true));
+    const revoking = runtime(
+      h,
+      revocation === "unpair" ? "unpair" : "setNativeBootstrapEnabled",
+      revocation === "unpair" ? {} : { enabled: false },
+    );
+    await vi.waitFor(() => expect(h.storageValues.nativeBootstrapDisabled).toBe(true));
+    blocked.resolve();
+    expect(await revoking).toMatchObject({ ok: true });
+    await runtime(h, "getStatus");
+    expect(h.storageValues).not.toHaveProperty("relayUrl");
+    expect(h.relaySockets).toHaveLength(0);
+  });
+  it("fails closed on a malformed or nonce-mismatched response", async () => {
+    const h = await loadBackground({
+      storedConfig: {},
+      nativeMessage: async () => ({
+        v: 1,
+        ok: true,
+        nonce: "wrong",
+        pairingString: `ws://127.0.0.1:18797/extension#${TEST_RELAY_KEY}`,
+      }),
+    });
+    await vi.waitFor(() =>
+      expect(h.storageValues).toMatchObject({
+        nativeBootstrapState: "manual_required",
+        nativeBootstrapFailureCode: "malformed_response",
+      }),
+    );
+    expect(h.storageValues).not.toHaveProperty("relayUrl");
+  });
+  it("blocks every startup path while retired copilot custody is unresolved", async () => {
+    const h = await loadBackground({
+      deferRetiredStatePreparation: true,
+      inheritedDebuggerTabIds: [17],
+      storedConfig: retiredConfig(),
+    });
+    h.alarmListener({ name: "openclaw-relay-watchdog" });
+    h.startupListener();
+    h.installedListener();
+    await Promise.resolve();
+    expectUnused(h.sendNativeMessage, h.debuggerAttach);
+    expect(h.relaySockets).toHaveLength(0);
+    h.releaseRetiredStatePreparation();
+    await waitCalled(h.debuggerDetach, { targetId: "tab-17" });
+    expectUnused(h.sendNativeMessage);
+    expect(h.relaySockets).toHaveLength(0);
+    const status = await runtime(h, "getStatus");
+    expect(status).toMatchObject({
+      paired: true,
+      retiredCopilotCustodyBlocked: true,
+    });
+    expect(JSON.stringify(status)).not.toMatch(/creationPending|pendingArchives|sessionKey/u);
+    expect(await pair(h)).toMatchObject({ ok: false });
+    expect(await runtime(h, "setNativeBootstrapEnabled", { enabled: true })).toMatchObject({
+      ok: false,
+    });
+    expect(await runtime(h, "setAccessMode", { accessMode: "selected" })).toMatchObject({
+      ok: false,
+    });
+    expect(
+      await runtime(h, "toggleTabAccess", { tabId: 17, accessMode: "all", grant: true }),
+    ).toMatchObject({ ok: false });
+    expect(h.storageValues).toMatchObject({
+      relayUrl: "ws://127.0.0.1:18797/extension",
+      accessMode: "all",
+      copilotSessionRegistryV1: expect.any(Object),
+    });
+    expect(await runtime(h, "unpair")).toEqual({ ok: true });
+    expect(h.storageValues).not.toHaveProperty("copilotSessionRegistryV1");
+    expect(h.storageValues).not.toHaveProperty("retiredCopilotCustodyBlockedV1");
+    expect(h.storageValues.nativeBootstrapDisabled).toBe(true);
+  });
+  it("keeps a persisted custody marker inert across worker startup without a registry", async () => {
+    const h = await loadBackground({
+      inheritedDebuggerTabIds: [18],
+      nativeMessage: async (request) => nativeSuccess(request),
+      storedConfig: { ...relayConfig("all"), retiredCopilotCustodyBlockedV1: true },
+    });
+    await waitCalled(h.debuggerDetach, { targetId: "tab-18" });
+    expect(h.relaySockets).toHaveLength(0);
+    expectUnused(h.sendNativeMessage, h.debuggerAttach);
+    expect(await runtime(h, "getStatus")).toMatchObject({
+      retiredCopilotCustodyBlocked: true,
+    });
+  });
+});
+
+describe("relay pairing and authentication", () => {
+  it("clears malformed persisted pairing before opening a relay", async () => {
+    const h = await loadBackground({
+      storedConfig: { relayUrl: "ws://gateway.example/extension", token: TEST_RELAY_KEY },
+    });
+    expect(h.relaySockets).toHaveLength(0);
+    expect(h.storageValues).not.toHaveProperty("relayUrl");
+  });
+  it("cancels the opening deadline when the socket-close fallback ends the relay", async () => {
+    const h = await loadBackground({ relayNegotiatedProtocol: "unsupported" });
+    const socket = h.relaySockets[0]!;
+    expect(socket).toBeDefined();
+    h.clearAlarm.mockClear();
+    socket.close.mockImplementationOnce(() => {
+      throw new Error("socket close failed");
+    });
+    socket.open();
+    await vi.waitFor(() => expect(socket.close).toHaveBeenCalledTimes(2));
+    expect(h.clearAlarm).toHaveBeenCalledOnce();
+  });
+  it("revokes synchronously while an older manual pair is stalled", async () => {
+    const h = await loadBackground({
+      initialTabs: [{ id: 131, url: "https://example.com/paired", groupId: 7 }],
+    });
+    const socket = h.relaySockets[0]!;
+    expect(socket).toBeDefined();
+    await h.authenticate(socket);
+    h.storageSet.mockClear();
+    const releaseSave = h.deferNextStorageSet();
+    const pairing = pair(h, "all");
+    await waitCalled(
+      h.storageSet,
+      expect.objectContaining({ relayUrl: "ws://127.0.0.1:18798/extension" }),
+    );
+    const unpairing = runtime(h, "unpair");
+    expect(socket.close).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(h.storageValues.nativeBootstrapDisabled).toBe(true));
+    releaseSave();
+    expect(await pairing).toMatchObject({ ok: false });
+    expect(await unpairing).toEqual({ ok: true });
+    expect(h.storageValues).not.toHaveProperty("relayUrl");
+  });
+});
+
+describe("standalone relay wake-up", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+  });
+  it("wakes the paired port on reconnect, at most once per minute", async () => {
+    const relayPort = 20123;
+    const h = await loadBackground({
+      storedConfig: { relayUrl: `ws://127.0.0.1:${relayPort}/extension`, token: TEST_RELAY_KEY },
+      nativeMessage: async (request) => ({
+        v: 1,
+        ok: true,
+        nonce: (request as { nonce: string }).nonce,
+        relay: "spawned",
+      }),
+    });
+    expectUnused(h.sendNativeMessage);
+    h.relaySockets.at(-1)?.close();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.sendNativeMessage).toHaveBeenCalledExactlyOnceWith("ai.openclaw.browser_bootstrap", {
+      v: 1,
+      op: "ensure_relay",
+      nonce: expect.any(String),
+      relayPort,
+    });
+    h.relaySockets.at(-1)?.close();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.relaySockets).toHaveLength(3);
+    expect(h.sendNativeMessage).toHaveBeenCalledOnce();
+    vi.setSystemTime(Date.now() + 60_000);
+    h.relaySockets.at(-1)?.close();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.sendNativeMessage).toHaveBeenCalledTimes(2);
+  });
+  it.each([
+    ["remote Gateway", "wss://gateway.example.com/browser/extension", false],
+    ["automatic setup opt-out", "ws://127.0.0.1:18798/extension", true],
+  ])("does not wake a daemon for %s", async (_label, relayUrl, nativeBootstrapDisabled) => {
+    const h = await loadBackground({
+      storedConfig: { relayUrl, token: TEST_RELAY_KEY, nativeBootstrapDisabled },
+    });
+    await vi.waitFor(() => expect(h.relaySockets).toHaveLength(1));
+    h.relaySockets.at(-1)?.close();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.relaySockets).toHaveLength(2);
+    expectUnused(h.sendNativeMessage);
+  });
+});
+
+const setMode = (h: Harness, accessMode: string) => runtime(h, "setAccessMode", { accessMode });
+const toggle = (h: Harness, tabId: number, accessMode: string, grant = false) =>
+  runtime(h, "toggleTabAccess", { tabId, accessMode, grant });
+const expectMode = async (result: ReturnType<typeof setMode>, accessMode: string) =>
+  expect(await result).toEqual({ ok: true, accessMode });
+const expectAccess = async (h: Harness, tabId: number, accessible: boolean) =>
+  expect(await runtime(h, "getTabAccess", { tabId })).toMatchObject({ accessible });
+
+async function ready(...args: Parameters<typeof load>) {
+  const harness = await load(...args);
+  const connection = await connectRelay(harness);
+  if (
+    !harness.debuggerEventListener ||
+    !harness.debuggerDetachListener ||
+    !harness.tabsRemovedListener ||
+    !harness.tabGroupRemovedListener
+  ) {
+    throw new Error("expected relay and Chrome lifecycle listeners");
+  }
+  return Object.assign(harness, {
+    ...connection,
+    events: () => connection.frames().filter((frame) => frame.type === "cdpEvent"),
+    debuggerEventListener: harness.debuggerEventListener,
+    debuggerDetachListener: harness.debuggerDetachListener,
+    tabsRemovedListener: harness.tabsRemovedListener,
+    tabGroupRemovedListener: harness.tabGroupRemovedListener,
+  });
+}
+
+async function attach(h: Awaited<ReturnType<typeof ready>>, ...tabIds: number[]) {
+  await Promise.all(
+    tabIds.map(async (tabId) => {
+      expect(await h.request({ type: "attach", tabId })).toMatchObject({
+        type: "result",
+        result: { targetId: `tab-${tabId}` },
+      });
+    }),
+  );
+}
+
+describe("relay command authorization", () => {
+  it("closes the old selected relay before a replacement pairing widens access", async () => {
+    const harness = await ready("selected", [45]);
+    const oldSocket = harness.socket;
+    expect(
+      await runtime(harness, "pair", {
+        pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_TEST_RELAY_KEY}`,
+        accessMode: "all",
+      }),
+    ).toEqual({ ok: true });
+    expect(oldSocket.close).toHaveBeenCalledOnce();
+    const oldFrames = relayFrames(oldSocket);
+    expect(
+      oldFrames.some(
+        (frame) =>
+          frame.type === "tabs" && frame.tabs?.some((tab: { tabId?: number }) => tab.tabId === 45),
+      ),
+    ).toBe(false);
     const replacement = harness.relaySockets.find(
       (socket) => socket.url === "ws://127.0.0.1:18798/extension",
     );
-    expect(replacement).toBeDefined();
-    expect(replacement?.close).not.toHaveBeenCalled();
-  });
-
-  it("unpair detaches every debugger session and clears session denies", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
-        authVersion: 2,
-        accessMode: "all",
-      },
-      sessionConfig: { deniedTabIdsV1: [122] },
-      initialTabs: [
-        { id: 121, url: "https://example.com/attached", groupId: -1 },
-        { id: 122, url: "https://example.com/paused", groupId: -1 },
-      ],
-    });
-    const socket = harness.relaySockets[0];
-    if (!socket) {
-      throw new Error("expected relay socket");
+    if (!replacement) {
+      throw new Error("expected replacement relay socket");
     }
-    await harness.authenticate(socket);
-    socket.receive({ type: "attach", seq: 35, tabId: 121 });
-    await vi.waitFor(() => expect(harness.debuggerAttach).toHaveBeenCalled());
-
-    await expect(sendRuntimeMessage(harness, { type: "unpair" })).resolves.toEqual({ ok: true });
-
-    expect(harness.debuggerDetach).toHaveBeenCalledWith({ tabId: 121 });
-    expect(harness.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1");
-    expect(harness.storageValues).not.toHaveProperty("accessMode");
+    await harness.authenticate(replacement);
+    const replacementHello = relayFrames(replacement).find((frame) => frame.type === "hello");
+    expect(replacementHello.tabs).toContainEqual(expect.objectContaining({ tabId: 45 }));
   });
-
-  it("revokes immediately and supersedes an older pair stalled in storage", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
-        authVersion: 2,
-        accessMode: "all",
-      },
-      initialTabs: [{ id: 131, url: "https://example.com/paired", groupId: -1 }],
-    });
-    const socket = harness.relaySockets[0];
-    if (!socket || !harness.debuggerEventListener) {
-      throw new Error("expected relay and debugger event listener");
-    }
-    await harness.authenticate(socket);
-    socket.receive({ type: "attach", seq: 36, tabId: 131 });
-    await vi.waitFor(() => {
-      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
-      expect(frames).toContainEqual({
-        type: "result",
-        seq: 36,
-        result: { targetId: "tab-131" },
-      });
-    });
-
-    harness.storageSet.mockClear();
-    const releasePairSave = harness.deferNextStorageSet();
-    const pairing = sendRuntimeMessage(harness, {
-      type: "pair",
-      pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_RELAY_SECRET}`,
-      accessMode: "all",
-    });
-    await vi.waitFor(() => {
-      expect(harness.storageSet).toHaveBeenCalledWith(
-        expect.objectContaining({
-          relayUrl: "ws://127.0.0.1:18798/extension",
-          token: REPLACEMENT_RELAY_SECRET,
-        }),
-      );
-    });
-
-    const unpairing = sendRuntimeMessage(harness, { type: "unpair" });
-    expect(socket.close).toHaveBeenCalledOnce();
-    await expect(
-      sendRuntimeMessage(harness, { type: "getTabAccess", tabId: 131 }),
-    ).resolves.toEqual({
-      accessMode: "all",
+  it("waits for access initialization before toggling an all-mode tab", async () => {
+    const harness = await load("all", [46], { deferTabAccessInitialization: true });
+    harness.tabsGet.mockClear();
+    const response = vi.fn();
+    harness.messageListener(
+      { type: "toggleTabAccess", tabId: 46, accessMode: "all", grant: false },
+      {},
+      response,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expectUnused(response, harness.tabsGet, harness.tabsGroup);
+    harness.releaseTabAccessInitialization();
+    await waitCalled(response, { ok: true, accessible: false, denied: true });
+    expect(harness.sessionStorageValues.deniedTabIdsV1).toEqual([46]);
+    expectUnused(harness.tabsGroup);
+  });
+  it("rejects a negative getTabAccess tab id without querying Chrome", async () => {
+    const harness = await loadBackground();
+    harness.tabsGet.mockClear();
+    expect(await runtime(harness, "getTabAccess", { tabId: -1 })).toEqual({
+      accessMode: "selected",
       accessible: false,
       eligible: false,
       denied: false,
     });
-    harness.debuggerEventListener({ tabId: 131 }, "Runtime.consoleAPICalled", { value: 1 });
-    expect(
-      socket.send.mock.calls
-        .map(([raw]) => JSON.parse(raw))
-        .some((frame) => frame.type === "cdpEvent" && frame.method === "Runtime.consoleAPICalled"),
-    ).toBe(false);
-
-    releasePairSave();
-    await expect(pairing).resolves.toEqual({
-      ok: false,
-      error: "Pairing was superseded by a newer request.",
-    });
-    await expect(unpairing).resolves.toEqual({ ok: true });
-
-    expect(harness.relaySockets).toHaveLength(1);
-    expect(harness.debuggerDetach).toHaveBeenCalledWith({ tabId: 131 });
-    expect(harness.storageValues).not.toHaveProperty("relayUrl");
-    expect(harness.storageValues).not.toHaveProperty("token");
-    expect(harness.storageValues).not.toHaveProperty("accessMode");
+    expectUnused(harness.tabsGet);
   });
-
-  it("lets the newest pair supersede an older pair stalled in storage", async () => {
-    const harness = await loadBackground();
-    const original = harness.relaySockets[0];
-    if (!original) {
-      throw new Error("expected original relay socket");
-    }
-    await harness.authenticate(original);
-
+  it("revokes all-mode authority before a queued downgrade reaches the mutation queue", async () => {
+    const harness = await ready("all", [204]);
+    const socket = harness.socket;
+    socket.receive({ type: "attach", seq: 40, tabId: 204 });
+    await waitCalled(harness.debuggerAttach, { tabId: 204 }, "1.3");
     harness.storageSet.mockClear();
-    const releaseFirstSave = harness.deferNextStorageSet();
-    const firstPair = sendRuntimeMessage(harness, {
-      type: "pair",
-      pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_RELAY_SECRET}`,
-      accessMode: "all",
+    socket.send.mockClear();
+    const releaseOlderMutation = harness.deferNextStorageSet();
+    const olderMutation = setMode(harness, "all");
+    await waitCalled(harness.storageSet, { accessMode: "all" });
+    const downgrading = setMode(harness, "selected");
+    await expectAccess(harness, 204, false);
+    harness.debuggerEventListener({ tabId: 204 }, "Runtime.consoleAPICalled", {});
+    expect(harness.events()).toEqual([]);
+    releaseOlderMutation();
+    await expectMode(olderMutation, "all");
+    await expectMode(downgrading, "selected");
+    expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-204" });
+  });
+  it("rejects a stale tab action when a queued mode change executes first", async () => {
+    const harness = await load("all", [205]);
+    harness.storageSet.mockClear();
+    const releaseModeStorage = harness.deferNextStorageSet();
+    const changingMode = setMode(harness, "selected");
+    await waitCalled(harness.storageSet, { accessMode: "selected" });
+    const staleToggle = toggle(harness, 205, "all");
+    releaseModeStorage();
+    await expectMode(changingMode, "selected");
+    expect(await staleToggle).toEqual({
+      ok: false,
+      error: "Browser access mode changed. Refresh and retry.",
     });
-    await vi.waitFor(() => {
-      expect(harness.storageSet).toHaveBeenCalledWith(
-        expect.objectContaining({ relayUrl: "ws://127.0.0.1:18798/extension" }),
+    expectUnused(harness.tabsGroup);
+    expect(harness.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1");
+  });
+  it("keeps a Selected barrier ahead of a queued All-mode widening", async () => {
+    const harness = await load("selected", [206]);
+    harness.storageSet.mockClear();
+    const releaseWideningStorage = harness.deferNextStorageSet();
+    const widening = setMode(harness, "all");
+    await waitCalled(harness.storageSet, { accessMode: "all" });
+    const restricting = setMode(harness, "selected");
+    const releaseRestrictingStorage = harness.deferNextStorageSet();
+    releaseWideningStorage();
+    await waitCalled(harness.storageSet, { accessMode: "selected" });
+    await expectAccess(harness, 206, false);
+    releaseRestrictingStorage();
+    await expectMode(widening, "all");
+    await expectMode(restricting, "selected");
+  });
+  it("revalidates a selected survivor that leaves its group during downgrade cleanup", async () => {
+    const harness = await ready("all", [{ id: 211, groupId: 7 }, 212]);
+    await attach(harness, 211, 212);
+    await vi.waitFor(() => expect(harness.debuggerAttach).toHaveBeenCalledTimes(2));
+    const unselectedDetach = createDeferred<void>();
+    harness.debuggerDetach.mockImplementation(async ({ targetId }) => {
+      if (targetId === "tab-212") {
+        await unselectedDetach.promise;
+      }
+    });
+    harness.socket.send.mockClear();
+    const changingMode = setMode(harness, "selected");
+    await waitCalled(harness.debuggerDetach, { targetId: "tab-212" });
+    harness.unshareTab(211);
+    harness.tabsUpdatedListener(211, { groupId: -1 });
+    unselectedDetach.resolve();
+    await expectMode(changingMode, "selected");
+    await waitCalled(harness.debuggerDetach, { targetId: "tab-211" });
+    harness.debuggerEventListener({ tabId: 211 }, "Runtime.consoleAPICalled", {});
+    expect(harness.events()).toEqual([]);
+  });
+  it.each(["all", "selected"] as const)(
+    "keeps an unrelated attachment live while toggling one tab in %s mode",
+    async (accessMode) => {
+      const groupId = accessMode === "selected" ? 7 : -1;
+      const harness = await ready(
+        accessMode,
+        [201, 202].map((id) => ({ id, groupId })),
       );
-    });
-
-    const newestSecret = "c".repeat(64);
-    const secondPair = sendRuntimeMessage(harness, {
-      type: "pair",
-      pairingString: `ws://127.0.0.1:18799/extension#${newestSecret}`,
-      accessMode: "selected",
-    });
-    releaseFirstSave();
-
-    await expect(firstPair).resolves.toEqual({
-      ok: false,
-      error: "Pairing was superseded by a newer request.",
-    });
-    await expect(secondPair).resolves.toEqual({ ok: true });
-    expect(harness.storageValues).toMatchObject({
-      relayUrl: "ws://127.0.0.1:18799/extension",
-      token: newestSecret,
-      accessMode: "selected",
-    });
-    expect(
-      harness.relaySockets.some((socket) => socket.url === "ws://127.0.0.1:18798/extension"),
-    ).toBe(false);
-    expect(
-      harness.relaySockets.filter((socket) => socket.url === "ws://127.0.0.1:18799/extension"),
-    ).toHaveLength(1);
-  });
-});
-
-describe("relay authentication v2 transport", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("offers only the non-secret v2 protocol", async () => {
-    const harness = await loadBackground();
-    const socket = harness.relaySockets[0];
-    expect(socket?.protocols).toEqual(["openclaw-extension-relay.v2"]);
-    expect(JSON.stringify(socket?.protocols)).not.toContain(RELAY_SECRET);
-  });
-
-  it("rejects a mismatched negotiated protocol before sending any frame", async () => {
-    const harness = await loadBackground({ relayNegotiatedProtocol: "" });
-    const socket = harness.relaySockets[0];
-    if (!socket) {
-      throw new Error("expected relay socket");
-    }
-    socket.open();
-    await vi.waitFor(() => expect(socket.close).toHaveBeenCalled());
-    expect(socket.send).not.toHaveBeenCalled();
-  });
-
-  it("sends no client proof or application hello after a bad server proof", async () => {
-    const harness = await loadBackground();
-    const socket = harness.relaySockets[0];
-    if (!socket) {
-      throw new Error("expected relay socket");
-    }
-    socket.open();
-    await vi.waitFor(() => expect(socket.send).toHaveBeenCalled());
-    const helloRaw = socket.send.mock.calls[0]?.[0];
-    const hello = JSON.parse(helloRaw) as { keyId: string; clientNonce: string };
-    const issuedAtMs = Date.now();
-    socket.receive({
-      type: "auth.challenge",
-      v: 2,
-      keyId: hello.keyId,
-      instanceId: AUTH_INSTANCE_ID,
-      sessionId: AUTH_SESSION_ID,
-      clientNonce: hello.clientNonce,
-      serverNonce: AUTH_SERVER_NONCE,
-      issuedAtMs,
-      expiresAtMs: issuedAtMs + 10_000,
-      role: "extension",
-      transport: "websocket",
-      method: "GET",
-      resource: "/extension",
-      flow: "extension",
-      serverProof: "A".repeat(43),
-    });
-    await vi.waitFor(() => expect(socket.close).toHaveBeenCalled());
-    const types = socket.send.mock.calls.map(([raw]) => JSON.parse(raw).type);
-    expect(types).toEqual(["auth.hello"]);
-    expect(harness.setBadgeText).not.toHaveBeenLastCalledWith({ text: "ON" });
-  });
-
-  it("rejects application commands before authentication", async () => {
-    const harness = await loadBackground();
-    const socket = harness.relaySockets[0];
-    if (!socket) {
-      throw new Error("expected relay socket");
-    }
-    socket.open();
-    await vi.waitFor(() => expect(socket.send).toHaveBeenCalled());
-    socket.receive({ type: "attach", seq: 1, tabId: 1 });
-    await vi.waitFor(() => expect(socket.close).toHaveBeenCalled());
-    expect(harness.debuggerAttach).not.toHaveBeenCalled();
-  });
-});
-
-async function startPendingPageShare(
-  harness: Awaited<ReturnType<typeof loadBackground>>,
-  socket = harness.sockets.at(-1),
-) {
-  if (!socket) {
-    throw new Error("expected the page-share relay socket");
-  }
-  if (socket.readyState !== 1) {
-    await harness.authenticate(socket);
-  }
-  harness.executeScript.mockResolvedValueOnce([
-    {
-      result: {
-        url: "https://example.com/article",
-        title: "Example article",
-        selection: "",
-        content: "Article body",
-      },
-    },
-  ]);
-  const response = vi.fn();
-  expect(harness.messageListener({ type: "sendPageToOpenClaw", tabId: 1 }, {}, response)).toBe(
-    true,
-  );
-  await vi.waitFor(() => {
-    expect(socket.send.mock.calls.some(([raw]) => JSON.parse(raw).type === "pageShare")).toBe(true);
-  });
-  const raw = socket.send.mock.calls.find(([frame]) => JSON.parse(frame).type === "pageShare")?.[0];
-  if (typeof raw !== "string") {
-    throw new Error("expected a sent page-share request");
-  }
-  return { socket, response, requestId: (JSON.parse(raw) as { requestId: number }).requestId };
-}
-
-describe("relay opening deadline", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    vi.useFakeTimers();
-    vi.setSystemTime(START_TIME_MS);
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
-
-  it("closes a stuck connecting socket and retries", async () => {
-    const harness = await loadBackground();
-    expect(harness.sockets).toHaveLength(1);
-    expect(harness.createAlarm).toHaveBeenCalledWith(RELAY_WATCHDOG_ALARM, {
-      periodInMinutes: 0.5,
-    });
-    const openingDeadline = harness.createAlarm.mock.calls.find(
-      ([name]) => name === RELAY_OPENING_DEADLINE_ALARM,
-    )?.[1]?.when;
-    if (typeof openingDeadline !== "number") {
-      throw new Error("expected relay opening deadline alarm");
-    }
-    expect(openingDeadline).toBe(Date.now() + 10_000);
-
-    vi.setSystemTime(openingDeadline);
-    harness.alarmListener({ name: RELAY_OPENING_DEADLINE_ALARM });
-
-    expect(harness.sockets[0]?.close).toHaveBeenCalledOnce();
-    expect(harness.clearAlarm).toHaveBeenCalledWith(RELAY_OPENING_DEADLINE_ALARM);
-    expect(harness.setBadgeText).toHaveBeenLastCalledWith({ text: "!" });
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(harness.sockets).toHaveLength(2);
-    expect(harness.createAlarm).toHaveBeenLastCalledWith(RELAY_OPENING_DEADLINE_ALARM, {
-      when: openingDeadline + 11_000,
-    });
-  });
-
-  it("clears the deadline only after relay authentication completes", async () => {
-    const harness = await loadBackground();
-    const socket = harness.sockets[0];
-    expect(socket).toBeDefined();
-
-    const clearsBeforeOpen = harness.clearAlarm.mock.calls.length;
-    socket?.open();
-    expect(harness.clearAlarm).toHaveBeenCalledTimes(clearsBeforeOpen);
-    expect(harness.setBadgeText).toHaveBeenLastCalledWith({ text: "…" });
-
-    if (socket) {
-      await harness.authenticate(socket);
-    }
-    expect(harness.clearAlarm).toHaveBeenCalledWith(RELAY_OPENING_DEADLINE_ALARM);
-    expect(harness.setBadgeText).toHaveBeenLastCalledWith({ text: "ON" });
-
-    vi.setSystemTime(START_TIME_MS + 60_000);
-    harness.alarmListener({ name: RELAY_OPENING_DEADLINE_ALARM });
-    expect(socket?.close).not.toHaveBeenCalled();
-  });
-});
-
-describe("copilot panel messaging", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("responds exactly once when the tab cannot be retrieved", async () => {
-    const harness = await loadBackground();
-    harness.tabsGet.mockRejectedValueOnce(new Error("No tab with id: 44."));
-    const sendResponse = vi.fn();
-
-    expect(
-      harness.messageListener({ type: "prepareCopilotPanel", tabId: 44 }, {}, sendResponse),
-    ).toBe(true);
-
-    await vi.waitFor(() => {
-      expect(sendResponse).toHaveBeenCalledOnce();
-    });
-    expect(harness.tabsGet).toHaveBeenCalledWith(44);
-    expect(sendResponse).toHaveBeenCalledWith({
-      ok: false,
-      error: "No tab with id: 44.",
-    });
-  });
-
-  it("responds exactly once with the prepared panel path", async () => {
-    const harness = await loadBackground();
-    const sendResponse = vi.fn();
-
-    expect(
-      harness.messageListener({ type: "prepareCopilotPanel", tabId: 44 }, {}, sendResponse),
-    ).toBe(true);
-
-    await vi.waitFor(() => {
-      expect(sendResponse).toHaveBeenCalledOnce();
-    });
-    expect(harness.tabsGet).toHaveBeenCalledWith(44);
-    expect(sendResponse).toHaveBeenCalledWith({
-      ok: true,
-      path: expect.stringMatching(/^sidepanel\.html\?binding=/),
-    });
-  });
-});
-
-describe("popup message failure responses", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  it("responds exactly once when a selected tab closes before it can be grouped", async () => {
-    const harness = await loadBackground();
-    harness.tabsGet.mockRejectedValueOnce(new Error("No tab with id: 44."));
-    const sendResponse = vi.fn();
-
-    expect(
-      harness.messageListener(
-        { type: "toggleTabAccess", tabId: 44, accessMode: "selected", grant: true },
-        {},
-        sendResponse,
-      ),
-    ).toBe(true);
-
-    await vi.waitFor(() => {
-      expect(sendResponse).toHaveBeenCalledExactlyOnceWith({
-        ok: false,
-        error: "No tab with id: 44.",
-      });
-    });
-    expect(harness.tabsGet).toHaveBeenCalledWith(44);
-  });
-
-  it.each([
-    { action: "share", initiallyShared: false },
-    { action: "unshare", initiallyShared: true },
-  ])(
-    "responds exactly once when $action consent reconciliation rejects",
-    async ({ initiallyShared }) => {
-      const error = "Could not reconcile browser tab consent.";
-      const onConsentChanged = vi.fn(async () => {
-        throw new Error(error);
-      });
-      const harness = await loadBackground({ onConsentChanged });
-      if (initiallyShared) {
-        harness.shareTab(44);
-      }
-      const sendResponse = vi.fn();
-
-      expect(
-        harness.messageListener(
-          {
-            type: "toggleTabAccess",
-            tabId: 44,
-            accessMode: "selected",
-            grant: !initiallyShared,
-          },
-          {},
-          sendResponse,
-        ),
-      ).toBe(true);
-
-      await vi.waitFor(() => {
-        expect(onConsentChanged).toHaveBeenCalledOnce();
-      });
-      if (initiallyShared) {
-        expect(harness.tabsUngroup).toHaveBeenCalledWith([44]);
+      await attach(harness, 201, 202);
+      harness.socket.send.mockClear();
+      let releaseMutation = () => {};
+      if (accessMode === "all") {
+        releaseMutation = harness.deferNextSessionStorageSet();
+        harness.sessionStorageSet.mockClear();
       } else {
-        expect(harness.tabsGroup).toHaveBeenCalledWith({ tabIds: [44] });
+        const pendingDetach = new Promise<void>((resolve) => {
+          releaseMutation = resolve;
+        });
+        harness.debuggerDetach.mockImplementation(async ({ targetId }) => {
+          if (targetId === "tab-202") {
+            await pendingDetach;
+          }
+        });
       }
-      expect(sendResponse).toHaveBeenCalledExactlyOnceWith({ ok: false, error });
-      expect(sendResponse).not.toHaveBeenCalledWith({
+      const toggling = toggle(harness, 202, accessMode);
+      if (accessMode === "all") {
+        await waitCalled(harness.sessionStorageSet);
+      } else {
+        await waitCalled(harness.debuggerDetach, { targetId: "tab-202" });
+      }
+      await expectAccess(harness, 201, true);
+      await expectAccess(harness, 202, false);
+      const emitPhase = (phase: string) => {
+        for (const tabId of [201, 202]) {
+          harness.debuggerEventListener({ tabId }, "Runtime.consoleAPICalled", { phase });
+        }
+        return harness.events().map((frame) => frame.params?.phase);
+      };
+      expect(emitPhase("during")).toEqual(["during"]);
+      releaseMutation();
+      expect(await toggling).toEqual({
         ok: true,
-        accessible: !initiallyShared,
-        denied: false,
+        accessible: false,
+        denied: accessMode === "all",
       });
+      expect(emitPhase("after")).toEqual(["during", "after"]);
+      expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-202" });
+      expect(harness.debuggerDetach).not.toHaveBeenCalledWith({ targetId: "tab-201" });
+      expect(harness.debuggerAttach).toHaveBeenCalledTimes(2);
     },
   );
-
-  it.each([
-    {
-      message: {
-        type: "pair" as const,
-        pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_RELAY_SECRET}`,
-      },
-      operation: "set" as const,
-      error: "Could not save browser pairing.",
-    },
-    {
-      message: { type: "unpair" as const },
-      operation: "remove" as const,
-      error: "Could not remove browser pairing.",
-    },
-  ])(
-    "responds exactly once when $message.type storage rejects",
-    async ({ message, operation, error }) => {
-      const harness = await loadBackground();
-      const storageOperation = operation === "set" ? harness.storageSet : harness.storageRemove;
-      storageOperation.mockRejectedValueOnce(new Error(error));
-      const sendResponse = vi.fn();
-
-      expect(harness.messageListener(message, {}, sendResponse)).toBe(true);
-
-      await vi.waitFor(() => {
-        expect(sendResponse).toHaveBeenCalledExactlyOnceWith({ ok: false, error });
-      });
-    },
-  );
-});
-
-describe("page-share relay request lifecycle", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
-
-  it("immediately rejects a page share when its owning relay disconnects", async () => {
-    const harness = await loadBackground();
-    const pending = await startPendingPageShare(harness);
-
-    pending.socket.close();
-
+  it("refreshes targets on selected-to-all while keeping session-denied tabs hidden", async () => {
+    const harness = await ready("selected", [71, 72], { sessionConfig: { deniedTabIdsV1: [72] } });
+    await expectMode(setMode(harness, "all"), "all");
     await vi.waitFor(() => {
-      expect(pending.response).toHaveBeenCalledWith({
-        ok: false,
-        error: "Browser relay disconnected before OpenClaw acknowledged the page share.",
-      });
+      const refreshes = harness.frames().filter((frame) => frame.type === "tabs");
+      expect(refreshes.at(-1)?.tabs).toEqual([expect.objectContaining({ tabId: 71 })]);
     });
-    expect(pending.response).toHaveBeenCalledOnce();
   });
-
-  it("immediately rejects a page share when the user unpairs the relay", async () => {
-    const harness = await loadBackground({ deferSocketClose: true });
-    const pending = await startPendingPageShare(harness);
-    const unpairResponse = vi.fn();
-
-    expect(harness.messageListener({ type: "unpair" }, {}, unpairResponse)).toBe(true);
-
-    await vi.waitFor(() => {
-      expect(unpairResponse).toHaveBeenCalledWith({ ok: true });
-      expect(pending.response).toHaveBeenCalledWith({
-        ok: false,
-        error: "Browser relay disconnected before OpenClaw acknowledged the page share.",
-      });
+  it("persists Cancel as an all-mode session deny, restores with Allow, and prunes on close", async () => {
+    const harness = await ready("all", [81]);
+    const socket = harness.socket;
+    socket.receive({ type: "attach", seq: 30, tabId: 81 });
+    await waitCalled(harness.debuggerAttach);
+    harness.debuggerDetachListener({ tabId: 81 }, "canceled_by_user");
+    await vi.waitFor(() => expect(harness.sessionStorageValues.deniedTabIdsV1).toEqual([81]));
+    expect(await harness.request({ type: "attach", tabId: 81 })).toEqual({
+      type: "error",
+      seq: expect.any(Number),
+      message: "tab 81 is paused for OpenClaw",
     });
-    expect(pending.socket.close).toHaveBeenCalledOnce();
-    expect(pending.socket.readyState).toBe(2);
-    expect(pending.response).toHaveBeenCalledOnce();
-  });
-
-  it("rejects old page shares before a replacement relay finishes closing", async () => {
-    const harness = await loadBackground({ deferSocketClose: true });
-    const pending = await startPendingPageShare(harness);
-    const pairResponse = vi.fn();
-
-    expect(
-      harness.messageListener(
-        {
-          type: "pair",
-          pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_RELAY_SECRET}`,
-        },
-        {},
-        pairResponse,
-      ),
-    ).toBe(true);
-
-    await vi.waitFor(() => {
-      expect(pairResponse).toHaveBeenCalledWith({ ok: true });
-      expect(pending.response).toHaveBeenCalledWith({
-        ok: false,
-        error: "Browser relay disconnected before OpenClaw acknowledged the page share.",
-      });
-    });
-    expect(pending.socket.close).toHaveBeenCalledOnce();
-    expect(pending.socket.readyState).toBe(2);
-    expect(harness.sockets).toHaveLength(2);
-    expect(pending.response).toHaveBeenCalledOnce();
-  });
-
-  it("preserves the acknowledgement from the page share's own relay", async () => {
-    const harness = await loadBackground();
-    const pending = await startPendingPageShare(harness);
-
-    pending.socket.receive({ type: "pageShareResult", requestId: pending.requestId, ok: true });
-
-    await vi.waitFor(() => {
-      expect(pending.response).toHaveBeenCalledWith({ ok: true });
-    });
-    pending.socket.close();
-    expect(pending.response).toHaveBeenCalledOnce();
-  });
-
-  it("preserves the delivery error returned by the page share's own relay", async () => {
-    const harness = await loadBackground();
-    const pending = await startPendingPageShare(harness);
-
-    pending.socket.receive({
-      type: "pageShareResult",
-      requestId: pending.requestId,
-      ok: false,
-      error: "Gateway page-share queue unavailable.",
-    });
-
-    await vi.waitFor(() => {
-      expect(pending.response).toHaveBeenCalledWith({
-        ok: false,
-        error: "Gateway page-share queue unavailable.",
-      });
-    });
-    pending.socket.close();
-    expect(pending.response).toHaveBeenCalledOnce();
-  });
-
-  it("does not let a stale socket reject a share on the reconnected relay", async () => {
-    const harness = await loadBackground();
-    const original = await startPendingPageShare(harness);
-
-    original.socket.close();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(harness.sockets).toHaveLength(2);
-    const replacement = await startPendingPageShare(harness);
-
-    original.socket.receive({
-      type: "pageShareResult",
-      requestId: replacement.requestId,
-      ok: false,
-      error: "Stale relay response.",
-    });
-    original.socket.close();
-    expect(replacement.response).not.toHaveBeenCalled();
-
-    replacement.socket.receive({
-      type: "pageShareResult",
-      requestId: replacement.requestId,
+    expect(await toggle(harness, 81, "all", true)).toMatchObject({
       ok: true,
+      accessible: true,
+      denied: false,
     });
-
-    await vi.waitFor(() => {
-      expect(original.response).toHaveBeenCalledWith({
-        ok: false,
-        error: "Browser relay disconnected before OpenClaw acknowledged the page share.",
-      });
-      expect(replacement.response).toHaveBeenCalledWith({ ok: true });
-    });
-    expect(original.response).toHaveBeenCalledOnce();
-    expect(replacement.response).toHaveBeenCalledOnce();
+    expect(harness.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1");
+    harness.debuggerDetachListener({ tabId: 81 }, "canceled_by_user");
+    await vi.waitFor(() => expect(harness.sessionStorageValues.deniedTabIdsV1).toEqual([81]));
+    harness.tabsRemovedListener(81);
+    await vi.waitFor(() =>
+      expect(harness.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1"),
+    );
+  });
+  it("revokes selected access on group removal", async () => {
+    const harness = await ready("selected", [{ id: 111, groupId: 7 }]);
+    harness.shareTab(111);
+    harness.socket.receive({ type: "attach", seq: 34, tabId: 111 });
+    await waitCalled(harness.debuggerAttach);
+    harness.debuggerDetach.mockClear();
+    harness.unshareTab(111);
+    harness.tabGroupRemovedListener();
+    await waitCalled(harness.debuggerDetach, { targetId: "tab-111" });
   });
 });

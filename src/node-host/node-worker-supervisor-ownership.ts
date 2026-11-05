@@ -1,0 +1,327 @@
+import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
+import type {
+  NodeWorkerEnvironmentStopInput,
+  NodeWorkerLaunchInput,
+  NodeWorkerSupervisorIdentity,
+} from "../worker/node-supervisor-protocol.js";
+import type { NodeWorkerProcessesChanged } from "../worker/worker-process-observation.js";
+import type { WorkerMcpResult, WorkerProcessMessage } from "../worker/worker-process-protocol.js";
+import type { NodeWorkerCapacity } from "./node-worker-capacity.js";
+import type { NodeWorkerContainerEngine } from "./node-worker-container-engine.js";
+import type { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
+import {
+  snapshotNodeWorkerExecutionEnv,
+  type NodeWorkerManagedIdentityTransport,
+  type NodeWorkerPlatformTrust,
+} from "./node-worker-environment.js";
+import type { NodeWorkerTerminalOutcome } from "./node-worker-launch-observation.js";
+import type {
+  NodeWorkerContainerIdentity,
+  NodeWorkerLaunchClaim,
+  NodeWorkerLaunchReceipt,
+  NodeWorkerLaunchStore,
+  NodeWorkerTerminalState,
+} from "./node-worker-launch-store.js";
+import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
+import { createNodeWorkerMcpTurn, type NodeWorkerMcpSession } from "./node-worker-mcp.js";
+import type { NodeWorkerNativeInferenceSnapshot } from "./node-worker-native-inference.js";
+import {
+  warnNodeWorkerIdleCleanupFailure,
+  type NodeWorkerCredentialScrubber,
+} from "./node-worker-output.js";
+import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
+import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
+import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
+
+export const NODE_WORKER_STOP_GRACE_MS = 1_000;
+export const NODE_WORKER_FORCE_STOP_WAIT_MS = 4_000;
+
+export type NodeWorkerStopState = Extract<NodeWorkerTerminalState, "cancelled" | "interrupted">;
+
+type NodeWorkerLaunchRecovery = (
+  receipt: NodeWorkerLaunchReceipt,
+  notifyCapacity?: boolean,
+  state?: NodeWorkerStopState,
+  awaitCleanup?: boolean,
+) => Promise<NodeWorkerLaunchReceipt>;
+
+export type NodeWorkerEnvironmentBinding = ReturnType<typeof nodeWorkerEnvironmentBinding>;
+
+export type NodeWorkerPendingAdmission = {
+  binding: NodeWorkerEnvironmentBinding;
+  identity: NodeWorkerSupervisorIdentity;
+  abort: AbortController;
+  signal: AbortSignal;
+  done: Promise<NodeWorkerLaunchReceipt>;
+};
+
+/** Only environment facts survive a turn; descriptors contain disposable admission authority. */
+export function nodeWorkerEnvironmentBinding(input: NodeWorkerLaunchInput) {
+  const { admission, assignment } = input.descriptor;
+  return {
+    gatewayNamespace: input.gatewayNamespace,
+    environmentId: admission.environmentId,
+    sessionId: admission.sessionId,
+    ownerEpoch: admission.ownerEpoch,
+    placementGeneration: input.placementGeneration,
+    bundleHash: input.expectedBundleHash,
+    agentId: assignment.agentId,
+    workspaceDir: assignment.workspaceDir,
+    containmentRoot: assignment.workerContainmentRoot,
+    permissionMode: assignment.permissionMode,
+    inference: assignment.inference,
+  };
+}
+
+export function nodeWorkerEnvironmentKey(
+  binding: Pick<NodeWorkerEnvironmentBinding, "gatewayNamespace" | "environmentId">,
+): string {
+  return JSON.stringify([binding.gatewayNamespace, binding.environmentId]);
+}
+
+export function nodeWorkerEnvironmentMatches(
+  binding: NodeWorkerEnvironmentStopInput,
+  expected: NodeWorkerEnvironmentStopInput,
+): boolean {
+  return (
+    binding.gatewayNamespace === expected.gatewayNamespace &&
+    binding.environmentId === expected.environmentId &&
+    binding.sessionId === expected.sessionId &&
+    binding.ownerEpoch === expected.ownerEpoch
+  );
+}
+
+export type NodeWorkerActiveTurn = {
+  claim: NodeWorkerLaunchClaim;
+  mcp?: ReturnType<typeof createNodeWorkerMcpTurn>;
+  done: Promise<void>;
+  settle: () => void;
+  cancelled: boolean;
+  settling?: Promise<void>;
+};
+
+export function createNodeWorkerActiveTurn(
+  claim: NodeWorkerLaunchClaim,
+  descriptor: WorkerLaunchDescriptor,
+  session?: NodeWorkerMcpSession,
+): NodeWorkerActiveTurn {
+  const { promise, resolve } = createDeferredCore();
+  return {
+    claim,
+    mcp: createNodeWorkerMcpTurn(descriptor, session),
+    done: promise,
+    settle: resolve,
+    cancelled: false,
+  };
+}
+
+type NodeWorkerActiveBase = {
+  binding: NodeWorkerEnvironmentBinding;
+  gatewayNamespace: string;
+  launchId: string;
+  planHash: string;
+  supervisor: NodeWorkerProcessIdentity;
+  worker: NodeWorkerProcessIdentity;
+  container?: NodeWorkerContainerIdentity;
+};
+
+export type NodeWorkerRunningChild = NodeWorkerActiveBase & {
+  state: "running";
+  adapter: NodeWorkerChildAdapter;
+  done: Promise<void>;
+  journalReady: Promise<void>;
+  scrubber: NodeWorkerCredentialScrubber;
+  connectionFailure: { errorText?: string };
+  turn?: NodeWorkerActiveTurn;
+  retiring: boolean;
+  idleRetention?: boolean;
+  retention?:
+    | { reason: "background"; turnId: string }
+    | { reason: "idle"; turnId: string; since: number; timer: NodeJS.Timeout };
+  stopState?: NodeWorkerStopState;
+  containerCleanup?: Promise<void>;
+  deferredOutcome?: NodeWorkerTerminalOutcome;
+};
+
+/** The stdout reader must stay free to receive cancellations while an MCP call runs. */
+export async function handleNodeWorkerMcpMessage({
+  active,
+  frame,
+  isClosed,
+  ownsChild,
+  sendResult,
+  stopChild,
+}: {
+  active: NodeWorkerRunningChild;
+  frame: Extract<WorkerProcessMessage, { type: "mcp-call" | "mcp-cancel" }>;
+  isClosed: boolean;
+  ownsChild: () => boolean;
+  sendResult: (response: WorkerMcpResult) => Promise<void>;
+  stopChild: () => Promise<void>;
+}): Promise<void> {
+  const turn = active.turn;
+  if (
+    !ownsChild() ||
+    !turn ||
+    turn.claim.launchId !== frame.turnId ||
+    turn.cancelled ||
+    turn.settling ||
+    active.retiring ||
+    active.stopState ||
+    isClosed
+  ) {
+    // A late cancellation from a settled turn must never affect a retained child's next turn.
+    return;
+  }
+  if (!turn.mcp) {
+    if (frame.type === "mcp-call") {
+      await sendResult({
+        type: "mcp-result",
+        turnId: frame.turnId,
+        requestId: frame.requestId,
+        error: "Worker MCP execution is unavailable for this turn",
+      });
+    }
+    return;
+  }
+  if (frame.type === "mcp-cancel") {
+    turn.mcp.cancel(frame.requestId);
+  } else {
+    void turn.mcp
+      .invoke(frame, sendResult)
+      .catch(() => {
+        if (active.turn === turn && ownsChild()) {
+          return stopChild();
+        }
+        return undefined;
+      })
+      .catch(warnNodeWorkerIdleCleanupFailure);
+  }
+}
+
+export function clearNodeWorkerRetention(active: NodeWorkerRunningChild): void {
+  if (active.retention?.reason === "idle") {
+    clearTimeout(active.retention.timer);
+  }
+  active.retention = undefined;
+}
+
+export type NodeWorkerObservedTerminal = NodeWorkerActiveBase & {
+  state: "observed";
+  outcome: NodeWorkerTerminalOutcome;
+  turn?: NodeWorkerActiveTurn;
+  cancelledTurn?: NodeWorkerLaunchClaim;
+  reconciliation?: Promise<NodeWorkerLaunchReceipt>;
+};
+
+export function createNodeWorkerObservedTerminal(
+  active: NodeWorkerRunningChild,
+  outcome: NodeWorkerTerminalOutcome,
+): NodeWorkerObservedTerminal {
+  return {
+    state: "observed",
+    binding: active.binding,
+    gatewayNamespace: active.gatewayNamespace,
+    launchId: active.launchId,
+    planHash: active.planHash,
+    supervisor: active.supervisor,
+    worker: active.worker,
+    ...(active.container ? { container: active.container } : {}),
+    outcome,
+    ...(active.turn ? { turn: active.turn } : {}),
+    ...(!active.stopState && active.turn?.cancelled ? { cancelledTurn: active.turn.claim } : {}),
+  };
+}
+
+export type NodeWorkerActiveOwnership = NodeWorkerRunningChild | NodeWorkerObservedTerminal;
+
+export type NodeWorkerSupervisorOptions = {
+  bundleRoot?: string;
+  env?: NodeJS.ProcessEnv;
+  capacity?: number;
+  onCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
+  onProcessesChanged?: (binding: NodeWorkerProcessesChanged) => void;
+  workspace?: NodeWorkerWorkspaceRuntime;
+  containerEngine?: NodeWorkerContainerEngine;
+  containerImage?: string;
+  /** Node-local canonical models captured before the runtime yields. */
+  nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
+  /** Captured by the dedicated ephemeral node owner, never a launch descriptor. */
+  managedIdentityTransport?: NodeWorkerManagedIdentityTransport;
+  /** Platform trust captured by that same dedicated node owner. */
+  platformTrust?: NodeWorkerPlatformTrust;
+};
+
+/** Capture the dedicated node environment once; HOME projections retain the same custody. */
+export function prepareNodeWorkerSupervisorEnvironment(
+  env: NodeJS.ProcessEnv,
+  options: NodeWorkerSupervisorOptions,
+) {
+  const managedIdentityTransport = options.containerEngine
+    ? undefined
+    : options.managedIdentityTransport;
+  const platformTrust = options.containerEngine ? undefined : options.platformTrust;
+  const workerEnv = snapshotNodeWorkerExecutionEnv(env, managedIdentityTransport, platformTrust);
+  return {
+    nativeInferenceSnapshot: options.nativeInferenceSnapshot,
+    workerEnv,
+    managedIdentityTransport,
+    engineEnv: { ...process.env, ...env },
+    projectWorkerEnv: (homeDir?: string) =>
+      homeDir
+        ? snapshotNodeWorkerExecutionEnv(
+            workerEnv,
+            managedIdentityTransport,
+            platformTrust,
+            homeDir,
+          )
+        : workerEnv,
+  };
+}
+
+/** Match both process bookkeeping and exact authoritative container identity. */
+export function nodeWorkerReceiptMatchesOwner(
+  receipt: NodeWorkerLaunchReceipt,
+  supervisor: NodeWorkerProcessIdentity,
+  worker: NodeWorkerProcessIdentity | null,
+  container?: NodeWorkerContainerIdentity,
+): boolean {
+  const sameProcess = (
+    left: NodeWorkerProcessIdentity | null,
+    right: NodeWorkerProcessIdentity | null,
+  ) =>
+    left?.pid === right?.pid &&
+    left?.startTime === right?.startTime &&
+    (left !== null) === (right !== null);
+  return (
+    sameProcess(receipt.supervisor, supervisor) &&
+    sameProcess(receipt.worker, worker) &&
+    receipt.container?.engine === container?.engine &&
+    receipt.container?.containerId === container?.containerId &&
+    receipt.container?.engineTarget === container?.engineTarget
+  );
+}
+
+export type NodeWorkerChildLifecycleOptions = {
+  onProcessesChanged?: NodeWorkerSupervisorOptions["onProcessesChanged"];
+  bundleRoot: string;
+  nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
+  /** Captured by the dedicated ephemeral node owner, never a launch descriptor. */
+  managedIdentityTransport?: NodeWorkerManagedIdentityTransport;
+  engineEnv: NodeJS.ProcessEnv;
+  store: NodeWorkerLaunchStore;
+  turns: NodeWorkerTurnStore;
+  capacity: NodeWorkerCapacity;
+  containerEngine?: NodeWorkerContainerEngine;
+  containerLifecycle?: NodeWorkerContainerLifecycle;
+  containerImage?: string;
+  starting: ReadonlyMap<string, Promise<NodeWorkerLaunchReceipt>>;
+  initialize: () => Promise<void>;
+  isClosed: () => boolean;
+  cancelTurn: (
+    expected: NodeWorkerSupervisorIdentity,
+  ) => Promise<NodeWorkerLaunchReceipt | undefined>;
+  recoverRunning: NodeWorkerLaunchRecovery;
+};

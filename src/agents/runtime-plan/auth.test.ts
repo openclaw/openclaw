@@ -1,123 +1,72 @@
-// Runtime plan auth tests cover provider/auth-profile selection and plugin
-// alias loading behavior for the auth portion of the plan.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const pluginRegistryMocks = vi.hoisted(() => {
-  const loadManifestRegistry = vi.fn();
-  return {
-    loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
-    loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
-    loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
-    loadPluginMetadataSnapshot: vi.fn((params: unknown) => {
-      const registry = loadManifestRegistry(params) ?? { plugins: [], diagnostics: [] };
-      return {
-        index: {
-          plugins: registry.plugins.map((plugin: { id: string; origin?: string }) => ({
-            pluginId: plugin.id,
-            origin: plugin.origin ?? "global",
-            enabled: true,
-            enabledByDefault: true,
-          })),
-        },
-        plugins: registry.plugins,
-      };
-    }),
-  };
-});
+const mocks = vi.hoisted(() => ({ metadata: vi.fn() }));
 
-vi.mock("../../plugins/manifest-registry-installed.js", () => ({
-  loadPluginManifestRegistryForInstalledIndex:
-    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
-}));
-
-vi.mock("../../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry:
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
-  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
-}));
-
+// mock-isolation: Keep provider alias tests independent of installed plugin metadata and registry state.
 vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
+  loadPluginMetadataSnapshot: mocks.metadata,
 }));
 
-import { resetProviderAuthAliasMapCacheForTest } from "../provider-auth-aliases.test-support.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { codexHarness, platformRoute, subscriptionRoute } from "./auth-fixtures.test-support.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
 
-describe("buildAgentRuntimeAuthPlan", () => {
-  beforeEach(() => {
-    resetProviderAuthAliasMapCacheForTest();
-    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
-    pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
+const buildPlan = (params: Partial<Parameters<typeof buildAgentRuntimeAuthPlan>[0]>) =>
+  buildAgentRuntimeAuthPlan({
+    provider: "openai",
+    authProfileProvider: "openai",
+    config: {},
+    sessionAuthProfileId: "openai:work",
+    ...params,
   });
 
-  it("does not load provider auth aliases when plugins are disabled", () => {
-    // Disabling alias support should avoid metadata loading entirely, not just
-    // ignore aliases after doing plugin work.
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alias-owner",
-          origin: "global",
-          providerAuthAliases: { fixture: "provider-two" },
-        },
-      ],
-      diagnostics: [],
-    });
-
+describe("buildAgentRuntimeAuthPlan", () => {
+  it.each([
+    { provider: undefined, forwarded: "arcee:default" },
+    { provider: "", forwarded: undefined },
+  ])("distinguishes an omitted credential provider from '$provider'", ({ provider, forwarded }) => {
     const plan = buildAgentRuntimeAuthPlan({
-      provider: "fixture",
-      authProfileProvider: "fixture",
-      config: {},
+      provider: "arcee",
+      authProfileProvider: provider,
+      sessionAuthProfileId: "arcee:default",
+      sessionAuthProfileSource: "user",
       providerAuthAliasesEnabled: false,
     });
-
-    expect(plan.providerForAuth).toBe("fixture");
-    expect(plan.authProfileProviderForAuth).toBe("fixture");
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(plan.forwardedAuthProfileId).toBe(forwarded);
   });
 
-  it("derives disabled provider auth aliases from plugin config", () => {
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alias-owner",
-          origin: "global",
-          providerAuthAliases: { fixture: "provider-two" },
-        },
-      ],
-      diagnostics: [],
+  beforeEach(() => {
+    clearPluginMetadataLifecycleCaches();
+    mocks.metadata.mockReset().mockReturnValue({ index: { plugins: [] }, plugins: [] });
+  });
+
+  it.each([
+    { label: "explicit flag", config: {}, providerAuthAliasesEnabled: false },
+    { label: "plugin config", config: { plugins: { enabled: false } } },
+  ])("does not load provider aliases disabled by $label", (params) => {
+    mocks.metadata.mockImplementationOnce(() => {
+      throw new Error("Disabled aliases must not load plugin metadata");
     });
 
     const plan = buildAgentRuntimeAuthPlan({
       provider: "fixture",
       authProfileProvider: "fixture",
-      config: { plugins: { enabled: false } },
+      config: params.config,
+      providerAuthAliasesEnabled: params.providerAuthAliasesEnabled,
     });
 
-    expect(plan.providerForAuth).toBe("fixture");
-    expect(plan.authProfileProviderForAuth).toBe("fixture");
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(plan).toMatchObject({
+      providerForAuth: "fixture",
+      authProfileProviderForAuth: "fixture",
+    });
+    expect(mocks.metadata).not.toHaveBeenCalled();
   });
 
   it("preserves the selected model route and locked profile source", () => {
-    const plan = buildAgentRuntimeAuthPlan({
-      provider: "openai",
-      authProfileProvider: "openai",
+    const plan = buildPlan({
       authProfileMode: "token",
-      sessionAuthProfileId: "openai:work",
       sessionAuthProfileSource: "user",
-      modelRoute: {
-        provider: "openai",
-        modelId: "gpt-5.5",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        authRequirement: "subscription",
-        requestTransportOverrides: "none",
-      },
-      config: {},
+      modelRoute: subscriptionRoute,
     });
 
     expect(plan).toMatchObject({
@@ -134,24 +83,12 @@ describe("buildAgentRuntimeAuthPlan", () => {
   });
 
   it("does not forward profiles when the harness rejects host auth", () => {
-    const plan = buildAgentRuntimeAuthPlan({
-      provider: "openai",
-      authProfileProvider: "openai",
+    const plan = buildPlan({
       authProfileMode: "api_key",
-      sessionAuthProfileId: "openai:work",
       sessionAuthProfileSource: "auto",
       sessionAuthProfileCandidateIds: ["openai:work"],
-      modelRoute: {
-        provider: "openai",
-        modelId: "gpt-5.5",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        authRequirement: "api-key",
-        requestTransportOverrides: "none",
-      },
-      config: {},
-      harnessId: "codex",
-      harnessRuntime: "codex",
+      modelRoute: platformRoute,
+      ...codexHarness,
       allowHarnessAuthProfileForwarding: false,
     });
 

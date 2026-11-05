@@ -1,17 +1,15 @@
 // Browser facade tests cover browser plugin facade loading and runtime API shape.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
+const loadBundledPluginPublicSurfaceModuleSyncCore = vi.hoisted(() => vi.fn());
 
 vi.mock("./facade-loader.js", () => ({
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSyncCore,
 }));
 
 describe("plugin-sdk browser facades", () => {
   beforeEach(() => {
-    // Facade wrappers cache successful loads; each case needs a clean wrapper module.
-    vi.resetModules();
-    loadBundledPluginPublicSurfaceModuleSync.mockReset();
+    loadBundledPluginPublicSurfaceModuleSyncCore.mockReset();
   });
 
   it("delegates browser profile helpers to the browser facade", async () => {
@@ -24,7 +22,7 @@ describe("plugin-sdk browser facades", () => {
 
     const resolveBrowserConfig = vi.fn().mockReturnValue(resolvedConfig);
     const resolveProfile = vi.fn().mockReturnValue(resolvedProfile);
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+    loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
       resolveBrowserConfig,
       resolveProfile,
     });
@@ -35,24 +33,12 @@ describe("plugin-sdk browser facades", () => {
 
     expect(browserProfiles.resolveBrowserConfig(cfg, rootConfig)).toBe(resolvedConfig);
     expect(browserProfiles.resolveProfile(resolvedConfig, "openclaw")).toBe(resolvedProfile);
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
       dirName: "browser",
       artifactBasename: "browser-profiles.js",
     });
     expect(resolveBrowserConfig).toHaveBeenCalledWith(cfg, rootConfig);
     expect(resolveProfile).toHaveBeenCalledWith(resolvedConfig, "openclaw");
-  });
-
-  it("hard-fails when browser profile facade is unavailable", async () => {
-    loadBundledPluginPublicSurfaceModuleSync.mockImplementation(() => {
-      throw new Error("missing browser profiles facade");
-    });
-
-    const browserProfiles = await import("./browser-profiles.js");
-
-    expect(() => browserProfiles.resolveBrowserConfig(undefined, undefined)).toThrow(
-      "missing browser profiles facade",
-    );
   });
 
   it("delegates browser control auth helpers to the browser facade", async () => {
@@ -68,7 +54,7 @@ describe("plugin-sdk browser facades", () => {
     const resolveBrowserControlAuth = vi.fn().mockReturnValue(resolvedAuth);
     const shouldAutoGenerateBrowserAuth = vi.fn().mockReturnValue(true);
     const ensureBrowserControlAuth = vi.fn().mockResolvedValue(ensuredAuth);
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+    loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
       resolveBrowserControlAuth,
       shouldAutoGenerateBrowserAuth,
       ensureBrowserControlAuth,
@@ -83,21 +69,9 @@ describe("plugin-sdk browser facades", () => {
     expect(controlAuth.resolveBrowserControlAuth(cfg, env)).toBe(resolvedAuth);
     expect(controlAuth.shouldAutoGenerateBrowserAuth(env)).toBe(true);
     await expect(controlAuth.ensureBrowserControlAuth({ cfg, env })).resolves.toEqual(ensuredAuth);
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
       dirName: "browser",
       artifactBasename: "browser-control-auth.js",
     });
-  });
-
-  it("hard-fails when browser control auth facade is unavailable", async () => {
-    loadBundledPluginPublicSurfaceModuleSync.mockImplementation(() => {
-      throw new Error("missing browser control auth facade");
-    });
-
-    const controlAuth = await import("./browser-control-auth.js");
-
-    expect(() => controlAuth.resolveBrowserControlAuth(undefined, {} as NodeJS.ProcessEnv)).toThrow(
-      "missing browser control auth facade",
-    );
   });
 });

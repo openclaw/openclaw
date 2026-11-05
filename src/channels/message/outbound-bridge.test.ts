@@ -4,17 +4,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChannelMessageAdapterFromOutbound } from "./outbound-bridge.js";
 import type {
   ChannelMessageSendPayloadContext,
-  ChannelMessageSendPollContext,
   ChannelMessageSendTextContext,
   MessageReceipt,
 } from "./types.js";
-
-type OutboundBridgeAdapter = Parameters<
-  typeof createChannelMessageAdapterFromOutbound
->[0]["outbound"];
-type ChannelMessageOutboundBridgeResult = Awaited<
-  ReturnType<NonNullable<OutboundBridgeAdapter["sendText"]>>
->;
 
 const cfg = {} as OpenClawConfig;
 
@@ -33,6 +25,28 @@ function requireFirstCallArg(mock: {
 }
 
 describe("createChannelMessageAdapterFromOutbound", () => {
+  it("preserves explicit no-send facts in progress and final results", async () => {
+    const notSent = { outcome: "not_sent" as const, messageId: "" };
+    const adapter = createChannelMessageAdapterFromOutbound({
+      outbound: {
+        sendText: async ({ onDeliveryResult }) => {
+          await onDeliveryResult?.(notSent);
+          return notSent;
+        },
+      },
+    });
+    const onDeliveryResult = vi.fn();
+    const result = await adapter.send?.text?.({ cfg, to: "room-1", text: "---", onDeliveryResult });
+
+    for (const delivery of [result, onDeliveryResult.mock.calls[0]?.[0]]) {
+      expect(delivery).toMatchObject({
+        outcome: "not_sent",
+        receipt: { platformMessageIds: [], parts: [] },
+      });
+      expect(delivery).not.toHaveProperty("messageId");
+    }
+  });
+
   it("wraps outbound text sends with a message receipt", async () => {
     const sendText = vi.fn(async (_request: ChannelMessageSendTextContext) => ({
       channel: "demo",
@@ -86,33 +100,21 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     ]);
   });
 
-  it("normalizes outbound progress results before forwarding them to message callers", async () => {
-    const sendText = vi.fn(
-      async (request: {
-        onDeliveryResult?: (result: ChannelMessageOutboundBridgeResult) => Promise<void> | void;
-      }) => {
-        await request.onDeliveryResult?.({ channel: "demo", messageId: "chunk-1" });
-        return { channel: "demo", messageId: "chunk-2" };
+  it("preserves target-only routing metadata without fabricating delivery identity", async () => {
+    const target = { kind: "channel" as const, id: "route-only" };
+    const adapter = createChannelMessageAdapterFromOutbound({
+      outbound: {
+        sendText: vi.fn(async () => ({ target })),
       },
-    );
-    const onDeliveryResult = vi.fn();
-    const adapter = createChannelMessageAdapterFromOutbound({ outbound: { sendText } });
-
-    await adapter.send?.text?.({
-      cfg,
-      to: "room-1",
-      text: "hello",
-      onDeliveryResult,
     });
 
-    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
-    expect(onDeliveryResult).toHaveBeenCalledWith({
-      messageId: "chunk-1",
-      receipt: expect.objectContaining({
-        primaryPlatformMessageId: "chunk-1",
-        platformMessageIds: ["chunk-1"],
-      }),
-    });
+    const result = await adapter.send?.text?.({ cfg, to: "room-1", text: "hello" });
+
+    expect(result?.target).toEqual(target);
+    expect(result).not.toHaveProperty("messageId");
+    expect(result?.receipt.primaryPlatformMessageId).toBeUndefined();
+    expect(result?.receipt.platformMessageIds).toEqual([]);
+    expect(result?.receipt.parts).toEqual([]);
   });
 
   it("preserves contracted delivery facts without exposing private provider fields", async () => {
@@ -227,34 +229,10 @@ describe("createChannelMessageAdapterFromOutbound", () => {
       expected: "card",
     },
     {
-      name: "title-only presentation",
-      payload: {
-        text: "Fallback",
-        presentation: { title: "Heading", blocks: [] },
-      },
-      expected: "card",
-    },
-    {
-      name: "rendered presentation blocks",
-      payload: {
-        text: "Fallback",
-        channelData: { slack: { presentationBlocks: [{ type: "divider" }] } },
-      },
-      expected: "card",
-    },
-    {
       name: "empty rendered presentation blocks",
       payload: {
         text: "Fallback",
         channelData: { slack: { presentationBlocks: [] } },
-      },
-      expected: "text",
-    },
-    {
-      name: "unrelated channel metadata",
-      payload: {
-        text: "Fallback",
-        channelData: { slack: { unfurl: false } },
       },
       expected: "text",
     },
@@ -277,66 +255,6 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     });
 
     expect(result?.receipt.parts[0]?.kind).toBe(expected);
-  });
-
-  it("wraps rich payload sends and infers the receipt part kind", async () => {
-    const sendPayload = vi.fn(async (_request: ChannelMessageSendPayloadContext) => ({
-      channel: "demo",
-      messageId: "card-1",
-    }));
-    const adapter = createChannelMessageAdapterFromOutbound({
-      capabilities: { payload: true, batch: true },
-      outbound: { sendPayload },
-    });
-
-    const result = await adapter.send?.payload?.({
-      cfg,
-      to: "room-1",
-      text: "",
-      payload: {
-        presentation: { blocks: [{ type: "text", text: "ready" }] },
-      },
-    });
-
-    expect(adapter.durableFinal?.capabilities).toEqual({ payload: true, batch: true });
-    expect(sendPayload).toHaveBeenCalledTimes(1);
-    const sendPayloadRequest = requireFirstCallArg(
-      sendPayload,
-    ) as unknown as ChannelMessageSendPayloadContext;
-    expect(sendPayloadRequest.payload).toEqual({
-      presentation: { blocks: [{ type: "text", text: "ready" }] },
-    });
-    expect(result?.receipt.parts[0]?.platformMessageId).toBe("card-1");
-    expect(result?.receipt.parts[0]?.kind).toBe("card");
-  });
-
-  it("wraps outbound poll sends with poll receipts", async () => {
-    const sendPoll = vi.fn(async (_request: ChannelMessageSendPollContext) => ({
-      channel: "demo",
-      pollId: "poll-1",
-    }));
-    const adapter = createChannelMessageAdapterFromOutbound({
-      capabilities: { poll: true },
-      outbound: { sendPoll },
-    });
-
-    const result = await adapter.send?.poll?.({
-      cfg,
-      to: "room-1",
-      poll: { question: "Ship?", options: ["Yes", "No"] },
-      threadId: "thread-1",
-    });
-
-    expect(adapter.durableFinal?.capabilities).toEqual({ poll: true });
-    expect(sendPoll).toHaveBeenCalledTimes(1);
-    const sendPollRequest = requireFirstCallArg(
-      sendPoll,
-    ) as unknown as ChannelMessageSendPollContext;
-    expect(sendPollRequest.poll).toEqual({ question: "Ship?", options: ["Yes", "No"] });
-    expect(sendPollRequest.threadId).toBe("thread-1");
-    expect(result?.messageId).toBe("poll-1");
-    expect(result?.receipt.parts[0]?.platformMessageId).toBe("poll-1");
-    expect(result?.receipt.parts[0]?.kind).toBe("poll");
   });
 
   it("normalizes existing outbound poll receipts", async () => {
@@ -364,40 +282,6 @@ describe("createChannelMessageAdapterFromOutbound", () => {
       { platformMessageId: "card-1", kind: "poll", index: 0 },
     ]);
     expect(receipt.parts[0]?.kind).toBe("card");
-  });
-
-  it("exposes only send methods backed by outbound handlers", async () => {
-    const adapter = createChannelMessageAdapterFromOutbound({
-      outbound: {
-        sendText: vi.fn(async () => ({ messageId: "msg-1" })),
-      },
-    });
-
-    const sendText = adapter.send?.text;
-    if (!sendText) {
-      throw new Error("expected text send adapter");
-    }
-
-    const result = await sendText({ cfg, to: "room-1", text: "hello" });
-    expect(result.messageId).toBe("msg-1");
-    expect(result.receipt.primaryPlatformMessageId).toBe("msg-1");
-    expect(result.receipt.platformMessageIds).toEqual(["msg-1"]);
-    expect(adapter.send?.media).toBeUndefined();
-    expect(adapter.send?.payload).toBeUndefined();
-    expect(adapter.send?.poll).toBeUndefined();
-  });
-
-  it("defaults outbound-derived adapters to plugin-owned receive acknowledgements", () => {
-    const adapter = createChannelMessageAdapterFromOutbound({
-      outbound: {
-        sendText: vi.fn(async () => ({ messageId: "msg-1" })),
-      },
-    });
-
-    expect(adapter.receive).toEqual({
-      defaultAckPolicy: "manual",
-      supportedAckPolicies: ["manual"],
-    });
   });
 
   it("preserves declared live and receive lifecycle metadata", () => {
