@@ -253,3 +253,13 @@ it("checks only schema facts before the v39 crossing", async () => {
     }
   });
 });
+
+it("keeps durable-question tables out of the released schema-33 integrity scope", () => {
+  expect(
+    resolveSchemaMigrationIntegrityCheck({
+      kind: "agent",
+      foundVersion: 32,
+      supportedVersion: 33,
+    }).tables,
+  ).not.toContain("session_questions");
+});

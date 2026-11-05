@@ -17,6 +17,7 @@ const scope = [
   "memory_index_sources",
   "schema_meta",
   "session_creation_operations",
+  "session_questions",
   "session_transcript_cold_archive_chunks",
   "transcript_events",
 ];

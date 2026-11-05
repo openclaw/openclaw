@@ -1,4 +1,5 @@
 import type { SqliteIntegrityCheckOptions } from "../infra/sqlite-integrity.js";
+import { DURABLE_QUESTIONS_SCHEMA_VERSION } from "./openclaw-agent-questions-schema.js";
 import { SCHEMA_MIGRATION_BACKUP_TABLES } from "./schema-migration-backup-tables.js";
 import { resolveSchemaMigrationIntegrityTables } from "./schema-migration-integrity-tables.js";
 
@@ -46,7 +47,7 @@ export function resolveSchemaMigrationIntegrityCheck(
     ...(migration.kind === "agent" &&
     migration.foundVersion >= 38 &&
     migration.foundVersion < migration.supportedVersion &&
-    migration.supportedVersion <= 40
+    migration.supportedVersion <= DURABLE_QUESTIONS_SCHEMA_VERSION
       ? { schemaOnly: true as const }
       : {}),
   };

@@ -1,4 +1,5 @@
 import { STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "./openclaw-agent-db-additive-columns.js";
+import { DURABLE_QUESTIONS_SCHEMA_VERSION } from "./openclaw-agent-questions-schema.js";
 import {
   CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS,
@@ -110,7 +111,6 @@ const migrationTables: Readonly<
       "session_canonical_validation_pending",
     ],
     26: ["session_nodes", "context_engine_turn_outbox", "transcript_events"],
-    33: ["session_questions"],
   },
   state: {
     ...SCHEMA_MIGRATION_BACKUP_TABLES.state,
@@ -195,7 +195,7 @@ export function resolveSchemaMigrationIntegrityTables(
     migration.kind === "agent" &&
     migration.foundVersion >= 38 &&
     migration.foundVersion < migration.supportedVersion &&
-    migration.supportedVersion <= 40
+    migration.supportedVersion <= DURABLE_QUESTIONS_SCHEMA_VERSION
   ) {
     return ["schema_meta"];
   }

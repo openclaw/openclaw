@@ -34,5 +34,5 @@ export function sessionQuestionsPostgresSchemaSql(schema: string): string {
 }
 
 export function withoutSessionQuestionsPostgresSchema(schema: string): string {
-  return schema.replace(questionPostgresStatements, "");
+  return schema.replace(new RegExp(`(?:${questionPostgresStatements.source})\\n\\n`, "gm"), "");
 }
