@@ -34,7 +34,7 @@ To intentionally keep it off and silence that notice, set
 The plugin is enabled by default. Connect to the Gateway, then click a public
 GitHub issue, pull request, or commit link in chat. The reader opens beside the
 conversation with a GitHub icon and an **Open on GitHub** link. Hover or focus
-an issue or pull request link to see its preview. Issue and pull request chips
+an issue, pull request, or commit link to see its preview. Issue and pull request chips
 show the full `owner/repo#number` reference, including shorthand references
 resolved from the session repository. Descriptive link labels stay unchanged.
 Login, OAuth, profile,
@@ -53,7 +53,8 @@ The reader shows the title and description first, while checks and discussion
 load independently. A quiet skeleton keeps the layout recognizable on a cold
 open. File diffs load when you select **Files** or scroll near that section.
 The reader includes discussion comments, published inline PR review comments
-with file and diff context, commit comments, and expandable file diffs. The
+with file and diff context, commit comments, and expandable file diffs. PR discussion
+and inline review comments load concurrently. The
 header separates the item state, author, change counts, and PR branches. **Overview**, **Checks**, **Files**, and **Discussion** shortcuts jump
 to the relevant section without leaving the reader.
 
@@ -188,14 +189,19 @@ hovercard, and GitHub links open externally.
 - Hover previews are shared for one minute across readers using the same GitHub
   identity. Concurrent requests share a fetch, but each reader must still have
   access when the result arrives. Expired previews can appear with a stale marker
-  while one background refresh runs. Cached delivery checks the current credential
+  while one background refresh runs. The hovercard displays that cached response
+  immediately; reopening or prefetching it after the 30-second stale-cache backoff
+  reads the refreshed metadata. An already-open card does not poll for updates.
+  Cached delivery checks the current credential
   once; each upstream dispatch also checks it. **Refresh** waits for current metadata.
   Refreshes use GitHub ETags for unchanged item and commit responses; identity
   changes, eviction, or a failed refresh retire those cached responses. Repository
   visibility is checked again for every authenticated refresh.
-  Anonymous author and coauthor avatars are shared across previews for up to five
-  minutes, including concurrent reads and previews of different items. Metadata
-  and repository access checks remain scoped to the selected GitHub identity.
+  Anonymous author and coauthor avatars are shared across previews for five minutes,
+  including concurrent reads and previews of different items. Expired images remain
+  visible while one background refresh runs; updated images appear with a subsequent
+  preview load. Metadata and repository access checks remain scoped to the selected
+  GitHub identity.
 - Slow preview reads (500 ms or longer) log phase durations for identity preparation,
   cache/load wait, delivery credential checks, metadata rendering, optional decoration,
   and upstream authentication/network waits. Network timings cover response headers;

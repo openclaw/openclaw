@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { normalizeAgentIdStrict, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 
 export function resolveBrowserSessionKey(
@@ -29,16 +29,14 @@ export function browserSessionTabStorageKey(record: {
   profileFingerprint: string;
   browserInstanceFingerprint: string;
 }): string {
-  return `sha256:${createHash("sha256")
-    .update(
-      JSON.stringify([
-        record.sessionKey,
-        record.nativeTargetId,
-        record.profileFingerprint,
-        record.browserInstanceFingerprint,
-      ]),
-    )
-    .digest("hex")}`;
+  return `sha256:${sha256Hex(
+    JSON.stringify([
+      record.sessionKey,
+      record.nativeTargetId,
+      record.profileFingerprint,
+      record.browserInstanceFingerprint,
+    ]),
+  )}`;
 }
 
 export function browserSessionTabNativeIdentity(record: {

@@ -2,14 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
+import { resolveSandboxScope } from "../agents/sandbox/config.js";
 import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
   DEFAULT_SANDBOX_IMAGE,
-  isDockerDaemonUnavailable,
-  resolveSandboxScope,
-} from "../agents/sandbox.js";
-import {
   SANDBOX_BROWSER_REGISTRY_PATH,
   SANDBOX_BROWSERS_DIR,
   SANDBOX_CONTAINERS_DIR,
@@ -17,6 +14,7 @@ import {
 } from "../agents/sandbox/constants.js";
 import {
   DOCKER_SANDBOX_ENGINE,
+  isDockerDaemonUnavailable,
   PODMAN_SANDBOX_ENGINE,
   validateSandboxContainerEngineTarget,
 } from "../agents/sandbox/docker.js";
@@ -103,10 +101,7 @@ function formatNamespaceProbeCommand(args: string[]): string {
   return ["unshare", ...args].join(" ");
 }
 
-async function runCodexBwrapNamespaceProbe(
-  kind: "user" | "network",
-  args: string[],
-): Promise<CodexBwrapNamespaceProbe> {
+async function runCodexBwrapNamespaceProbe(args: string[]): Promise<CodexBwrapNamespaceProbe> {
   try {
     await runExec("unshare", args, {
       timeoutMs: 5_000,
@@ -117,7 +112,7 @@ async function runCodexBwrapNamespaceProbe(
       (error as { stderr?: string } | undefined)?.stderr?.trim() ||
       (error as { stdout?: string } | undefined)?.stdout?.trim() ||
       (error instanceof Error ? error.message : String(error));
-    return { ok: false, kind, command: formatNamespaceProbeCommand(args), reason };
+    return { ok: false, kind: "user", command: formatNamespaceProbeCommand(args), reason };
   }
 }
 
@@ -130,11 +125,7 @@ async function probeCodexBwrapNamespaces(
   cfg: OpenClawConfig,
   options: SandboxHealthOptions,
 ): Promise<CodexBwrapNamespaceProbe> {
-  const userProbe = await runCodexBwrapNamespaceProbe("user", [
-    "--user",
-    "--map-root-user",
-    "true",
-  ]);
+  const userProbe = await runCodexBwrapNamespaceProbe(["--user", "--map-root-user", "true"]);
   if (!userProbe.ok || !codexBwrapNeedsNetworkNamespaceProbe(cfg)) {
     return userProbe;
   }

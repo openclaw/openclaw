@@ -39,8 +39,9 @@ import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
+// mock-isolation: Synthetic checkpoints isolate publication from real repository and session state.
 vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
-  withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
+  withSessionRepositoryPublicationCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
 
 function createPerson(accountId: number, login: string) {
@@ -81,6 +82,48 @@ const creditRejected = {
   code: "identity_changed",
   nextAction: expect.stringMatching(/credit/i),
 };
+
+type RecordEffect = NonNullable<
+  Parameters<typeof publicationExecutor.executeGitHubPublication>[0]["recordEffect"]
+>;
+
+function afterEffect(
+  surface: "local" | "repository",
+  observe: (...args: Parameters<RecordEffect>) => void,
+) {
+  const wrap =
+    (
+      record: (...args: Parameters<RecordEffect>) => void | Promise<void>,
+    ): ((...args: Parameters<RecordEffect>) => Promise<void>) =>
+    async (effect, observed) => {
+      await record(effect, observed);
+      observe(effect, observed);
+    };
+  const executeLocal = publicationExecutor.executeGitHubPublication;
+  const executeRepository = repositoryPublicationExecutor.executeRepositoryGitHubPublication;
+  const intercepted =
+    surface === "local"
+      ? vi.spyOn(publicationExecutor, "executeGitHubPublication").mockImplementation((params) =>
+          executeLocal({
+            ...params,
+            recordEffect: wrap((effect, observed) => params.recordEffect?.(effect, observed)),
+          }),
+        )
+      : vi
+          .spyOn(repositoryPublicationExecutor, "executeRepositoryGitHubPublication")
+          .mockImplementation((params) =>
+            executeRepository({
+              ...params,
+              execution: {
+                ...params.execution,
+                recordEffect: wrap((effect, observed) =>
+                  params.execution.recordEffect(effect, observed),
+                ),
+              },
+            }),
+          );
+  onTestFinished(() => intercepted.mockRestore());
+}
 
 describe("Gateway GitHub publication attribution", () => {
   installGitHubPublicationTestHarness();
@@ -154,45 +197,11 @@ describe("Gateway GitHub publication attribution", () => {
         return result;
       });
       if (boundary !== "preparation") {
-        type RecordEffect = NonNullable<
-          Parameters<typeof publicationExecutor.executeGitHubPublication>[0]["recordEffect"]
-        >;
-        const revokeAfter =
-          (record: RecordEffect) =>
-          async (effect: Parameters<RecordEffect>[0], observed?: Parameters<RecordEffect>[1]) => {
-            await record(effect, observed);
-            if (effect === boundary && observed === undefined) {
-              revokeCredit();
-            }
-          };
-        const executeLocal = publicationExecutor.executeGitHubPublication;
-        const executeRepository = repositoryPublicationExecutor.executeRepositoryGitHubPublication;
-        const intercepted =
-          surface === "local"
-            ? vi
-                .spyOn(publicationExecutor, "executeGitHubPublication")
-                .mockImplementation((params) =>
-                  executeLocal({
-                    ...params,
-                    recordEffect: revokeAfter((effect, observed) =>
-                      params.recordEffect?.(effect, observed),
-                    ),
-                  }),
-                )
-            : vi
-                .spyOn(repositoryPublicationExecutor, "executeRepositoryGitHubPublication")
-                .mockImplementation((params) =>
-                  executeRepository({
-                    ...params,
-                    execution: {
-                      ...params.execution,
-                      recordEffect: revokeAfter((effect, observed) =>
-                        params.execution.recordEffect(effect, observed),
-                      ),
-                    },
-                  }),
-                );
-        onTestFinished(() => intercepted.mockRestore());
+        afterEffect(surface, (effect, observed) => {
+          if (effect === boundary && observed === undefined) {
+            revokeCredit();
+          }
+        });
       }
       const coordinator = repository?.coordinator ?? createGitHubPublicationCoordinator();
       const result = await coordinator.requestForSessionV2(
@@ -411,42 +420,11 @@ describe("Gateway GitHub publication attribution", () => {
         change();
       }
     };
-    if (repository) {
-      const execute = repositoryPublicationExecutor.executeRepositoryGitHubPublication;
-      const intercepted = vi
-        .spyOn(repositoryPublicationExecutor, "executeRepositoryGitHubPublication")
-        .mockImplementation((params) =>
-          execute({
-            ...params,
-            execution: {
-              ...params.execution,
-              recordEffect: async (effect, observed) => {
-                await params.execution.recordEffect(effect, observed);
-                if (effect === "pull_request" && observed === undefined) {
-                  onEffect();
-                }
-              },
-            },
-          }),
-        );
-      onTestFinished(() => intercepted.mockRestore());
-    } else {
-      const execute = publicationExecutor.executeGitHubPublication;
-      const intercepted = vi
-        .spyOn(publicationExecutor, "executeGitHubPublication")
-        .mockImplementation((params) =>
-          execute({
-            ...params,
-            recordEffect: async (effect, observed) => {
-              await params.recordEffect?.(effect, observed);
-              if (effect === "pull_request" && observed === undefined) {
-                onEffect();
-              }
-            },
-          }),
-        );
-      onTestFinished(() => intercepted.mockRestore());
-    }
+    afterEffect(surface, (effect, observed) => {
+      if (effect === "pull_request" && observed === undefined) {
+        onEffect();
+      }
+    });
     const coordinator = repository?.coordinator ?? createGitHubPublicationCoordinator();
     const result = await coordinator.requestForSessionV2({
       agentId: "main",

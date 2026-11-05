@@ -6,11 +6,35 @@ read_when:
 title: "Usage tracking"
 ---
 
+## Account-scoped quotas
+
+The account-aware `models.authStatus` response includes an optional
+`usage.authProfileId` when the Gateway knows which saved credential supplied the
+measurement. This is account attribution, not a credential or a new
+account-selection setting. The general `usage.status` response omits this
+profile identity.
+
+The chat composer joins quota facts to the session’s selected auth profile, never
+to the first response for a provider. Automatic account selection, measurements
+without attribution, and conflicting account measurements show **Quota account
+unknown** instead of guessing. Model pickers and account summaries likewise do
+not borrow a plan name measured for another account.
+
+An unknown quota account does not change subscription billing into token-based
+billing. The composer keeps token-cost estimates hidden when the session
+provider has a subscription credential, even with automatic account selection or
+unavailable quota data. Until usage records attribute each run to its credential,
+providers with both subscription and API-key credentials keep this conservative
+subscription display.
+
 ## What it is
 
 - Pulls provider usage/quota directly from each provider's usage endpoint. No estimated provider billing; only provider-reported plan names, quota windows, balances, spend, budgets, daily cost history, token/model attribution, or account-state summaries.
 - Human-readable quota-window output is normalized to `X% left`, even when a provider reports consumed quota, remaining quota, or only raw counts. Providers without resettable quota windows show provider summary text instead (for example a balance).
+- Claude quota windows and extra-usage amounts accept finite numbers or numeric strings. Malformed numeric values are ignored without hiding valid sibling windows.
 - Session-level `/status` and the `session_status` tool fall back to the session's transcript log when the live session snapshot is missing token/model data. That fallback fills missing token/cache counters, can recover the active runtime model label, and prefers the larger prompt-oriented total when session metadata is missing or smaller (`totalTokensFresh !== true`, zero, or below the transcript-derived value). Nonzero live values always win over the fallback.
+
+Provider usage is cached for 60 seconds; set `models.usage.cacheTtlMs` to change this (`0` disables reuse).
 
 ## Where it shows up
 
@@ -27,7 +51,9 @@ Since v2026.5.7, `openclaw channels list` no longer prints provider usage; it po
 
 `/usage cost` warns that the **Today** and **Last 30d** totals may be incomplete
 if their aggregate cache is refreshing, partial, or stale, and suggests running
-the command again later. The **Session** total is loaded separately. The CLI
+the command again later. The **Session** total waits up to ten seconds for pending
+refreshes, then shows the last known total marked **stale** while refresh continues.
+Without a cached total, it shows **Session n/a**. The CLI
 `openclaw gateway usage-cost` also reports the recorded cache state before its
 totals.
 
@@ -37,6 +63,11 @@ cold cache has any usage data, the page shows a loading placeholder instead of
 zero totals. Available partial totals stay visible; if a refresh fails, select
 **Refresh** to try again.
 
+In a selected session's conversation details, search ignores case and matches
+canonically equivalent composed and decomposed Unicode text. Filtering does not
+rewrite the displayed or stored messages.
+
+Detailed report batches share one short wait per agent for pending usage updates.
 Session reports have a 15-second data-read budget. If it expires, completed
 batches remain visible as a partial report, with a hint to narrow the date
 range or select a session. Partial totals are not complete billing totals.
@@ -77,17 +108,31 @@ transcript changes. A refresh that overlaps agent database creation joins that
 database's preparation before writing its projection. An empty store stays absent
 until a transcript needs a rollup. Background refresh waits for 30 seconds without new usage
 or an active agent turn. After five minutes of pending work, it can start in the
-next idle gap without another quiet period. Explicit cost and overview reads
-flush and await pending updates, so a completed turn does not need to wait for
-that timer. This display batching does not delay Goal budgets or provider billing
-limits. A restart or pricing change can require background backfill;
-the page shows partial totals while it advances. Sessions without a cached
+next idle gap without another quiet period. Overview reads return the committed
+aggregates immediately and request background refresh for missing or stale sessions.
+They show partial coverage until that refresh publishes progress; opening the page
+does not wait for large transcripts to be scanned. Explicit session cost reads flush
+pending updates within the same bounded report wait. This display batching does not delay Goal budgets or
+provider billing limits. A restart or pricing change can require background backfill;
+the page shows partial totals while it advances. A pricing change (a new build or
+model catalog update) rescans only sessions with a turn that has no recorded cost;
+sessions whose turns all recorded their cost keep their projection. Sessions without a cached
 projection remain pending without waiting for transcript statistics. Background
 backfill yields between completed transcripts after ten seconds of scanning or
 50 transcripts, whichever comes first. One large transcript or the initial
 inventory can take longer. Transcripts
 remain the source of truth. Detailed reports retain exact timestamp boundaries and the recorded
-order of floating-point cost additions.
+order of floating-point cost additions. Cached SQLite detail reads use the rollup's
+recorded checkpoint and current transcript mutation facts instead of rescanning
+all transcript rows for their size and event count.
+After an append, background refresh also reuses the checkpoint's size and event
+count and reads only the appended rows. A transcript rewrite or missing checkpoint
+still requires a full recount before the new totals are published.
+
+Background refresh budgets, detailed-result cache freshness, and the Control UI's
+context-breakdown retry backoff use elapsed time, so wall-clock corrections do not
+extend the quiet period, keep expired results fresh, or shorten retry delays.
+Report dates and recorded timestamps still follow the wall clock.
 
 ## Usage date ranges
 
@@ -430,7 +475,8 @@ provider-neutral for CLI, app, and Control UI consumers.
   profile). Combines the account credits endpoint with the key quota endpoint,
   so account balance/spend, key budget, and daily/weekly/monthly usage appear
   when the credential can access them. Either endpoint can enrich the snapshot
-  independently.
+  independently. Transport failures include their underlying cause in the usage
+  error shown by `openclaw status --usage --json`.
 - **Venice**: API key via env/config/auth store (`VENICE_API_KEY`). Shows USD and
   DIEM balances plus DIEM epoch allocation usage when reported.
 - **Xiaomi MiMo**: two separate usage surfaces. Pay-as-you-go uses an API key

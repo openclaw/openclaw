@@ -1,12 +1,12 @@
-import { createMemo, createSignal, onCleanup } from "solid-js";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { createMemo, createSignal } from "solid-js";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
+import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { AboutView, type AboutCommitCopyState } from "./view.tsx";
+import { createTimeout } from "../../lib/reactive/timers.ts";
+import { AboutView } from "./view.tsx";
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -16,74 +16,40 @@ declare module "@solidjs/web" {
   }
 }
 
-const COPY_RESULT_VISIBLE_MS = 1800;
 // Mirrors about-clawd-wave so the next poke can replay the settled animation.
 const CLAWD_WAVE_MS = 1400;
 
 export function AboutPage() {
   const context = useApplication();
   const gateway = createMemo(() => projectGateway(context.gateway));
-  const [copyState, setCopyState] = createSignal<AboutCommitCopyState>("idle");
   const [clawdWaving, setClawdWaving] = createSignal(false);
-  let disposed = false;
-  let copyResetTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  let waveResetTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  onCleanup(() => {
-    disposed = true;
-    globalThis.clearTimeout(copyResetTimer);
-    globalThis.clearTimeout(waveResetTimer);
-  });
+  const waveReset = createTimeout(() => setClawdWaving(false), CLAWD_WAVE_MS);
 
   function pokeClawd() {
     if (clawdWaving()) {
       return;
     }
     setClawdWaving(true);
-    waveResetTimer = globalThis.setTimeout(() => {
-      waveResetTimer = undefined;
-      setClawdWaving(false);
-    }, CLAWD_WAVE_MS);
+    waveReset.schedule();
   }
 
-  async function copyCommit() {
-    const commit = CONTROL_UI_BUILD_INFO.commit;
-    if (!commit || copyState() === "copying") {
-      return;
-    }
-    globalThis.clearTimeout(copyResetTimer);
-    copyResetTimer = undefined;
-    setCopyState("copying");
-    const copied = await copyToClipboard(commit, () => !disposed);
-    if (disposed) {
-      return;
-    }
-    setCopyState(copied ? "copied" : "error");
-    copyResetTimer = globalThis.setTimeout(() => {
-      copyResetTimer = undefined;
-      setCopyState("idle");
-    }, COPY_RESULT_VISIBLE_MS);
-  }
-
-  function gatewayVersion() {
-    const snapshot = gateway().read().snapshot;
-    return snapshot.hello?.server?.version?.trim() || null;
-  }
+  // The connected Gateway reports its own startup-bound identity; never infer it from this UI build.
+  const gatewayBuild = createMemo(() => {
+    const server = gateway().read().snapshot.hello?.server;
+    return {
+      version: server?.version?.trim() || null,
+      commit: server?.commit ?? null,
+      builtAt: server?.builtAt ?? null,
+    };
+  });
 
   return (
     <openclaw-about-page>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <h1 class="page-title">{t("tabs.about")}</h1>
-          </div>
-        </section>
-      </ShellLayoutBoundary>
+      <SettingsPageHeader title={t("tabs.about")} />
       <SettingsWorkspace>
         <AboutView
           buildInfo={CONTROL_UI_BUILD_INFO}
-          gatewayVersion={gatewayVersion()}
-          copyState={copyState()}
-          onCopyCommit={() => void copyCommit()}
+          gateway={gatewayBuild()}
           clawdWaving={clawdWaving()}
           onPokeClawd={pokeClawd}
         />

@@ -1,4 +1,1 @@
-export {
-  testing as imessageConversationBindingTesting,
-  createIMessageConversationBindingManagerV2,
-} from "./src/conversation-bindings.js";
+export { createIMessageConversationBindingManagerV2 } from "./src/conversation-bindings.js";

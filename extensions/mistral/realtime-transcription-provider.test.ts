@@ -1,423 +1,233 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { afterEach, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 
 const provider = buildMistralRealtimeTranscriptionProvider({
   createRealtimeTranscriptionWebSocketSession,
 });
 let cleanup: (() => Promise<void>) | undefined;
-
-function createSession(
-  baseUrl: string,
-  callbacks: Omit<Parameters<typeof provider.createSession>[0], "providerConfig">,
-) {
-  return provider.createSession({
-    providerConfig: { apiKey: "fixture-value", baseUrl },
-    ...callbacks,
-  });
-}
+const delta = (text: string) => ({ type: "transcription.text.delta", text });
+const done = (text?: string) => ({ type: "transcription.done", text });
+const failure = (message: string) => ({ type: "error", error: { message } });
+const oversized = delta("x".repeat(256 * 1024 + 1));
+const limitMessage =
+  "Mistral realtime transcription exceeded the 256 KiB in-progress transcript limit";
+const segment = (text: string, start = 0, speaker_id?: string) => ({
+  type: "transcription.segment",
+  text,
+  start,
+  end: start + 1,
+  speaker_id,
+});
+const pending = (text: string, aggregate: string) => [
+  segment("hello"),
+  delta(text),
+  done(aggregate),
+];
+const texts = (callback: (text: string) => void) =>
+  vi.mocked(callback).mock.calls.map(([text]) => text);
 
 async function createRealtimeServer(
-  onRequest: (url: URL) => void,
-  transcriptionEvents: readonly Record<string, unknown>[] = [],
-  eventsByConnection?: readonly (readonly Record<string, unknown>[])[],
-  onConnection?: (socket: WebSocket) => void,
+  eventsByConnection: readonly (readonly Record<string, unknown>[])[] = [[]],
+  config: Parameters<typeof provider.createSession>[0]["providerConfig"] = {},
+  onPartial: (text: string) => void = vi.fn(),
 ) {
+  const requests: URL[] = [];
+  const sockets: WebSocket[] = [];
   const closed = createDeferred<void>();
+  const errorReceived = createDeferred<void>();
+  const onError = vi.fn(() => errorReceived.resolve());
+  const onTranscript = vi.fn();
   const server = createServer();
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
-  const clients = new Set<WebSocket>();
-  let connectionCount = 0;
-  server.on("upgrade", (request, socket, head) => {
-    onRequest(new URL(request.url ?? "/", "http://127.0.0.1"));
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      const connectionIndex = connectionCount++;
-      clients.add(ws);
-      onConnection?.(ws);
-      ws.on("close", () => {
-        clients.delete(ws);
-        closed.resolve();
-      });
-      ws.on("message", (data) => {
-        const bytes = Buffer.isBuffer(data)
-          ? data
-          : Array.isArray(data)
-            ? Buffer.concat(data)
-            : Buffer.from(data);
-        const message = JSON.parse(bytes.toString("utf8")) as { type?: unknown };
-        if (message.type === "session.update") {
-          for (const event of eventsByConnection?.[connectionIndex] ?? transcriptionEvents) {
-            ws.send(JSON.stringify(event));
-          }
+  const wss = new WebSocketServer({ server, maxPayload: 1024 * 1024 });
+  wss.on("connection", (ws, request) => {
+    const connectionIndex = sockets.push(ws) - 1;
+    requests.push(new URL(request.url ?? "/", "http://127.0.0.1"));
+    ws.on("close", () => closed.resolve());
+    ws.on("message", (data) => {
+      const message = JSON.parse(rawDataToString(data, "utf8")) as { type?: unknown };
+      if (message.type === "session.update") {
+        for (const event of eventsByConnection[connectionIndex] ?? []) {
+          ws.send(JSON.stringify(event));
         }
-      });
-      ws.send(JSON.stringify({ type: "session.created" }));
+      }
     });
+    ws.send(JSON.stringify({ type: "session.created" }));
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
+  const port = await listenOnLoopback(server);
+  const session = provider.createSession({
+    providerConfig: { apiKey: "fixture-value", ...config, baseUrl: `http://127.0.0.1:${port}/v1` },
+    onPartial,
+    onTranscript,
+    onError,
   });
   cleanup = async () => {
-    for (const ws of clients) {
-      ws.terminate();
-    }
+    session.close();
+    wss.clients.forEach((ws) => ws.terminate());
     await new Promise<void>((resolve) => {
       wss.close(() => resolve());
     });
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await server[Symbol.asyncDispose]();
   };
+  await session.connect();
   return {
-    baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`,
-    closed: closed.promise,
+    requests,
+    sockets,
+    session,
+    onPartial,
+    onTranscript,
+    onError,
+    errorReceived: errorReceived.promise,
+    waitClosed: async () => {
+      await withTimeout(closed.promise, 1_000, {
+        message: "Mistral terminal socket did not close",
+      });
+      expect(session.isConnected()).toBe(false);
+    },
   };
 }
 
-describe("buildMistralRealtimeTranscriptionProvider", () => {
-  afterEach(async () => {
-    await cleanup?.();
-    cleanup = undefined;
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
+afterEach(async () => {
+  vi.useRealTimers();
+  await cleanup?.();
+  cleanup = undefined;
+  vi.unstubAllEnvs();
+});
+
+it("normalizes nested provider config and connects with its URL parameters", async () => {
+  const mistral = {
+    apiKey: "  sk-\r\nmistral│  ",
+    model: "fixture-model",
+    encoding: "g711_ulaw",
+    sample_rate: "8000",
+    target_streaming_delay_ms: "240",
+  };
+  const resolved = provider.resolveConfig?.({
+    cfg: {} as OpenClawConfig,
+    rawConfig: { providers: { mistral } },
   });
 
-  it("normalizes nested provider config", () => {
-    const resolved = provider.resolveConfig?.({
-      cfg: {} as OpenClawConfig,
-      rawConfig: {
-        providers: {
-          mistral: {
-            apiKey: "  sk-\r\nmistral│  ",
-            model: "voxtral-mini-transcribe-realtime-2602",
-            encoding: "g711_ulaw",
-            sample_rate: "8000",
-            target_streaming_delay_ms: "240",
-          },
-        },
-      },
-    });
-
-    expect(resolved).toEqual({
-      apiKey: "sk-mistral",
-      baseUrl: undefined,
-      model: "voxtral-mini-transcribe-realtime-2602",
-      encoding: "pcm_mulaw",
-      sampleRate: 8000,
-      targetStreamingDelayMs: 240,
-    });
+  expect(resolved).toEqual({
+    apiKey: "sk-mistral",
+    baseUrl: undefined,
+    model: "fixture-model",
+    encoding: "pcm_mulaw",
+    sampleRate: 8000,
+    targetStreamingDelayMs: 240,
   });
+  const { requests } = await createRealtimeServer([], resolved);
+  expect(requests).toHaveLength(1);
+  expect(requests[0]?.pathname).toBe("/v1/audio/transcriptions/realtime");
+  expect(requests[0]?.searchParams.get("model")).toBe("fixture-model");
+  expect(requests[0]?.searchParams.get("target_streaming_delay_ms")).toBe("240");
+});
 
-  it("requires an API key when creating sessions", () => {
-    vi.stubEnv("MISTRAL_API_KEY", "");
-    expect(() => provider.createSession({ providerConfig: {} })).toThrow("Mistral API key missing");
+it("requires an API key when creating sessions", () => {
+  vi.stubEnv("MISTRAL_API_KEY", "");
+  expect(() => provider.createSession({ providerConfig: {} })).toThrow("Mistral API key missing");
+});
+
+it.each<[string, Record<string, unknown>[], string[], string[]]>([
+  ["terminal-only text", [done("final transcript")], [], ["final transcript"]],
+  ["corrected final", [delta("a"), delta("b"), done("c")], ["a", "ab"], ["c"]],
+  ["timed repeats", [segment("a", 0, "x"), segment("a", 1, "y"), done("b")], [], ["a", "a"]],
+  [
+    "flushes post-segment deltas without aggregate replay",
+    [delta("hello"), segment("hello"), delta(" new"), delta(" speech"), done("hello new speech")],
+    ["hello", " new", " new speech"],
+    ["hello", " new speech"],
+  ],
+  ["pending whitespace", pending("  \t", "hello  "), ["  \t"], ["hello"]],
+  ["pending punctuation", pending(".", "hello."), ["."], ["hello"]],
+  ["pending letters", pending(", 你好", "hello, 你好"), [", 你好"], ["hello", ", 你好"]],
+  ["pending numbers", pending(" 42", "hello 42"), [" 42"], ["hello", " 42"]],
+])("%s", async (_name, events, partials, transcripts) => {
+  const { onPartial, onTranscript, waitClosed } = await createRealtimeServer([events]);
+  await waitClosed();
+  expect(texts(onTranscript)).toEqual(transcripts);
+  expect(vi.mocked(onPartial).mock.calls).toEqual(partials.map((text) => [text]));
+});
+
+it.each<[string, string[], string[]]>([
+  ["terminal-only speech", [], []],
+  ["isolates interrupted partials", ["old fragment "], ["new fragment"]],
+])("%s after a real provider reconnect", async (_name, firstPartials, nextPartials) => {
+  const { session, onPartial, onTranscript, onError, requests, sockets } =
+    await createRealtimeServer([
+      [segment("earlier turn"), ...firstPartials.map(delta)],
+      [...nextPartials.map(delta), done("replacement final")],
+    ]);
+
+  await vi.waitFor(() => {
+    expect(texts(onTranscript)).toEqual(["earlier turn"]);
+    expect(texts(onPartial)).toEqual(firstPartials);
   });
+  vi.useFakeTimers();
+  sockets.forEach((socket) => socket.terminate());
+  // The real close must arm the retry before its backoff clock advances.
+  await vi.waitFor(() => expect(session.isConnected()).toBe(false));
+  await vi.advanceTimersByTimeAsync(1_000);
+  // The replacement socket can close before its final transcript is delivered.
+  await vi.waitFor(
+    () => {
+      expect(requests).toHaveLength(2);
+      expect(session.isConnected()).toBe(false);
+      expect(texts(onTranscript)).toEqual(["earlier turn", "replacement final"]);
+    },
+    { timeout: 3_000 },
+  );
 
-  it("connects through the public session boundary with the configured URL params", async () => {
-    const requests: URL[] = [];
-    const { baseUrl } = await createRealtimeServer((url) => requests.push(url));
-    const session = provider.createSession({
-      providerConfig: {
-        apiKey: "fixture-value",
-        baseUrl,
-        model: "voxtral-mini-transcribe-realtime-2602",
-        sampleRate: 8000,
-        encoding: "pcm_mulaw",
-        targetStreamingDelayMs: 800,
-      },
-    });
+  expect(texts(onPartial)).toEqual([...firstPartials, ...nextPartials]);
+  expect(onError).not.toHaveBeenCalled();
+});
 
-    await session.connect();
-    session.close();
+it("tracks the in-progress transcript limit as aggregate UTF-8 bytes", async () => {
+  const exactUtf8Limit = "🙂".repeat((256 * 1024) / 4);
+  const splitSurrogatePrefix = "x".repeat(256 * 1024 - 4);
+  const splitSurrogateTranscript = `${splitSurrogatePrefix}🙂`;
+  const { onError, onTranscript, waitClosed } = await createRealtimeServer([
+    [
+      delta(exactUtf8Limit),
+      segment("first segment"),
+      delta(`${splitSurrogatePrefix}\ud83d`),
+      delta("\ude42"),
+      done(),
+    ],
+  ]);
+  await waitClosed();
+  expect(texts(onTranscript)).toEqual(["first segment", splitSurrogateTranscript]);
+  expect(onError).not.toHaveBeenCalled();
+});
 
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.pathname).toBe("/v1/audio/transcriptions/realtime");
-    expect(requests[0]?.searchParams.get("model")).toBe("voxtral-mini-transcribe-realtime-2602");
-    expect(requests[0]?.searchParams.get("target_streaming_delay_ms")).toBe("800");
-  });
-
-  it.each([
-    {
-      name: "delivers terminal-only transcription text",
-      events: [{ type: "transcription.done", text: "final transcript" }],
-      partials: [],
-      transcripts: ["final transcript"],
-    },
-    {
-      name: "prefers corrected final text over streamed deltas",
-      events: [
-        { type: "transcription.text.delta", text: "draft" },
-        { type: "transcription.text.delta", text: " words" },
-        { type: "transcription.done", text: "corrected final transcript" },
-      ],
-      partials: ["draft", "draft words"],
-      transcripts: ["corrected final transcript"],
-    },
-    {
-      name: "does not repeat an already emitted final segment",
-      events: [
-        { type: "transcription.text.delta", text: "draft" },
-        { type: "transcription.segment", text: "final transcript", start: 0, end: 1 },
-        { type: "transcription.done", text: "final transcript" },
-      ],
-      partials: ["draft"],
-      transcripts: ["final transcript"],
-    },
-    {
-      name: "delivers identical text from independently timed segments",
-      events: [
-        { type: "transcription.segment", text: "echo", start: 0, end: 1, speaker_id: "first" },
-        { type: "transcription.segment", text: "echo", start: 1, end: 2, speaker_id: "second" },
-        { type: "transcription.done", text: "echo echo" },
-      ],
-      partials: [],
-      transcripts: ["echo", "echo"],
-    },
-    {
-      name: "flushes new deltas after a finalized segment without replaying its aggregate",
-      events: [
-        { type: "transcription.text.delta", text: "hello" },
-        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
-        { type: "transcription.text.delta", text: " new" },
-        { type: "transcription.text.delta", text: " speech" },
-        { type: "transcription.done", text: "hello new speech" },
-      ],
-      partials: ["hello", " new", " new speech"],
-      transcripts: ["hello", " new speech"],
-    },
-    {
-      name: "does not finalize whitespace-only deltas after a final segment",
-      events: [
-        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
-        { type: "transcription.text.delta", text: "  \t" },
-        { type: "transcription.done", text: "hello  " },
-      ],
-      partials: ["  \t"],
-      transcripts: ["hello"],
-    },
-    {
-      name: "does not finalize a punctuation-only period delta after a final segment",
-      events: [
-        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
-        { type: "transcription.text.delta", text: "." },
-        { type: "transcription.done", text: "hello." },
-      ],
-      partials: ["."],
-      transcripts: ["hello"],
-    },
-    {
-      name: "preserves multilingual speech with leading punctuation after a final segment",
-      events: [
-        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
-        { type: "transcription.text.delta", text: ", 你好" },
-        { type: "transcription.done", text: "hello, 你好" },
-      ],
-      partials: [", 你好"],
-      transcripts: ["hello", ", 你好"],
-    },
-    {
-      name: "preserves numeric speech after a final segment",
-      events: [
-        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
-        { type: "transcription.text.delta", text: " 42" },
-        { type: "transcription.done", text: "hello 42" },
-      ],
-      partials: [" 42"],
-      transcripts: ["hello", " 42"],
-    },
-    {
-      name: "does not replay a rewritten terminal aggregate after final segments",
-      events: [
-        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
-        { type: "transcription.segment", text: "world", start: 1, end: 2 },
-        { type: "transcription.done", text: "greetings earth" },
-      ],
-      partials: [],
-      transcripts: ["hello", "world"],
-    },
-  ])("$name", async ({ name, events, partials, transcripts }) => {
-    const { baseUrl, closed } = await createRealtimeServer(() => {}, events);
-    const onPartial = vi.fn();
-    const onTranscript = vi.fn();
-    const session = createSession(baseUrl, { onPartial, onTranscript });
-
-    await session.connect();
-    await withTimeout(closed, 1_000, { message: `Mistral terminal socket did not close: ${name}` });
-    expect(onTranscript.mock.calls.map(([text]) => text)).toEqual(transcripts);
-    expect(session.isConnected()).toBe(false);
-
-    expect(onPartial.mock.calls.map(([text]) => text)).toEqual(partials);
-  });
-
-  it.each([
-    {
-      name: "preserves the replacement session's terminal-only speech",
-      firstEvents: [{ type: "transcription.segment", text: "earlier turn" }],
-      secondEvents: [{ type: "transcription.done", text: "replacement final" }],
-      firstPartials: [],
-      partials: [],
-    },
-    {
-      name: "does not mix the interrupted session's partial text into replacement speech",
-      firstEvents: [
-        { type: "transcription.segment", text: "earlier turn" },
-        { type: "transcription.text.delta", text: "old fragment " },
-      ],
-      secondEvents: [
-        { type: "transcription.text.delta", text: "new fragment" },
-        { type: "transcription.done", text: "replacement final" },
-      ],
-      firstPartials: ["old fragment "],
-      partials: ["old fragment ", "new fragment"],
-    },
-  ])(
-    "$name after a real provider reconnect",
-    async ({ firstEvents, secondEvents, firstPartials, partials }) => {
-      const requests: URL[] = [];
-      let firstSocket: WebSocket | undefined;
-      const { baseUrl } = await createRealtimeServer(
-        (url) => requests.push(url),
-        [],
-        [firstEvents, secondEvents],
-        (socket) => {
-          firstSocket ??= socket;
-        },
-      );
-      const onPartial = vi.fn();
-      const onTranscript = vi.fn();
-      const onError = vi.fn();
-      const session = createSession(baseUrl, { onPartial, onTranscript, onError });
-
-      try {
-        await session.connect();
-        await vi.waitFor(() => {
-          expect(onTranscript.mock.calls.map(([text]) => text)).toEqual(["earlier turn"]);
-          expect(onPartial.mock.calls.map(([text]) => text)).toEqual(firstPartials);
-        });
-        if (!firstSocket) {
-          throw new Error("Mistral fixture did not establish its first WebSocket");
-        }
-        vi.useFakeTimers();
-        firstSocket.terminate();
-        // The real close must arm the retry before its backoff clock advances.
-        await vi.waitFor(() => expect(session.isConnected()).toBe(false));
-        await vi.advanceTimersByTimeAsync(1_000);
-        // Wait on the delivered transcripts, not just the socket close: the replacement
-        // connection can close before its `transcription.done` reaches onTranscript.
-        await vi.waitFor(
-          () => {
-            expect(requests).toHaveLength(2);
-            expect(session.isConnected()).toBe(false);
-            expect(onTranscript.mock.calls.map(([text]) => text)).toEqual([
-              "earlier turn",
-              "replacement final",
-            ]);
-          },
-          { timeout: 3_000 },
-        );
-
-        expect(onPartial.mock.calls.map(([text]) => text)).toEqual(partials);
-        expect(onError).not.toHaveBeenCalled();
-      } finally {
-        session.close();
-        vi.useRealTimers();
-      }
+it.each<[string, Record<string, unknown>[], number, string | number]>([
+  [limitMessage, Array.from({ length: 10_000 }, () => delta("x".repeat(32))), 8_192, 256 * 1024],
+  ["provider failed", [delta("draft"), failure("provider failed"), oversized], 1, "draft"],
+])("fails once and ignores late events: %s", async (message, events, count, last) => {
+  let lastPartial = "";
+  let partialCalls = 0;
+  const { waitClosed, errorReceived, onError, onTranscript } = await createRealtimeServer(
+    [[...events, segment("late segment"), done("late done")]],
+    {},
+    (partial) => {
+      lastPartial = partial;
+      partialCalls += 1;
     },
   );
 
-  it("tracks the in-progress transcript limit as aggregate UTF-8 bytes", async () => {
-    const exactUtf8Limit = "🙂".repeat((256 * 1024) / 4);
-    const splitSurrogatePrefix = "x".repeat(256 * 1024 - 4);
-    const splitSurrogateTranscript = `${splitSurrogatePrefix}🙂`;
-    const { baseUrl, closed } = await createRealtimeServer(() => {}, [
-      { type: "transcription.text.delta", text: exactUtf8Limit },
-      { type: "transcription.segment", text: "first segment", start: 0, end: 1 },
-      { type: "transcription.text.delta", text: `${splitSurrogatePrefix}\ud83d` },
-      { type: "transcription.text.delta", text: "\ude42" },
-      { type: "transcription.done" },
-    ]);
-    const onError = vi.fn();
-    const onTranscript = vi.fn();
-    const session = createSession(baseUrl, { onError, onTranscript });
+  // Start the teardown deadline after overflow is reported, preserving the processing budget.
+  await errorReceived;
+  await waitClosed();
+  expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message }));
 
-    await session.connect();
-    await withTimeout(closed, 1_000, { message: "Mistral UTF-8 limit socket did not close" });
-    expect(onTranscript.mock.calls.map(([text]) => text)).toEqual([
-      "first segment",
-      splitSurrogateTranscript,
-    ]);
-    expect(session.isConnected()).toBe(false);
-
-    expect(onError).not.toHaveBeenCalled();
-  });
-
-  it("fails once and ignores late terminal events after 10,000 runaway deltas", async () => {
-    const { baseUrl, closed } = await createRealtimeServer(() => {}, [
-      ...Array.from({ length: 10_000 }, () => ({
-        type: "transcription.text.delta",
-        text: "x".repeat(32),
-      })),
-      { type: "transcription.segment", text: "late segment", start: 0, end: 1 },
-      { type: "transcription.done", text: "late done" },
-    ]);
-    const errorReceived = createDeferred<void>();
-    const onError = vi.fn(() => errorReceived.resolve());
-    const onTranscript = vi.fn();
-    let lastPartialLength = 0;
-    let partialCalls = 0;
-    const session = createSession(baseUrl, {
-      onError,
-      onPartial: (partial) => {
-        lastPartialLength = partial.length;
-        partialCalls += 1;
-      },
-      onTranscript,
-    });
-
-    await session.connect();
-    // Start the teardown deadline after overflow is reported, preserving the processing budget.
-    await errorReceived.promise;
-    await withTimeout(closed, 1_000, { message: "Mistral runaway-delta socket did not close" });
-    expect(onError).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        message: "Mistral realtime transcription exceeded the 256 KiB in-progress transcript limit",
-      }),
-    );
-    expect(session.isConnected()).toBe(false);
-
-    expect(partialCalls).toBe(8_192);
-    expect(lastPartialLength).toBe(256 * 1024);
-    expect(onTranscript).not.toHaveBeenCalled();
-  });
-
-  it("makes a ready-state provider error terminal and ignores late events", async () => {
-    const { baseUrl, closed } = await createRealtimeServer(() => {}, [
-      { type: "transcription.text.delta", text: "draft" },
-      { type: "error", error: { message: "provider failed" } },
-      { type: "transcription.text.delta", text: "x".repeat(256 * 1024 + 1) },
-      { type: "transcription.segment", text: "late segment", start: 0, end: 1 },
-      { type: "transcription.done", text: "late done" },
-    ]);
-    const onError = vi.fn();
-    const onPartial = vi.fn();
-    const onTranscript = vi.fn();
-    const session = createSession(baseUrl, { onError, onPartial, onTranscript });
-
-    await session.connect();
-    await withTimeout(closed, 1_000, { message: "Mistral provider-error socket did not close" });
-    expect(onError).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ message: "provider failed" }),
-    );
-    expect(session.isConnected()).toBe(false);
-
-    expect(onPartial).toHaveBeenCalledExactlyOnceWith("draft");
-    expect(onTranscript).not.toHaveBeenCalled();
-  });
+  expect(partialCalls).toBe(count);
+  expect(typeof last === "number" ? lastPartial.length : lastPartial).toBe(last);
+  expect(onTranscript).not.toHaveBeenCalled();
 });

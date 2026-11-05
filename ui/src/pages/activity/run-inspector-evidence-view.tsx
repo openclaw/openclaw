@@ -146,11 +146,17 @@ export function renderRunInspectorPagination(
   kind: "candidates" | "decisions",
   status: "loading" | "error" | undefined,
   onLoad: () => void,
+  disabled = false,
 ) {
   return (
     <div class="run-inspector__pagination">
       <span>{t(`activity.runInspector.${kind}.more`)}</span>
-      <button type="button" class="btn" disabled={status === "loading"} onClick={onLoad}>
+      <button
+        type="button"
+        class="btn"
+        disabled={disabled || status === "loading"}
+        onClick={onLoad}
+      >
         {t(`activity.runInspector.${kind}.${status === "loading" ? "loadingMore" : "loadMore"}`)}
       </button>
       {status === "error" ? (
@@ -204,6 +210,25 @@ function renderReceiptDetail(receipt: DecisionReceiptDisplayV1) {
             ])
           : undefined}
         <p class="run-inspector__reason">{t("activity.runInspector.decisions.ownerNote")}</p>
+        {receipt.representedSubject ? (
+          <>
+            <h6>{t("activity.runInspector.decisions.representedSubjectHeading")}</h6>
+            {renderRunInspectorValues("values", [
+              ["kind", renderRunInspectorSafeRef(receipt.representedSubject.principal.kind)],
+              [
+                "principalReference",
+                renderRunInspectorSafeRef(receipt.representedSubject.principal.principalRef, true),
+              ],
+              [
+                "domainReference",
+                renderRunInspectorSafeRef(receipt.representedSubject.principal.domainRef, true),
+              ],
+            ])}
+            <p class="run-inspector__reason">
+              {t("activity.runInspector.decisions.representedSubjectNote")}
+            </p>
+          </>
+        ) : undefined}
       </section>
       <section aria-labelledby="run-inspector-receipt-evidence">
         <h5 id="run-inspector-receipt-evidence">
@@ -244,6 +269,7 @@ export function renderRunInspectorDecisions(
   selectorId: string | null,
   basePath: string,
   onLoadMoreDecisions: () => void,
+  disabled = false,
 ) {
   const result = state.result;
   const selectedReceipt = selectorId
@@ -300,7 +326,12 @@ export function renderRunInspectorDecisions(
         </ol>
       ) : undefined}
       {result.nextDecisionCursor ? (
-        renderRunInspectorPagination("decisions", state.decisionPageStatus, onLoadMoreDecisions)
+        renderRunInspectorPagination(
+          "decisions",
+          state.decisionPageStatus,
+          onLoadMoreDecisions,
+          disabled,
+        )
       ) : (
         <div class="run-inspector__pagination" role="note">
           {t("activity.runInspector.decisions.bounded")}

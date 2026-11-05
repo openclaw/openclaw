@@ -18,12 +18,30 @@ function loadSkillsFromPath(dir: string) {
   return loadSkills({ cwd: dir, agentDir: dir, skillPaths: [dir] });
 }
 
+async function writeNamedSkill(root: string, name: string, description: string) {
+  return writeRawSkill(
+    path.join(root, name),
+    `---\nname: ${name}\ndescription: ${description}\n---\n`,
+  );
+}
+
+function expectScanWarning(root: string, warningPath: string, message?: string) {
+  const result = loadSkillsFromPath(root);
+  expect(result.skills.map((skill) => skill.name)).toEqual(["valid"]);
+  expect(result.diagnostics).toEqual([
+    expect.objectContaining({
+      type: "warning",
+      path: warningPath,
+      ...(message ? { message: expect.stringContaining(message) } : {}),
+    }),
+  ]);
+}
+
 it("keeps cached content isolated from caller mutations, paths and read limits", async () => {
   const root = tempDirs.make("openclaw-skill-content-cache-");
   const raw = "---\ndescription: Cached instructions\n---\nInstructions without a heading.";
   for (const name of ["first-copy", "second-copy"]) {
-    const dir = path.join(root, name);
-    await writeRawSkill(dir, raw);
+    await writeRawSkill(path.join(root, name), raw);
   }
   const firstParams = {
     skillDir: path.join(root, "first-copy"),
@@ -150,24 +168,48 @@ it("does not load dash-prefixed Markdown as frontmatter", async () => {
 
 it("reports malformed frontmatter by file and keeps loading sibling skills", async () => {
   const tempDir = tempDirs.make("openclaw-skill-scan-");
-  const brokenDir = path.join(tempDir, "broken");
   const brokenFile = await writeRawSkill(
-    brokenDir,
+    path.join(tempDir, "broken"),
     "---\nname: [broken\ndescription: Broken skill\n---\n",
   );
-  await writeRawSkill(
-    path.join(tempDir, "valid"),
-    "---\nname: valid\ndescription: Valid sibling\n---\n",
-  );
-
-  const result = loadSkillsFromPath(tempDir);
-
-  expect(result.skills.map((skill) => skill.name)).toEqual(["valid"]);
-  expect(result.diagnostics).toEqual([
-    expect.objectContaining({
-      type: "warning",
-      path: brokenFile,
-      message: expect.stringContaining("invalid frontmatter: BAD_INDENT"),
-    }),
-  ]);
+  await writeNamedSkill(tempDir, "valid", "Valid sibling");
+  expectScanWarning(tempDir, brokenFile, "invalid frontmatter: BAD_INDENT");
 });
+
+it.each([
+  "a[1]",
+  "a]1",
+  "a{1}",
+  "#a",
+  "!a",
+  ...(process.platform === "win32" ? [] : ["a*", "a?", "a\\1"]),
+])("honors nested ignore rules in literal directory %s", async (name) => {
+  const root = tempDirs.make("openclaw-skill-literal-ignore-");
+  const nested = path.join(root, name);
+  await writeRawSkill(nested, "---\nname: direct\ndescription: Ignored direct skill\n---\n");
+  await fs.writeFile(path.join(nested, ".gitignore"), "SKILL.md\n!keep/SKILL.md\n");
+  await writeNamedSkill(nested, "hidden", "Ignored nested skill");
+  await writeNamedSkill(nested, "keep", "Explicit exception");
+  await writeNamedSkill(root, "a1", "Unaffected sibling");
+
+  const result = loadSkillsFromPath(root);
+  expect(result.skills.map((skill) => skill.name).toSorted()).toEqual(["a1", "keep"]);
+  expect(result.diagnostics).toEqual([]);
+});
+
+it.each(["nonregular", "cyclic-symlink"] as const)(
+  "reports %s ignore rules without loading that subtree or losing siblings",
+  async (kind) => {
+    const root = tempDirs.make("openclaw-skill-ignore-read-");
+    const brokenDir = path.join(root, "broken");
+    await writeNamedSkill(brokenDir, "private-skill", "Must not load without ignore rules");
+    const ignorePath = path.join(brokenDir, ".gitignore");
+    if (kind === "nonregular") {
+      await fs.mkdir(ignorePath);
+    } else {
+      await fs.symlink(".gitignore", ignorePath);
+    }
+    await writeNamedSkill(root, "valid", "Valid sibling");
+    expectScanWarning(root, brokenDir);
+  },
+);

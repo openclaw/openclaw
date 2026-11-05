@@ -12,7 +12,7 @@ import {
 } from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { RuntimeId } from "./runtime-id.js";
-import type { RuntimeParityResult } from "./runtime-parity.js";
+import type { RuntimeParityResult } from "./runtime-parity.types.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 
@@ -189,18 +189,6 @@ function isQaSuiteEvidenceOutcomeStatus(status: unknown): boolean {
   return status === "blocked" || isQaSuiteScenarioOutcomeStatus(status);
 }
 
-function findQaSuiteScenarioCountMismatch(
-  counts: QaSuiteOutcomeCounts,
-  observed: QaSuiteOutcomeCounts,
-): string | undefined {
-  for (const key of ["total", "passed", "failed", "skipped"] as const) {
-    if (counts[key] !== observed[key]) {
-      return `count/scenario mismatch: counts.${key}=${counts[key]}, scenario.${key}=${observed[key]}`;
-    }
-  }
-  return undefined;
-}
-
 export function findQaSuiteSummaryAccountingError(summary: unknown): string | undefined {
   if (!isRecord(summary) || summary.counts === undefined) {
     return undefined;
@@ -248,12 +236,11 @@ export function findQaSuiteSummaryAccountingError(summary: unknown): string | un
       isRecord(scenario) ? scenario.status : undefined,
     );
     if (statuses.every(isQaSuiteScenarioOutcomeStatus)) {
-      const mismatch = findQaSuiteScenarioCountMismatch(
-        counts,
-        countQaSuiteScenarioStatuses(statuses),
-      );
-      if (mismatch) {
-        return mismatch;
+      const observed = countQaSuiteScenarioStatuses(statuses);
+      for (const key of ["total", "passed", "failed", "skipped"] as const) {
+        if (counts[key] !== observed[key]) {
+          return `count/scenario mismatch: counts.${key}=${counts[key]}, scenario.${key}=${observed[key]}`;
+        }
       }
     }
   }

@@ -20,7 +20,7 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - ui/src/e2e/activity-summaries.e2e.test.ts
-    - ui/src/pages/activity/activity-page.ts
+    - ui/src/pages/activity/activity-page.tsx
     - ui/src/pages/activity/tool-activity.ts
   execution:
     kind: playwright

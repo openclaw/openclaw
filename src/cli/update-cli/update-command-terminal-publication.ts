@@ -18,11 +18,16 @@ import {
   recordMutableUpdateInterruption,
 } from "./update-command-mutable-signals.js";
 import { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
-import { isUpdateStateReadContention, UpdateCommandFailure } from "./update-command-result.js";
+import {
+  isUpdateStateReadContention,
+  UpdateCommandFailure,
+  UpdateCommandPendingRecoveryFailure,
+} from "./update-command-result.js";
+import { GatewayRestartHealthError } from "./update-command-service-command.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import type { UpdateCommandTerminalRecord } from "./update-command-terminal-record.js";
 import {
-  publishUpdateCommandTerminalResult,
+  prepareUpdateCommandTerminalResult,
   resolveSettledUpdateCommandResult,
 } from "./update-command-terminal.js";
 
@@ -74,7 +79,7 @@ export async function withUpdateProgressSettlement(
       throw cause;
     }
     failure = { cause };
-    const { result } = createPostUpdateFailureResult(params, cause);
+    const { result } = createPostUpdateExceptionResult(params, cause);
     settledParams = {
       ...params,
       result:
@@ -168,7 +173,7 @@ export function completeUpdateCommandResult(
   });
 }
 
-export async function publishSettledUpdateCommandResult(
+export async function prepareSettledUpdateCommandResult(
   params: Pick<
     FinishUpdateParams,
     | "opts"
@@ -189,23 +194,29 @@ export async function publishSettledUpdateCommandResult(
       completedDowntimeMs?: number;
     };
   },
-  onTerminalRecord?: (record: UpdateCommandTerminalRecord["record"]) => void,
-): Promise<UpdateRunResult> {
+  assertCurrent?: () => void,
+) {
+  assertCurrent?.();
   const settled = await resolveSettledUpdateCommandResult(
     params,
     state.pendingResult,
     state.failure,
     state.terminalRecord,
+    assertCurrent && params.opts.run?.executorFence
+      ? { runId: params.opts.run.runId, fence: params.opts.run.executorFence }
+      : undefined,
   );
+  assertCurrent?.();
   const result = completeUpdateCommandResult(params, settled.result);
   const reporting = state.readReportingState();
   const reportDowntime = !settled.settlementFailed && reporting.pendingRestartAtMs === undefined;
   if (reporting.notify) {
     await reporting.notify(result);
   }
+  assertCurrent?.();
   // Notification can yield. Preserve the finalizer's original observation points.
   const { rolledBack, completedDowntimeMs } = state.readReportingState();
-  return publishUpdateCommandTerminalResult(
+  return prepareUpdateCommandTerminalResult(
     params,
     result,
     {
@@ -213,17 +224,62 @@ export async function publishSettledUpdateCommandResult(
       downtimeMs: reportDowntime ? completedDowntimeMs : undefined,
       captured: settled.captured,
     },
-    onTerminalRecord,
+    assertCurrent,
   );
 }
 
-export function createPostUpdateFailureResult(
+export async function publishSettledUpdateCommandResult(
+  params: Parameters<typeof prepareSettledUpdateCommandResult>[0],
+  state: Parameters<typeof prepareSettledUpdateCommandResult>[1],
+  onTerminalRecord?: (record: UpdateCommandTerminalRecord["record"]) => void,
+): Promise<UpdateRunResult> {
+  const prepared = await prepareSettledUpdateCommandResult(params, state);
+  return prepared(onTerminalRecord);
+}
+
+export function createPostUpdateExceptionResult(
   params: Pick<FinishUpdateParams, "result" | "root" | "startedAt">,
   error: unknown,
+  activationVerified = false,
 ): { result: UpdateRunResult; message: string } {
   const message = formatErrorMessage(error);
+  if (error instanceof UpdateCommandPendingRecoveryFailure) {
+    return { result: error.result, message };
+  }
   const failureFacts = collectUpdateDoctorFailureFacts(error);
   const refusal = classifyDoctorMaintenanceRefusal(error);
+  if (
+    activationVerified &&
+    collectNestedErrorCandidates(error).every(
+      (cause) =>
+        cause instanceof GatewayRestartHealthError ||
+        (cause instanceof UpdateCommandFailure &&
+          cause.result.reason === "wrapper-retirement-failed" &&
+          cause.result.recovery?.serviceRestartSafe !== false),
+    ) &&
+    error instanceof Error &&
+    !(params.result.recovery?.serviceRestartSafe === false && params.result.recovery.dataAtRisk)
+  ) {
+    // Only known maintenance failures qualify; health does not grant authority.
+    const warning = `Gateway activation verified; post-update maintenance needs attention: ${message}`;
+    return {
+      message: warning,
+      result: {
+        ...params.result,
+        steps: [
+          ...params.result.steps,
+          {
+            name: "post-update maintenance",
+            command: "openclaw update",
+            cwd: params.result.root ?? params.root,
+            durationMs: Math.max(0, Date.now() - params.startedAt),
+            exitCode: 0,
+            advisory: { kind: "recoverable-maintenance", message: warning },
+          },
+        ],
+      },
+    };
+  }
   const version = params.result.after?.version?.trim();
   return {
     message,

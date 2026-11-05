@@ -294,8 +294,13 @@ run_prepared_correction_review() (
   validate_review_artifact_data || return 1
   node "$(dirname "$(review_artifacts_helper_path)")/correction-review.mjs" \
     "$command" "$pr" "$PR_HEAD_SHA_BEFORE" "$head" \
-    "$PREP_INCOMING_JSON_OID" "$PREP_BASELINE_REFRESH_HEAD" "$PREP_BASELINE_REFRESH_OID"
+    "$PREP_INCOMING_JSON_OID" "$PREP_BASELINE_REFRESH_HEAD" "$PREP_BASELINE_REFRESH_OID" "${@:3}"
 )
+
+require_proof_publication_review() {
+  run_prepared_correction_review "$1" "${2:-proof-publication}" \
+    "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID"
+}
 
 require_prepared_review() {
   local pr="$1" mode=ready
@@ -330,11 +335,15 @@ read_prepared_ci_failure() (
 # Normal READY preparation keeps its existing contract; the nonempty snapshot
 # also detects loss of correction mode during an operation.
 correction_review_snapshot() (
-  local pr="$1" PREP_REVIEW_MODE=""
+  local pr="$1" purpose="${2:-qualified}" PREP_REVIEW_MODE=""
   [ -s .local/prep-context.env ] || return 0
   source .local/prep-context.env || return 1
   [ "$PREP_REVIEW_MODE" = correction ] || return 0
-  require_prepared_review "$pr" >/dev/null || return 1
+  case "$purpose" in
+    qualified) require_prepared_review "$pr" >/dev/null || return 1 ;;
+    proof) require_proof_publication_review "$pr" >/dev/null || return 1 ;;
+    *) return 1 ;;
+  esac
   local receipt oid
   for receipt in \
     .local/prep-context.env .local/pr-meta.json .local/pr-meta.env \
@@ -378,7 +387,7 @@ correction_review_snapshot_with_publication() {
 verify_correction_review_snapshot() {
   local pr="$1" expected="$2" current
   [ -n "$expected" ] || return 0
-  current=$(correction_review_snapshot "$pr") || return 1
+  current=$(correction_review_snapshot "$pr" "${3:-qualified}") || return 1
   if [ "$expected" != "$current" ]; then
     echo "Correction review authority changed during admission; no publication or merge is authorized." >&2
     return 1
@@ -517,7 +526,7 @@ review_init() {
   expected_sha=$(pr_view_string_field "$json" headRefOid "$pr") || return 1
   fetch_pr_head "$pr" "$expected_sha" "refs/heads/pr-$pr" "$json" || return 1
   verify_pr_metadata_identity "$pr" "$json" "$PR_HEAD_OBSERVATION" || return 1
-  write_pr_meta_files "$json"
+  write_pr_meta_files "$json" || return 1
   local mb
   mb=$(pr_git merge-base "$PR_MAIN_SHA" "refs/heads/pr-$pr")
 

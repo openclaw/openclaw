@@ -1,5 +1,6 @@
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { vi } from "vitest";
+import { runCatalogListInline } from "./session-catalog-list-operation.js";
 import { catalogFactory } from "./session-catalog-resident.test-support.js";
 import type {
   CodexSessionCatalogPage,
@@ -9,21 +10,15 @@ import {
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   config,
   createCodexTestBindingStore,
+  createCatalogTestProvider,
   createControl,
-  createGatewayApi,
   createRuntime,
-  registerCodexSessionCatalog,
 } from "./session-catalog.test-helpers.js";
 
+const idleSession = { status: "idle", source: "cli", archived: false };
 export function page(ids: string[], nextCursor?: string): CodexSessionCatalogPage {
   return {
-    sessions: ids.map((threadId) => ({
-      threadId,
-      name: threadId,
-      status: "idle",
-      source: "cli",
-      archived: false,
-    })),
+    sessions: ids.map((threadId) => ({ ...idleSession, threadId, name: threadId })),
     ...(nextCursor ? { nextCursor } : {}),
   };
 }
@@ -41,7 +36,7 @@ export function observe<T>(promise: Promise<T>) {
   return { state, done };
 }
 
-export async function fixture(homeCount = 1) {
+export async function fixture(homeCount = 1, pluginConfig?: unknown) {
   const { runtime } = createRuntime();
   const base = catalogFactory({ getRuntimeConfig: () => config });
   const primary = (await base.homesForAgent("main"))[0]!;
@@ -62,26 +57,22 @@ export async function fixture(homeCount = 1) {
   const bindingStore = Object.assign(createCodexTestBindingStore(), {
     managedThreads: { has: vi.fn(async () => false), mark: vi.fn(async () => true), snapshot },
   });
-  const { api, getProvider } = createGatewayApi(runtime, config);
-  let runtimeConfig = config;
-  registerCodexSessionCatalog({
-    api,
-    bindingStore,
+  const provider = createCatalogTestProvider({
     control: {
       ...base,
       homesForAgent: async () => homes,
       forRequest: (_agentId, source) =>
-        createControl({
-          listPage: (params) => listPage(source!.sourceHomeId, params),
-        }),
+        createControl({ listPage: (params) => listPage(source!.sourceHomeId, params) }),
     },
-    getRuntimeConfig: () => runtimeConfig,
+    runtime,
+    startupConfig: config,
+    bindingStore,
+    getPluginConfig: () => pluginConfig,
   });
   const controller = new AbortController();
   const onHost = vi.fn();
   const publications: Promise<void>[] = [];
   const start = (params: Partial<Parameters<SessionCatalogProvider["list"]>[0]> = {}) => {
-    const provider = getProvider()!;
     if (!provider.createListOperation) {
       throw new Error("Codex list operation is unavailable");
     }
@@ -97,49 +88,23 @@ export async function fixture(homeCount = 1) {
       ...params,
     });
   };
-  return {
-    runtime,
-    homes,
-    listPage,
-    snapshot,
-    controller,
-    onHost,
-    publications,
-    start,
-    replaceConfig: () => {
-      runtimeConfig = structuredClone(config);
-    },
-  };
+  return { runtime, homes, listPage, snapshot, controller, onHost, publications, start, provider };
 }
 
 export async function nodeFixture() {
   const f = await fixture();
-  const node = {
-    nodeId: "remote",
-    connected: true,
-    connectedAtMs: 1,
-    commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-  };
-  const listNodes = vi.fn(async () => ({ nodes: [node] }));
+  const commands = [CODEX_APP_SERVER_THREADS_LIST_COMMAND];
+  const node = { nodeId: "remote", connected: true, connectedAtMs: 1, commands };
   const invoke = vi.mocked(f.runtime.nodes.invoke);
   invoke.mockResolvedValue({ payloadJSON: JSON.stringify(page(["original"])) });
-  const read = async (params: Partial<Parameters<SessionCatalogProvider["list"]>[0]> = {}) => {
-    const operation = f.start({
-      hostIds: undefined,
-      allowPartialResults: true,
-      listNodes,
-      ...params,
-    });
-    try {
-      for (;;) {
-        const result = await operation.next();
-        if (result.done) {
-          return result.hosts;
-        }
-      }
-    } finally {
-      operation.close();
-    }
-  };
-  return { ...f, node, listNodes, invoke, read };
+  const read = (params: Partial<Parameters<SessionCatalogProvider["list"]>[0]> = {}) =>
+    runCatalogListInline(
+      f.start({
+        hostIds: undefined,
+        allowPartialResults: true,
+        listNodes: async () => ({ nodes: [node] }),
+        ...params,
+      }),
+    );
+  return { ...f, invoke, read };
 }

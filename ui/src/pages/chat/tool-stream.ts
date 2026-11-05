@@ -429,49 +429,6 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
   return true;
 }
 
-function applyToolReviewEvent(
-  host: ToolStreamHost,
-  payload: AgentEventPayload,
-  entry: ToolStreamEntry,
-  review: ToolApprovalReview,
-) {
-  const ownerIdentity = toolActivityIdentity(payload.runId, entry.toolCallId);
-  const sequences = (host.activityEventSeqById ??= new Map());
-  const sequenceFor = (candidate: ToolApprovalReview) =>
-    sequences.get(toolReviewSequenceIdentity(ownerIdentity, candidate.id)) ?? 0;
-  const reviewFloorKey = `${ownerIdentity}:review-floor`;
-  const currentReviews = readToolApprovalReviews(entry.details);
-  const newestReviewSeq = Math.max(
-    sequences.get(reviewFloorKey) ?? 0,
-    ...currentReviews.map(sequenceFor),
-  );
-  const reviews = [
-    ...currentReviews.filter((candidate) => candidate.id !== review.id),
-    review,
-  ].toSorted((left, right) => sequenceFor(left) - sequenceFor(right));
-  const evicted = reviews.slice(0, -MAX_TOOL_APPROVAL_REVIEWS);
-  const retainedReviews = reviews.slice(-MAX_TOOL_APPROVAL_REVIEWS);
-  if (evicted.length > 0) {
-    sequences.set(
-      reviewFloorKey,
-      Math.max(sequences.get(reviewFloorKey) ?? 0, ...evicted.map(sequenceFor)),
-    );
-    for (const candidate of evicted) {
-      sequences.delete(toolReviewSequenceIdentity(ownerIdentity, candidate.id));
-    }
-  }
-  const reportedOutcome = readToolApprovalReviewOutcome(payload.data);
-  const derivedOutcome = resolveToolApprovalReviewOutcome(retainedReviews);
-  const currentOutcome = readToolApprovalReviewOutcome(entry.details);
-  const nextOutcome =
-    currentOutcome === "denied" ? "denied" : (reportedOutcome ?? derivedOutcome ?? undefined);
-  entry.details = withToolApprovalReviews(
-    entry.details,
-    retainedReviews,
-    nextOutcome && payload.seq >= newestReviewSeq ? nextOutcome : currentOutcome,
-  );
-}
-
 export function handleAgentEvent(
   host: ToolStreamHost,
   payload?: AgentEventPayload,
@@ -494,7 +451,10 @@ export function handleAgentEvent(
   if (!acceptActivityEvent(host, payload)) {
     return false;
   }
-  if (payload.stream === "lifecycle" || payload.stream === "tool") {
+  if ((payload.stream === "tool" || payload.stream === "item") && payload.data.display === false) {
+    return false;
+  }
+  if (payload.stream === "lifecycle" || payload.stream === "tool" || payload.stream === "item") {
     const runId = toTrimmedString(payload.runId);
     if (runId) {
       (host.knownAgentRunIds ??= new Set()).add(runId);
@@ -551,7 +511,6 @@ export function handleAgentEvent(
       entry = {
         toolCallId,
         runId: payload.runId,
-        sessionKey,
         name: item.name ?? item.title,
         startedAt: item.startedAt ?? payload.ts,
         receivedAt: Date.now(),
@@ -629,7 +588,6 @@ export function handleAgentEvent(
     entry = {
       toolCallId,
       runId: payload.runId,
-      sessionKey,
       name,
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       receivedAt: now,
@@ -672,7 +630,41 @@ export function handleAgentEvent(
   }
 
   if (approvalReview) {
-    applyToolReviewEvent(host, payload, entry, approvalReview);
+    const ownerIdentity = toolActivityIdentity(payload.runId, entry.toolCallId);
+    const sequences = (host.activityEventSeqById ??= new Map());
+    const sequenceFor = (candidate: ToolApprovalReview) =>
+      sequences.get(toolReviewSequenceIdentity(ownerIdentity, candidate.id)) ?? 0;
+    const reviewFloorKey = `${ownerIdentity}:review-floor`;
+    const currentReviews = readToolApprovalReviews(entry.details);
+    const newestReviewSeq = Math.max(
+      sequences.get(reviewFloorKey) ?? 0,
+      ...currentReviews.map(sequenceFor),
+    );
+    const reviews = [
+      ...currentReviews.filter((candidate) => candidate.id !== approvalReview.id),
+      approvalReview,
+    ].toSorted((left, right) => sequenceFor(left) - sequenceFor(right));
+    const evicted = reviews.slice(0, -MAX_TOOL_APPROVAL_REVIEWS);
+    const retainedReviews = reviews.slice(-MAX_TOOL_APPROVAL_REVIEWS);
+    if (evicted.length > 0) {
+      sequences.set(
+        reviewFloorKey,
+        Math.max(sequences.get(reviewFloorKey) ?? 0, ...evicted.map(sequenceFor)),
+      );
+      for (const candidate of evicted) {
+        sequences.delete(toolReviewSequenceIdentity(ownerIdentity, candidate.id));
+      }
+    }
+    const reportedOutcome = readToolApprovalReviewOutcome(payload.data);
+    const derivedOutcome = resolveToolApprovalReviewOutcome(retainedReviews);
+    const currentOutcome = readToolApprovalReviewOutcome(entry.details);
+    const nextOutcome =
+      currentOutcome === "denied" ? "denied" : (reportedOutcome ?? derivedOutcome ?? undefined);
+    entry.details = withToolApprovalReviews(
+      entry.details,
+      retainedReviews,
+      nextOutcome && payload.seq >= newestReviewSeq ? nextOutcome : currentOutcome,
+    );
   }
   publishToolStreamEntry(host, entry, phase === "result" || approvalReview !== null);
   return true;

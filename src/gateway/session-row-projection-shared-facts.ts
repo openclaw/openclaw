@@ -6,6 +6,7 @@ import { rowToAcpSessionMeta } from "../acp/runtime/session-meta-readonly.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { OpenClawStateReadResult } from "../state/openclaw-state-read.types.js";
 import type { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   identity,
@@ -88,10 +89,9 @@ export function prepareSessionRowSharedFacts({
       },
       { context: shared },
     ),
-    accept(reply: Awaited<ReturnType<typeof executeExistingOpenClawStateRead>>) {
-      if (reply && (!reply.ok || reply.type !== "sessionRows.sharedFacts")) {
-        throw new Error("Unexpected session row shared-state facts");
-      }
+    accept(
+      reply: Extract<OpenClawStateReadResult, { type: "sessionRows.sharedFacts" }> | undefined,
+    ) {
       for (const [index, { prepared }] of sharedRows.entries()) {
         const sharedFacts = reply?.rows[index];
         if (prepared.acpMeta === undefined) {

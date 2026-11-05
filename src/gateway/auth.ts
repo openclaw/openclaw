@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isRedactedSecretValue } from "../config/redact-sentinel.js";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
@@ -182,6 +183,38 @@ export function assertGatewayAuthConfigured(
   }
 }
 
+/** Shared person-ingress policy; canonical emails are supplied after identity preparation. */
+export function gatewayPersonPrincipalAuthError(
+  auth: ResolvedGatewayAuth,
+  cfg: OpenClawConfig,
+  emails?: readonly string[],
+): string | undefined {
+  const proxy = auth.trustedProxy;
+  if (
+    auth.mode !== "trusted-proxy" ||
+    !cfg.gateway?.roles ||
+    proxy?.userHeader.trim().toLowerCase() !== "cf-access-authenticated-user-email" ||
+    !proxy.requiredHeaders?.some(
+      (header) => header.trim().toLowerCase() === "cf-access-jwt-assertion",
+    )
+  ) {
+    return "Person ingress requires trusted-proxy authentication with verified Cloudflare Access profiles and gateway.roles. Approve the grant from the person's authenticated Gateway Control UI.";
+  }
+  if (emails && !isTrustedProxyUserAllowed(proxy, emails)) {
+    return "Person principal is no longer permitted by gateway.auth.trustedProxy.allowUsers.";
+  }
+  return undefined;
+}
+
+/** Match the current trusted-proxy allowlist against an identity's canonical names. */
+function isTrustedProxyUserAllowed(
+  trustedProxy: Pick<GatewayTrustedProxyConfig, "allowUsers"> | undefined,
+  users: readonly string[],
+): boolean {
+  const allowUsers = trustedProxy?.allowUsers;
+  return !allowUsers?.length || users.some((user) => allowUsers.includes(user));
+}
+
 function authorizeTrustedProxy(params: {
   req?: IncomingMessage;
   trustedProxies?: string[];
@@ -226,8 +259,7 @@ function authorizeTrustedProxy(params: {
 
   const user = userHeaderValue.trim();
 
-  const allowUsers = trustedProxyConfig.allowUsers ?? [];
-  if (allowUsers.length > 0 && !allowUsers.includes(user)) {
+  if (!isTrustedProxyUserAllowed(trustedProxyConfig, [user])) {
     return { reason: "trusted_proxy_user_not_allowed" };
   }
 

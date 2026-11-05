@@ -642,7 +642,7 @@ final class TalkModeManager {
         guard self.isCurrentStartAttempt(attemptID) else { return }
 
         do {
-            try configureOwnedAudioSession()
+            try configureOwnedAudioSession(reuseActiveSession: true)
             // Set this before starting recognition so any early speech errors are classified correctly.
             self.captureMode = .continuous
             try self.startRecognition()
@@ -680,9 +680,11 @@ final class TalkModeManager {
             GatewayDiagnostics.log("talk start ignored: app backgrounded")
             return false
         }
-        // Realtime callbacks own Listening/Thinking/Speaking while their session
-        // exists. An idempotent enable must not replace that owner or its phase.
-        guard !self.hasRealtimeOwnerOrStart else { return false }
+        // Live realtime transports and native transcript work own their phase and audio.
+        // Retained continuous mode alone must allow an ended realtime transport to restart.
+        guard !self.hasRealtimeOwnerOrStart,
+              self.continuousTranscriptProcessingGeneration != self.transcriptProcessingGeneration
+        else { return false }
         guard !self.isListening else { return false }
         guard !self.isStarting else {
             GatewayDiagnostics.log("talk start ignored: already starting")
@@ -1477,7 +1479,7 @@ final class TalkModeManager {
         try? await Task.sleep(nanoseconds: 250_000_000)
         guard self.canRestartNativeRecognition(expectedGeneration: expectedGeneration) else { return }
         do {
-            try configureOwnedAudioSession()
+            try configureOwnedAudioSession(reuseActiveSession: true)
             try self.startRecognition()
             self.isListening = true
             self.setStatus(String(localized: "Listening"), phase: .listening)
@@ -1743,6 +1745,7 @@ final class TalkModeManager {
             let acknowledgement = try await sendChat(
                 prompt,
                 context: context,
+                transcriptProcessingGeneration: generation,
                 idempotencyKey: runId)
             guard self.isCurrentTranscriptProcessing(generation) else { return }
             guard acknowledgement.runId == runId else {
@@ -2598,6 +2601,7 @@ final class TalkModeManager {
     private func sendChat(
         _ message: String,
         context: TalkGatewayContext,
+        transcriptProcessingGeneration generation: UInt64,
         idempotencyKey: String) async throws -> OpenClawChatSendResponse
     {
         let request = OpenClawChatGatewayRequests.sendMessage(
@@ -2609,9 +2613,10 @@ final class TalkModeManager {
             idempotencyKey: idempotencyKey,
             attachments: [],
             runTimeoutMs: 30000)
-        let res = try await context.gateway.request(
-            request,
-            ifCurrentRoute: context.route)
+        let res = try await withGatewayStartupAdmission(method: request.method) {
+            guard self.isCurrentTranscriptProcessing(generation) else { throw CancellationError() }
+            return try await context.gateway.request(request, ifCurrentRoute: context.route)
+        }
         guard await context.gateway.currentRoute() == context.route else { throw CancellationError() }
         return try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
     }
@@ -3658,7 +3663,29 @@ extension TalkModeManager {
         case "Confirmation needed":
             (String(localized: "Confirmation needed"), .idle, .localized("Confirmation needed"))
         default:
-            (status, .idle, .verbatim(status))
+            self.realtimeInputNoticePresentation(for: status) ?? (status, .idle, .verbatim(status))
+        }
+    }
+
+    /// Input-loss notices arrive mid-call; the relay keeps listening while the user repeats.
+    private static func realtimeInputNoticePresentation(for status: String) -> (
+        text: String,
+        phase: TalkPhase,
+        watch: TalkWatchPresentation)?
+    {
+        switch status {
+        case "Realtime audio input fell behind; repeat the last part":
+            (
+                String(localized: "Realtime audio input fell behind; repeat the last part"),
+                .listening,
+                .localized("Realtime audio input fell behind; repeat the last part"))
+        case "Microphone input recovered; repeat the last part":
+            (
+                String(localized: "Microphone input recovered; repeat the last part"),
+                .listening,
+                .localized("Microphone input recovered; repeat the last part"))
+        default:
+            nil
         }
     }
 
@@ -3918,7 +3945,20 @@ extension TalkModeManager {
         return lower.contains("missing scope") && lower.contains(scope.lowercased())
     }
 
-    private func configureOwnedAudioSession() throws {
+    private func configureOwnedAudioSession(reuseActiveSession: Bool = false) throws {
+        let session = AVAudioSession.sharedInstance()
+        // Preserved background Talk has native audio already admitted. Reactivating
+        // it between turns can fail while locked and tear down the listening loop.
+        // Foreground recovery, realtime fallback, PTT and route changes still configure.
+        if reuseActiveSession,
+           !self.foregroundPushToTalkAllowed,
+           self.audioSessionIsActive,
+           !self.runtimeRoute.usesRealtime,
+           session.category == .playAndRecord,
+           session.mode == .spokenAudio
+        {
+            return
+        }
         try Self.configureAudioSession(preferredInputDeviceID: self.preferredInputDeviceID)
         self.audioSessionIsActive = true
     }

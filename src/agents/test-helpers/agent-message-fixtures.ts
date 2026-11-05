@@ -6,7 +6,7 @@
  */
 import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import type { AgentMessage } from "../runtime/index.js";
-import { ZERO_USAGE_FIXTURE } from "./usage-fixtures.js";
+import { createZeroUsageFixture } from "./usage-fixtures.js";
 
 /** Casts an unknown fixture value to an agent message for tests. */
 export function castAgentMessage(message: unknown): AgentMessage {
@@ -38,7 +38,7 @@ export function makeAgentAssistantMessage(
     api: "openai-responses",
     provider: "openai",
     model: "test-model",
-    usage: ZERO_USAGE_FIXTURE,
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: 0,
     ...overrides,

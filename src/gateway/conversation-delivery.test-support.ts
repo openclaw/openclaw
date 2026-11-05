@@ -1,35 +1,17 @@
 import path from "node:path";
 import { onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  beginConversationDeliveryOperation,
-  getConversationDeliveryOperation,
-  markConversationDeliverySent,
-  markConversationDeliverySuppressed,
-  type ConversationDeliveryStoreScope,
-} from "../config/sessions/conversation-delivery-store.js";
-import {
-  registerConversationAddresses,
-  type PreparedConversationRegistryScope,
-} from "../config/sessions/conversation-registry.js";
-import {
-  resolveSqliteReadScope,
-  toDatabaseOptions,
-} from "../config/sessions/session-accessor.sqlite-scope.js";
+import * as delivery from "../config/sessions/conversation-delivery-store.js";
+import * as registry from "../config/sessions/conversation-registry.js";
+import * as sqlite from "../config/sessions/session-accessor.sqlite-scope.js";
 import { markDurableDeliveryQueued } from "../infra/outbound/delivery-completion.js";
 import type { MessageActionInput } from "../infra/outbound/message-action-contracts.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 
-const address = {
-  channel: "reef",
-  accountId: "default",
-  kind: "direct" as const,
-  peerId: "molty",
-};
+const address = { channel: "reef", accountId: "default", kind: "direct" as const, peerId: "molty" };
 
 export const conversation = {
   ...address,
@@ -46,22 +28,16 @@ export async function queueConversationDeliveryForTest(
   input: Pick<MessageActionInput, "deliveryCompletion" | "conversationDeliveryTarget">,
   queueId = "queue-1",
 ): Promise<void> {
-  if (!input.deliveryCompletion) {
+  const { deliveryCompletion: completion, conversationDeliveryTarget: target } = input;
+  if (!completion) {
     throw new Error("conversation delivery fixture requires a durable completion owner");
   }
-  await markDurableDeliveryQueued(
-    input.deliveryCompletion,
-    queueId,
-    undefined,
-    undefined,
-    undefined,
-    input.conversationDeliveryTarget,
-  );
+  await markDurableDeliveryQueued(completion, queueId, undefined, undefined, undefined, target);
 }
 
 // Inspect committed state without joining the writer deliberately held by these tests.
 export function readConversationDeliveryStateForTest(
-  scope: ConversationDeliveryStoreScope,
+  scope: delivery.ConversationDeliveryStoreScope,
   operationId: string,
 ) {
   const read = withOpenClawAgentDatabaseReadOnly(
@@ -73,12 +49,12 @@ export function readConversationDeliveryStateForTest(
       FROM conversation_deliveries WHERE operation_id = ?
     `)
         .get(operationId),
-    toDatabaseOptions(resolveSqliteReadScope(scope)),
+    sqlite.toDatabaseOptions(sqlite.resolveSqliteReadScope(scope)),
   );
   return read.found ? read.value : undefined;
 }
 
-export function holdConversationWriterForTest(scope: PreparedConversationRegistryScope) {
+export function holdConversationWriterForTest(scope: registry.PreparedConversationRegistryScope) {
   const entered = createDeferred();
   const released = createDeferred();
   const finished = runOpenClawAgentWriteAdmission(
@@ -97,24 +73,28 @@ export function holdConversationWriterForTest(scope: PreparedConversationRegistr
 }
 
 export async function createConversationDeliveryTestStore(agentId = "main") {
-  const dirs = createTempDirTracker();
-  const agentDir = path.join(dirs.make("openclaw-gateway-conversation-"), "agents", agentId);
+  const dirs = useSessionStoreTempDirs(onTestFinished, "openclaw-gateway-conversation-");
+  const agentDir = path.join(dirs.make(), "agents", agentId);
   const scope = { agentId, storePath: path.join(agentDir, "sessions", "sessions.json") };
-  onTestFinished(async () => {
-    await closeOpenClawAgentDatabaseByPathAsync(
-      path.join(agentDir, "agent", "openclaw-agent.sqlite"),
-    );
-    dirs.cleanup();
-  });
-  await registerConversationAddresses(scope, [
+  await registry.registerConversationAddresses(scope, [
     { ...conversation, deliveryTarget: conversation.target },
   ]);
   return {
     scope,
     config: { session: { store: scope.storePath } },
-    beginOperation: vi.fn(beginConversationDeliveryOperation),
-    getOperation: vi.fn(getConversationDeliveryOperation),
-    markSent: vi.fn(markConversationDeliverySent),
-    markSuppressed: vi.fn(markConversationDeliverySuppressed),
+    beginOperation: vi.fn(delivery.beginConversationDeliveryOperation),
+    getOperation: vi.fn(delivery.getConversationDeliveryOperation),
+    markSent: vi.fn(delivery.markConversationDeliverySent),
+    markSuppressed: vi.fn(delivery.markConversationDeliverySuppressed),
   };
 }
+
+export const createClickClackConversationConfig = () => ({
+  channels: {
+    clickclack: {
+      baseUrl: "https://clickclack.example",
+      workspace: "wsp_synthetic",
+      token: "synthetic-token",
+    },
+  },
+});

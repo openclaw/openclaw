@@ -3,6 +3,7 @@ import {
   prepareTranscriptMessageAppendForWorker,
   type PreparedTranscriptMessageAppend,
 } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
+import type { SessionActorAppend } from "../../config/sessions/session-actor-contract.js";
 import type {
   SessionMetadataOperations,
   SessionMetadataWorkerOperations,
@@ -48,18 +49,40 @@ import {
   SessionManagerActorCommittedError,
   receiveSessionManagerCommit,
 } from "./session-manager-persistence-error.js";
-import type { SessionEntry, SessionHeader, SessionLeafControl } from "./session-manager-types.js";
+import type {
+  ModelChangeEntry,
+  SessionEntry,
+  SessionHeader,
+  SessionLeafControl,
+} from "./session-manager-types.js";
 
 type MetadataAppend = SessionMetadataOperations["session.metadata.append"]["output"];
 type CommittedMetadataAppend = Extract<MetadataAppend["snapshot"], { ok: true }>["value"] & {
   result: NonNullable<Extract<MetadataAppend["snapshot"], { ok: true }>["value"]["result"]>;
 };
 
+function requireCommittedMetadataAppend(
+  snapshot: MetadataAppend["snapshot"],
+  entry: SessionEntry | SessionLeafControl,
+): CommittedMetadataAppend {
+  if (
+    !snapshot.ok ||
+    !snapshot.value.result ||
+    (entry.type !== "message" && !snapshot.value.result.appended)
+  ) {
+    throw new Error(`Session transcript entry was not persisted: ${entry.id}`, {
+      cause: snapshot.ok ? undefined : snapshot.error,
+    });
+  }
+  return { ...snapshot.value, result: snapshot.value.result };
+}
+
 export class SessionManagerPersistence extends SessionManagerNativePersistence {
   protected async persistWorkerRecord(
     entry: SessionEntry | SessionLeafControl,
     appendIntent: "active-branch" | undefined,
     writeAdmission: SessionManagerAppendAdmission,
+    view: "reload" | "none",
     message?: Omit<
       NonNullable<SessionMetadataWorkerOperations["session.metadata.append"]["input"]["message"]>,
       "messageJson"
@@ -68,6 +91,8 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
     expectedMutationAt?: number | null,
     retryMutationConflicts = true,
     assertNavigation?: () => void,
+    initialModel?: ModelChangeEntry,
+    modelPromptProjection?: SessionActorAppend["modelPromptProjection"],
   ): Promise<PersistWorkerRecordResult> {
     this.assertTranscriptWriteActive();
     const target = this.persistenceTarget;
@@ -179,6 +204,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
       failure: Error | undefined,
       loadedVersion: typeof this.transcriptVersion,
       requireReload = false,
+      initialModelParentId?: string | null,
     ): PersistWorkerRecordResult => {
       const receipt = committed.result;
       const effectiveParentId =
@@ -187,7 +213,9 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           : entry.parentId;
       const adoptedMessage = "messageId" in receipt && receipt.messageId !== entry.id;
       const reloadAfterAppend =
-        receipt.appended && transcriptAppendNeedsReload(committed.before, loadedVersion);
+        receipt.appended &&
+        (transcriptAppendNeedsReload(committed.before, loadedVersion) ||
+          (initialModelParentId !== undefined && initialModelParentId !== initialModel?.parentId));
       if (
         requireReload &&
         !this.hasNewerPublishedTranscriptView(committed.after) &&
@@ -237,11 +265,14 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           assertCurrent,
           beforeFreshMessageCommit,
           toolResult: entry.type === "message" && entry.message.role === "toolResult",
+          message: entry.type === "message" ? entry.message : null,
           append: {
             kind: "metadata",
+            ...(modelPromptProjection ? { modelPromptProjection } : {}),
             input: {
               scope: captured,
               event: wireEvent,
+              ...(initialModel ? { initialModel } : {}),
               ...(wireMessage ? { message: wireMessage } : {}),
               options: {
                 ...(appendIntent ? { appendIntent } : {}),
@@ -250,12 +281,16 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
                   ? { expectedMutationAt: mutationAt }
                   : {}),
               },
-              view: {
-                loadedVersion,
-                limits: this.boundedContextLimits,
-                admission,
-                questionAnswers: questionAnswers?.answers,
-              },
+              ...(view === "reload"
+                ? {
+                    view: {
+                      loadedVersion,
+                      limits: this.boundedContextLimits,
+                      admission,
+                      questionAnswers: questionAnswers?.answers,
+                    },
+                  }
+                : {}),
             },
             ...(this.persistenceHeaderPending || (initialWriter && !initialWriter.committedFence)
               ? {
@@ -306,11 +341,21 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
             }
           },
         });
+      const authority = { assertCurrent, authorize: assertCurrent };
+      let mutationAt =
+        expectedMutationAt !== undefined ? expectedMutationAt : this.transcriptMutationAt;
+      if (retryMutationConflicts && expectedMutationAt === undefined) {
+        // Rewrites can publish a watermark before the manager adopts it. This pre-adoption
+        // matches the retry below: same parent/content, with the DB check authoritative.
+        // Remove it if retries ever recompute parent/content from a fresh view.
+        const current = actor.snapshot(authority);
+        if (current) {
+          mutationAt = current.transcript.version.updatedAt;
+        }
+      }
       let outcome;
       try {
-        outcome = await append(
-          expectedMutationAt !== undefined ? expectedMutationAt : this.transcriptMutationAt,
-        );
+        outcome = await append(mutationAt);
       } catch (error) {
         if (
           !retryMutationConflicts ||
@@ -319,7 +364,6 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
         ) {
           throw error;
         }
-        const authority = { assertCurrent, authorize: assertCurrent };
         const current = actor.snapshot(authority) ?? (await actor.read(authority));
         outcome = await append(current.transcript.version.updatedAt);
       }
@@ -329,21 +373,13 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
         }
         const value = outcome.committed.value;
         const snapshot = value.snapshot;
-        if (
-          !snapshot.ok ||
-          !snapshot.value.result ||
-          (entry.type !== "message" && !snapshot.value.result.appended)
-        ) {
-          throw new Error(`Session transcript entry was not persisted: ${entry.id}`, {
-            cause: snapshot.ok ? undefined : snapshot.error,
-          });
-        }
         const projected = projectAppend(
-          { ...snapshot.value, result: snapshot.value.result },
+          requireCommittedMetadataAppend(snapshot, entry),
           value.reload,
           outcome.failure,
           loadedVersion,
-          true,
+          view === "reload",
+          value.initialModelParentId,
         );
         if (value.projectionNeedsReconcile && !outcome.failure) {
           startSessionTranscriptIndexReconcile({
@@ -351,7 +387,10 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
             preferredSessionId: captured.sessionId,
           });
         }
-        return projected;
+        return {
+          ...projected,
+          modelPromptProjection: outcome.committed.modelPromptProjection?.result,
+        };
       } catch (cause) {
         const failure =
           outcome.failure ??
@@ -434,12 +473,13 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
               input: {
                 scope: captured,
                 event: bytes,
+                ...(initialModel && event.type !== "session" ? { initialModel } : {}),
                 ...(event.type === "message" ? { message: wireMessage } : {}),
                 options: {
                   ...(intent ? { appendIntent: intent } : {}),
                   ...(mutationAt !== undefined ? { expectedMutationAt: mutationAt } : {}),
                 },
-                ...(event.type !== "session"
+                ...(view === "reload" && event.type !== "session"
                   ? {
                       view: {
                         loadedVersion: this.transcriptVersion,
@@ -492,17 +532,9 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           loadedVersion = this.transcriptVersion;
           const outcome = await appendEvent(entry, wireEvent, mutationAt, appendIntent);
           const snapshot = outcome.snapshot;
-          if (
-            !snapshot.ok ||
-            !snapshot.value.result ||
-            (entry.type !== "message" && !snapshot.value.result.appended)
-          ) {
-            throw new Error(`Session transcript entry was not persisted: ${entry.id}`, {
-              cause: snapshot.ok ? undefined : snapshot.error,
-            });
-          }
           return {
-            committed: { ...snapshot.value, result: snapshot.value.result },
+            committed: requireCommittedMetadataAppend(snapshot, entry),
+            initialModelParentId: outcome.initialModelParentId,
             reload: outcome.reload,
             failure: outcome.failure,
           };
@@ -526,7 +558,14 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           });
           outcome = await append(fresh);
         }
-        return projectAppend(outcome.committed, outcome.reload, outcome.failure, loadedVersion);
+        return projectAppend(
+          outcome.committed,
+          outcome.reload,
+          outcome.failure,
+          loadedVersion,
+          false,
+          outcome.initialModelParentId,
+        );
       },
       { beforeFreshMessageCommit, initialWriter },
     );
@@ -572,6 +611,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           canonical,
           options?.appendIntent,
           admission,
+          "none",
           message,
           options?.beforeFreshMessageCommit,
           options?.expectedMutationAt,

@@ -2,8 +2,8 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   OpenClawConfig,
   ProviderAuthMethod,
-  ProviderCatalogContext,
   ProviderRuntimeModel,
+  ProviderThinkingProfile,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
@@ -29,7 +29,6 @@ import {
   type XiaomiTokenPlanRegion,
 } from "./provider-catalog.js";
 import { buildXiaomiSpeechProvider } from "./speech-provider.js";
-import { isMiMoReasoningModelRef, resolveMiMoThinkingProfile } from "./thinking.js";
 
 const PAYG_FLAG_NAME = "--xiaomi-api-key";
 const PAYG_OPTION_KEY = "xiaomiApiKey";
@@ -42,6 +41,21 @@ const XIAOMI_WIZARD_GROUP = {
   groupLabel: "Xiaomi",
   groupHint: "Pay-as-you-go / Token Plan",
 };
+const MIMO_REASONING_MODEL_IDS = new Set([
+  "mimo-v2.5",
+  "mimo-v2.5-pro",
+  "mimo-v2.6-flash",
+  "mimo-v2.6-pro",
+  "mimo-v2.6-pro-ultraspeed",
+]);
+
+const MIMO_THINKING_PROFILE = {
+  levels: (["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const).map((id) => ({
+    id,
+  })),
+  defaultLevel: "high",
+} satisfies ProviderThinkingProfile;
+
 const XIAOMI_PROVIDER_HOOKS = {
   ...buildProviderReplayFamilyHooks({
     family: "openai-compatible",
@@ -53,41 +67,16 @@ const XIAOMI_PROVIDER_HOOKS = {
     createDeepSeekV4OpenAICompatibleThinkingWrapper({
       baseStreamFn: ctx.streamFn,
       thinkingLevel: ctx.thinkingLevel,
-      shouldPatchModel: isMiMoReasoningModelRef,
+      shouldPatchModel: (model) =>
+        (model.provider === XIAOMI_PROVIDER_ID ||
+          model.provider === XIAOMI_TOKEN_PLAN_PROVIDER_ID) &&
+        MIMO_REASONING_MODEL_IDS.has(model.id.toLowerCase()),
     }),
-  resolveThinkingProfile: ({ modelId }: { modelId: string }) => resolveMiMoThinkingProfile(modelId),
+  resolveThinkingProfile: ({ modelId }: { modelId: string }) =>
+    MIMO_REASONING_MODEL_IDS.has(modelId.toLowerCase()) ? MIMO_THINKING_PROFILE : undefined,
   isModernModelRef: ({ modelId }: { modelId: string }) =>
-    Boolean(resolveMiMoThinkingProfile(modelId)),
+    MIMO_REASONING_MODEL_IDS.has(modelId.toLowerCase()),
 };
-
-async function resolveXiaomiCatalog(params: {
-  ctx: ProviderCatalogContext;
-  providerId: string;
-  buildProvider: () => ReturnType<typeof buildXiaomiProvider>;
-  requiresRegion: boolean;
-}) {
-  const auth = params.ctx.resolveProviderApiKey(params.providerId);
-  if (!auth.apiKey) {
-    return null;
-  }
-  const explicitBaseUrl = normalizeOptionalString(
-    params.ctx.config.models?.providers?.[params.providerId]?.baseUrl,
-  );
-  if (params.requiresRegion && !explicitBaseUrl) {
-    return null;
-  }
-  return await buildOpenAICompatibleLiveProviderCatalog({
-    discoveryMode: "strict",
-    providerId: params.providerId,
-    providerConfig: {
-      ...params.buildProvider(),
-      ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
-    },
-    apiKey: auth.apiKey,
-    discoveryApiKey: auth.discoveryApiKey,
-    profileId: auth.profileId,
-  });
-}
 
 function assertCompatibleXiaomiKey(actualKey: string, expectedKind: "payg" | "token-plan"): void {
   const normalized = actualKey.trim().toLowerCase();
@@ -202,13 +191,29 @@ export default definePluginEntry({
         auth: provider.auth(),
         catalog: {
           order: "simple",
-          run: async (ctx) =>
-            resolveXiaomiCatalog({
-              ctx,
+          run: async (ctx) => {
+            const auth = ctx.resolveProviderApiKey(provider.id);
+            if (!auth.apiKey) {
+              return null;
+            }
+            const explicitBaseUrl = normalizeOptionalString(
+              ctx.config.models?.providers?.[provider.id]?.baseUrl,
+            );
+            if (provider.requiresRegion && !explicitBaseUrl) {
+              return null;
+            }
+            return await buildOpenAICompatibleLiveProviderCatalog({
+              discoveryMode: "strict",
               providerId: provider.id,
-              buildProvider: provider.buildProvider,
-              requiresRegion: provider.requiresRegion,
-            }),
+              providerConfig: {
+                ...provider.buildProvider(),
+                ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
+              },
+              apiKey: auth.apiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+              profileId: auth.profileId,
+            });
+          },
         },
         staticCatalog: {
           order: "simple",

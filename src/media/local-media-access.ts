@@ -6,6 +6,7 @@ import { resolveInboundPathRoot } from "@openclaw/media-core/inbound-path-policy
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
+import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
 
@@ -44,7 +45,6 @@ export { getDefaultMediaLocalRoots as getDefaultLocalRootsCore };
 
 type LocalMediaBoundaryOptions = {
   inboundRoots?: readonly string[];
-  resolvedRoots?: readonly string[];
   resolveRoots?: () => Promise<readonly string[]>;
 };
 
@@ -137,8 +137,10 @@ async function resolveLocalMediaBoundary(
     // Channel inbound roots may contain whole-segment wildcards. Freeze the
     // matched root under the stable pre-wildcard anchor so an alias cannot
     // promote an outside directory into the authorized boundary.
-    const resolvedAnchor = await resolveCanonicalBoundaryPath(matchedInboundRoot.anchorRoot);
-    const resolvedRoot = await resolveCanonicalBoundaryPath(matchedInboundRoot.matchedRoot);
+    const [resolvedAnchor, resolvedRoot] = await settleCurrentReadPreparations([
+      resolveCanonicalBoundaryPath(matchedInboundRoot.anchorRoot),
+      resolveCanonicalBoundaryPath(matchedInboundRoot.matchedRoot),
+    ] as const);
     if (!isPathInside(resolvedAnchor, resolvedRoot)) {
       throw new LocalMediaAccessError(
         "path-not-allowed",
@@ -151,11 +153,10 @@ async function resolveLocalMediaBoundary(
     };
   }
   const roots = localRoots ?? getDefaultMediaLocalRoots();
-  const resolved = await resolveLocalMediaPathForContainment(mediaPath);
-  const resolvedRoots =
-    options?.resolvedRoots ??
-    (await options?.resolveRoots?.()) ??
-    (await resolveLocalMediaRoots(roots));
+  const [resolved, resolvedRoots] = await settleCurrentReadPreparations([
+    resolveLocalMediaPathForContainment(mediaPath),
+    options?.resolveRoots?.() ?? resolveLocalMediaRoots(roots),
+  ] as const);
   const workspaceRootIndex = roots.findIndex((root) => path.basename(root) === "workspace");
   const workspaceRoot = roots[workspaceRootIndex];
   if (workspaceRoot) {
@@ -218,10 +219,10 @@ export async function openLocalMediaFile(
 ) {
   const readScope = captureChannelReadScope();
   readScope?.assertCurrent();
-  const boundary = await resolveLocalMediaBoundary(mediaPath, localRoots, "reject", options);
-  const excludedRoots = options.excludedRoots?.length
-    ? await resolveLocalMediaRoots(options.excludedRoots)
-    : [];
+  const [boundary, excludedRoots] = await settleCurrentReadPreparations([
+    resolveLocalMediaBoundary(mediaPath, localRoots, "reject", options),
+    options.excludedRoots?.length ? resolveLocalMediaRoots(options.excludedRoots) : [],
+  ] as const);
   readScope?.assertCurrent();
   const opened = await openLocalFileSafely({ filePath: mediaPath });
   try {

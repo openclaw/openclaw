@@ -1,24 +1,19 @@
-import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
 export type KeyedFifoLease = {
-  wait(signal?: AbortSignal): Promise<boolean>;
+  wait(): Promise<void>;
   release(): void;
 };
 
-type KeyedFifoLeaseState = {
-  tails: Map<string, Promise<void>>;
-  releases: Set<() => void>;
-};
-
-type KeyedFifoLeaseRegistry = {
-  reserve(keys: readonly string[]): KeyedFifoLease | undefined;
-};
-
 /** Creates a close-owned FIFO registry shared by every runtime chunk using globalKey. */
-export function createKeyedFifoLeaseRegistry(globalKey: symbol): KeyedFifoLeaseRegistry {
-  const state = resolveGlobalSingleton<KeyedFifoLeaseState>(
+export function createKeyedFifoLeaseRegistry(globalKey: symbol): {
+  reserve(keys: readonly string[]): KeyedFifoLease | undefined;
+} {
+  const state = resolveGlobalSingleton<{
+    tails: Map<string, Promise<void>>;
+    releases: Set<() => void>;
+  }>(
     globalKey,
     () => ({ tails: new Map(), releases: new Set() }),
     (current) => {
@@ -62,15 +57,8 @@ export function createKeyedFifoLeaseRegistry(globalKey: symbol): KeyedFifoLeaseR
       state.releases.add(release);
 
       return {
-        async wait(signal) {
-          if (signal?.aborted) {
-            return false;
-          }
-          const ready = Promise.all(predecessors).then(() => true);
-          if (!signal) {
-            return await ready;
-          }
-          return await racePromiseWithAbortSignal(ready, signal, () => false).catch(() => false);
+        async wait() {
+          await Promise.all(predecessors);
         },
         release,
       };

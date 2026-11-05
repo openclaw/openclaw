@@ -2,7 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { For, createMemo } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
-import { TerminalPanelHost } from "../../components/terminal/terminal-panel-registration.ts";
+import { TerminalPanelHost } from "../../components/terminal/terminal-panel-registration.tsx";
 import {
   projectAgentSelection,
   projectApplicationConfig,
@@ -29,7 +29,7 @@ export function TerminalPage(props: { location: RouteLocation | null }) {
   const target = createMemo(() =>
     props.location ? resolveTerminalRouteLocation(props.location, context.basePath) : null,
   );
-  const route = createMemo(() => {
+  const route = () => {
     const current = target();
     const key = current
       ? "sessionId" in current
@@ -37,7 +37,7 @@ export function TerminalPage(props: { location: RouteLocation | null }) {
         : buildCatalogSessionKey(current.catalog)
       : "";
     return [{ target: current, key }];
-  });
+  };
   const themeMode = () => {
     theme.appliedPalette.read();
     return context.theme.resolvedMode;

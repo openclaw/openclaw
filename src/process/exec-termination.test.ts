@@ -121,14 +121,11 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
       isCommandSettled: () => !exits,
     });
     expect(owner.terminate()).toBe(true);
-    let settled = false;
-    const completion = owner.settle().then((result) => {
-      settled = true;
-      return result;
-    });
+    const settled = vi.fn();
+    const completion = owner.settle().finally(settled);
     if (exits) {
       await vi.advanceTimersByTimeAsync(24);
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
       child.exitCode = 1;
       gone = true;
       await vi.advanceTimersByTimeAsync(1);
@@ -136,18 +133,18 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
       expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
     } else {
       await vi.advanceTimersByTimeAsync(0);
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
       expect(owner.terminate()).toBe(true);
       expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
       await vi.advanceTimersByTimeAsync(299);
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
       expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
       await vi.advanceTimersByTimeAsync(1);
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
       expect(kill).toHaveBeenCalledWith(-4242, "SIGKILL");
       // Force-send and EPERM are not evidence of extinction.
       await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS - 1);
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       await expect(completion).resolves.toBe("uncertain");
       expect(kill.mock.calls.every(([pid]) => pid === -4242)).toBe(true);
@@ -202,14 +199,14 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
         if (observation === "exit") {
           owner.terminate();
           await forced.promise;
-          let settled = false;
+          const settled = vi.fn();
           const completion = owner.settle().then((result) => {
-            settled = true;
+            settled();
             return { result, observedAbsence };
           });
           await nextTurn();
           expect(processIdentity.isPidAlive(descendantPid)).toBe(true);
-          expect.soft(settled).toBe(false);
+          expect.soft(settled).not.toHaveBeenCalled();
           kill(-parent.pid!, "SIGKILL");
           const outcome = await completion;
           expect(outcome.result).toBe(outcome.observedAbsence ? "forced" : "uncertain");
@@ -217,7 +214,7 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
             expect(processIdentity.isPidAlive(descendantPid)).toBe(false);
           }
         } else {
-          vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+          vi.useFakeTimers({ toFake: ["setTimeout", "Date", "performance"] });
           try {
             owner.terminate();
             const completion = owner.settle();
@@ -245,7 +242,7 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
         return 123;
       }
       // A synchronous identity probe can consume the remaining observation budget.
-      vi.setSystemTime(Date.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
+      vi.advanceTimersByTime(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
       finalIdentityRead = true;
       return reused ? 124 : null;
     });
@@ -269,6 +266,24 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
       [-child.pid, "SIGKILL"],
     ]);
     expect(signals.mock.calls.every(([pid]) => pid === -child.pid)).toBe(true);
+  });
+
+  it("keeps kill grace and exit confirmation bounded when the wall clock rewinds", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(123);
+    const signals = vi.spyOn(process, "kill").mockReturnValue(true);
+    const owner = terminationOwner(mockTerminatingChild().child, { isChildExited: () => false });
+    const rewindWallClock = () => vi.setSystemTime(Date.now() - 60_000);
+    owner.terminate();
+    rewindWallClock();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(signals.mock.calls.filter(([, signal]) => isForceSignal(signal))).toHaveLength(1);
+    const settled = vi.fn();
+    const completion = owner.settle().finally(settled);
+    rewindWallClock();
+    await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
+    expect(settled).toHaveBeenCalledOnce();
+    await expect(completion).resolves.toBe("uncertain");
   });
 
   it("preserves normal cleanup for a retired group", async () => {

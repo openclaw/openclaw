@@ -2,7 +2,7 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
 
 afterEach(() => resetChatViewState());

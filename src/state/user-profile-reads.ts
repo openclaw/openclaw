@@ -1,11 +1,45 @@
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { captureUserProfileAuthorityRead } from "./user-profile-events.js";
-import { prepareUserProfileCatalog, readUserProfileSnapshot } from "./user-profile-list.js";
+import {
+  isUserProfileCatalogReady,
+  prepareUserProfileCatalog,
+  readUserProfileSnapshot,
+} from "./user-profile-list.js";
 import type { CachedGitHubIdentity, CachedGitHubIdentityBinding } from "./user-profiles.types.js";
 
 type ProfileReadOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+
+/** A profile merge or identity change raced a disclosure read; a fresh read can succeed. */
+export class UserProfileDisclosureChangedError extends Error {}
+
+/** Fresh identity snapshots avoid foreign-process catalog reuse; local mutations fence consumption. */
+export async function prepareCurrentUserProfileIdentity(
+  profileId: string,
+  options: ProfileReadOptions = {},
+) {
+  const context = captureOpenClawStateWorkerContext(options);
+  // Incoming merges change the target's alias cohort, but not its identity cell.
+  const authority = await captureUserProfileAuthorityRead(context.admission);
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "userProfiles.identity", profileId },
+    { context, current: true },
+  );
+  const profile = reply?.profile;
+  const isCurrent = authority.bind([profileId, profile?.profileId ?? profileId]);
+  const assertCurrent = () => {
+    if (!isCurrent?.()) {
+      throw new UserProfileDisclosureChangedError(
+        "Profile identity changed while preparing disclosure. Retry the request.",
+      );
+    }
+  };
+  assertCurrent();
+  return { profile, assertCurrent };
+}
 
 /** Fresh disclosure aliases retain their physical store and merge authority across caller waits. */
 export async function prepareCurrentUserProfileAliases(
@@ -27,7 +61,9 @@ export async function prepareCurrentUserProfileAliases(
   const isCurrent = authority.bind([profileId, profile?.profileId ?? profileId]);
   const assertCurrent = () => {
     if (!isCurrent?.()) {
-      throw new Error("Profile aliases changed while preparing disclosure. Retry the request.");
+      throw new UserProfileDisclosureChangedError(
+        "Profile aliases changed while preparing disclosure. Retry the request.",
+      );
     }
   };
   assertCurrent();
@@ -38,6 +74,16 @@ export async function resolveCanonicalCachedGitHubIdentity(
   binding: CachedGitHubIdentityBinding,
   options: ProfileReadOptions = {},
 ): Promise<CachedGitHubIdentity | undefined> {
+  const pathname = resolveDatabasePath(options);
+  if ("email" in binding && isUserProfileCatalogReady(pathname)) {
+    const catalog = await prepareUserProfileCatalog(options);
+    try {
+      return catalog.readCurrentGitHubEmailIdentity(binding.accountId, binding.email);
+    } finally {
+      catalog.release();
+    }
+  }
+  // Standalone callers and login aliases still need the worker's exact binding lookup.
   const reply = await executeExistingOpenClawStateRead(options, {
     type: "userProfiles.githubIdentity.cached",
     ...binding,

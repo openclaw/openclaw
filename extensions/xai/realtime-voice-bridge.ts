@@ -11,7 +11,6 @@ import {
   RealtimeVoiceWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveXaiRealtimeApiKey } from "./realtime-voice-auth.runtime.js";
 import {
   XAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX,
   XAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR,
@@ -202,9 +201,7 @@ export class XaiRealtimeVoiceBridge
     url: string;
     headers: Record<string, string>;
   }> {
-    const apiKey = this.config.resolveApiKey
-      ? await this.config.resolveApiKey()
-      : await resolveXaiRealtimeApiKey(this.config.apiKey, this.config.cfg, this.config.agentId);
+    const apiKey = await this.config.resolveApiKey();
     const model = this.config.model ?? XAI_REALTIME_DEFAULT_MODEL;
     const url = toXaiRealtimeWsUrl(
       this.config.baseUrl,
@@ -283,20 +280,26 @@ export class XaiRealtimeVoiceBridge
       return;
     }
     if (event.type === "response.created" && this.acceptsEvent(connection)) {
+      // Only an identified successor can retire an older live response's fence.
+      if (
+        this.outputResponse?.id &&
+        !this.outputResponse.ended &&
+        responseId &&
+        responseId !== this.outputResponse.id
+      ) {
+        if (!this.inputResponseStarted) {
+          // Server VAD may omit the interrupted terminal. Settle Talk before admission.
+          this.outputResponse.ended = true;
+          this.config.onResponseDone?.({ status: "cancelled", responseId: this.outputResponse.id });
+          if (!this.acceptsEvent(connection)) {
+            return;
+          }
+        }
+        this.responseCancelInFlight = false;
+      }
       // Publish the response owner before observers can interrupt its first PCM.
       this.inputResponseStarted = true;
       this.inputResponseFinished = false;
-      // Cancellation before response.created belongs to that pending response.
-      // Only an identified successor can retire an older live response's fence.
-      if (
-        this.outputResponse &&
-        !this.outputResponse.ended &&
-        responseId &&
-        this.outputResponse.id &&
-        responseId !== this.outputResponse.id
-      ) {
-        this.responseCancelInFlight = false;
-      }
       this.outputResponse = { id: responseId, ended: false };
       // The fence drops a retired response's late terminal, including its buffer
       // cleanup, so the successor must not inherit the predecessor's tool calls.
@@ -313,9 +316,7 @@ export class XaiRealtimeVoiceBridge
       type: event.type,
       detail: this.describeServerEvent(event),
       ...(event.item_id ? { itemId: event.item_id } : {}),
-      ...((event.response_id ?? event.response?.id)
-        ? { responseId: event.response_id ?? event.response?.id }
-        : {}),
+      ...(responseId ? { responseId } : {}),
     } as const;
     const emitBridgeEvent = () => this.config.onEvent?.(bridgeEvent);
     if (event.type !== "response.done" || !this.acceptsEvent(connection)) {

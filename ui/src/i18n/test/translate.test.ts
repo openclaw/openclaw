@@ -8,10 +8,12 @@ import * as translate from "../lib/translate.ts";
 let translateImportCase = 0;
 
 async function importFreshTranslate() {
-  return importFreshModule<typeof import("../lib/translate.ts")>(
+  const fresh = await importFreshModule<typeof import("../lib/translate.ts")>(
     import.meta.url,
     `../lib/translate.ts?case=${++translateImportCase}`,
   );
+  await vi.dynamicImportSettled();
+  return fresh;
 }
 
 function stubDocumentLocaleMetadata() {
@@ -21,17 +23,6 @@ function stubDocumentLocaleMetadata() {
 }
 
 describe("i18n", () => {
-  function readTranslationString(value: unknown, path: string): string {
-    let cursor = value;
-    for (const part of path.split(".")) {
-      cursor =
-        cursor && typeof cursor === "object"
-          ? (cursor as Record<string, unknown>)[part]
-          : undefined;
-    }
-    return typeof cursor === "string" ? cursor : "";
-  }
-
   beforeEach(async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
@@ -48,81 +39,60 @@ describe("i18n", () => {
     expect(translate.t("non.existent.key")).toBe("non.existent.key");
   });
 
-  it("renders a provided empty-string param as empty, not the raw placeholder", () => {
-    expect(translate.t("connection.help.copyCommandAria", { command: "" })).toBe("Copy command: ");
+  it.each<[Record<string, string>, string]>([
+    [{ command: "" }, "Copy command: "],
+    [{}, "Copy command: {command}"],
+  ])("renders provided or missing parameters: %j", (params, expected) => {
+    expect(translate.t("connection.help.copyCommandAria", params)).toBe(expected);
   });
 
-  it("keeps the visible placeholder when the param is missing", () => {
-    expect(translate.t("connection.help.copyCommandAria", {})).toBe("Copy command: {command}");
-  });
-
-  it("loads saved non-English locale on startup", async () => {
-    localStorage.setItem("openclaw.i18n.locale", "zh-CN");
-    const fresh = await importFreshTranslate();
-    await vi.dynamicImportSettled();
-    expect(fresh.i18n.getLocale()).toBe("zh-CN");
-    expect(fresh.t("common.health")).toBe(
-      readTranslationString(await loadLazyLocaleTranslation("zh-CN"), "common.health"),
-    );
-  });
-
-  it("syncs canonical document locale metadata on startup", async () => {
+  it.each([
+    ["en-US", "zh-CN", "zh-CN", "ltr"],
+    ["fa-IR", null, "fa", "rtl"],
+    ["ZH-hAnT-CN", null, "zh-TW", "ltr"],
+    ["ca-ES", null, "ca", "ltr"],
+  ])("loads startup locale for browser %s and saved %s", async (language, saved, locale, dir) => {
     const documentElement = stubDocumentLocaleMetadata();
-    vi.stubGlobal("navigator", { language: "fa-IR" } as Navigator);
+    vi.stubGlobal("navigator", { language });
     localStorage.removeItem("openclaw.i18n.locale");
-
+    if (saved) {
+      localStorage.setItem("openclaw.i18n.locale", saved);
+    }
     const fresh = await importFreshTranslate();
-
-    await vi.dynamicImportSettled();
-    expect(fresh.i18n.getLocale()).toBe("fa");
-    expect(documentElement).toEqual({ lang: "fa", dir: "rtl" });
-    expect(localStorage.getItem("openclaw.i18n.locale")).toBeNull();
+    expect(fresh.i18n.getLocale()).toBe(locale);
+    expect(documentElement).toEqual({ lang: locale, dir });
+    expect(localStorage.getItem("openclaw.i18n.locale")).toBe(saved);
+    expect(await loadLazyLocaleTranslation(fresh.i18n.getLocale())).toMatchObject({
+      common: { health: fresh.t("common.health") },
+    });
   });
 
   it("clears an explicit locale when returning to the system language", async () => {
     vi.stubGlobal("navigator", { language: "de-DE" } as Navigator);
     await translate.i18n.setLocale("fr");
     expect(localStorage.getItem("openclaw.i18n.locale")).toBe("fr");
-
     await translate.i18n.useSystemLocale();
-
     expect(translate.i18n.getLocale()).toBe("de");
     expect(localStorage.getItem("openclaw.i18n.locale")).toBeNull();
   });
 
   it("syncs document locale metadata when the locale changes", async () => {
     const documentElement = stubDocumentLocaleMetadata();
-
     await translate.i18n.setLocale("ar");
     expect(documentElement).toEqual({ lang: "ar", dir: "rtl" });
-
+    await translate.i18n.setLocale("ca");
+    expect(documentElement).toEqual({ lang: "ca", dir: "ltr" });
     await translate.i18n.setLocale("de");
     expect(documentElement).toEqual({ lang: "de", dir: "ltr" });
-  });
-
-  it("loads the browser's Chinese script preference on startup", async () => {
-    vi.stubGlobal("navigator", { language: "ZH-hAnT-CN" } as Navigator);
-    localStorage.removeItem("openclaw.i18n.locale");
-
-    const fresh = await importFreshTranslate();
-
-    await vi.dynamicImportSettled();
-    expect(fresh.i18n.getLocale()).toBe("zh-TW");
-    expect(fresh.t("common.health")).toBe(
-      readTranslationString(await loadLazyLocaleTranslation("zh-TW"), "common.health"),
-    );
   });
 
   it("skips node localStorage accessors that warn without a storage file", async () => {
     vi.unstubAllGlobals();
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
     const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-
     const fresh = await importFreshTranslate();
-
     expect(fresh.i18n.getLocale()).toBe("en");
-    const warningMessages = warningSpy.mock.calls.map((call) => String(call[0]));
-    expect(warningMessages).not.toContain(
+    expect(warningSpy.mock.calls.map((call) => String(call[0]))).not.toContain(
       "`--localstorage-file` was provided without a valid path",
     );
   });

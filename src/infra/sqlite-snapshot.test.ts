@@ -2,15 +2,14 @@ import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import {
   exclusiveCopyPublication,
-  snapshotContent,
+  useSnapshotFixture,
   type PublicationFixture,
 } from "./sqlite-snapshot.test-support.js";
 
@@ -45,21 +44,18 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
 
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
-const tempDirs: string[] = [];
-
 function isDirectoryOpen(flags: string | number | undefined): boolean {
   return (
     flags === "r" || (typeof flags === "number" && (flags & fsSync.constants.O_DIRECTORY) !== 0)
   );
 }
 
-afterEach(async () => {
+afterEach(() => {
   __setFsSafeTestHooksForTest(undefined);
   durabilityTestState.publish = undefined;
   durabilityTestState.publicationSyncUnsupported = false;
   durabilityTestState.syncOutcome = undefined;
   vi.restoreAllMocks();
-  await Promise.all(tempDirs.splice(0).map((tempDir) => fs.rm(tempDir, { recursive: true })));
 });
 
 function mockExclusiveCopyPublication(alterCopy?: (filePath: string) => Promise<void>) {
@@ -154,46 +150,15 @@ let sqlite: ReturnType<typeof requireNodeSqlite>;
 let sourcePath: string;
 let targetPath: string;
 let tempDir: string;
-
-beforeEach(async () => {
-  tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sqlite-snapshot-"));
-  tempDirs.push(tempDir);
-  if (process.platform === "win32") {
-    tempDir = path.join(tempDir, "private");
-    await createPrivateSqliteDirectory(tempDir);
-  }
-  sourcePath = path.join(tempDir, "source.sqlite");
-  targetPath = path.join(tempDir, "snapshot.sqlite");
+const fixture = useSnapshotFixture();
+const { execSource, query, snapshot, expectSnapshotSuccess, expectSnapshotFailureWithoutTarget } =
+  fixture;
+beforeEach(() => {
+  ({ tempDir, sourcePath, targetPath } = fixture);
   sqlite = requireNodeSqlite();
-  execSource("VACUUM;");
 });
 
 type SnapshotOptions = Parameters<typeof createVerifiedSqliteSnapshot>[0];
-
-async function expectSnapshotSuccess(options: Partial<SnapshotOptions> = {}) {
-  const receipt = await snapshot(options);
-  const published = await fs.readFile(options.targetPath ?? targetPath);
-  expect(receipt).toEqual({
-    path: options.targetPath ?? targetPath,
-    userVersion: 0,
-    ...snapshotContent(published),
-  });
-  return published;
-}
-
-function snapshot(options: Partial<SnapshotOptions> = {}) {
-  return createVerifiedSqliteSnapshot({ sourcePath, targetPath, ...options });
-}
-
-async function expectSnapshotFailureWithoutTarget(
-  pattern: RegExp,
-  options: Partial<SnapshotOptions> = {},
-): Promise<void> {
-  await expect(snapshot(options)).rejects.toThrow(pattern);
-  await expect(fs.access(options.targetPath ?? targetPath)).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-}
 
 async function expectPreservedTarget(
   pattern: RegExp,
@@ -202,16 +167,6 @@ async function expectPreservedTarget(
 ) {
   await expect(snapshot(options)).rejects.toThrow(pattern);
   await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(content);
-}
-
-function execSource(sql: string) {
-  using database = new sqlite.DatabaseSync(sourcePath);
-  database.exec(sql);
-}
-
-function query(sql: string, file = targetPath) {
-  using database = new sqlite.DatabaseSync(file, { readOnly: true });
-  return database.prepare(sql).all();
 }
 
 function interceptOpen(
@@ -328,50 +283,34 @@ describe("createVerifiedSqliteSnapshot", () => {
     await expect(fs.access(`${targetPath}-shm`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.skipIf(process.platform === "win32")(
-    "recovers hot journals without modifying source",
-    async () => {
+  it.skipIf(process.platform === "win32").each([false, true])(
+    "recovers hot journals without modifying source (initially hidden: %s)",
+    async (hideJournal) => {
       createHotRollbackJournal(sourcePath);
       const sourceBefore = await fs.readFile(sourcePath);
       const journalBefore = await fs.readFile(`${sourcePath}-journal`);
-
-      await expectSnapshotSuccess({ sourcePath, targetPath });
-
-      await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
-      await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(journalBefore);
-      expect(query("SELECT COUNT(*) AS count FROM records WHERE value = 'committed'")).toEqual([
-        { count: 256 },
-      ]);
-      expect(query("SELECT COUNT(*) AS count FROM records WHERE value = 'uncommitted'")).toEqual([
-        { count: 0 },
-      ]);
-      expect(query("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
-      await expect(fs.access(`${targetPath}-journal`)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "rechecks hot journal after source-open failure",
-    async () => {
-      createHotRollbackJournal(sourcePath);
       const canonicalJournalPath = `${fsSync.realpathSync.native(sourcePath)}-journal`;
       const lstatSync = fsSync.lstatSync.bind(fsSync);
       let hidJournal = false;
-      vi.spyOn(fsSync, "lstatSync").mockImplementation(((pathname, options) => {
-        if (!hidJournal && path.resolve(String(pathname)) === canonicalJournalPath) {
-          hidJournal = true;
-          const error = new Error("missing");
-          (error as NodeJS.ErrnoException).code = "ENOENT";
-          throw error;
-        }
-        return lstatSync(pathname, options as never);
-      }) as typeof fsSync.lstatSync);
+      if (hideJournal) {
+        vi.spyOn(fsSync, "lstatSync").mockImplementation(((pathname, options) => {
+          if (!hidJournal && path.resolve(String(pathname)) === canonicalJournalPath) {
+            hidJournal = true;
+            throw Object.assign(new Error("missing"), { code: "ENOENT" });
+          }
+          return lstatSync(pathname, options as never);
+        }) as typeof fsSync.lstatSync);
+      }
 
       await expectSnapshotSuccess({ sourcePath, targetPath });
-      expect(hidJournal).toBe(true);
-      expect(query("SELECT COUNT(*) AS count FROM records WHERE value = 'committed'")).toEqual([
-        { count: 256 },
+      expect(hidJournal).toBe(hideJournal);
+      assert(sourceBefore.equals(await fs.readFile(sourcePath)), "source");
+      assert(journalBefore.equals(await fs.readFile(`${sourcePath}-journal`)), "journal");
+      expect(query("SELECT value, COUNT(*) AS count FROM records GROUP BY value")).toEqual([
+        { value: "committed", count: 256 },
       ]);
+      expect(query("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+      await expect(fs.access(`${targetPath}-journal`)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
 
@@ -388,8 +327,8 @@ describe("createVerifiedSqliteSnapshot", () => {
 
       await expect(snapshot()).rejects.toThrow(/super-journal.*cannot be recovered privately/iu);
 
-      await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
-      await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(journalBefore);
+      assert(sourceBefore.equals(await fs.readFile(sourcePath)), "source");
+      assert(journalBefore.equals(await fs.readFile(`${sourcePath}-journal`)), "journal");
       await expect(fs.readFile(superJournalPath)).resolves.toEqual(superJournalBefore);
       await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
     },
@@ -509,6 +448,15 @@ describe("createVerifiedSqliteSnapshot", () => {
     await expectPreservedTarget(/target already exists/u, {}, "keep");
   });
 
+  it.runIf(process.platform !== "win32")("preserves a dangling target link", async () => {
+    await fs.symlink("missing.sqlite", targetPath);
+
+    await expect(snapshot()).rejects.toThrow(
+      `SQLite snapshot target already exists: ${targetPath}`,
+    );
+    await expect(fs.readlink(targetPath)).resolves.toBe("missing.sqlite");
+  });
+
   it("preserves a target created while the snapshot is being prepared", async () => {
     await expectPreservedTarget(/EEXIST|already exists/iu, {
       transform: async () => {
@@ -517,7 +465,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     });
   });
 
-  it("rejects staged bytes changed after validation", async () => {
+  it("rejects a same-size user_version change after validation", async () => {
     let stagedReadCount = 0;
     interceptOpen(
       (file, flags) =>
@@ -526,7 +474,9 @@ describe("createVerifiedSqliteSnapshot", () => {
         path.basename(path.dirname(file)).startsWith(".sqlite-snapshot-"),
       async (file) => {
         if (++stagedReadCount === 2) {
-          await fs.appendFile(file, "changed-after-validation");
+          const bytes = await fs.readFile(file);
+          bytes.writeUInt32BE(8, 60);
+          await fs.writeFile(file, bytes);
         }
       },
     );

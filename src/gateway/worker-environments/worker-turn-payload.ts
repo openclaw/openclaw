@@ -20,7 +20,6 @@ import {
   normalizeOptionalAgentRuntimeId,
   OPENCLAW_AGENT_RUNTIME_ID,
 } from "../../agents/agent-runtime-id.js";
-import { isHeartbeatLifecycleRunKind } from "../../agents/bootstrap-mode.js";
 import { bindActiveOperatorTurnAuthority } from "../../agents/cron-creator-authority-context.js";
 import {
   buildUsageAgentMetaFields,
@@ -39,6 +38,7 @@ import {
   runHarnessContextEngineMaintenance,
 } from "../../agents/harness/context-engine-lifecycle.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
+import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
@@ -50,10 +50,9 @@ import { capturePresenceToolAuthority } from "../../agents/tools/presence-tool-a
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import {
-  runWithoutOwnedSessionTranscriptWrites,
-  withSessionTranscriptWriteAssertion,
-} from "../../config/sessions/transcript-write-context.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
@@ -75,14 +74,12 @@ import {
 } from "../agent-runtime-identity-token.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import {
-  bindWorkerTurnOwner,
-  type WorkerTurnPromptCacheContext,
-} from "./placement-turn-claim-events.js";
+import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import type { WorkerTurnProcessResult } from "./tunnel-contract.js";
 import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
 import { WorkerTurnExecutionError } from "./worker-turn-failure.js";
 import type { prepareWorkerTurnPrompt } from "./worker-turn-prompt.js";
+import type { WorkerTurnPromptCacheContext } from "./worker-turn-prompt.types.js";
 import {
   captureWorkerTurnTranscriptSource,
   resolveWorkerTurnTranscriptTarget,
@@ -146,6 +143,7 @@ export function captureWorkerTurnInputAuthority(params: {
 export async function prepareWorkerAgentRuntimeIdentity(
   params: PrepareWorkerAgentRuntimeIdentityParams,
 ) {
+  const requesterOrigin = captureRequesterOrigin(params.turn);
   const admittedRunContext = await resolvePreparedRunAdmission({
     runId: params.turn.runId,
     runtimeKind: "worker",
@@ -186,6 +184,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
     operatorAuthority,
     assertPresenceSourceCurrent,
     params.promptCacheContext,
+    requesterOrigin,
   );
   capability.receiptAuthority();
   // Worker-local process keys isolate ephemeral state only. The signed caller
@@ -207,6 +206,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
     } satisfies AgentRuntimeIdentityTokenParams;
   });
   return {
+    capability,
     admittedRunContext,
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,
@@ -374,6 +374,7 @@ export async function finalizeWorkerTurnResult(
   params: Parameters<typeof reconcileWorkspaceAfterTurn>[0] & {
     turn: SessionPlacementTurnParams;
     processResult: WorkerTurnProcessResult;
+    assertInputAdmitted: () => void;
     modelRef: ReturnType<typeof assertSupportedTurn>;
     baseLeafId: string | null;
     promptContext: Awaited<ReturnType<typeof prepareWorkerTurnPrompt>>;
@@ -381,7 +382,6 @@ export async function finalizeWorkerTurnResult(
     takeFinishingOutcome: () => ReturnType<
       Awaited<ReturnType<typeof prepareWorkerAgentRuntimeIdentity>>["takeFinishingOutcome"]
     >;
-    settleSteering: () => Promise<void>;
     signal: AbortSignal;
     startedAt: number;
     onReply: (result: EmbeddedAgentRunResult) => void;
@@ -389,10 +389,14 @@ export async function finalizeWorkerTurnResult(
 ) {
   const { turn, placement, transcriptTarget, promptContext } = params;
   const runtimeResult = parseWorkerTurnProcessResult(params.processResult);
+  // Report launch failures before enforcing admission for transcript-backed results.
+  params.assertInputAdmitted();
   const workerTurnFailed = runtimeResult.status === "failed";
 
   // A terminal result settles under its pending-result owner, even after execution ends.
-  const completed = await SessionManager.openAsync(transcriptTarget);
+  const completed = await withSessionTranscriptHydrationCaller("worker-result", () =>
+    SessionManager.openAsync(transcriptTarget),
+  );
   const resultTarget = { ...transcriptTarget, expectedWriterRunId: undefined };
   const assertResultCurrent = () => {
     if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
@@ -470,7 +474,9 @@ export async function finalizeWorkerTurnResult(
   const finalizeContext = async () => {
     const finalizationManager = turn.onContextEngineTurnCandidate
       ? completed
-      : await SessionManager.openAsync(resultTarget);
+      : await withSessionTranscriptHydrationCaller("worker-result", () =>
+          SessionManager.openAsync(resultTarget),
+        );
     assertResultCurrent();
     const userEntry = params.baseLeafId
       ? finalizationManager.getEntry(params.baseLeafId)
@@ -482,7 +488,6 @@ export async function finalizeWorkerTurnResult(
       promptError: workerTurnFailed,
       aborted,
       yieldAborted: false,
-      isHeartbeat: isHeartbeatLifecycleRunKind(turn.bootstrapContextRunKind),
       messagesSnapshot: [
         ...promptContext.history,
         ...(userEntry?.type === "message" && userEntry.message.role === "user"
@@ -536,7 +541,6 @@ export async function finalizeWorkerTurnResult(
     });
     throw workerFailure;
   }
-  await params.settleSteering();
   const durationMs = Date.now() - params.startedAt;
   const usageAccumulator = createUsageAccumulator();
   const assistants = workerMessages.filter(
@@ -565,6 +569,7 @@ export async function finalizeWorkerTurnResult(
     ...(reply.text || reply.mediaUrl || reply.mediaUrls?.length ? { payloads: [reply] } : {}),
     meta: {
       durationMs,
+      systemPromptReport: promptContext.systemPromptReport,
       agentMeta: {
         sessionId: placement.sessionId,
         sessionFile: turn.sessionFile,
@@ -579,6 +584,8 @@ export async function finalizeWorkerTurnResult(
     },
   };
   assertResultCurrent();
+  // The terminal reply is committed; retained workspace cleanup still owns settlement.
+  turn.replyOperation?.freezeAbort();
   params.onReply(result);
   await settleWorkspace();
   return result;

@@ -1,9 +1,17 @@
 import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
-import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
+import {
+  getOwnedSessionTranscriptActor,
+  SessionTranscriptWriterClaimReboundError,
+} from "../../config/sessions/transcript-write-context.js";
 import type { ImageContent, TextContent } from "../../llm/types.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
+import type { CustomMessage } from "./messages.js";
+import {
+  sessionManagerAppendPromptContext,
+  type PrepareModelPromptProjection,
+} from "./model-prompt-projection-append.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionManagerAppend } from "./session-manager-append.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
@@ -174,6 +182,29 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
+  async [sessionManagerAppendPromptContext](
+    message: CustomMessage,
+    prepare: PrepareModelPromptProjection,
+  ): Promise<string> {
+    const target = this.getSessionTarget();
+    const actor = target ? getOwnedSessionTranscriptActor(target)?.actor : undefined;
+    // Join user admission before entering the manager's append queue.
+    const projection =
+      actor && actor.target.database.kind !== "memory" ? await prepare() : undefined;
+    const { customType, content, display, details, timestamp } = message;
+    const entry: CustomMessageEntry = this.createEntry(
+      { type: "custom_message", customType, content, display, details },
+      timestamp,
+    );
+    await this.appendEntryAsync(
+      entry,
+      { invalidateSerializedPrefixCache: true },
+      false,
+      projection,
+    );
+    return entry.id;
+  }
+
   /** @deprecated Await appendCustomMessageEntryAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendCustomMessageEntry(
     customType: string,
@@ -207,6 +238,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
         entry,
         undefined,
         admission,
+        "reload",
         undefined,
         undefined,
         this.transcriptMutationAt,

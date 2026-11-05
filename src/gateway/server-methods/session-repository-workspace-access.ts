@@ -4,8 +4,12 @@ import type { SessionEntryCurrentFacts } from "../../config/sessions/session-ent
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import { assertRepositoryWorkspaceDiskIdentity } from "../../state/session-repository-workspaces.authority.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import {
   parseWorkspaceInspectionResult,
@@ -16,6 +20,7 @@ import {
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
 import type { GatewaySessionEntryRead } from "../session-utils.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { isWorkerRetainedWindowOpen } from "../worker-environments/retained-work-window.js";
 import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -133,6 +138,11 @@ export async function resolveRepositoryWorkspaceAccess(
       : await readSessionWorkerPlacementAsync({ context: context ?? {}, sessionId });
     assertSession(repository.revision);
     if (placement?.state !== "active" || !environments) {
+      if (repository.diskAuthority) {
+        throw new Error(
+          "The repository disk is unavailable; reconnect its original runner before accessing files.",
+        );
+      }
       return {
         kind: "stored" as const,
         repository,
@@ -147,6 +157,9 @@ export async function resolveRepositoryWorkspaceAccess(
         ? placementRead.current()
         : placements?.getMany([sessionId]).get(sessionId);
       const environment = environments.get(placement.environmentId);
+      if (repository.diskAuthority) {
+        assertRepositoryWorkspaceDiskIdentity(repository.diskAuthority, environment);
+      }
       if (
         current?.state !== "active" ||
         current.agentId !== repository.agentId ||
@@ -182,9 +195,23 @@ export async function resolveRepositoryWorkspaceAccess(
         };
         const run = async (assertOperation = assertAuthorized) => {
           assertOperation();
+          // Editor wake belongs to the mutation owner, before its result/readiness gate.
+          if (
+            operation !== "set" &&
+            repository.diskAuthority &&
+            !isWorkerRetainedWindowOpen(environments.get(placement.environmentId))
+          ) {
+            await environments.ensureRetainedRunning({
+              environmentId: placement.environmentId,
+              expectedOwnerEpoch: placement.activeOwnerEpoch,
+              assertCurrent: assertOperation,
+            });
+            assertOperation();
+          }
           const tunnel = await environments.startTunnel({
             environmentId: placement.environmentId,
             ownerEpoch: placement.activeOwnerEpoch,
+            authorize: assertOperation,
           });
           assertOperation();
           if (
@@ -219,9 +246,15 @@ export async function resolveRepositoryWorkspaceAccess(
             "Cloud repository editing is unavailable; restart the Gateway and retry.",
           );
         }
-        return await runExclusiveSessionLifecycleMutation("workspace-edit", {
-          scope: loaded.storePath,
-          identities: [loaded.canonicalKey, ...loaded.storeKeys, sessionId],
+        return await runSessionMutation({
+          diagnosticLabel: "workspace-edit",
+          target: captureSessionTarget({
+            storeScope: loaded.storePath,
+            sessionKey: loaded.canonicalKey,
+            aliases: loaded.storeKeys,
+            agentId: loaded.agentId,
+            incarnation: sessionId,
+          }),
           run: () => {
             assertAuthorized();
             return mutationService.mutate({

@@ -11,14 +11,18 @@ import {
   SCHEMA_NESTED_KEYS,
   stripUnsupportedSchemaKeywords,
   truncateToolSchemaDepth,
+  reportToolSchemaTruncation,
+  wasToolSchemaTruncated,
 } from "@openclaw/ai/internal/tool-schema";
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
+import { memoizeFrozenPlainDataProjection } from "../shared/immutable-data.js";
 import {
   mergeLiteralSchemas,
   readLiteralSchemaValues,
   schemaAnnotationsOnly,
 } from "../shared/json-schema-literals.js";
+import { mapArrayIfChanged } from "../shared/map-array-if-changed.js";
 import type {
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
@@ -143,7 +147,7 @@ export function inspectGeminiToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
   return inspectToolSchemas(ctx, (schema, path) =>
-    findUnsupportedSchemaKeywords(schema, path, GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS),
+    inspectSchemaKeywords(schema, path, GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS),
   );
 }
 
@@ -161,6 +165,10 @@ export function inspectLlamacppGbnfToolSchemas(
   return inspectToolSchemas(ctx, findLlamacppGbnfSchemaViolations);
 }
 
+const normalizeOpenAIParameters = memoizeFrozenPlainDataProjection((schema: object) =>
+  normalizeOpenAIStrictCompatSchema(schema),
+);
+
 /**
  * Rewrites OpenAI-native tool schemas to satisfy strict object-schema requirements.
  */
@@ -171,16 +179,16 @@ export function normalizeOpenAIToolSchemas(
   if (!shouldApplyOpenAIToolCompat(ctx)) {
     return ctx.tools;
   }
-  return ctx.tools.map((tool) => {
+  return mapArrayIfChanged(ctx.tools, (tool) => {
     if (tool.parameters != null && typeof tool.parameters !== "object") {
       return tool;
     }
-    return {
-      ...tool,
-      parameters: normalizeOpenAIStrictCompatSchema(
-        truncateToolSchemaDepth(tool.parameters ?? {}, tool.name),
-      ),
-    };
+    const parameters = normalizeOpenAIParameters(tool.parameters ?? {});
+    // Warnings belong to the current tool name, even when its frozen schema is shared.
+    if (wasToolSchemaTruncated(parameters)) {
+      reportToolSchemaTruncation(parameters, tool.name);
+    }
+    return parameters === tool.parameters ? tool : { ...tool, parameters };
   });
 }
 
@@ -223,8 +231,8 @@ export function inspectOpenAIToolSchemas(
   if (!shouldApplyOpenAIToolCompat(ctx)) {
     return [];
   }
-  // Native OpenAI transports fall back to `strict: false` when any tool schema is not
-  // strict-compatible, so these findings are expected for optional-heavy tool schemas.
+  // Compatibility normalization runs before runtime inspection. Registration
+  // diagnostics own open-object warnings while the raw schemas are available.
   return [];
 }
 
@@ -247,13 +255,7 @@ function isNullSchemaVariant(schema: unknown): boolean {
 
 function normalizeDeepSeekSchema(schema: unknown): unknown {
   if (Array.isArray(schema)) {
-    let changed = false;
-    const normalized = schema.map((entry) => {
-      const next = normalizeDeepSeekSchema(entry);
-      changed ||= next !== entry;
-      return next;
-    });
-    return changed ? normalized : schema;
+    return mapArrayIfChanged(schema, normalizeDeepSeekSchema);
   }
   if (!schema || typeof schema !== "object") {
     return schema;
@@ -459,7 +461,7 @@ export function inspectDeepSeekToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
   return inspectToolSchemas(ctx, (schema, path) =>
-    findUnsupportedSchemaKeywords(schema, path, DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS),
+    inspectSchemaKeywords(schema, path, DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS),
   );
 }
 

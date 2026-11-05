@@ -4,7 +4,7 @@ import { parseMd } from "../../parse.js";
 
 describe("frontmatter-edges", () => {
   it("BOM before frontmatter open is tolerated", () => {
-    const { ast } = parseMd("﻿---\nname: bom\n---\n");
+    const ast = parseMd("﻿---\nname: bom\n---\n");
     expect(ast.frontmatter[0]?.value).toBe("bom");
   });
 });

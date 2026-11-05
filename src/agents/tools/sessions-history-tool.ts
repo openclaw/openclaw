@@ -1,6 +1,7 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
+import { ArrayOptions, ObjectOptions } from "typebox/type";
 import {
   ChatHistoryParamsSchema,
   ChatPendingInputsPageSchema,
@@ -51,7 +52,7 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsHistoryToolSchema = Type.Object({
-  user: requesterProfileSchema(),
+  user: requesterProfileSchema({ defaultToTurnOwner: true }),
   sessionKey: ChatHistoryParamsSchema.properties.sessionKey,
   limit: ChatHistoryParamsSchema.properties.limit,
   offset: Type.With(ChatHistoryParamsSchema.properties.offset, {
@@ -85,7 +86,23 @@ const SessionsHistoryOutputSchema = Type.Union([
       hasMore: Type.Optional(Type.Boolean()),
       totalMessages: Type.Optional(Type.Number()),
       windowReset: Type.Optional(Type.Boolean()),
-      pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
+      // Writer UI controls are not part of the model-facing history contract.
+      pendingInputs: Type.Optional(
+        Type.Object(
+          {
+            ...ChatPendingInputsPageSchema.properties,
+            items: Type.Array(
+              Type.Omit(
+                ChatPendingInputsPageSchema.properties.items.items,
+                ["steerNow"],
+                ObjectOptions(ChatPendingInputsPageSchema.properties.items.items),
+              ),
+              ArrayOptions(ChatPendingInputsPageSchema.properties.items),
+            ),
+          },
+          { additionalProperties: false },
+        ),
+      ),
     },
     { additionalProperties: false },
   ),

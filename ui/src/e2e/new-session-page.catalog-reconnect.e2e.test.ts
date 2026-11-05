@@ -21,7 +21,6 @@ import {
 } from "./new-session-page.scenario.test-support.ts";
 import {
   REFRESHED_RESEARCH_WORKSPACE,
-  SESSION_LIST_DEFAULTS,
   WORKSPACE,
   LOCAL_GIT_WORKSPACE_RESPONSES,
   checkoutBaseRefInput,
@@ -31,6 +30,7 @@ import {
   navigateInApp,
   pollLocatorText,
 } from "./new-session-page.test-support.ts";
+import { sessionList } from "./new-session-shard.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const captureCliAgentsProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -434,13 +434,7 @@ suite.define(() => {
   it("navigates to a created session while canonical session refresh is pending", async () => {
     const page = await openPage(createControlUiE2eContextOptions());
     const sessionKey = "agent:main:refresh-overlap-e2e";
-    const listResponse = {
-      count: 0,
-      defaults: SESSION_LIST_DEFAULTS,
-      path: "",
-      sessions: [],
-      ts: Date.now(),
-    };
+    const listResponse = sessionList();
     const gateway = await installMockGateway(page, {
       workspaceGit: true,
       methodResponses: {
@@ -536,11 +530,13 @@ suite.define(() => {
     expect(create.params).toHaveProperty("cwd", "/home/peter/research");
   });
 
-  it("clears the draft after a genuine new-session route navigation settles", async () => {
+  it("clears a navigated draft and preserves a manually selected agent across reconnect", async () => {
     const page = await openPage(createControlUiE2eContextOptions());
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       methodResponses: {
-        "agents.list": mainAndResearchAgents(WORKSPACE, REFRESHED_RESEARCH_WORKSPACE),
+        "agents.list": mainAndResearchAgents(WORKSPACE, "/home/peter/research"),
+        "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
+        "sessions.create": { key: "agent:research:manual-reconnect" },
       },
     });
     await page.goto(`${suite.server.baseUrl}new?agent=research`);
@@ -550,19 +546,6 @@ suite.define(() => {
     await navigateInApp(page, "new-session", "?agent=main");
     await page.getByRole("heading", { name: "Main" }).waitFor();
     await expectValue(message, "");
-  });
-
-  it("preserves a manually selected agent across a same-client reconnect", async () => {
-    const page = await openPage(createControlUiE2eContextOptions());
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "agents.list": mainAndResearchAgents(WORKSPACE, "/home/peter/research"),
-        "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
-        "sessions.create": { key: "agent:research:manual-reconnect" },
-      },
-    });
-    await page.goto(`${suite.server.baseUrl}new`);
-    await page.getByRole("heading", { name: "Main" }).waitFor();
     await gateway.waitForRequest("worktrees.branches");
     const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
     await agentPicker.locator(".agent-select__trigger").click();
@@ -571,7 +554,6 @@ suite.define(() => {
       .filter({ hasText: "Research" })
       .click();
     await page.getByRole("heading", { name: "Research" }).waitFor();
-    const message = page.locator(".new-session-page__message");
     await message.fill("keep my selected agent");
     const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
     const branchRequestsBefore = (await gateway.getRequests("worktrees.branches")).length;

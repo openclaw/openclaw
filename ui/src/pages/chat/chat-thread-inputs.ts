@@ -9,7 +9,7 @@ import {
   buildMessageItems,
   hasRenderableNormalizedMessage,
   insertChatItemsByTimestamp,
-  messageMatchesSearchQuery,
+  createChatSearchMatcher,
   queuedSendThreadMessage,
 } from "./chat-thread-items.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
@@ -45,12 +45,7 @@ export function placeChatInputs(
   props: ChatInputPlacementProps,
   orderState: ChatInputOrderState,
   currentRunId: string | null,
-): {
-  pendingKeys: Set<string>;
-  historicalKeys: Set<string>;
-  hiddenKeys: Set<string>;
-  activeInputKey?: string;
-} {
+) {
   const orderedQueue = (props.queue ?? []).toSorted(compareChatQueueOrder);
   const { queue, pendingInputs } = selectChatInputDisplay(
     history,
@@ -63,12 +58,12 @@ export function placeChatInputs(
   const blocks: InputBlock[] = [];
   let activeInputKey: string | undefined;
   let previousStoppedKey: string | undefined;
+  const matchesSearch = createChatSearchMatcher(
+    props.searchOpen ? (props.searchQuery ?? "") : "",
+    props.messageRecovery,
+  );
   const markSearchVisibility = (message: unknown, inputItems: readonly ChatItem[]) => {
-    if (
-      props.searchOpen &&
-      props.searchQuery?.trim() &&
-      !messageMatchesSearchQuery(message, props.searchQuery, props.messageRecovery)
-    ) {
+    if (props.searchOpen && props.searchQuery?.trim() && !matchesSearch(message)) {
       for (const item of inputItems) {
         hiddenKeys.add(item.key);
       }
@@ -77,11 +72,8 @@ export function placeChatInputs(
   for (const input of pendingInputs) {
     const inputItems = buildPendingInputItems(
       [input],
-      undefined,
-      orderedQueue,
       props.workspaceSyncPendingRunIds,
       props.workerSetupPending,
-      props.messageRecovery,
     );
     const first = inputItems[0];
     if (!first) {
@@ -90,8 +82,9 @@ export function placeChatInputs(
     markSearchVisibility(input.message, inputItems);
     if (input.state === "queued") {
       blocks.push({ items: inputItems, runId: input.runId });
-      // The active run owns this floor even when a fresh client has no local send.
-      if (currentRunId && input.runId === currentRunId) {
+      // On an empty transcript, the first accepted input owns the startup floor
+      // even before execution identity arrives. Later inputs remain ceilings.
+      if (currentRunId ? input.runId === currentRunId : history.length === 0 && !activeInputKey) {
         activeInputKey = first.key;
       }
       continue;

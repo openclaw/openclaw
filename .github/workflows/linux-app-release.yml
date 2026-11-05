@@ -54,6 +54,7 @@ jobs:
       desktop_test_bundles: ${{ steps.request.outputs.desktop_test_bundles }}
       release_tag: ${{ steps.request.outputs.release_tag }}
       tag_sha: ${{ steps.ancestry.outputs.tag_sha }}
+      tooling_sha: ${{ steps.request.outputs.workflow_sha }}
       updater_pubkey: ${{ steps.updater_trust.outputs.updater_pubkey }}
       already_published: ${{ steps.completion.outputs.already_published }}
       # Opt-in desktop-test bundles include the Windows installer, so they build it
@@ -65,15 +66,8 @@ jobs:
         env:
           REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
           REQUEST_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          # Reject stale requests visibly before selected code runs; a job-level
-          # SHA gate would silently skip the whole release when main advances.
-          if [[ "$REQUEST_HEAD_SHA" != "$WORKFLOW_SHA" ]]; then
-            echo "::error::Main advanced after this Linux release request. Dispatch a new Linux App Release Request from main with the same inputs." >&2
-            exit 1
-          fi
           pattern='^Linux App Release Request \[(v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?)\] desktop=(true|false)$'
           if [[ ! "${REQUEST_TITLE}" =~ ${pattern} ]]; then
             echo "Release request title does not match the trusted request contract"
@@ -81,6 +75,7 @@ jobs:
           fi
           echo "release_tag=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
           echo "desktop_test_bundles=${BASH_REMATCH[3]}" >> "$GITHUB_OUTPUT"
+          echo "workflow_sha=$REQUEST_HEAD_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Prepare Git owner
         uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
@@ -95,7 +90,7 @@ jobs:
       - name: Checkout trusted release tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ steps.request.outputs.workflow_sha }}
           path: .release-tooling
           fetch-depth: 1
           persist-credentials: false
@@ -110,7 +105,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Verify trusted release tooling identity
@@ -118,7 +113,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_FULL_REF: ${{ github.ref }}
           WORKFLOW_REF: ${{ github.ref_name }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ steps.request.outputs.workflow_sha }}
         run: |
           set -euo pipefail
           node .release-tooling/scripts/release-tooling-identity.mjs verify \
@@ -151,7 +146,7 @@ jobs:
         id: ancestry
         env:
           RELEASE_TAG: ${{ steps.request.outputs.release_tag }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ steps.request.outputs.workflow_sha }}
         run: |
           set -euo pipefail
           exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
@@ -243,7 +238,7 @@ jobs:
           REQUEST_RUN_ID: ${{ github.event.workflow_run.id }}
           REQUEST_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           REQUEST_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ steps.request.outputs.workflow_sha }}
           RELEASE_TAG: ${{ steps.request.outputs.release_tag }}
           TAG_SHA: ${{ steps.ancestry.outputs.tag_sha }}
           ADMISSION_STATUS: ${{ job.status }}
@@ -329,22 +324,25 @@ jobs:
             xdg-utils \
             xvfb
 
-      - name: Install Rust
+      - &install_release_rust
+        name: Install Rust
         run: rustup toolchain install stable --profile minimal
 
-      - name: Setup trusted Node runtime
+      - &setup_release_node
+        name: Setup trusted Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
-      - name: Checkout selected tag
+      - &checkout_selected_release_tag
+        name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_release.outputs.tag_sha }}
           persist-credentials: false
 
       - name: Install selected-tag dependencies
-        run: |
+        run: &install_selected_release_dependencies |
           corepack enable
           pnpm install --frozen-lockfile --prefer-offline \
             --config.ignore-scripts=false --config.engine-strict=false \
@@ -353,7 +351,7 @@ jobs:
       - name: Checkout trusted Linux packaging tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ needs.validate_release.outputs.tooling_sha }}
           path: .release-tooling
           fetch-depth: 1
           persist-credentials: false
@@ -468,7 +466,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
           TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ needs.validate_release.outputs.tooling_sha }}
           FINALIZE_OUTCOME: ${{ steps.finalize-appimage.outcome }}
           STAGING_OUTCOME: ${{ steps.stage-bundles.outcome }}
           RUNTIME_OUTCOME: ${{ steps.packaged-runtime.outcome }}
@@ -545,7 +543,8 @@ jobs:
     outputs:
       signed_appimage_artifact_id: ${{ steps.upload_signed_appimage.outputs.artifact-id }}
     steps:
-      - name: Install trusted signing tools
+      - &install_release_signing_tools
+        name: Install trusted signing tools
         run: |
           set -euo pipefail
           minisign_archive="${RUNNER_TEMP}/minisign-0.12-linux.tar.gz"
@@ -631,37 +630,24 @@ jobs:
     name: Build unsigned macOS test bundles
     if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
     needs: validate_release
-    # macos-15, not macos-14: tauri-plugin-notifications' Swift sources use
-    # typed throws (`throws(FFIResult)`), which needs Swift 6. The macos-14
-    # image still ships Swift 5.x, so this job could not build the plugin.
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 45
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
     permissions:
       contents: read
     outputs:
       dmg_artifact_id: ${{ steps.upload_dmg.outputs.artifact-id }}
       unsigned_updater_artifact_id: ${{ steps.upload_updater.outputs.artifact-id }}
     steps:
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
+      - *install_release_rust
 
-      - name: Setup trusted Node runtime
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
+      - *setup_release_node
 
-      - name: Checkout selected tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.validate_release.outputs.tag_sha }}
-          persist-credentials: false
+      - *checkout_selected_release_tag
 
       - name: Install selected-tag dependencies
-        run: |
-          corepack enable
-          pnpm install --frozen-lockfile --prefer-offline \
-            --config.ignore-scripts=false --config.engine-strict=false \
-            --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+        run: *install_selected_release_dependencies
 
       - name: Build macOS test bundles
         working-directory: apps/linux/src-tauri
@@ -715,6 +701,7 @@ jobs:
         id: upload_updater
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: macos-app-release-unsigned-updater
           path: dist/macos-app/unsigned/*.app.tar.gz
           if-no-files-found: error
@@ -730,27 +717,15 @@ jobs:
     outputs:
       unsigned_updater_artifact_id: ${{ steps.upload_updater.outputs.artifact-id }}
     steps:
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
+      - *install_release_rust
 
-      - name: Setup trusted Node runtime
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
+      - *setup_release_node
 
-      - name: Checkout selected tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.validate_release.outputs.tag_sha }}
-          persist-credentials: false
+      - *checkout_selected_release_tag
 
       - name: Install selected-tag dependencies
         shell: bash
-        run: |
-          corepack enable
-          pnpm install --frozen-lockfile --prefer-offline \
-            --config.ignore-scripts=false --config.engine-strict=false \
-            --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+        run: *install_selected_release_dependencies
 
       - name: Build Windows installer
         working-directory: apps/linux/src-tauri
@@ -886,30 +861,7 @@ jobs:
     outputs:
       signed_desktop_artifact_id: ${{ steps.upload_signed_desktop.outputs.artifact-id }}
     steps:
-      - name: Install trusted signing tools
-        run: |
-          set -euo pipefail
-          minisign_archive="${RUNNER_TEMP}/minisign-0.12-linux.tar.gz"
-          tauri_archive="${RUNNER_TEMP}/cargo-tauri-x86_64-unknown-linux-gnu.tgz"
-          mkdir -p "${RUNNER_TEMP}/bin"
-          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
-            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
-            --output "$minisign_archive" "$MINISIGN_URL"
-          printf '%s  %s\n' "$MINISIGN_ARCHIVE_SHA256" "$minisign_archive" | sha256sum --check -
-          tar -xzf "$minisign_archive" -C "${RUNNER_TEMP}/bin" --strip-components=2 \
-            minisign-linux/x86_64/minisign
-          printf '%s  %s\n' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign" |
-            sha256sum --check -
-          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
-            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
-            --output "$tauri_archive" "$TAURI_CLI_URL"
-          printf '%s  %s\n' "$TAURI_CLI_ARCHIVE_SHA256" "$tauri_archive" | sha256sum --check -
-          tar -xzf "$tauri_archive" -C "${RUNNER_TEMP}/bin" cargo-tauri
-          printf '%s  %s\n' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri" |
-            sha256sum --check -
-          chmod 0555 "${RUNNER_TEMP}/bin/cargo-tauri" "${RUNNER_TEMP}/bin/minisign"
-          "${RUNNER_TEMP}/bin/cargo-tauri" --version
-          "${RUNNER_TEMP}/bin/minisign" -v
+      - *install_release_signing_tools
 
       - name: Download finalized macOS updater archive
         if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
@@ -1023,7 +975,7 @@ jobs:
       - name: Checkout trusted Linux updater publication tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ needs.validate_release.outputs.tooling_sha }}
           fetch-depth: 1
           persist-credentials: false
           sparse-checkout: |
@@ -1146,7 +1098,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Publish immutable bundles, canonical Linux channel, and legacy mirror
@@ -1156,7 +1108,8 @@ jobs:
           DESKTOP_TEST_BUNDLES: ${{ needs.validate_release.outputs.desktop_test_bundles }}
           LOCAL_INPUTS: ${{ needs.validate_release.outputs.already_published != 'true' }}
           TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ needs.validate_release.outputs.tooling_sha }}
+          BUILDER_SHA: ${{ github.workflow_sha }}
           WORKFLOW_REF: ${{ github.ref_name }}
           WORKFLOW_FULL_REF: ${{ github.ref }}
           REQUEST_RUN_ID: ${{ github.event.workflow_run.id }}
@@ -1195,6 +1148,7 @@ jobs:
           printf '%s  %s\n' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/minisign/minisign" | sha256sum --check -
           node scripts/linux-app-channel.mjs publish \
             --tag "$RELEASE_TAG" --source-sha "$TAG_SHA" --tooling-sha "$WORKFLOW_SHA" \
+            --builder-sha "$BUILDER_SHA" \
             --workflow-ref "$WORKFLOW_REF" --workflow-full-ref "$WORKFLOW_FULL_REF" \
             --request-run-id "$REQUEST_RUN_ID" --request-run-attempt "$REQUEST_RUN_ATTEMPT" \
             "${input_args[@]}" --public-key-config apps/linux/src-tauri/tauri.conf.json \

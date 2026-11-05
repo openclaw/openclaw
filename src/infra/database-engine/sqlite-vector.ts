@@ -128,7 +128,6 @@ export function bindSqliteVectorCapability(
       if (plan.candidateParameter < 0) {
         throw new Error("Vector query omitted native candidate matching");
       }
-      plan.query.parameters = [...plan.query.parameters];
       plan.query.parameters[plan.candidateParameter] = 0;
       let response: VectorKnnResponse<Row>;
       if (db && !admitted.databasePath) {

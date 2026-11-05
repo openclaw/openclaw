@@ -1,6 +1,10 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, onSettled } from "solid-js";
+import { isPhoneLayout, PHONE_LAYOUT_QUERY } from "../../lib/phone-layout.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import { createScrollPosition } from "../../lib/reactive/scroll-state.ts";
 import { reclaimHubTabFocus, rememberHubTabFocus } from "../hub-tabs-focus.ts";
+import { useScrollState } from "./scroll-state.ts";
 import { Tabs } from "./tabs.tsx";
 import "../../styles/hub-tabs.css";
 import hubStyles from "../../styles/hub-tabs.css?inline";
@@ -8,7 +12,6 @@ import hubStyles from "../../styles/hub-tabs.css?inline";
 export type HubTabsProps<T extends string> = {
   id: string;
   active: T | null;
-  requestedActive?: T;
   tabs: readonly {
     value: T;
     label: JSX.Element;
@@ -46,19 +49,44 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
       ),
     })),
   );
-  let tablist: HTMLDivElement | undefined;
+  let strip!: HTMLElement;
+  let tabElement!: (value: string) => HTMLElement | undefined;
   onSettled(() => {
-    const selected = [...(tablist?.querySelectorAll<HTMLElement>("[role=tab]") ?? [])].find(
-      (tab) => tab.dataset.tabValue === props.active,
-    );
     if (props.active !== null) {
-      reclaimHubTabFocus(props.id, props.active, selected);
+      reclaimHubTabFocus(props.id, props.active, tabElement(props.active));
     }
   });
+  const scrollState = useScrollState(true);
+  const phone = createMediaQuery(PHONE_LAYOUT_QUERY, isPhoneLayout());
+  // Keyed to a value, so re-rendered tab props can't cancel a reveal that is waiting for its frame.
+  // Count badges arrive after mount and can push the active tab back out of view.
+  const revealKey = createMemo(() =>
+    phone() && props.active !== null
+      ? `${props.active}|${props.tabs.map((tab) => tab.count).join(",")}`
+      : null,
+  );
+  // Only the strip scrolls, so the page never moves.
+  createScrollPosition(
+    () => {
+      const key = revealKey();
+      return {
+        reveal:
+          key === null
+            ? undefined
+            : {
+                identity: [key],
+                target: () => (props.active !== null ? tabElement(props.active) : undefined),
+              },
+      };
+    },
+    { region: () => strip, revealTiming: "animation-frame", revealAxis: "inline" },
+  );
   return (
     <Tabs
-      ref={(node) => {
-        tablist = node;
+      ref={(element, findTab) => {
+        strip = element;
+        tabElement = findTab;
+        scrollState(element);
       }}
       id={`${props.id}-tabs`}
       shadowStyles={[hubStyles]}
@@ -75,7 +103,7 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
       ]}
       onActivate={(value, element, event) => {
         const tab = props.tabs.find((entry) => entry.value === value);
-        if (!tab || tab.value === (props.requestedActive ?? props.active)) {
+        if (!tab || tab.value === props.active) {
           return false;
         }
         if (event instanceof KeyboardEvent) {

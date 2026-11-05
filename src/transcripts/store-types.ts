@@ -45,7 +45,6 @@ export type MaterializedTranscriptArtifacts = {
   sessionDir: string;
   metadataPath: string;
   transcriptPath: string;
-  summaryJsonPath: string;
   summaryPath: string;
   hasSummary: boolean;
 };

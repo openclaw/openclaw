@@ -1,24 +1,30 @@
 import fsNode, { existsSync } from "node:fs";
 import fs from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
 import { createPreUpdateConfigSnapshot } from "../../config/backup-rotation.js";
 import { createConfigIO } from "../../config/io.factory.js";
 import {
   containsConfigIncludeDirective,
   hashConfigRaw,
   parseConfigJson5,
+  normalizeConfigIoDeps,
+  resolveConfigForRead,
+  resolveConfigIncludesForRead,
 } from "../../config/io.read-helpers.js";
+import type { ConfigFileWritePathSnapshot } from "../../config/io.write-path.types.js";
 import {
   captureConfigFileWritePathProof,
-  type ConfigFileWritePathSnapshot,
+  assertConfigFileWritePathSnapshot,
 } from "../../config/io.write-safety.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import { resolveConfigPath } from "../../config/paths.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   BackupConfigCaptureError,
   readBackupConfigCaptureFile,
   resolveBackupConfigCapture,
 } from "../../infra/backup-config-capture.js";
-import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 
 type UpdateConfigFileSnapshot = {
   path: string;
@@ -33,12 +39,7 @@ export type UpdateConfigSnapshot = UpdateConfigFileSnapshot & {
 };
 
 export async function readUpdateConfigSnapshot(path: string): Promise<UpdateConfigSnapshot> {
-  const raw = await fs.readFile(path, "utf8").catch((error: unknown) => {
-    if (!hasNodeErrorCode(error, "ENOENT")) {
-      throw error;
-    }
-    return null;
-  });
+  const raw = (await fs.readFile(path, "utf8").catch(ignoreMissingPath)) ?? null;
   return { path, raw, hash: hashConfigRaw(raw) };
 }
 
@@ -112,6 +113,66 @@ export async function createUpdateConfigSnapshot(
 ): Promise<void> {
   await createPreUpdateConfigSnapshot({
     configPath: resolveConfigPath(env),
-    fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+    fs: {
+      writeFile: fs.writeFile,
+      rename: fs.rename,
+      rm: fs.rm,
+      readFile: fs.readFile,
+      existsSync,
+    },
   });
+}
+
+/** Read the activation-owned files under their captured path proofs before rollback. */
+export async function isUpdateConfigRollbackUnchanged(params: {
+  files: readonly UpdateConfigFileSnapshot[];
+  expectedHashes: ReadonlyMap<string, string>;
+  cohortPaths: ReadonlySet<string>;
+  cohortSettled: boolean;
+  legacySnapshot: Pick<ConfigFileSnapshot, "path" | "parsed" | "includedPaths"> | undefined;
+  baseline: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  assertCurrent: () => void;
+}): Promise<boolean> {
+  const { assertCurrent } = params;
+  assertCurrent();
+  let unchanged = params.files.every(
+    (file) => params.cohortPaths.has(file.path) || file.doctorOwned !== false,
+  );
+  for (const file of params.files) {
+    if (!unchanged) {
+      break;
+    }
+    try {
+      if (file.pathSnapshot) {
+        assertConfigFileWritePathSnapshot(file.pathSnapshot, fsNode);
+      }
+      // The cohort journal checks its authored leaves; whole-file hashes cover other files.
+      if (params.cohortSettled || !params.cohortPaths.has(file.path)) {
+        unchanged =
+          (await readUpdateConfigSnapshot(file.path)).hash === params.expectedHashes.get(file.path);
+      }
+      if (file.pathSnapshot) {
+        assertConfigFileWritePathSnapshot(file.pathSnapshot, fsNode);
+      }
+    } catch (error) {
+      if (!(error instanceof ConfigMutationConflictError)) {
+        throw error;
+      }
+      unchanged = false;
+    }
+    assertCurrent();
+  }
+  const legacy = params.legacySnapshot;
+  if (unchanged && legacy?.includedPaths?.length) {
+    // Older handoffs carry only the root snapshot; keep their include refusal.
+    const deps = normalizeConfigIoDeps({ env: { ...params.env } });
+    const included = resolveConfigIncludesForRead(legacy.parsed, legacy.path, deps);
+    unchanged = isDeepStrictEqual(
+      params.baseline,
+      resolveConfigForRead(included, deps.env).resolvedConfigRaw,
+    );
+  }
+  assertCurrent();
+  return unchanged;
 }

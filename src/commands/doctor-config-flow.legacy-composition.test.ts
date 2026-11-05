@@ -113,7 +113,8 @@ it(
       expect(Object.keys(saved.agents.entries)).toEqual(["main", "research"]);
       expect(saved.agents.defaults.systemAgent.agentId).toBe("main");
       expect(saved.meta.migrations.modelPolicyAllowlist).toBe(true);
-      const allowedModels = ["anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-7"];
+      // Preserve the fixture's pinned choices without model-retirement evidence.
+      const allowedModels = ["anthropic/claude-sonnet-4-5", "anthropic/claude-opus-4-5"];
       expect(saved.agents.defaults.modelPolicy.allow).toEqual(allowedModels);
       expect(saved.memory.search).toEqual({ ...raw.agents.defaults.memorySearch });
       expect(saved.tools.media.models).toEqual([

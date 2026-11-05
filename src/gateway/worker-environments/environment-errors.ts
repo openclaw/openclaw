@@ -26,6 +26,9 @@ export class WorkerEnvironmentServiceError extends Error {
   }
 }
 
+/** Maintenance interruption retains the lease for the next reconciliation. */
+export class WorkerEnvironmentReconcileInterruptedError extends Error {}
+
 export const workerEnvironmentServiceError = (
   code: WorkerEnvironmentServiceErrorCode,
   message: string,

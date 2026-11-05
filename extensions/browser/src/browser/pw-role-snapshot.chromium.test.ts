@@ -1,13 +1,11 @@
-import path from "node:path";
-import type { BrowserContext, CDPSession, Page } from "playwright-core";
+import type { BrowserContext, CDPSession } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import type { CdpProtocolSend } from "./cdp-ax.js";
 import { snapshotRoleViaCdpSession } from "./cdp-role-snapshot.js";
-import { snapshotRoleViaCdp } from "./cdp.js";
-import { getPlaywrightCore } from "./playwright-core.runtime.js";
+import { snapshotAria, snapshotRoleViaCdp } from "./cdp.js";
+import { withChromiumPage } from "./pw-chromium.test-support.js";
 import {
-  closePlaywrightBrowserConnection,
   getDocumentIdentitiesViaPlaywright,
   getPageForTargetId,
   refLocator,
@@ -20,41 +18,13 @@ import {
   snapshotRoleViaPlaywright,
   storeSnapshotRefsViaPlaywright,
 } from "./pw-tools-core.snapshot.js";
-import { getFreePort } from "./test-port.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const controlsHtml =
   "<style>button{min-width:30px;min-height:25px}</style><main></main><output></output>";
 
-async function withSnapshotPage(
-  html: string,
-  run: (fixture: {
-    page: Page;
-    context: BrowserContext;
-    target: { cdpUrl: string; targetId: string };
-  }) => Promise<void>,
-) {
-  const port = await getFreePort();
-  const cdpUrl = `http://127.0.0.1:${port}`;
-  const context = await getPlaywrightCore().chromium.launchPersistentContext(
-    path.join(tempDirs.make("openclaw-role-snapshot-"), "profile"),
-    {
-      headless: true,
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-      args: [`--remote-debugging-port=${port}`],
-    },
-  );
-  try {
-    const page = context.pages()[0] ?? (await context.newPage());
-    await page.setContent(html);
-    const session = await context.newCDPSession(page);
-    const { targetInfo } = await session.send("Target.getTargetInfo");
-    await session.detach();
-    await run({ page, context, target: { cdpUrl, targetId: targetInfo.targetId } });
-  } finally {
-    await closePlaywrightBrowserConnection({ cdpUrl });
-    await context.close();
-  }
+function withSnapshotPage(html: string, run: Parameters<typeof withChromiumPage>[2]) {
+  return withChromiumPage(tempDirs.make("openclaw-role-snapshot-"), html, run);
 }
 
 function appendControls(controls: { id: string; name: string; native?: boolean }[]) {
@@ -357,6 +327,45 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
           for (const [index, node] of rawButtons.entries()) {
             await refLocator(page, node.ref).click({ timeout: 1_000 });
             expect(await page.locator("output").textContent()).toBe(rawControls[index]!.id);
+          }
+        },
+      );
+    }, 30_000);
+
+    it("masks credential and payment field values in every snapshot format", async () => {
+      await withSnapshotPage(
+        `<form>
+          <input aria-label="Email" value="visible@example.test">
+          <input aria-label="Password" type="password" placeholder="Your password">
+          <input aria-label="Code" autocomplete="one-time-code" value="SECRET-OTP-123">
+          <input aria-label="Card" autocomplete="billing cc-number" value="SECRET-CARD-4242">
+        </form>`,
+        async ({ page, target }) => {
+          // Script fill leaves the same DOM state as browser autofill.
+          await page.getByLabel("Password").fill("SECRET-PASSWORD-xyz");
+          const targets = (await fetch(`${target.cdpUrl}/json/list`).then((res) =>
+            res.json(),
+          )) as Array<{ id?: string; webSocketDebuggerUrl?: string }>;
+          const wsUrl = targets.find(
+            (entry) => entry.id === target.targetId,
+          )!.webSocketDebuggerUrl!;
+          const snapshots = {
+            aiFull: (await snapshotRoleViaPlaywright({ ...target, refsMode: "aria" })).snapshot,
+            aiInteractive: (
+              await snapshotRoleViaPlaywright({
+                ...target,
+                refsMode: "aria",
+                options: { interactive: true },
+              })
+            ).snapshot,
+            playwrightRole: (await snapshotRoleViaPlaywright(target)).snapshot,
+            cdpRole: (await snapshotRoleViaCdp({ wsUrl })).snapshot,
+            playwrightAria: JSON.stringify(await snapshotAriaViaPlaywright(target)),
+            cdpAria: JSON.stringify(await snapshotAria({ wsUrl })),
+          };
+          for (const [format, snapshot] of Object.entries(snapshots)) {
+            expect(snapshot, format).not.toMatch(/SECRET-/);
+            expect(snapshot, format).toContain("visible@example.test");
           }
         },
       );

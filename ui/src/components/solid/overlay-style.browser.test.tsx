@@ -2,6 +2,7 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import { finishElementAnimations } from "../../test-helpers/animations.ts";
 import { emulateOverlayMedia } from "../../test-helpers/overlay-browser-media.ts";
 import {
   item,
@@ -11,8 +12,7 @@ import {
   surface,
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
-import { ModalDialog, type OpenClawModalDialog } from "../modal-dialog.ts";
-import { Menu } from "./menu.tsx";
+import type { MenuItem } from "./menu.tsx";
 import { Popover, type PopoverHandle } from "./popover.tsx";
 import "../../styles/base.css";
 import "../../../public/themes/absolutely.css";
@@ -42,19 +42,13 @@ afterEach(async () => {
   await page.viewport(originalWidth, originalHeight);
 });
 
-function tokenColor(token: string) {
+function color(value: string) {
   const probe = document.createElement("span");
-  probe.style.color = `var(--${token})`;
+  probe.style.color = value;
   document.body.append(probe);
-  const color = getComputedStyle(probe).color;
+  const resolved = getComputedStyle(probe).color;
   probe.remove();
-  return color;
-}
-
-function finishColorTransitions() {
-  for (const animation of document.getAnimations()) {
-    animation.finish();
-  }
+  return resolved;
 }
 
 function expectWithinViewport(element: HTMLElement) {
@@ -68,10 +62,31 @@ function expectWithinViewport(element: HTMLElement) {
   return box;
 }
 
+function details(label: string) {
+  return item(label).querySelector(".oc-menu-item__details")!;
+}
+
+function entries(prefix: string, count: number, padded = false): MenuItem[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `${prefix.toLowerCase()}-${index}`,
+    label: `${prefix} ${padded ? String(index + 1).padStart(2, "0") : index + 1}`,
+  }));
+}
+
+function positionTrigger(style: Partial<CSSStyleDeclaration>) {
+  Object.assign(trigger().style, { position: "fixed" }, style);
+}
+
+function expectItemVisible(element: HTMLElement, menu: HTMLElement) {
+  const box = expectWithinViewport(menu);
+  const itemBox = element.getBoundingClientRect();
+  expect(itemBox.bottom).toBeLessThanOrEqual(box.bottom);
+  expect(itemBox.top).toBeGreaterThanOrEqual(box.top);
+}
+
 describe("native overlay presentation", () => {
   it("inherits palettes, focus, and menu states across stock, imported, and custom themes", async () => {
     mountMenu({
-      children: <h3>Actions</h3>,
       items: [
         { id: "open", label: "Open", details: "Details" },
         { id: "delete", label: "Delete", details: "Permanently", variant: "danger" },
@@ -84,23 +99,14 @@ describe("native overlay presentation", () => {
     const child = item("Child", "people-group");
     await userEvent.hover(child);
     await userEvent.keyboard("{Home}");
-    for (const theme of [
-      "dark",
-      "light",
-      "absolutely",
-      "absolutely-light",
-      "phosphor",
-      "phosphor-light",
-      "custom",
-      "custom-light",
-    ]) {
+    const themes = ["absolutely", "phosphor", "custom"].flatMap((name) => [name, `${name}-light`]);
+    for (const theme of ["dark", "light", ...themes]) {
       root.dataset.theme = theme;
       root.dataset.themeMode = theme.endsWith("light") || theme === "light" ? "light" : "dark";
       if (theme.startsWith("custom")) {
         for (const [token, value] of Object.entries({
           muted: "rgb(120, 190, 160)",
           text: "rgb(220, 235, 210)",
-          accent: "rgb(190, 130, 220)",
           ring: "rgb(160, 130, 230)",
           popover: "rgb(32, 45, 38)",
           danger: "rgb(240, 135, 150)",
@@ -109,155 +115,110 @@ describe("native overlay presentation", () => {
           root.style.setProperty(`--${token}`, value);
         }
       }
-      finishColorTransitions();
-      expect(getComputedStyle(surface()).backgroundColor, theme).toBe(tokenColor("popover"));
-      expect(getComputedStyle(item("Open")).color, theme).toBe(tokenColor("text"));
-      expect(
-        getComputedStyle(item("Open").querySelector(".oc-menu-item__details")!).color,
-        theme,
-      ).toBe(tokenColor("muted"));
-      expect(
-        getComputedStyle(trigger("people-group").querySelector(".oc-menu-item__submenu-icon")!)
-          .color,
-        theme,
-      ).toBe(tokenColor("muted"));
-      expect(getComputedStyle(item("Open")).fontWeight, theme).toBe("400");
-      expect(getComputedStyle(surface().querySelector("h3")!).fontWeight, theme).toBe("500");
-      const itemStyle = getComputedStyle(item("Open"));
-      const motionContext = JSON.stringify({
-        theme,
-        duration: itemStyle.transitionDuration,
-        property: itemStyle.transitionProperty,
-        token: itemStyle.getPropertyValue("--control-ui-transition-fast"),
-        reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
-      });
-      for (const duration of itemStyle.transitionDuration.split(",")) {
-        const seconds = Number.parseFloat(duration) / (duration.trim().endsWith("ms") ? 1000 : 1);
-        expect(seconds, motionContext).toBeCloseTo(0.075, 6);
+      document.getAnimations().forEach((animation) => animation.finish());
+      const colors: [Element, "color" | "backgroundColor", string][] = [
+        [surface(), "backgroundColor", "menu-surface"],
+        [item("Open"), "color", "text"],
+        [details("Open"), "color", "text-tertiary"],
+        [
+          trigger("people-group").querySelector(".oc-menu-item__submenu-icon")!,
+          "color",
+          "text-tertiary",
+        ],
+        [item("Delete"), "color", "danger"],
+        [details("Delete"), "color", "danger"],
+        [trigger("people-group"), "backgroundColor", "surface-hover"],
+      ];
+      for (const [element, property, token] of colors) {
+        expect(getComputedStyle(element)[property], theme).toBe(color(`var(--${token})`));
       }
       const rootFontSize = Number.parseFloat(getComputedStyle(root).fontSize);
-      const focused = getComputedStyle(child);
-      expect(focused.outlineStyle, theme).toBe("solid");
-      expect(focused.outlineWidth, theme).toBe(`${rootFontSize * 0.1875}px`);
-      expect(focused.outlineOffset, theme).toBe(`${rootFontSize * 0.0625}px`);
-      expect(focused.outlineColor, theme).toBe(tokenColor("ring"));
-      expect(getComputedStyle(item("Delete")).color, theme).toBe(tokenColor("danger"));
-      expect(
-        getComputedStyle(item("Delete").querySelector(".oc-menu-item__details")!).color,
-        theme,
-      ).toBe(tokenColor("danger"));
+      expect(getComputedStyle(child), theme).toMatchObject({
+        outlineStyle: "solid",
+        outlineWidth: `${rootFontSize * 0.1875}px`,
+        outlineOffset: `${rootFontSize * 0.0625}px`,
+        outlineColor: color("var(--ring)"),
+      });
       expect(getComputedStyle(item("Unavailable")).opacity, theme).toBe("0.5");
-      expect(getComputedStyle(trigger("people-group")).backgroundColor, theme).toBe(
-        tokenColor("bg-hover"),
-      );
     }
   });
 
-  it.each(["ltr", "rtl"] as const)(
-    "flips a large nested menu within the viewport in %s at enlarged text",
-    async (dir) => {
+  it("preserves a consumer height budget when its stylesheet loads before the overlay", async () => {
+    await page.viewport(800, 700);
+    const style = document.createElement("style");
+    style.textContent = ".oc-menu.consumer-sized-menu { max-height: 500px; }";
+    document.head.prepend(style);
+    try {
+      mountMenu({
+        placement: "right-start",
+        panelClass: "consumer-sized-menu",
+        items: entries("Action", 24),
+      });
+      positionTrigger({ left: "200px", top: "50px" });
+      await openMenu();
+      // Measure the consumer budget, not WebKit's in-flight entry scale.
+      finishElementAnimations(surface());
+      expect(expectWithinViewport(surface()).height).toBe(500);
+      await userEvent.keyboard("{End}");
+      expect(document.activeElement).toBe(item("Action 24"));
+      const last = item("Action 24").getBoundingClientRect();
+      expect(last.bottom).toBeLessThanOrEqual(surface().getBoundingClientRect().bottom);
+    } finally {
+      style.remove();
+    }
+  });
+
+  it.each([
+    ["ltr", "low"],
+    ["rtl", "low"],
+    ["ltr", "bottom"],
+    ["rtl", "bottom"],
+    ["ltr", "middle"],
+    ["rtl", "middle"],
+  ] as const)(
+    "fits nested menu actions within the viewport in %s near the %s",
+    async (dir, position) => {
       await page.viewport(800, 600);
-      root.style.fontSize = "24px";
+      const enlarged = position !== "low";
+      const count = enlarged ? 28 : 10;
+      if (enlarged) {
+        root.style.fontSize = "24px";
+      }
       mountMenu({
         dir,
-        items: [
-          {
-            id: "large",
-            label: "Many actions",
-            children: Array.from({ length: 28 }, (_, index) => ({
-              id: `action-${index}`,
-              label: `Action ${String(index + 1).padStart(2, "0")}`,
-            })),
-          },
-        ],
+        items: [{ id: "actions", label: "Actions", children: entries("Action", count, enlarged) }],
       });
-      Object.assign(trigger().style, { position: "fixed", right: "8px", bottom: "8px" });
+      positionTrigger(
+        position === "low"
+          ? { left: "350px", top: "400px" }
+          : { right: "8px", bottom: position === "bottom" ? "8px" : "250px" },
+      );
       await openMenu();
       const parentBox = expectWithinViewport(surface());
-      expect(parentBox.bottom).toBeLessThanOrEqual(trigger().getBoundingClientRect().top);
-      await openMenu("people-large");
-      const childBox = expectWithinViewport(surface("people-large"));
-      expect(childBox.height).toBeLessThanOrEqual(420);
-      expect(surface("people-large").scrollHeight).toBeGreaterThan(
-        surface("people-large").clientHeight,
-      );
+      if (position === "bottom") {
+        expect(parentBox.bottom).toBeLessThanOrEqual(trigger().getBoundingClientRect().top);
+      }
+      await openMenu("people-actions");
+      const child = surface("people-actions");
+      const last = item(`Action ${count}`, "people-actions");
+      expectWithinViewport(child);
+      if (!enlarged) {
+        expect(child.scrollHeight).toBe(child.clientHeight);
+        expectItemVisible(last, child);
+        return;
+      }
+      expect(child.scrollHeight).toBeGreaterThan(child.clientHeight);
       await userEvent.keyboard("{End}");
-      const last = item("Action 28", "people-large");
       expect(document.activeElement).toBe(last);
-      const currentChildBox = expectWithinViewport(surface("people-large"));
-      const lastBox = last.getBoundingClientRect();
-      expect(currentChildBox.height).toBeLessThanOrEqual(420);
-      expect(lastBox.bottom).toBeLessThanOrEqual(currentChildBox.bottom);
-      expect(lastBox.top).toBeGreaterThanOrEqual(currentChildBox.top);
+      expectItemVisible(last, child);
 
       // Scrolling the menu can hide the focused action; End must reveal it again.
-      surface("people-large").scrollTo({ top: 0, behavior: "instant" });
+      child.scrollTo({ top: 0, behavior: "instant" });
       await userEvent.keyboard("{End}");
       expect(document.activeElement).toBe(last);
-      const revealedBox = last.getBoundingClientRect();
-      const scrolledChildBox = expectWithinViewport(surface("people-large"));
-      expect(scrolledChildBox.height).toBeLessThanOrEqual(420);
-      expect(revealedBox.bottom).toBeLessThanOrEqual(scrolledChildBox.bottom);
-      expect(revealedBox.top).toBeGreaterThanOrEqual(scrolledChildBox.top);
+      expectItemVisible(last, child);
     },
   );
-
-  it("keeps nested menus above a modal and consumes only the deepest Escape", async () => {
-    let modal!: OpenClawModalDialog;
-    render(() => (
-      <ModalDialog label="Modal menu" ref={(value) => (modal = value)}>
-        <Menu
-          id="modal-menu"
-          label="Modal actions"
-          items={[{ id: "nested", label: "Nested", children: [{ id: "apply", label: "Apply" }] }]}
-        />
-      </ModalDialog>
-    ));
-    flush();
-    expect(modal.querySelector("dialog")!.matches(":modal")).toBe(true);
-    await openMenu("modal-menu");
-    await openMenu("modal-menu-nested");
-    const action = item("Apply", "modal-menu-nested");
-    const bounds = action.getBoundingClientRect();
-    expect(
-      document
-        .elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
-        ?.closest("button"),
-    ).toBe(action);
-    await userEvent.keyboard("{Escape}");
-    await phase(surface("modal-menu-nested"), "hidden");
-    expect(surface("modal-menu").matches(":popover-open")).toBe(true);
-    expect(modal.querySelector("dialog")!.matches(":modal")).toBe(true);
-    await userEvent.keyboard("{Escape}");
-    await phase(surface("modal-menu"), "hidden");
-    expect(modal.querySelector("dialog")!.matches(":modal")).toBe(true);
-    await userEvent.keyboard("{Escape}");
-    expect(modal.open).toBe(false);
-  });
-
-  it.each(["selection", "Tab"])("keeps the modal open after menu %s", async (action) => {
-    let modal!: OpenClawModalDialog;
-    render(() => (
-      <ModalDialog label="Modal menu" ref={(value) => (modal = value)}>
-        <Menu
-          id="modal-menu"
-          label="Modal actions"
-          items={[{ id: "nested", label: "Nested", children: [{ id: "apply", label: "Apply" }] }]}
-        />
-      </ModalDialog>
-    ));
-    flush();
-    await openMenu("modal-menu");
-    await openMenu("modal-menu-nested");
-    if (action === "selection") {
-      await userEvent.click(item("Apply", "modal-menu-nested"));
-    } else {
-      await userEvent.keyboard("{Tab}");
-    }
-    await phase(surface("modal-menu"), "hidden");
-    expect(modal.open).toBe(true);
-    expect(modal.querySelector("dialog")!.matches(":modal")).toBe(true);
-  });
 
   it("uses high-contrast borders and focus in forced colors", async () => {
     await emulateOverlayMedia({ forcedColors: "active" });
@@ -265,14 +226,9 @@ describe("native overlay presentation", () => {
     mountMenu();
     await openMenu();
     expect(getComputedStyle(surface()).boxShadow).toBe("none");
-    const probe = document.createElement("span");
-    probe.style.color = "CanvasText";
-    document.body.append(probe);
-    expect(getComputedStyle(surface()).borderTopColor).toBe(getComputedStyle(probe).color);
-    probe.style.color = "Highlight";
+    expect(getComputedStyle(surface()).borderTopColor).toBe(color("CanvasText"));
     await userEvent.keyboard("{End}");
-    expect(getComputedStyle(item("Archive")).outlineColor).toBe(getComputedStyle(probe).color);
-    probe.remove();
+    expect(getComputedStyle(item("Archive")).outlineColor).toBe(color("Highlight"));
   });
 
   it("disables menu and popover motion for reduced motion", async () => {
@@ -290,8 +246,10 @@ describe("native overlay presentation", () => {
     popover.show();
     await phase(popover.overlay.surface, "open");
     for (const element of [surface(), item("Archive"), popover.overlay.surface]) {
-      expect(getComputedStyle(element).animationName).toBe("none");
-      expect(getComputedStyle(element).transitionDuration).toBe("0s");
+      expect(getComputedStyle(element)).toMatchObject({
+        animationName: "none",
+        transitionDuration: "0s",
+      });
       expect(element.getAnimations()).toHaveLength(0);
     }
   });

@@ -9,6 +9,7 @@ import {
 } from "../agents/bash-process-observation.js";
 import {
   getActiveBackgroundExecSessionCount,
+  onBackgroundProcessesChanged,
   waitForExecScope,
 } from "../agents/bash-process-registry.js";
 import { toErrorObject } from "../infra/errors.js";
@@ -19,6 +20,7 @@ import {
   takeNativeInferenceStartup,
   type NativeInferenceStartup,
 } from "./native-inference-startup.js";
+import { createWorkerLocalMcpClient } from "./worker-local-mcp.js";
 import {
   parseWorkerProcessRequest,
   type WorkerProcessMessage,
@@ -60,11 +62,19 @@ async function runManagedWorkerCommand(
     | { environmentId: string; sessionId: string; ownerEpoch: number; agentId: string }
     | undefined;
   let lastTurnId: string | undefined;
-  let active: { turnId: string; controller: AbortController } | undefined;
+  let active:
+    | {
+        turnId: string;
+        controller: AbortController;
+        mcp: ReturnType<typeof createWorkerLocalMcpClient>;
+      }
+    | undefined;
   let running: Promise<void> | undefined;
   let idleCleanup: Promise<void> | undefined;
   let draining: Promise<void> | undefined;
   let closed = false;
+  let processChanges = false;
+  let unsubscribeProcesses = () => {};
   const framer = createBoundedLineFramer(
     WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
     "managed worker request exceeds the protocol payload limit",
@@ -107,6 +117,19 @@ async function runManagedWorkerCommand(
             }
           });
         });
+      // The command owns retained processes after the per-turn Gateway connection closes.
+      unsubscribeProcesses = onBackgroundProcessesChanged((target) => {
+        const owner = processBinding;
+        if (
+          !closed &&
+          processChanges &&
+          owner &&
+          target.sessionKey === "worker:" + owner.sessionId &&
+          (target.agentId === undefined || target.agentId === owner.agentId)
+        ) {
+          void write({ type: "processes-changed" }).catch(finish);
+        }
+      });
       const onLine = (line: Buffer) => {
         let value: unknown;
         try {
@@ -115,6 +138,12 @@ async function runManagedWorkerCommand(
           throw new Error("managed worker request is not valid JSON");
         }
         const request = parseWorkerProcessRequest(value);
+        if (request.type === "mcp-result") {
+          if (request.turnId === active?.turnId) {
+            active.mcp.receive(request);
+          }
+          return;
+        }
         if (request.type === "process") {
           const owner = processBinding;
           const matches =
@@ -154,7 +183,11 @@ async function runManagedWorkerCommand(
         // The node turn journal owns replay history; retain only the immediate
         // transport duplicate here, then require fresh Gateway admission.
         lastTurnId = request.turnId;
-        const current = { turnId: request.turnId, controller: new AbortController() };
+        const current = {
+          turnId: request.turnId,
+          controller: new AbortController(),
+          mcp: createWorkerLocalMcpClient(request.turnId, write),
+        };
         active = current;
         running = (async (descriptor: WorkerLaunchDescriptor, idleRetention?: true) => {
           // Device-folder admission binds a canonical path. Do not independently
@@ -199,6 +232,7 @@ async function runManagedWorkerCommand(
             ownerEpoch: descriptor.admission.ownerEpoch,
             agentId: descriptor.assignment.agentId,
           };
+          processChanges = request.processChanges === true;
           if (closed) {
             return;
           }
@@ -218,6 +252,7 @@ async function runManagedWorkerCommand(
             },
             {
               environmentStateDir: environment.stateDir,
+              localMcp: current.mcp.call,
               ...(assertWorkspaceCurrent ? { assertWorkspaceCurrent } : {}),
               nativeInference: options.nativeInference,
               signal: current.controller.signal,
@@ -237,8 +272,9 @@ async function runManagedWorkerCommand(
             await disposeWorkerGitHubEnvironment(stateDir, descriptor.assignment.turnId);
           };
           const canRetain =
-            result.status === "completed" ||
-            (result.status === "failed" && result.reason === "turn-failed");
+            !current.controller.signal.aborted &&
+            (result.status === "completed" ||
+              (result.status === "failed" && result.reason === "turn-failed"));
           let retention: WorkerProcessResult["retention"] =
             canRetain && getActiveBackgroundExecSessionCount() > 0
               ? "background"
@@ -283,7 +319,9 @@ async function runManagedWorkerCommand(
             active = undefined;
             finish();
           }
-        })(request.descriptor, request.idleRetention).catch(finish);
+        })(request.descriptor, request.idleRetention)
+          .catch(finish)
+          .finally(current.mcp.close);
       };
       const onData = (raw: unknown) => {
         if (closed) {
@@ -324,6 +362,7 @@ async function runManagedWorkerCommand(
       }
     });
   } finally {
+    unsubscribeProcesses();
     framer.clear();
     try {
       await running;

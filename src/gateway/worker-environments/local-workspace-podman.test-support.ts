@@ -101,7 +101,7 @@ export async function proveRequiredPodmanWorkspace(
           scope: "session",
           workspaceAccess: "none",
           prune: { idleHours: 0, maxAgeDays: 0 },
-          docker: { image: "localhost/openclaw-sandbox:bookworm-slim", network: "none" },
+          docker: { image: "localhost/openclaw-sandbox:trixie-slim", network: "none" },
         },
       },
     },

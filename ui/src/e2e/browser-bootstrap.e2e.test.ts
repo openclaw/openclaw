@@ -1,7 +1,7 @@
-import path from "node:path";
 import type { Route } from "playwright";
 import { expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -11,41 +11,23 @@ const suite = createControlUiE2eSuite({ name: "Control UI browser bootstrap" });
 
 suite.define(() => {
   it("recovers a bare HTTPS deep link and reuses the paired browser credential on reload", async () => {
-    const artifactDir = suite.artifactDir;
-    const startedAt = performance.now();
-    const elapsedMs = () => Math.round(performance.now() - startedAt);
-    let cleanupStarted = false;
-    const assetRequests: Array<{
-      path: string;
-      startedMs: number;
-      response?: { elapsedMs: number; status: number };
-      fulfilledMs?: number;
-      failure?: { elapsedMs: number; error: string; cleanupStarted: boolean };
-    }> = [];
-    let releaseHandoff!: () => void;
-    const handoffReady = new Promise<void>((resolve) => {
-      releaseHandoff = resolve;
-    });
+    const handoff = createDeferred();
     const pendingRoutes = new Set<Promise<void>>();
     const trackRoute = (handle: (route: Route) => Promise<void>) => async (route: Route) => {
-      let finish!: () => void;
-      const pending = new Promise<void>((resolve) => {
-        finish = resolve;
-      });
-      pendingRoutes.add(pending);
+      const pending = createDeferred();
+      pendingRoutes.add(pending.promise);
       try {
         await handle(route);
       } finally {
-        pendingRoutes.delete(pending);
-        finish();
+        pendingRoutes.delete(pending.promise);
+        pending.resolve();
       }
     };
-    const video = await suite.withPage(
+    await suite.withPage(
       {
         viewport: { width: 1440, height: 1000 },
         locale: "en-US",
         serviceWorkers: "block",
-        recordVideo: { dir: artifactDir, size: { width: 1440, height: 1000 } },
       },
       async ({ page }) => {
         const origin = "https://gateway.example";
@@ -54,6 +36,12 @@ suite.define(() => {
         const bootstrapToken = "synthetic-owner-bootstrap";
         const deviceToken = "synthetic-paired-browser";
         let helperCalls = 0;
+        const connectedText = "Your browser is connected. This is synthetic proof data.";
+        const expectConnected = async () => {
+          await waitForControlUiGatewayReady(page);
+          await page.getByText(connectedText, { exact: true }).waitFor();
+          expect(page.url()).toBe(deepLink);
+        };
 
         // Exercise secure-origin browser behavior while serving only this test's local bundle.
         await page.route(
@@ -64,28 +52,8 @@ suite.define(() => {
               `${requested.pathname}${requested.search}`,
               suite.server.baseUrl,
             );
-            const request: (typeof assetRequests)[number] = {
-              path: requested.pathname,
-              startedMs: elapsedMs(),
-            };
-            assetRequests.push(request);
-            try {
-              const response = await route.fetch({ url: upstream.href, maxRetries: 1 });
-              request.response = { elapsedMs: elapsedMs(), status: response.status() };
-              await route.fulfill({ response });
-              request.fulfilledMs = elapsedMs();
-            } catch (error) {
-              request.failure = {
-                elapsedMs: elapsedMs(),
-                error:
-                  error instanceof Error
-                    ? error.message.replace(/\n[\s\S]*/, "")
-                    : "Non-Error rejection",
-                cleanupStarted,
-              };
-              console.error("[browser-bootstrap] asset request failed", JSON.stringify(request));
-              throw error;
-            }
+            const response = await route.fetch({ url: upstream.href, maxRetries: 1 });
+            await route.fulfill({ response });
           }),
         );
         const gateway = await installMockGateway(page, {
@@ -95,12 +63,7 @@ suite.define(() => {
           historyMessages: [
             {
               role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: "Your browser is connected. This is synthetic proof data.",
-                },
-              ],
+              content: [{ type: "text", text: connectedText }],
             },
           ],
         });
@@ -110,7 +73,7 @@ suite.define(() => {
             helperCalls += 1;
             expect(route.request().method()).toBe("GET");
             expect(route.request().headers().authorization).toBeUndefined();
-            await handoffReady;
+            await handoff.promise;
             await route.fulfill({
               status: 200,
               contentType: "application/json",
@@ -120,67 +83,45 @@ suite.define(() => {
           }),
         );
 
-        try {
-          await page.goto(deepLink);
-          const initialConnect = await gateway.waitForRequest("connect");
-          expect(initialConnect.params).not.toHaveProperty("auth.bootstrapToken");
-          expect(initialConnect.params).not.toHaveProperty("auth.deviceToken");
-          await gateway.rejectDeferred("connect", {
-            code: "INVALID_REQUEST",
-            message: "The Gateway needs a matching token or password.",
-            details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
-          });
-          await page.getByText("This Gateway expects its token", { exact: true }).waitFor();
-          await expect.poll(() => helperCalls).toBe(1);
-          await page.screenshot({ path: path.join(artifactDir, "1-auth-required.png") });
+        await page.goto(deepLink);
+        const initialConnect = await gateway.waitForRequest("connect");
+        expect(initialConnect.params).not.toHaveProperty("auth.bootstrapToken");
+        expect(initialConnect.params).not.toHaveProperty("auth.deviceToken");
+        await gateway.rejectDeferred("connect", {
+          code: "INVALID_REQUEST",
+          message: "The Gateway needs a matching token or password.",
+          details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+        });
+        await page.getByText("This Gateway expects its token", { exact: true }).waitFor();
+        await expect.poll(() => helperCalls).toBe(1);
 
-          await gateway.deferNext("connect");
-          releaseHandoff();
-          const recoveredConnect = await gateway.waitForRequest("connect", { after: 1 });
-          expect(recoveredConnect.params).toMatchObject({
-            auth: { bootstrapToken },
-            device: { id: expect.any(String), signature: expect.any(String) },
-          });
-          await gateway.resolveDeferred("connect");
-          await waitForControlUiGatewayReady(page);
-          await page
-            .getByText("Your browser is connected. This is synthetic proof data.", { exact: true })
-            .waitFor();
-          expect(page.url()).toBe(deepLink);
-          await page.screenshot({ path: path.join(artifactDir, "2-connected.png") });
+        await gateway.deferNext("connect");
+        handoff.resolve();
+        const recoveredConnect = await gateway.waitForRequest("connect", { after: 1 });
+        expect(recoveredConnect.params).toMatchObject({
+          auth: { bootstrapToken },
+          device: { id: expect.any(String), signature: expect.any(String) },
+        });
+        await gateway.resolveDeferred("connect");
+        await expectConnected();
 
-          await page.reload();
-          const reloadConnect = await gateway.waitForRequest("connect");
-          expect(reloadConnect.params).toMatchObject({ auth: { deviceToken } });
-          expect(reloadConnect.params).not.toHaveProperty("auth.bootstrapToken");
-          await gateway.resolveDeferred("connect");
-          await waitForControlUiGatewayReady(page);
-          await page
-            .getByText("Your browser is connected. This is synthetic proof data.", { exact: true })
-            .waitFor();
-          expect(helperCalls).toBe(1);
-          expect(page.url()).toBe(deepLink);
-          await page.screenshot({ path: path.join(artifactDir, "3-reloaded.png") });
-          return page.video();
-        } catch (error) {
-          console.error(
-            "[browser-bootstrap] asset requests before cleanup",
-            JSON.stringify({ elapsedMs: elapsedMs(), cleanupStarted, requests: assetRequests }),
-          );
-          throw error;
-        }
+        await page.reload();
+        const reloadConnect = await gateway.waitForRequest("connect");
+        expect(reloadConnect.params).toMatchObject({ auth: { deviceToken } });
+        expect(reloadConnect.params).not.toHaveProperty("auth.bootstrapToken");
+        await gateway.resolveDeferred("connect");
+        await expectConnected();
+        expect(helperCalls).toBe(1);
       },
       async ({ page }) => {
-        cleanupStarted = true;
         // Stop page requests, then drain handlers while the context still owns
         // fetched bodies. Unrouting during the drain can auto-continue active routes.
-        releaseHandoff();
+        handoff.resolve();
         await runQaGatewayFixture(
           () => page.close(),
           () => Promise.all(pendingRoutes),
         );
       },
     );
-    await video?.saveAs(path.join(artifactDir, "browser-bootstrap.webm"));
   });
 });

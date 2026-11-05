@@ -1,4 +1,6 @@
 import type { WorkerProvider } from "../../plugins/types.js";
+import { assertWorkerResourceReceiptMatch } from "../../plugins/worker-resource-receipt.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import {
   isWorkerNodeCarrierBindingCurrent,
   type WorkerNodeCarrierBinding,
@@ -102,18 +104,51 @@ export function createDedicatedNodeLeaseAttestations(
       lease: Parameters<WorkerProvider["inspect"]>[0],
       signal?: AbortSignal,
     ) {
+      // Observations can stop at drain; provider mutations retain their settlement owner.
+      signal?.throwIfAborted();
+      getGatewayRestartDrainSignal().throwIfAborted();
+      const timeout = new AbortController();
+      const timer = setTimeout(
+        () => timeout.abort(new Error("Worker provider inspection exceeded its 15s budget")),
+        15_000,
+      );
+      timer.unref();
+      const inspectionSignal = AbortSignal.any([
+        timeout.signal,
+        getGatewayRestartDrainSignal(),
+        ...(signal ? [signal] : []),
+      ]);
       const inspection = await options
-        .callProvider(record.environmentId, () => provider.inspect({ ...lease, signal }))
-        .then((result) => ({
-          ...requireWorkerLeaseStatus(result),
-          explicitlyDedicated: result.status === "active" && result.sharedHost === false,
-        }))
+        .callProvider(
+          record.environmentId,
+          "inspect",
+          () => {
+            if (record.resourceReceipt && !provider.supportsResourceReceipts) {
+              throw new Error("Worker provider cannot honor the recorded resource receipt");
+            }
+            return provider.inspect({ ...lease, signal: inspectionSignal });
+          },
+          undefined,
+          inspectionSignal,
+        )
+        .then((result) => {
+          const status = requireWorkerLeaseStatus(result);
+          if (record.resourceReceipt) {
+            assertWorkerResourceReceiptMatch(record.resourceReceipt, status.resourceReceipt);
+          }
+          return {
+            ...status,
+            explicitlyDedicated: result.status === "active" && result.sharedHost === false,
+          };
+        })
         .catch(async (error: unknown) => {
           signal?.throwIfAborted();
+          getGatewayRestartDrainSignal().throwIfAborted();
           await options.saveError(record, error);
           return undefined;
-        });
-      signal?.throwIfAborted();
+        })
+        .finally(() => clearTimeout(timer));
+      inspectionSignal.throwIfAborted();
       if (inspection) {
         assertCurrent(record);
         // A successful observation withdraws access now, even if persistence later

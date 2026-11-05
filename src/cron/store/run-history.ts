@@ -38,16 +38,8 @@ export async function recordCronRun(
   source?: CronRunHistorySource,
 ): Promise<void> {
   const context = source?.context ?? captureOpenClawStateWorkerContext();
-  const assertCurrent = () => {
-    context.admission.assertCurrent();
-  };
-  await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => {
-      // Caller retirement after dispatch may race history; committed outcomes remain useful.
-      assertCurrent();
-      return scope.execute({ type: "cron.recordRun", input });
-    },
-    { assertCurrent },
+  // Caller retirement after dispatch may race history; committed outcomes remain useful.
+  await runOpenClawStateWorkerOperation(context, (scope) =>
+    scope.execute({ type: "cron.recordRun", input }),
   );
 }

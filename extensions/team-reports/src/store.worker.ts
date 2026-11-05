@@ -1,18 +1,19 @@
 import {
   jsonPathValue,
-  runEngineStoreReadSnapshot,
   runEngineWorkerWrite,
   withEngineStoreAdmission,
   type DatabaseEngineInput,
   type EngineConnection,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
+  assertTransactionUsable,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   requestSqliteWorkerOperationAdmission,
   runSqliteImmediateTransactionSync,
+  type SynchronousSqliteCallback,
   type SqliteWorkerCommand,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { aggregateDay, aggregateDays, itemKey } from "./aggregate.js";
@@ -115,6 +116,17 @@ class TeamReportsDatabase {
     );
   }
 
+  assertSettled(): void {
+    // Retire a lost native connection without clearing collection scratch between commands.
+    assertTransactionUsable(this.db);
+    if (!this.db.isOpen) {
+      throw new Error("Team Reports database is closed");
+    }
+    if (this.db.isTransaction) {
+      throw new Error("Team Reports database left an unsettled transaction");
+    }
+  }
+
   resetActivity(): void {
     executeSqliteQuerySync(this.db, this.query.deleteFrom("team_reports_activity"));
   }
@@ -211,13 +223,10 @@ class TeamReportsDatabase {
   }
 
   aggregatePeriod(input: TeamReportsOperations["aggregatePeriod"]["input"]): ReportDocument {
-    // Stream accepted daily reports from one snapshot without retaining their full payloads.
-    return runEngineStoreReadSnapshot(this.db, () =>
-      aggregateDays({
-        ...input,
-        days: this.dayReports(input.period.sinceMs, input.period.untilMs),
-      }),
-    );
+    return aggregateDays({
+      ...input,
+      days: this.dayReports(input.period.sinceMs, input.period.untilMs),
+    });
   }
 
   upsertPeriod(value: TeamReportsOperations["upsertPeriod"]["input"]): void {
@@ -336,53 +345,20 @@ class TeamReportsDatabase {
           "generated_at_ms as generatedAtMs",
         ])
         // SQLite extracts only the chart totals instead of materializing every report in JavaScript.
-        .select((eb) => [
-          jsonPathValue<number>(
-            this.db,
-            eb.ref("data_json"),
-            eb.val("$.activeMembers"),
-            "number",
-          ).as("activeMembers"),
-          jsonPathValue<number>(this.db, eb.ref("data_json"), eb.val("$.memberCount"), "number").as(
-            "memberCount",
-          ),
-          jsonPathValue<number>(
-            this.db,
-            eb.ref("data_json"),
-            eb.val("$.totals.github.total"),
-            "number",
-          ).as("githubTotal"),
-          jsonPathValue<number>(
-            this.db,
-            eb.ref("data_json"),
-            eb.val("$.totals.discord.messages"),
-            "number",
-          ).as("discordMessages"),
-          jsonPathValue<number>(
-            this.db,
-            eb.ref("data_json"),
-            eb.val("$.totals.github.commits"),
-            "number",
-          ).as("commits"),
-          jsonPathValue<number>(
-            this.db,
-            eb.ref("data_json"),
-            eb.val("$.totals.github.prsOpened"),
-            "number",
-          ).as("prsOpened"),
-          jsonPathValue<number>(
-            this.db,
-            eb.ref("data_json"),
-            eb.val("$.totals.github.prsMerged"),
-            "number",
-          ).as("prsMerged"),
-          jsonPathValue<number>(
-            this.db,
-            eb.ref("data_json"),
-            eb.val("$.totals.github.securityAdvisories"),
-            "number",
-          ).as("securityAdvisories"),
-        ])
+        .select((eb) => {
+          const numericField = <Name extends string>(path: string, name: Name) =>
+            jsonPathValue<number>(this.db, eb.ref("data_json"), eb.val(path), "number").as(name);
+          return [
+            numericField("$.activeMembers", "activeMembers"),
+            numericField("$.memberCount", "memberCount"),
+            numericField("$.totals.github.total", "githubTotal"),
+            numericField("$.totals.discord.messages", "discordMessages"),
+            numericField("$.totals.github.commits", "commits"),
+            numericField("$.totals.github.prsOpened", "prsOpened"),
+            numericField("$.totals.github.prsMerged", "prsMerged"),
+            numericField("$.totals.github.securityAdvisories", "securityAdvisories"),
+          ];
+        })
         .orderBy("since_ms", "desc")
         .orderBy("period", "asc")
     );
@@ -429,10 +405,6 @@ class TeamReportsDatabase {
         }),
       ),
     };
-  }
-
-  getDayReports(sinceMs: number, untilMs: number): ReportDocument[] {
-    return [...this.dayReports(sinceMs, untilMs)];
   }
 
   private *dayReports(sinceMs: number, untilMs: number): Generator<ReportDocument> {
@@ -594,7 +566,7 @@ class TeamReportsDatabase {
     }));
   }
 
-  withWriteTransaction<T>(operation: () => T): T {
+  withWriteTransaction<T>(operation: SynchronousSqliteCallback<T>): T {
     requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
     return runSqliteImmediateTransactionSync(this.db, operation, {
       withCommit(commit) {
@@ -642,8 +614,6 @@ export function createSqliteWorkerBackend(
         return database.latestSourceWarnings();
       case "latestPeople":
         return database.latestPeople();
-      case "getDayReports":
-        return database.getDayReports(command.input.sinceMs, command.input.untilMs);
       case "listPersonDays":
         return database.listPersonDays(command.input.login, command.input.options);
       case "listPersonDaysSince":
@@ -668,6 +638,7 @@ export function createSqliteWorkerBackend(
           )
         : execute(command);
     },
+    assertSettled: () => database.assertSettled(),
     close: () => database.close(),
   };
 }

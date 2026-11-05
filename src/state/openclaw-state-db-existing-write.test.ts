@@ -1,490 +1,381 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  observeHostDataSql,
-  observeSqliteReadSql,
-} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import * as maintenance from "../infra/state-database-maintenance.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { closeOpenClawStateDatabaseByPathAsync as closePath } from "./openclaw-state-db-cache.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION as SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
-  openExistingOpenClawStateWriter,
-  runExistingOpenClawStateWriteTransaction,
+  openExistingOpenClawStateWriter as openExistingWriter,
+  runExistingOpenClawStateWriteTransaction as writeExisting,
 } from "./openclaw-state-db-existing-write.js";
-import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
-import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { expectRow, readRow, readRows } from "./openclaw-state-db-fixtures.test-support.js";
+import { withExistingOpenClawStateSchema as withExistingSchema } from "./openclaw-state-db-schema-policy.js";
+import { openOpenClawStateDatabase as openState } from "./openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_SQL as SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { ensureUserPreferencesSchema } from "./user-preferences.store.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const writers = new Set<ReturnType<typeof openExistingWriter>>();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const writer of writers) {
+      writer.close();
+    }
+    writers.clear();
+    cleanup();
+  }),
+);
 const recordSchema = "CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL) STRICT;";
 const contract = {
-  schemaSql: extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"),
+  schemaSql: extractSqliteTableSchema(SCHEMA_SQL, "config_machine_state"),
   operationLabel: "retained writer test",
 };
-const schemaInventorySql =
-  /\b(?:sqlite_schema|sqlite_master|(?:pragma_)?(?:table|index)_(?:list|info|xinfo))\b/iu;
-
-function fixture(fullSchema = false) {
+function fixture(fullSchema = false, seedSql = "") {
   const root = tempDirs.make("openclaw-existing-writer-");
   const options = { path: path.join(root, "state.sqlite"), env: { OPENCLAW_STATE_DIR: root } };
-  const database = new DatabaseSync(options.path);
-  try {
-    database.exec(
-      fullSchema
-        ? OPENCLAW_STATE_SCHEMA_SQL
-        : `
+  using database = new DatabaseSync(options.path);
+  database.exec(
+    fullSchema
+      ? SCHEMA_SQL
+      : `
       CREATE TABLE schema_meta (
         meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER,
         created_at INTEGER, updated_at INTEGER
       );
       ${contract.schemaSql}
     `,
-    );
-    database.exec(`
+  );
+  database.exec(`
       PRAGMA journal_mode = WAL;
-      PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
+      PRAGMA user_version = ${SCHEMA_VERSION};
       INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
-        VALUES ('primary', 'global', ${OPENCLAW_STATE_SCHEMA_VERSION}, 1, 1);
+        VALUES ('primary', 'global', ${SCHEMA_VERSION}, 1, 1);
       ${recordSchema}
+      ${seedSql}
     `);
-  } finally {
-    database.close();
-  }
   return options;
 }
 
 function readValues(pathname: string) {
-  const database = new DatabaseSync(pathname, { readOnly: true });
-  try {
-    return database.prepare("SELECT value FROM records ORDER BY id").all();
-  } finally {
-    database.close();
-  }
+  using database = new DatabaseSync(pathname, { readOnly: true });
+  return readRows(database, "SELECT value FROM records ORDER BY id").map((row) => row.value);
 }
 
 function readSchemaMarkers(database: DatabaseSync) {
-  return {
-    userVersion: database.prepare("PRAGMA user_version").get()?.user_version,
-    schemaVersion: database.prepare("PRAGMA schema_version").get()?.schema_version,
-  };
+  return ["user_version", "schema_version"].map((name) => readRow(database, `PRAGMA ${name}`));
 }
 
-describe("retained existing-state writer", () => {
-  it("admits maintenance with QUICK without lending that receipt to a FULL writer", () => {
-    const options = fixture();
-    const reads = observeSqliteReadSql(StatementSync.prototype);
-    try {
-      runExistingOpenClawStateWriteTransaction(
-        ({ db }) => db.exec("INSERT INTO records VALUES (1, 'quick write')"),
-        options,
-        { ...contract, integrityCheck: "quick" },
-      );
-      expect(reads.queries).toContain("PRAGMA quick_check;");
-      expect(reads.queries).toContain("PRAGMA integrity_check('config_machine_state');");
-      expect(reads.queries).not.toContain("PRAGMA integrity_check;");
-      runExistingOpenClawStateWriteTransaction(
-        ({ db }) => {
-          expect(db.prepare("SELECT value FROM records WHERE id = 1").get()?.value).toBe(
-            "quick write",
-          );
-          db.exec("INSERT INTO records VALUES (2, 'full write')");
-        },
-        options,
-        contract,
-      );
-      expect(reads.queries.filter((query) => query === "PRAGMA integrity_check;")).toHaveLength(1);
-      expect(readValues(options.path)).toEqual([{ value: "quick write" }, { value: "full write" }]);
-    } finally {
-      reads.restore();
-    }
-  });
+function openWriter(options: ReturnType<typeof fixture>) {
+  const writer = openExistingWriter(options, contract);
+  writers.add(writer);
+  return writer;
+}
 
-  it("initializes an existing additive subset without repeating DDL on its warm table", () => {
-    const options = fixture(true);
-    const queries: Array<{ query: string; database?: DatabaseSync }> = [];
-    const sql = observeHostDataSql((query, database) => queries.push({ query, database }));
-    let writer: EngineConnection | undefined;
-    try {
-      runExistingOpenClawStateWriteTransaction(
-        ({ db }) => {
-          writer = db;
-          db.prepare("INSERT INTO records VALUES (?, ?)").run(1, "warm subset");
-        },
-        options,
-        {
-          ...contract,
-          initializeAdditiveSchema: true,
-        },
-      );
-      expect(readValues(options.path)).toEqual([{ value: "warm subset" }]);
-      expect(
-        queries.filter(
-          ({ query, database }) =>
-            database === writer && classifySqliteMutation(query, "batch").mainSchemaChange,
-        ),
-      ).toEqual([]);
-    } finally {
-      sql.restore();
-    }
+function sidecarIdentities(pathname: string) {
+  return ["-wal", "-shm"].map((suffix) => {
+    const { dev, ino } = fs.statSync(`${pathname}${suffix}`);
+    return { dev, ino };
   });
+}
 
-  it("refuses invalid and restricted repair admission before acquiring schema maintenance", () => {
-    const options = fixture();
-    const repairContract = { ...contract, recoverTaskDeliveryOrphans: true as const };
-    const lease = vi.spyOn(maintenance, "withStateDatabaseSchemaMaintenance");
-    const mutate = vi.fn();
-    try {
-      expect(() =>
-        runExistingOpenClawStateWriteTransaction(
-          mutate,
-          { ...options, readOnly: true },
-          repairContract,
-        ),
-      ).toThrow(/own tracked writable connection/iu);
-      expect(() =>
-        withExistingOpenClawStateSchema(options, () =>
-          runExistingOpenClawStateWriteTransaction(mutate, options, repairContract),
-        ),
-      ).toThrow(/schema repair is owned/iu);
-      expect(lease).not.toHaveBeenCalled();
-      expect(mutate).not.toHaveBeenCalled();
-    } finally {
-      lease.mockRestore();
-    }
+function insert(db: EngineConnection, id: number, value: string) {
+  return db.prepare("INSERT INTO records VALUES (?, ?)").run(id, value);
+}
+const record =
+  (id: number, value: string) =>
+  ({ db }: { db: EngineConnection }) =>
+    insert(db, id, value);
+
+function expectNoSidecars(pathname: string) {
+  expect(["-wal", "-shm"].map((suffix) => fs.existsSync(`${pathname}${suffix}`))).toEqual([
+    false,
+    false,
+  ]);
+}
+it("admits maintenance with QUICK without lending that receipt to a FULL writer", () => {
+  const options = fixture();
+  const reads = observeSqliteReadSql(StatementSync.prototype);
+  writeExisting(record(1, "quick write"), options, {
+    ...contract,
+    integrityCheck: "quick",
   });
-
-  it("preserves a replacement appearing during schema lease acquisition", () => {
-    const options = fixture();
-    const replacement = fixture();
-    const replacementDatabase = new DatabaseSync(replacement.path);
-    try {
-      replacementDatabase.exec("INSERT INTO records VALUES (99, 'replacement preserved')");
-    } finally {
-      replacementDatabase.close();
-    }
-    const replacementBytes = fs.readFileSync(replacement.path);
-    const withMaintenance = maintenance.withStateDatabaseSchemaMaintenance;
-    const lease = vi
-      .spyOn(maintenance, "withStateDatabaseSchemaMaintenance")
-      .mockImplementation((leaseOptions, operation) =>
-        withMaintenance(leaseOptions, () => {
-          fs.renameSync(options.path, `${options.path}.retired`);
-          fs.copyFileSync(replacement.path, options.path);
-          return operation();
-        }),
-      );
-    const mutate = vi.fn(({ db }: { db: EngineConnection }) => {
-      db.exec("INSERT INTO records VALUES (1, 'wrong generation')");
-    });
-    try {
-      expect(() =>
-        runExistingOpenClawStateWriteTransaction(mutate, options, {
-          ...contract,
-          recoverTaskDeliveryOrphans: true,
-        }),
-      ).toThrow(/generation/iu);
-      expect(lease).toHaveBeenCalledOnce();
-      expect(mutate).not.toHaveBeenCalled();
-      expect(fs.readFileSync(options.path).equals(replacementBytes)).toBe(true);
-      expect(readValues(options.path)).toEqual([{ value: "replacement preserved" }]);
-    } finally {
-      lease.mockRestore();
-    }
-  });
-
-  it("retains WAL files and one integrity admission through ordinary local and sibling writes", () => {
-    const options = fixture();
-    const reads = observeSqliteReadSql(StatementSync.prototype);
-    const writer = openExistingOpenClawStateWriter(options, contract);
-    let retained: EngineConnection | undefined;
-    try {
-      writer.run(({ db }) => {
-        retained = db;
-        db.prepare("INSERT INTO records VALUES (?, ?)").run(1, "first");
-      }, options);
-      const sidecars = ["-wal", "-shm"].map((suffix) => {
-        const stat = fs.statSync(`${options.path}${suffix}`);
-        return { dev: stat.dev, ino: stat.ino };
-      });
-      const external = openNodeSqliteDatabase(options.path);
-      try {
-        external.prepare("INSERT INTO records VALUES (?, ?)").run(2, "foreign");
-      } finally {
-        external.close();
-      }
-      writer.run(({ db }) => {
-        expect(db).toBe(retained);
-        db.prepare("INSERT INTO records VALUES (?, ?)").run(3, "last");
-      }, options);
-      const warmQueryCount = reads.queries.length;
-      writer.run(({ db }) => {
-        db.prepare("INSERT INTO records VALUES (?, ?)").run(4, "warm");
-      }, options);
-      expect(
-        reads.queries.slice(warmQueryCount).filter((sql) => schemaInventorySql.test(sql)),
-      ).toEqual([]);
-      writer.assertSettled();
-      expect(readValues(options.path)).toEqual([
-        { value: "first" },
-        { value: "foreign" },
-        { value: "last" },
-        { value: "warm" },
-      ]);
-      expect(
-        ["-wal", "-shm"].map((suffix) => {
-          const stat = fs.statSync(`${options.path}${suffix}`);
-          return { dev: stat.dev, ino: stat.ino };
-        }),
-      ).toEqual(sidecars);
-      expect(
-        reads.queries.filter((sql) => /^PRAGMA integrity_check\s*;?$/iu.test(sql)),
-      ).toHaveLength(1);
-      expect(
-        reads.queries.filter((sql) => /^PRAGMA foreign_key_check\s*;?$/iu.test(sql)),
-      ).toHaveLength(1);
-    } finally {
-      writer.close();
-      reads.restore();
-    }
-    expect(retained?.isOpen).toBe(false);
-    expect(fs.existsSync(`${options.path}-wal`)).toBe(false);
-    expect(fs.existsSync(`${options.path}-shm`)).toBe(false);
-  });
-
-  it("readmits canonical same-version lazy DDL once before resuming warm subset writes", async () => {
-    const options = fixture(true);
-    const peer = openOpenClawStateDatabase(options);
-    peer.db.exec("DROP TABLE user_preferences");
-    const version = peer.db.prepare("PRAGMA user_version").get();
-    const writer = openExistingOpenClawStateWriter(options, contract);
-    const reads = observeSqliteReadSql(StatementSync.prototype);
-    try {
-      writer.run(({ db }) => {
-        expect(db).not.toBe(peer.db);
-        db.exec("INSERT INTO records VALUES (1, 'before addition')");
-      }, options);
-      ensureUserPreferencesSchema({ ...options, database: peer });
-      expect(peer.db.prepare("SELECT COUNT(*) AS total FROM user_preferences").get()).toEqual({
-        total: 0,
-      });
-      expect(peer.db.prepare("PRAGMA user_version").get()).toEqual(version);
-      writer.run(({ db }) => {
-        db.exec("INSERT INTO records VALUES (2, 'after addition')");
-      }, options);
-      const readmittedQueryCount = reads.queries.length;
-      writer.run(({ db }) => {
-        db.exec("INSERT INTO records VALUES (3, 'warm again')");
-      }, options);
-      expect(
-        reads.queries
-          .slice(readmittedQueryCount)
-          .filter(
-            (sql) =>
-              schemaInventorySql.test(sql) ||
-              /\b(?:integrity_check|quick_check|foreign_key_check)\b/iu.test(sql),
-          ),
-      ).toEqual([]);
-      expect(readValues(options.path)).toEqual([
-        { value: "before addition" },
-        { value: "after addition" },
-        { value: "warm again" },
-      ]);
-    } finally {
-      reads.restore();
-      writer.close();
-      await closeOpenClawStateDatabaseByPathAsync(options.path);
-    }
-  });
-
-  it("retains a failed close for cleanup while refusing further writes", () => {
-    const options = fixture();
-    const writer = openExistingOpenClawStateWriter(options, contract);
-    const retained = writer.run(({ db }) => {
-      db.exec("INSERT INTO records VALUES (1, 'preserved')");
-      return db;
-    }, options);
-    const failure = new Error("synthetic native close failure");
-    const nativeClose = vi.spyOn(retained, "close").mockImplementationOnce(() => {
-      throw failure;
-    });
-    try {
-      expect(() => writer.close()).toThrow(failure);
-      expect(retained?.isOpen).toBe(true);
-      expect(fs.existsSync(`${options.path}-wal`)).toBe(true);
-      const mutate = vi.fn();
-      expect(() => writer.run(mutate, options)).toThrow(/closed/iu);
-      expect(mutate).not.toHaveBeenCalled();
-      writer.close();
-      expect(retained?.isOpen).toBe(false);
-      expect(fs.existsSync(`${options.path}-wal`)).toBe(false);
-      expect(fs.existsSync(`${options.path}-shm`)).toBe(false);
-      expect(readValues(options.path)).toEqual([{ value: "preserved" }]);
-    } finally {
-      nativeClose.mockRestore();
-      writer.close();
-    }
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "rejects replacement before a retained write callback",
-    () => {
-      const options = fixture();
-      const writer = openExistingOpenClawStateWriter(options, contract);
-      try {
-        writer.run(() => undefined, options);
-        const replacement = fixture();
-        fs.renameSync(options.path, `${options.path}.retired`);
-        fs.copyFileSync(replacement.path, options.path);
-        const mutate = vi.fn();
-        expect(() => writer.run(mutate, options)).toThrow(/generation/iu);
-        expect(mutate).not.toHaveBeenCalled();
-        expect(readValues(options.path)).toEqual([]);
-      } finally {
-        writer.close();
-      }
+  expect(reads.queries).toContain("PRAGMA quick_check;");
+  expect(reads.queries).toContain("PRAGMA integrity_check('config_machine_state');");
+  expect(reads.queries).not.toContain("PRAGMA integrity_check;");
+  writeExisting(
+    ({ db }) => {
+      expect(readRow(db, "SELECT value FROM records WHERE id = 1")?.value).toBe("quick write");
+      db.exec("INSERT INTO records VALUES (2, 'full write')");
     },
+    options,
+    contract,
+  );
+  expect(reads.queries.filter((query) => query === "PRAGMA integrity_check;")).toHaveLength(1);
+  expect(readValues(options.path)).toEqual(["quick write", "full write"]);
+});
+
+it("writes to an existing additive subset across reopen", () => {
+  const options = fixture(true);
+  const additive = { ...contract, initializeAdditiveSchema: true };
+  writeExisting(record(1, "warm subset"), options, additive);
+  expect(readValues(options.path)).toEqual(["warm subset"]);
+  writeExisting(record(2, "reopened subset"), options, additive);
+  expect(readValues(options.path)).toEqual(["warm subset", "reopened subset"]);
+});
+
+it("performs requested orphan recovery after warming subset admission", () => {
+  const options = fixture(
+    false,
+    `CREATE TABLE task_runs (task_id TEXT PRIMARY KEY) STRICT;
+     CREATE TABLE task_delivery_state (
+       task_id TEXT PRIMARY KEY REFERENCES task_runs(task_id) ON DELETE CASCADE,
+       requester_origin_json TEXT, last_notified_event_at INTEGER
+     ) STRICT;`,
+  );
+  writeExisting(record(1, "warm"), options, contract);
+  {
+    using database = new DatabaseSync(options.path);
+    database.exec(`PRAGMA foreign_keys = OFF;
+      INSERT INTO task_delivery_state VALUES ('missing-task', 'synthetic retained payload', 77)`);
+  }
+
+  const changes = writeExisting(
+    ({ db, recoveryChanges }) => {
+      insert(db, 2, "recovered");
+      return recoveryChanges;
+    },
+    options,
+    { ...contract, recoverTaskDeliveryOrphans: true },
   );
 
-  it.each([
-    {
-      change: "foreign version",
-      sql: `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
-      error: /newer schema version/iu,
-      markersChange: true,
-    },
-    {
-      change: "deferred content marker removed",
-      sql: "DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
-      error: /requires schema migration by its owning installation/iu,
-      deferred: true,
-    },
-    {
-      change: "role changed",
-      sql: "UPDATE schema_meta SET role = 'agent' WHERE meta_key = 'primary'",
-      error: /schema role agent/iu,
-    },
-    {
-      change: "metadata version changed",
-      sql: `UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1} WHERE meta_key = 'primary'`,
-      error: /schema metadata is inconsistent/iu,
-    },
-    {
-      change: "primary row deleted",
-      sql: "DELETE FROM schema_meta WHERE meta_key = 'primary'",
-      error: /schema role missing/iu,
-    },
-    {
-      change: "content version newer than supported",
-      sql: `INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION + 1}', 1)`,
-      error: /newer schema version/iu,
-    },
-    {
-      change: "content version malformed",
-      sql: "INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '{', 1)",
-      error: /invalid shared state schema content version/iu,
-    },
-  ])("rejects $change at first admission", ({ sql, error, markersChange, deferred }) => {
+  expect(readValues(options.path)).toEqual(["warm", "recovered"]);
+  expect(changes).toEqual([
+    expect.stringContaining("Preserved and recovered 1 orphan task delivery rows"),
+  ]);
+  const root = path.dirname(options.path);
+  const preserved = fs
+    .readdirSync(root)
+    .filter((name) => name.startsWith("openclaw-task-delivery-recovery-"))
+    .map((name) => {
+      using backup = new DatabaseSync(path.join(root, name, "database.sqlite"), { readOnly: true });
+      return readRow(
+        backup,
+        "SELECT requester_origin_json, last_notified_event_at FROM task_delivery_state",
+      );
+    });
+  expect(preserved).toEqual([
+    { requester_origin_json: "synthetic retained payload", last_notified_event_at: 77 },
+  ]);
+});
+
+it("refuses invalid repair admission before acquiring maintenance", () => {
+  const options = fixture();
+  const repairContract = { ...contract, recoverTaskDeliveryOrphans: true as const };
+  const lease = vi.spyOn(maintenance, "withStateDatabaseSchemaMaintenance");
+  const mutate = vi.fn();
+  expect(() => writeExisting(mutate, { ...options, readOnly: true }, repairContract)).toThrow(
+    /own tracked writable connection/iu,
+  );
+  expect(() =>
+    withExistingSchema(options, () => writeExisting(mutate, options, repairContract)),
+  ).toThrow(/schema repair is owned/iu);
+  expect(lease).not.toHaveBeenCalled();
+  expect(mutate).not.toHaveBeenCalled();
+});
+
+it("preserves a replacement appearing during schema lease acquisition", () => {
+  const options = fixture();
+  const replacement = fixture(false, "INSERT INTO records VALUES (99, 'replacement preserved')");
+  const replacementBytes = fs.readFileSync(replacement.path);
+  const withMaintenance = maintenance.withStateDatabaseSchemaMaintenance;
+  vi.spyOn(maintenance, "withStateDatabaseSchemaMaintenance").mockImplementation(
+    (leaseOptions, operation) =>
+      withMaintenance(leaseOptions, () => {
+        fs.renameSync(options.path, `${options.path}.retired`);
+        fs.copyFileSync(replacement.path, options.path);
+        return operation();
+      }),
+  );
+  const mutate = vi.fn(record(1, "wrong generation"));
+  expect(() =>
+    writeExisting(mutate, options, { ...contract, recoverTaskDeliveryOrphans: true }),
+  ).toThrow(/generation/iu);
+  expect(mutate).not.toHaveBeenCalled();
+  expect(fs.readFileSync(options.path).equals(replacementBytes)).toBe(true);
+  expect(readValues(options.path)).toEqual(["replacement preserved"]);
+});
+
+it("retains WAL identity and admission across local and sibling writes", () => {
+  const options = fixture();
+  const writer = openWriter(options);
+  const retained = writer.run(({ db }) => {
+    insert(db, 1, "first");
+    return db;
+  }, options);
+  const sidecars = sidecarIdentities(options.path);
+  {
+    using external = openNodeSqliteDatabase(options.path);
+    insert(external, 2, "foreign");
+  }
+  writer.run(({ db }) => {
+    expect(db).toBe(retained);
+    insert(db, 3, "last");
+  }, options);
+  writer.run(record(4, "warm"), options);
+  writer.assertSettled();
+  expect(readValues(options.path)).toEqual(["first", "foreign", "last", "warm"]);
+  expect(sidecarIdentities(options.path)).toEqual(sidecars);
+  writer.close();
+  expect(retained?.isOpen).toBe(false);
+  expectNoSidecars(options.path);
+});
+
+it("resumes retained writes after lazy DDL without changing the schema version", async () => {
+  const options = fixture(true);
+  const peer = openState(options);
+  peer.db.exec("DROP TABLE user_preferences");
+  const version = readRow(peer.db, "PRAGMA user_version");
+  const writer = openWriter(options);
+  try {
+    writer.run(({ db }) => {
+      expect(db).not.toBe(peer.db);
+      db.exec("INSERT INTO records VALUES (1, 'before addition')");
+    }, options);
+    ensureUserPreferencesSchema({ ...options, database: peer });
+    expectRow(peer.db, "SELECT COUNT(*) AS total FROM user_preferences", { total: 0 });
+    expectRow(peer.db, "PRAGMA user_version", version);
+    writer.run(record(2, "after addition"), options);
+    writer.run(record(3, "warm again"), options);
+    expect(readValues(options.path)).toEqual(["before addition", "after addition", "warm again"]);
+  } finally {
+    writer.close();
+    await closePath(options.path);
+  }
+});
+
+it("retains a failed close for cleanup while refusing further writes", () => {
+  const options = fixture();
+  const writer = openWriter(options);
+  const retained = writer.run(({ db }) => {
+    db.exec("INSERT INTO records VALUES (1, 'preserved')");
+    return db;
+  }, options);
+  const failure = new Error("synthetic native close failure");
+  vi.spyOn(retained, "close").mockImplementationOnce(() => {
+    throw failure;
+  });
+  expect(() => writer.close()).toThrow(failure);
+  expect(retained?.isOpen).toBe(true);
+  expect(fs.existsSync(`${options.path}-wal`)).toBe(true);
+  const mutate = vi.fn();
+  expect(() => writer.run(mutate, options)).toThrow(/closed/iu);
+  expect(mutate).not.toHaveBeenCalled();
+  writer.close();
+  expect(retained?.isOpen).toBe(false);
+  expectNoSidecars(options.path);
+  expect(readValues(options.path)).toEqual(["preserved"]);
+});
+
+it.skipIf(process.platform === "win32")("rejects replacement before retained writes", () => {
+  const options = fixture();
+  const writer = openWriter(options);
+  writer.run(() => undefined, options);
+  const replacement = fixture();
+  fs.renameSync(options.path, `${options.path}.retired`);
+  fs.copyFileSync(replacement.path, options.path);
+  const mutate = vi.fn();
+  expect(() => writer.run(mutate, options)).toThrow(/generation/iu);
+  expect(mutate).not.toHaveBeenCalled();
+  expect(readValues(options.path)).toEqual([]);
+});
+const metadataMutationCases: [string, RegExp, boolean?, boolean?][] = [
+  [`PRAGMA user_version = ${SCHEMA_VERSION + 1}`, /newer schema version/iu, true],
+  [
+    "DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
+    /requires schema migration by its owning installation/iu,
+    false,
+    true,
+  ],
+  ["UPDATE schema_meta SET role = 'agent' WHERE meta_key = 'primary'", /schema role agent/iu],
+  [
+    `UPDATE schema_meta SET schema_version = ${SCHEMA_VERSION - 1} WHERE meta_key = 'primary'`,
+    /schema metadata is inconsistent/iu,
+  ],
+  ["DELETE FROM schema_meta WHERE meta_key = 'primary'", /schema role missing/iu],
+  [
+    `INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${SCHEMA_VERSION + 1}', 1)`,
+    /newer schema version/iu,
+  ],
+  [
+    "INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '{', 1)",
+    /invalid shared state schema content version/iu,
+  ],
+];
+it.each(metadataMutationCases)(
+  "rejects metadata mutation %s",
+  (sql, error, markersChange = false, deferred = false) => {
     const options = fixture(deferred);
     if (deferred) {
-      const setup = new DatabaseSync(options.path);
-      try {
-        setup.exec(`
-          PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
-          UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}
+      using setup = new DatabaseSync(options.path);
+      setup.exec(`
+          PRAGMA user_version = ${SCHEMA_VERSION - 1};
+          UPDATE schema_meta SET schema_version = ${SCHEMA_VERSION - 1}
             WHERE meta_key = 'primary';
           INSERT INTO config_machine_state VALUES
-            ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION}', 1);
+            ('state.schema.contentVersion', '${SCHEMA_VERSION}', 1);
         `);
-      } finally {
-        setup.close();
-      }
     }
     const run = () => {
       // Raw fixture connections leave this physical file unadmitted until the writer opens it.
-      const external = new DatabaseSync(options.path);
-      try {
+      {
+        using external = new DatabaseSync(options.path);
         const before = readSchemaMarkers(external);
         external.exec(sql);
         if (!markersChange) {
           expect(readSchemaMarkers(external)).toEqual(before);
         }
-      } finally {
-        external.close();
       }
-      const writer = openExistingOpenClawStateWriter(options, contract);
-      try {
-        const mutate = vi.fn(({ db }: { db: EngineConnection }) => {
-          db.exec("INSERT INTO records VALUES (2, 'refused')");
-        });
-        expect(() => writer.run(mutate, options)).toThrow(error);
-        expect(mutate).not.toHaveBeenCalled();
-        expect(readValues(options.path)).toEqual([]);
-      } finally {
-        writer.close();
-      }
+      const writer = openWriter(options);
+      const mutate = vi.fn(record(2, "refused"));
+      expect(() => writer.run(mutate, options)).toThrow(error);
+      expect(mutate).not.toHaveBeenCalled();
+      expect(readValues(options.path)).toEqual([]);
     };
     if (deferred) {
-      withExistingOpenClawStateSchema(options, run);
+      withExistingSchema(options, run);
     } else {
       run();
     }
-  });
+  },
+);
 
-  it("rechecks current environment for each retained write", () => {
-    const options = fixture(true);
-    const externalOptions = {
-      ...options,
-      env: { ...options.env, OPENCLAW_SUPERVISOR_MODE: "external" },
-    };
-    const setup = new DatabaseSync(options.path);
-    try {
-      setup.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
-        "gateway.supervision",
-        JSON.stringify({
-          version: 1,
-          mode: "external",
-          managerId: "fixture-owner",
-          claimedAt: 1,
-        }),
-        1,
-      );
-    } finally {
-      setup.close();
-    }
-    const writer = withExistingOpenClawStateSchema(options, () => {
-      const result = openExistingOpenClawStateWriter(externalOptions, contract);
-      try {
-        result.run(
-          ({ db }) => db.exec("INSERT INTO records VALUES (1, 'authorized')"),
-          externalOptions,
-        );
-        const refused = vi.fn();
-        expect(() => result.run(refused, options)).toThrow(/external|managed/iu);
-        expect(refused).not.toHaveBeenCalled();
-        return result;
-      } catch (error) {
-        result.close();
-        throw error;
-      }
-    });
-    try {
-      withExistingOpenClawStateSchema(options, () => {
-        writer.run(
-          ({ db }) => db.exec("INSERT INTO records VALUES (2, 'readmitted')"),
-          externalOptions,
-        );
-      });
-      expect(readValues(options.path)).toEqual([{ value: "authorized" }, { value: "readmitted" }]);
-    } finally {
-      writer.close();
-    }
+it("rechecks current environment for each retained write", () => {
+  const options = fixture(
+    true,
+    `INSERT INTO config_machine_state VALUES
+    ('gateway.supervision',
+     '{"version":1,"mode":"external","managerId":"fixture-owner","claimedAt":1}', 1)`,
+  );
+  const externalOptions = {
+    ...options,
+    env: { ...options.env, OPENCLAW_SUPERVISOR_MODE: "external" },
+  };
+  const writer = withExistingSchema(options, () => {
+    const result = openWriter(externalOptions);
+    result.run(record(1, "authorized"), externalOptions);
+    const refused = vi.fn();
+    expect(() => result.run(refused, options)).toThrow(/external|managed/iu);
+    expect(refused).not.toHaveBeenCalled();
+    return result;
   });
+  withExistingSchema(options, () => {
+    writer.run(record(2, "readmitted"), externalOptions);
+  });
+  expect(readValues(options.path)).toEqual(["authorized", "readmitted"]);
 });

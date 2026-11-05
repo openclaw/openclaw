@@ -34,32 +34,19 @@ export type CodexAppInventoryCacheKeyInput = {
   appServerVersion?: string;
 };
 
-type CodexAppInventoryCacheDiagnostic = {
-  message: string;
-  atMs: number;
-};
-
 export type CodexAppInventorySnapshot = {
-  key: string;
   apps: CodexAppServerRequestResult<"app/read">["apps"];
   installedApps: readonly v2.InstalledApp[];
   /** Absent for complete inventory; present for plugin-targeted snapshots. */
   targetAppIds?: readonly string[];
-  fetchedAtMs: number;
   expiresAtMs: number;
-  revision: number;
-  lastError?: CodexAppInventoryCacheDiagnostic;
 };
 
 type CodexAppInventoryReadState = "fresh" | "stale" | "missing";
 
 export type CodexAppInventoryCacheRead = {
   state: CodexAppInventoryReadState;
-  key: string;
-  revision: number;
   snapshot?: CodexAppInventorySnapshot;
-  refreshScheduled: boolean;
-  diagnostic?: CodexAppInventoryCacheDiagnostic;
 };
 
 type CacheEntry = CodexAppInventorySnapshot & {
@@ -81,15 +68,8 @@ type InFlightRefresh = {
 };
 
 export class CodexAppInventoryCache {
-  private readonly ttlMs: number;
   private readonly entries = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, InFlightRefresh>();
-  private readonly diagnostics = new Map<string, CodexAppInventoryCacheDiagnostic>();
-  private revision = 0;
-
-  constructor(options: { ttlMs?: number } = {}) {
-    this.ttlMs = options.ttlMs ?? CODEX_APP_INVENTORY_CACHE_TTL_MS;
-  }
 
   read(params: RefreshParams): CodexAppInventoryCacheRead {
     const nowMs = resolveDateTimestampMs(params.nowMs);
@@ -99,51 +79,30 @@ export class CodexAppInventoryCache {
       : entry.invalidated || !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })
         ? "stale"
         : "fresh";
-    const refreshScheduled =
-      (state === "missing"
+    if (
+      state === "missing"
         ? !params.suppressRefresh
-        : state === "stale" || Boolean(params.forceRefetch)) && this.scheduleRefresh(params);
-    let snapshot: CodexAppInventorySnapshot | undefined;
-    if (entry) {
-      const { invalidated: _invalidated, ...rest } = entry;
-      snapshot = rest;
+        : state === "stale" || Boolean(params.forceRefetch)
+    ) {
+      void this.refreshNow(params).catch(() => undefined);
     }
-    const diagnostic = entry ? entry.lastError : this.diagnostics.get(params.key);
     return {
       state,
-      key: params.key,
-      revision: entry?.revision ?? this.revision,
-      ...(snapshot ? { snapshot } : {}),
-      refreshScheduled,
-      ...(diagnostic ? { diagnostic } : {}),
+      ...(entry ? { snapshot: entry } : {}),
     };
   }
 
   /** Marks a key stale until its next successful refresh. */
-  invalidate(key: string, reason: string, nowMs = Date.now()): number {
-    this.revision += 1;
-    const diagnostic = { message: reason, atMs: nowMs };
+  invalidate(key: string): void {
     const entry = this.entries.get(key);
     if (entry) {
       entry.invalidated = true;
-      entry.lastError = diagnostic;
-      entry.revision = this.revision;
-    } else {
-      this.diagnostics.set(key, diagnostic);
     }
-    return this.revision;
   }
 
   clear(): void {
     this.entries.clear();
     this.inFlight.clear();
-    this.diagnostics.clear();
-    this.revision = 0;
-  }
-
-  private scheduleRefresh(params: RefreshParams): boolean {
-    void this.refreshNow(params).catch(() => undefined);
-    return true;
   }
 
   /** Forces or joins an immediate refresh for a cache key. */
@@ -195,10 +154,9 @@ export class CodexAppInventoryCache {
             !previousRefreshSucceeded),
         targetAppIds: params.targetAppIds,
       });
-      this.revision += 1;
-      const expiresAtMs = resolveExpiresAtMsFromDurationMs(this.ttlMs, { nowMs }) ?? 0;
+      const expiresAtMs =
+        resolveExpiresAtMsFromDurationMs(CODEX_APP_INVENTORY_CACHE_TTL_MS, { nowMs }) ?? 0;
       const snapshot: CodexAppInventorySnapshot = {
-        key: params.key,
         apps: inventory.apps,
         installedApps: inventory.installedApps,
         ...(params.targetAppIds?.some(Boolean)
@@ -206,9 +164,7 @@ export class CodexAppInventoryCache {
               targetAppIds: Array.from(targetAppIdSet(params.targetAppIds)).toSorted(),
             }
           : {}),
-        fetchedAtMs: nowMs,
         expiresAtMs,
-        revision: this.revision,
       };
       // Invalidation during a pending read is best effort; the next refresh or TTL
       // repairs a snapshot that raced an install or cache clear.
@@ -216,18 +172,8 @@ export class CodexAppInventoryCache {
         ...resolvePublishedInventorySnapshot(this.entries.get(params.key), snapshot, nowMs),
         invalidated: false,
       });
-      this.diagnostics.delete(params.key);
       return snapshot;
     } catch (error) {
-      const diagnostic = {
-        message: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
-        atMs: nowMs,
-      };
-      this.diagnostics.set(params.key, diagnostic);
-      const entry = this.entries.get(params.key);
-      if (entry) {
-        entry.lastError = diagnostic;
-      }
       embeddedAgentLog.warn("codex app inventory refresh failed", {
         forceRefetch: params.forceRefetch === true,
         keyFingerprint: fingerprintInventoryCacheKey(params.key),
@@ -267,7 +213,6 @@ function resolvePublishedInventorySnapshot(
     ...snapshotBase,
     // Freshness belongs to the still-valid prior fetch: the merge must not
     // renew rows it never re-read.
-    fetchedAtMs: existing.fetchedAtMs,
     expiresAtMs: existing.expiresAtMs,
     apps: mergeRefreshedRows(existing.apps, snapshot.apps, refreshedTargetIds),
     installedApps: mergeRefreshedRows(

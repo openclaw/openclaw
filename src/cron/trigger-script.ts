@@ -42,7 +42,7 @@ import {
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
-import { resolveSandboxContext } from "../agents/sandbox.js";
+import { resolveSandboxContext } from "../agents/sandbox/context.js";
 import {
   resolveScheduledToolPolicyContext,
   type ScheduledToolPolicyContext,
@@ -59,19 +59,20 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
-import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
+import {
+  capturePluginLifecycleAuthority,
+  isPluginRegistryRecordSetAdmitting,
+} from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import {
-  resolveCronActiveRuntimeConfig,
-  resolveCronAgentConfig,
-} from "./isolated-agent/run-config.js";
+import { resolveCronAgentConfig } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
 import {
@@ -104,6 +105,9 @@ const MAX_CONCURRENT_TRIGGER_EVALS = 3;
 const MAX_CACHED_TRIGGER_RUNTIMES = 128;
 const HEADLESS_TRIGGER_WALL_CLOCK_MS = 30_000;
 const HEADLESS_TRIGGER_TOOL_BUDGET = 5;
+// Preparation can outlive the evaluation that started it so a slow host warms the
+// cache for the next tick. Script budgets above this floor bound their own preparation.
+const MIN_TRIGGER_PREPARATION_TIMEOUT_MS = 120_000;
 // Holds a finished evaluation for MCP teardown at most this long; a hung connect or shutdown
 // keeps retiring as tracked work instead of holding the result and trigger slot.
 const CRON_SCRIPT_MCP_CLEANUP_GRACE_MS = 1_000;
@@ -134,6 +138,7 @@ type PreparedTriggerRuntime = {
   ) => Promise<CronScriptMcpTools | undefined>;
   context: HookContext & { config: OpenClawConfig; agentId: string; sessionKey: string };
   pluginRegistry?: PluginRegistry;
+  scheduledToolPolicy: ScheduledToolPolicyContext | undefined;
 };
 
 type CronScriptInvocation = Parameters<NonNullable<CronServiceDeps["evaluateCronTrigger"]>>[0];
@@ -339,6 +344,7 @@ async function prepareTriggerRuntime(
         acquireMcpTools,
         context,
         ...(pluginRegistry ? { pluginRegistry } : {}),
+        scheduledToolPolicy,
         [Symbol.dispose]: () => sandbox?.[Symbol.dispose]?.(),
       };
     } catch (error) {
@@ -397,6 +403,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
   const resolveCachedRuntime = async (
     request: Parameters<PrepareTriggerRuntime>[0],
     scope: ReturnType<typeof createHeadlessDeadlineScope>,
+    preparationLimits: { cancelSignal?: AbortSignal; wallClockMs: number },
   ): Promise<{ runtime: CachedTriggerRuntime; release: () => void }> => {
     const agentId = resolveTriggerAgentId(request.runtimeConfig, request.agentId);
     const toolsAllowKey = JSON.stringify([
@@ -414,7 +421,8 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     ) {
       runtimeCache.delete(request.jobId);
       runtimeCache.set(request.jobId, cached);
-      // Shared preparation follows its first caller's deadline; later invocations retry cold.
+      // Shared preparation follows its first caller's cancellation, not its deadline;
+      // a later caller's cancellation leaves the shared work for the next tick.
       const retained = await retainRuntime(cached, scope);
       if (retained.runtime.isCurrent()) {
         return retained;
@@ -424,15 +432,38 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     if (cached) {
       retireRuntime(request.jobId, cached);
     }
-    const promise = prepareRuntime({ ...request, signal: scope.signal }).then((runtime) => {
+    const { cancelSignal } = preparationLimits;
+    const preparation = new AbortController();
+    const cancelPreparation = () => preparation.abort(new CodeModeHeadlessAbortError());
+    const settlePreparation = () => {
+      clearTimeout(preparationTimer);
+      cancelSignal?.removeEventListener("abort", cancelPreparation);
+    };
+    // Expiry evicts even a preparation that ignores its signal; a late result is disposed.
+    const preparationTimer = setTimeout(
+      () => {
+        settlePreparation();
+        preparation.abort(new CodeModeHeadlessTimeoutError("cron script preparation timed out"));
+        retireRuntime(request.jobId, entry);
+      },
+      Math.max(MIN_TRIGGER_PREPARATION_TIMEOUT_MS, preparationLimits.wallClockMs),
+    );
+    cancelSignal?.addEventListener("abort", cancelPreparation, { once: true });
+    if (cancelSignal?.aborted) {
+      cancelPreparation();
+    }
+    const promise = prepareRuntime({ ...request, signal: preparation.signal }).then((runtime) => {
       entry.lifetime.publish(runtime);
+      const registry = runtime.pluginRegistry;
+      const registryCurrent =
+        registry && capturePluginLifecycleAuthority(registry, undefined, { scopedRuntime: true });
       return {
         ...runtime,
-        isCurrent: runtime.pluginRegistry
-          ? (capturePluginLifecycleAuthority(runtime.pluginRegistry, undefined, {
-              scopedRuntime: true,
-            }) ?? (() => false))
-          : () => true,
+        // Per-plugin replacement disposes one instance without retiring this
+        // retained registry; its stale hooks would fail every later tool call.
+        isCurrent: () =>
+          !registry ||
+          (registryCurrent?.() === true && isPluginRegistryRecordSetAdmitting(registry)),
       };
     });
     const entry: TriggerRuntimeCacheEntry = {
@@ -448,13 +479,19 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       retireRuntime(...oldest);
     }
     // Failed preparations evict themselves so the next tick retries cold.
-    void promise.catch(() => {
-      retireRuntime(request.jobId, entry);
-    });
+    void promise
+      .catch(() => {
+        retireRuntime(request.jobId, entry);
+      })
+      .finally(settlePreparation);
     try {
       return await retainRuntime(entry, scope);
     } catch (error) {
-      retireRuntime(request.jobId, entry);
+      // A missed deadline keeps preparation running for the next tick instead of
+      // repeating the same cold load forever; cancellation still starts cold.
+      if (!(error instanceof CodeModeHeadlessTimeoutError)) {
+        retireRuntime(request.jobId, entry);
+      }
       throw error;
     }
   };
@@ -481,7 +518,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     let releaseRuntime = () => {};
     try {
       const request = {
-        runtimeConfig: resolveCronActiveRuntimeConfig(deps.config),
+        runtimeConfig: selectLiveRuntimeConfig(deps.config),
         jobId: params.job.id,
         agentId: params.job.agentId,
         toolsAllow: params.job.payload.toolsAllow,
@@ -493,10 +530,20 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         execTarget: params.job.toolsAllowExecTarget,
         callerOrigin: params.job.toolsAllowProvenance?.callerOrigin,
       };
-      const retained = await resolveCachedRuntime(request, evaluationScope);
+      const retained = await resolveCachedRuntime(request, evaluationScope, {
+        cancelSignal: params.abortSignal,
+        wallClockMs: params.wallClockMs,
+      });
       const runtime = retained.runtime;
       releaseRuntime = retained.release;
       admission = prepareCronRunAdmission({
+        scheduledExecution: params.occurrence.mint({
+          cfg: runtime.context.config,
+          agentId: runtime.context.agentId,
+          runId,
+          runSessionKey: runtime.context.sessionKey,
+          toolsAllow: request.toolsAllow,
+        }),
         cfg: runtime.context.config,
         runId,
         agentId: runtime.context.agentId,
@@ -504,7 +551,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         jobId: params.job.id,
         deliveryAttemptFence: params.deliveryAttemptFence,
         toolsAllow: request.toolsAllow,
-        scheduledToolPolicy: request.scheduledToolPolicy,
+        scheduledToolPolicy: runtime.scheduledToolPolicy,
         channelRequester: resolveCronAuthenticatedChannelRequester(params.job),
         executionIdentity: params.executionIdentity,
         ingressBoundary: "cron.script",

@@ -1,7 +1,13 @@
+import { existsSync } from "node:fs";
+import { closeOpenClawStateDatabaseWorkersByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabaseForDoctor } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { formatErrorMessage } from "./errors.js";
 import { formatGatewayLockFailure } from "./gateway-lock-diagnostics.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+import { hasUpdateDoctorMigrationCapture } from "./update-doctor-migration-attribution.js";
+import { Utf8InputError } from "./utf8-input.js";
 
 type LegacyMigrationStateLockOptions = {
   stateDir: string;
@@ -48,12 +54,28 @@ export async function withLegacyMigrationStateLock(
   let result: MigrationMessages = { changes: [], warnings: [] };
   let releaseError: unknown;
   try {
-    result = await lock.run(() => options.run(env));
+    result = await lock.run(async () => {
+      // Await first-open attribution before native migration writes borrow the cached owner.
+      // An absent source remains absent when the migration itself has nothing to do.
+      const statePath = resolveOpenClawStateSqlitePath(env);
+      if (hasUpdateDoctorMigrationCapture() && existsSync(statePath)) {
+        // Attributed writes take native exclusion. Doctor detection can leave warm
+        // worker connections at this path; retire them without closing the native owner.
+        await closeOpenClawStateDatabaseWorkersByPathAsync(statePath);
+        lock.assertCurrent();
+        await openOpenClawStateDatabaseForDoctor({ env });
+        lock.assertCurrent();
+      }
+      return options.run(env);
+    });
   } catch (error) {
     if (!options.errorLabel) {
       throw error;
     }
     result.warnings.push(`${options.errorLabel}: ${String(error)}`);
+    if (error instanceof Utf8InputError) {
+      result.warningDisposition = "recoverable";
+    }
   } finally {
     try {
       await lock.run(() => options.beforeRelease?.());

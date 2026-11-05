@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWorkerPreparationIdentity } from "./preparation-identity.js";
 import { readWorkerPreparation } from "./preparation-identity.schema.js";
-import { PROJECT_KEY, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
+import { PRESENCE_REPOSITORY, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import { prepareWorkerProviderProject } from "./provider-project-preparation.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
 
 const sourceAdmission = vi.hoisted(() =>
@@ -22,23 +21,10 @@ describe("prepared project retention compatibility", () => {
       .mockReset()
       .mockRejectedValue(new Error("Retention must not access the repository"));
     fixture.config.agents = { entries: { main: {} } };
-    fixture.provider.requiresNodeEnrollment = true;
-    fixture.provider.supportsProjectPreparation = () => true;
+    const options = fixture.intentOwnerOptions("gateway");
     const { target, artifacts } = readWorkerPreparation(fixture.profile())!;
     fixture.provider.resolvePreparationTarget = () => target;
-    const project: RepositoryWorkerProjectSnapshot = {
-      key: PROJECT_KEY,
-      baseCommit: "d".repeat(40),
-      source: {
-        kind: "repository",
-        url: "https://github.com/openclaw/prepared-fixture.git",
-        repositoryId: "R_prepared_fixture",
-        owner: {
-          agent: { agentId: "main", provenance: null },
-          identity: { source: "anonymous" },
-        },
-      },
-    };
+    const project = structuredClone(PRESENCE_REPOSITORY);
     const profileSnapshot = { settings: {}, install: "bundle", executionMode: "worker-turn" };
     const preparation = createWorkerPreparationIdentity({
       namespace: "gateway",
@@ -51,50 +37,53 @@ describe("prepared project retention compatibility", () => {
       setupRecipe: "e".repeat(40),
       runSetupScript: false,
     });
+    const preparedProfile = { ...profileSnapshot, project: { ...project, preparation } };
     const record = await fixture.store.createIntent({
       environmentId: "retained",
       providerId: fixture.provider.id,
       profileId: "development",
       provisionOperationId: "provision:retained",
-      profileSnapshot: { ...profileSnapshot, project: { ...project, preparation } },
+      profileSnapshot: preparedProfile,
     });
     const prepareNodeArtifacts = vi.fn(async () => ({ artifacts, assertCurrent() {} }));
     const providerFor = vi.fn(() => fixture.provider);
     const owner = createWorkerProviderIntent({
-      store: fixture.store,
-      getConfig: () => fixture.config,
-      projectNamespace: "gateway",
+      ...options,
       providerFor,
       prepareNodeArtifacts,
-      isStopping: () => false,
-      withLock: async (_id, run) => await run(),
       resumeProvision: async (environment) => environment,
     });
-    return { record, owner, project, artifacts, prepareNodeArtifacts, providerFor };
+    return {
+      record,
+      preparation: readWorkerPreparation(record.profileSnapshot)!,
+      preparedProfile,
+      owner,
+      project,
+      artifacts,
+      prepareNodeArtifacts,
+      providerFor,
+    };
   }
 
   it("uses repository admission and fences a changed source owner before allocation", async () => {
     const { owner, project } = await setup();
     let current = true;
-    sourceAdmission.mockImplementation(async (request) => {
-      request.assertCurrent();
-      return {
-        project,
-        setupRecipe: "e".repeat(40),
-        recipe: {
-          source: "script",
-          identity: "e".repeat(40),
-          inputs: { ".openclaw/worktree-setup.sh": "e".repeat(40) },
-          env: {},
-          onCreate: ["./.openclaw/worktree-setup.sh"],
-        },
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Repository owner changed");
-          }
-        },
-        revalidate: async () => {},
-      };
+    sourceAdmission.mockResolvedValue({
+      project,
+      setupRecipe: "e".repeat(40),
+      recipe: {
+        source: "script",
+        identity: "e".repeat(40),
+        inputs: { ".openclaw/worktree-setup.sh": "e".repeat(40) },
+        env: {},
+        onCreate: ["./.openclaw/worktree-setup.sh"],
+      },
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("Repository owner changed");
+        }
+      },
+      revalidate: async () => {},
     });
     const intent = await owner.prepareIntent("development", {
       executionMode: "worker-turn",
@@ -162,8 +151,8 @@ describe("prepared project retention compatibility", () => {
   });
 
   it("checks canonical retained contents without source admission or an allocation authority", async () => {
-    const { record, owner } = await setup();
-    const retained = await owner.prepareRetention(record, fixture.abort.signal);
+    const { record, preparation, preparedProfile, owner } = await setup();
+    const retained = await owner.prepareRetention(record, preparation, fixture.abort.signal);
     expect(retained).toBeDefined();
     expect(retained!.isCurrent()).toBe(true);
     expect(sourceAdmission).not.toHaveBeenCalled();
@@ -171,7 +160,7 @@ describe("prepared project retention compatibility", () => {
     expect(() =>
       owner.assertPreparedIntentCurrent(record.profileId, {
         providerId: record.providerId,
-        profileSnapshot: record.profileSnapshot,
+        profileSnapshot: preparedProfile,
       }),
     ).toThrow("not owned by this lifecycle");
   });
@@ -179,8 +168,8 @@ describe("prepared project retention compatibility", () => {
   it.each(["provider", "target", "owner selection", "agent deletion"])(
     "rejects %s drift on the next retention pass without external source authority",
     async (mutation) => {
-      const { record, owner, providerFor } = await setup();
-      const retained = await owner.prepareRetention(record, fixture.abort.signal);
+      const { record, preparation, owner, providerFor } = await setup();
+      const retained = await owner.prepareRetention(record, preparation, fixture.abort.signal);
       expect(retained).toBeDefined();
       const unavailable = mutation === "owner selection" || mutation === "agent deletion";
       if (unavailable) {
@@ -205,7 +194,9 @@ describe("prepared project retention compatibility", () => {
       if (unavailable) {
         expect(retained?.isCurrent()).toBe(false);
       }
-      expect(await owner.prepareRetention(record, fixture.abort.signal)).toBeUndefined();
+      expect(
+        await owner.prepareRetention(record, preparation, fixture.abort.signal),
+      ).toBeUndefined();
       if (unavailable) {
         expect(providerFor).not.toHaveBeenCalled();
       }
@@ -214,8 +205,8 @@ describe("prepared project retention compatibility", () => {
   );
 
   it("rejects agent removal during lifecycle preparation before preparing artifacts", async () => {
-    const { record, owner, prepareNodeArtifacts } = await setup();
-    const pending = owner.prepareRetention(record, fixture.abort.signal);
+    const { record, preparation, owner, prepareNodeArtifacts } = await setup();
+    const pending = owner.prepareRetention(record, preparation, fixture.abort.signal);
     fixture.config.agents = { entries: { other: {} } };
 
     await expect(pending).resolves.toBeUndefined();
@@ -224,9 +215,9 @@ describe("prepared project retention compatibility", () => {
   });
 
   it("rejects an old runtime fingerprint on the first retention pass after restart", async () => {
-    const { record, owner, artifacts } = await setup();
+    const { record, preparation, owner, artifacts } = await setup();
     artifacts.workerArchiveSha256 = "1".repeat(64);
-    expect(await owner.prepareRetention(record, fixture.abort.signal)).toBeUndefined();
+    expect(await owner.prepareRetention(record, preparation, fixture.abort.signal)).toBeUndefined();
     expect(sourceAdmission).not.toHaveBeenCalled();
   });
 

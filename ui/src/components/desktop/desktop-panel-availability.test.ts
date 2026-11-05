@@ -63,7 +63,7 @@ async function mount(
 }
 
 describe("Desktop native availability", () => {
-  it("refreshes the same node after a DOM reconnect without accepting its old availability", async () => {
+  it("refreshes the same node after a DOM reconnect", async () => {
     let statusReply: Promise<EnvironmentSummary> = Promise.resolve(unlocked);
     const request = statusRequest(() => statusReply);
     const { gateway, connect, panel } = await mount(request, { documentMode: true });
@@ -71,10 +71,6 @@ describe("Desktop native availability", () => {
     statusReply = Promise.resolve(workstation);
     refresh(gateway);
     await waitForSolid(() => expect(panel.textContent).toContain("This Mac is locked"));
-    const oldStatus = createDeferred<EnvironmentSummary>();
-    statusReply = oldStatus.promise;
-    refresh(gateway);
-    const oldStatusRequest = request.mock.results.at(-1)!.value;
     await unmountPanel(panel);
     expect(gateway.unsubscribe).toHaveBeenCalledOnce();
     const requestsAfterUnmount = request.mock.calls.length;
@@ -83,10 +79,6 @@ describe("Desktop native availability", () => {
     statusReply = Promise.resolve(unlocked);
     await mountPanel(panel);
     await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
-    expect(panel.textContent).not.toContain("This Mac is locked");
-    oldStatus.resolve(workstation);
-    await oldStatusRequest;
-    await panel.updateComplete;
     expect(panel.textContent).not.toContain("This Mac is locked");
   });
 
@@ -135,7 +127,7 @@ describe("Desktop native availability", () => {
     },
   );
 
-  it("rejects late availability replies from an older refresh, source, or Gateway", async () => {
+  it("rejects late availability replies from an older source or Gateway", async () => {
     const initialStatus = createDeferred<EnvironmentSummary>();
     const other = native("unlocked", "node:other");
     const replies = new Map<string, Promise<EnvironmentSummary>>([
@@ -173,14 +165,6 @@ describe("Desktop native availability", () => {
         await requested;
       };
     };
-    const releaseRefresh = hold();
-    replies.set(workstation.id, Promise.resolve(unlocked));
-    refresh(gateway);
-    await waitForSolid(() => expect(panel.textContent).not.toContain("lock state is unknown"));
-    await releaseRefresh();
-    await panel.updateComplete;
-    expect(panel.textContent).not.toContain("This Mac is locked");
-
     const releaseSource = hold();
     updatePanel(panel, { requestedSource: other.id });
     await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));

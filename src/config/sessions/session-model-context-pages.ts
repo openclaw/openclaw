@@ -1,12 +1,22 @@
 import type { AgentMessage } from "@openclaw/agent-core";
+import {
+  BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE,
+  isPendingBackgroundResultMessage,
+} from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import { createSqliteQueryCache } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
-import { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseScopedWriteToken,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import { createModelContextPairing } from "./session-model-context-pairing.js";
-import { collectSessionModelContextRequests } from "./session-model-context-read.js";
+import {
+  collectSessionModelContextRequests,
+  collectSessionPendingBackgroundResultRequests,
+} from "./session-model-context-read.js";
 import type { ContextEntry, ModelContextRequest } from "./session-model-context-window.js";
 import {
   scanSessionTranscriptTree,
@@ -16,12 +26,14 @@ import {
 /** Rewrites invalidate only the navigation page containing the changed row. */
 const MODEL_CONTEXT_PAGE_SIZE = 512;
 
-export function modelContextPageWriteScope(sessionId: string, seq: number): string {
-  return JSON.stringify([
-    "model-context-page",
-    sessionId,
-    Math.floor(seq / MODEL_CONTEXT_PAGE_SIZE),
-  ]);
+export function modelContextPageWriteScope(
+  sessionId: string,
+  seq: number,
+): { sessionId: string; partition: string } {
+  return {
+    ...sqliteSessionIdWriteScope(sessionId),
+    partition: `model-context-page:${Math.floor(seq / MODEL_CONTEXT_PAGE_SIZE)}`,
+  };
 }
 
 type ModelContextNavigationRow = {
@@ -48,6 +60,7 @@ type NavigationSnapshot = {
   pages: Map<number, NavigationPage>;
   rows: Map<number, ModelContextNavigationRow>;
   requests: ModelContextRequest[];
+  pending: ModelContextRequest[];
   entries: ContextEntry[];
   model?: ContextEntry;
   thinking?: ContextEntry;
@@ -74,7 +87,14 @@ function rowBytes(row: ModelContextNavigationRow, omitCheckpoint: boolean): numb
 }
 
 function rebuildEntries(snapshot: NavigationSnapshot): void {
-  const entries = new Map(snapshot.requests.map(({ entry }) => [entry.seq, entry]));
+  const entries = new Map(
+    [...snapshot.requests, ...snapshot.pending].map(({ entry }) => [entry.seq, entry]),
+  );
+  for (const { placement } of snapshot.requests) {
+    if (placement) {
+      entries.set(placement.seq, placement);
+    }
+  }
   if (snapshot.model) {
     entries.set(snapshot.model.seq, snapshot.model);
   }
@@ -128,6 +148,7 @@ function appendRows(snapshot: NavigationSnapshot, rows: ModelContextNavigationRo
         "label",
         "session_info",
       ].includes(entry.type) ||
+      (entry.type === "custom" && entry.customType === BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE) ||
       (entry.type === "custom" &&
         entry.customType === "openclaw.system-prompt" &&
         typeof entry.data === "object" &&
@@ -152,7 +173,9 @@ function appendRows(snapshot: NavigationSnapshot, rows: ModelContextNavigationRo
   for (const [index, entry] of entries.entries()) {
     if (
       entry.type === "model_change" ||
-      (entry.type === "message" && entry.message.role === "assistant")
+      (entry.type === "message" &&
+        entry.message.role === "assistant" &&
+        !isPendingBackgroundResultMessage(entry.message))
     ) {
       snapshot.model = entry;
     }
@@ -161,7 +184,11 @@ function appendRows(snapshot: NavigationSnapshot, rows: ModelContextNavigationRo
     }
     const requests = collectSessionModelContextRequests([entry]);
     snapshot.requests.push(...requests);
-    if (requests.length) {
+    const pending = entry.type === "message" && isPendingBackgroundResultMessage(entry.message);
+    if (pending) {
+      snapshot.pending.push({ entry, omitCheckpoint: false });
+    }
+    if (requests.length || pending) {
       snapshot.rows.set(entry.seq, { ...rows[index]!, entry });
     }
   }
@@ -294,6 +321,7 @@ export function readModelContextNavigationPages(params: {
       page.bytes = 0;
     }
     const requests = collectSessionModelContextRequests(entries);
+    const pending = collectSessionPendingBackgroundResultRequests(entries);
     snapshot = {
       sessionId,
       generation,
@@ -303,8 +331,11 @@ export function readModelContextNavigationPages(params: {
       leafId: anchorId ?? tree.leafId,
       appendParentId: tree.appendParentId,
       pages,
-      rows: new Map(requests.map(({ entry }) => [entry.seq, rows.get(entry.seq)!])),
+      rows: new Map(
+        [...requests, ...pending].map(({ entry }) => [entry.seq, rows.get(entry.seq)!]),
+      ),
       requests,
+      pending,
       entries: [],
       prefixCount: 0,
       prefixBytes: 0,
@@ -312,7 +343,9 @@ export function readModelContextNavigationPages(params: {
       model: entries.findLast(
         (entry) =>
           entry.type === "model_change" ||
-          (entry.type === "message" && entry.message.role === "assistant"),
+          (entry.type === "message" &&
+            entry.message.role === "assistant" &&
+            !isPendingBackgroundResultMessage(entry.message)),
       ),
       thinking: entries.findLast((entry) => entry.type === "thinking_level_change"),
       pairing: createModelContextPairing(messages(requests), messages(requests.slice(-maxEvents))),

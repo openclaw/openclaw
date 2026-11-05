@@ -13,202 +13,91 @@ import {
 } from "./group-policy.js";
 
 describe("resolveChannelGroupPolicy", () => {
-  it("allows configured groups when groupPolicy=allowlist", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          groupPolicy: "allowlist",
-          groups: {
-            "123@g.us": { requireMention: true },
-          },
-        },
-      },
-    } as OpenClawConfig;
+  const whatsapp = (config: Record<string, unknown>) =>
+    ({ channels: { whatsapp: config } }) as OpenClawConfig;
 
-    const policy = resolveChannelGroupPolicy({
-      cfg,
-      channel: "whatsapp",
-      groupId: "123@g.us",
-    });
-
-    expect(policy.allowlistEnabled).toBe(true);
-    expect(policy.allowed).toBe(true);
-  });
-
-  it("blocks all groups when groupPolicy=disabled", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          groupPolicy: "disabled",
-          groups: {
-            "*": { requireMention: false },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const policy = resolveChannelGroupPolicy({
-      cfg,
-      channel: "whatsapp",
-      groupId: "123@g.us",
-    });
-
-    expect(policy.allowed).toBe(false);
-  });
-
-  it("respects account-scoped groupPolicy overrides", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          groupPolicy: "open",
-          accounts: {
-            work: {
-              groupPolicy: "allowlist",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const policy = resolveChannelGroupPolicy({
-      cfg,
-      channel: "whatsapp",
-      accountId: "work",
-      groupId: "123@g.us",
-    });
-
-    expect(policy.allowlistEnabled).toBe(true);
-    expect(policy.allowed).toBe(false);
-  });
-
-  it("allows groups when groupPolicy=allowlist with hasGroupAllowFrom but no groups", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          groupPolicy: "allowlist",
-        },
-      },
-    } as OpenClawConfig;
-
-    const policy = resolveChannelGroupPolicy({
-      cfg,
-      channel: "whatsapp",
-      groupId: "123@g.us",
-      hasGroupAllowFrom: true,
-    });
-
-    expect(policy.allowlistEnabled).toBe(true);
-    expect(policy.allowed).toBe(true);
-  });
-
-  it("still fails closed when groupPolicy=allowlist without groups or groupAllowFrom", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          groupPolicy: "allowlist",
-        },
-      },
-    } as OpenClawConfig;
-
-    const policy = resolveChannelGroupPolicy({
-      cfg,
-      channel: "whatsapp",
-      groupId: "123@g.us",
+  it.each([
+    {
+      name: "allows configured groups on an allowlist",
+      config: { groupPolicy: "allowlist", groups: { "123@g.us": { requireMention: true } } },
+      accountId: undefined,
       hasGroupAllowFrom: false,
-    });
-
-    expect(policy.allowlistEnabled).toBe(true);
-    expect(policy.allowed).toBe(false);
-  });
-
-  it("can default explicitly configured groups to no mention for channels that opt in", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          groups: {
-            "123@g.us": {},
-          },
-        },
-      },
-    } as OpenClawConfig;
-
+      allowed: true,
+    },
+    {
+      name: "blocks disabled groups despite a wildcard",
+      config: { groupPolicy: "disabled", groups: { "*": { requireMention: false } } },
+      accountId: undefined,
+      hasGroupAllowFrom: false,
+      allowed: false,
+    },
+    {
+      name: "respects account-scoped allowlist overrides",
+      config: { groupPolicy: "open", accounts: { work: { groupPolicy: "allowlist" } } },
+      accountId: "work",
+      hasGroupAllowFrom: false,
+      allowed: false,
+    },
+    ...[false, true].map((hasGroupAllowFrom) => ({
+      name: `requires sender filtering without configured groups (${hasGroupAllowFrom})`,
+      config: { groupPolicy: "allowlist" },
+      accountId: undefined,
+      hasGroupAllowFrom,
+      allowed: hasGroupAllowFrom,
+    })),
+  ])("$name", ({ config, accountId, hasGroupAllowFrom, allowed }) => {
     expect(
-      resolveChannelGroupRequireMention({
-        cfg,
+      resolveChannelGroupPolicy({
+        cfg: whatsapp(config),
         channel: "whatsapp",
         groupId: "123@g.us",
+        accountId,
+        hasGroupAllowFrom,
       }),
-    ).toBe(true);
-    expect(
-      resolveChannelGroupRequireMention({
-        cfg,
-        channel: "whatsapp",
-        groupId: "123@g.us",
-        configuredGroupDefaultsToNoMention: true,
-      }),
-    ).toBe(false);
+    ).toMatchObject({ allowlistEnabled: true, allowed });
   });
 
-  it("falls back to root channel groups when account.groups is an empty object (regression: #79427)", () => {
+  it.each([undefined, true])(
+    "defaults configured groups to no mention only with channel opt-in (%s)",
+    (configuredGroupDefaultsToNoMention) => {
+      expect(
+        resolveChannelGroupRequireMention({
+          cfg: whatsapp({ groups: { "123@g.us": {} } }),
+          channel: "whatsapp",
+          groupId: "123@g.us",
+          configuredGroupDefaultsToNoMention,
+        }),
+      ).toBe(!configuredGroupDefaultsToNoMention);
+    },
+  );
+
+  it.each([
+    ["inherits root groups for an empty account map (#79427)", {}, "-100root", true],
+    [
+      "selects populated account groups",
+      { "-100account": { requireMention: false } },
+      "-100account",
+      true,
+    ],
+    [
+      "does not merge root groups into populated account groups",
+      { "-100account": { requireMention: false } },
+      "-100root",
+      false,
+    ],
+  ] as const)("%s", (_name, groups, groupId, allowed) => {
     const cfg = {
       channels: {
         telegram: {
           groupPolicy: "allowlist",
-          groups: {
-            "-100123": { requireMention: false },
-          },
-          accounts: {
-            default: { botToken: "123:default", groups: {} },
-          },
+          groups: { "-100root": { requireMention: false } },
+          accounts: { default: { botToken: "123:default", groups } },
         },
       },
     } as OpenClawConfig;
-
-    const policy = resolveChannelGroupPolicy({
-      cfg,
-      channel: "telegram",
-      groupId: "-100123",
-      accountId: "default",
-    });
-
-    expect(policy.allowlistEnabled).toBe(true);
-    expect(policy.allowed).toBe(true);
-  });
-
-  it("uses populated account.groups instead of root when both are configured", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          groupPolicy: "allowlist",
-          groups: {
-            "-100root": { requireMention: false },
-          },
-          accounts: {
-            default: {
-              botToken: "123:default",
-              groups: { "-100account": { requireMention: false } },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
     expect(
-      resolveChannelGroupPolicy({
-        cfg,
-        channel: "telegram",
-        groupId: "-100account",
-        accountId: "default",
-      }).allowed,
-    ).toBe(true);
-    expect(
-      resolveChannelGroupPolicy({
-        cfg,
-        channel: "telegram",
-        groupId: "-100root",
-        accountId: "default",
-      }).allowed,
-    ).toBe(false);
+      resolveChannelGroupPolicy({ cfg, channel: "telegram", groupId, accountId: "default" }),
+    ).toMatchObject({ allowlistEnabled: true, allowed });
   });
 });
 

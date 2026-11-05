@@ -3,7 +3,7 @@ import type { JSX } from "@solidjs/web";
 import {
   createComponent,
   createContext,
-  createRenderEffect,
+  createEffect,
   onCleanup,
   untrack,
   useContext,
@@ -22,8 +22,13 @@ export function ApplicationProvider(props: {
   host?: HTMLElement;
 }): JSX.Element {
   // The native transport belongs to this mounted host; the capability value stays reactive.
-  const host = untrack(() => props.host);
-  if (host) {
+  const initialHost = untrack(() => props.host);
+  const applicationValue = () => props.value;
+  // Solid context snapshots this capability; native transport below owns replacements.
+  const initialValue = untrack(applicationValue);
+  if (initialHost) {
+    // Native requests can arrive during another owner's effect; serve the last publication.
+    let publishedValue = initialValue;
     const subscribers = new Map<
       ApplicationContextRequest["callback"],
       { target: HTMLElement; unsubscribe: () => void }
@@ -31,7 +36,7 @@ export function ApplicationProvider(props: {
     const request = (event: Event) => {
       // SAFETY: The native request protocol is identified by the context token below.
       const incoming = event as ApplicationContextRequest;
-      if (incoming.context !== applicationContext || incoming.contextTarget === host) {
+      if (incoming.context !== applicationContext || incoming.contextTarget === initialHost) {
         return;
       }
       event.stopPropagation();
@@ -45,15 +50,12 @@ export function ApplicationProvider(props: {
         };
         subscribers.set(incoming.callback, subscription);
       }
-      incoming.callback(
-        untrack(() => props.value),
-        subscription?.unsubscribe,
-      );
+      incoming.callback(publishedValue, subscription?.unsubscribe);
     };
     const provider = (event: Event) => {
       // SAFETY: Provider announcements carry the same context token as requests.
       const incoming = event as Event & { context?: unknown; contextTarget?: HTMLElement };
-      if (incoming.context !== applicationContext || incoming.contextTarget === host) {
+      if (incoming.context !== applicationContext || incoming.contextTarget === initialHost) {
         return;
       }
       for (const [callback, subscription] of subscribers) {
@@ -73,31 +75,28 @@ export function ApplicationProvider(props: {
         }
       }
     };
-    const stopRequest = listen(host, "context-request", request);
-    const stopProvider = listen(host, "context-provider", provider);
-    createRenderEffect(
-      () => props.value,
-      (value) => {
-        for (const [callback, subscription] of subscribers) {
-          callback(value, subscription.unsubscribe);
-        }
-      },
-    );
+    const stopRequest = listen(initialHost, "context-request", request);
+    const stopProvider = listen(initialHost, "context-provider", provider);
+    createEffect(applicationValue, (value) => {
+      publishedValue = value;
+      for (const [callback, subscription] of subscribers) {
+        callback(value, subscription.unsubscribe);
+      }
+    });
     onCleanup(() => {
       stopRequest();
       stopProvider();
       subscribers.clear();
     });
-    host.dispatchEvent(
+    initialHost.dispatchEvent(
       Object.assign(new Event("context-provider", { bubbles: true, composed: true }), {
         context: applicationContext,
-        contextTarget: host,
+        contextTarget: initialHost,
       }),
     );
   }
   return createComponent(ApplicationContext, {
-    // Solid context snapshots this capability; native transport above owns replacements.
-    value: untrack(() => props.value),
+    value: initialValue,
     get children() {
       return props.children;
     },

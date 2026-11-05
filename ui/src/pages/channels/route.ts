@@ -1,25 +1,23 @@
-import { definePage } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
-import { routePageSpec } from "../../app-route-paths.ts";
+import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 
-export const page = definePage({
-  ...routePageSpec("channels"),
-  loader: (context: ApplicationContext) => {
-    const primaryRefresh = Promise.all([
-      context.channels.refresh(false),
-      context.runtimeConfig.ensureLoaded(),
-    ]);
-    void primaryRefresh.then(
-      () => {
-        void context.runtimeConfig.ensureSchemaLoaded();
-      },
-      () => undefined,
-    );
+export const page = defineSolidPage(
+  "channels",
+  () => import("./channels-page.tsx").then((module) => module.ChannelsPage),
+  {
+    loader: (context: ApplicationContext) => {
+      const primaryRefresh = Promise.all([
+        import("../../lib/channels/index.ts").then(({ createChannelCapability }) =>
+          context.acquireChannels(createChannelCapability).refresh(false),
+        ),
+        context.runtimeConfig.ensureLoaded(),
+      ]);
+      void primaryRefresh.then(
+        () => {
+          void context.runtimeConfig.ensureSchemaLoaded();
+        },
+        () => undefined,
+      );
+    },
   },
-  component: () =>
-    import("./channels-page.tsx").then((module) => ({
-      header: true,
-      renderSolid: () => createComponent(module.ChannelsPage, {}),
-    })),
-});
+);

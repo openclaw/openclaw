@@ -27,7 +27,6 @@ import {
 import { log as embeddedAgentLog } from "../src/agents/embedded-agent-runner/logger.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../src/agents/harness/hook-helpers.js";
 import { createAgentHarnessHostCapabilities } from "../src/agents/harness/host-capability.js";
-import { listRegisteredAgentHarnesses } from "../src/agents/harness/registry.js";
 import { withGatewayToolCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import {
@@ -121,6 +120,10 @@ function transcriptTarget(fixture: CanonicalForkFixture, sessionKey: string) {
 
 function sessionEntries(fixture: CanonicalForkFixture) {
   return listSessionEntriesCore({ agentId: "main", storePath: fixture.storePath });
+}
+
+function upstreamLink(key: string) {
+  return readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase().db, key, "main");
 }
 
 function requireSandbox(fixture: CanonicalForkFixture, sessionKey: string) {
@@ -492,11 +495,6 @@ async function withFixture(
           }),
         );
         const fork = async (sessionKey: string, entryId: string) => {
-          expect(
-            listRegisteredAgentHarnesses().map(
-              (entry) => entry.harness.sessionForkV2?.upstreamKinds,
-            ),
-          ).toEqual([["codex-app-server"]]);
           let result: { ok: boolean; key?: string; message?: string } | undefined;
           const request = { sessionKey, entryId };
           await expectDefined(
@@ -516,7 +514,7 @@ async function withFixture(
             // SAFETY: these are the complete Gateway collaborators used by the real fork handler.
             context: {
               getRuntimeConfig: () => config,
-              chatAbortControllers: new Map(),
+              rpcSources: new Map(),
               getSessionEventSubscriberConnIds: () => new Set(),
               broadcastToConnIds: () => {},
             } as unknown as GatewayRequestContext,
@@ -1069,6 +1067,41 @@ describe("canonical descendant lifecycle through real owners", () => {
     180_000,
   );
 
+  it("hands a fresh canonical fork to a separate turn connection without a restart", async () => {
+    await withFixture(async (fixture, fork) => {
+      const source = await fixture.adopt();
+      await fixture.turn(source.sessionKey, "canonical");
+      const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
+      const forkOffset = fixture.native.calls.length;
+      const forked = await fork(source.sessionKey, selected.entryId);
+      expect(forked, forked.message).toMatchObject({ ok: true });
+      const childKey = expectDefined(forked.key, "child key");
+      const child = expectDefined(
+        fixture.bindingStore.read(fixture.identity(childKey)),
+        "child binding",
+      );
+      const forkCall = expectDefined(
+        fixture.native.calls.slice(forkOffset).find((call) => call.method === "thread/fork"),
+        "canonical fork request",
+      );
+      const turnOffset = fixture.native.calls.length;
+      // Live supervision turns use another app-server process on the same Codex home.
+      const continued = await fixture.turn(childKey, "warm child turn", {
+        separateConnection: true,
+      });
+      expect(continued.threadId).toBe(child.threadId);
+      const resume = expectDefined(
+        fixture.native.calls
+          .slice(turnOffset)
+          .find(
+            (call) => call.method === "thread/resume" && call.params.threadId === child.threadId,
+          ),
+        "child resume",
+      );
+      expect(resume.client).not.toBe(forkCall.client);
+    });
+  }, 180_000);
+
   it("keeps ordinary archive cleanup on the healthy client while its notification is delayed", async () => {
     await withFixture(async (fixture, fork) => {
       const { source, selected } = await canonicalSource(fixture, "canonical");
@@ -1110,18 +1143,8 @@ describe("canonical descendant lifecycle through real owners", () => {
       const before = await events();
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
       expect(await events()).toEqual(before);
-      const link = expectDefined(
-        readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase().db, key, "main"),
-        "child link",
-      );
-      const root = expectDefined(
-        readSessionUpstreamLinkInDatabase(
-          openOpenClawStateDatabase().db,
-          source.sessionKey,
-          "main",
-        ),
-        "root link",
-      );
+      const link = expectDefined(upstreamLink(key), "child link");
+      const root = expectDefined(upstreamLink(source.sessionKey), "root link");
       expect(link).toMatchObject({
         threadId: root.threadId,
         upstreamRef: root.upstreamRef,
@@ -1141,6 +1164,44 @@ describe("canonical descendant lifecycle through real owners", () => {
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
       expect(await events()).toHaveLength(before.length + 1);
     });
+  }, 180_000);
+
+  it("retains a read-only app tool on a native fork", async () => {
+    await withFixture(
+      async (fixture, fork) => {
+        const source = await fixture.adopt();
+        await fixture.turn(source.sessionKey, "canonical");
+        const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
+        const result = await withRetainedNativeForkAttempt(fixture, () =>
+          fork(source.sessionKey, selected.entryId),
+        );
+        expect(result, result.message).toMatchObject({ ok: true });
+        const binding = expectDefined(
+          bindingFor(fixture, expectDefined(result.key, "child key")),
+          "child binding",
+        );
+        expect(fixture.native.threads.get(binding.threadId)?.config).toMatchObject({
+          apps: {
+            "synthetic-app": {
+              default_tools_enabled: false,
+              tools: { "synthetic.lookup": { enabled: true } },
+            },
+          },
+        });
+      },
+      {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            synthetic: {
+              marketplaceName: "openai-curated",
+              pluginName: "synthetic",
+              read_only: true,
+            },
+          },
+        },
+      },
+    );
   }, 180_000);
 
   it("forks with the current native model instead of the stale persisted model", async () => {
@@ -1240,14 +1301,8 @@ describe("canonical descendant lifecycle through real owners", () => {
               key.endsWith(`:${firstBinding.threadId}`),
             ),
           ).toBe(false);
-          const link = readSessionUpstreamLinkInDatabase(
-            openOpenClawStateDatabase().db,
-            source.sessionKey,
-            "main",
-          );
-          expect(
-            readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase().db, firstKey, "main"),
-          ).toMatchObject({
+          const link = upstreamLink(source.sessionKey);
+          expect(upstreamLink(firstKey)).toMatchObject({
             threadId: link?.threadId,
             marker: { turnId: null, userMessageCount: 0 },
           });
@@ -1261,25 +1316,26 @@ describe("canonical descendant lifecycle through real owners", () => {
             ),
           ).toBe(true);
           const inherited = structuredClone(nativeFirst.dynamicTools);
-          const unavailable = async ({
+          const expectOwnerDenied = async ({
             bridge,
           }: Parameters<
             NonNullable<NonNullable<Parameters<typeof fixture.turn>[2]>["inspectTools"]>
           >[0]) => {
             expect(bridge.specs).toEqual(inherited);
-            expect(bridge.availableTools.some((tool) => tool.name === "codex_threads")).toBe(false);
+            expect(bridge.availableTools.some((tool) => tool.name === "codex_threads")).toBe(true);
             const calls = fixture.native.calls.length;
             const result = await bridge.handleToolCall({
               threadId: firstBinding.threadId,
               turnId: "current",
-              callId: "unavailable-owner",
+              callId: "nonowner-denied",
               namespace: null,
               tool: "codex_threads",
               arguments: { action: "list" },
             });
             expect(result.success).toBe(false);
-            expect(result.executionStarted, JSON.stringify(result.contentItems)).toBe(false);
-            expect(JSON.stringify(result.contentItems)).toContain("not available for this turn");
+            // The declared executor rejects nonowners before sending any native request.
+            expect(result.executionStarted, JSON.stringify(result.contentItems)).toBe(true);
+            expect(JSON.stringify(result.contentItems)).toContain("owner-authorized sender");
             expect(fixture.native.calls).toHaveLength(calls);
           };
           await fixture.native.restart();
@@ -1288,7 +1344,7 @@ describe("canonical descendant lifecycle through real owners", () => {
             (
               await fixture.turn(firstKey, "first nonowner turn", {
                 senderIsOwner: false,
-                inspectTools: unavailable,
+                inspectTools: expectOwnerDenied,
               })
             ).threadId,
           ).toBe(firstBinding.threadId);
@@ -1394,7 +1450,7 @@ describe("canonical descendant lifecycle through real owners", () => {
             (
               await fixture.turn(laterKey, "descendant turn", {
                 senderIsOwner: false,
-                inspectTools: unavailable,
+                inspectTools: expectOwnerDenied,
               })
             ).threadId,
           ).toBe(laterBinding.threadId);

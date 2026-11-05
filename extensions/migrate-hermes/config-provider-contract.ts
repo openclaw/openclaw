@@ -60,70 +60,48 @@ const HERMES_MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
 const HERMES_MINIMAX_CN_BASE_URL = "https://api.minimaxi.com/anthropic";
 const HERMES_ALIBABA_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
 
-const HERMES_SPECIAL_BASE_URL_ENV_VARS: Record<string, readonly string[]> = {
+const HERMES_SPECIAL_PROVIDER_ENV: Record<
+  string,
+  { baseUrlEnv: readonly string[]; apiKeyEnv?: string }
+> = {
   // Hermes plain `custom` still reads OPENAI_BASE_URL in its runtime provider resolver.
-  custom: ["CUSTOM_BASE_URL", "OPENAI_BASE_URL"],
-  "openai-api": ["OPENAI_BASE_URL"],
-  "xai-oauth": ["HERMES_XAI_BASE_URL", "XAI_BASE_URL"],
-  "qwen-oauth": ["HERMES_QWEN_BASE_URL"],
-  "qwen-cli": ["HERMES_QWEN_BASE_URL"],
-  "qwen-portal": ["HERMES_QWEN_BASE_URL"],
-  "minimax-cn": ["MINIMAX_CN_BASE_URL"],
-  "alibaba-coding-plan": ["ALIBABA_CODING_PLAN_BASE_URL"],
+  custom: { baseUrlEnv: ["CUSTOM_BASE_URL", "OPENAI_BASE_URL"], apiKeyEnv: "OPENAI_API_KEY" },
+  "openai-api": { baseUrlEnv: ["OPENAI_BASE_URL"], apiKeyEnv: "OPENAI_API_KEY" },
+  "xai-oauth": { baseUrlEnv: ["HERMES_XAI_BASE_URL", "XAI_BASE_URL"] },
+  "qwen-oauth": { baseUrlEnv: ["HERMES_QWEN_BASE_URL"] },
+  "qwen-cli": { baseUrlEnv: ["HERMES_QWEN_BASE_URL"] },
+  "qwen-portal": { baseUrlEnv: ["HERMES_QWEN_BASE_URL"] },
+  "minimax-cn": { baseUrlEnv: ["MINIMAX_CN_BASE_URL"], apiKeyEnv: "MINIMAX_CN_API_KEY" },
+  "alibaba-coding-plan": {
+    baseUrlEnv: ["ALIBABA_CODING_PLAN_BASE_URL"],
+    apiKeyEnv: "ALIBABA_CODING_PLAN_API_KEY",
+  },
 };
 
-const HERMES_BASE_URL_ENV_VARS: Record<string, readonly string[]> = {
-  anthropic: ["ANTHROPIC_BASE_URL"],
-  arcee: ["ARCEE_BASE_URL"],
-  "azure-foundry": ["AZURE_FOUNDRY_BASE_URL"],
-  deepseek: ["DEEPSEEK_BASE_URL"],
-  gmi: ["GMI_BASE_URL"],
-  google: ["GEMINI_BASE_URL"],
-  huggingface: ["HF_BASE_URL"],
-  kilocode: ["KILOCODE_BASE_URL"],
-  kimi: ["KIMI_BASE_URL"],
-  lmstudio: ["LM_BASE_URL"],
-  minimax: ["MINIMAX_BASE_URL"],
-  novita: ["NOVITA_BASE_URL"],
-  nvidia: ["NVIDIA_BASE_URL"],
-  "ollama-cloud": ["OLLAMA_BASE_URL"],
-  opencode: ["OPENCODE_ZEN_BASE_URL"],
-  "opencode-go": ["OPENCODE_GO_BASE_URL"],
-  openrouter: ["OPENROUTER_BASE_URL"],
-  qwen: ["DASHSCOPE_BASE_URL"],
-  stepfun: ["STEPFUN_BASE_URL"],
-  "tencent-tokenhub": ["TOKENHUB_BASE_URL"],
-  xai: ["XAI_BASE_URL"],
-  xiaomi: ["XIAOMI_BASE_URL"],
-  zai: ["GLM_BASE_URL"],
-};
-
-const HERMES_SPECIAL_API_KEY_ENV_VARS: Record<string, string> = {
-  custom: "OPENAI_API_KEY",
-  "openai-api": "OPENAI_API_KEY",
-  "minimax-cn": "MINIMAX_CN_API_KEY",
-  "alibaba-coding-plan": "ALIBABA_CODING_PLAN_API_KEY",
-};
-
-const HERMES_API_KEY_ENV_VARS: Record<string, string> = {
-  anthropic: "ANTHROPIC_API_KEY",
-  arcee: "ARCEEAI_API_KEY",
-  deepseek: "DEEPSEEK_API_KEY",
-  google: "GOOGLE_API_KEY",
-  huggingface: "HF_TOKEN",
-  kilocode: "KILOCODE_API_KEY",
-  kimi: "KIMI_API_KEY",
-  lmstudio: "LM_API_KEY",
-  minimax: "MINIMAX_API_KEY",
-  nvidia: "NVIDIA_API_KEY",
-  opencode: "OPENCODE_ZEN_API_KEY",
-  "opencode-go": "OPENCODE_GO_API_KEY",
-  openrouter: "OPENROUTER_API_KEY",
-  qwen: "DASHSCOPE_API_KEY",
-  stepfun: "STEPFUN_API_KEY",
-  xai: "XAI_API_KEY",
-  xiaomi: "XIAOMI_API_KEY",
-  zai: "ZAI_API_KEY",
+const HERMES_PROVIDER_ENV: Record<string, { baseUrlEnv: readonly string[]; apiKeyEnv?: string }> = {
+  anthropic: { baseUrlEnv: ["ANTHROPIC_BASE_URL"], apiKeyEnv: "ANTHROPIC_API_KEY" },
+  arcee: { baseUrlEnv: ["ARCEE_BASE_URL"], apiKeyEnv: "ARCEEAI_API_KEY" },
+  "azure-foundry": { baseUrlEnv: ["AZURE_FOUNDRY_BASE_URL"] },
+  deepseek: { baseUrlEnv: ["DEEPSEEK_BASE_URL"], apiKeyEnv: "DEEPSEEK_API_KEY" },
+  gmi: { baseUrlEnv: ["GMI_BASE_URL"] },
+  google: { baseUrlEnv: ["GEMINI_BASE_URL"], apiKeyEnv: "GOOGLE_API_KEY" },
+  huggingface: { baseUrlEnv: ["HF_BASE_URL"], apiKeyEnv: "HF_TOKEN" },
+  kilocode: { baseUrlEnv: ["KILOCODE_BASE_URL"], apiKeyEnv: "KILOCODE_API_KEY" },
+  kimi: { baseUrlEnv: ["KIMI_BASE_URL"], apiKeyEnv: "KIMI_API_KEY" },
+  lmstudio: { baseUrlEnv: ["LM_BASE_URL"], apiKeyEnv: "LM_API_KEY" },
+  minimax: { baseUrlEnv: ["MINIMAX_BASE_URL"], apiKeyEnv: "MINIMAX_API_KEY" },
+  novita: { baseUrlEnv: ["NOVITA_BASE_URL"] },
+  nvidia: { baseUrlEnv: ["NVIDIA_BASE_URL"], apiKeyEnv: "NVIDIA_API_KEY" },
+  "ollama-cloud": { baseUrlEnv: ["OLLAMA_BASE_URL"] },
+  opencode: { baseUrlEnv: ["OPENCODE_ZEN_BASE_URL"], apiKeyEnv: "OPENCODE_ZEN_API_KEY" },
+  "opencode-go": { baseUrlEnv: ["OPENCODE_GO_BASE_URL"], apiKeyEnv: "OPENCODE_GO_API_KEY" },
+  openrouter: { baseUrlEnv: ["OPENROUTER_BASE_URL"], apiKeyEnv: "OPENROUTER_API_KEY" },
+  qwen: { baseUrlEnv: ["DASHSCOPE_BASE_URL"], apiKeyEnv: "DASHSCOPE_API_KEY" },
+  stepfun: { baseUrlEnv: ["STEPFUN_BASE_URL"], apiKeyEnv: "STEPFUN_API_KEY" },
+  "tencent-tokenhub": { baseUrlEnv: ["TOKENHUB_BASE_URL"] },
+  xai: { baseUrlEnv: ["XAI_BASE_URL"], apiKeyEnv: "XAI_API_KEY" },
+  xiaomi: { baseUrlEnv: ["XIAOMI_BASE_URL"], apiKeyEnv: "XIAOMI_API_KEY" },
+  zai: { baseUrlEnv: ["GLM_BASE_URL"], apiKeyEnv: "ZAI_API_KEY" },
 };
 
 export function resolveHermesProviderBaseUrlEnv(
@@ -136,7 +114,9 @@ export function resolveHermesProviderBaseUrlEnv(
   const sourceProvider = normalizeHermesCustomProviderId(providerId);
   const provider = normalizeHermesProviderId(sourceProvider);
   const names =
-    HERMES_SPECIAL_BASE_URL_ENV_VARS[sourceProvider] ?? HERMES_BASE_URL_ENV_VARS[provider] ?? [];
+    HERMES_SPECIAL_PROVIDER_ENV[sourceProvider]?.baseUrlEnv ??
+    HERMES_PROVIDER_ENV[provider]?.baseUrlEnv ??
+    [];
   for (const name of names) {
     const value = env[name]?.trim();
     if (value) {
@@ -152,7 +132,10 @@ export function resolveHermesProviderApiKeyEnv(providerId: string | undefined): 
   }
   const sourceProvider = normalizeHermesCustomProviderId(providerId);
   const provider = normalizeHermesProviderId(sourceProvider);
-  return HERMES_SPECIAL_API_KEY_ENV_VARS[sourceProvider] ?? HERMES_API_KEY_ENV_VARS[provider];
+  return (
+    HERMES_SPECIAL_PROVIDER_ENV[sourceProvider]?.apiKeyEnv ??
+    HERMES_PROVIDER_ENV[provider]?.apiKeyEnv
+  );
 }
 
 export function resolveHermesImplicitBaseUrl(providerId: string | undefined): string | undefined {

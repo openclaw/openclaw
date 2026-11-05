@@ -28,7 +28,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
+  NODE_VERSION: "24.22.1"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
 
@@ -47,7 +47,7 @@ jobs:
           )
         )
       }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       authorized: ${{ steps.permission.outputs.authorized }}
     steps:
@@ -83,7 +83,6 @@ jobs:
       request-pattern: '(?=[\s\S]*discord)(?=[\s\S]*status)(?=[\s\S]*reaction)'
       skip-notice: Comment mentioned Mantis but did not request the Discord status-reactions scenario.
       dispatch-params: ${{ github.event_name == 'workflow_dispatch' && toJSON(inputs) || '{"baseline_ref":"0bf06e953fdda290799fc9fb9244a8f67fdae593"}' }}
-      runner: blacksmith-8vcpu-ubuntu-2404
     secrets:
       MANTIS_GITHUB_APP_ID: ${{ secrets.MANTIS_GITHUB_APP_ID }}
       MANTIS_GITHUB_APP_PRIVATE_KEY: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
@@ -92,7 +91,7 @@ jobs:
     name: Validate selected refs
     needs: resolve_request
     if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       baseline_revision: ${{ steps.validate.outputs['baseline-revision'] }}
       candidate_revision: ${{ steps.validate.outputs['candidate-revision'] }}

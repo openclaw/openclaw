@@ -175,7 +175,11 @@ it("cancels restoration queued at writer admission when its host callback expire
     if (params.expectedMessageType !== "reclaimed") {
       throw new Error("Expected cold restoration worker");
     }
-    await params.withWriteAdmission(async () => undefined, { admissionId: 1 });
+    await params.withWriteAdmission(
+      async () => undefined,
+      { admissionId: 1 },
+      { settled: Promise.resolve({ kind: "completed" }) },
+    );
     return [{ result }];
   });
   const pending = restore(controller.signal);

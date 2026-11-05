@@ -2,13 +2,11 @@ import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "@openclaw/ai/transports";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { withAgentTurnCompletion } from "../../../auto-reply/reply/agent-runner-completion.js";
-import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../../auto-reply/reply/reply-tool-authority.js";
 import { prepareSessionUsageUpdate } from "../../../auto-reply/reply/session-usage.js";
-import { resolveSessionStorePathCore, type SessionEntry } from "../../../config/sessions.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
@@ -17,13 +15,9 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { createReplyOperation } from "../../../sessions/session-controller.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../../test-utils/openclaw-test-state.js";
-import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import * as authRows from "../../auth-profiles/sqlite-read.js";
 import { loadAuthProfileStoreForRuntimeAsync } from "../../auth-profiles/store-runtime.js";
 import { persistAuthProfileBatch } from "../../auth-profiles/upsert-with-lock.js";
@@ -37,19 +31,12 @@ import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.
 import { resolveSessionRuntimeOverrideForProvider } from "../../session-runtime-compat.js";
 import { resolveExtraParams } from "../extra-params.js";
 import {
-  createModelGenerationFixture,
-  publishCurrentModelGeneration,
-  resetModelGenerationFixtureState,
-} from "../model.generation-scope.test-support.js";
-import {
-  clearActiveEmbeddedRun,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  setActiveEmbeddedRun,
-} from "../runs.js";
-import { createEmbeddedRunHandle } from "../runs.test-support.js";
-import { resolveEmbeddedRunModelSetup } from "./model-setup.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
-import { prepareEmbeddedRunRuntime } from "./runtime.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+  steerTestSessionTurn,
+} from "../runs.test-support.js";
+import { createModelOwnershipFixture as createFixture } from "./model-setup.ownership.test-support.js";
 import { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 
 // Installation is outside this composition. Selection, concrete model resolution,
@@ -57,144 +44,6 @@ import { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 vi.mock("../../harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: async () => undefined,
 }));
-
-const states: OpenClawTestState[] = [];
-afterEach(async () => {
-  resetModelGenerationFixtureState();
-  for (const state of states.splice(0).toReversed()) {
-    await state.cleanup();
-  }
-});
-
-async function createFixture(
-  config: OpenClawConfig = {},
-  nativeOwner?: AgentHarness["resolveSessionRuntimeOwnership"],
-  asyncNativeOwner?: AgentHarness["resolveSessionRuntimeOwnershipAsync"],
-) {
-  const state = await createOpenClawTestState({ label: "model-ownership" });
-  states.push(state);
-  const generation = createModelGenerationFixture({
-    label: "ownership",
-    provider: "openai",
-    requestProvider: "openai",
-    modelId: "fixture-model",
-    agentDir: state.agentDir(),
-    workspaceDir: state.workspaceDir,
-    runtimeApi: "openai-responses",
-    runtimeBaseUrl: "https://api.openai.com/v1",
-    config,
-  });
-  publishCurrentModelGeneration(generation);
-  const harness: AgentHarness = {
-    id: "codex",
-    label: "Native fixture",
-    authBootstrap: "harness",
-    supports: ({ provider, modelProvider }) =>
-      provider !== "openai"
-        ? { supported: false }
-        : modelProvider?.requestTransportOverrides === "present"
-          ? { supported: false, fallbackRuntime: "openclaw" }
-          : { supported: true },
-    ...(nativeOwner ? { resolveSessionRuntimeOwnership: nativeOwner } : {}),
-    ...(asyncNativeOwner ? { resolveSessionRuntimeOwnershipAsync: asyncNativeOwner } : {}),
-    runAttempt: vi.fn<AgentHarness["runAttempt"]>(),
-  };
-  registerAgentHarness(harness);
-  const runParams: RunEmbeddedAgentParams = {
-    config,
-    agentId: "main",
-    sessionId: "model-chat",
-    sessionKey: "agent:main:model-chat",
-    prompt: "hello",
-    runId: "ownership-run",
-    timeoutMs: 5_000,
-    workspaceDir: state.workspaceDir,
-    agentHarnessId: "codex",
-    agentHarnessRuntimeOverride: "codex",
-    modelSelectionLocked: true,
-  };
-  const target = {
-    agentId: "main",
-    sessionKey: runParams.sessionKey!,
-    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-  };
-  const entry: SessionEntry = {
-    sessionId: runParams.sessionId,
-    updatedAt: 1,
-    modelSelectionLocked: true,
-    ...(nativeOwner || asyncNativeOwner
-      ? { agentHarnessId: "codex" }
-      : {
-          pluginOwnerId: "catalog-owner",
-          providerOverride: "openai",
-          modelOverride: "fixture-model",
-          agentRuntimeOverride: "codex",
-        }),
-  };
-  await replaceSessionEntry(target, entry);
-  const resolve = async (
-    assertCurrent = () => {},
-    preparedModelRuntime: PreparedModelRuntimeSnapshot = generation.preparedModelRuntime,
-    sessionAdmission?: Awaited<ReturnType<typeof assertAgentHarnessRunAdmission>>,
-  ) =>
-    resolveEmbeddedRunModelSetup({
-      assertCurrent,
-      runParams,
-      sessionAdmission: sessionAdmission ?? (await assertAgentHarnessRunAdmission(runParams)),
-      provider: generation.provider,
-      modelId: generation.modelId,
-      agentDir: generation.preparedModelRuntime.agentDir,
-      workspaceDir: generation.preparedModelRuntime.workspaceDir,
-      globalLane: "test",
-      hookRunner: undefined,
-      hookContext: {
-        sessionId: runParams.sessionId,
-        workspaceDir: runParams.workspaceDir,
-      },
-      onHooksResolved: () => {},
-      preparedModelRuntime,
-    });
-  const withRuntime = async (
-    overrides: Partial<RunEmbeddedAgentParams>,
-    use: (
-      runtime: Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>,
-      admission: ReturnType<typeof prepareSystemAgentRunAdmission>,
-    ) => void | Promise<void>,
-    preparedModelRuntime: PreparedModelRuntimeSnapshot = generation.preparedModelRuntime,
-  ) => {
-    const actualParams = { ...runParams, ...overrides };
-    const admission = prepareSystemAgentRunAdmission(
-      config,
-      actualParams.runId,
-      "main",
-      "ownership-test",
-    );
-    let runtime: Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>> | undefined;
-    try {
-      runtime = await prepareEmbeddedRunRuntime({
-        assertCurrent: () => {},
-        runParams: { ...actualParams, preparedRunAdmission: admission },
-        sessionAdmission: await assertAgentHarnessRunAdmission(actualParams),
-        provider: actualParams.provider ?? generation.provider,
-        modelId: actualParams.model ?? generation.modelId,
-        agentDir: generation.preparedModelRuntime.agentDir,
-        workspaceDir: actualParams.workspaceDir,
-        globalLane: "test",
-        hookRunner: undefined,
-        hookContext: { sessionId: entry.sessionId, workspaceDir: actualParams.workspaceDir },
-        markStartupStage: () => {},
-        notifyExecutionPhase: () => {},
-        fallbackConfigured: false,
-        preparedModelRuntime,
-      });
-      await use(runtime, admission);
-    } finally {
-      runtime?.stopRuntimeAuthRefreshTimer();
-      admission.close();
-    }
-  };
-  return { state, generation, harness, target, entry, runParams, resolve, withRuntime };
-}
 
 describe("model chat and native model ownership", () => {
   it.each([true, false])(
@@ -674,27 +523,30 @@ describe("model chat and native model ownership", () => {
       sessionKey: fixture.target.sessionKey,
       sessionFile: `${fixture.state.workspaceDir}/native-ownership-transcript`,
       senderIsOwner: true,
-      messageProvider: "webchat",
+      messageProvider: "telegram",
+      senderId: "model-owner",
     };
     const caller = {
+      senderId: execution.senderId,
       senderIsOwner: true,
       disableTools: false,
       traceAuthorized: true,
-      messageProvider: "webchat",
+      messageProvider: execution.messageProvider,
       clientCaps: ["task_suggestions"],
       approvalReviewerDeviceId: "review-device",
     };
     const authority = prepareReplyToolAuthority({
       run: {
+        ...profile,
         config: execution.config,
         agentId: execution.agentId,
         sessionId: execution.sessionId,
         sessionKey: execution.sessionKey,
         sessionFile: execution.sessionFile,
         workspaceDir: execution.workspaceDir,
-        authProfileId: execution.authProfileId,
-        senderIsOwner: execution.senderIsOwner,
         messageProvider: execution.messageProvider,
+        senderId: execution.senderId,
+        senderIsOwner: execution.senderIsOwner,
         traceAuthorized: caller.traceAuthorized,
         clientCaps: caller.clientCaps,
         approvalReviewerDeviceId: caller.approvalReviewerDeviceId,
@@ -732,6 +584,7 @@ describe("model chat and native model ownership", () => {
                 runId: execution.runId,
                 toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
                 queueMessage,
+                guarded: true,
               }),
               kind: "embedded" as const,
               cancel: () => {},
@@ -742,30 +595,21 @@ describe("model chat and native model ownership", () => {
               execution.sessionKey,
               execution.sessionFile,
             );
-            operation.attachBackend(handle);
             operation.setPhase("running");
             try {
               await expect(
-                queueEmbeddedAgentMessageWithOutcomeAsync(
-                  execution.sessionId,
-                  "Keep the current task",
-                  {
-                    isInboundUserMessage: true,
-                    toolAuthorityOverlay: caller,
-                  },
-                ),
-              ).resolves.toMatchObject({ queued: true });
+                steerTestSessionTurn(execution.sessionId, "Keep the current task", {
+                  isInboundUserMessage: true,
+                  toolAuthorityOverlay: caller,
+                }),
+              ).resolves.toMatchObject({ status: "accepted" });
               await expect(
-                queueEmbeddedAgentMessageWithOutcomeAsync(
-                  execution.sessionId,
-                  "Use different permissions",
-                  {
-                    isInboundUserMessage: true,
-                    toolAuthorityOverlay: { ...caller, clientCaps: [] },
-                    toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
-                  },
-                ),
-              ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
+                steerTestSessionTurn(execution.sessionId, "Use different permissions", {
+                  isInboundUserMessage: true,
+                  toolAuthorityOverlay: { ...caller, clientCaps: [] },
+                  toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
+                }),
+              ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
               expect(queueMessage).toHaveBeenCalledOnce();
               expect(prepared.toolAuthorityFingerprint).not.toBe(authority.fingerprint());
             } finally {

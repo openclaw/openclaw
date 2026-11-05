@@ -50,6 +50,7 @@ import {
   buildCodexThreadRequestConfig,
   prepareCodexThreadFinalConfigPatch,
   resolveCodexThreadAgentDir,
+  withCodexThreadWriteCurrent,
   type CodexThreadRequestContext,
 } from "./thread-lifecycle-preflight.js";
 import type {
@@ -227,7 +228,7 @@ export async function resumeExistingCodexThread(
     };
     const requestOptions = {
       signal: params.signal,
-      withCurrent: params.authority?.withCurrent,
+      withCurrent: (write: () => void) => withCodexThreadWriteCurrent(params, write),
       assertCurrent: assertResumeCurrent,
     };
     const response = await lifecycleTiming.measure("thread-resume-request", () =>
@@ -321,8 +322,7 @@ export async function resumeExistingCodexThread(
       // Keeping its previous client id disables warm reuse after every restart.
       clientId: params.client.getInstanceId(),
       pendingResumeConfiguration: undefined,
-      ...(resumeBinding.agentWorkspaceDeveloperInstructions === undefined &&
-      params.agentWorkspaceDeveloperInstructions !== undefined
+      ...(params.agentWorkspaceDeveloperInstructions !== undefined
         ? { agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions }
         : {}),
       cwd: params.cwd,
@@ -389,6 +389,7 @@ export async function resumeExistingCodexThread(
           modelProvider: resumePatch.modelProvider ?? null,
           preserveNativeModel: resumeBinding.preserveNativeModel,
         },
+        params,
       ),
       lifecycle: {
         action: "resumed",
@@ -456,7 +457,9 @@ export async function resumeExistingCodexThread(
       }
       acceptedConfiguration.assertConfigured();
     }
+    // Missing native state cannot authorize discarding acknowledged conversation history.
     if (
+      (!acceptedConfiguration && resumeBinding.historyCoveredThrough !== undefined) ||
       resumeBinding.pendingResumeConfiguration ||
       resumeBinding.preserveNativeModel ||
       resumeBinding.connectionScope === "supervision" ||
@@ -466,6 +469,8 @@ export async function resumeExistingCodexThread(
     }
     embeddedAgentLog.warn("codex app-server thread resume failed; starting a new thread", {
       error,
+      // Error normalization drops custom fields; retain the failed RPC at the recovery boundary.
+      rpcMethod: error instanceof CodexAppServerRpcError ? error.method : undefined,
     });
     stageBindingReplacement("rotating a stale thread binding");
   } finally {
@@ -549,7 +554,7 @@ export async function startFreshCodexThread(
       return await params.client.request("thread/start", startParams, {
         signal: params.signal,
         assertCurrent: assertInferenceCurrent,
-        withCurrent: params.authority?.withCurrent,
+        withCurrent: (write) => withCodexThreadWriteCurrent(params, write),
       });
     } catch (error) {
       if (error instanceof CodexAppServerRpcError) {
@@ -725,6 +730,7 @@ export async function startFreshCodexThread(
             params.params.authProfileId,
             dynamicToolsFingerprint,
             { model: response.model, modelProvider: bindingModelProvider ?? null },
+            params,
           ),
         }
       : {}),

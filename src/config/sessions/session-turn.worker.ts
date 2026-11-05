@@ -12,9 +12,9 @@ import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
-import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
+import { createCliHistoryOwnerProbe, runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import { applySessionGoalOperation } from "./goals-operation-policy.js";
-import { readSessionGoalOperationReceipt } from "./goals-operations.js";
+import { readSessionGoalOperationReceipt } from "./goals-operation-receipts.js";
 import {
   readQualifiedSessionEntryRow,
   readSessionKeyBySessionIdInDatabase,
@@ -37,7 +37,7 @@ import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worke
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { prepareSessionTurnRouting } from "./session-turn-predicate.js";
 import {
   createSessionTranscriptTurnKernel,
@@ -59,11 +59,22 @@ function inCustody<T>(
 ): T {
   const assertCurrent = () =>
     context.admit("transaction", { kind: "session-entry-patch-validated" });
+  // Coverage asks the host for its live owner check inside this transaction, once.
+  const probe = createCliHistoryOwnerProbe();
+  let probed = false;
+  const confirmsOwner = () => {
+    if (!probed) {
+      context.admit("transaction", probe.fact);
+      probed = true;
+    }
+    return probe.holds();
+  };
   const owned = () =>
     runWithCliHistoryWriter(
       input.cliWriter
         ? {
             ...input.cliWriter,
+            ...(input.cliWriter.confirmOwner ? { confirmsOwner } : {}),
             target: {
               agentId: input.agentId,
               sessionKey: input.sessionKey,
@@ -227,7 +238,13 @@ export function prepareSessionTurn(
                   ),
                 ),
                 existing:
-                  key && append.idempotencyLookup !== "caller-checked"
+                  key &&
+                  append.idempotencyLookup !== "caller-checked" &&
+                  (!resident?.transcript.complete ||
+                    append.idempotencyLookup === "scan-assistant" ||
+                    [...resident.transcript.identities.values()].some(
+                      (identity) => identity.message_idempotency_key === key,
+                    ))
                     ? readTranscriptMessageByScopedIdempotencyKey(
                         database,
                         scope,
@@ -250,7 +267,7 @@ export function prepareSessionTurn(
       version: transcriptState?.version,
       expectedSessionState:
         expectedEntry &&
-        buildRestartRecoveryExpectedState(
+        buildSessionTranscriptTurnExpectedState(
           selected?.entry ?? { sessionId: scope.sessionId, updatedAt: 0 },
         ),
       goalId:
@@ -286,162 +303,169 @@ export function applySessionTurn<T>(
     input,
     context,
     () =>
-      context.writeTransaction("session.transcript.append-turn", "Session turn", (database) =>
-        withSqliteDatabaseWriteScope(
-          database.db,
-          [
-            input.sessionKey,
-            sqliteSessionIdWriteScope(input.options.expectedSessionId),
-            ...(input.custody ? [input.custody.sessionKey] : []),
-          ],
-          () => {
-            const scope = {
-              agentId: input.agentId,
-              path: context.options.path,
-              sessionKey: input.sessionKey,
-              sessionId: input.options.expectedSessionId,
-            };
-            const transactionVersion = input.options.messages.some(
-              (append) => append.preparationVersion,
-            )
-              ? { ...readTranscriptContextVersionInTransaction(database, scope.sessionId) }
-              : undefined;
-            const messages = input.options.messages.map((append, index) => ({
-              ...append,
-              ...(append.preparedMessage
-                ? { prepareMessageAfterIdempotencyCheck: () => append.preparedMessage!.message }
-                : {}),
-              ...(append.freshGuard || append.preparedMessage
-                ? {
-                    beforeFreshMessageCommit: () => {
-                      // The append kernel invokes this only after replay and custody recognition.
-                      if (append.preparedMessage && !append.preparedMessage.prepared) {
-                        throw new SqliteTranscriptMutationConflictError(scope.sessionId);
-                      }
-                      if (
-                        append.preparationVersion &&
-                        !isDeepStrictEqual(append.preparationVersion, transactionVersion)
-                      ) {
-                        throw new SqliteTranscriptMutationConflictError(scope.sessionId);
-                      }
-                      if (append.freshGuard) {
-                        withoutSqliteDatabaseWriteScope(database.db, () =>
-                          context.admit("transaction", {
-                            kind: "session-turn-fresh",
-                            index,
-                            sourceValidation: readSessionSourceValidation(
-                              database,
-                              append.sources,
-                              incarnation,
-                            ),
-                          }),
-                        );
-                      }
-                    },
-                  }
-                : {}),
-            }));
-            const kernel = createSessionTranscriptTurnKernel(
-              scope,
-              {
-                ...input.options,
-                workerPrepared: true,
-                messages,
-              },
-              assertRouting,
-            );
-            let projectionNeedsReconcile = false;
-            const committed = kernel.commit(
-              database,
-              messages,
-              {
-                scheduleProjectionReconcile: false,
-                onProjectionReconcileNeeded: () => {
-                  projectionNeedsReconcile = true;
+      context.writeTransaction(
+        "session.transcript.append-turn",
+        "Session turn",
+        (database) =>
+          withSqliteDatabaseWriteScope(
+            database.db,
+            [
+              input.sessionKey,
+              sqliteSessionIdWriteScope(input.options.expectedSessionId),
+              ...(input.custody ? [input.custody.sessionKey] : []),
+            ],
+            () => {
+              let scope = {
+                agentId: input.agentId,
+                path: context.options.path,
+                sessionKey: input.sessionKey,
+                sessionId: input.options.expectedSessionId,
+              };
+              const transactionVersion = input.options.messages.some(
+                (append) => append.preparationVersion,
+              )
+                ? { ...readTranscriptContextVersionInTransaction(database, scope.sessionId) }
+                : undefined;
+              const messages = input.options.messages.map((append, index) => ({
+                ...append,
+                ...(append.preparedMessage
+                  ? { prepareMessageAfterIdempotencyCheck: () => append.preparedMessage!.message }
+                  : {}),
+                ...(append.freshGuard || append.preparedMessage
+                  ? {
+                      beforeFreshMessageCommit: () => {
+                        // The append kernel invokes this only after replay and custody recognition.
+                        if (append.preparedMessage && !append.preparedMessage.prepared) {
+                          throw new SqliteTranscriptMutationConflictError(scope.sessionId);
+                        }
+                        if (
+                          append.preparationVersion &&
+                          !isDeepStrictEqual(append.preparationVersion, transactionVersion)
+                        ) {
+                          throw new SqliteTranscriptMutationConflictError(scope.sessionId);
+                        }
+                        if (append.freshGuard) {
+                          withoutSqliteDatabaseWriteScope(database.db, () =>
+                            context.admit("transaction", {
+                              kind: "session-turn-fresh",
+                              index,
+                              sourceValidation: readSessionSourceValidation(
+                                database,
+                                append.sources,
+                                incarnation,
+                              ),
+                            }),
+                          );
+                        }
+                      },
+                    }
+                  : {}),
+              }));
+              const kernel = createSessionTranscriptTurnKernel(
+                scope,
+                {
+                  ...input.options,
+                  workerPrepared: true,
+                  messages,
                 },
-              },
-              (selected) => {
-                const revision = getSqliteReadScopeRevision(database.db);
-                selectedPostimage =
-                  selected && revision
-                    ? { sessionKey: scope.sessionKey, entry: selected.entry, revision }
-                    : undefined;
-                if (input.ownerSources?.length) {
-                  withoutSqliteDatabaseWriteScope(database.db, () =>
-                    context.admit("transaction", {
-                      kind: "session-turn-owner",
-                      sourceValidation: readSessionSourceValidation(
-                        database,
-                        input.ownerSources,
-                        incarnation,
-                        new Map([[scope.sessionKey, selected?.entry]]),
-                      ),
-                    }),
-                  );
-                }
-              },
-            );
-            if (input.options.voiceTranscript && committed.result.appendedMessages.length === 1) {
-              if (!voiceKernel) {
-                throw new Error("Voice transcript commit was not prepared");
-              }
-              committed.result.voiceSession = voiceKernel.mutateVoiceSessionInDatabase(database, {
-                ...input.options.voiceTranscript,
-                kind: "confirm",
-                now: Date.now(),
-              });
-            }
-            const revision = getSqliteReadScopeRevision(database.db);
-            const publication = committed.identity
-              ? prepareSessionEntryReplacementPublication(
-                  {
-                    ...committed.identity,
-                    pendingArchiveRecovery: false,
-                    membershipInvalidatedKeys: [],
-                    maintenancePlans: [],
+                assertRouting,
+              );
+              let projectionNeedsReconcile = false;
+              const committed = kernel.commit(
+                database,
+                messages,
+                {
+                  scheduleProjectionReconcile: false,
+                  onProjectionReconcileNeeded: () => {
+                    projectionNeedsReconcile = true;
                   },
-                  database,
-                  { captureFullFacts: true, postimages: committed.postimages },
-                )
-              : undefined;
-            const custodyEntry =
-              input.custody &&
-              revision &&
-              getSqliteReadScopeRevision(database.db) === revision &&
-              publication?.current.get(input.custody.sessionKey);
-            const candidate: SessionTurnCommitted = {
-              kind: "session-turn",
-              result: committed.result,
-              projectionNeedsReconcile,
-              sequences: committed.result.appendedMessages.map(
-                readCommittedTranscriptMessageSequence,
-              ),
-              custody: readSessionPendingInputWorkerReceipt(database),
-              authority:
-                input.custody?.preparedAuthority &&
-                input.custody.databasePath ===
-                  (readOpenClawAgentDatabaseIdentity(database).canonicalPath || database.path)
-                  ? readSessionPendingInputAuthorityFacts(
-                      database,
-                      input.custody.sessionKey,
-                      input.custody.agentId,
-                      custodyEntry && revision
-                        ? { sessionKey: input.custody.sessionKey, entry: custodyEntry, revision }
-                        : undefined,
-                    )
-                  : undefined,
-              publication,
-            };
-            if (incarnation && candidate.publication?.source) {
-              // The publication and its commit receipt share this locally created source.
-              Object.assign(candidate.publication.source, {
-                identity: incarnation,
-                incarnation,
-              });
-            }
-            return withoutSqliteDatabaseWriteScope(database.db, () => publish(database, candidate));
-          },
-        ),
+                },
+                (selected, selectedScope) => {
+                  scope = { ...scope, sessionKey: selectedScope.sessionKey };
+                  const revision = getSqliteReadScopeRevision(database.db);
+                  selectedPostimage =
+                    selected && revision
+                      ? { sessionKey: scope.sessionKey, entry: selected.entry, revision }
+                      : undefined;
+                  if (input.ownerSources?.length) {
+                    withoutSqliteDatabaseWriteScope(database.db, () =>
+                      context.admit("transaction", {
+                        kind: "session-turn-owner",
+                        sourceValidation: readSessionSourceValidation(
+                          database,
+                          input.ownerSources,
+                          incarnation,
+                          new Map([[scope.sessionKey, selected?.entry]]),
+                        ),
+                      }),
+                    );
+                  }
+                },
+              );
+              if (input.options.voiceTranscript && committed.result.appendedMessages.length === 1) {
+                if (!voiceKernel) {
+                  throw new Error("Voice transcript commit was not prepared");
+                }
+                committed.result.voiceSession = voiceKernel.mutateVoiceSessionInDatabase(database, {
+                  ...input.options.voiceTranscript,
+                  kind: "confirm",
+                  now: Date.now(),
+                });
+              }
+              const revision = getSqliteReadScopeRevision(database.db);
+              const publication = committed.identity
+                ? prepareSessionEntryReplacementPublication(
+                    {
+                      ...committed.identity,
+                      pendingArchiveRecovery: false,
+                      membershipInvalidatedKeys: [],
+                      maintenancePlans: [],
+                    },
+                    database,
+                    { captureFullFacts: true, postimages: committed.postimages },
+                  )
+                : undefined;
+              const custodyEntry =
+                input.custody &&
+                revision &&
+                getSqliteReadScopeRevision(database.db) === revision &&
+                publication?.current.get(input.custody.sessionKey);
+              const candidate: SessionTurnCommitted = {
+                kind: "session-turn",
+                result: committed.result,
+                projectionNeedsReconcile,
+                sequences: committed.result.appendedMessages.map(
+                  readCommittedTranscriptMessageSequence,
+                ),
+                custody: readSessionPendingInputWorkerReceipt(database),
+                authority:
+                  input.custody?.preparedAuthority &&
+                  input.custody.databasePath ===
+                    (readOpenClawAgentDatabaseIdentity(database).canonicalPath || database.path)
+                    ? readSessionPendingInputAuthorityFacts(
+                        database,
+                        input.custody.sessionKey,
+                        input.custody.agentId,
+                        custodyEntry && revision
+                          ? { sessionKey: input.custody.sessionKey, entry: custodyEntry, revision }
+                          : undefined,
+                      )
+                    : undefined,
+                publication,
+              };
+              if (incarnation && candidate.publication?.source) {
+                // The publication and its commit receipt share this locally created source.
+                Object.assign(candidate.publication.source, {
+                  identity: incarnation,
+                  incarnation,
+                });
+              }
+              return withoutSqliteDatabaseWriteScope(database.db, () =>
+                publish(database, candidate),
+              );
+            },
+          ),
+        { messages: input.options.messages.length },
       ),
     () => selectedPostimage,
   );

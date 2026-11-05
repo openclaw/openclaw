@@ -26,12 +26,9 @@ import { assertRuntimeMediaRequestSecretOwnerAvailable } from "../secrets/runtim
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { resolveCliModelEntry } from "./resolve.js";
-import type {
-  AudioTranscriptionRequest,
-  MediaUnderstandingCapability,
-  MediaUnderstandingProvider,
-} from "./types.js";
+import type { AudioTranscriptionRequest, MediaUnderstandingCapability } from "./types.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 
@@ -65,17 +62,12 @@ export function resolveProviderRequestContext(params: {
 }
 
 const loadModelAuth = createLazyRuntimeModule(async () => {
-  const {
-    hasAvailableAuthForProvider,
-    isProviderAuthError,
-    requireApiKey,
-    resolveApiKeyForProviderCore,
-  } = await import("../agents/model-auth.js");
+  const modelAuth = await import("../agents/model-auth.js");
   return {
-    hasAvailableAuthForProvider,
-    isProviderAuthError,
-    requireApiKey,
-    resolveApiKeyForProviderCore,
+    hasAvailableAuthForProvider: modelAuth.hasAvailableAuthForProvider,
+    isProviderAuthError: modelAuth.isProviderAuthError,
+    requireApiKey: modelAuth.requireApiKey,
+    resolveApiKeyForProviderCore: modelAuth.resolveApiKeyForProviderCore,
   };
 });
 

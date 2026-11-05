@@ -1,15 +1,16 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { prepareReplyToolAuthorityCallerRead } from "../../agents/harness/host-private-capabilities.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { prepareSessionResetCleanupGuard } from "../../auto-reply/reply/session-reset-cleanup.js";
 import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
 import { createCompletionGrantLineageAdmission } from "../../gateway/tool-resolution-completion.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import { applySessionEntryOperation } from "./session-accessor.sqlite-entry.js";
 import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
+import { memoryOwnerFixture } from "./session-actor-memory-family.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { memoryStorage } from "./session-actor-memory-publication.test-support.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
@@ -19,7 +20,7 @@ import {
   prepareSessionGenerationFacts,
 } from "./session-delivery-generation.js";
 import { acquireSessionInputActor } from "./session-input-actor.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -40,20 +41,15 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 const sessionKey = "agent:main:dashboard:incognito-actor-test";
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
-const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
+const database = { agentId: "main", path: "/synthetic/incognito" };
+const openFixture = memoryOwnerFixture(database);
 afterEach(async () => {
-  for (const owner of owners.splice(0)) {
-    owner.close();
-  }
   await Promise.all(actors.splice(0).map((actor) => actor.release()));
   memorySessionActorOwners.reset();
 });
 
 async function fixture() {
-  const owner = createMemorySessionActorOwner({ agentId: "main", path: "/synthetic/incognito" });
-  owners.push(owner);
-  const target = { database: owner.identity, sessionKey };
-  const actor = await owner.acquire(target, lifetime);
+  const { actor } = await openFixture(sessionKey);
   await initialize(actor, "accept", {
     sessionFile: "/synthetic/transcript",
     cwd: "/synthetic",
@@ -65,162 +61,36 @@ async function fixture() {
       },
     ],
   });
-  return { owner, target, actor, acquire: () => owner.acquire(target, lifetime) };
+  return { actor };
 }
 
-function activity(actor: SessionActor, updatedAt: number) {
-  return actor.patch(
-    {
-      commandId: `activity-${updatedAt}`,
-      phaseId: "turn",
-      reducers: [{ kind: "activity", updatedAt }],
-    },
-    authority,
-  );
-}
+const activityCommand = (updatedAt: number) => ({
+  commandId: `activity-${updatedAt}`,
+  phaseId: "turn",
+  reducers: [{ kind: "activity" as const, updatedAt }],
+});
 
 describe("memory session actor", () => {
-  it.each([
-    { change: "unchanged", accepted: true },
-    { change: "excluded-input", accepted: false },
-    { change: "reset", accepted: false },
-    { change: "compaction", accepted: true },
-  ] as const)(
-    "evaluates recovery from active history after $change",
-    async ({ change, accepted }) => {
-      const { actor } = await fixture();
-      const turn = (eventId: string, message: unknown): SessionTurnPlan => ({
-        agentId: "main",
-        sessionKey,
-        options: {
-          expectedSessionId: "session-1",
-          sessionFile: "/synthetic/transcript",
-          messages: [{ eventId, message, now: 2 }],
-        },
-      });
-      const request = (commandId: string, eventId: string, message: unknown) => ({
-        commandId,
-        phaseId: "recovery",
-        lifecycle: {},
-        expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
-        turn: turn(eventId, message),
-      });
-      const source = await actor.adoptRun(
-        {
-          ...request("source", "source-input", {
-            role: "user",
-            content: "Task completed",
-            timestamp: 2,
-            idempotencyKey: "source-run:user",
-            __openclaw: { runId: "source-run" },
-            provenance: {
-              kind: "inter_session",
-              sourceChannel: "internal",
-              sourceTool: "agent_harness_completion",
-              sourceSessionKey: "task-run",
-            },
-          }),
-          sessionId: "session-1",
-          runId: "recovery-run",
-        },
-        authority,
-      );
-      expect(source.kind).toBe("committed");
-      if (change === "excluded-input") {
-        const later = await actor.acceptInput(
-          request("later-input", "later-input", {
-            role: "user",
-            content: "Do something else",
-            timestamp: 3,
-            excludeFromContext: true,
-          }),
-          authority,
-        );
-        expect(later.kind).toBe("committed");
-      } else if (change === "reset" || change === "compaction") {
-        const boundary = await actor.appendTranscriptEvent(
-          {
-            commandId: "boundary",
-            phaseId: "recovery",
-            sessionId: "session-1",
-            lifecycleRevision: null,
-            eventJson: JSON.stringify({
-              type: change,
-              id: "boundary",
-              parentId: "source-input",
-              timestamp: new Date(3).toISOString(),
-              firstKeptEntryId: change === "reset" ? "source-input" : "boundary",
-              ...(change === "reset"
-                ? { reason: "reset" }
-                : { summary: "Summary", tokensBefore: 10 }),
-            }),
-          },
-          authority,
-        );
-        expect(boundary.kind).toBe("committed");
-      }
-      const before = actor.snapshot(authority);
-      const recovered = await actor.acceptInput(
-        {
-          ...request("recover", "recovery-input", {
-            role: "user",
-            content: "Resume",
-            timestamp: 4,
-          }),
-          recovery: {
-            sources: [],
-            expectedRunId: "recovery-run",
-            harnessCompletion: {
-              taskId: "task",
-              taskStatus: "succeeded",
-              taskRunId: "task-run",
-              sourceRunId: "source-run",
-              requesterSessionKey: sessionKey,
-              requesterAgentId: "main",
-              sessionId: "session-1",
-            },
-          },
-        },
-        authority,
-      );
-      expect(recovered.kind).toBe(accepted ? "committed" : "rolled-back");
-      if (accepted) {
-        expect(actor.snapshot(authority)?.transcript.anchors.at(-1)?.entryId).toBe(
-          "recovery-input",
-        );
-      } else {
-        expect(recovered).toMatchObject({
-          error: { message: "Session actor recovery input no longer matches its source" },
-        });
-        expect(actor.snapshot(authority)).toEqual(before);
-      }
-      await actor.release();
-    },
-  );
-
   it("detaches committed receipts and rejects a stale command version", async () => {
     const { actor } = await fixture();
     const old = actor.snapshot(authority)!;
-    const result = await activity(actor, 10);
-    expect(result.kind).toBe("committed");
-    if (result.kind !== "committed") {
-      throw new Error("Expected a committed receipt");
-    }
+    const result = await actor.patch(activityCommand(10), authority, {
+      committed(value) {
+        Object.assign(value.receipt.afterVersion, { sequence: 100 });
+        value.receipt.postimage.entry!.updatedAt = 100;
+        value.receipt.transcript.after.rawSeq = 100;
+      },
+    });
+    assert(result.kind === "committed", "Expected a committed receipt");
     const retained = actor.snapshot(authority);
+    expect(result.receipt.postimage).toEqual(retained);
+    expect(retained?.entry?.updatedAt).toBe(10);
     Object.assign(result.receipt.afterVersion, { sequence: 100 });
+    result.receipt.postimage.entry!.updatedAt = 100;
     result.receipt.transcript.after.rawSeq = 100;
     expect(actor.snapshot(authority)).toEqual(retained);
-    expect(
-      await actor.patch(
-        {
-          commandId: "stale",
-          phaseId: "turn",
-          expected: old.version,
-          reducers: [{ kind: "activity", updatedAt: 99 }],
-        },
-        authority,
-      ),
-    ).toMatchObject({
+    const stale = await actor.patch({ ...activityCommand(99), expected: old.version }, authority);
+    expect(stale).toMatchObject({
       kind: "stale-version",
       postimage: { entry: { updatedAt: 10 } },
     });
@@ -232,28 +102,21 @@ describe("memory session actor", () => {
     async (refusedStage) => {
       const { actor } = await fixture();
       const before = actor.snapshot(authority)!;
-      const refused = await actor.patch(
-        { commandId: "refused", phaseId: "turn", reducers: [{ kind: "activity", updatedAt: 50 }] },
-        {
-          assertCurrent() {},
-          authorize(stage) {
-            if (stage === refusedStage) {
-              throw new Error("revoked");
-            }
-          },
+      const refused = await actor.patch(activityCommand(50), {
+        assertCurrent() {},
+        authorize(stage) {
+          if (stage === refusedStage) {
+            throw new Error("revoked");
+          }
         },
-      );
+      });
       expect(refused).toMatchObject({ kind: "rolled-back", error: { message: "revoked" } });
       expect(actor.snapshot(authority)).toEqual(before);
-      const committed = await actor.patch(
-        { commandId: "observed", phaseId: "turn", reducers: [{ kind: "activity", updatedAt: 51 }] },
-        authority,
-        {
-          committed() {
-            throw new Error("observer failed");
-          },
+      const committed = await actor.patch(activityCommand(51), authority, {
+        committed() {
+          throw new Error("observer failed");
         },
-      );
+      });
       expect(committed).toMatchObject({
         kind: "committed",
         failure: { message: "observer failed" },
@@ -265,7 +128,6 @@ describe("memory session actor", () => {
   );
 });
 
-const database = { agentId: "main", path: "/synthetic/incognito" };
 const actors: SessionActor[] = [];
 
 async function acquireRegistered(options = database, key = sessionKey) {
@@ -289,7 +151,10 @@ async function initialize(
     {
       commandId,
       phaseId: "turn",
-      expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
+      expectedState: buildSessionTranscriptTurnExpectedState({
+        sessionId: "session-1",
+        updatedAt: 1,
+      }),
       lifecycle: {},
       turn: {
         agentId: "main",
@@ -320,12 +185,7 @@ describe("memory actor owner registry", () => {
     const owner = memorySessionActorOwners.read(database)!;
     const owned = await owner.acquire(actor.target, lifetime);
     actors.push(owned);
-    expect(same.snapshot(authority)?.entry?.sessionId).toBe("session-1");
-    expect(owned.snapshot(authority)?.entry?.sessionId).toBe("session-1");
-    await owned.patch(
-      { commandId: "activity", phaseId: "turn", reducers: [{ kind: "activity", updatedAt: 10 }] },
-      authority,
-    );
+    await owned.patch(activityCommand(10), authority);
     expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(10);
     expect(same.snapshot(authority)?.entry?.updatedAt).toBe(10);
   });
@@ -407,11 +267,9 @@ describe("memory actor effect adapters", () => {
   }
 
   async function effectFixture() {
-    const owner = createMemorySessionActorOwner({ agentId: scope.agentId, path: scope.storePath });
-    owners.push(owner);
-    const actor = await owner.acquire(
-      { database: owner.identity, sessionKey: scope.sessionKey },
-      lifetime,
+    const { owner, actor } = await openFixture(
+      scope.sessionKey,
+      createMemorySessionActorOwner({ agentId: scope.agentId, path: scope.storePath }),
     );
     const binding = { actor, authority, agentId: scope.agentId, path: scope.storePath };
     const storage = memoryStorage(actor.storage!);
@@ -420,14 +278,19 @@ describe("memory actor effect adapters", () => {
     });
     const patch = async (value: Partial<InternalSessionEntry>) =>
       storage.commit("session.entry.patch", { operation: { kind: "fields", patch: value } });
-    return { owner, actor, binding, patch };
+    return {
+      owner,
+      actor,
+      patch,
+      run: <T>(callback: () => T) => runWithSessionActorStorage(binding, callback),
+    };
   }
 
   it("publishes lifecycle failure facts with the memory entry commit", async () => {
     const f = await effectFixture();
     await f.patch({ lifecycleRunId: "failed-run", startedAt: 1_000 });
     const onCommitted = vi.fn();
-    const result = await runWithSessionActorStorage(f.binding, () =>
+    const result = await f.run(() =>
       applySessionEntryOperation(
         scope,
         {
@@ -462,7 +325,7 @@ describe("memory actor effect adapters", () => {
 
   it("acquires an input handle without transferring the caller's actor lifetime", async () => {
     const f = await effectFixture();
-    const input = await runWithSessionActorStorage(f.binding, () =>
+    const input = await f.run(() =>
       acquireSessionInputActor(
         {
           agentId: scope.agentId,
@@ -478,18 +341,15 @@ describe("memory actor effect adapters", () => {
     expect(f.actor.snapshot(authority)?.entry?.label).toBe("Still open");
   });
 
-  it("reads terminal steering eligibility after an awaited in-process write", async () => {
+  it("refuses steering after its in-process owner closes", async () => {
     const f = await effectFixture();
-    const delivery = runWithSessionActorStorage(f.binding, () =>
+    const delivery = f.run(() =>
       prepareSteeringDelivery({
         ...scope,
-        sourceTurnId: "source-turn",
         assertCurrent() {},
       }),
     );
     await delivery.prepareCurrent();
-    await f.patch({ restartRecoveryDeliveryReceiptState: "terminal-pending" });
-    await expect(delivery.prepareCurrent()).rejects.toThrow("terminal-pending");
     f.owner.close();
     await expect(delivery.prepareCurrent()).rejects.toThrow("closed");
   });
@@ -511,7 +371,7 @@ describe("memory actor effect adapters", () => {
         permissionMode: "guarded",
         toolOverrides: { webSearch: false },
       });
-      await runExclusiveSessionLifecycleMutation("reset", {
+      await runSessionMutation({
         scope: source.storePath,
         identities: [source.sessionKey, source.sessionId],
         async run() {
@@ -597,7 +457,7 @@ describe("memory actor effect adapters", () => {
         inheritedToolPolicyVersion: 1,
       },
     });
-    const lineage = runWithSessionActorStorage(f.binding, () =>
+    const lineage = f.run(() =>
       createCompletionGrantLineageAdmission({
         cfg: {},
         context: {

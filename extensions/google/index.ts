@@ -16,7 +16,7 @@ import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.
 
 const loadGoogleImageGenerationProvider = createLazyRuntimeSurface(
   () => import("./image-generation-provider.js"),
-  (mod) => mod.buildGoogleImageGenerationProvider(),
+  (mod) => mod.googleImageGenerationProvider,
 );
 
 const loadGoogleMediaUnderstandingProvider = createLazyRuntimeSurface(
@@ -26,12 +26,12 @@ const loadGoogleMediaUnderstandingProvider = createLazyRuntimeSurface(
 
 const loadGoogleMusicGenerationProvider = createLazyRuntimeSurface(
   () => import("./music-generation-provider.js"),
-  (mod) => mod.buildGoogleMusicGenerationProvider(),
+  (mod) => mod.googleMusicGenerationProvider,
 );
 
 const loadGoogleVideoGenerationProvider = createLazyRuntimeSurface(
   () => import("./video-generation-provider.js"),
-  (mod) => mod.buildGoogleVideoGenerationProvider(),
+  (mod) => mod.googleVideoGenerationProvider,
 );
 
 export default definePluginEntry({

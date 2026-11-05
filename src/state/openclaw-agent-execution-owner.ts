@@ -1,23 +1,30 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { addAbortListener } from "node:events";
 import path from "node:path";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import { retainSqliteWorkerErrorCode } from "../infra/sqlite-worker-contract.js";
+import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
+import {
+  isSqliteWorkerError,
+  retainSqliteWorkerErrorCode,
+} from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
+import { getGatewayShutdownCleanupSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { notifyListeners } from "../shared/listeners.js";
 import * as creationClaims from "./agent-creation-claim.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
-import { captureAgentDatabaseAdmission } from "./agent-database-admission.js";
+import {
+  captureAgentDatabaseAdmission,
+  retainAgentDatabaseStartupWorker,
+} from "./agent-database-admission.js";
 import {
   assertAgentDeletionExecutionCleanupAccess,
   getAgentDeletionDatabaseCleanup,
@@ -44,6 +51,7 @@ import {
   assertBorrowedAgentDatabaseFileIdentity,
   captureNativeAgentDatabaseExecutionIdentity,
   supportsAgentDatabaseExecutionScope,
+  toAgentExecutionConstraints,
 } from "./openclaw-agent-execution-scope.js";
 import { createAgentDatabaseAcceptedWork } from "./openclaw-agent-execution-work.js";
 import {
@@ -65,7 +73,6 @@ export type AgentDatabaseExecutionState = {
 
 const log = createSubsystemLogger("state/agent-db");
 const MAX_IDLE_EXECUTORS = 4;
-const runInExecutionOwnerContext = AsyncLocalStorage.snapshot();
 
 export function createAgentDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
@@ -116,7 +123,7 @@ export function createAgentDatabaseExecution(
   const reportCleanupFailure = (error: unknown) => {
     // Diagnostic failures cannot turn a committed command into a replayable failure.
     try {
-      log.warn(`Agent database idle cleanup failed: ${formatErrorMessage(error)}`);
+      log.warn(`Agent database cleanup failed: ${formatErrorMessage(error)}`);
     } catch {
       // The resource owner still retains the cleanup failure.
     }
@@ -163,12 +170,9 @@ export function createAgentDatabaseExecution(
       return Promise.resolve();
     }
     clearIdleTimer();
-    if (nativeClosing) {
-      return nativeClosing;
-    }
     const captured = generation;
-    if (!captured) {
-      return Promise.resolve();
+    if (nativeClosing || !captured) {
+      return nativeClosing ?? Promise.resolve();
     }
     const result = captured
       .close()
@@ -181,6 +185,7 @@ export function createAgentDatabaseExecution(
           }
         },
         (error: unknown) => {
+          materializeErrorStack(error);
           cleanupFailure = { error };
           throw error;
         },
@@ -193,6 +198,33 @@ export function createAgentDatabaseExecution(
     nativeClosing = result;
     return result;
   };
+  // Persistent generation callbacks must not capture a request's source or operation frame.
+  function createGeneration(
+    expectedIdentity?: AgentDatabaseExecutionFileIdentity,
+    creatingTarget?: DatabasePathIdentity,
+  ): AgentDatabaseNativeGeneration {
+    const created = createAgentDatabaseNativeGeneration(
+      agentId,
+      identity.canonicalPath,
+      context,
+      lifetime.state,
+      assertCurrent,
+      () => {
+        if (executions.get(pathname) !== owner || generation !== created || !nativeClosing) {
+          throw new Error("Agent cleanup no longer owns its original execution reference");
+        }
+      },
+      expectedIdentity ?? fileIdentity ?? toAgentExecutionConstraints(identity).expectedIdentity,
+      acceptFileIdentity,
+      reportTerminal,
+      fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
+      creationClaim?.witness,
+      retainAgentDatabaseStartupWorker(agentId, { env: context.environment }, () =>
+        closeNative(created),
+      ),
+    );
+    return created;
+  }
   async function run<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
@@ -233,35 +265,7 @@ export function createAgentDatabaseExecution(
       assertCallerCurrent();
       signal?.throwIfAborted();
     }
-    if (!generation) {
-      const created = createAgentDatabaseNativeGeneration(
-        agentId,
-        identity.canonicalPath,
-        context,
-        lifetime.state,
-        assertCurrent,
-        () => {
-          if (executions.get(pathname) !== owner || generation !== created || !nativeClosing) {
-            throw new Error("Agent cleanup no longer owns its original execution reference");
-          }
-        },
-        expectedIdentity ??
-          fileIdentity ??
-          (identity.key.startsWith("file:")
-            ? {
-                kind: "file",
-                physicalIdentity: identity.key.slice("file:".length),
-                birthtime: identity.birthtime,
-                nativeLocation: identity.canonicalPath,
-              }
-            : undefined),
-        acceptFileIdentity,
-        reportTerminal,
-        fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
-        creationClaim?.witness,
-      );
-      generation = created;
-    }
+    generation ??= createGeneration(expectedIdentity, creatingTarget);
     const current = generation;
     let entered = false;
     try {
@@ -294,12 +298,24 @@ export function createAgentDatabaseExecution(
             await closeNative(current);
           }
         } catch (cleanupError) {
-          throw retainSqliteWorkerErrorCode(
-            new AggregateError([error, cleanupError], "Agent operation and cleanup failed", {
-              cause: error,
+          reportCleanupFailure(cleanupError);
+          const primary = error instanceof Error ? error : new Error(String(error));
+          const failure = Object.assign(
+            new Error(primary.message, {
+              cause: new AggregateError(
+                [error, cleanupError],
+                "Agent operation and cleanup failed",
+                {
+                  cause: error,
+                },
+              ),
             }),
-            error,
+            { name: primary.name },
           );
+          // Cleanup failures preserve the primary presentation without granting a retry.
+          throw isSqliteWorkerError(error, "outcome-unknown")
+            ? retainSqliteWorkerErrorCode(failure, error)
+            : failure;
         }
       }
       if (contended) {
@@ -564,8 +580,8 @@ export function createAgentDatabaseExecution(
             if (borrowers !== 0 || !lifetime.open || cleanupFailure || cleanupOwner) {
               return;
             }
-            const drainSignal = getGatewayRestartDrainSignal();
-            const canRetain = () => generation && !nativeClosing && !drainSignal.aborted;
+            const cleanupSignal = getGatewayShutdownCleanupSignal();
+            const canRetain = () => generation && !nativeClosing && !cleanupSignal.aborted;
             try {
               for (const idle of executionState.idle) {
                 if (!canRetain() || executionState.idle.size < MAX_IDLE_EXECUTORS) {
@@ -584,19 +600,19 @@ export function createAgentDatabaseExecution(
             }
             if (canRetain() && executionState.idle.size < MAX_IDLE_EXECUTORS) {
               executionState.idle.add(owner);
-              const timer = runInExecutionOwnerContext(() =>
+              const timer = runInDetachedAsyncContext(() =>
                 setTimeout(() => {
                   if (idleTimer !== timer || !executionState.idle.has(owner)) {
                     return;
                   }
                   void owner.closeIdle().catch(reportCleanupFailure);
-                }, SQLITE_IDLE_HANDLE_TTL_MS),
+                }, resolveAgentDatabaseIdleHandleTtlMs()),
               );
               idleTimer = timer;
               timer.unref();
-              // Restart drain retires idle generations without interrupting accepted writers.
-              idleDrainListener = addAbortListener(drainSignal, () => {
-                runInExecutionOwnerContext(() => {
+              // Marker persistence precedes shutdown retirement of idle generations.
+              idleDrainListener = addAbortListener(cleanupSignal, () => {
+                runInDetachedAsyncContext(() => {
                   void owner.closeIdle().catch(reportCleanupFailure);
                 });
               });
@@ -689,13 +705,12 @@ export function createAgentDatabaseExecution(
     // Config changes do not drain captured executors; unused stores expire normally.
     // Callers resolve new routing, while accepted work keeps its original physical store.
     unregisterShared = registerOpenClawStateDatabaseAsyncResource({
-      close: async (sharedIdentity) => {
-        if (!sharedIdentity || sharedIdentity.key === context.admission.identity.key) {
-          reportTerminal(
-            new AgentDatabaseExecutionAdmissionClosedError("Agent database state admission closed"),
-          );
-          await acceptedWork.closeAccepted(() => owner.close());
-        }
+      admission: context.admission,
+      close: async () => {
+        reportTerminal(
+          new AgentDatabaseExecutionAdmissionClosedError("Agent database state admission closed"),
+        );
+        await acceptedWork.closeAccepted(() => owner.close());
       },
     });
     return owner.borrow(

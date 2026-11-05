@@ -1,13 +1,7 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { danger } from "../globals.js";
-import {
-  type GmailRunOptions,
-  type GmailSetupOptions,
-  runGmailService,
-  runGmailSetup,
-} from "../hooks/gmail-ops.js";
+import { type GmailRunOptions, runGmailService, runGmailSetup } from "../hooks/gmail-ops.js";
 import {
   DEFAULT_GMAIL_LABEL,
   DEFAULT_GMAIL_MAX_BYTES,
@@ -22,6 +16,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatDocsHelp } from "./help-format.js";
+import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
 
 function addGmailDeliveryOptions(command: Command, defaults = false): Command {
   return command
@@ -93,7 +88,20 @@ export function registerWebhooksCli(program: Command) {
     .option("--json", "Output JSON summary", false)
     .action(async (opts) => {
       try {
-        await runGmailSetup(parseGmailSetupOptions(opts));
+        const account = normalizeOptionalString(opts.account) ?? "";
+        if (!account) {
+          throw new Error(
+            `--account is required. Example: ${formatCliCommand("openclaw webhooks gmail setup --account default")}.`,
+          );
+        }
+        const common = parseGmailCommonOptions(opts);
+        await runGmailSetup({
+          account,
+          project: normalizeOptionalString(opts.project),
+          ...common,
+          pushEndpoint: normalizeOptionalString(opts.pushEndpoint),
+          json: Boolean(opts.json),
+        });
       } catch (err) {
         if (opts.json) {
           throw new Error(formatErrorMessage(err), { cause: err });
@@ -111,37 +119,16 @@ export function registerWebhooksCli(program: Command) {
       .option("--topic <topic>", "Pub/Sub topic path (projects/.../topics/..)"),
   ).action(async (opts) => {
     try {
-      await runGmailService(parseGmailRunOptions(opts));
+      const common = parseGmailCommonOptions(opts);
+      await runGmailService({
+        account: normalizeOptionalString(opts.account),
+        ...common,
+      });
     } catch (err) {
       defaultRuntime.error(danger(formatErrorMessage(err)));
       defaultRuntime.exit(1);
     }
   });
-}
-
-function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions {
-  const account = normalizeOptionalString(raw.account) ?? "";
-  if (!account) {
-    throw new Error(
-      `--account is required. Example: ${formatCliCommand("openclaw webhooks gmail setup --account default")}.`,
-    );
-  }
-  const common = parseGmailCommonOptions(raw);
-  return {
-    account,
-    project: normalizeOptionalString(raw.project),
-    ...common,
-    pushEndpoint: normalizeOptionalString(raw.pushEndpoint),
-    json: Boolean(raw.json),
-  };
-}
-
-function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
-  const common = parseGmailCommonOptions(raw);
-  return {
-    account: normalizeOptionalString(raw.account),
-    ...common,
-  };
 }
 
 function parseGmailCommonOptions(raw: Record<string, unknown>): Omit<GmailRunOptions, "account"> {
@@ -153,11 +140,15 @@ function parseGmailCommonOptions(raw: Record<string, unknown>): Omit<GmailRunOpt
     hookToken: normalizeOptionalString(raw.hookToken),
     pushToken: normalizeOptionalString(raw.pushToken),
     bind: normalizeOptionalString(raw.bind),
-    port: numberOption(raw.port, "--port"),
+    port: parseOptionalPositiveInteger(raw.port ?? undefined, "--port", "."),
     path: normalizeOptionalString(raw.path),
     includeBody: raw.includeBody == null ? undefined : Boolean(raw.includeBody),
-    maxBytes: numberOption(raw.maxBytes, "--max-bytes"),
-    renewEveryMinutes: numberOption(raw.renewMinutes, "--renew-minutes"),
+    maxBytes: parseOptionalPositiveInteger(raw.maxBytes ?? undefined, "--max-bytes", "."),
+    renewEveryMinutes: parseOptionalPositiveInteger(
+      raw.renewMinutes ?? undefined,
+      "--renew-minutes",
+      ".",
+    ),
     tailscale: tailscaleModeOption(raw.tailscale),
     tailscalePath: normalizeOptionalString(raw.tailscalePath),
     tailscaleTarget: normalizeOptionalString(raw.tailscaleTarget),
@@ -173,15 +164,4 @@ function tailscaleModeOption(value: unknown): GmailRunOptions["tailscale"] {
     return mode;
   }
   throw new Error("Invalid --tailscale (must be funnel, serve, or off).");
-}
-
-function numberOption(value: unknown, label: string): number | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  const n = parseStrictPositiveInteger(value);
-  if (n === undefined) {
-    throw new Error(`${label} must be a positive integer.`);
-  }
-  return n;
 }

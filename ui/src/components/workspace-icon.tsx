@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
@@ -19,8 +19,10 @@ defineSolidBridge<WorkspaceIconProps>(
     const loader = new AuthenticatedAvatarRouteLoader(() => refresh((value) => value + 1), {
       retryUnavailable: true,
     });
-    loader.connect();
-    onCleanup(() => loader.disconnect());
+    onSettled(() => {
+      loader.connect();
+      return () => loader.disconnect();
+    });
     const blobUrl = createMemo(() => {
       revision();
       return loader.withActiveRoutes(() =>

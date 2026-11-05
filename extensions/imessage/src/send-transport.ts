@@ -13,22 +13,17 @@ export type IMessageSendHandoff = {
 };
 
 export function bindIMessageCliSend(
-  handoff: IMessageSendHandoff & {
-    runCliJson?: (args: readonly string[]) => Promise<Record<string, unknown>>;
-  },
+  handoff: IMessageSendHandoff,
   options: Omit<Parameters<typeof runIMessageCliJsonCommand>[0], "args">,
 ) {
   const effect = captureEffectAuthority();
   const assertReadAuthority = captureChannelReadAuthority();
-  const runCli =
-    handoff.runCliJson ??
-    ((args: readonly string[]) => runIMessageCliJsonCommand({ ...options, args }));
   return (args: readonly string[]) =>
     effect.initiate(() => {
       // Lookup commands retain authority without recording visible dispatch.
       assertReadAuthority?.();
       handoff.assertDirectAdapterHandoff?.();
-      return runCli(args);
+      return runIMessageCliJsonCommand({ ...options, args });
     });
 }
 

@@ -1,4 +1,3 @@
-/** systemctl execution, user-manager routing, and availability probes. */
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
@@ -13,6 +12,7 @@ import {
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
   type ServiceInspectionReason,
+  SystemdInspectionTimeout,
 } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import {
@@ -27,10 +27,7 @@ import {
   isSystemctlMissingDetail,
   isSystemdUserBusUnavailableDetail,
 } from "./systemd-unavailable.js";
-import {
-  resolveSystemdUserTransport,
-  SystemdTransportInspectionTimeout,
-} from "./systemd-user-transport.js";
+import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
 type SystemdExecResult = ExecResult & {
   inspectionReason?: ServiceInspectionReason;
@@ -56,8 +53,10 @@ async function execSystemdCommand(
   args: string[],
   env?: GatewayServiceEnv,
   timeoutMs?: number,
+  beforeEffect?: () => void,
 ): Promise<SystemdExecResult> {
   const result = await execFileUtf8(command, args, {
+    beforeEffect,
     env: env ? { ...process.env, ...env } : process.env,
     // A wedged systemd socket can leave manager commands blocked forever; the timeout
     // kills the child so status reads fail soft instead of hanging the command.
@@ -78,8 +77,9 @@ export async function execSystemctl(
   args: string[],
   env?: GatewayServiceEnv,
   timeoutMs?: number,
+  beforeEffect?: () => void,
 ): Promise<ExecResult> {
-  return await execSystemdCommand("systemctl", args, env, timeoutMs);
+  return await execSystemdCommand("systemctl", args, env, timeoutMs, beforeEffect);
 }
 
 /** System-manager reads never inherit user-bus routing. */
@@ -104,7 +104,7 @@ export function systemdInspectionError(
     return new ServiceInspectionError("service-manager-unavailable");
   }
   if (result.termination === "timeout" || result.termination === "no-output-timeout") {
-    return new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+    return new SystemdInspectionTimeout(`${scope} manager command`);
   }
   if (result.termination === "error" && ["EACCES", "EPERM"].includes(result.errorCode ?? "")) {
     return new ServiceInspectionError("service-manager-access-denied");
@@ -197,6 +197,7 @@ async function execSystemdUserCommand(
   timeoutMs?: number,
   assertCurrent?: () => void,
   stopInspection?: SystemdStopInspection,
+  beforeEffect?: () => void,
 ): Promise<SystemdExecResult> {
   const now = stopInspection ? () => performance.now() : getServiceInspectionClock();
   const deadline = timeoutMs && timeoutMs > 0 ? now() + timeoutMs : undefined;
@@ -215,7 +216,7 @@ async function execSystemdUserCommand(
     try {
       transport = await inspect();
     } catch (error) {
-      if (!stopInspection || !(error instanceof SystemdTransportInspectionTimeout)) {
+      if (!stopInspection || !(error instanceof SystemdInspectionTimeout)) {
         throw error;
       }
       stopInspection.warn(`${error.message} Retrying systemd stop inspection once.`);
@@ -237,7 +238,13 @@ async function execSystemdUserCommand(
             DBUS_SESSION_BUS_ADDRESS: transport.address,
           };
     runServiceInspectionGuard(assertCurrent);
-    const remaining = deadline === undefined ? undefined : Math.ceil(deadline - now());
+    // Stop routing has its own bounded inspection; preserve the unit's full
+    // shutdown allowance for the command after routing and custody checks.
+    const remaining = stopInspection
+      ? timeoutMs
+      : deadline === undefined
+        ? undefined
+        : Math.ceil(deadline - now());
     if (remaining !== undefined && remaining <= 0) {
       return {
         code: 1,
@@ -248,7 +255,13 @@ async function execSystemdUserCommand(
     }
     const scope =
       transport?.kind === "machine" ? ["--machine", `${transport.user}@`, "--user"] : ["--user"];
-    return await execSystemdCommand(command, [...scope, ...args], childEnv, remaining);
+    return await execSystemdCommand(
+      command,
+      [...scope, ...args],
+      childEnv,
+      remaining,
+      beforeEffect,
+    );
   } catch (error) {
     assertServiceInspectionFallbackAllowed(error);
     runServiceInspectionGuard(assertCurrent);
@@ -257,7 +270,7 @@ async function execSystemdUserCommand(
     }
     return {
       code: 1,
-      termination: error instanceof SystemdTransportInspectionTimeout ? "timeout" : "error",
+      termination: error instanceof SystemdInspectionTimeout ? "timeout" : "error",
       stdout: "",
       stderr: error.message,
       inspectionReason: error.reason,
@@ -272,6 +285,7 @@ export async function execSystemctlUser(
   timeoutMs?: number,
   assertCurrent?: () => void,
   stopInspection?: SystemdStopInspection,
+  beforeEffect?: () => void,
 ): Promise<SystemdExecResult> {
   return await execSystemdUserCommand(
     "systemctl",
@@ -280,6 +294,7 @@ export async function execSystemctlUser(
     timeoutMs,
     assertCurrent,
     stopInspection,
+    beforeEffect,
   );
 }
 
@@ -388,7 +403,7 @@ export async function isSystemctlAvailable(env: GatewayServiceEnv): Promise<bool
  * The caller supplies its deadline- and custody-checked D-Bus query. */
 export async function bindSystemdManagerOwner(
   query: SystemdBusQuery,
-  managerUid: number,
+  managerUid: number | undefined,
   unavailable: () => Error,
 ): Promise<{ destination: string; verify: () => Promise<void> }> {
   const readOwner = () => readSystemdBusOwner(query, unavailable);
@@ -400,10 +415,10 @@ export async function bindSystemdManagerOwner(
     "u",
     unavailable,
   );
-  if (!isSystemdManagerUid(managerUid) || !Number.isInteger(uid)) {
+  if ((managerUid !== undefined && !isSystemdManagerUid(managerUid)) || !isSystemdManagerUid(uid)) {
     throw unavailable();
   }
-  if (uid !== managerUid) {
+  if (managerUid !== undefined && uid !== managerUid) {
     throw new ServiceOwnershipRefusalError("systemd-manager-changed");
   }
   return {

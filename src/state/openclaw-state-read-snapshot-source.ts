@@ -1,43 +1,54 @@
+import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { sleepWithAbort } from "@openclaw/retry";
 import { mapRetainedOperation, type RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { acquireWithWait } from "../infra/acquire-with-wait.js";
-import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
-import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
+import {
+  sameFileMutationFingerprint,
+  type FileMutationFingerprint,
+} from "../infra/file-descriptor.js";
+import {
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../infra/gateway-state-owner-record.js";
+import {
+  createSqliteLifecycleAggregateError,
+  SqliteSnapshotCleanupError,
+} from "../infra/sqlite-lifecycle-errors.js";
 import {
   deferSqliteSnapshotCleanupAfterRead,
   retainSnapshotTempDirectory,
-  SqliteSnapshotCleanupError,
 } from "../infra/sqlite-readonly-location-cleanup.js";
-import { prepareSqliteReadOnlyLocationSyncInProcess } from "../infra/sqlite-readonly-location.js";
 import type {
   AsyncPreparedSqliteReadOnlyLocation,
   RetainedSqliteSnapshotPreparation,
+  SqlitePrivateSnapshotFamily,
 } from "../infra/sqlite-readonly-location.types.js";
 import {
   readSqliteInspectionBudget,
+  runSqliteReadOnlyOperation,
   sqliteInspectionTimeoutError,
 } from "../infra/sqlite-readonly-worker.js";
 import {
+  forkSqlitePrivateSnapshot,
   prepareSqliteReadOnlyLocation,
   startSqliteReadOnlyLocationAsync,
 } from "../infra/sqlite-snapshot-source.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   openClawStateDatabaseCache,
 } from "./openclaw-state-db-cache.js";
 import { existingPathOrUndefined } from "./openclaw-state-db.paths.js";
-import {
-  getOpenClawDatabaseMaintenanceScope,
-  maintenanceOwnerMayCopySourcesInProcess,
-} from "./openclaw-state-maintenance-context.js";
+import { recoverOpenClawStateRollbackJournal } from "./openclaw-state-ownership.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
+
+const log = createSubsystemLogger("state/db");
 
 export type StateReadSnapshotSource = {
   location: string;
   cleanupRoot?: string;
-  cleanClose?: boolean;
   postgresSnapshot?: string;
 };
 
@@ -50,7 +61,8 @@ export async function prepareOpenClawStateReadSnapshotSource({
   controller,
   callerSignal,
   admissionTimeoutMs,
-  reuseCleanClose,
+  allowStartupRollbackRecovery,
+  live,
 }: {
   pathname: string;
   env: NodeJS.ProcessEnv;
@@ -59,34 +71,37 @@ export async function prepareOpenClawStateReadSnapshotSource({
   controller: AbortController;
   callerSignal?: AbortSignal;
   admissionTimeoutMs?: number;
-  reuseCleanClose?: boolean;
+  allowStartupRollbackRecovery: boolean;
+  live: boolean;
 }) {
   const admissionSignal = callerSignal
     ? AbortSignal.any([callerSignal, controller.signal])
     : controller.signal;
+  const artifactPreserving = isArtifactPreservingStateRead();
   const assertHostAdmission = () =>
     openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
   let admission: ReturnType<typeof captureOpenClawStateDatabaseReadAdmission> | undefined;
   let prepared: AsyncPreparedSqliteReadOnlyLocation | undefined;
   let source: StateReadSnapshotSource | undefined;
-  let cleanClose = false;
+  let family: SqlitePrivateSnapshotFamily | undefined;
   let postgresSnapshot: string | undefined;
   let releaseSource: (() => void) | undefined;
+  let rollbackSource: { path: string; fingerprint: FileMutationFingerprint }[] | undefined;
   let preparation: RetainedSqliteSnapshotPreparation | undefined;
   let materialization: RetainedOperation<AsyncPreparedSqliteReadOnlyLocation> | undefined;
   let budget: ReturnType<typeof readSqliteInspectionBudget> | undefined;
   let deadline = Infinity;
   const retainSource = (location: AsyncPreparedSqliteReadOnlyLocation) => {
     prepared = location;
+    family = location.privateFamily;
     // Callers key prepared reads and discovery caches by this scope's source identity.
     source = {
       location: location.location,
       cleanupRoot: location.cleanupRoot,
-      cleanClose,
       postgresSnapshot,
     };
     releaseSource =
-      postgres || cleanClose
+      postgres || location.location === pathname
         ? undefined
         : retainSnapshotTempDirectory(location.cleanupRoot ?? path.dirname(location.location));
   };
@@ -101,10 +116,11 @@ export async function prepareOpenClawStateReadSnapshotSource({
       admission = captured;
       budget = readSqliteInspectionBudget("read-only snapshot", pathname);
       deadline = performance.now() + budget.timeoutMs;
+      const preserveSourceArtifacts = artifactPreserving || isArtifactPreservingStateRead();
       preparation = startSqliteReadOnlyLocationAsync(pathname, {
-        preserveSourceArtifacts: isArtifactPreservingStateRead(),
+        preserveSourceArtifacts,
         signal: admissionSignal,
-        expectedSourceIdentity: isArtifactPreservingStateRead() ? captured.identity : undefined,
+        expectedSourceIdentity: preserveSourceArtifacts ? captured.identity : undefined,
       });
       // Sync readers must publish the same source without waiting for a Promise reaction.
       materialization = mapRetainedOperation(preparation, (location) => {
@@ -118,18 +134,39 @@ export async function prepareOpenClawStateReadSnapshotSource({
     return materialization;
   };
   if (!lazy) {
+    const admissionDeadline = performance.now() + (admissionTimeoutMs ?? 0);
+    let nextWaitLog = 0;
     try {
       // Wait only before capturing private bytes; callbacks and cleanup must never replay.
       admission = await acquireWithWait({
         acquire: capture,
-        shouldRetry: (error) =>
-          error instanceof StateDatabaseAdmissionPendingError && error.databasePath === pathname,
-        deadlineMs: performance.now() + (admissionTimeoutMs ?? 0),
+        shouldRetry: (error) => {
+          if (
+            !(error instanceof StateDatabaseAdmissionPendingError) &&
+            !(error instanceof StateDatabaseOfflineMaintenanceError)
+          ) {
+            return false;
+          }
+          if (error.databasePath !== pathname) {
+            return false;
+          }
+          const now = performance.now();
+          if (now >= nextWaitLog && now < admissionDeadline) {
+            log.warn(
+              `Waiting for shared-state admission (up to ${Math.ceil((admissionDeadline - now) / 1000)} s remaining). ${error.message}`,
+            );
+            nextWaitLog = now + 30_000;
+          }
+          return true;
+        },
+        deadlineMs: admissionDeadline,
         pollIntervalMs: 250,
         sleep: (ms) => sleepWithAbort(ms, admissionSignal),
       });
       admissionSignal.throwIfAborted();
-      cleanClose = !postgres && reuseCleanClose === true && readSqliteDatabaseCleanClose(pathname);
+      if (nextWaitLog > 0) {
+        log.info(`Shared-state admission acquired: ${pathname}`);
+      }
       if (postgres) {
         const { openPostgresStateReadSnapshot } =
           await import("./openclaw-state-postgres-snapshot.js");
@@ -142,22 +179,73 @@ export async function prepareOpenClawStateReadSnapshotSource({
           location: pathname,
           cleanupAsync: () => retained.close().then(() => true),
         };
-      } else if (cleanClose) {
-        prepared = { location: pathname, cleanupAsync: async () => true };
-      } else if (
-        isArtifactPreservingStateRead() &&
-        maintenanceOwnerMayCopySourcesInProcess(getOpenClawDatabaseMaintenanceScope(), pathname) &&
-        !openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(pathname)
-      ) {
-        prepared = prepareSqliteReadOnlyLocationSyncInProcess(pathname);
+      } else if (live) {
+        const rollbackRecovery =
+          allowStartupRollbackRecovery &&
+          existsSync(`${pathname}-journal`) &&
+          (await runSqliteReadOnlyOperation(
+            pathname,
+            { type: "startupMetadata.rollbackRecoveryRequired", input: undefined },
+            {
+              source: "canonical",
+              expectedIdentity: admission.identity.key,
+              env,
+              signal: admissionSignal,
+            },
+          ));
+        admission.assertCurrent();
+        if (rollbackRecovery) {
+          rollbackSource = [pathname, `${pathname}-journal`].map((filePath) => ({
+            path: filePath,
+            fingerprint: statSync(filePath, { bigint: true }),
+          }));
+          // Crash recovery on DELETE-journal filesystems writes before ownership checks; inspect a copy first.
+          preparation = startSqliteReadOnlyLocationAsync(pathname, {
+            preserveSourceArtifacts: true,
+            signal: admissionSignal,
+            expectedSourceIdentity: admission.identity,
+          });
+          prepared = await preparation.result;
+          log.info("Startup state inspection selected private hot rollback-journal recovery", {
+            path: pathname,
+          });
+        } else {
+          prepared = { location: pathname, cleanupAsync: async () => true };
+        }
+      } else if (artifactPreserving) {
+        // Share only the retained read producer, never a generic mutable snapshot lease.
+        preparation = startSqliteReadOnlyLocationAsync(pathname, {
+          preserveSourceArtifacts: true,
+          signal: admissionSignal,
+          expectedSourceIdentity: admission.identity,
+        });
+        prepared = await preparation.result;
       } else {
         prepared = await prepareSqliteReadOnlyLocation(pathname, {
-          preserveSourceArtifacts: isArtifactPreservingStateRead(),
-          signal: controller.signal,
+          preserveSourceArtifacts: artifactPreserving,
+          signal: admissionSignal,
         });
       }
       retainSource(prepared);
     } catch (error) {
+      if (nextWaitLog > 0) {
+        log.warn(`Shared-state admission wait ended without a snapshot. ${String(error)}`);
+      }
+      try {
+        releaseSource?.();
+        if (preparation) {
+          // A rejected retained producer still owns its child and unpublished directory.
+          await preparation.startClose().result;
+        } else if (prepared && !(await prepared.cleanupAsync())) {
+          throw new SqliteSnapshotCleanupError("Shared-state snapshot preparation cleanup failed");
+        }
+      } catch (cleanupError) {
+        throw createSqliteLifecycleAggregateError(
+          [error, cleanupError],
+          "Shared-state snapshot preparation and cleanup failed",
+          error,
+        );
+      }
       throw new Error(
         `Cannot read shared state for discovery: ${pathname}. Retry after the current state operation completes. ${String(error)}`,
         { cause: error },
@@ -209,6 +297,44 @@ export async function prepareOpenClawStateReadSnapshotSource({
           await startLazySource()?.result;
         }
       : undefined,
+    forkSource: async (signal?: AbortSignal) => {
+      const forkSignal = signal ? AbortSignal.any([signal, admissionSignal]) : admissionSignal;
+      forkSignal.throwIfAborted();
+      // Join an accepted capture, but do not force unused lazy reports to acquire bytes.
+      await materialization?.result;
+      forkSignal.throwIfAborted();
+      if (!prepared || !family) {
+        return undefined;
+      }
+      const assertCurrent = () => {
+        assertHostAdmission();
+        admission?.assertCurrent();
+      };
+      assertCurrent();
+      return forkSqlitePrivateSnapshot(prepared.location, family, forkSignal, assertCurrent);
+    },
+    recoverRollbackJournal: () => {
+      const recoverySource = rollbackSource;
+      if (!recoverySource || !prepared) {
+        return;
+      }
+      recoverOpenClawStateRollbackJournal(pathname, prepared.location, env, () => {
+        admissionSignal.throwIfAborted();
+        assertHostAdmission();
+        admission?.assertCurrent();
+        // The private ownership verdict belongs only to this unchanged crashed source.
+        for (const file of recoverySource) {
+          if (
+            !sameFileMutationFingerprint(file.fingerprint, statSync(file.path, { bigint: true }))
+          ) {
+            throw new Error(
+              "Hot rollback-journal source changed during startup admission; retry startup.",
+            );
+          }
+        }
+      });
+      rollbackSource = undefined;
+    },
     async cleanup(readSucceeded: boolean) {
       releaseSource?.();
       if (!prepared) {

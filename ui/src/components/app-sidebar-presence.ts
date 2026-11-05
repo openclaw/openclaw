@@ -20,28 +20,24 @@ export type SidebarPresenceScope = {
   selfInstanceId?: string;
 };
 
-type SidebarPresenceHost = Pick<HTMLElement, "querySelectorAll"> & {
+type SidebarPresenceHost = {
   navigationView: "sessions" | "online" | "pages";
   contextualSidebar?: ContextualSidebar;
   sessionDataContext?: { gateway: { snapshot: { selfUser?: AuthenticatedUser | null } } };
   sessionData: { presenceInstanceId?: string; presencePayload: PresencePayload | undefined };
   reconciledSidebarZone(): { entries: readonly SidebarZoneEntry[] };
+  mountedPresence(): {
+    sessionKeys: ReadonlySet<string>;
+    activityProfileIds: ReadonlySet<string>;
+  };
 };
 
 export function sidebarPresenceScope(host: SidebarPresenceHost): SidebarPresenceScope {
   const sessionsVisible = host.navigationView === "sessions" && !host.contextualSidebar;
-  // Fingerprint mounted presentation, including plugin-delegated lists; source
-  // rows also contain controls excluded by lazy loading, collapse, and pagination.
-  const sessionKeys = new Set<string>();
-  const activityProfileIds = new Set<string>();
-  if (sessionsVisible) {
-    for (const facepile of host.querySelectorAll("openclaw-viewer-facepile")) {
-      sessionKeys.add(facepile.sessionKey ?? "");
-    }
-    for (const header of host.querySelectorAll<HTMLElement>(".sidebar-session-group-person")) {
-      activityProfileIds.add(header.dataset.personCardKey?.slice("profile:".length) ?? "");
-    }
-  }
+  // Mounted refs include plugin-delegated lists while excluding collapsed or paged-out rows.
+  const { sessionKeys, activityProfileIds } = sessionsVisible
+    ? host.mountedPresence()
+    : { sessionKeys: new Set<string>(), activityProfileIds: new Set<string>() };
   const profileIds = new Set(activityProfileIds);
   for (const entry of host.reconciledSidebarZone().entries) {
     if (entry.type === "person") {

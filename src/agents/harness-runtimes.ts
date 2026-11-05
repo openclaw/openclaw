@@ -59,7 +59,11 @@ export function resolveConfiguredModelHarnessRuntime(params: {
   return isSelectablePluginRuntime(runtime) ? runtime : undefined;
 }
 
-function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<string>): void {
+function pushConfiguredModelRuntimeIds(
+  config: OpenClawConfig,
+  runtimes: Set<string>,
+  includeImplicitRuntimePreferences: boolean,
+): void {
   const addRuntime = (value: unknown) => {
     const runtime = normalizeOptionalAgentRuntimeId(value);
     if (isSelectablePluginRuntime(runtime)) {
@@ -72,32 +76,6 @@ function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<str
       addRuntime(modelConfig?.agentRuntime?.id);
     }
   }
-  const pushModelMapRuntimeIds = (models: unknown) => {
-    if (!isRecord(models)) {
-      return;
-    }
-    for (const entry of Object.values(models)) {
-      if (!isRecord(entry)) {
-        continue;
-      }
-      addRuntime(isRecord(entry.agentRuntime) ? entry.agentRuntime.id : undefined);
-      for (const value of Array.isArray(entry.pickerRuntimes) ? entry.pickerRuntimes : []) {
-        addRuntime(value);
-      }
-    }
-  };
-  pushModelMapRuntimeIds(config.agents?.defaults?.models);
-  const agents = listAgentEntries(config);
-  for (const agent of agents) {
-    pushModelMapRuntimeIds(isRecord(agent) ? agent.models : undefined);
-  }
-}
-
-function pushConfiguredAgentModelRuntimeIds(
-  config: OpenClawConfig,
-  runtimes: Set<string>,
-  includeImplicitRuntimePreferences: boolean,
-): void {
   const pushModelRefs = (
     modelRefs: string[],
     modelRefKind: ConfiguredModelRef["kind"],
@@ -116,16 +94,25 @@ function pushConfiguredAgentModelRuntimeIds(
       }
     }
   };
-  const pushModelMapRefs = (models: unknown, agentId?: string) => {
+  const pushModelMap = (models: unknown, agentId?: string) => {
     if (!isRecord(models)) {
       return;
     }
     pushModelRefs(Object.keys(models), "literal", agentId);
+    for (const entry of Object.values(models)) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      addRuntime(isRecord(entry.agentRuntime) ? entry.agentRuntime.id : undefined);
+      for (const value of Array.isArray(entry.pickerRuntimes) ? entry.pickerRuntimes : []) {
+        addRuntime(value);
+      }
+    }
   };
 
   const defaultsModel = config.agents?.defaults?.model;
   pushModelRefs(listModelRefsFromConfigValue(defaultsModel), "selector");
-  pushModelMapRefs(config.agents?.defaults?.models);
+  pushModelMap(config.agents?.defaults?.models);
 
   for (const agent of listAgentEntries(config)) {
     if (!isRecord(agent)) {
@@ -133,7 +120,7 @@ function pushConfiguredAgentModelRuntimeIds(
     }
     const agentId = typeof agent.id === "string" ? agent.id : undefined;
     pushModelRefs(listModelRefsFromConfigValue(agent.model ?? defaultsModel), "selector", agentId);
-    pushModelMapRefs(agent.models, agentId);
+    pushModelMap(agent.models, agentId);
   }
 }
 
@@ -155,9 +142,9 @@ export function collectConfiguredAgentHarnessRuntimes(
     const runtimes = new Set<string>();
     const includeImplicitRuntimePreferences = options.includeImplicitRuntimePreferences ?? true;
 
-    pushConfiguredModelRuntimeIds(config, runtimes);
-    pushConfiguredAgentModelRuntimeIds(config, runtimes, includeImplicitRuntimePreferences);
+    pushConfiguredModelRuntimeIds(config, runtimes, includeImplicitRuntimePreferences);
 
-    return [...runtimes].toSorted((left, right) => left.localeCompare(right));
+    // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is private to this runtime listing.
+    return [...runtimes].sort((left, right) => left.localeCompare(right));
   });
 }

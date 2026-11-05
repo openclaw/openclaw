@@ -1,11 +1,14 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
+import { fnv1aUtf16 } from "../../../../src/shared/fnv1a.js";
+import { markdownVisibleText } from "../../components/markdown-visible-text.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
+import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
   canvasPreviewsMatch,
@@ -19,12 +22,11 @@ import {
   extractToolPreview,
   type CanvasToolPreview,
 } from "../../lib/chat/tool-cards.ts";
-import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { stripThinkingTags } from "../../lib/strip-thinking-tags.ts";
+import { phraseQueryPattern } from "../../lib/text-match.ts";
 import {
   messageRecoveryKey,
-  resolveCappedMessageId,
-  resolveSourceMessageId,
+  resolveFullMessageRecovery,
   type ChatMessageRecovery,
 } from "./chat-message-recovery.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
@@ -69,38 +71,59 @@ export function appendCanvasBlockToAssistantMessage(
   return projection;
 }
 
-export function messageMatchesSearchQuery(
-  message: unknown,
+export function createChatSearchMatcher(
   query: string,
   recovery?: ChatMessageRecovery,
-): boolean {
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
+): (message: unknown) => boolean {
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
   if (!normalizedQuery) {
-    return true;
+    return () => true;
   }
-  const messageId = recovery && resolveSourceMessageId(message);
-  const expansion =
-    recovery && messageId
-      ? recovery.messages.get(messageRecoveryKey(recovery.agentId, messageId))
+  const phrase = phraseQueryPattern(query);
+  const sourceMatches = (markdown: string | null) =>
+    normalizeLowercaseStringOrEmpty(markdown).normalize("NFC").includes(normalizedQuery);
+  return (message) => {
+    const role = recovery ? normalizeRoleForGrouping(normalizeMessage(message).role) : "";
+    const expansion = recovery
+      ? resolveFullMessageRecovery(message, role, {
+          displayFacts: recovery.displayFacts,
+          canFetchFullMessage: recovery.canFetchFullMessage ?? true,
+          getAssistantMessageExpansion: (id) =>
+            recovery.messages.get(messageRecoveryKey(recovery.agentId, id)),
+        })?.state
       : undefined;
-  if (expansion?.status === "loaded") {
-    const role = normalizeRoleForGrouping(normalizeMessage(message).role);
-    if (resolveCappedMessageId(message, role)) {
-      return normalizeLowercaseStringOrEmpty(
-        role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown,
-      ).includes(normalizedQuery);
+    // Keep source syntax and link destinations searchable, then compare the same
+    // display preparation used by message rendering.
+    if (expansion?.status === "loaded") {
+      const markdown =
+        role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown;
+      const recovered = expansion.message ? prepareChatMessageRender(expansion.message) : undefined;
+      return (
+        sourceMatches(markdown) ||
+        (phrase !== null &&
+          markdownVisibleText(expansion, markdown, {
+            mode: "document",
+            humanMentions:
+              recovered?.displayMarkdown === markdown ? recovered.humanMentions : undefined,
+            assistantTranscriptRoleHeaders: role === "assistant",
+          }).search(phrase) >= 0)
+      );
     }
-  }
-  return normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery);
+    if (sourceMatches(extractTextCached(message))) {
+      return true;
+    }
+    const prepared = prepareChatMessageRender(message);
+    return (
+      phrase !== null &&
+      markdownVisibleText(message, prepared.displayMarkdown, {
+        humanMentions: prepared.humanMentions,
+        assistantTranscriptRoleHeaders: prepared.normalizedMessage.role === "assistant",
+      }).search(phrase) >= 0
+    );
+  };
 }
 
-type ChatMessagePreview = {
-  runId?: string;
-  parentToolCallId?: string;
-  preview: CanvasToolPreview;
-  text: string | null;
-  timestamp: number | null;
-};
+type ChatMessagePreview = NonNullable<ReturnType<typeof readChatMessagePreview>>;
 
 const chatMessagePreviews = new WeakMap<object, ChatMessagePreview | null>();
 
@@ -119,7 +142,11 @@ export function extractChatMessagePreview(toolMessage: unknown): ChatMessagePrev
   return preview;
 }
 
-function readChatMessagePreview(toolMessage: Record<string, unknown>): ChatMessagePreview | null {
+function readChatMessagePreview(toolMessage: Record<string, unknown>) {
+  // Recorded Canvas references are text, not views created by this OpenClaw session.
+  if (asRecord(toolMessage["__openclaw"])?.catalogSource === true) {
+    return null;
+  }
   if (!safeNormalizeMessage(toolMessage)) {
     return null;
   }
@@ -303,7 +330,14 @@ export function isPendingSendMessage(message: unknown): boolean {
 export function readPendingSendStatus(message: unknown): {
   error?: string;
   id: string;
-  state: "failed" | "unconfirmed" | "held" | "waiting-reconnect";
+  state:
+    | "failed"
+    | "held"
+    | "waiting-reconnect"
+    | "waiting-model"
+    | "waiting-idle"
+    | "submitting"
+    | "sending";
 } | null {
   const metadata = asRecord(asRecord(message)?.["__openclaw"]);
   const state = metadata?.state;
@@ -311,9 +345,12 @@ export function readPendingSendStatus(message: unknown): {
   if (
     metadata?.kind !== "pending-send" ||
     (state !== "failed" &&
-      state !== "unconfirmed" &&
       state !== "held" &&
-      state !== "waiting-reconnect") ||
+      state !== "waiting-reconnect" &&
+      state !== "waiting-model" &&
+      state !== "waiting-idle" &&
+      state !== "submitting" &&
+      state !== "sending") ||
     typeof id !== "string"
   ) {
     return null;
@@ -325,21 +362,6 @@ export function readPendingSendStatus(message: unknown): {
   };
 }
 
-export function readChatThreadMessageIdentity(message: unknown) {
-  const record = asRecord(message);
-  const surfaceId =
-    typeof record?.messageId === "string" && record.messageId.trim()
-      ? record.messageId
-      : record?.id;
-  return readSessionMessageIdentity(message, { messageId: surfaceId });
-}
-
-/** Causal boundaries follow execution ownership, which can differ from the submit key. */
-export function userTurnRunId(message: unknown): string | null {
-  const identity = readChatThreadMessageIdentity(message);
-  return identity?.role === "user" ? identity.runId : null;
-}
-
 export function persistedMessageEntryId(message: unknown): string | null {
   const id = readChatThreadMessageIdentity(message)?.id;
   return isPendingSendMessage(message) || id?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)
@@ -347,7 +369,7 @@ export function persistedMessageEntryId(message: unknown): string | null {
     : (id ?? null);
 }
 
-function transcriptMessageSourceKey(message: unknown): string | null {
+export function transcriptMessageSourceKey(message: unknown): string | null {
   // Send identity outranks transcript ids: the same submit is re-projected with
   // different id/seq metadata across the pending -> history handoff, and a key
   // change there remounts the bubble (visible flicker).
@@ -523,6 +545,21 @@ export function insertionIndexesForBounds(
     minimum: afterIndex + 1,
     maximum: beforeIndex >= 0 ? beforeIndex : items.length,
   };
+}
+
+export function appendActiveRunItem(
+  items: ChatItem[],
+  bounds: TurnInsertionBounds | undefined,
+  item: Extract<ChatItem, { kind: "stream" | "reading-indicator" }>,
+): void {
+  // Queued custody is a ceiling for the whole live response, not just its text.
+  // Moving its working indicator past that ceiling splits and remeasures the run.
+  if (bounds) {
+    const { maximum } = insertionIndexesForBounds(items, bounds);
+    items.splice(maximum, 0, item);
+  } else {
+    items.push(item);
+  }
 }
 
 export function insertChatItemsByTimestamp(items: ChatItem[], inserts: ChatProjection[]): void {

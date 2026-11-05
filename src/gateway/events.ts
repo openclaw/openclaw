@@ -35,6 +35,9 @@ export const GATEWAY_EVENTS = [
   "session.typing",
   "session.tool",
   "sessions.changed",
+  "worktrees.branches.changed",
+  "projects.checkoutOptions.changed",
+  "sessions.processes.changed",
   "socket.drain",
   "controlUi.sessionPullRequests.changed",
   "plugins.controlUi.changed",
@@ -48,6 +51,7 @@ export const GATEWAY_EVENTS = [
   "health",
   "heartbeat",
   "cron",
+  "cron.inventory.changed",
   "task.suggestion",
   "node.pair.requested",
   "node.pair.resolved",
@@ -56,6 +60,7 @@ export const GATEWAY_EVENTS = [
   GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
   "node.invoke.cancel",
   "node.invoke.input",
+  "node.worker.localMcpPolicy",
   "node.invoke.request",
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
   "device.pair.requested",
@@ -83,6 +88,7 @@ export const GATEWAY_EVENTS = [
   "portal.changed",
   "progressCard.changed",
   "mentions.changed",
+  "mentions.failed",
 ];
 
 export function canReadDetailedUpdateMetadata(role: string, scopes: readonly string[]): boolean {

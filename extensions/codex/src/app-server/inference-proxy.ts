@@ -1,8 +1,11 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { Writable, type Duplex } from "node:stream";
-import { createDeferred, createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
+import {
+  createDeferred,
+  createPermitPool,
+  runInDetachedAsyncContext,
+} from "openclaw/plugin-sdk/concurrency-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
-import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
 import {
   fetchWithSsrFGuard,
   isBlockedHostnameOrIp,
@@ -18,7 +21,6 @@ import { createCodexInferenceContext } from "./inference-context.js";
 import {
   authorizationFailure,
   requestTooLargeFailure,
-  CODEX_INFERENCE_TRANSPORT_FAILURE as FAILURE,
   createCodexInferenceDispatch,
   isTerminalResponse,
   readProxyBody,
@@ -30,14 +32,20 @@ import {
   OVERLOAD_HEADERS,
   rejectBusyUpgrade,
   relayHeaders,
+  logInferenceTransportFailure,
+  type CodexInferenceTransportStage,
 } from "./inference-proxy-http.js";
+import { CODEX_INFERENCE_TRANSPORT_FAILURE as FAILURE } from "./inference-transport.js";
 import {
   createUploadAdmission,
   MAX_BODY_BYTES,
   MAX_PENDING_REQUESTS,
   MAX_UPLOADS,
 } from "./inference-upload.js";
-import type { CodexResponsesOAuth } from "./responses-oauth.js";
+import {
+  createCodexInferenceUpstream,
+  type CodexInferenceUpstreamOptions,
+} from "./inference-upstream.js";
 import { codexWebSocketDataToBuffer } from "./websocket-data.js";
 
 const MAX_ERROR_BODY_BYTES = 1024 * 1024;
@@ -57,41 +65,27 @@ type ResidentTicket = {
 };
 
 /** Private, fixed-destination relay. Upstream credentials are never retained. */
-export async function createCodexInferenceProxy(params: {
-  upstream: URL;
-  assertCurrent: () => void;
-  oauth?: CodexResponsesOAuth;
-  preserveAzureUrlFeatures?: boolean;
-  preserveCodexBackendRoutes?: boolean;
-  bindModelExecution?: (
-    request: CodexInferenceModelRequest,
-  ) => Promise<CodexInferenceModelExecution> | CodexInferenceModelExecution;
-}) {
-  const upstream = new URL(params.upstream);
-  if (upstream.protocol !== "https:" || upstream.username || upstream.password || upstream.hash) {
-    throw new Error("Codex inference requires a credential-free HTTPS upstream URL");
-  }
-  if (params.oauth && upstream.href.replace(/\/$/, "") !== "https://api.openai.com/v1") {
-    throw new Error("ChatGPT subscription sharing requires the public Responses endpoint");
-  }
+export async function createCodexInferenceProxy(
+  params: CodexInferenceUpstreamOptions & {
+    configurationIdentity?: string;
+    assertCurrent: () => void;
+    bindModelExecution?: (
+      request: CodexInferenceModelRequest,
+    ) => Promise<CodexInferenceModelExecution> | CodexInferenceModelExecution;
+  },
+) {
+  const {
+    upstream,
+    upstreamPath,
+    pathPrefix,
+    policy: upstreamPolicy,
+  } = createCodexInferenceUpstream(params);
   const lifetime = new AbortController();
   const assertCurrent = () => {
     lifetime.signal.throwIfAborted();
     params.assertCurrent();
   };
   const context = createCodexInferenceContext(assertCurrent);
-  const upstreamPath = upstream.pathname.replace(/\/+$/, "");
-  // Preserve native Azure feature detection and the Guardian backend suffix through loopback.
-  const pathPrefix =
-    "/" +
-    generateSecureToken({ bytes: 32, redact: true }) +
-    (params.preserveAzureUrlFeatures ? "/azure-api." : "") +
-    upstreamPath +
-    (params.preserveCodexBackendRoutes && !upstreamPath.endsWith("/backend-api/codex")
-      ? "/backend-api/codex"
-      : params.preserveCodexBackendRoutes === false && upstreamPath.endsWith("/backend-api/codex")
-        ? "/native-responses"
-        : "");
   const acquireUpload = createUploadAdmission();
   const connections = new Set<() => void>();
   const idleConnections = new Set<() => void>();
@@ -230,15 +224,18 @@ export async function createCodexInferenceProxy(params: {
     let resident: ReturnType<typeof reserveResident> = null;
     let upload: Awaited<ReturnType<typeof prepareHttp>> | undefined;
     let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
+    let stage: CodexInferenceTransportStage = "request";
     const abort = () => controller.abort();
     req.once("aborted", abort);
     res.once("close", abort);
-    void (async () => {
+    // A fresh request owns its admission, not the listener's closed startup lease.
+    void runInDetachedAsyncContext(async () => {
       try {
         const { target, path } = resolveTarget(req);
         if (req.method !== "POST") {
           throw new Error(FAILURE);
         }
+        stage = "admission";
         resident = reserveResident(socket, signal, deadlineAtMs);
         const admitted = resident && (await resident.ready);
         signal.throwIfAborted();
@@ -254,6 +251,7 @@ export async function createCodexInferenceProxy(params: {
           res.writeHead(503, OVERLOAD_HEADERS).end(OVERLOAD_BODY);
           return;
         }
+        stage = "prepare";
         upload = await prepareHttp(req, path, signal, releasePermit, Boolean(params.oauth));
         const preparedUpload = upload;
         let body = upload.body;
@@ -262,6 +260,7 @@ export async function createCodexInferenceProxy(params: {
             ...relayHeaders(req.headers),
             "content-length": String(upload.length),
           };
+          stage = "authorization";
           const auth = await params.oauth?.resolve(attempt === 1);
           const assertAuthorized = () => {
             preparedUpload.assertCurrent();
@@ -287,6 +286,7 @@ export async function createCodexInferenceProxy(params: {
             signal: upload.signal,
             duplex: "half",
           };
+          stage = "upstream";
           guarded = await fetchWithSsrFGuard({
             url: target.toString(),
             init,
@@ -297,6 +297,7 @@ export async function createCodexInferenceProxy(params: {
             maxRedirects: 0,
             capture: false,
             mode: "trusted_env_proxy",
+            policy: upstreamPolicy,
             auditContext: "codex-parent-local-inference",
           });
           assertAuthorized();
@@ -313,6 +314,7 @@ export async function createCodexInferenceProxy(params: {
           throw new Error(FAILURE);
         }
         upload.assertCurrent();
+        stage = "response";
         // fetch decodes response content encodings. Never forward stale encoding/length headers.
         const headers = Object.fromEntries(guarded.response.headers);
         delete headers["content-encoding"];
@@ -324,9 +326,12 @@ export async function createCodexInferenceProxy(params: {
         }
       } catch (error) {
         // Errors can contain headers, bodies, or the private URL: never log/reflect them.
+        const denied = authorizationFailure(error);
+        const tooLarge = requestTooLargeFailure(error);
+        if (!denied && !tooLarge) {
+          logInferenceTransportFailure(stage, error, res.headersSent);
+        }
         if (!res.headersSent && !res.destroyed) {
-          const denied = authorizationFailure(error);
-          const tooLarge = requestTooLargeFailure(error);
           if (denied) {
             res.writeHead(403, { "content-type": "application/json" }).end(denied);
           } else if (tooLarge) {
@@ -346,7 +351,7 @@ export async function createCodexInferenceProxy(params: {
         upload?.releaseModelExecution();
         resident?.finish();
       }
-    })();
+    });
   });
   // Leave HTTP/failure-response headroom beyond the separately bounded WS pool.
   // This last-resort TCP ceiling must not be the normal inference admission limit.
@@ -467,7 +472,12 @@ export async function createCodexInferenceProxy(params: {
         proxyAgent = createNodeProxyAgent({ mode: "env", targetUrl: target.href });
         const lookup = proxyAgent
           ? undefined
-          : (await resolvePinnedHostnameWithPolicy(target.hostname, { signal })).lookup;
+          : (
+              await resolvePinnedHostnameWithPolicy(target.hostname, {
+                signal,
+                policy: upstreamPolicy,
+              })
+            ).lookup;
         assertHandshakeCurrent();
         target.protocol = "wss:";
         const headers = relayHeaders(req.headers);
@@ -563,16 +573,12 @@ export async function createCodexInferenceProxy(params: {
               const forward = async (prepared: Awaited<ReturnType<typeof prepare>>) => {
                 let releaseUpload: (() => void) | null = null;
                 try {
-                  const requestSignal = AbortSignal.any([
-                    signal,
-                    ...(prepared.signal ? [prepared.signal] : []),
-                  ]);
                   releaseUpload = await acquireUpload(
-                    requestSignal,
+                    prepared.signal,
                     Date.now() + REQUEST_TIMEOUT_MS,
                     prepared.bytes.length,
                   );
-                  requestSignal.throwIfAborted();
+                  prepared.signal.throwIfAborted();
                   prepared.assertCurrent();
                   if (!releaseUpload) {
                     accepted.send(OVERLOAD_BODY, { binary: false }, close);
@@ -715,6 +721,7 @@ export async function createCodexInferenceProxy(params: {
     return {
       context,
       upstream: upstream.toString(),
+      configurationIdentity: params.configurationIdentity ?? upstream.toString(),
       baseUrl: "http://127.0.0.1:" + address.port + pathPrefix,
       assertCurrent,
       close,

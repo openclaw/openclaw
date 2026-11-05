@@ -13,10 +13,10 @@ sidebarTitle: "Tool permissions"
 
 Two built-in tools remain control-plane sensitive:
 
-- `gateway` reads config with `config.schema.lookup` / `config.get` and starts owner-requested OpenClaw updates with `update.run`. It has no config-write or standalone restart action; update restart and completion notices are automatic.
+- `gateway` reads config with `config.schema.lookup` / `config.get` and starts owner-requested OpenClaw updates with `update.run`. It also exposes `restart` for a runtime-supervised restart and `update.cleanup` for explicit recovery cleanup while serving (`dryRun` previews). It has no config-write action; update restart and completion notices are automatic.
 - `cron` creates scheduled jobs that keep running after the original chat/task ends.
 
-The `gateway` tool stays owner-only because config reads can expose secrets and host topology and `update.run` changes the running installation. Updates require an explicit user request. Agents request other persistent config or lifecycle changes through the `openclaw` delegation tool. OpenClaw maps them to typed operations and applies the requesting run's effective permission policy: Full Access, including Default (Full Access), authorizes permitted changes without an approval prompt; restricted runs require human approval. Independent tool, filesystem, sandbox, and operation restrictions still apply, and the host revalidates live authority before execution. See [Session permission modes](/gateway/permission-modes#delegated-setup-and-repair) and [OpenClaw setup agent](/cli/openclaw#operations-and-approval).
+The `gateway` tool stays owner-only because config reads can expose secrets and host topology, updates change the running installation, and cleanup permanently retires eligible rollback copies. Each maintenance action requires an explicit owner request or operator-scheduled admission. Agents request other persistent config or lifecycle changes through the `openclaw` delegation tool. OpenClaw maps them to typed operations and applies the requesting run's effective permission policy: Full Access, including Default (Full Access), authorizes permitted changes without an approval prompt; restricted runs require human approval. Independent tool, filesystem, sandbox, and operation restrictions still apply, and the host revalidates live authority before execution. See [Session permission modes](/gateway/permission-modes#delegated-setup-and-repair) and [OpenClaw setup agent](/cli/openclaw#operations-and-approval).
 
 For any agent/surface handling untrusted content, deny these by default:
 
@@ -28,7 +28,7 @@ For any agent/surface handling untrusted content, deny these by default:
 }
 ```
 
-`commands.restart=false` disables `/restart` and external `SIGUSR2` restart requests. The `gateway` agent tool has no restart action.
+`commands.restart=false` disables `/restart`, `/update`, external-chat `gateway` update/restart actions, and external `SIGUSR2` restart requests. Cleanup does not stop the Gateway and does not depend on this flag. Tool maintenance keeps owner/operator and tool-policy gates; it does not require the separate setup-delegation approval path.
 
 ## Cross-provider messaging
 

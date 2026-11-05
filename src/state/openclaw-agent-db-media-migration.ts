@@ -26,13 +26,14 @@ export function* migrateOpenClawAgentDatabaseToMediaPrerequisiteSchemaSteps(
   options: OpenClawAgentDatabaseOptions & { integrityCheck?: "quick" | "full" },
 ): SqliteIntegrityOperation<void> {
   const targetVersion = AGENT_MEDIA_SCHEMA_VERSION - 1;
-  if (readSqliteUserVersion(db) > targetVersion) {
+  const userVersion = readSqliteUserVersion(db);
+  if (userVersion > targetVersion) {
     return;
   }
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
   assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
-  assertSupportedAgentMigrationSchemas(db, pathname, readSqliteUserVersion(db));
+  assertSupportedAgentMigrationSchemas(db, pathname, userVersion);
   if (db.location()) {
     maintenanceAuthority.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
   }

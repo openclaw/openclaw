@@ -11,7 +11,7 @@ import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { truncateUtf16WithEllipsis as truncateText } from "../../shared/text-truncate.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { isAcpTagVisible, resolveAcpProjectionSettings } from "./acp-stream-settings.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -40,53 +40,6 @@ type BufferedToolDelivery = {
   meta?: AcpDispatchDeliveryMeta;
 };
 
-function shouldInsertSeparator(params: {
-  separator: " " | "\n\n";
-  previousTail: string | undefined;
-  nextText: string;
-}): boolean {
-  if (!params.previousTail || /^\s/.test(params.nextText)) {
-    return false;
-  }
-  return params.separator === " "
-    ? !/\s$/.test(params.previousTail)
-    : !params.previousTail.endsWith("\n");
-}
-
-function shouldFlushLiveBufferOnBoundary(text: string): boolean {
-  return (
-    text.length >= ACP_LIVE_HARD_FLUSH_CHARS ||
-    text.endsWith("\n\n") ||
-    /[.!?][)"'`]*\s$/.test(text) ||
-    (text.length >= ACP_LIVE_SOFT_FLUSH_CHARS && /\s$/.test(text))
-  );
-}
-
-function shouldFlushLiveBufferOnIdle(text: string): boolean {
-  return (
-    text.length >= ACP_LIVE_IDLE_MIN_CHARS ||
-    /[.!?][)"'`]*$/.test(text.trimEnd()) ||
-    text.includes("\n")
-  );
-}
-
-function renderToolSummaryText(
-  event: Extract<AcpRuntimeEvent, { type: "tool_call" }>,
-  shouldSendFullToolDetails: boolean,
-): string {
-  const showDetails =
-    shouldSendFullToolDetails || normalizeOptionalLowercaseString(event.kind) !== "execute";
-  const title = showDetails ? normalizeOptionalString(event.title) : undefined;
-  const status = normalizeOptionalString(event.status);
-  const fallback = showDetails ? normalizeOptionalString(event.text) : undefined;
-  const display = resolveToolDisplay({
-    name: "tool_call",
-    meta:
-      [title, status && `status=${status}`].filter(Boolean).join(" · ") || fallback || "tool call",
-  });
-  return formatToolSummary(display);
-}
-
 export function createAcpReplyProjector(params: {
   cfg: OpenClawConfig;
   shouldSendToolSummaries: () => Promise<boolean>;
@@ -111,13 +64,19 @@ export function createAcpReplyProjector(params: {
     maxChunkChars: 1800,
     coalesceIdleMs: 350,
   });
+  let hasAcceptedSourceBlock = false;
   const blockReplyPipeline = createBlockReplyPipeline({
     onBlockReply: async (payload) => {
       // The chunker emits disjoint pieces, not replacement snapshots.
-      await params.deliver(
+      setReplyPayloadMetadata(payload, {
+        streamedSourceBoundary:
+          hasAcceptedSourceBlock && payload.text?.startsWith("\n") ? true : undefined,
+      });
+      const accepted = await params.deliver(
         "block",
         copyReplyPayloadMetadata(payload, { ...payload, textMode: "delta" }),
       );
+      hasAcceptedSourceBlock ||= accepted && Boolean(payload.text?.trim());
     },
     timeoutMs: ACP_BLOCK_REPLY_TIMEOUT_MS,
     coalescing: isLive ? undefined : streaming.coalescing,
@@ -160,7 +119,14 @@ export function createAcpReplyProjector(params: {
     if (!bufferedText) {
       return;
     }
-    if (idle && !shouldFlushLiveBufferOnIdle(bufferedText)) {
+    if (
+      idle &&
+      !(
+        bufferedText.length >= ACP_LIVE_IDLE_MIN_CHARS ||
+        /[.!?][)"'`]*$/.test(bufferedText.trimEnd()) ||
+        bufferedText.includes("\n")
+      )
+    ) {
       return;
     }
     const text = bufferedText;
@@ -176,9 +142,6 @@ export function createAcpReplyProjector(params: {
     clearLiveIdleTimer();
     liveIdleTimer = setTimeout(() => {
       flushLiveBuffer(true);
-      if (bufferedText) {
-        scheduleLiveIdleFlush();
-      }
     }, liveIdleFlushMs);
   };
 
@@ -243,10 +206,20 @@ export function createAcpReplyProjector(params: {
       markHiddenToolBoundary(event);
       return;
     }
-    const renderedToolSummary = renderToolSummaryText(
-      event,
-      await params.shouldSendFullToolDetails(),
-    );
+    const shouldSendFullToolDetails = await params.shouldSendFullToolDetails();
+    const showDetails =
+      shouldSendFullToolDetails || normalizeOptionalLowercaseString(event.kind) !== "execute";
+    const title = showDetails ? normalizeOptionalString(event.title) : undefined;
+    const toolStatus = normalizeOptionalString(event.status);
+    const fallback = showDetails ? normalizeOptionalString(event.text) : undefined;
+    const display = resolveToolDisplay({
+      name: "tool_call",
+      meta:
+        [title, toolStatus && `status=${toolStatus}`].filter(Boolean).join(" · ") ||
+        fallback ||
+        "tool call",
+    });
+    const renderedToolSummary = formatToolSummary(display);
     const toolSummary = truncateText(renderedToolSummary, ACP_MAX_SESSION_UPDATE_CHARS);
     const hash = renderedToolSummary.trim();
     const toolCallId = normalizeOptionalString(event.toolCallId);
@@ -311,11 +284,11 @@ export function createAcpReplyProjector(params: {
       }
       if (
         pendingHiddenBoundary &&
-        shouldInsertSeparator({
-          separator: hiddenBoundarySeparator,
-          previousTail: lastVisibleOutputTail,
-          nextText: text,
-        })
+        lastVisibleOutputTail &&
+        !/^\s/.test(text) &&
+        (hiddenBoundarySeparator === " "
+          ? !/\s$/.test(lastVisibleOutputTail)
+          : !lastVisibleOutputTail.endsWith("\n"))
       ) {
         text = `${hiddenBoundarySeparator}${text}`;
       }
@@ -332,7 +305,12 @@ export function createAcpReplyProjector(params: {
         lastVisibleOutputTail = safeText.slice(-1) || lastVisibleOutputTail;
         bufferedText += safeText;
         if (isLive) {
-          if (shouldFlushLiveBufferOnBoundary(bufferedText)) {
+          if (
+            bufferedText.length >= ACP_LIVE_HARD_FLUSH_CHARS ||
+            bufferedText.endsWith("\n\n") ||
+            /[.!?][)"'`]*\s$/.test(bufferedText) ||
+            (bufferedText.length >= ACP_LIVE_SOFT_FLUSH_CHARS && /\s$/.test(bufferedText))
+          ) {
             clearLiveIdleTimer();
             flushLiveBuffer();
           } else {

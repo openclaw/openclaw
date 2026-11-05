@@ -8,6 +8,7 @@ import {
   recordSessionProviderReview,
   type ProviderReviewTarget,
 } from "../../../sessions/provider-review.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { isIncognitoSessionKey } from "../../../shared/incognito-session-key.js";
 import { classifyAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { FailoverError } from "../../failover/error.js";
@@ -171,13 +172,30 @@ export function createProviderReviewRun(input: {
           );
         } finally {
           try {
-            const { clearSessionLifecycleQueues } =
+            const { clearSessionQueues } =
               await import("../../../auto-reply/reply/queue/cleanup.js");
-            clearSessionLifecycleQueues({
-              ...ownedTarget,
-              keys: [ownedTarget.sessionKey, attempt.sessionIdUsed],
-              assertCurrent,
+            const { getExistingFollowupQueue } =
+              await import("../../../auto-reply/reply/queue/state.js");
+            assertCurrent();
+            const keys = [ownedTarget.sessionKey, attempt.sessionIdUsed];
+            const queueTarget = captureSessionTarget({
+              storeScope: ownedTarget.storePath,
+              sessionKey: ownedTarget.sessionKey,
+              aliases: keys,
+              agentId: ownedTarget.agentId,
+              incarnation: ownedTarget.sessionId,
             });
+            const pendingInputs = [
+              ...new Set(
+                keys.flatMap(
+                  (key) =>
+                    getExistingFollowupQueue(key, queueTarget)?.entries.filter(
+                      (entry) => !entry.claim || entry.claim.released,
+                    ) ?? [],
+                ),
+              ),
+            ];
+            clearSessionQueues(keys, queueTarget, pendingInputs);
           } catch (cause) {
             stop(new Error("Provider precaution queue settlement did not complete", { cause }));
           }

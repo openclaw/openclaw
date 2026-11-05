@@ -36,7 +36,9 @@
           "lastRun": "上次 {time}",
           "notScheduled": "未安排",
           "learnMore": "梦境机制的工作原理",
-          "openDocs": "打开梦境指南"
+          "openDocs": "打开梦境指南",
+          "sweep": "清理",
+          "guide": "引导"
         },
         "activity": {
           "title": "活动",
@@ -45,7 +47,10 @@
           "shortTermCount": "待处理的短期条目",
           "phaseHitCount": "阶段信号",
           "lightPhaseHitCount": "浅睡阶段命中次数",
-          "remPhaseHitCount": "快速眼动阶段命中次数"
+          "remPhaseHitCount": "快速眼动阶段命中次数",
+          "promoted": "已提升",
+          "promotedValue": "今日 {today} · 累计 {total}",
+          "phaseHitValue": "浅睡眠 {light} · 快速眼动睡眠 {rem}"
         },
         "health": {
           "title": "引擎健康状况",
@@ -99,7 +104,8 @@
         "sourceSessions": "会话",
         "fileLoading": "正在加载完整的记忆文件…",
         "fileError": "无法加载此记忆文件: {message}",
-        "fileUnsupported": "此记忆文件无法以文本形式显示。"
+        "fileUnsupported": "此记忆文件无法以文本形式显示。",
+        "resultOne": "{count} 条结果"
       }
     }
   },
@@ -140,7 +146,9 @@
           "lastRun": "上次 {time}",
           "notScheduled": "尚未排程",
           "learnMore": "夢境運作方式",
-          "openDocs": "開啟夢境指南"
+          "openDocs": "開啟夢境指南",
+          "sweep": "清理",
+          "guide": "引導"
         },
         "activity": {
           "title": "活動",
@@ -149,7 +157,10 @@
           "shortTermCount": "待處理的短期記憶項目",
           "phaseHitCount": "階段訊號",
           "lightPhaseHitCount": "淺眠階段命中數",
-          "remPhaseHitCount": "快速動眼期命中數"
+          "remPhaseHitCount": "快速動眼期命中數",
+          "promoted": "已提升",
+          "promotedValue": "今日 {today} 筆 · 共 {total} 筆",
+          "phaseHitValue": "{light} 次淺眠 · {rem} 次快速動眼期"
         },
         "health": {
           "title": "引擎健康狀態",
@@ -203,7 +214,8 @@
         "sourceSessions": "工作階段",
         "fileLoading": "正在載入完整記憶檔案…",
         "fileError": "無法載入此記憶檔案: {message}",
-        "fileUnsupported": "此記憶檔案無法以文字顯示。"
+        "fileUnsupported": "此記憶檔案無法以文字顯示。",
+        "resultOne": "{count} 筆結果"
       }
     }
   },
@@ -244,7 +256,9 @@
           "lastRun": "última {time}",
           "notScheduled": "Não agendado",
           "learnMore": "Como os sonhos funcionam",
-          "openDocs": "Abrir guia de sonhos"
+          "openDocs": "Abrir guia de sonhos",
+          "sweep": "Varredura",
+          "guide": "Guia"
         },
         "activity": {
           "title": "Atividade",
@@ -253,7 +267,10 @@
           "shortTermCount": "Entradas de curto prazo pendentes",
           "phaseHitCount": "Sinais de fase",
           "lightPhaseHitCount": "Ocorrências na fase leve",
-          "remPhaseHitCount": "Ocorrências na fase REM"
+          "remPhaseHitCount": "Ocorrências na fase REM",
+          "promoted": "Promovidas",
+          "promotedValue": "{today} hoje · {total} no total",
+          "phaseHitValue": "{light} leve · {rem} REM"
         },
         "health": {
           "title": "Integridade do mecanismo",
@@ -307,7 +324,8 @@
         "sourceSessions": "sessões",
         "fileLoading": "Carregando o arquivo de memória completo…",
         "fileError": "Não foi possível carregar este arquivo de memória: {message}",
-        "fileUnsupported": "Este arquivo de memória não pode ser exibido como texto."
+        "fileUnsupported": "Este arquivo de memória não pode ser exibido como texto.",
+        "resultOne": "{count} resultado"
       }
     }
   },
@@ -348,7 +366,9 @@
           "lastRun": "letzter Lauf {time}",
           "notScheduled": "Nicht geplant",
           "learnMore": "So funktioniert das Träumen",
-          "openDocs": "Anleitung zum Träumen öffnen"
+          "openDocs": "Anleitung zum Träumen öffnen",
+          "sweep": "Bereinigung",
+          "guide": "Anleitung"
         },
         "activity": {
           "title": "Aktivität",
@@ -357,7 +377,10 @@
           "shortTermCount": "Ausstehende Kurzzeiteinträge",
           "phaseHitCount": "Phasensignale",
           "lightPhaseHitCount": "Treffer in der Leichtschlafphase",
-          "remPhaseHitCount": "Treffer in der REM-Phase"
+          "remPhaseHitCount": "Treffer in der REM-Phase",
+          "promoted": "Hochgestuft",
+          "promotedValue": "{today} heute · {total} insgesamt",
+          "phaseHitValue": "{light} Leichtschlaf · {rem} REM"
         },
         "health": {
           "title": "Engine-Zustand",
@@ -411,7 +434,8 @@
         "sourceSessions": "Sitzungen",
         "fileLoading": "Vollständige Gedächtnisdatei wird geladen…",
         "fileError": "Diese Gedächtnisdatei konnte nicht geladen werden: {message}",
-        "fileUnsupported": "Diese Gedächtnisdatei kann nicht als Text angezeigt werden."
+        "fileUnsupported": "Diese Gedächtnisdatei kann nicht als Text angezeigt werden.",
+        "resultOne": "{count} Ergebnis"
       }
     }
   },
@@ -452,7 +476,9 @@
           "lastRun": "última {time}",
           "notScheduled": "Sin programar",
           "learnMore": "Cómo funciona el sueño",
-          "openDocs": "Abrir la guía del sueño"
+          "openDocs": "Abrir la guía del sueño",
+          "sweep": "Barrido",
+          "guide": "Guía"
         },
         "activity": {
           "title": "Actividad",
@@ -461,7 +487,10 @@
           "shortTermCount": "Entradas pendientes a corto plazo",
           "phaseHitCount": "Señales de fase",
           "lightPhaseHitCount": "Coincidencias en la fase ligera",
-          "remPhaseHitCount": "Coincidencias en la fase REM"
+          "remPhaseHitCount": "Coincidencias en la fase REM",
+          "promoted": "Promovidos",
+          "promotedValue": "{today} hoy · {total} en total",
+          "phaseHitValue": "{light} ligero · {rem} REM"
         },
         "health": {
           "title": "Estado del motor",
@@ -515,7 +544,8 @@
         "sourceSessions": "sesiones",
         "fileLoading": "Cargando el archivo de memoria completo…",
         "fileError": "No se pudo cargar este archivo de memoria: {message}",
-        "fileUnsupported": "Este archivo de memoria no se puede mostrar como texto."
+        "fileUnsupported": "Este archivo de memoria no se puede mostrar como texto.",
+        "resultOne": "{count} resultado"
       }
     }
   },
@@ -556,7 +586,9 @@
           "lastRun": "前回 {time}",
           "notScheduled": "スケジュール未設定",
           "learnMore": "夢を見る仕組み",
-          "openDocs": "夢のガイドを開く"
+          "openDocs": "夢のガイドを開く",
+          "sweep": "スイープ",
+          "guide": "ガイド"
         },
         "activity": {
           "title": "アクティビティ",
@@ -565,7 +597,10 @@
           "shortTermCount": "保留中の短期記憶エントリ",
           "phaseHitCount": "フェーズのシグナル数",
           "lightPhaseHitCount": "浅い睡眠フェーズのヒット数",
-          "remPhaseHitCount": "レム睡眠フェーズのヒット数"
+          "remPhaseHitCount": "レム睡眠フェーズのヒット数",
+          "promoted": "昇格済み",
+          "promotedValue": "今日{today}件 · 合計{total}件",
+          "phaseHitValue": "浅い睡眠{light}回 · REM睡眠{rem}回"
         },
         "health": {
           "title": "エンジンの稼働状態",
@@ -619,7 +654,8 @@
         "sourceSessions": "セッション",
         "fileLoading": "メモリファイル全体を読み込み中…",
         "fileError": "このメモリファイルを読み込めませんでした: {message}",
-        "fileUnsupported": "このメモリファイルはテキストとして表示できません。"
+        "fileUnsupported": "このメモリファイルはテキストとして表示できません。",
+        "resultOne": "{count}件の結果"
       }
     }
   },
@@ -660,7 +696,9 @@
           "lastRun": "마지막 실행 {time}",
           "notScheduled": "예약되지 않음",
           "learnMore": "꿈꾸기 작동 방식",
-          "openDocs": "꿈꾸기 가이드 열기"
+          "openDocs": "꿈꾸기 가이드 열기",
+          "sweep": "정리",
+          "guide": "안내"
         },
         "activity": {
           "title": "활동",
@@ -669,7 +707,10 @@
           "shortTermCount": "대기 중인 단기 기억 항목",
           "phaseHitCount": "단계별 신호",
           "lightPhaseHitCount": "얕은 수면 단계 적중 횟수",
-          "remPhaseHitCount": "REM 단계 적중 횟수"
+          "remPhaseHitCount": "REM 단계 적중 횟수",
+          "promoted": "승격됨",
+          "promotedValue": "오늘 {today}개 · 총 {total}개",
+          "phaseHitValue": "얕은 수면 {light}회 · REM {rem}회"
         },
         "health": {
           "title": "엔진 상태",
@@ -723,7 +764,8 @@
         "sourceSessions": "세션",
         "fileLoading": "전체 메모리 파일을 불러오는 중…",
         "fileError": "이 메모리 파일을 불러올 수 없습니다: {message}",
-        "fileUnsupported": "이 메모리 파일은 텍스트로 표시할 수 없습니다."
+        "fileUnsupported": "이 메모리 파일은 텍스트로 표시할 수 없습니다.",
+        "resultOne": "결과 {count}개"
       }
     }
   },
@@ -764,7 +806,9 @@
           "lastRun": "dernière {time}",
           "notScheduled": "Non planifié",
           "learnMore": "Comment fonctionne le rêve",
-          "openDocs": "Ouvrir le guide du rêve"
+          "openDocs": "Ouvrir le guide du rêve",
+          "sweep": "Balayage",
+          "guide": "Guide"
         },
         "activity": {
           "title": "Activité",
@@ -773,7 +817,10 @@
           "shortTermCount": "Entrées à court terme en attente",
           "phaseHitCount": "Signaux de phase",
           "lightPhaseHitCount": "Détections en phase de sommeil léger",
-          "remPhaseHitCount": "Détections en phase de sommeil paradoxal"
+          "remPhaseHitCount": "Détections en phase de sommeil paradoxal",
+          "promoted": "Promus",
+          "promotedValue": "{today} aujourd’hui · {total} au total",
+          "phaseHitValue": "{light} léger · {rem} paradoxal"
         },
         "health": {
           "title": "État du moteur",
@@ -827,7 +874,8 @@
         "sourceSessions": "sessions",
         "fileLoading": "Chargement du fichier mémoire complet…",
         "fileError": "Impossible de charger ce fichier mémoire : {message}",
-        "fileUnsupported": "Ce fichier mémoire ne peut pas être affiché sous forme de texte."
+        "fileUnsupported": "Ce fichier mémoire ne peut pas être affiché sous forme de texte.",
+        "resultOne": "{count} résultat"
       }
     }
   },
@@ -868,7 +916,9 @@
           "lastRun": "पिछला {time}",
           "notScheduled": "निर्धारित नहीं है",
           "learnMore": "स्वप्न प्रक्रिया कैसे काम करती है",
-          "openDocs": "स्वप्न प्रक्रिया की मार्गदर्शिका खोलें"
+          "openDocs": "स्वप्न प्रक्रिया की मार्गदर्शिका खोलें",
+          "sweep": "सफ़ाई",
+          "guide": "मार्गदर्शन"
         },
         "activity": {
           "title": "गतिविधि",
@@ -877,7 +927,10 @@
           "shortTermCount": "लंबित अल्पकालिक प्रविष्टियाँ",
           "phaseHitCount": "चरण संकेत",
           "lightPhaseHitCount": "हल्के चरण के संकेत",
-          "remPhaseHitCount": "REM चरण के संकेत"
+          "remPhaseHitCount": "REM चरण के संकेत",
+          "promoted": "उन्नत",
+          "promotedValue": "आज {today} · कुल {total}",
+          "phaseHitValue": "{light} हल्की नींद · {rem} REM"
         },
         "health": {
           "title": "इंजन की स्थिति",
@@ -931,7 +984,8 @@
         "sourceSessions": "सत्र",
         "fileLoading": "पूरी मेमोरी फ़ाइल लोड हो रही है…",
         "fileError": "यह मेमोरी फ़ाइल लोड नहीं हो सकी: {message}",
-        "fileUnsupported": "यह मेमोरी फ़ाइल टेक्स्ट के रूप में नहीं दिखाई जा सकती."
+        "fileUnsupported": "यह मेमोरी फ़ाइल टेक्स्ट के रूप में नहीं दिखाई जा सकती.",
+        "resultOne": "{count} परिणाम"
       }
     }
   },
@@ -972,7 +1026,9 @@
           "lastRun": "الأخير {time}",
           "notScheduled": "غير مجدول",
           "learnMore": "كيف يعمل الحلم",
-          "openDocs": "فتح دليل الحلم"
+          "openDocs": "فتح دليل الحلم",
+          "sweep": "مسح",
+          "guide": "دليل"
         },
         "activity": {
           "title": "النشاط",
@@ -981,7 +1037,10 @@
           "shortTermCount": "إدخالات الذاكرة قصيرة المدى المعلّقة",
           "phaseHitCount": "إشارات المراحل",
           "lightPhaseHitCount": "تطابقات مرحلة النوم الخفيف",
-          "remPhaseHitCount": "تطابقات مرحلة نوم حركة العين السريعة"
+          "remPhaseHitCount": "تطابقات مرحلة نوم حركة العين السريعة",
+          "promoted": "تمت الترقية",
+          "promotedValue": "{today} اليوم · {total} إجمالًا",
+          "phaseHitValue": "{light} نوم خفيف · {rem} نوم حركة العين السريعة"
         },
         "health": {
           "title": "سلامة المحرك",
@@ -1035,7 +1094,8 @@
         "sourceSessions": "الجلسات",
         "fileLoading": "جارٍ تحميل ملف الذاكرة بالكامل…",
         "fileError": "تعذّر تحميل ملف الذاكرة هذا: {message}",
-        "fileUnsupported": "لا يمكن عرض ملف الذاكرة هذا كنص."
+        "fileUnsupported": "لا يمكن عرض ملف الذاكرة هذا كنص.",
+        "resultOne": "{count} نتيجة"
       }
     }
   },
@@ -1076,7 +1136,9 @@
           "lastRun": "ultima {time}",
           "notScheduled": "Non pianificata",
           "learnMore": "Come funziona il processo onirico",
-          "openDocs": "Apri la guida al processo onirico"
+          "openDocs": "Apri la guida al processo onirico",
+          "sweep": "Scansione",
+          "guide": "Guida"
         },
         "activity": {
           "title": "Attività",
@@ -1085,7 +1147,10 @@
           "shortTermCount": "Voci a breve termine in attesa",
           "phaseHitCount": "Segnali delle fasi",
           "lightPhaseHitCount": "Riscontri nella fase leggera",
-          "remPhaseHitCount": "Riscontri nella fase REM"
+          "remPhaseHitCount": "Riscontri nella fase REM",
+          "promoted": "Promossi",
+          "promotedValue": "{today} oggi · {total} in totale",
+          "phaseHitValue": "{light} leggero · {rem} REM"
         },
         "health": {
           "title": "Stato del motore",
@@ -1139,7 +1204,8 @@
         "sourceSessions": "sessioni",
         "fileLoading": "Caricamento del file di memoria completo…",
         "fileError": "Impossibile caricare questo file di memoria: {message}",
-        "fileUnsupported": "Questo file di memoria non può essere visualizzato come testo."
+        "fileUnsupported": "Questo file di memoria non può essere visualizzato come testo.",
+        "resultOne": "{count} risultato"
       }
     }
   },
@@ -1180,7 +1246,9 @@
           "lastRun": "son {time}",
           "notScheduled": "Planlanmadı",
           "learnMore": "Rüya görme nasıl çalışır",
-          "openDocs": "Rüya görme kılavuzunu aç"
+          "openDocs": "Rüya görme kılavuzunu aç",
+          "sweep": "Tarama",
+          "guide": "Rehber"
         },
         "activity": {
           "title": "Etkinlik",
@@ -1189,7 +1257,10 @@
           "shortTermCount": "Bekleyen kısa süreli kayıtlar",
           "phaseHitCount": "Evre sinyalleri",
           "lightPhaseHitCount": "Hafif uyku evresi eşleşmeleri",
-          "remPhaseHitCount": "REM evresi eşleşmeleri"
+          "remPhaseHitCount": "REM evresi eşleşmeleri",
+          "promoted": "Yükseltilen",
+          "promotedValue": "Bugün {today} · toplam {total}",
+          "phaseHitValue": "{light} hafif · {rem} REM"
         },
         "health": {
           "title": "Motor sağlığı",
@@ -1243,7 +1314,8 @@
         "sourceSessions": "oturumlar",
         "fileLoading": "Bellek dosyasının tamamı yükleniyor…",
         "fileError": "Bu bellek dosyası yüklenemedi: {message}",
-        "fileUnsupported": "Bu bellek dosyası metin olarak gösterilemiyor."
+        "fileUnsupported": "Bu bellek dosyası metin olarak gösterilemiyor.",
+        "resultOne": "{count} sonuç"
       }
     }
   },
@@ -1284,7 +1356,9 @@
           "lastRun": "останній {time}",
           "notScheduled": "Не заплановано",
           "learnMore": "Як працюють сновидіння",
-          "openDocs": "Відкрити посібник зі сновидінь"
+          "openDocs": "Відкрити посібник зі сновидінь",
+          "sweep": "Очищення",
+          "guide": "Спрямування"
         },
         "activity": {
           "title": "Активність",
@@ -1293,7 +1367,10 @@
           "shortTermCount": "Короткострокові записи в очікуванні",
           "phaseHitCount": "Сигнали фаз",
           "lightPhaseHitCount": "Спрацювання легкої фази",
-          "remPhaseHitCount": "Спрацювання REM-фази"
+          "remPhaseHitCount": "Спрацювання REM-фази",
+          "promoted": "Підвищено",
+          "promotedValue": "{today} сьогодні · {total} загалом",
+          "phaseHitValue": "{light} легкий сон · {rem} REM"
         },
         "health": {
           "title": "Стан рушія",
@@ -1347,7 +1424,8 @@
         "sourceSessions": "сеанси",
         "fileLoading": "Завантаження повного файлу пам’яті…",
         "fileError": "Не вдалося завантажити цей файл пам’яті: {message}",
-        "fileUnsupported": "Цей файл пам’яті неможливо відобразити як текст."
+        "fileUnsupported": "Цей файл пам’яті неможливо відобразити як текст.",
+        "resultOne": "{count} результат"
       }
     }
   },
@@ -1388,7 +1466,9 @@
           "lastRun": "terakhir {time}",
           "notScheduled": "Tidak dijadwalkan",
           "learnMore": "Cara kerja proses bermimpi",
-          "openDocs": "Buka panduan proses bermimpi"
+          "openDocs": "Buka panduan proses bermimpi",
+          "sweep": "Penyisiran",
+          "guide": "Panduan"
         },
         "activity": {
           "title": "Aktivitas",
@@ -1397,7 +1477,10 @@
           "shortTermCount": "Entri jangka pendek yang tertunda",
           "phaseHitCount": "Sinyal fase",
           "lightPhaseHitCount": "Temuan fase ringan",
-          "remPhaseHitCount": "Temuan fase REM"
+          "remPhaseHitCount": "Temuan fase REM",
+          "promoted": "Dipromosikan",
+          "promotedValue": "{today} hari ini · {total} total",
+          "phaseHitValue": "{light} ringan · {rem} REM"
         },
         "health": {
           "title": "Kesehatan mesin",
@@ -1451,7 +1534,8 @@
         "sourceSessions": "sesi",
         "fileLoading": "Memuat seluruh file memori…",
         "fileError": "Tidak dapat memuat file memori ini: {message}",
-        "fileUnsupported": "File memori ini tidak dapat ditampilkan sebagai teks."
+        "fileUnsupported": "File memori ini tidak dapat ditampilkan sebagai teks.",
+        "resultOne": "{count} hasil"
       }
     }
   },
@@ -1492,7 +1576,9 @@
           "lastRun": "ostatnie {time}",
           "notScheduled": "Nie zaplanowano",
           "learnMore": "Jak działa śnienie",
-          "openDocs": "Otwórz przewodnik po śnieniu"
+          "openDocs": "Otwórz przewodnik po śnieniu",
+          "sweep": "Przegląd",
+          "guide": "Przewodnik"
         },
         "activity": {
           "title": "Aktywność",
@@ -1501,7 +1587,10 @@
           "shortTermCount": "Oczekujące wpisy krótkoterminowe",
           "phaseHitCount": "Sygnały faz",
           "lightPhaseHitCount": "Trafienia w fazie snu płytkiego",
-          "remPhaseHitCount": "Trafienia w fazie REM"
+          "remPhaseHitCount": "Trafienia w fazie REM",
+          "promoted": "Awansowane",
+          "promotedValue": "{today} dzisiaj · {total} łącznie",
+          "phaseHitValue": "{light} lekki · {rem} REM"
         },
         "health": {
           "title": "Stan silnika",
@@ -1555,7 +1644,8 @@
         "sourceSessions": "sesje",
         "fileLoading": "Ładowanie pełnego pliku pamięci…",
         "fileError": "Nie udało się załadować tego pliku pamięci: {message}",
-        "fileUnsupported": "Tego pliku pamięci nie można wyświetlić jako tekstu."
+        "fileUnsupported": "Tego pliku pamięci nie można wyświetlić jako tekstu.",
+        "resultOne": "{count} wynik"
       }
     }
   },
@@ -1596,7 +1686,9 @@
           "lastRun": "ครั้งล่าสุด {time}",
           "notScheduled": "ยังไม่ได้กำหนดเวลา",
           "learnMore": "การฝันทำงานอย่างไร",
-          "openDocs": "เปิดคู่มือการฝัน"
+          "openDocs": "เปิดคู่มือการฝัน",
+          "sweep": "กวาดล้าง",
+          "guide": "แนะนำ"
         },
         "activity": {
           "title": "กิจกรรม",
@@ -1605,7 +1697,10 @@
           "shortTermCount": "รายการความจำระยะสั้นที่รอดำเนินการ",
           "phaseHitCount": "สัญญาณของแต่ละระยะ",
           "lightPhaseHitCount": "จำนวนครั้งที่พบในระยะหลับตื้น",
-          "remPhaseHitCount": "จำนวนครั้งที่พบในระยะ REM"
+          "remPhaseHitCount": "จำนวนครั้งที่พบในระยะ REM",
+          "promoted": "ยกระดับแล้ว",
+          "promotedValue": "วันนี้ {today} · ทั้งหมด {total}",
+          "phaseHitValue": "หลับตื้น {light} · REM {rem}"
         },
         "health": {
           "title": "สถานะการทำงานของเอนจิน",
@@ -1659,7 +1754,8 @@
         "sourceSessions": "เซสชัน",
         "fileLoading": "กำลังโหลดไฟล์ความจำฉบับเต็ม…",
         "fileError": "ไม่สามารถโหลดไฟล์ความจำนี้ได้: {message}",
-        "fileUnsupported": "ไม่สามารถแสดงไฟล์ความจำนี้เป็นข้อความได้"
+        "fileUnsupported": "ไม่สามารถแสดงไฟล์ความจำนี้เป็นข้อความได้",
+        "resultOne": "{count} ผลลัพธ์"
       }
     }
   },
@@ -1700,7 +1796,9 @@
           "lastRun": "lần cuối {time}",
           "notScheduled": "Chưa lên lịch",
           "learnMore": "Cách giấc mơ hoạt động",
-          "openDocs": "Mở hướng dẫn về giấc mơ"
+          "openDocs": "Mở hướng dẫn về giấc mơ",
+          "sweep": "Quét",
+          "guide": "Hướng dẫn"
         },
         "activity": {
           "title": "Hoạt động",
@@ -1709,7 +1807,10 @@
           "shortTermCount": "Các mục ngắn hạn đang chờ",
           "phaseHitCount": "Tín hiệu theo giai đoạn",
           "lightPhaseHitCount": "Lượt khớp trong giai đoạn ngủ nông",
-          "remPhaseHitCount": "Lượt khớp trong giai đoạn REM"
+          "remPhaseHitCount": "Lượt khớp trong giai đoạn REM",
+          "promoted": "Đã nâng cấp",
+          "promotedValue": "{today} hôm nay · {total} tổng cộng",
+          "phaseHitValue": "{light} ngủ nông · {rem} REM"
         },
         "health": {
           "title": "Tình trạng bộ máy",
@@ -1763,7 +1864,8 @@
         "sourceSessions": "phiên",
         "fileLoading": "Đang tải toàn bộ tệp bộ nhớ…",
         "fileError": "Không thể tải tệp bộ nhớ này: {message}",
-        "fileUnsupported": "Không thể hiển thị tệp bộ nhớ này dưới dạng văn bản."
+        "fileUnsupported": "Không thể hiển thị tệp bộ nhớ này dưới dạng văn bản.",
+        "resultOne": "{count} kết quả"
       }
     }
   },
@@ -1804,7 +1906,9 @@
           "lastRun": "laatste {time}",
           "notScheduled": "Niet gepland",
           "learnMore": "Hoe dromen werkt",
-          "openDocs": "Droomhandleiding openen"
+          "openDocs": "Droomhandleiding openen",
+          "sweep": "Opschonen",
+          "guide": "Begeleiden"
         },
         "activity": {
           "title": "Activiteit",
@@ -1813,7 +1917,10 @@
           "shortTermCount": "Kortetermijnitems in afwachting",
           "phaseHitCount": "Fasesignalen",
           "lightPhaseHitCount": "Treffers in de lichte fase",
-          "remPhaseHitCount": "Treffers in de REM-fase"
+          "remPhaseHitCount": "Treffers in de REM-fase",
+          "promoted": "Gepromoveerd",
+          "promotedValue": "{today} vandaag · {total} totaal",
+          "phaseHitValue": "{light} licht · {rem} REM"
         },
         "health": {
           "title": "Enginestatus",
@@ -1867,7 +1974,8 @@
         "sourceSessions": "sessies",
         "fileLoading": "Het volledige geheugenbestand wordt geladen…",
         "fileError": "Dit geheugenbestand kon niet worden geladen: {message}",
-        "fileUnsupported": "Dit geheugenbestand kan niet als tekst worden weergegeven."
+        "fileUnsupported": "Dit geheugenbestand kan niet als tekst worden weergegeven.",
+        "resultOne": "{count} resultaat"
       }
     }
   },
@@ -1908,7 +2016,9 @@
           "lastRun": "قبلی {time}",
           "notScheduled": "زمان‌بندی نشده",
           "learnMore": "رؤیاپردازی چگونه کار می‌کند",
-          "openDocs": "باز کردن راهنمای رؤیاپردازی"
+          "openDocs": "باز کردن راهنمای رؤیاپردازی",
+          "sweep": "پاک‌سازی",
+          "guide": "راهنما"
         },
         "activity": {
           "title": "فعالیت",
@@ -1917,7 +2027,10 @@
           "shortTermCount": "ورودی‌های کوتاه‌مدت در انتظار",
           "phaseHitCount": "نشانه‌های مرحله",
           "lightPhaseHitCount": "موارد شناسایی‌شده در مرحله خواب سبک",
-          "remPhaseHitCount": "موارد شناسایی‌شده در مرحله REM"
+          "remPhaseHitCount": "موارد شناسایی‌شده در مرحله REM",
+          "promoted": "ارتقایافته",
+          "promotedValue": "{today} امروز · {total} در مجموع",
+          "phaseHitValue": "{light} خواب سبک · {rem} خواب با حرکت سریع چشم"
         },
         "health": {
           "title": "سلامت موتور",
@@ -1971,7 +2084,8 @@
         "sourceSessions": "نشست‌ها",
         "fileLoading": "در حال بارگذاری فایل کامل حافظه…",
         "fileError": "بارگذاری این فایل حافظه ممکن نشد: {message}",
-        "fileUnsupported": "این فایل حافظه را نمی‌توان به‌صورت متن نمایش داد."
+        "fileUnsupported": "این فایل حافظه را نمی‌توان به‌صورت متن نمایش داد.",
+        "resultOne": "{count} نتیجه"
       }
     }
   },
@@ -2012,7 +2126,9 @@
           "lastRun": "последний запуск {time}",
           "notScheduled": "Не запланировано",
           "learnMore": "Как работают сновидения",
-          "openDocs": "Открыть руководство по сновидениям"
+          "openDocs": "Открыть руководство по сновидениям",
+          "sweep": "Очистка",
+          "guide": "Руководство"
         },
         "activity": {
           "title": "Активность",
@@ -2021,7 +2137,10 @@
           "shortTermCount": "Краткосрочные записи в ожидании",
           "phaseHitCount": "Сигналы фаз",
           "lightPhaseHitCount": "Срабатывания лёгкой фазы",
-          "remPhaseHitCount": "Срабатывания фазы быстрого сна"
+          "remPhaseHitCount": "Срабатывания фазы быстрого сна",
+          "promoted": "Повышено",
+          "promotedValue": "{today} сегодня · {total} всего",
+          "phaseHitValue": "{light} лёгкий сон · {rem} быстрый сон"
         },
         "health": {
           "title": "Состояние движка",
@@ -2075,7 +2194,228 @@
         "sourceSessions": "сеансы",
         "fileLoading": "Загрузка полного файла памяти…",
         "fileError": "Не удалось загрузить этот файл памяти: {message}",
-        "fileUnsupported": "Этот файл памяти нельзя отобразить как текст."
+        "fileUnsupported": "Этот файл памяти нельзя отобразить как текст.",
+        "resultOne": "{count} результат"
+      }
+    }
+  },
+  "sv": {
+    "common": {
+      "loading": "Läser in…",
+      "enabled": "Aktiverad",
+      "disabled": "Inaktiverad",
+      "na": "ej tillämpligt",
+      "unknown": "Okänd"
+    },
+    "memoryPage": {
+      "memories": {
+        "searchLabel": "Sök i minnen",
+        "searchPlaceholder": "Sök i den här agentens minnen",
+        "searchButton": "Sök",
+        "idle": "Sök efter en person, ett projekt, ett beslut eller något annat som den här agenten minns.",
+        "searching": "Söker i minnen…",
+        "results": "{count} resultat",
+        "empty": "Inga minnen matchade ”{query}”.",
+        "error": "Sökningen i minnen misslyckades: {message}",
+        "retry": "Försök igen",
+        "gatewayUpdateRequired": "Uppdatera Gateway för att söka i minnen från Control UI.",
+        "hybridSearch": "hybridsökning",
+        "keywordSearch": "nyckelordssökning",
+        "lineRange": "rader {start}–{end}",
+        "score": "poäng {score}",
+        "sourceMemory": "minne",
+        "sourceSessions": "sessioner",
+        "fileLoading": "Läser in hela minnesfilen…",
+        "fileError": "Kunde inte läsa in den här minnesfilen: {message}",
+        "fileUnsupported": "Den här minnesfilen kan inte visas som text.",
+        "resultOne": "{count} resultat"
+      },
+      "overview": {
+        "hero": {
+          "awake": "Minnet är vaket",
+          "waking": "Väcker minnet…",
+          "hibernating": "Minnet är i viloläge",
+          "needsAttention": "Minnet behöver uppmärksamhet",
+          "noSearchRuntime": "Minnesökning på värden är inte tillgänglig",
+          "noSearchRuntimeDescription": "{engine} tillhandahåller ingen körmiljö för minnesökning på värden. Andra minnesintegrationer kan köras oberoende.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Kontrollerar den här agentens minnesmotor och drömcykel.",
+          "offDescription": "Välj en minnesmotor i Inställningar för att väcka minnet.",
+          "disabledDescription": "Den valda minnesmotorn är inaktiverad. Aktivera den igen i Inställningar.",
+          "gatewayOffline": "Gateway är offline, så minnets status är inte tillgänglig.",
+          "hybridSearch": "hybridsökning",
+          "keywordSearch": "nyckelordssökning (utan inbäddningar)",
+          "openSettings": "Öppna inställningar",
+          "retry": "Försök igen",
+          "refresh": "Uppdatera status"
+        },
+        "schedule": {
+          "title": "Sömnschema",
+          "lightDescription": "Sorterar nya korttidsanteckningar och förbereder lovande kandidater utan att ändra långtidsminnet.",
+          "remDescription": "Reflekterar över teman och återkommande idéer i den senaste aktiviteten för att förbättra rangordningen utan att ändra långtidsminnet.",
+          "deepDescription": "Poängsätter förberedda kandidater, för över de som är värda att behålla till långtidsminnet (MEMORY.md) och skriver drömdagboken.",
+          "nextRun": "nästa {time}",
+          "lastRun": "senaste {time}",
+          "notScheduled": "Inte schemalagt",
+          "learnMore": "Så fungerar drömmar",
+          "openDocs": "Öppna drömguiden",
+          "sweep": "Svep",
+          "guide": "Guide"
+        },
+        "activity": {
+          "title": "Aktivitet",
+          "promotedToday": "Överförda till långtidsminnet idag",
+          "promotedTotal": "Överförda till långtidsminnet totalt",
+          "shortTermCount": "Väntande korttidsposter",
+          "phaseHitCount": "Fassignaler",
+          "lightPhaseHitCount": "Träffar i lättsömnfasen",
+          "remPhaseHitCount": "Träffar i REM-fasen",
+          "promoted": "Uppflyttade",
+          "promotedValue": "{today} idag · {total} totalt",
+          "phaseHitValue": "{light} lätt · {rem} REM"
+        },
+        "health": {
+          "title": "Motorns hälsostatus",
+          "provider": "Leverantör",
+          "embeddings": "Vektorinbäddningar",
+          "runtime": "Körmiljö för vektorinbäddningar",
+          "healthy": "Redo",
+          "unavailable": "Inte tillgänglig",
+          "notChecked": "Inte kontrollerad",
+          "notCheckedDescription": "Det har ännu inte kontrollerats om inbäddningar är redo att användas.",
+          "checking": "Kontrollerar…",
+          "test": "Testa",
+          "testing": "Testar…"
+        },
+        "shortcuts": {
+          "title": "Utforska minnet",
+          "memories": "Sök bland minnen",
+          "diary": "Läs drömdagboken",
+          "settings": "Konfigurera minnet"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Lätt sömnfas"
+          },
+          "deep": {
+            "title": "Djup sömnfas"
+          },
+          "rem": {
+            "title": "REM-fas"
+          }
+        }
+      }
+    }
+  },
+  "ca": {
+    "common": {
+      "loading": "S'està carregant…",
+      "enabled": "Activat",
+      "disabled": "Desactivat",
+      "na": "n/d",
+      "unknown": "Desconegut"
+    },
+    "memoryPage": {
+      "memories": {
+        "searchLabel": "Cerca de records",
+        "searchPlaceholder": "Cerca als records d'aquest agent",
+        "searchButton": "Cerca",
+        "idle": "Cerca una persona, un projecte, una decisió o qualsevol altra cosa que aquest agent recordi.",
+        "searching": "S'estan cercant records…",
+        "results": "{count} resultats",
+        "empty": "No s'ha trobat cap record que coincideixi amb «{query}».",
+        "error": "La cerca a la memòria ha fallat: {message}",
+        "retry": "Torna-ho a provar",
+        "gatewayUpdateRequired": "Actualitza la Passarel·la per cercar records des de la Control UI.",
+        "hybridSearch": "cerca híbrida",
+        "keywordSearch": "cerca per paraules clau",
+        "lineRange": "línies {start}–{end}",
+        "score": "puntuació {score}",
+        "sourceMemory": "memòria",
+        "sourceSessions": "sessions",
+        "fileLoading": "S'està carregant el fitxer de memòria complet…",
+        "fileError": "No s'ha pogut carregar aquest fitxer de memòria: {message}",
+        "fileUnsupported": "Aquest fitxer de memòria no es pot mostrar com a text.",
+        "resultOne": "{count} resultat"
+      },
+      "overview": {
+        "hero": {
+          "awake": "La memòria està desperta",
+          "waking": "S'està despertant la memòria…",
+          "hibernating": "La memòria està hibernant",
+          "needsAttention": "La memòria necessita atenció",
+          "noSearchRuntime": "La cerca a la memòria de l'amfitrió no està disponible",
+          "noSearchRuntimeDescription": "{engine} no proporciona un entorn d'execució de cerca a la memòria de l'amfitrió. Altres integracions de memòria poden funcionar de manera independent.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "S'estan comprovant el motor de memòria i el cicle de somnis d'aquest agent.",
+          "offDescription": "Trieu un motor de memòria a Configuració per despertar-la.",
+          "disabledDescription": "El motor de memòria seleccionat està desactivat. Torneu-lo a activar a Configuració.",
+          "gatewayOffline": "La passarel·la està fora de línia, de manera que l'estat de la memòria no està disponible.",
+          "hybridSearch": "cerca híbrida",
+          "keywordSearch": "cerca per paraules clau (sense incrustacions vectorials)",
+          "openSettings": "Obre Configuració",
+          "retry": "Torna-ho a provar",
+          "refresh": "Actualitza l'estat"
+        },
+        "schedule": {
+          "title": "Programació del son",
+          "lightDescription": "Ordena les notes recents a curt termini i prepara les candidates prometedores sense modificar la memòria a llarg termini.",
+          "remDescription": "Reflexiona sobre temes i idees recurrents de l'activitat recent per millorar-ne la classificació sense modificar la memòria a llarg termini.",
+          "deepDescription": "Puntua les candidates preparades, incorpora les seleccionades a la memòria a llarg termini (MEMORY.md) i escriu el diari de somnis.",
+          "nextRun": "propera {time}",
+          "lastRun": "última {time}",
+          "notScheduled": "Sense programar",
+          "learnMore": "Com funciona el procés de somni",
+          "openDocs": "Obre la guia del procés de somni",
+          "sweep": "Escombratge",
+          "guide": "Guia"
+        },
+        "activity": {
+          "title": "Activitat",
+          "promotedToday": "Incorporades avui",
+          "promotedTotal": "Total d'incorporades",
+          "shortTermCount": "Entrades a curt termini pendents",
+          "phaseHitCount": "Senyals de fase",
+          "lightPhaseHitCount": "Coincidències de la fase lleugera",
+          "remPhaseHitCount": "Coincidències de la fase REM",
+          "promoted": "Promoguts",
+          "promotedValue": "{today} avui · {total} en total",
+          "phaseHitValue": "{light} lleuger · {rem} REM"
+        },
+        "health": {
+          "title": "Estat del motor",
+          "provider": "Proveïdor",
+          "embeddings": "Representacions vectorials",
+          "runtime": "Entorn d'execució de representacions vectorials",
+          "healthy": "A punt",
+          "unavailable": "No disponible",
+          "notChecked": "Cap comprovació recent",
+          "notCheckedDescription": "Els resultats caduquen al cap de 30 segons. Feu clic a Prova per comprovar si està a punt.",
+          "checking": "S'està comprovant…",
+          "test": "Prova",
+          "testing": "S'està provant…"
+        },
+        "shortcuts": {
+          "title": "Explora la memòria",
+          "memories": "Cerca records",
+          "diary": "Llegeix el diari de somnis",
+          "settings": "Configura la memòria"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Fase lleugera"
+          },
+          "deep": {
+            "title": "Fase profunda"
+          },
+          "rem": {
+            "title": "Fase REM"
+          }
+        }
       }
     }
   }

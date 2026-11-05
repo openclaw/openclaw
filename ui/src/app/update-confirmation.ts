@@ -19,7 +19,7 @@ export type UpdateProgress = {
 };
 
 // Keep the lazy confirmation entry independent of the application context.
-type UpdateProgressSources = {
+export function createUpdateProgressWatcher(context: {
   gateway: {
     snapshot: { phase: string };
     subscribe: (listener: () => void) => () => void;
@@ -34,11 +34,7 @@ type UpdateProgressSources = {
     };
     subscribe: (listener: () => void) => () => void;
   };
-};
-
-export function createUpdateProgressWatcher(
-  context: UpdateProgressSources,
-): (listener: (progress: UpdateProgress) => void) => () => void {
+}): (listener: (progress: UpdateProgress) => void) => () => void {
   return (listener) => {
     const emit = () => {
       const update = context.overlays.snapshot;
@@ -52,13 +48,10 @@ export function createUpdateProgressWatcher(
           update.updateStatusCheckBanner?.text ?? (banner?.source === "read" ? banner.text : null),
       });
     };
-    const stopOverlays = context.overlays.subscribe(emit);
-    const stopGateway = context.gateway.subscribe(emit);
+    // Deliver ordered progress receipts, including subscribe-time state, to the dialog.
+    const stops = [context.overlays, context.gateway].map((source) => source.subscribe(emit));
     emit();
-    return () => {
-      stopOverlays();
-      stopGateway();
-    };
+    return () => stops.forEach((stop) => stop());
   };
 }
 

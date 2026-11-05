@@ -1,6 +1,8 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
+    // Match test graphs that import retained plain-Node fixtures.
+    "allowJs": true,
     "jsx": "preserve",
     "jsxImportSource": "@solidjs/web",
     "rootDir": ".."

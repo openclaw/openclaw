@@ -114,6 +114,12 @@ and TLS configuration instead of changing native networking settings. OpenClaw l
 persona or explicitly shared task text, is preserved; this is not a retroactive
 history scrub. See [Workspace bootstrap files](/plugins/codex-harness-reference#workspace-bootstrap-files).
 
+After a managed parent turn registers its inference context, trajectory
+`context.compiled`, the system-prompt report, and `llm_input` include that exact
+registered text alongside OpenClaw's thread instructions. This diagnostic
+projection is not the complete native/provider prompt and is never sent back
+into native thread requests. Existing trajectories are not backfilled.
+
 Delivery mode and the current message target requirement arrive as compact
 application context before each user turn. They explicitly supersede earlier
 delivery guidance while preserving permission and temporal context. With the
@@ -183,7 +189,7 @@ nine child pages below. The anchors from the single-page version still resolve h
 
 [Codex replies and final answers](/plugins/codex-harness-runtime/replies) — Visible reply delivery, heartbeat turns, and bounded final-answer recovery.
 
-- <a id="visible-replies-and-heartbeats"></a>[Visible replies and heartbeats](/plugins/codex-harness-runtime/replies#visible-replies-and-heartbeats)
+- <a id="visible-replies-and-heartbeats"></a>[Visible replies and scheduled turns](/plugins/codex-harness-runtime/replies#visible-replies-and-heartbeats)
 - <a id="final-answers-after-settled-tool-work"></a>[Final answers after settled tool work](/plugins/codex-harness-runtime/replies#final-answers-after-settled-tool-work)
 
 ### Codex hook boundaries

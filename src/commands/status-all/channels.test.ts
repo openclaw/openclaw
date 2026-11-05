@@ -1,254 +1,210 @@
-// Status-all channels tests cover plugin-generic channel rows, account inspection, and load failure reporting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelAccountInspectionResult } from "../../channels/account-inspection.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { buildChannelsTable } from "./channels.js";
 
 const mocks = vi.hoisted(() => ({
-  resolveInspectedChannelAccount: vi.fn(),
-  listReadOnlyChannelPluginsForConfig: vi.fn(),
-  readOnlyChannelLoadFailures: [] as Array<{
-    channelId: string;
-    pluginId: string;
-    message: string;
-  }>,
-  missingConfiguredChannelIds: [] as string[],
-  missingOfficialExternalChannels: new Set<string>(),
+  inspect: vi.fn(),
+  plugins: vi.fn(),
+  failures: [] as Array<{ channelId: string; pluginId: string; message: string }>,
+  missing: [] as string[],
+  external: new Set<string>(),
 }));
-
+const plugin = (id: string, accountId = "default", label = id) => ({
+  id,
+  meta: { label },
+  config: { listAccountIds: () => [accountId], defaultAccountId: () => accountId },
+});
 const discordPlugin = {
   id: "discord",
   meta: { label: "Discord" },
-  config: {
-    listAccountIds: () => ["default"],
-  },
+  config: { listAccountIds: () => ["default"] },
 };
-
+const discordConfig = { channels: { discord: { enabled: true } } };
+const unavailable = "configured_unavailable";
+const socket = (botToken = "", fields: Record<string, unknown> = {}) => ({
+  botToken,
+  appToken: "",
+  ...fields,
+});
+const http = (botToken = "", fields: Record<string, unknown> = {}) => ({
+  mode: "http",
+  botToken,
+  signingSecret: "",
+  ...fields, // pragma: allowlist secret
+});
+function inspection(account: Record<string, unknown>, snapshot: ChannelAccountSnapshot) {
+  return {
+    kind: "inspected",
+    account,
+    enabled: true,
+    configured: true,
+    snapshot,
+  } satisfies ChannelAccountInspectionResult;
+}
+function inspect(account: Record<string, unknown>) {
+  mocks.inspect.mockResolvedValue(
+    inspection(account, {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      ...account,
+    }),
+  );
+}
+async function summarize(
+  account: Record<string, unknown>,
+  snapshot: Partial<ChannelAccountSnapshot> = {},
+  showSecrets = false,
+) {
+  mocks.plugins.mockReturnValue([plugin("mattermost", "primary", "Mattermost")]);
+  mocks.inspect.mockResolvedValueOnce(inspection(account, { accountId: "primary", ...snapshot }));
+  return (await buildChannelsTable({}, { showSecrets })).rows[0];
+}
+// mock-isolation: Keep credential inspection synthetic instead of reading configured accounts.
 vi.mock("../../channels/account-inspection.js", () => ({
-  resolveInspectedChannelAccount: mocks.resolveInspectedChannelAccount,
+  resolveInspectedChannelAccount: mocks.inspect,
 }));
-
+// mock-isolation: Supply the selected channel owners without loading installed plugins.
 vi.mock("../../channels/plugins/read-only.js", () => ({
   resolveReadOnlyChannelPluginsForConfig: (...args: unknown[]) => ({
-    plugins: mocks.listReadOnlyChannelPluginsForConfig(...args),
+    plugins: mocks.plugins(...args),
     manifestRecords: [],
     configuredChannelIds: [],
     missingConfiguredChannelIds: [
-      ...new Set([
-        ...mocks.missingConfiguredChannelIds,
-        ...mocks.readOnlyChannelLoadFailures.map((failure) => failure.channelId),
-      ]),
+      ...new Set([...mocks.missing, ...mocks.failures.map(({ channelId }) => channelId)]),
     ],
-    loadFailures: mocks.readOnlyChannelLoadFailures,
+    loadFailures: mocks.failures,
   }),
 }));
-
+// mock-isolation: Control missing-plugin repair hints independently of the installed inventory.
 vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
   resolveMissingOfficialExternalChannelPluginRepairHints: ({
     channelIds,
   }: {
     channelIds: string[];
   }) =>
-    channelIds.flatMap((channelId) =>
-      mocks.missingOfficialExternalChannels.has(channelId)
-        ? [
-            {
-              pluginId: channelId,
-              channelId,
-              label: "Feishu",
-              installSpec: "@openclaw/feishu",
-              installCommand: "openclaw plugins install @openclaw/feishu",
-              doctorFixCommand: "openclaw doctor --fix",
-              repairHint:
-                "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
-            },
-          ]
-        : [],
-    ),
+    channelIds
+      .filter((id) => mocks.external.has(id))
+      .map((channelId) => ({
+        channelId,
+        label: "Feishu",
+        installCommand: "openclaw plugins install @openclaw/feishu",
+        doctorFixCommand: "openclaw doctor --fix",
+      })),
 }));
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.failures = [];
+  mocks.missing = [];
+  mocks.external.clear();
+  mocks.plugins.mockReturnValue([discordPlugin]);
+  inspect({ tokenStatus: unavailable, tokenSource: "secretref" });
+});
 
 describe("buildChannelsTable", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.readOnlyChannelLoadFailures = [];
-    mocks.missingConfiguredChannelIds = [];
-    mocks.missingOfficialExternalChannels.clear();
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([discordPlugin]);
-    mocks.resolveInspectedChannelAccount.mockResolvedValue({
-      kind: "inspected",
-      account: {
-        tokenStatus: "configured_unavailable",
-        tokenSource: "secretref",
-      },
-      enabled: true,
-      configured: true,
-      snapshot: {
-        accountId: "default",
-        enabled: true,
-        configured: true,
-        tokenStatus: "configured_unavailable",
-        tokenSource: "secretref",
-      },
-    });
-  });
-
   it("keeps a live gateway-backed account OK when local status cannot resolve the token", async () => {
-    const table = await buildChannelsTable(
-      { channels: { discord: { enabled: true } } },
-      {
-        liveChannelStatus: {
-          channelAccounts: {
-            discord: [
-              {
-                accountId: "default",
-                running: true,
-                connected: true,
-                tokenStatus: "available",
-              },
-            ],
-          },
+    const table = await buildChannelsTable(discordConfig, {
+      liveChannelStatus: {
+        channelAccounts: {
+          discord: [
+            {
+              accountId: "default",
+              running: true,
+              connected: true,
+              tokenStatus: "available",
+            },
+          ],
         },
       },
-    );
-
-    const row = table.rows.find((entry) => entry.id === "discord");
-    expect(row?.state).toBe("ok");
-    expect(row?.detail).not.toContain("unavailable");
-    const detailRow = table.details[0]?.rows[0];
-    expect(detailRow?.Status).toBe("OK");
-    expect(detailRow?.Notes).toContain("credential available in gateway runtime");
+    });
+    expect(table.rows[0]).toMatchObject({
+      state: "ok",
+      detail: expect.not.stringContaining("unavailable"),
+    });
+    expect(table.details[0]?.rows[0]).toMatchObject({
+      Status: "OK",
+      Notes: expect.stringContaining("credential available in gateway runtime"),
+    });
   });
 
   it("warns when an inspector cannot report configuration state", async () => {
-    mocks.resolveInspectedChannelAccount.mockResolvedValue({
-      kind: "inspected",
-      account: { enabled: true },
-      enabled: true,
+    mocks.inspect.mockResolvedValue({
+      ...inspection(
+        { enabled: true },
+        {
+          accountId: "default",
+          enabled: true,
+          stateReason: "configuration status unavailable",
+        },
+      ),
       configured: undefined,
-      snapshot: {
-        accountId: "default",
-        enabled: true,
-        stateReason: "configuration status unavailable",
-      },
     });
-
-    const table = await buildChannelsTable({ channels: { discord: { enabled: true } } });
-    expect(table.rows).toEqual([
-      {
-        id: "discord",
-        label: "Discord",
-        enabled: true,
-        state: "warn",
-        detail: "configuration status unavailable",
-      },
-    ]);
+    const table = await buildChannelsTable(discordConfig);
+    expect(table.rows[0]).toMatchObject({
+      state: "warn",
+      detail: "configuration status unavailable",
+    });
     expect(table.details).toEqual([]);
   });
 
-  it("summarizes channels without selecting an owner from an explicit multi-agent roster", async () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        entries: { ops: {}, research: {} },
-      },
-      channels: { discord: { enabled: true } },
-    };
-
-    const table = await buildChannelsTable(config);
-
-    expect(table.rows).toContainEqual(expect.objectContaining({ id: "discord", state: "warn" }));
-    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(config, {
-      activationSourceConfig: config,
-      includeSetupFallbackPlugins: true,
+  it("summarizes unavailable credentials without selecting an explicit fleet owner", async () => {
+    const table = await buildChannelsTable({
+      ...discordConfig,
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    });
+    expect(table.rows[0]).toMatchObject({
+      state: "warn",
+      detail: expect.stringContaining("unavailable"),
     });
   });
 
-  it("warns when a configured token is unavailable and there is no live account proof", async () => {
-    const table = await buildChannelsTable({ channels: { discord: { enabled: true } } });
-
-    const row = table.rows.find((entry) => entry.id === "discord");
-    expect(row?.state).toBe("warn");
-    expect(row?.detail).toContain("unavailable");
-  });
-
-  it("renders a resolved credential as OK on fast-path scans without live channel status", async () => {
-    mocks.resolveInspectedChannelAccount.mockResolvedValue({
-      kind: "inspected",
-      account: {
-        token: "8905123456:AAF-example-bDTs",
-        tokenSource: "config",
-        tokenStatus: "available",
-      },
-      enabled: true,
-      configured: true,
-      snapshot: {
-        accountId: "default",
-        enabled: true,
-        configured: true,
-        token: "8905123456:AAF-example-bDTs",
-        tokenSource: "config",
-        tokenStatus: "available",
-      },
+  it("renders resolved credentials as OK in fast mode without live status", async () => {
+    inspect({
+      token: "8905123456:AAF-example-bDTs",
+      tokenSource: "config",
+      tokenStatus: "available",
     });
-
-    // Fast-path call shape: no live channel status, no setup fallback plugins.
-    const table = await buildChannelsTable(
-      { channels: { discord: { enabled: true } } },
-      { includeSetupFallbackPlugins: false, liveChannelStatus: null },
-    );
-
-    const row = table.rows.find((entry) => entry.id === "discord");
-    expect(row?.state).toBe("ok");
-    expect(row?.detail).toContain("token config");
-    const detailRow = table.details[0]?.rows[0];
-    expect(detailRow?.Status).toBe("OK");
+    const table = await buildChannelsTable(discordConfig, {
+      includeSetupFallbackPlugins: false,
+      liveChannelStatus: null,
+    });
+    expect(table.rows[0]).toMatchObject({
+      state: "ok",
+      detail: expect.stringContaining("token config"),
+    });
+    expect(table.details[0]?.rows[0]?.Status).toBe("OK");
   });
 
   it("formats human phone identity while preserving raw account ids", async () => {
-    const phonePlugin = {
-      id: "signal",
-      meta: { label: "Signal" },
-      config: {
-        listAccountIds: () => ["work"],
-        defaultAccountId: () => "work",
-        formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-          allowFrom.map((entry) => String(entry).replace(/^\+/u, "")),
+    const signal = plugin("signal", "work", "Signal");
+    mocks.plugins.mockReturnValue([
+      {
+        ...signal,
+        config: {
+          ...signal.config,
+          formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
+            allowFrom.map((entry) => String(entry).replace(/^\+/u, "")),
+        },
+        configSchema: {
+          schema: { type: "object" },
+          uiHints: { allowFrom: { presentation: "phone-number" } },
+        },
+        status: {
+          buildChannelSummary: async () => ({
+            statusState: "linked",
+            self: { e164: "+15551234567" },
+          }),
+        },
       },
-      configSchema: {
-        schema: { type: "object" },
-        uiHints: { allowFrom: { presentation: "phone-number" } },
-      },
-      status: {
-        buildChannelSummary: async () => ({
-          statusState: "linked",
-          self: { e164: "+15551234567" },
-        }),
-      },
-    };
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([phonePlugin]);
-    mocks.resolveInspectedChannelAccount.mockResolvedValue({
+    ]);
+    const account = { name: "+12133734253", allowFrom: ["+442079460018", "bot-token"] };
+    mocks.inspect.mockResolvedValue({
+      ...inspection(account, { accountId: "work", enabled: true, configured: true, ...account }),
       kind: "resolved",
-      account: {
-        name: "+12133734253",
-        allowFrom: ["+442079460018", "bot-token"],
-      },
-      enabled: true,
-      configured: true,
-      snapshot: {
-        accountId: "work",
-        enabled: true,
-        configured: true,
-        name: "+12133734253",
-        allowFrom: ["+442079460018", "bot-token"],
-      },
     });
-
     const table = await buildChannelsTable({ channels: { signal: { enabled: true } } });
-
-    expect(table.rows).toContainEqual(
-      expect.objectContaining({
-        id: "signal",
-        detail: "linked · +1 555 123 4567 (id: +15551234567)",
-      }),
-    );
+    expect(table.rows[0]?.detail).toBe("linked · +1 555 123 4567 (id: +15551234567)");
     expect(table.details[0]?.rows[0]).toEqual({
       Account: "work (+12133734253)",
       Status: "OK",
@@ -256,68 +212,35 @@ describe("buildChannelsTable", () => {
     });
   });
 
-  it("shows configured official external channels when the plugin is missing", async () => {
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
-    mocks.missingOfficialExternalChannels.add("feishu");
+  it.each`
+    kind         | id            | label         | detail
+    ${"missing"} | ${"feishu"}   | ${"Feishu"}   | ${"plugin not installed - run openclaw plugins install @openclaw/feishu or openclaw doctor --fix"}
+    ${"failed"}  | ${"telegram"} | ${"telegram"} | ${"plugin load failed: dependency tree corrupted; run openclaw doctor --fix"}
+    ${"blocked"} | ${"feishu"}   | ${"Feishu"}   | ${null}
+  `(
+    "reports $kind channel plugins without inspecting accounts",
+    async ({ kind, id, label, detail }) => {
+      mocks.plugins.mockReturnValue([]);
+      if (kind === "missing") {
+        mocks.external.add(id);
+      }
+      if (kind === "failed") {
+        mocks.failures = [
+          { channelId: id, pluginId: id, message: 'Cannot find module "ansi-escapes"' },
+        ];
+      }
+      const table = await buildChannelsTable({ channels: { [id]: { enabled: true } } });
+      expect(table).toStrictEqual({
+        rows: detail === null ? [] : [{ id, label, enabled: true, state: "warn", detail }],
+        details: [],
+      });
+      expect(mocks.inspect).not.toHaveBeenCalled();
+    },
+  );
 
-    const table = await buildChannelsTable({ channels: { feishu: { appId: "cli_xxx" } } });
-
-    expect(table).toStrictEqual({
-      rows: [
-        {
-          id: "feishu",
-          label: "Feishu",
-          enabled: true,
-          state: "warn",
-          detail:
-            "plugin not installed - run openclaw plugins install @openclaw/feishu or openclaw doctor --fix",
-        },
-      ],
-      details: [],
-    });
-    expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
-  });
-
-  it("shows plugin load failures for configured channels whose setup registration fails", async () => {
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
-    mocks.readOnlyChannelLoadFailures = [
-      {
-        channelId: "telegram",
-        pluginId: "telegram",
-        message: 'failed to load setup entry: Cannot find module "ansi-escapes"',
-      },
-    ];
-
-    const table = await buildChannelsTable({ channels: { telegram: { botToken: "123:abc" } } });
-
-    expect(table).toStrictEqual({
-      rows: [
-        {
-          id: "telegram",
-          label: "telegram",
-          enabled: true,
-          state: "warn",
-          detail: "plugin load failed: dependency tree corrupted; run openclaw doctor --fix",
-        },
-      ],
-      details: [],
-    });
-    expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
-  });
-
-  it("does not show install repair rows when an external channel owner is policy-blocked", async () => {
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
-
-    const table = await buildChannelsTable({ channels: { feishu: { appId: "cli_xxx" } } });
-
-    expect(table.rows).toStrictEqual([]);
-    expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
-  });
-
-  it("keeps configured channels visible when fast status skips setup fallback plugins", async () => {
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
-    mocks.missingConfiguredChannelIds = ["zulu", "telegram", "alpha"];
-
+  it("keeps configured channels visible and ordered when fast mode skips setup plugins", async () => {
+    mocks.plugins.mockReturnValue([]);
+    mocks.missing = ["zulu", "telegram", "alpha"];
     const table = await buildChannelsTable(
       {
         channels: {
@@ -331,7 +254,6 @@ describe("buildChannelsTable", () => {
         sourceConfig: { channels: { beta: { enabled: true }, shared: { enabled: true } } },
       },
     );
-
     expect(table.rows).toStrictEqual(
       ["beta", "shared", "telegram", "alpha", "zulu"].map((id) => ({
         id,
@@ -341,35 +263,13 @@ describe("buildChannelsTable", () => {
         detail: "configured; status unavailable in fast mode",
       })),
     );
-    expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
-  });
-
-  it("keeps explicit configured channels visible when the fast path skips their plugin", async () => {
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
-
-    const table = await buildChannelsTable(
-      { channels: { feishu: { appId: "cli_xxx" } } },
-      { includeSetupFallbackPlugins: false },
-    );
-
-    expect(table.rows).toStrictEqual([
-      {
-        id: "feishu",
-        label: "feishu",
-        enabled: true,
-        state: "setup",
-        detail: "configured; status unavailable in fast mode",
-      },
-    ]);
-    expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
+    expect(mocks.inspect).not.toHaveBeenCalled();
   });
 
   it("sanitizes fast-path configured-channel labels", async () => {
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
-    const osc = (value: string) =>
-      `${String.fromCharCode(0x1b)}]0;${value}${String.fromCharCode(0x07)}`;
-    const unsafeChannel = `${osc("owned")}telegram`;
-
+    mocks.plugins.mockReturnValue([]);
+    const osc = (value: string) => "\u001b]0;" + value + "\u0007";
+    const unsafeChannel = osc("owned") + "telegram";
     const table = await buildChannelsTable(
       {
         channels: {
@@ -379,12 +279,47 @@ describe("buildChannelsTable", () => {
       },
       { includeSetupFallbackPlugins: false },
     );
-
-    expect(table.rows.find((row) => row.id === unsafeChannel)).toMatchObject({
-      id: unsafeChannel,
-      label: "telegram",
-    });
+    expect(table.rows.find((row) => row.id === unsafeChannel)?.label).toBe("telegram");
     expect(table.rows.find((row) => row.label === "configured-channel")).toBeDefined();
-    expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
+    expect(mocks.inspect).not.toHaveBeenCalled();
+  });
+});
+
+describe("channel table credential summaries", () => {
+  it("does not require appToken for bot-token-only channels", async () => {
+    expect(
+      await summarize(
+        { botToken: "bot-token-value", baseUrl: "https://mm.example.com" },
+        { botTokenSource: "config" },
+      ),
+    ).toMatchObject({
+      state: "ok",
+      detail: expect.stringMatching(
+        /^bot token config \(sha256:[a-f0-9]{8} · len 15\) · accounts 1\/1$/u,
+      ),
+    });
+  });
+
+  it.each`
+    account                                                                        | snapshot                                                       | state      | detail
+    ${socket("bot-token")}                                                         | ${{}}                                                          | ${"warn"}  | ${expect.stringContaining("need bot+app")}
+    ${socket("", { botTokenStatus: unavailable, appTokenStatus: unavailable })}    | ${{ botTokenSource: "config", appTokenSource: "config" }}      | ${"warn"}  | ${expect.stringContaining("unavailable in this command path")}
+    ${http("", { botTokenStatus: "available", signingSecretStatus: "available" })} | ${{ botTokenSource: "config", signingSecretSource: "config" }} | ${"ok"}    | ${expect.stringContaining("credentials ok")}
+    ${http("bot-token", { signingSecretStatus: unavailable })}                     | ${{}}                                                          | ${"warn"}  | ${"configured http credentials unavailable in this command path · accounts 1"}
+    ${socket("bot-token", { mode: "socket", appTokenStatus: unavailable })}        | ${{}}                                                          | ${"warn"}  | ${"configured credentials unavailable in this command path · accounts 1"}
+    ${socket("", { botTokenStatus: "available", appTokenStatus: "available" })}    | ${{}}                                                          | ${"setup"} | ${"no tokens (need bot+app)"}
+  `("reports $state for $account", async ({ account, snapshot, state, detail }) => {
+    expect(await summarize(account, snapshot)).toMatchObject({ state, detail });
+  });
+
+  it.each([
+    ["sk-1234567890", "sk-1…7890 · len 13"],
+    ["abc😀" + "x".repeat(10), "abc…xxxx · len 15"],
+    ["x".repeat(10) + "😀abc", "xxxx…abc · len 15"],
+    ["a😀b", "a😀b · len 4"],
+  ])("formats a visible token hint without splitting %p", async (token, expectedHint) => {
+    expect((await summarize({ token }, { tokenSource: "config" }, true))?.detail).toContain(
+      "token config (" + expectedHint + ")",
+    );
   });
 });

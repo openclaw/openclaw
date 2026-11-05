@@ -18,7 +18,6 @@ import type {
   AgentHarnessSessionDeletionParams,
 } from "../../agents/harness/types.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import * as sqliteQueries from "../../infra/kysely-sync.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -30,10 +29,10 @@ import {
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import {
-  beginSessionWorkAdmission,
-  isCompetingSessionWorkAdmissionActive,
-  isSessionWorkAdmissionActive,
-} from "../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  isCompetingSessionControllerWorkActive,
+  isSessionControllerWorkActive,
+} from "../../sessions/session-controller.lifecycle.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import * as personalPublicationLifecycle from "../../state/github-personal-publication-lifecycle.js";
 import {
@@ -57,11 +56,6 @@ import {
   replaceSessionEntry,
 } from "./session-accessor.js";
 import * as sessionArchive from "./session-accessor.sqlite-archive.js";
-import {
-  runSqliteSessionDeletionTransaction,
-  withSqliteSessionDeletions,
-} from "./session-accessor.sqlite-deletion.js";
-import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
@@ -191,16 +185,21 @@ describe("session deletion and native owner state", () => {
     });
   const read = (key = sessionKey) =>
     loadSessionEntry({ sessionKey: key, storePath, readConsistency: "latest" });
+  const createRepository = (
+    repositories: ReturnType<typeof createSessionRepositoryWorkspaceStore>,
+    { agentId, sessionKey: key } = { agentId: "main", sessionKey },
+  ) =>
+    repositories.create({
+      agentId,
+      sessionKey: key,
+      url: "https://github.com/openclaw/fixture.git",
+      assertCurrent: () => {},
+    });
 
   it("cleans repository state in the explicit environment and preserves the ambient same-key session", async () => {
     const ambientEnv = { ...process.env };
     const ambientRepositories = createSessionRepositoryWorkspaceStore({ env: ambientEnv });
-    const ambientRepository = await ambientRepositories.create({
-      agentId: "main",
-      sessionKey,
-      url: "https://github.com/openclaw/fixture.git",
-      assertCurrent: () => {},
-    });
+    const ambientRepository = await createRepository(ambientRepositories);
     const ambientScope = { agentId: "main", sessionKey, storePath, env: ambientEnv };
     await replaceSessionEntry(ambientScope, {
       sessionId: "ambient-sentinel",
@@ -222,12 +221,7 @@ describe("session deletion and native owner state", () => {
         const scope = { agentId: "main", sessionKey, storePath: explicitStorePath, env: state.env };
         const repositories = createSessionRepositoryWorkspaceStore({ env: state.env });
         expect(repositories.path).not.toBe(ambientRepositories.path);
-        const repository = await repositories.create({
-          agentId: "main",
-          sessionKey,
-          url: "https://github.com/openclaw/fixture.git",
-          assertCurrent: () => {},
-        });
+        const repository = await createRepository(repositories);
         await replaceSessionEntry(scope, {
           sessionId: "explicit-environment-session",
           updatedAt: 1,
@@ -278,18 +272,8 @@ describe("session deletion and native owner state", () => {
         env: state.env,
       };
       const siblingScope = { ...scope, agentId: "worker", sessionKey: "agent:worker:task" };
-      const repository = await repositories.create({
-        agentId: scope.agentId,
-        sessionKey: scope.sessionKey,
-        url: "https://github.com/openclaw/fixture.git",
-        assertCurrent: () => {},
-      });
-      const siblingRepository = await repositories.create({
-        agentId: siblingScope.agentId,
-        sessionKey: siblingScope.sessionKey,
-        url: "https://github.com/openclaw/fixture.git",
-        assertCurrent: () => {},
-      });
+      const repository = await createRepository(repositories, scope);
+      const siblingRepository = await createRepository(repositories, siblingScope);
       await replaceSessionEntry(scope, {
         sessionId: "global-session",
         updatedAt: 1,
@@ -515,91 +499,6 @@ describe("session deletion and native owner state", () => {
     },
   );
 
-  it.each(["a shared window", "a placeholder successor"] as const)(
-    "does not materialize surviving prompts when deleting a node with %s",
-    async (scenario) => {
-      const reclaimedKey = "agent:main:reclaimed-node";
-      const survivorKeys = ["agent:main:survivor-a", "agent:main:survivor-b"] as const;
-      const entry = { sessionId: "reclaimed-session", updatedAt: Date.now() };
-      const retainedEvent = { type: "session", id: entry.sessionId, content: "retained history" };
-      await replaceSessionEntry({ sessionKey: reclaimedKey, storePath }, entry);
-      for (const survivorKey of survivorKeys.toReversed()) {
-        await replaceSessionEntry(
-          { sessionKey: survivorKey, storePath },
-          {
-            sessionId: `${survivorKey}-session`,
-            previousSessionId: entry.sessionId,
-            updatedAt: entry.updatedAt,
-            skillsSnapshot: { prompt: "saved skill prompt".repeat(4096), skills: [] },
-            systemPromptReport: {
-              source: "run",
-              generatedAt: entry.updatedAt,
-              systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
-              injectedWorkspaceFiles: [],
-              skills: { promptChars: 0, entries: [{ name: "saved-report-skill", blockChars: 0 }] },
-              tools: { listChars: 0, schemaChars: 0, entries: [] },
-            },
-          },
-        );
-      }
-      const scope = {
-        agentId: "main",
-        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
-      };
-      const database = openOpenClawAgentDatabase(scope);
-      replaceTranscriptEventsSync(
-        { sessionKey: reclaimedKey, sessionId: entry.sessionId, storePath },
-        [retainedEvent],
-      );
-      if (scenario === "a placeholder successor") {
-        database.db
-          .prepare(
-            "UPDATE session_nodes SET current_session_id = ?, entry_json = '{}', entry_valid = -1 WHERE session_key = ?",
-          )
-          .run(entry.sessionId, survivorKeys[0]);
-      }
-      const readSurvivors = () =>
-        database.db
-          .prepare(
-            "SELECT session_key, current_session_id, entry_json, entry_valid FROM session_nodes WHERE session_key != ? ORDER BY session_key",
-          )
-          .all(reclaimedKey);
-      const survivorsBefore = readSurvivors();
-      const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
-      try {
-        await withSqliteSessionDeletions(scope, [{ sessionKey: reclaimedKey, entry }], async () => {
-          runSqliteSessionDeletionTransaction((current) => {
-            deleteSessionEntryRows(current, reclaimedKey, {
-              deleteOwnedWindows: scenario === "a shared window",
-            });
-          }, scope);
-        });
-        const rows = queries.mock.results.flatMap((result) =>
-          result.type === "return" ? result.value.rows : [],
-        );
-        for (const payload of ["saved skill prompt", "saved-report-skill"]) {
-          expect(JSON.stringify(rows)).not.toContain(payload);
-        }
-      } finally {
-        queries.mockRestore();
-      }
-      expect(loadSessionEntry({ sessionKey: reclaimedKey, storePath })).toBeUndefined();
-      expect(readSurvivors()).toEqual(survivorsBefore);
-      expect(
-        database.db
-          .prepare("SELECT session_key FROM session_windows WHERE session_id = ?")
-          .get(entry.sessionId),
-      ).toEqual({ session_key: survivorKeys[0] });
-      await expect(
-        loadTranscriptEvents({
-          sessionKey: survivorKeys[0],
-          sessionId: entry.sessionId,
-          storePath,
-        }),
-      ).resolves.toEqual([retainedEvent]);
-    },
-  );
-
   it("patches a case-distinct Matrix room without preparing its admitted sibling for deletion", async () => {
     const mixedKey = "agent:main:matrix:channel:!RoomAbC:example.org";
     const lowerKey = "agent:main:matrix:channel:!roomabc:example.org";
@@ -625,7 +524,7 @@ describe("session deletion and native owner state", () => {
     const owner = nativeOwner({ prepare });
     const identities = [lowerKey, "lower-session"];
     const onInterrupt = vi.fn();
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities,
       assertAllowed: () => {},
@@ -646,10 +545,10 @@ describe("session deletion and native owner state", () => {
       expect(bindings).toEqual(bindingsBefore);
       expect(prepare).not.toHaveBeenCalled();
       expect(onInterrupt).not.toHaveBeenCalled();
-      expect(isSessionWorkAdmissionActive(storePath, identities)).toBe(true);
-      expect(isCompetingSessionWorkAdmissionActive(storePath, identities)).toBe(true);
+      expect(isSessionControllerWorkActive(storePath, identities)).toBe(true);
+      expect(isCompetingSessionControllerWorkActive(storePath, identities)).toBe(true);
       await admission.run(async () => {
-        expect(isCompetingSessionWorkAdmissionActive(storePath, identities)).toBe(false);
+        expect(isCompetingSessionControllerWorkActive(storePath, identities)).toBe(false);
       });
     } finally {
       admission.release();

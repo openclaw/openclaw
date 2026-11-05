@@ -1,38 +1,63 @@
-import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
+import { registryFor } from "./overlay-registry.ts";
 
-// Single-letter context-menu shortcuts. Items opt in via data-shortcut plus a
-// rendered hint; menu hosts route non-Escape keydowns here so a bare letter
-// clicks the matching enabled item and disabled items swallow nothing.
-export function activateMenuShortcut(root: ParentNode, event: KeyboardEvent): boolean {
+type MenuSearchControl = HTMLInputElement | HTMLButtonElement;
+
+const shortcutItems = new WeakMap<
+  HTMLElement,
+  {
+    items: () => Iterable<{ element: HTMLElement; key: string | undefined }>;
+    search?: () => MenuSearchControl | undefined;
+  }
+>();
+
+/** Renderers publish the same enabled shortcut elements that receive activation. */
+export function registerMenuShortcuts(
+  surface: HTMLElement,
+  read: () => Iterable<{ element: HTMLElement; key: string | undefined }>,
+  search?: () => MenuSearchControl | undefined,
+): () => void {
+  shortcutItems.set(surface, { items: read, search });
+  return () => shortcutItems.delete(surface);
+}
+
+export function findMenuShortcut(
+  surface: HTMLElement | undefined,
+  key: string,
+): HTMLElement | undefined {
   if (
-    event.metaKey ||
-    event.ctrlKey ||
-    event.altKey ||
-    event
-      .composedPath()
-      .some(
-        (target) =>
-          target instanceof Element &&
-          target.matches("input, textarea, select, [contenteditable=true]"),
-      )
+    !surface ||
+    !(surface instanceof HTMLDetailsElement ? surface.open : surface.matches(":popover-open")) ||
+    surface.closest("[inert]")
   ) {
-    return false;
+    return undefined;
   }
-  const key = resolveAsciiShortcutKey(event);
-  if (!key) {
-    return false;
+  for (const { element, key: advertisedKey } of shortcutItems.get(surface)?.items() ?? []) {
+    if (
+      advertisedKey === key &&
+      !element.matches(":disabled") &&
+      element.getAttribute("aria-disabled") !== "true"
+    ) {
+      return element;
+    }
   }
-  const item = Array.from(root.querySelectorAll<HTMLElement>(`[data-shortcut="${key}"]`)).find(
-    (candidate) =>
-      !candidate.matches(":disabled") &&
-      candidate.getAttribute("aria-disabled") !== "true" &&
-      candidate.closest('[role="menu"]')?.matches(":popover-open"),
+  return undefined;
+}
+
+/** Hover can open a submenu while keyboard focus remains in its parent. */
+export function findMenuSearch(surface: HTMLElement): MenuSearchControl | undefined {
+  const active = registryFor(surface.ownerDocument).stack.findLast(
+    (overlay) => overlay.open && surface.contains(overlay.surface),
   );
-  if (!item) {
-    return false;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  item.click();
-  return true;
+  const search = active && shortcutItems.get(active.surface)?.search?.();
+  return search &&
+    !search.disabled &&
+    !(search instanceof HTMLInputElement && search.readOnly) &&
+    !search.closest("[inert]") &&
+    search.checkVisibility({ checkVisibilityCSS: true })
+    ? search
+    : undefined;
+}
+
+export function menuOwnsShortcut(surface: HTMLElement, key: string): boolean {
+  return /^[a-z0-9]$/iu.test(key) && Boolean(findMenuShortcut(surface, key.toLowerCase()));
 }

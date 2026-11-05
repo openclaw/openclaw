@@ -1,21 +1,111 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, vi } from "vitest";
+import { afterEach, beforeEach, expect, onTestFinished, vi } from "vitest";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   INSTANCE_BINDING_PROBE_METHOD,
+  clearInstanceBindingProbeCoordinators,
   installInstanceBindingProbeCoordinator,
   writeChannelBindingProbePlugin,
   writeInstanceBindingProbePlugin,
   withPluginServiceStopDeadline,
   type InstanceBindingProbeCoordinator,
-  type ChannelBindingProof,
   type InstanceBindingProbeResult,
 } from "./server-plugins.lifecycle.test-fixtures.js";
-import { type connectWebchatClient, rpcReq } from "./test-helpers.server.js";
+import {
+  type connectWebchatClient,
+  rpcReq,
+  startTestGatewayServer,
+} from "./test-helpers.server.js";
+
+export type PluginSocket = Awaited<ReturnType<typeof connectWebchatClient>>;
+export type PluginServer = Awaited<ReturnType<typeof startTestGatewayServer>>;
+export const writeJson = (file: string, value: unknown) =>
+  fs.writeFile(file, JSON.stringify(value));
+
+export const reloadPlugin = (
+  socket: PluginSocket,
+  pluginId = "instance-binding-probe",
+  timeoutMs?: number,
+) => rpcReq(socket, "plugins.reload", { plugins: [{ pluginId }] }, timeoutMs);
+
+export function configurePluginGateway(bundledRoot: string, channels = false) {
+  Object.assign(process.env, {
+    OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    OPENCLAW_SKIP_CRON: "1",
+  });
+  delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  if (channels) {
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+  } else {
+    process.env.OPENCLAW_SKIP_CHANNELS = "1";
+  }
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("gateway test hooks did not install OPENCLAW_CONFIG_PATH");
+  }
+  return configPath;
+}
+
+export async function startPluginGateway(options: Parameters<typeof startTestGatewayServer>[1]) {
+  const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+  const server = await startTestGatewayServer(claim, {
+    auth: { mode: "none" },
+    controlUiEnabled: false,
+    sidecarStartup: "start",
+    ...options,
+  });
+  return { server, port: claim.port };
+}
+
+// Manual reloads must wait for post-ready maintenance to release the lifecycle lease.
+export async function observePostReadyStartupMaintenance() {
+  const startupPlugins = await import("./server-startup-plugins.js");
+  const run = startupPlugins.runGatewayPostReadyStartupMaintenance;
+  const settled = createDeferredCore();
+  const observer = vi
+    .spyOn(startupPlugins, "runGatewayPostReadyStartupMaintenance")
+    .mockImplementation((params) => {
+      const maintenance = run(params);
+      maintenance.then(settled.resolve, settled.resolve);
+      return maintenance;
+    });
+  onTestFinished(() => observer.mockRestore());
+  return { settled: settled.promise };
+}
+
+export async function closePluginGateway(server: PluginServer | undefined, socket?: PluginSocket) {
+  const closed =
+    !socket || socket.readyState === socket.CLOSED
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          socket.once("close", () => resolve());
+        });
+  socket?.close();
+  try {
+    const results = await Promise.allSettled([
+      server?.close({ reason: "plugin fixture cleanup" }),
+      closed,
+    ]);
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) {
+      throw new AggregateError(failures, "Plugin lifecycle fixture shutdown failed");
+    }
+  } finally {
+    clearInstanceBindingProbeCoordinators();
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+  }
+}
 
 export async function prepareInstanceBindingFixture(
   bundledRoot: string,
@@ -30,41 +120,26 @@ export async function prepareInstanceBindingFixture(
   if (options?.channels) {
     await writeChannelBindingProbePlugin(bundledRoot, coordinator.channelName, options.channelIds);
   }
-  process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
-  delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
-  process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-  process.env.OPENCLAW_SKIP_CHANNELS = "1";
-  process.env.OPENCLAW_SKIP_CRON = "1";
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("gateway test hooks did not install OPENCLAW_CONFIG_PATH");
-  }
+  const configPath = configurePluginGateway(bundledRoot);
+  const pluginIds = [
+    "instance-binding-probe",
+    ...(options?.channels ? ["instance-binding-channels"] : []),
+  ];
   const config = {
     plugins: {
       enabled: true,
-      allow: [
-        "instance-binding-probe",
-        ...(options?.channels ? ["instance-binding-channels"] : []),
-      ],
-      entries: {
-        "instance-binding-probe": { enabled: true },
-        ...(options?.channels ? { "instance-binding-channels": { enabled: true } } : {}),
-      },
+      allow: pluginIds,
+      entries: Object.fromEntries(pluginIds.map((id) => [id, { enabled: true }])),
     },
   };
-  const { loadPluginLookUpTable } = await import("../plugins/plugin-lookup-table.js");
-  expect(loadPluginLookUpTable({ config, env: process.env }).startup.pluginIds).toContain(
-    "instance-binding-probe",
-  );
   await fs.writeFile(configPath, `${JSON.stringify(config)}\n`);
   const restoreChannelRuntimeLoader = coordinator.channelProof
-    ? await installChannelBindingRuntimeLoader(coordinator.channelProof)
+    ? await installChannelBindingRuntimeLoader()
     : undefined;
   return { coordinator, bundledRoot, configPath, restoreChannelRuntimeLoader };
 }
 
-async function installChannelBindingRuntimeLoader(proof: ChannelBindingProof) {
+async function installChannelBindingRuntimeLoader() {
   // Keep the real host factory in Vitest's module graph; fixture plugins still
   // load normally, with their original registry and instance runtime options.
   const [loaderModule, sdkAlias, fullRuntime] = await Promise.all([
@@ -72,36 +147,21 @@ async function installChannelBindingRuntimeLoader(proof: ChannelBindingProof) {
     import("../plugins/sdk-alias.js"),
     import("../plugins/runtime/index.js"),
   ]);
-  const observation = {
-    phase: "runtime-module-loader",
-    resolvedTargets: [] as string[],
-    factoryCalls: 0,
-  };
-  proof.observations.push(observation);
   const resolveRuntime = vi.spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics");
   const createLoader = loaderModule.createPluginModuleLoader;
   const loaderSpy = vi
     .spyOn(loaderModule, "createPluginModuleLoader")
     .mockImplementation((loaderOptions) => {
       const load = createLoader(loaderOptions);
-      const observedLoad: typeof load = Object.assign(
+      return Object.assign(
         (modulePath: Parameters<typeof load>[0], owner: Parameters<typeof load>[1]) => {
           if (!owner && modulePath === resolveRuntime.mock.results.at(-1)?.value?.resolvedPath) {
-            observation.resolvedTargets.push(modulePath);
-            return {
-              createPluginRuntime: (
-                ...args: Parameters<typeof fullRuntime.createPluginRuntime>
-              ) => {
-                observation.factoryCalls += 1;
-                return fullRuntime.createPluginRuntime(...args);
-              },
-            };
+            return { createPluginRuntime: fullRuntime.createPluginRuntime };
           }
           return load(modulePath, owner);
         },
         { prepare: (...args: Parameters<typeof load.prepare>) => load.prepare(...args) },
       );
-      return observedLoad;
     });
   return () => {
     loaderSpy.mockRestore();
@@ -109,9 +169,7 @@ async function installChannelBindingRuntimeLoader(proof: ChannelBindingProof) {
   };
 }
 
-export async function patchInstanceBindingTestConfig(
-  socket: Awaited<ReturnType<typeof connectWebchatClient>>,
-) {
+export async function patchInstanceBindingTestConfig(socket: PluginSocket) {
   const current = await rpcReq<{ hash?: string }>(socket, "config.get", {});
   expect(current.ok).toBe(true);
   expect(current.payload?.hash).toBeTypeOf("string");
@@ -131,25 +189,21 @@ export function installInstanceBindingConfigIo() {
   const configIoRestorers: Array<{ mockRestore: () => void }> = [];
 
   beforeEach(async () => {
-    const actualIo = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+    const real = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
     const facades = await Promise.all([import("../config/io.js"), import("../config/config.js")]);
     // Cached mutation importers retain the shared mocks; delegate those same exports to real IO
     // so config receipts, preflight, source snapshots, and runtime defaults keep their real owner.
     for (const facade of facades) {
-      configIoRestorers.push(
-        vi.spyOn(facade, "createConfigIO").mockImplementation(actualIo.createConfigIO),
-        vi.spyOn(facade, "getRuntimeConfig").mockImplementation(actualIo.getRuntimeConfig),
-        vi
-          .spyOn(facade, "readConfigFileSnapshot")
-          .mockImplementation(actualIo.readConfigFileSnapshot),
-        vi
-          .spyOn(facade, "readConfigFileSnapshotWithPluginMetadata")
-          .mockImplementation(actualIo.readConfigFileSnapshotWithPluginMetadata),
-        vi
-          .spyOn(facade, "readConfigFileSnapshotForWrite")
-          .mockImplementation(actualIo.readConfigFileSnapshotForWrite),
-        vi.spyOn(facade, "writeConfigFile").mockImplementation(actualIo.writeConfigFile),
-      );
+      for (const name of [
+        "createConfigIO",
+        "getRuntimeConfig",
+        "readConfigFileSnapshot",
+        "readConfigFileSnapshotWithPluginMetadata",
+        "readConfigFileSnapshotForWrite",
+        "writeConfigFile",
+      ] as const) {
+        configIoRestorers.push(vi.spyOn(facade, name).mockImplementation(real[name]));
+      }
     }
   });
 
@@ -204,7 +258,7 @@ export async function reloadInstanceBindingAfterServiceDeadline({
 }: {
   coordinator: InstanceBindingProbeCoordinator;
   bundledRoot: string;
-  socket: Awaited<ReturnType<typeof connectWebchatClient>>;
+  socket: PluginSocket;
   currentConfig: Awaited<ReturnType<typeof rpcReq>>;
 }) {
   const initialRegistry = getActivePluginRegistry();
@@ -220,20 +274,15 @@ export async function reloadInstanceBindingAfterServiceDeadline({
     return await withPluginServiceStopDeadline(
       coordinator,
       () =>
-        rpcReq(socket, "plugins.reload", {
-          plugins: [{ pluginId: "instance-binding-probe" }],
-        }).then((result) => {
+        reloadPlugin(socket).then((result) => {
           reloadSettled = true;
           return result;
         }),
       async () => {
         expect(reloadSettled).toBe(false);
-        expect(coordinator.serviceStops).toBe(1);
-        expect(coordinator.serviceStarts).toBe(1);
+        expect(coordinator).toMatchObject({ serviceStops: 1, serviceStarts: 1, gatewayStops: [] });
         expect(coordinator.runtimes).toHaveLength(initialRegistrationCount);
-        expect(coordinator.gatewayStops).toEqual([]);
-        expect(initialInstance?.disposing).toBe(false);
-        expect(initialInstance?.acceptingCalls).toBe(false);
+        expect(initialInstance).toMatchObject({ disposing: false, acceptingCalls: false });
         expect(getGatewayPluginMetadataSnapshot()).toBe(initialMetadata);
         expect(getActivePluginRegistry()).toBe(initialRegistry);
         const pendingConfig = await rpcReq(socket, "config.get", {});

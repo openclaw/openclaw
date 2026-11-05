@@ -16,18 +16,23 @@ import {
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelAccountSnapshot } from "./types.public.js";
 
-export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(params: {
+type ChannelAccountSnapshotParams<ResolvedAccount> = {
   plugin: ChannelPlugin<ResolvedAccount, unknown, unknown, 1 | 2>;
   cfg: OpenClawConfig;
   accountId: string;
-  account: ResolvedAccount;
   runtime?: ChannelAccountSnapshot;
   probe?: unknown;
   audit?: unknown;
-  enabledFallback?: boolean;
-  configuredFallback?: boolean;
-  assertActive?: () => void;
-}): Promise<ChannelAccountSnapshot> {
+};
+
+export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(
+  params: ChannelAccountSnapshotParams<ResolvedAccount> & {
+    account: ResolvedAccount;
+    enabledFallback?: boolean;
+    configuredFallback?: boolean;
+    assertActive?: () => void;
+  },
+): Promise<ChannelAccountSnapshot> {
   params.assertActive?.();
   let snapshot: ChannelAccountSnapshot;
   if (params.plugin.status?.buildAccountSnapshot) {
@@ -84,14 +89,9 @@ export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(pa
   });
 }
 
-export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>(params: {
-  plugin: ChannelPlugin<ResolvedAccount, unknown, unknown, 1 | 2>;
-  cfg: OpenClawConfig;
-  accountId: string;
-  runtime?: ChannelAccountSnapshot;
-  probe?: unknown;
-  audit?: unknown;
-}): Promise<ChannelAccountSnapshot | null> {
+export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>(
+  params: ChannelAccountSnapshotParams<ResolvedAccount>,
+): Promise<ChannelAccountSnapshot | null> {
   const inspectedAccount = await inspectChannelAccount(params);
   if (!inspectedAccount) {
     return null;
@@ -102,14 +102,9 @@ export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>
   });
 }
 
-export async function resolveChannelAccountSnapshot<ResolvedAccount>(params: {
-  plugin: ChannelPlugin<ResolvedAccount, unknown, unknown, 1 | 2>;
-  cfg: OpenClawConfig;
-  accountId: string;
-  runtime?: ChannelAccountSnapshot;
-  probe?: unknown;
-  audit?: unknown;
-}): Promise<ChannelAccountSnapshot> {
+export async function resolveChannelAccountSnapshot<ResolvedAccount>(
+  params: ChannelAccountSnapshotParams<ResolvedAccount>,
+): Promise<ChannelAccountSnapshot> {
   const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
     channelId: params.plugin.id,
     accountId: params.accountId,

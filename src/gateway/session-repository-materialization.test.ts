@@ -29,14 +29,19 @@ import * as secretsRuntime from "../secrets/runtime-state.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { NODE_WORKSPACE_GIT_HISTORY_SCRIPT } from "../worker/node-workspace-transfer-protocol.js";
 import * as githubOAuthLifecycle from "./github-oauth-lifecycle.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
-import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
+import { createRepositoryGatewayMovePreparation } from "./session-repository-materialization.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { bindRepositoryDiskForTest } from "./worker-environments/repository-disk-authority.test-support.js";
 import * as repositoryGitHubIdentity from "./worker-environments/repository-github-identity.js";
+import * as repositorySnapshot from "./worker-environments/repository-workspace-snapshot.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
+import type { WorkerWorkspaceGitHistory } from "./worker-environments/workspace-result-inventory.js";
 
 const exec = promisify(execFile);
 const git = async (cwd: string, args: string[]) =>
@@ -46,6 +51,20 @@ const enterpriseGitHub = {
   apiBaseUrl: "https://ghe.example.test/api/v3",
 };
 const readFile = (root: string, name: string) => fsp.readFile(path.join(root, name), "utf8");
+const prepareGatewayMove = (cfg: OpenClawConfig) =>
+  createRepositoryGatewayMovePreparation({
+    placements: createWorkerSessionPlacementStore(),
+    getConfig: () => cfg,
+    environments: {
+      get: () => undefined,
+      ensureRetainedRunning: async () => {
+        throw new Error("Unexpected retained wake for checkpoint fixture");
+      },
+      startTunnel: async () => {
+        throw new Error("Unexpected worker tunnel for retained checkpoint fixture");
+      },
+    },
+  });
 
 async function createRepository(
   scope: { agentId: string; sessionKey: string },
@@ -86,6 +105,7 @@ it.each([
   "clone reset",
   "auth failure",
   "unavailable identity",
+  "disk authority",
 ] as const)(
   "keeps the current shared GitHub identity and move authority at clone admission: %s",
   async (scenario) => {
@@ -163,6 +183,9 @@ it.each([
           sessionId,
           repositoryWorkspaceId: repository.workspaceId,
         });
+        if (scenario === "disk authority") {
+          await bindRepositoryDiskForTest(repository, sessionId);
+        }
         let current = true;
         const verify = vi
           .spyOn(githubOAuth, "verifyGitHubCredential")
@@ -208,9 +231,8 @@ it.each([
             }
             throw cloneFailure;
           });
-        const operation = materializeSessionRepositoryWorkspaceOnGateway({
+        const operation = prepareGatewayMove(cfg)({
           ...scope,
-          cfg,
           sessionId,
           assertCurrent: () => {
             if (!current) {
@@ -220,6 +242,7 @@ it.each([
         });
         const rejections: Partial<Record<typeof scenario, string | RegExp>> = {
           "host mismatch": "configured GitHub host (ghe.example.test)",
+          "disk authority": "requires a fresh disk export",
           "unavailable identity": /reconnect.*GitHub identity/iu,
           revoked: "move authority revoked",
           reset: "Repository workspace changed",
@@ -228,7 +251,7 @@ it.each([
         if (rejection) {
           await expect(operation).rejects.toThrow(rejection);
           expect(clone).not.toHaveBeenCalled();
-          if (scenario === "host mismatch") {
+          if (scenario === "host mismatch" || scenario === "disk authority") {
             expect(verify).not.toHaveBeenCalled();
           }
         } else {
@@ -269,6 +292,9 @@ it.each([
   "publication unavailable",
   "requested topic",
   "unbound incognito",
+  "worker commits",
+  "disk export",
+  "disk changed",
 ] as const)("retains only committed materialization: %s", async (outcome) => {
   // Local recovery fixtures exercise retained state; identity admission is covered above.
   vi.spyOn(repositoryGitHubIdentity, "prepareRepositoryGitHubIdentity").mockImplementation(
@@ -305,6 +331,38 @@ it.each([
     const base = await captureWorkspaceManifest({ root: source, baseCommit });
     const remote = state.path("remote");
     await exec("git", ["clone", "--", source, remote]);
+    let workerHistory: { gitHistory: WorkerWorkspaceGitHistory; gitPackPath: string } | undefined;
+    const diskExport = outcome === "disk export" || outcome === "disk changed";
+    if (outcome === "worker commits" || diskExport) {
+      await fsp.writeFile(path.join(remote, "committed.txt"), "worker commit\n");
+      await git(remote, ["add", "committed.txt"]);
+      await git(remote, [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "commit.gpgSign=false",
+        "commit",
+        "-m",
+        "worker commit",
+      ]);
+      const gitPackPath = state.path("worker.pack");
+      workerHistory = {
+        gitPackPath,
+        gitHistory: JSON.parse(
+          (
+            await exec(process.execPath, [
+              "-e",
+              NODE_WORKSPACE_GIT_HISTORY_SCRIPT,
+              remote,
+              baseCommit,
+              gitPackPath,
+            ])
+          ).stdout,
+        ),
+      };
+    }
     await fsp.writeFile(path.join(remote, "published[1].ignored"), "publishable\n");
     await fsp.writeFile(path.join(remote, "retained.ignored"), "recovery only\n");
     await git(remote, ["--literal-pathspecs", "add", "-f", "--", "published[1].ignored"]);
@@ -340,10 +398,28 @@ it.each([
       base.manifestRef,
       outcome === "requested topic" ? "topic" : undefined,
     );
+    if (diskExport) {
+      const old = await stageSessionRepositoryCheckpoint({
+        workspaceId: repository.workspaceId,
+        expectedRevision: repository.revision,
+        stagingRoot: source,
+        baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+        currentManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+        baseManifestRef: base.manifestRef,
+        currentManifestRef: base.manifestRef,
+        assertCurrent: () => {},
+      });
+      repository = await old.publish();
+      repository = await bindRepositoryDiskForTest(
+        repository,
+        "repository-materialization-session",
+      );
+    }
     const checkpoint = await stageSessionRepositoryCheckpoint({
       workspaceId: repository.workspaceId,
       expectedRevision: repository.revision,
       stagingRoot: remote,
+      ...workerHistory,
       ...(publicationDigest ? { publicationStagingRoot, publicationDigest } : {}),
       baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
       currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
@@ -351,7 +427,11 @@ it.each([
       currentManifestRef: current.manifestRef,
       assertCurrent: () => {},
     });
-    repository = await checkpoint.publish();
+    if (diskExport) {
+      await checkpoint.publishArtifacts();
+    } else {
+      repository = await checkpoint.publish();
+    }
     const sessionId = "repository-materialization-session";
     const owner =
       outcome === "unbound incognito"
@@ -404,14 +484,35 @@ it.each([
           },
         );
       }
-      const operation = materializeSessionRepositoryWorkspaceOnGateway({
+      const verifyDisk = vi.fn(async () => {
+        if (outcome === "disk changed") {
+          throw new Error("source disk changed before handoff");
+        }
+      });
+      if (diskExport) {
+        vi.spyOn(repositorySnapshot, "captureRepositoryDiskCheckpoint").mockImplementation(
+          async (params, use) => {
+            params.assertCurrent();
+            return await use(
+              { checkpointRef: checkpoint.checkpointRef, manifestHash: current.manifestRef },
+              verifyDisk,
+            );
+          },
+        );
+      }
+      const move = prepareGatewayMove(cfg);
+      const operation = move({
         ...scope,
-        cfg,
         sessionId,
         assertCurrent,
+        quiescence: diskExport ? { assertActive: verifyDisk, resume: async () => {} } : undefined,
       });
-      if (outcome === "revoked") {
-        await expect(operation).rejects.toThrow("move authority revoked");
+      if (outcome === "revoked" || outcome === "disk changed") {
+        await expect(operation).rejects.toThrow(
+          outcome === "disk changed"
+            ? "source disk changed before handoff"
+            : "move authority revoked",
+        );
         expect(readEntry()?.repositoryWorkspaceId).toBe(repository.workspaceId);
         expect(await managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
       } else {
@@ -433,7 +534,12 @@ it.each([
         await expect(fsp.stat(path.join(worktree.path, "deleted.txt"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        expect(await git(worktree.path, ["rev-parse", "HEAD"])).toBe(baseCommit);
+        expect(await git(worktree.path, ["rev-parse", "HEAD"])).toBe(
+          workerHistory?.gitHistory.headCommit ?? baseCommit,
+        );
+        if (workerHistory) {
+          expect(await git(worktree.path, ["show", "HEAD:committed.txt"])).toBe("worker commit");
+        }
         expect(await readFile(worktree.path, "published[1].ignored")).toBe("publishable\n");
         expect(await readFile(worktree.path, "retained.ignored")).toBe("recovery only\n");
         expect(await git(worktree.path, ["ls-files", "--", "published[1].ignored"])).toBe(
@@ -451,15 +557,20 @@ it.each([
         ).split("\n");
         expect(published.includes("published[1].ignored")).toBe(Boolean(publicationDigest));
         expect(published).not.toContain("retained.ignored");
-        await materializeSessionRepositoryWorkspaceOnGateway({
+        await move({
           ...scope,
-          cfg,
           sessionId,
           assertCurrent,
         });
         expect((await managedWorktrees.findLiveByOwner("session", scope.sessionKey))?.id).toBe(
           worktree.id,
         );
+      }
+      if (diskExport) {
+        expect(verifyDisk).toHaveBeenCalledOnce();
+        expect(await readFile(remote, "edited.txt")).toBe("accepted\n");
+        expect(await git(remote, ["rev-parse", "HEAD"])).toBe(workerHistory!.gitHistory.headCommit);
+        await checkpoint.discard();
       }
       // Retained publication may still need the original immutable source after the move.
       expect(await repositories.get(repository.workspaceId)).toEqual(repository);

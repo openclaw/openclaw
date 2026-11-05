@@ -109,7 +109,6 @@ it("renews a selected video's ticket without interrupting playback and releases 
   const play = vi.spyOn(media, "play").mockImplementation(async () => {
     paused = false;
   });
-  const timersBeforeConnection = vi.getTimerCount();
   disconnect = item!.connectVideo!(media, vi.fn());
   await vi.advanceTimersByTimeAsync(0);
   expect(media.src).toContain("mediaTicket=A");
@@ -129,13 +128,14 @@ it("renews a selected video's ticket without interrupting playback and releases 
   expect(media.currentTime).toBe(8);
   expect(play).toHaveBeenCalledOnce();
   expect(paused).toBe(false);
+  const timersBeforeClose = vi.getTimerCount();
   disconnect();
   disconnect = undefined;
   expect(media.hasAttribute("src")).toBe(false);
   expect(pause).toHaveBeenCalled();
-  // This neighbor has no inline subscriber. The transcript owner remains alive;
-  // only the selected connection can release its pending refresh timer here.
-  expect(vi.getTimerCount()).toBe(timersBeforeConnection);
+  // The transcript remains alive. Measure the selected connection's synchronous
+  // release without counting timers started by other UI work during playback.
+  expect(vi.getTimerCount()).toBe(timersBeforeClose - 1);
   await vi.advanceTimersByTimeAsync(300_000);
   expect(resolve).toHaveBeenCalledTimes(2);
 });

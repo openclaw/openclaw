@@ -1,9 +1,12 @@
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { drainWorkerSessionPlacement } from "./placement-drain.js";
+import { workerWorkspaceDurabilitySchema } from "../../plugins/worker-retention.js";
 import {
-  createPlacementMoveOps,
-  readWorkerPlacementMovesReadOnly,
-} from "./placement-move-intent.js";
+  bindSessionRepositoryWorkspaceDiskInDatabase,
+  readSessionRepositoryWorkspaceInDatabase,
+} from "../../state/session-repository-workspaces.kernel.js";
+import { drainWorkerSessionPlacement } from "./placement-drain.js";
+import { createPlacementMoveOps } from "./placement-move-intent.js";
+import { readWorkerPlacementMovesReadOnly } from "./placement-move-row-codec.js";
 import {
   isCurrentPlacementTurnClaim,
   nextGeneration,
@@ -12,10 +15,12 @@ import {
   projectWorkerSessionTurnClaim,
   required,
   type WorkerSessionPlacementTransitionPatch,
+  type WorkerSessionPlacementIdentity,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import {
   fromRow,
+  ensureLocal,
   getRequired,
   query,
   transitionValues,
@@ -30,6 +35,8 @@ import {
 } from "./placement-state.js";
 import type { PlacementTurnClaimReceipt } from "./placement-turn-claims.types.js";
 import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
+import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
+import { findWorkerEnvironment } from "./store-row-codec.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
@@ -41,6 +48,8 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
       to: WorkerSessionPlacementState;
       expectedGeneration: number;
       patch?: WorkerSessionPlacementTransitionPatch;
+      localIdentity?: WorkerSessionPlacementIdentity;
+      repositoryDiskWorkspaceId?: string;
     }): PlacementTurnClaimReceipt {
       if (!canTransitionWorkerSessionPlacement(input.from, input.to)) {
         throw new Error(
@@ -53,9 +62,14 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
       if (input.to === "failed") {
         throw new Error("Use fail to record terminal worker placement diagnostics");
       }
+      if (input.repositoryDiskWorkspaceId && (input.from !== "starting" || input.to !== "active")) {
+        throw new Error("Repository disk binding requires placement activation");
+      }
       const sessionId = required(input.sessionId, "session id");
       return write((db) => {
-        const current = getRequired(db, sessionId);
+        const current = input.localIdentity
+          ? ensureLocal(db, input.localIdentity, now())
+          : getRequired(db, sessionId);
         if (current.state !== input.from || current.generation !== input.expectedGeneration) {
           throw new Error(
             `Worker session placement ${sessionId} changed: expected ${input.from}@${input.expectedGeneration}, found ${current.state}@${current.generation}`,
@@ -75,6 +89,47 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
             environmentActivation = { environmentId, lastActivatedAtMs };
           },
         );
+        if (placement.state === "active") {
+          const environment = findWorkerEnvironment(db, placement.environmentId);
+          const durability = workerWorkspaceDurabilitySchema
+            .optional()
+            .parse(environment?.profileSnapshot.workspaceDurability);
+          if (durability?.mode === "retained-disk") {
+            const repository = input.repositoryDiskWorkspaceId
+              ? readSessionRepositoryWorkspaceInDatabase(db, input.repositoryDiskWorkspaceId)
+              : undefined;
+            if (
+              !repository ||
+              repository.agentId !== placement.agentId ||
+              repository.sessionKey !== placement.sessionKey ||
+              repository.manifestHash !== placement.workspaceBaseManifestRef ||
+              !environment?.resourceReceipt ||
+              !environment.nodeDeviceId ||
+              environment.sharedHost !== false ||
+              environment.retention?.policy.computeWindowSeconds !==
+                durability.computeWindowSeconds ||
+              !isWorkerRetainedWindowOpen(environment, now())
+            ) {
+              throw new Error("Retained repository activation lost its hydrated exact disk owner");
+            }
+            // The existing repository publication commits with the active postimage.
+            // No routable placement may escape before its disk authority is durable.
+            bindSessionRepositoryWorkspaceDiskInDatabase(
+              db,
+              {
+                workspaceId: repository.workspaceId,
+                expectedRevision: repository.revision,
+                diskAuthority: {
+                  environmentId: environment.environmentId,
+                  resourceReceipt: environment.resourceReceipt,
+                },
+              },
+              now(),
+            );
+          } else if (input.repositoryDiskWorkspaceId) {
+            throw new Error("Repository disk binding was not selected for this allocation");
+          }
+        }
         if (current.state === "reconciling" && input.to === "reclaimed") {
           const move = readWorkerPlacementMovesReadOnly(db, [sessionId]).get(sessionId);
           if (
@@ -183,11 +238,14 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
       sessionId: string;
       recoveryError: string;
       expectedGeneration?: number;
+      localIdentity?: WorkerSessionPlacementIdentity;
     }): PlacementTurnClaimReceipt {
       const sessionId = required(input.sessionId, "session id");
       const recoveryError = boundedWorkerError(input.recoveryError);
       return write((db) => {
-        const current = getRequired(db, sessionId);
+        const current = input.localIdentity
+          ? ensureLocal(db, input.localIdentity, now())
+          : getRequired(db, sessionId);
         if (
           input.expectedGeneration !== undefined &&
           current.generation !== input.expectedGeneration

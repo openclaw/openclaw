@@ -9,7 +9,8 @@ afterEach(cleanup);
 describe("Solid keyboard hints", () => {
   it.each([
     [KEYBOARD_SHORTCUT_COMBOS.browserPanel, true, false, ["⌘⌥⇧U"], 3],
-    [KEYBOARD_SHORTCUT_COMBOS.browserPanel, false, false, ["Ctrl+Alt+Shift+U"], 0],
+    [KEYBOARD_SHORTCUT_COMBOS.browserPanel, false, false, ["CtrlAlt⇧U"], 1],
+    [KEYBOARD_SHORTCUT_COMBOS.browserPanel, false, true, ["Ctrl", "Alt", "⇧", "U"], 1],
     [KEYBOARD_SHORTCUT_COMBOS.newline, true, true, ["⇧", "⏎"], 2],
   ] as const)(
     "renders platform key labels and accessible symbols",
@@ -37,8 +38,7 @@ describe("Solid keyboard hints", () => {
       <Kbd keys="constructor" slot="details" ariaHidden hidden={hidden()} />
     ));
     const key = view.container.querySelector("kbd")!;
-    expect(key.textContent).toBe("constructor");
-    expect(key.slot).toBe("details");
+    expect([key.textContent, key.slot]).toEqual(["constructor", "details"]);
     expect(key.hidden).toBe(true);
     expect(key.getAttribute("aria-hidden")).toBe("true");
     setHidden(false);
@@ -47,19 +47,15 @@ describe("Solid keyboard hints", () => {
     expect(key.hidden).toBe(false);
   });
 
-  it("renders a distinct shortcut at each translated placeholder", () => {
+  it("renders translated placeholders and tooltip hints as keycap chips", () => {
     const view = render(() => (
-      <ShortcutText text="{shortcut} first; {shortcut} again" shortcut={() => <Kbd keys="/" />} />
+      <>
+        <ShortcutText text="{shortcut} first; {shortcut} again" shortcut={() => <Kbd keys="/" />} />
+        <ShortcutHint label="Commands" combo={{ key: "/", modifiers: [] }} />
+      </>
     ));
-    expect(view.container.textContent).toBe("/ first; / again");
-    expect(view.container.querySelectorAll("kbd")).toHaveLength(2);
-  });
-
-  it("keeps a literal shortcut inline with its tooltip label", () => {
-    const view = render(() => (
-      <ShortcutHint label="Commands" combo={{ key: "/", modifiers: [] }} />
-    ));
-    expect(view.container.textContent).toBe("Commands (/)");
-    expect(view.container.querySelector("kbd")?.style.font).toBe("inherit");
+    expect(view.container.textContent).toBe("/ first; / againCommands /");
+    expect(view.container.querySelectorAll("kbd")).toHaveLength(3);
+    expect(view.container.querySelector(".shortcut-hint__keys")?.textContent).toBe("/");
   });
 });

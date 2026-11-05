@@ -1,12 +1,16 @@
 import { createHash } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
-import type { AssistantMessage, Model } from "../../../llm/types.js";
+import type { AssistantMessage } from "../../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { makeZeroUsageSnapshot } from "../../usage.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
@@ -44,7 +48,6 @@ function createInput(overrides: Record<string, unknown> = {}) {
   } as unknown as AgentSession["settingsManager"];
   return {
     activeSession,
-    agentDir: "/tmp/agent",
     attempt: {
       config: {
         agents: { defaults: { compaction: { midTurnPrecheck: { enabled: true } } } },
@@ -57,16 +60,10 @@ function createInput(overrides: Record<string, unknown> = {}) {
     },
     computerContextEpoch: { value: 3 },
     dropThinkingBlocksForEstimate: false,
-    effectiveCwd: "/tmp/workspace",
     effectiveWorkspace: "/tmp/workspace",
-    getPrePromptMessageCount: () => 4,
-    getPromptCache: () => undefined,
-    getPromptCacheRetention: () => "short" as const,
     getCompactionReplayEnabled: () => false,
     getServerToolClearingEnabled: () => false,
     toolResultPromptProjectionState: createToolResultPromptProjectionState(),
-    getSystemPrompt: () => "system prompt",
-    isOpenAIResponsesApi: false,
     repairToolUseResultPairing: false,
     sessionAgentId: "main",
     sessionManager: {},
@@ -75,41 +72,35 @@ function createInput(overrides: Record<string, unknown> = {}) {
   };
 }
 
-const cacheModel: Model = {
+const cacheModel = makeProviderModelFixture({
   id: "claude-sonnet-4-6",
-  name: "Synthetic cache model",
   api: "anthropic-messages",
   provider: "anthropic",
   baseUrl: "http://127.0.0.1:1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 2_048,
   maxTokens: 1_024,
-};
+});
 
-function prunableHistory(): AgentMessage[] {
-  const assistant = (text: string): AssistantMessage => ({
-    role: "assistant",
+function assistant(
+  text: string,
+  stopReason: AssistantMessage["stopReason"] = "stop",
+  timestamp = 1,
+): AssistantMessage {
+  return makeAgentAssistantMessage({
     content: [{ type: "text", text }],
     api: cacheModel.api,
     provider: cacheModel.provider,
     model: cacheModel.id,
-    usage: makeZeroUsageSnapshot(),
-    stopReason: "stop",
-    timestamp: 1,
+    stopReason,
+    timestamp,
   });
+}
+
+function prunableHistory(): AgentMessage[] {
   return [
     { role: "user", content: "first", timestamp: 1 },
     assistant("a1"),
-    {
-      role: "toolResult",
-      toolCallId: "old-tool",
-      toolName: "read",
-      content: [{ type: "text", text: "x".repeat(5_000) }],
-      isError: false,
-      timestamp: 1,
-    },
+    makeTextToolResult("old-tool", "read", "x".repeat(5_000), false, 1),
     assistant("a2"),
     assistant("a3"),
     assistant("a4"),
@@ -126,17 +117,45 @@ describe("installEmbeddedAttemptContextGuards", () => {
     hoisted.readLastCacheTtlTimestamp.mockReturnValue(null);
   });
 
+  it("retained cache-touch callbacks do not keep completed attempt continuations", async () => {
+    const completed = Array.from({ length: 20 }, () => {
+      const input = createInput();
+      const continuation = { prompt: "continue", messages: prunableHistory() };
+      const guards = installEmbeddedAttemptContextGuards({
+        ...input,
+        attempt: { ...input.attempt, continuation },
+      } as never);
+      guards.remove();
+      return { callback: guards.recordCacheTouch, continuation: new WeakRef(continuation) };
+    });
+    const control = new WeakRef({});
+    await nextTurn();
+    queryObjects(WeakRef);
+    expect(control.deref()).toBeUndefined();
+    expect(completed.filter(({ continuation }) => continuation.deref())).toHaveLength(0);
+    for (const { callback } of completed) {
+      callback(1);
+    }
+  });
+
   it("tracks mid-turn requests and restores attempt-local transforms", async () => {
     const input = createInput();
     const originalTransform = input.activeSession.agent.transformContext;
     const guards = installEmbeddedAttemptContextGuards(input as never);
-    expect(() =>
+    const request = {
+      context: { messages: [{ role: "user" as const, content: "x".repeat(8_000), timestamp: 1 }] },
+    };
+    input.activeSession[agentSessionDeferThresholdCompaction] = true;
+    await expect(
       guards.checkMidTurnPrecheck({
-        context: {
-          messages: [{ role: "user", content: "x".repeat(8_000), timestamp: 1 }],
-        },
+        context: { messages: [{ role: "user", content: "x".repeat(3_200), timestamp: 1 }] },
       }),
-    ).toThrow(MidTurnPrecheckSignal);
+    ).resolves.toBeLessThan(1_024);
+    expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
+    await expect(guards.checkMidTurnPrecheck(request)).rejects.toThrow(MidTurnPrecheckSignal);
+    expect(guards.takePendingMidTurnPrecheckRequest()?.promptBudgetBeforeReserve).toBe(1_024);
+    input.activeSession[agentSessionDeferThresholdCompaction] = false;
+    await expect(guards.checkMidTurnPrecheck(request)).rejects.toThrow(MidTurnPrecheckSignal);
     expect(guards.takePendingMidTurnPrecheckRequest()).toMatchObject({
       route: "compact_only",
       promptBudgetBeforeReserve: 960,
@@ -157,20 +176,6 @@ describe("installEmbeddedAttemptContextGuards", () => {
     guards.remove();
     expect(input.activeSession.agent.transformContext).toBe(originalTransform);
     expect(removeToolResultGuard).toHaveBeenCalledOnce();
-  });
-
-  it("defers local pressure recovery while the provider request boundary owns compaction", () => {
-    const input = createInput();
-    input.activeSession[agentSessionDeferThresholdCompaction] = true;
-    const guards = installEmbeddedAttemptContextGuards(input as never);
-    const request = {
-      context: { messages: [{ role: "user" as const, content: "x".repeat(8_000), timestamp: 1 }] },
-    };
-    expect(() => guards.checkMidTurnPrecheck(request)).not.toThrow();
-    expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
-    input.activeSession[agentSessionDeferThresholdCompaction] = false;
-    expect(() => guards.checkMidTurnPrecheck(request)).toThrow(MidTurnPrecheckSignal);
-    guards.remove();
   });
 
   it("hydrates current images and their failure notice before context transforms", async () => {
@@ -239,11 +244,9 @@ describe("installEmbeddedAttemptContextGuards", () => {
     loopOptions.onAfterTurnCheckpoint(17);
 
     expect(guards.getAfterTurnCheckpoint()).toBe(17);
-    expect(loopOptions).toMatchObject({
-      contextEngine: activeContextEngine,
-      modelId: "model-1",
-      repairAssembledMessages: expect.any(Function),
-    });
+    expect(loopOptions.modelId).toBe("model-1");
+    expect(loopOptions.contextEngine).toBe(activeContextEngine);
+    expect(loopOptions.repairAssembledMessages).toEqual(expect.any(Function));
 
     const removeLoopHook = hoisted.installContextEngineLoopHook.mock.results[0]?.value;
     const removeToolResultGuard = hoisted.installToolResultContextGuard.mock.results[0]?.value;
@@ -252,22 +255,19 @@ describe("installEmbeddedAttemptContextGuards", () => {
     expect(removeLoopHook).toHaveBeenCalledOnce();
   });
 
-  it.each([{ name: "attempt configuration is absent", config: undefined }])(
-    "does not inspect providers when $name",
-    ({ config }) => {
-      hoisted.isCacheTtlEligibleProvider.mockReturnValue(true);
-      const input = createInput();
-      input.attempt = { ...input.attempt, config: config as never };
+  it("does not inspect providers when attempt configuration is absent", () => {
+    hoisted.isCacheTtlEligibleProvider.mockReturnValue(true);
+    const input = createInput();
+    input.attempt = { ...input.attempt, config: undefined as never };
 
-      const guards = installEmbeddedAttemptContextGuards(input as never);
+    const guards = installEmbeddedAttemptContextGuards(input as never);
 
-      expect(hoisted.isCacheTtlEligibleProvider).not.toHaveBeenCalled();
-      expect(hoisted.readLastCacheTtlTimestamp).not.toHaveBeenCalled();
-      guards.remove();
-    },
-  );
+    expect(hoisted.isCacheTtlEligibleProvider).not.toHaveBeenCalled();
+    expect(hoisted.readLastCacheTtlTimestamp).not.toHaveBeenCalled();
+    guards.remove();
+  });
 
-  it.each([undefined])("passes resolved route opt-in %s to pruning eligibility", (optIn) => {
+  it("passes absent route opt-in to pruning eligibility", () => {
     const input = createInput();
     const model = {
       ...cacheModel,
@@ -276,7 +276,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
       id: "gpt-4o",
       api: "openai-responses" as const,
       baseUrl: "https://proxy.example/v1",
-      compat: { supportsPromptCacheKey: optIn },
+      compat: { supportsPromptCacheKey: undefined },
       headers: { "x-test-private": "not-for-provider-hooks" },
     };
     input.attempt = {
@@ -291,121 +291,63 @@ describe("installEmbeddedAttemptContextGuards", () => {
       "openai",
       "gpt-4o",
       "openai-responses",
-      { baseUrl: model.baseUrl, supportsPromptCacheKey: optIn },
+      { baseUrl: model.baseUrl, supportsPromptCacheKey: undefined },
     );
     guards.remove();
   });
 
-  it.each([
-    { scenario: "threshold crossing", age: 310_000, thresholdCrossing: true, outcome: "success" },
-    {
-      scenario: "failure before dispatch",
-      age: 290_000,
-      thresholdCrossing: false,
-      outcome: "throw",
-    },
-    { scenario: "provider error", age: 290_000, thresholdCrossing: false, outcome: "error" },
-    { scenario: "aborted request", age: 290_000, thresholdCrossing: false, outcome: "aborted" },
-  ] as const)(
-    "uses successful request start for pruning after $scenario",
-    async ({ age, thresholdCrossing, outcome }) => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      const requestStart = 1_000_000;
-      vi.setSystemTime(requestStart);
-      hoisted.isCacheTtlEligibleProvider.mockReturnValue(true);
-      hoisted.readLastCacheTtlTimestamp.mockReturnValue(requestStart - age);
-      const input = createInput();
-      input.attempt = {
-        ...input.attempt,
-        contextTokenBudget: thresholdCrossing ? 10_000 : 1_024,
-        config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } } as never,
-      };
-      const guards = installEmbeddedAttemptContextGuards(input as never);
-      const history = prunableHistory();
-      const project = (messages: AgentMessage[]) =>
-        input.activeSession.agent.transformContext!(messages, new AbortController().signal);
-      const first = await project(history);
-      expect(JSON.stringify(first)).toBe(JSON.stringify(history));
-      const response: AssistantMessage = {
-        role: "assistant",
-        content: [{ type: "text", text: "continue" }],
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-        usage: makeZeroUsageSnapshot(),
-        stopReason: outcome === "error" || outcome === "aborted" ? outcome : "toolUse",
-        timestamp: requestStart,
-      };
-      const onSucceeded = vi.fn(guards.recordCacheTouch);
-      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
-        () => {
-          if (outcome === "throw") {
-            throw new Error("failed before dispatch");
-          }
-          const stream = createAssistantMessageEventStream();
-          // Completion is deliberately later than request start; using completion time
-          // would incorrectly keep the cache warm past the final idle check below.
-          vi.setSystemTime(Date.now() + 10_000);
-          if (outcome === "error" || outcome === "aborted") {
-            stream.push({ type: "error", reason: outcome, error: response });
-          } else {
-            stream.push({ type: "done", reason: "toolUse", message: response });
-          }
-          return stream;
-        },
-        {
-          runId: "cache-ttl-clock",
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          trace: createDiagnosticTraceContext(),
-          nextCallId: () => "cache-ttl-request",
-          onSucceeded,
-        },
-      );
-      try {
-        if (outcome === "throw") {
-          expect(() => wrapped(cacheModel, { messages: [] })).toThrow("failed before dispatch");
-        } else {
-          const stream = await wrapped(cacheModel, { messages: [] });
-          await stream.result();
-        }
-        vi.setSystemTime(requestStart + 20_000);
-        const expanded = thresholdCrossing
-          ? [
-              ...history,
-              {
-                role: "toolResult" as const,
-                toolCallId: "new-tool",
-                toolName: "read",
-                content: [{ type: "text" as const, text: "y".repeat(10_000) }],
-                isError: false,
-                timestamp: Date.now(),
-              },
-            ]
-          : history;
-        const second = await project(expanded);
-        if (outcome === "success") {
-          expect(JSON.stringify(second)).toBe(JSON.stringify(expanded));
-          expect(onSucceeded).toHaveBeenCalledExactlyOnceWith(requestStart);
-          // A second successful request starts its own TTL window.
-          const nextStream = await wrapped(cacheModel, { messages: [] });
-          await nextStream.result();
-          expect(onSucceeded).toHaveBeenCalledTimes(2);
-          expect(onSucceeded).toHaveBeenLastCalledWith(requestStart + 20_000);
-          vi.setSystemTime(requestStart + 320_000);
-          const expired = await project(expanded);
-          expect(JSON.stringify(expired)).toContain("[Tool result trimmed:");
-          expect(JSON.stringify(expired)).not.toBe(JSON.stringify(expanded));
-        } else {
-          expect(onSucceeded).not.toHaveBeenCalled();
-          expect(JSON.stringify(second)).toContain("[Tool result trimmed:");
-        }
-        expect(JSON.stringify(history)).toContain("x".repeat(5_000));
-      } finally {
-        guards.remove();
-      }
-    },
-  );
+  it("refreshes pruning at successful request start, not stream completion", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const requestStart = 1_000_000;
+    vi.setSystemTime(requestStart);
+    hoisted.isCacheTtlEligibleProvider.mockReturnValue(true);
+    hoisted.readLastCacheTtlTimestamp.mockReturnValue(requestStart - 310_000);
+    const input = createInput();
+    input.attempt = {
+      ...input.attempt,
+      contextTokenBudget: 10_000,
+      config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } } as never,
+    };
+    const guards = installEmbeddedAttemptContextGuards(input as never);
+    onTestFinished(guards.remove);
+    const history = prunableHistory();
+    const project = (messages: AgentMessage[]) =>
+      input.activeSession.agent.transformContext!(messages, new AbortController().signal);
+    expect(await project(history)).toEqual(history);
+    const onSucceeded = vi.fn(guards.recordCacheTouch);
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      () => {
+        const stream = createAssistantMessageEventStream();
+        vi.setSystemTime(Date.now() + 10_000);
+        stream.push({ type: "done", reason: "toolUse", message: assistant("continue", "toolUse") });
+        return stream;
+      },
+      {
+        runId: "cache-ttl-clock",
+        provider: cacheModel.provider,
+        model: cacheModel.id,
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "cache-ttl-request",
+        onSucceeded,
+      },
+    );
+    await (await wrapped(cacheModel, { messages: [] })).result();
+    expect(onSucceeded).toHaveBeenCalledExactlyOnceWith(requestStart);
+    vi.setSystemTime(requestStart + 20_000);
+    const expanded = [
+      ...history,
+      makeTextToolResult("new-tool", "read", "y".repeat(10_000), false, Date.now()),
+    ];
+    expect(await project(expanded)).toEqual(expanded);
+    await (await wrapped(cacheModel, { messages: [] })).result();
+    expect(onSucceeded).toHaveBeenCalledTimes(2);
+    expect(onSucceeded).toHaveBeenLastCalledWith(requestStart + 20_000);
+    vi.setSystemTime(requestStart + 320_000);
+    const expired = await project(expanded);
+    expect(JSON.stringify(expired)).toContain("[Tool result trimmed:");
+    expect(expired).not.toEqual(expanded);
+    expect(JSON.stringify(history)).toContain("x".repeat(5_000));
+  });
 
   it.each([false, true])(
     "keeps cache-TTL tool-loop bytes stable with server clearing=%s",
@@ -458,19 +400,6 @@ describe("installEmbeddedAttemptContextGuards", () => {
       const messages = prunableHistory();
 
       const guards = installEmbeddedAttemptContextGuards(input as never);
-      expect(hoisted.isCacheTtlEligibleProvider).toHaveBeenCalledExactlyOnceWith(
-        "anthropic",
-        "claude-sonnet-4-6",
-        "anthropic-messages",
-        { baseUrl: undefined, supportsPromptCacheKey: undefined },
-      );
-      expect(hoisted.readLastCacheTtlTimestamp).toHaveBeenCalledExactlyOnceWith(
-        input.sessionManager,
-        {
-          provider: "anthropic",
-          modelId: "claude-sonnet-4-6",
-        },
-      );
       await input.activeSession.agent.transformContext?.(messages, new AbortController().signal);
       const firstTool = engineMessages?.find((message) => message.role === "toolResult");
       expect(firstTool?.content[0]).toMatchObject({

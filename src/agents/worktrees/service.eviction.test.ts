@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
@@ -23,7 +22,6 @@ import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.t
 import { type WorktreeAllocationGuard, withWorktreeAllocationLease } from "./allocation.js";
 import * as checkout from "./checkout-materialize.js";
 import { evictManagedWorktree } from "./eviction.js";
-import * as cleanupLimits from "./gc-limits.js";
 import { requireGit } from "./git.js";
 import * as registryReads from "./registry-read.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
@@ -344,12 +342,11 @@ describe("managed worktree cap eviction", () => {
     const first = service.create({ repoRoot, name: "first", baseRef: "HEAD", signal });
     const creations = [first];
     let planning = false;
-    const enforce = cleanupLimits.enforceWorktreeCleanupLimits;
-    vi.spyOn(cleanupLimits, "enforceWorktreeCleanupLimits").mockImplementation(async (params) => {
+    const readCleanupState = registryReads.readWorktreeCleanupState;
+    vi.spyOn(registryReads, "readWorktreeCleanupState").mockImplementation(async (...args) => {
+      const state = await readCleanupState(...args);
       planning = true;
-      return enforce(params).finally(() => {
-        planning = false;
-      });
+      return state;
     });
     const readRegistry = registryReads.readRegistryWorktrees;
     let publishedDuringPlanning = false;
@@ -391,7 +388,8 @@ describe("managed worktree cap eviction", () => {
     const dirty = await createFixture("dirty");
     await fs.writeFile(path.join(dirty.path, "README.md"), "unsaved tracked edit\n");
     await fs.writeFile(path.join(dirty.path, "untracked.txt"), "unsaved new file\n");
-    const reads = observeMainThreadReads();
+    const readStatements: Array<{ sql: string; bindings: readonly unknown[] }> = [];
+    const reads = observeMainThreadReads((sql, bindings) => readStatements.push({ sql, bindings }));
     const worktreeReads: string[] = [];
     const leaseScope = worktreeRunLeaseScope(dirty.id);
     const namesWorktree = (value: unknown) =>
@@ -405,20 +403,14 @@ describe("managed worktree cap eviction", () => {
           (request, grant) => {
             grants += 1;
             reads.clear();
+            readStatements.length = 0;
             try {
               return handler(request, grant);
             } finally {
-              for (const call of reads.calls) {
-                for (const [index, statement] of call.mock.contexts.entries()) {
-                  if (!(statement instanceof StatementSync)) {
-                    continue;
-                  }
-                  const sql = statement.sourceSQL;
-                  const queriesLease =
-                    /\bstate_leases\b/u.test(sql) && call.mock.calls[index]?.some(namesWorktree);
-                  if (/\bworktrees\b/u.test(sql) || queriesLease) {
-                    worktreeReads.push(sql);
-                  }
+              for (const { sql, bindings } of readStatements) {
+                const queriesLease = /\bstate_leases\b/u.test(sql) && bindings.some(namesWorktree);
+                if (/\bworktrees\b/u.test(sql) || queriesLease) {
+                  worktreeReads.push(sql);
                 }
               }
             }

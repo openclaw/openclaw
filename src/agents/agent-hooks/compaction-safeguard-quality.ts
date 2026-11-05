@@ -11,6 +11,8 @@ import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 
 const MAX_EXTRACTED_IDENTIFIERS = 12;
 const MAX_UNTRUSTED_INSTRUCTION_CHARS = 4000;
+// Reserve room for the other audit reasons and corrective sentence inside the 4k wrapper.
+const MAX_MISSING_IDENTIFIER_REASON_CHARS = MAX_UNTRUSTED_INSTRUCTION_CHARS - 600;
 const MAX_ASK_OVERLAP_TOKENS = 12;
 const MIN_ASK_OVERLAP_TOKENS_FOR_DOUBLE_MATCH = 3;
 const REQUIRED_SUMMARY_SECTIONS = [
@@ -38,11 +40,7 @@ export function resolveSummaryReserveTokens(
   // tokens; generic callers own their output budget.
   const requested = Math.max(1, Math.min(Math.floor(requestedReserveTokens), 20_000));
   const modelMaxTokens = model.maxTokens;
-  if (
-    typeof modelMaxTokens !== "number" ||
-    !Number.isFinite(modelMaxTokens) ||
-    modelMaxTokens <= 0
-  ) {
+  if (!Number.isFinite(modelMaxTokens) || modelMaxTokens <= 0) {
     return requested;
   }
   return Math.max(1, Math.min(requested, Math.floor(modelMaxTokens)));
@@ -464,6 +462,26 @@ function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
   return overlapCount >= requirement.requiredMatches;
 }
 
+/** Preserve whole identifiers; count values that cannot fit in the corrective request. */
+function missingIdentifierAuditReasons(missing: string[]): string[] {
+  const named: string[] = [];
+  let used = 0;
+  for (const identifier of missing) {
+    // Skip rather than stop: one pathological value must not hide the short ones behind it.
+    const cost = named.length === 0 ? identifier.length : identifier.length + 1;
+    if (used + cost > MAX_MISSING_IDENTIFIER_REASON_CHARS) {
+      continue;
+    }
+    used += cost;
+    named.push(identifier);
+  }
+  const omitted = missing.length - named.length;
+  return [
+    ...(named.length > 0 ? [`missing_identifiers:${named.join(",")}`] : []),
+    ...(omitted > 0 ? [`missing_identifiers_omitted:${omitted}`] : []),
+  ];
+}
+
 /** Audits a candidate summary for required sections, pending asks, and identifier preservation. */
 export function auditSummaryQuality(params: {
   summary: string;
@@ -494,9 +512,7 @@ export function auditSummaryQuality(params: {
     const missingIdentifiers = params.identifiers.filter(
       (identifier) => !summaryIncludesIdentifier(params.summary, identifier),
     );
-    if (missingIdentifiers.length > 0) {
-      reasons.push(`missing_identifiers:${missingIdentifiers.slice(0, 3).join(",")}`);
-    }
+    reasons.push(...missingIdentifierAuditReasons(missingIdentifiers));
   }
   const leadingPendingAsk = extractLeadingPendingAsk(params.structuralSummary);
   if (

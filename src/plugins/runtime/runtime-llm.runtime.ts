@@ -12,6 +12,7 @@ import { modelKey } from "../../shared/model-key.js";
 import {
   createLlmCompleteError as completionError,
   isLlmOperatorAuthorizationError,
+  withLlmRuntimeLifecycleErrors,
 } from "./runtime-llm-error.js";
 import {
   assertSupportedExecutionMode,
@@ -19,6 +20,7 @@ import {
   runIsolatedAgentRuntimeCompletion,
 } from "./runtime-llm-isolated.js";
 import { bindLlmOperatorAuthority } from "./runtime-llm-operator-authority.js";
+import type { LlmCompleteParams, LlmCompleteResult } from "./runtime-llm.types.js";
 import { writeRuntimeLog } from "./runtime-logging.js";
 import {
   assertAllowedAuthProfileOverride,
@@ -33,31 +35,23 @@ import {
   type RuntimeLlmAuthority,
 } from "./runtime-model-policy.js";
 import { finalizePluginModelUsage } from "./runtime-model-usage.js";
-import type {
-  LlmCompleteParams,
-  LlmCompleteResult,
-  PluginRuntimeCore,
-  RuntimeLogger,
-} from "./types-core.js";
+import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
 export type { RuntimeLlmAuthority } from "./runtime-model-policy.js";
 
 export type CreateRuntimeLlmOptions = {
   getConfig?: () => OpenClawConfig | undefined;
   authority?: RuntimeLlmAuthority;
-  logger?: RuntimeLogger;
 };
 
 const defaultLogger = getChildLogger({ capability: "runtime.llm" });
 
-function toRuntimeLogger(logger: typeof defaultLogger): RuntimeLogger {
-  return {
-    debug: (message, meta) => writeRuntimeLog(logger, "debug", message, meta),
-    info: (message, meta) => writeRuntimeLog(logger, "info", message, meta),
-    warn: (message, meta) => writeRuntimeLog(logger, "warn", message, meta),
-    error: (message, meta) => writeRuntimeLog(logger, "error", message, meta),
-  };
-}
+const logger: RuntimeLogger = {
+  debug: (message, meta) => writeRuntimeLog(defaultLogger, "debug", message, meta),
+  info: (message, meta) => writeRuntimeLog(defaultLogger, "info", message, meta),
+  warn: (message, meta) => writeRuntimeLog(defaultLogger, "warn", message, meta),
+  error: (message, meta) => writeRuntimeLog(defaultLogger, "error", message, meta),
+};
 
 function resolveRuntimeConfig(options: CreateRuntimeLlmOptions): OpenClawConfig {
   const cfg = options.getConfig?.();
@@ -125,10 +119,8 @@ export function finalizePluginLlmCompletion(params: {
   hostPluginId?: string;
   suppressUsage?: boolean;
   rawUsage: unknown;
-  logger?: RuntimeLogger;
   result: Omit<LlmCompleteResult, "usage">;
 }): LlmCompleteResult {
-  const logger = params.logger ?? toRuntimeLogger(defaultLogger);
   const usage = finalizePluginModelUsage({
     cfg: params.cfg,
     hostPluginId: params.hostPluginId,
@@ -160,8 +152,7 @@ export function finalizePluginLlmCompletion(params: {
 export function createRuntimeLlm(
   options: CreateRuntimeLlmOptions = {},
 ): Pick<PluginRuntimeCore["llm"], "complete"> {
-  const logger = options.logger ?? toRuntimeLogger(defaultLogger);
-  return {
+  const llm: Pick<PluginRuntimeCore["llm"], "complete"> = {
     complete: bindLlmOperatorAuthority(options.authority?.caller, async (params, source) => {
       const caller = resolveTrustedCaller(options.authority);
       if (options.authority?.allowComplete === false) {
@@ -282,7 +273,6 @@ export function createRuntimeLlm(
           cfg,
           hostPluginId: pluginPolicyId,
           rawUsage: result.usage,
-          logger,
           result: {
             text: result.text,
             provider: result.provider,
@@ -427,7 +417,6 @@ export function createRuntimeLlm(
                 suppressUsage:
                   !text.trim() || !["stop", "length", "toolUse"].includes(result.stopReason),
                 rawUsage: result.usage,
-                logger,
                 result: {
                   text,
                   provider: prepared.selection.provider,
@@ -455,4 +444,5 @@ export function createRuntimeLlm(
       return await callerResult.promise;
     }),
   };
+  return { complete: withLlmRuntimeLifecycleErrors(llm.complete) };
 }

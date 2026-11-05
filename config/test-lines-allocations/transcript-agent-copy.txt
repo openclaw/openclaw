@@ -1,0 +1,3 @@
+# Verify localized unnamed-agent labels at avatar and sender boundaries (9 lines),
+# plus formatter wrapping for the longer selection action label (3 lines).
+12

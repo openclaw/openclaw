@@ -200,28 +200,21 @@ function expandSqliteDatabaseToken(token: string, stateDir: string): string | nu
   const fileUriBody = expanded.toLowerCase().startsWith("file:")
     ? expanded.slice("file:".length)
     : null;
-  if (fileUriBody !== null && SQLITE_URI_RECOGNIZED_VARIABLE_BODY.test(fileUriBody)) {
-    // A recognized variable-bearing file: URI (e.g. "file:$OPENCLAW_STATE_DIR/…")
-    // is not an absolute file URL: fileURLToPath would prefix the literal
-    // variable with "/" and hide it from expansion. Strip the scheme and any
-    // query/fragment, percent-decode, then run the variable expansions below.
-    const filename = fileUriBody.replace(SQLITE_URI_EMPTY_AUTHORITY, "").split(/[?#]/u, 1)[0] ?? "";
-    if (!filename) {
-      return null;
+  if (fileUriBody !== null) {
+    let filename: string | undefined;
+    if (SQLITE_URI_RECOGNIZED_VARIABLE_BODY.test(fileUriBody)) {
+      // Strip recognized variable-bearing URI decoration before the expansions below;
+      // fileURLToPath would otherwise prefix the literal variable with "/".
+      filename = fileUriBody.replace(SQLITE_URI_EMPTY_AUTHORITY, "").split(/[?#]/u, 1)[0] ?? "";
+    } else {
+      // Other file: URIs retain fileURLToPath host, percent, and resolution semantics.
+      try {
+        expanded = fileURLToPath(expanded);
+      } catch {
+        filename = fileUriBody.split(/[?#]/u, 1)[0] ?? "";
+      }
     }
-    try {
-      expanded = decodeURIComponent(filename);
-    } catch {
-      expanded = filename;
-    }
-  } else if (fileUriBody !== null) {
-    // Absolute, relative, opaque, and tilde file: URIs keep fileURLToPath
-    // semantics (host/percent handling, root-relative resolution) so their
-    // allow/refuse behavior is unchanged by this guard.
-    try {
-      expanded = fileURLToPath(expanded);
-    } catch {
-      const filename = fileUriBody.split(/[?#]/u, 1)[0] ?? "";
+    if (filename !== undefined) {
       if (!filename) {
         return null;
       }

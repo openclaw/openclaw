@@ -2,7 +2,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronDelivery } from "../types.js";
 
-const FAILURE_DESTINATION_FIELDS = ["channel", "to", "accountId", "mode"] as const;
+const FAILURE_DESTINATION_FIELDS = ["channel", "to", "threadId", "accountId", "mode"] as const;
 
 export const CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE =
   'cron delivery requires an explicit mode: "none", "announce", or "webhook"; run openclaw doctor --fix for legacy settings or explicitly edit delivery.mode';

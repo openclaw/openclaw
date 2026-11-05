@@ -17,6 +17,7 @@ export type LocalRunState = {
   lastBroadcastText?: string;
   textUpdates?: ReturnType<typeof createDraftStreamLoop<boolean>>;
   question?: string;
+  explicitFollowup?: true;
   finishing: boolean;
   lifecycleEnded: boolean;
   lifecycleStopReason?: string;
@@ -50,7 +51,7 @@ export function createLocalRunState(
   runId: string,
   initial: Pick<
     LocalRunState,
-    "sessionKey" | "agentId" | "question" | "pendingQueue" | "queuedAfter"
+    "sessionKey" | "agentId" | "question" | "explicitFollowup" | "pendingQueue" | "queuedAfter"
   >,
 ): LocalRunState {
   const controller = new AbortController();
@@ -87,10 +88,7 @@ export function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
 }
 
 export function buildLocalQueuedPrompt(queue: NonNullable<LocalRunState["pendingQueue"]>): string {
-  const summary = previewQueueSummaryPrompt({
-    state: queue,
-    noun: "message",
-  });
+  const summary = previewQueueSummaryPrompt(queue);
   const prompt =
     queue.mode === "collect" && queue.messages.length > 1
       ? buildCollectPrompt({
@@ -132,4 +130,14 @@ export async function waitForQueuedLocalRun(
       `timed out waiting for previous local run to finish post-turn maintenance for ${runId}`,
     );
   }
+}
+
+export function isSameLocalRunScope(
+  run: LocalRunState,
+  params: { sessionKey: string; agentId?: string },
+) {
+  return (
+    run.sessionKey === params.sessionKey &&
+    (params.sessionKey !== "global" || run.agentId === params.agentId)
+  );
 }

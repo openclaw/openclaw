@@ -4,7 +4,7 @@ import {
   OAuthProtectedResourceMetadataSchema,
   OAuthTokensSchema,
   OpenIdProviderDiscoveryMetadataSchema,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+} from "@modelcontextprotocol/core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 

@@ -3,8 +3,8 @@ import {
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import type { FollowupRun } from "./queue.js";
-import { createReplyOperation } from "./reply-run-registry.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 
 export async function withQuestionCreator(
@@ -14,6 +14,8 @@ export async function withQuestionCreator(
 ) {
   run.run.agentId = "main";
   run.run.sessionKey = key;
+  // These independent logical fixtures must not share one synthetic incarnation.
+  run.run.sessionId = `question-${key}`;
   const runId = "accepted-backing-work";
   const operation = createReplyOperation({
     sessionKey: key,

@@ -1,11 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
 import * as swarmScheduler from "../agents/subagents/swarm/swarm-scheduler.js";
-import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.operation.js";
-import { markReplyOperationExecutionStarted } from "../auto-reply/reply/reply-run-registry.state.js";
 import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
@@ -14,22 +13,29 @@ import { setDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import {
+  getSessionRowSelectionMetrics,
   onGatewayWorkMetrics,
   type GatewayWorkMetricsSnapshot,
 } from "../infra/gateway-work-metrics.js";
+import { createMainThreadStallMonitor, runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { markReplyOperationExecutionStarted } from "../sessions/session-controller.js";
+import {
+  registerRpcSource,
+  requestRpcSourceCancellation,
+} from "../sessions/session-controller.rpc-sources.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { registerChatAbortController } from "./chat-abort.js";
-import * as chatQueue from "./chat-queued-turns.js";
 import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
+import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import * as activeRuns from "./server-methods/session-active-runs.js";
 import * as sessionReads from "./server-methods/sessions-read-cache.test-support.js";
 import { startGatewayWorkMetrics } from "./server-work-metrics.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
+import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -45,12 +51,12 @@ it("bounds live projection over idle history through admission, progress, drain,
       sessionId,
       sessionKey: `agent:main:${sessionId}`,
     });
-    context.chatQueuedTurns = new Map();
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const names = ["chat", "reply", ...Array.from({ length: 512 }, (_, i) => `idle-${i}`)];
     const sessionKeys = names.map((name) => `agent:main:${name}`);
     await applySessionEntryCanonicalReplacements({
       agentId: "main",
-      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+      storePath,
       sessionKeys,
       skipMaintenance: true,
       update: () => ({
@@ -64,7 +70,25 @@ it("bounds live projection over idle history through admission, progress, drain,
     });
     await sessionReads.initializeSessionReadContext(context);
     const projection = getSessionRowProjection(context)!;
-    expect(projection.selectEntries({ sortBy: null }, true)).toHaveLength(514);
+    const beforeSelection = getSessionRowSelectionMetrics().selections.find(
+      (selection) => selection.kind === "broad" && selection.task === "sessions.list",
+    );
+    const monitor = createMainThreadStallMonitor();
+    try {
+      expect(
+        runWithMainThreadTask("gateway:rpc:sessions.list", () =>
+          projection.selectEntries({ sortBy: null }, true),
+        ),
+      ).toHaveLength(514);
+    } finally {
+      monitor.stop();
+    }
+    expect(getSessionRowSelectionMetrics().selections).toContainEqual({
+      kind: "broad",
+      task: "sessions.list",
+      calls: (beforeSelection?.calls ?? 0) + 1,
+      rows: (beforeSelection?.rows ?? 0) + 514,
+    });
     const prepareOriginal = projection.prepareSelection.bind(projection);
     const prepare = vi.spyOn(projection, "prepareSelection");
     const inspectors = createGatewayServerActiveWorkInspectors({ ...context, cron: {} });
@@ -88,20 +112,33 @@ it("bounds live projection over idle history through admission, progress, drain,
       inspectors,
       log: createSubsystemLogger("gateway/work-metrics-test"),
     });
-    const chat = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
+    const chat = registerRpcSourceForTest({
+      storeScope: storePath,
       runId: "chat-run",
       ...session("chat"),
-      timeoutMs: 60_000,
     });
-    const reply = createReplyOperation({ ...session("reply"), resetTriggered: false });
-    const queued = new AbortController();
-    chatQueue.registerQueuedChatTurn({
-      chatQueuedTurns: context.chatQueuedTurns,
-      runId: "queued-turn",
-      controller: queued,
-      ...session("reply"),
-    });
+    chat.initializeTiming();
+    const releaseChat = await claimRpcSourceForTest(chat.entry);
+    chat.markExecutionStarted();
+    const replySource = createRpcSourceForTest(
+      {},
+      {
+        storeScope: storePath,
+        ...session("reply"),
+      },
+    );
+    const releaseReply = await claimRpcSourceForTest(replySource, { executionStarted: false });
+    const reply = expectDefined(replySource.input.claim?.operation, "admitted reply turn");
+    const queued = createRpcSourceForTest(
+      {},
+      {
+        storeScope: storePath,
+        runId: "queued-turn",
+        ...session("reply"),
+        phase: "waiting",
+      },
+    );
+    registerRpcSource("queued-turn", queued);
     let claim = runRegistry.claimAgentRunContext(
       "agent-run",
       { ...session("reply"), projectSessionActive: true },
@@ -156,11 +193,14 @@ it("bounds live projection over idle history through admission, progress, drain,
       releaseWait?.();
       markReplyOperationExecutionStarted(reply);
       await read(2, 0, liveWork);
-      chatQueue.retireQueuedChatTurnCancellation(context.chatQueuedTurns, "queued-turn", queued);
-      queued.abort();
+      requestRpcSourceCancellation(queued, new Error("queued turn stopped"));
+      await queued.input.settlement.promise;
       await read(2, 0, { ...liveWork, queuedTurns: 0 });
-      reply.complete();
+      releaseReply();
+      await replySource.input.settlement.promise;
+      releaseChat();
       chat.cleanup();
+      await chat.entry.input.settlement.promise;
       runRegistry.releaseAgentRunContext("agent-run", claim!);
       claim = undefined;
       await read(0, 0);
@@ -223,19 +263,29 @@ it("bounds live projection over idle history through admission, progress, drain,
         await held.promise;
         await prepareOriginal(...args);
       });
-      chatQueue.completeQueuedChatTurn(context.chatQueuedTurns, "queued-turn", queued);
-      await vi.runOnlyPendingTimersAsync();
-      const stopping = source.stop();
-      expect(latest).toBeUndefined();
-      held.resolve();
-      await stopping;
-      expect(latest).toBeUndefined();
+      try {
+        notifyGatewayWorkMetricsChanged();
+        await vi.runOnlyPendingTimersAsync();
+        const stopping = source.stop();
+        expect(latest).toBeUndefined();
+        held.resolve();
+        await stopping;
+        expect(latest).toBeUndefined();
+      } finally {
+        held.resolve();
+      }
     } finally {
       unsubscribe();
       await source.stop();
+      releaseChat();
       chat.cleanup();
-      reply.complete();
-      chatQueue.completeQueuedChatTurn(context.chatQueuedTurns, "queued-turn", queued);
+      releaseReply();
+      await replySource.input.settlement.promise;
+      requestRpcSourceCancellation(queued, new Error("test cleanup"));
+      await Promise.allSettled([
+        chat.entry.input.settlement.promise,
+        queued.input.settlement.promise,
+      ]);
       releaseWait?.();
       if (claim) {
         runRegistry.releaseAgentRunContext("agent-run", claim);

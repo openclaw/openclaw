@@ -3,6 +3,7 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { classifyGatewayStorageFailure } from "../../../infra/sqlite-error-diagnostics.js";
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import { withAgentTerminalSnapshot } from "../../agent-terminal-snapshot.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
   buildAssistantFailoverSignal,
@@ -115,16 +116,14 @@ export async function handleEmbeddedAssistantFailure(input: {
   // may drive retries, profile health, or failure copy.
   const failedAssistant = attemptAssistant?.stopReason === "error" ? attemptAssistant : undefined;
   const transcriptError = failedAssistant?.errorMessage;
-  if (failedAssistant) {
-    log.warn("Assistant attempt failed", {
+  if (failedAssistant && log.isEnabled("debug")) {
+    log.debug("Assistant attempt failed", {
       provider: failedAssistant.provider,
       model: failedAssistant.model,
       runId: runInput.runParams.runId,
       responseId: failedAssistant.responseId,
       code: failedAssistant.errorCode,
       type: failedAssistant.errorType,
-      message: transcriptError,
-      body: failedAssistant.errorBody,
     });
   }
   if (isSessionTranscriptTurnMismatchErrorMessage(transcriptError)) {
@@ -158,7 +157,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   const assistantProfileFailoverReason =
     assistantFailoverReason ??
     (assistantProviderStarted && (timedOut || idleTimedOut) ? "timeout" : null);
-  const assistantProfileFailureReason = input.failover.resolveAuthProfileFailureReason(
+  let assistantProfileFailureReason = input.failover.resolveAuthProfileFailureReason(
     assistantProfileFailoverReason,
     {
       providerStarted: assistantProviderStarted,
@@ -312,6 +311,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       fallbackConfigured: runInput.fallbackConfigured,
       failoverFailure,
       failoverReason: assistantFailoverReason,
+      errorMessage: failedAssistant?.errorMessage,
       harnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
       profileRotated,
     });
@@ -364,7 +364,10 @@ export async function handleEmbeddedAssistantFailure(input: {
         failedModel: error.model ?? modelId,
       });
     }
-    throw error;
+    throw withAgentTerminalSnapshot(
+      error,
+      !terminalInterrupted && failedAssistant ? attempt.agentTerminal : undefined,
+    );
   };
 
   if (decision.action === "rotate_profile") {
@@ -378,6 +381,7 @@ export async function handleEmbeddedAssistantFailure(input: {
           profileId: failedProfileId,
           reason: assistantProfileFailureReason,
           modelId,
+          retryAfterMs: assistantSignal?.retryAfterMs,
         });
       } catch (err) {
         log.warn(`profile failure mark failed: ${String(err)}`);
@@ -418,15 +422,22 @@ export async function handleEmbeddedAssistantFailure(input: {
       logFallbackDecision: logFailoverDecision,
     });
 
+    if (assistantProfileFailureReason === "timeout" && !rotated && !runInput.fallbackConfigured) {
+      // A cooldown without a recovery target would only block subsequent turns.
+      assistantProfileFailureReason = null;
+    }
     const markFailedProfilePromise = markFailedProfile();
     if (timedOut && !runInput.isProbeSession && failedProfileId) {
       const timeoutLabel = idleTimedOut ? "idle timeout (model silent)" : "timed out";
       // Existing credentials are rotation targets only when config authorizes them.
-      log.warn(
-        rotated
-          ? `Profile ${failedProfileId} ${timeoutLabel}. Trying next account...`
-          : `Profile ${failedProfileId} ${timeoutLabel}. No further authorized account for this provider; create a backup auth profile and add its id to auth.order to enable failover.`,
-      );
+      const recoveryHint = rotated
+        ? "Trying next account..."
+        : runInput.fallbackConfigured
+          ? "No further authorized account for this provider; trying the next configured model."
+          : assistantProfileFailureReason
+            ? "No further authorized account for this provider; create a backup auth profile and add its id to auth.order to enable failover."
+            : "No failover target is available; leaving the profile available for the next turn.";
+      log.warn(`Profile ${failedProfileId} ${timeoutLabel}. ${recoveryHint}`);
     }
     if (cloudCodeAssistFormatError && failedProfileId) {
       log.warn(

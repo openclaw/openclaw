@@ -4,9 +4,9 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { catalogProvider as provider } from "./session-catalog.fixtures.test-support.js";
 import {
   hoisted,
-  provider,
   resetSessionCatalogTestState,
   startCall,
 } from "./session-catalog.test-helpers.js";

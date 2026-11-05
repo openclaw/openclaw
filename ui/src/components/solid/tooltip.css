@@ -8,22 +8,23 @@ openclaw-tooltip-provider {
 }
 
 .tooltip-surface {
+  --chat-bubble-background: initial;
+  --chat-text-link: var(--link);
+  --chat-text-link-hover: var(--link-hover);
   position: fixed;
   inset: auto;
   --oc-overlay-distance: 8px;
   max-width: var(--openclaw-tooltip-max-width, min(260px, calc(100vw - 16px)));
   max-height: min(420px, calc(100dvh - 16px));
   overflow: auto;
-  border: 1px solid
-    var(--openclaw-tooltip-border-color, var(--overlay-border, var(--border-strong)));
-  border-radius: var(--openclaw-tooltip-border-radius, var(--radius-md));
+  border: 1px solid transparent;
+  border-radius: var(--openclaw-tooltip-border-radius, var(--radius-tooltip));
+  corner-shape: superellipse(1.5);
   padding: var(--openclaw-tooltip-padding, 5px 7px);
-  background: var(
-    --openclaw-tooltip-background-color,
-    color-mix(in srgb, var(--bg-elevated) 97%, var(--text) 3%)
-  );
+  background: var(--openclaw-tooltip-background-color, var(--menu-surface));
   color: var(--text);
-  box-shadow: var(--openclaw-tooltip-shadow, var(--overlay-shadow, var(--shadow-md)));
+  box-shadow: var(--openclaw-tooltip-shadow, var(--menu-shadow));
+  backdrop-filter: var(--menu-backdrop);
   font-family: var(--font-body);
   font-size: 11px;
   font-weight: 500;
@@ -73,26 +74,6 @@ openclaw-tooltip-provider {
   display: block;
   pointer-events: inherit;
   text-align: left;
-}
-
-.shortcut-kbd:where(:not([hidden])) {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  vertical-align: middle;
-}
-
-.shortcut-kbd > span + span {
-  margin-inline-start: 0.15em;
-}
-
-.kbd__text {
-  text-box: trim-both cap alphabetic;
-}
-
-.shortcut-kbd::before {
-  content: "";
-  height: 1lh;
 }
 
 @media (prefers-reduced-motion: reduce) {

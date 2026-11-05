@@ -37,7 +37,8 @@ const managedRuntime = vi.hoisted(() => ({
   disposeProfile: vi.fn(),
 }));
 
-vi.mock("../agents/bash-process-registry.js", () => ({
+vi.mock("../agents/bash-process-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/bash-process-registry.js")>()),
   getActiveBackgroundExecSessionCount: () => managedRuntime.backgroundCount,
   waitForExecScope: managedRuntime.waitForExecScope,
 }));
@@ -396,17 +397,12 @@ describe("worker command lifetime gate", () => {
       transcriptLeafId: "first-leaf",
       transcriptNextSeq: 2,
     });
-    const secondStarted = waitForRuntimeAbort(
-      {
-        status: "failed",
-        reason: "turn-failed",
-        transcriptLeafId: "second-leaf",
-        transcriptNextSeq: 3,
-      },
-      () => {
-        managedRuntime.backgroundCount = 0;
-      },
-    );
+    const secondStarted = waitForRuntimeAbort({
+      status: "failed",
+      reason: "turn-failed",
+      transcriptLeafId: "second-leaf",
+      transcriptNextSeq: 3,
+    });
     const running = runWorkerCommand({ ...harness, managed: true, lifetime: lifetime.contract });
     lifetime.open();
     harness.turn();
@@ -423,14 +419,19 @@ describe("worker command lifetime gate", () => {
     const secondSignal = await secondStarted;
     harness.send({ type: "cancel", turnId: "turn-1" });
     expect(secondSignal.aborted).toBe(false);
+    const cancellationResult = harness.nextMessage();
     harness.send({ type: "cancel", turnId: "turn-2" });
-    await running;
+    try {
+      expect(await cancellationResult).toMatchObject({
+        turnId: "turn-2",
+        result: { status: "failed", reason: "turn-failed" },
+        retainWorker: false,
+      });
+    } finally {
+      harness.input.end();
+      await running;
+    }
 
-    expect(harness.results[1]).toMatchObject({
-      turnId: "turn-2",
-      result: { status: "failed", reason: "turn-failed" },
-      retainWorker: false,
-    });
     expect(createWorkerRuntimeEnvironment).toHaveBeenCalledOnce();
     expect(
       vi.mocked(runWorkerDescriptor).mock.calls.map(([, options]) => options?.environmentStateDir),

@@ -5,7 +5,6 @@ import "./codex-route-session-repair.js";
 type TestApi = {
   repairCodexSessionStoreRoutes(params: {
     store: Record<string, SessionEntry>;
-    now?: number;
     blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
     authProfileIdMap?: ReadonlyMap<string, string>;
   }): string[];

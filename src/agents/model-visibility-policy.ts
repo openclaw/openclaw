@@ -19,8 +19,8 @@ export const RUNTIME_MODEL_VISIBILITY_NORMALIZATION = {
   allowPluginNormalization: true,
 } as const;
 
-/** Every model ref the configured view admits from agent settings. */
-export function resolveAdditionalConfiguredModelRefs(params: {
+/** Model refs agent settings select; the per-model metadata map is not a visibility source. */
+function resolveAdditionalConfiguredModelRefs(params: {
   cfg: OpenClawConfig;
   agentId?: string;
 }): string[] {
@@ -32,8 +32,6 @@ export function resolveAdditionalConfiguredModelRefs(params: {
     ...resolveAgentModelFallbackValues(defaults?.model),
     resolveAgentModelPrimaryValue(agent?.model),
     ...resolveAgentModelFallbackValues(agent?.model),
-    ...Object.keys(defaults?.models ?? {}),
-    ...Object.keys(agent?.models ?? {}),
     ...(utility.kind === "explicit" ? [utility.modelRef] : []),
     ...(utility.kind !== "disabled" ? utility.fallbacks : []),
     resolveAgentModelPrimaryValue(defaults?.imageModel),

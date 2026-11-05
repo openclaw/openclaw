@@ -1,5 +1,6 @@
 /** Persists CLI and ACP command fallbacks through the shared transcript owner. */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   persistSessionTranscriptTurn,
   type TranscriptMessageAppendResult,
@@ -52,6 +53,7 @@ type PersistTextTurnTranscriptParams = TextTurnTranscriptContext & {
   expectedSessionId?: string;
   finalText: string;
   skipAssistantTurn?: boolean;
+  assistantUsageOnly?: boolean;
   assistant: {
     api: string;
     provider: string;
@@ -89,6 +91,8 @@ async function persistTextTurnTranscript(
 ): Promise<PersistTextTurnTranscriptResult> {
   const promptText = params.transcriptBody ?? params.body;
   const replyText = params.skipAssistantTurn === true ? "" : params.finalText;
+  const persistAssistantUsage =
+    params.skipAssistantTurn !== true && params.assistantUsageOnly === true;
   const userMessage =
     params.userMessage ??
     (await params.userTurnTranscriptRecorder?.resolveMessage()) ??
@@ -99,7 +103,7 @@ async function persistTextTurnTranscript(
           provenance: params.inputProvenance,
         })
       : undefined);
-  if (!userMessage && !replyText) {
+  if (!userMessage && !replyText && !persistAssistantUsage) {
     return { kind: "persisted", sessionEntry: params.sessionEntry };
   }
   const inputProvenance =
@@ -135,7 +139,7 @@ async function persistTextTurnTranscript(
     });
   }
 
-  if (replyText) {
+  if (replyText || persistAssistantUsage) {
     const prepareAssistantTranscriptMessage = params.prepareAssistantTranscriptMessage;
     messages.push({
       idempotencyLookup: "scan-assistant" as const,
@@ -144,7 +148,7 @@ async function persistTextTurnTranscript(
         ...(params.assistantIdempotencyKey
           ? { idempotencyKey: params.assistantIdempotencyKey }
           : {}),
-        content: [{ type: "text", text: replyText }],
+        content: replyText ? [{ type: "text", text: replyText }] : [],
         api: params.assistant.api,
         provider: params.assistant.provider,
         model: params.assistant.model,
@@ -157,7 +161,8 @@ async function persistTextTurnTranscript(
           // SAFETY: This append creates the assistant row above; the preparer cannot receive another row.
           const assistant = message as Parameters<PrepareAssistantTranscriptMessage>[0];
           return projectAgentHarnessTranscriptMessageForDisplay({
-            hidden: params.privateCompletion === true,
+            runId: params.runId,
+            hidden: params.privateCompletion === true || persistAssistantUsage,
             inputProvenance,
             message: prepareAssistantTranscriptMessage
               ? prepareAssistantTranscriptMessage(assistant, replyText)
@@ -216,7 +221,20 @@ async function persistTextTurnTranscript(
   };
 }
 
+function hasSourceReplyTranscriptMirrors(result: EmbeddedAgentRunResult): boolean {
+  return (
+    result.payloads?.some(
+      (payload) => getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror,
+    ) === true
+  );
+}
+
 export function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
+  // Delivery owns the individual source-reply mirrors. Their joined visible text
+  // is not another CLI answer, and private terminal output must stay private.
+  if (hasSourceReplyTranscriptMirrors(result)) {
+    return "";
+  }
   const visibleText = result.meta.finalAssistantVisibleText?.trim();
   if (visibleText) {
     return visibleText;
@@ -264,6 +282,7 @@ export async function persistCliTurnTranscript(
   const { result, skipUserTurn: requestedSkipUserTurn, ...transcript } = params;
   const replyText = resolveCliTranscriptReplyText(result);
   const skipUserTurn = requestedSkipUserTurn === true;
+  const assistantUsageOnly = hasSourceReplyTranscriptMirrors(result);
 
   return await persistTextTurnTranscript({
     ...transcript,
@@ -271,6 +290,10 @@ export async function persistCliTurnTranscript(
     transcriptBody: skipUserTurn ? undefined : transcript.transcriptBody,
     userMessage: skipUserTurn ? undefined : transcript.userMessage,
     finalText: replyText,
+    // Mirrors carry no usage. Keep the whole-turn counters without another visible reply.
+    assistantUsageOnly,
+    assistantIdempotencyKey:
+      assistantUsageOnly && params.runId ? `cli-usage:${params.runId}` : undefined,
     assistant: {
       api: "cli",
       provider: result.meta.agentMeta?.provider?.trim() ?? "cli",

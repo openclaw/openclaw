@@ -1,18 +1,12 @@
-import { render, type JSX } from "@solidjs/web";
-import {
-  createMemo,
-  createSignal,
-  For,
-  Match,
-  onCleanup,
-  runWithOwner,
-  Show,
-  Switch,
-  untrack,
-} from "solid-js";
-import { registerListener } from "../../../../../src/shared/listeners.js";
+import { dynamic, render, type JSX } from "@solidjs/web";
+import { createMemo, createSignal, For, onSettled, runWithOwner, Show, useContext } from "solid-js";
+import type { MarkdownPrewarmMode } from "../../../components/markdown.ts";
+import { createIdleImport } from "../../../lib/idle-import.ts";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../../lib/presentation.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { AfterCommitEffect } from "../render-lifecycle.ts";
@@ -20,144 +14,173 @@ import {
   createSolidRenderLifecycle,
   type SolidRenderLifecycle,
 } from "../solid-render-lifecycle.ts";
-import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
-import { ChatDivider, ChatNotice } from "./chat-divider.tsx";
-import { ChatHistoryBoundary } from "./chat-history-boundary.tsx";
-import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
-  StreamGroup,
-  UnplacedSubagentWait,
-  WorkGroupSummary,
-} from "./chat-message-stream-view.tsx";
-import { RealtimeTalkConversation } from "./chat-realtime-controls.tsx";
-import { ChatSystemEvents } from "./chat-system-events.tsx";
-import { TranscriptWorkPreviews } from "./chat-transcript-content.tsx";
-import type { TranscriptContent, TranscriptLayoutProps } from "./chat-transcript-layout.ts";
+  TranscriptRowKeyContext,
+  type TranscriptContent,
+  type TranscriptLayoutProps,
+  type TranscriptRow,
+} from "./chat-transcript-layout.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
-import {
-  GuardedTranscriptItem,
-  type NativeTranscriptView,
-} from "./chat-transcript-render-guard.ts";
-import { ChatTypingIndicator } from "./chat-typing-indicator.tsx";
-import { TurnRecapRow } from "./chat-working-indicator.tsx";
+import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
+import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
+import { nativeRows, type NativeTranscriptView } from "./chat-transcript-rows.ts";
+
+type PrewarmModule = typeof import("./chat-transcript-row-prewarm.ts");
+let prewarmModule: PrewarmModule | null | undefined;
+const prewarmImport = createIdleImport(
+  () => import("./chat-transcript-row-prewarm.ts"),
+  (loaded) => {
+    prewarmModule = loaded;
+  },
+);
 
 function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
-  return (
-    <Switch>
-      <Match when={props.value.kind === "system-events" ? props.value : undefined}>
-        {(view) => <ChatSystemEvents item={view().item} />}
-      </Match>
-      <Match when={props.value.kind === "group" ? props.value : undefined}>
-        {(view) => <MessageGroup {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "activity" ? props.value : undefined}>
-        {(view) => <ActivityGroup {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "stream" ? props.value : undefined}>
-        {(view) => <StreamGroup {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "work" ? props.value : undefined}>
-        {(view) => <WorkGroupSummary {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "frame" ? props.value : undefined}>
-        {(view) => <AgentRunFrame {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "wait" ? props.value : undefined}>
-        {(view) => <UnplacedSubagentWait {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "divider" ? props.value : undefined}>
-        {(view) => <ChatDivider {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "notice" ? props.value : undefined}>
-        {(view) => <ChatNotice {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "work-previews" ? props.value : undefined}>
-        {(view) => <TranscriptWorkPreviews {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "realtime" ? props.value : undefined}>
-        {(view) => <RealtimeTalkConversation {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "recap" ? props.value : undefined}>
-        {(view) => <TurnRecapRow {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "typing" ? props.value : undefined}>
-        {(view) => <ChatTypingIndicator {...view()} />}
-      </Match>
-    </Switch>
-  );
-}
-
-function GuardedRow(props: { value: GuardedTranscriptItem }): JSX.Element {
-  const dependencies = createMemo(() => props.value.dependencies, {
-    equals: transcriptArraysEqual,
-  });
-  const current = createMemo(() => {
-    dependencies();
-    // The explicit row dependency vector keeps unrelated streaming snapshots out of this row.
-    return untrack(() => props.value);
-  });
-  return <Show when={current().native}>{(view) => <NativeRow value={view()} />}</Show>;
-}
-
-function RowContent(props: { value: TranscriptContent }): JSX.Element {
+  const Row = dynamic(() => nativeRows[props.value.kind]);
   return (
     <Show
-      when={props.value instanceof GuardedTranscriptItem ? props.value : undefined}
-      fallback={props.value instanceof GuardedTranscriptItem ? null : props.value}
+      when={props.value.kind === "group"}
+      fallback={
+        <ChatLazyBoundary
+          fallback={
+            <div class="chat-group" role="status">
+              {t("common.loading")}
+            </div>
+          }
+        >
+          <Row {...props.value} />
+        </ChatLazyBoundary>
+      }
     >
-      {(item) => <GuardedRow value={item()} />}
+      <Row {...props.value} />
     </Show>
   );
 }
 
-function TranscriptRows(props: { snapshot: TranscriptLayoutProps }) {
+function RowContent(props: { value: TranscriptContent }): JSX.Element {
+  // Cut off unchanged rows before the content-kind branch and its child bindings.
+  const current = createMemo(() => props.value, {
+    equals: (before, next) =>
+      before instanceof GuardedTranscriptItem && next instanceof GuardedTranscriptItem
+        ? transcriptArraysEqual(before.dependencies, next.dependencies)
+        : Object.is(before, next),
+  });
+  const native = () => {
+    const value = current();
+    return value instanceof GuardedTranscriptItem ? value.native : undefined;
+  };
+  const fallback = () => {
+    const value = current();
+    return value instanceof GuardedTranscriptItem ? null : value;
+  };
+  return (
+    <Show when={native()} fallback={fallback()}>
+      {(view) => <NativeRow value={view()} />}
+    </Show>
+  );
+}
+
+function TranscriptRows(props: {
+  snapshot: TranscriptLayoutProps;
+  measureRowRefFor: TranscriptLayoutProps["measureRowRefFor"];
+  columnRef: (element: HTMLDivElement) => void;
+}) {
+  const presented = useContext(ContentPresentation);
   const virtualRows = createMemo(() => {
     return props.snapshot.virtualizer.getVirtualItems();
   });
+  const getContent = createMemo(() => props.snapshot.getContent);
+  const activeRows = createMemo(() =>
+    virtualRows().filter((row) => props.snapshot.activeRowKeys.has(String(row.key))),
+  );
+  const blockStart = () =>
+    activeRows()[0]?.start ?? props.snapshot.virtualizer.options.scrollMargin;
+  const gaps = createMemo(
+    () =>
+      new Map(
+        activeRows().map((row, index, rows) => {
+          const previous = rows[index - 1];
+          return [
+            row.key,
+            previous && row.index > previous.index + 1 ? row.start - previous.end : 0,
+          ];
+        }),
+      ),
+  );
+  const rowRef = (key: string) => {
+    const measureRef = props.measureRowRefFor(key);
+    return elementRef((element: HTMLDivElement) => {
+      measureRef(element);
+      return () => measureRef(undefined);
+    });
+  };
   return (
     <>
-      <Show when={props.snapshot.header}>{(header) => <ChatHistoryBoundary {...header()} />}</Show>
-      <div class="chat-virtual-sizer">
+      {/* Live controls can retire before a gesture releases the accepted row model. */}
+      <div style={{ height: `${props.snapshot.headerHeight}px`, "transition-property": "none" }}>
+        {props.snapshot.header}
+      </div>
+      <div class="chat-virtual-sizer" ref={(element) => props.columnRef(element)}>
         {props.snapshot.overlay}
         <div
           class="chat-virtual-block"
           style={{
-            transform: `translateY(${(virtualRows()[0]?.start ?? props.snapshot.virtualizer.options.scrollMargin) - props.snapshot.virtualizer.options.scrollMargin}px)`,
+            // WebKit 26.4 omits ancestor transforms from top-layer CSS anchor coordinates.
+            top: `${blockStart() - props.snapshot.virtualizer.options.scrollMargin}px`,
           }}
         >
           <For each={virtualRows()} keyed={(row) => row.key}>
-            {(virtualRow, renderedIndex) => {
+            {(virtualRow) => {
               const index = createMemo(() => virtualRow().index);
               const row = createMemo(() => props.snapshot.rows[index()]);
-              const content = createMemo(() => props.snapshot.getContent(index()));
-              const gap = createMemo(() => {
-                const previous = virtualRows()[renderedIndex() - 1];
-                return previous && virtualRow().index > previous.index + 1
-                  ? virtualRow().start - previous.end
-                  : 0;
+              const content = createMemo(() => {
+                // Content rows may replace their DOM without replacing the row model.
+                const source = row()?.kind === "content" ? props.snapshot.getContent : getContent();
+                return source(index());
               });
-              // The keyed row owns one measurement binding for its entire mounted lifetime.
-              const measureRef = untrack(() =>
-                props.snapshot.measureRowRefFor(String(virtualRow().key)),
-              );
-              onCleanup(() => measureRef(undefined));
+              const active = createMemo(() => props.snapshot.activeRowKeys.has(row()?.key ?? ""));
+              const preparing = createMemo(() => row()?.key === props.snapshot.preparingRowKey);
+              const streaming = createMemo(() => row()?.streaming === true);
+              const gap = () => gaps().get(virtualRow().key) ?? 0;
               return (
                 <>
                   <Show when={gap() > 0}>
                     <div aria-hidden="true" style={{ height: `${gap()}px` }} />
                   </Show>
                   <div
-                    ref={(node) => measureRef(node)}
+                    ref={[rowRef(String(virtualRow().key))]}
                     class={[
                       "chat-virtual-row",
                       { "chat-virtual-row--first": virtualRow().index === 0 },
                     ]}
-                    style={{ "contain-intrinsic-block-size": `${virtualRow().size}px` }}
+                    style={{
+                      // Live content stays measurable; reflecting every resize back into
+                      // its own style would invalidate it again after native layout.
+                      "contain-intrinsic-block-size": streaming()
+                        ? undefined
+                        : `${virtualRow().size}px`,
+                      "min-height": `${props.snapshot.layout.rowMinimum(index())}px`,
+                      display: active() ? undefined : preparing() ? "flow-root" : "none",
+                      position: active() ? undefined : "absolute",
+                      top: active() ? undefined : "0",
+                      opacity: active() ? undefined : "0",
+                      "content-visibility":
+                        preparing() || streaming() ? "visible" : active() ? undefined : "hidden",
+                    }}
                     data-index={String(virtualRow().index)}
                     data-virtual-row-key={row()?.key}
+                    data-prepared-row={active() ? undefined : "true"}
+                    data-preparing-row={preparing() ? "true" : undefined}
+                    data-streaming-row={streaming() ? "true" : undefined}
+                    inert={!active()}
+                    aria-hidden={active() ? undefined : "true"}
                   >
-                    <RowContent value={content()} />
+                    <TranscriptRowKeyContext value={() => row()?.key}>
+                      <ContentPresentation value={() => presented() && (active() || preparing())}>
+                        <RowContent value={content()} />
+                      </ContentPresentation>
+                    </TranscriptRowKeyContext>
                   </div>
                 </>
               );
@@ -171,24 +194,69 @@ function TranscriptRows(props: { snapshot: TranscriptLayoutProps }) {
 
 /** One Solid root per session, independent of the caller's render computation. */
 export class ChatTranscriptRenderer {
+  private contentSource?: {
+    rows: readonly TranscriptRow[];
+    renderer: unknown;
+    getContent: (index: number) => TranscriptContent;
+  };
+  private prewarming?: ReturnType<PrewarmModule["createTranscriptRowPrewarmer"]>;
   private element?: HTMLDivElement;
+  private column?: HTMLDivElement;
   private accepted?: TranscriptLayoutProps;
   private committed?: TranscriptLayoutProps;
   private lifecycle?: SolidRenderLifecycle<TranscriptLayoutProps>;
   private publishPresentation?: () => void;
   private disposeRoot?: () => void;
   private binding?: PresentationBinding;
+  private stopPresentation?: () => void;
   private commitQueued = false;
   private readonly layoutEffects = new Set<() => void>();
   private readonly mediaDisconnect = new Set<() => void>();
-  private readonly listeners = new Set<() => void>();
+  private publish?: () => void;
   private readonly presentationChanged = () => this.publishPresentation?.();
 
-  subscribe(listener: () => void): () => void {
-    return registerListener(this.listeners, listener);
+  contentFor<T>(
+    rows: readonly TranscriptRow<T>[],
+    renderer: (row: TranscriptRow<T>) => TranscriptContent,
+  ) {
+    // Geometry commits reuse content; a replaced row or renderer still refreshes it.
+    if (this.contentSource?.rows !== rows || this.contentSource.renderer !== renderer) {
+      this.prewarming = undefined;
+      this.contentSource = { rows, renderer, getContent: (index) => renderer(rows[index]!) };
+    }
+    return this.contentSource.getContent;
   }
 
-  private isPresented(): boolean {
+  prewarmRow(index: number, mode: MarkdownPrewarmMode = "cold-fragment"): boolean | undefined {
+    const source = this.contentSource;
+    const row = source?.rows[index];
+    if (!source || !row || prewarmModule === null) {
+      return false;
+    }
+    if (!prewarmModule) {
+      // Pending code yields the current preparation slice; visible rows still render normally.
+      void prewarmImport.load().catch(() => {
+        // Visible rendering remains available; the shared loader retries when online.
+        prewarmModule = null;
+      });
+      return undefined;
+    }
+    this.prewarming ??= prewarmModule.createTranscriptRowPrewarmer();
+    return this.prewarming(row, source.getContent(index), mode);
+  }
+
+  get columnElement(): HTMLDivElement | undefined {
+    return this.column;
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.publish = listener;
+    return () => {
+      this.publish = undefined;
+    };
+  }
+
+  isPresented(): boolean {
     const presented = this.accepted?.presented ?? false;
     return (
       this.element?.isConnected === true &&
@@ -253,8 +321,7 @@ export class ChatTranscriptRenderer {
     this.lifecycle.afterCommit(
       () => {
         this.commitQueued = false;
-        // Commit observes the accepted DOM snapshot without subscribing its imperative caller.
-        const current = untrack(() => this.lifecycle?.snapshot());
+        const current = this.lifecycle?.snapshot();
         if (!current || !this.element) {
           return;
         }
@@ -279,8 +346,10 @@ export class ChatTranscriptRenderer {
     this.accepted = next;
     const binding = typeof next.presented === "boolean" ? undefined : next.presented;
     if (binding?.owner !== this.binding?.owner) {
-      this.binding?.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, this.presentationChanged);
-      binding?.owner.addEventListener(PRESENTATION_CHANGED_EVENT, this.presentationChanged);
+      this.stopPresentation?.();
+      this.stopPresentation = binding
+        ? listen(binding.owner, PRESENTATION_CHANGED_EVENT, this.presentationChanged)
+        : undefined;
     }
     this.binding = binding;
     if (!this.element) {
@@ -288,7 +357,8 @@ export class ChatTranscriptRenderer {
       element.className = "chat-thread-inner chat-thread-inner--virtual";
       element.style.visibility = next.initialPositionPending() ? "hidden" : "";
       this.element = element;
-      // A session outlives the render computation that first introduces its DOM.
+      // This retained transcript island outlives the computation that introduces its DOM.
+      // Its session owner disposes the detached root, including while the pane is parked.
       this.disposeRoot = runWithOwner(null, () =>
         render(() => {
           const [presented, setPresented] = createSignal(this.isPresented(), { ownedWrite: true });
@@ -309,14 +379,21 @@ export class ChatTranscriptRenderer {
           this.lifecycle = lifecycle;
           const snapshot = createMemo(lifecycle.snapshot);
           const capture = (event: Event) => snapshot().captureInteractionResize(event);
-          element.addEventListener("click", capture, true);
-          onCleanup(() => element.removeEventListener("click", capture, true));
+          onSettled(() => listen(element, "click", capture, true));
           const content = () => (
-            <TranscriptMediaDisconnect value={this.mediaDisconnect}>
-              <ContentPresentation value={active}>
-                <TranscriptRows snapshot={snapshot()} />
-              </ContentPresentation>
-            </TranscriptMediaDisconnect>
+            <TranscriptMessageElementsContext value={next.messageElements}>
+              <TranscriptMediaDisconnect value={this.mediaDisconnect}>
+                <ContentPresentation value={active}>
+                  <TranscriptRows
+                    snapshot={snapshot()}
+                    measureRowRefFor={next.measureRowRefFor}
+                    columnRef={(column) => {
+                      this.column = column;
+                    }}
+                  />
+                </ContentPresentation>
+              </TranscriptMediaDisconnect>
+            </TranscriptMessageElementsContext>
           );
           // Keep the session root independent while retaining its application capabilities.
           return (
@@ -329,10 +406,11 @@ export class ChatTranscriptRenderer {
         }, element),
       );
     } else {
+      // Read the native offset before row mutations dirty layout. The later
+      // commit still accepts any sizes discovered while mounting those rows.
+      next.layout.commitRange(this.element, next.virtualizer.getTotalSize() + next.headerHeight);
       this.publishPresentation?.();
-      for (const listener of this.listeners) {
-        listener();
-      }
+      this.publish?.();
     }
     this.commit();
     next.scrollElementRef(this.element);
@@ -340,16 +418,20 @@ export class ChatTranscriptRenderer {
   }
 
   dispose(): void {
-    this.binding?.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, this.presentationChanged);
+    this.stopPresentation?.();
+    this.stopPresentation = undefined;
     this.binding = undefined;
     this.disposeRoot?.();
     this.disposeRoot = undefined;
     this.publishPresentation = undefined;
     this.lifecycle = undefined;
     this.accepted = undefined;
+    this.contentSource = undefined;
+    this.prewarming = undefined;
     this.committed = undefined;
     this.commitQueued = false;
     this.layoutEffects.clear();
     this.element = undefined;
+    this.column = undefined;
   }
 }

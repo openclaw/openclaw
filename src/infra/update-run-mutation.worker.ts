@@ -10,14 +10,20 @@ import {
   retrySqliteWorkerAdmission,
   SQLITE_WORKER_ADMISSION_DEADLINE_MS,
 } from "./sqlite-worker-admission-retry.js";
-import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import {
+  requestSqliteWorkerOperationAdmission,
+  takeSqliteWorkerOperationAdmissionAttachment,
+} from "./sqlite-worker-operation-admission.js";
+import { PluginCohortRecoveryWriteBindingSchema } from "./update-plugin-cohort-schema.js";
+import { claimUpdateResultInTransaction } from "./update-result-claim.js";
 import { resolveUpdateRunCodecEnv, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { createUpdateRun } from "./update-run-ledger.js";
 import type {
   UpdateRunWriteCommand,
   UpdateRunWriteOperations,
 } from "./update-run-mutation.types.js";
-import { readRecovery } from "./update-run-recovery-store.js";
+import { readPluginCohortRecoveryInDatabase, readRecovery } from "./update-run-recovery-store.js";
+import { pluginCohortRecoveryMatchesSource } from "./update-run-recovery.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 import {
   applyFinishUpdateRun,
@@ -47,8 +53,9 @@ export function withUpdateRunWriteAdmission<T>(
       facts: undefined,
       ...(stage === "commit" ? { deadlineMs: SQLITE_WORKER_ADMISSION_DEADLINE_MS } : {}),
     });
-  // Required update evidence retains its retry policy; each attempt obtains fresh admission.
-  return retrySqliteWorkerAdmission(() => operation(assertCurrent), { maxAttempts: Infinity });
+  // A slow host policy snapshot can exceed every commit grant. Repeating it
+  // forever rewrites the same database without ever recording progress.
+  return retrySqliteWorkerAdmission(() => operation(assertCurrent), { maxAttempts: 3 });
 }
 
 export function recordUpdateRunMutationInWorker(
@@ -92,10 +99,39 @@ export function recordUpdateRunMutationInWorker(
         setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
       }
       if (input.requireNoRecovery) {
+        const binding = input.pluginCohort;
+        const eligible =
+          binding &&
+          (command.type === "updateRuns.recordPhase" ||
+            command.type === "updateRuns.recordStep" ||
+            command.type === "updateRuns.recordDiagnostics");
+        // Check even when the reservation disappeared: an orphan companion is never admission.
+        const pair = eligible ? readPluginCohortRecoveryInDatabase(db, input.runId) : undefined;
         const recovery = readRecovery(db, input.runId);
         if (recovery) {
-          assertCurrent("commit");
-          return { kind: "recovery-required", recovery };
+          if (
+            !binding ||
+            !pair ||
+            binding.runId !== input.runId ||
+            binding.transactionId !== pair.cohort.transactionId ||
+            binding.installKey !== pair.cohort.installKey ||
+            !pluginCohortRecoveryMatchesSource(pair, options)
+          ) {
+            assertCurrent("commit");
+            return { kind: "recovery-required", recovery };
+          }
+          // The attachment belongs to this request's retained admission callback,
+          // which rechecks the live executor/source before BEGIN and COMMIT.
+          const admitted = PluginCohortRecoveryWriteBindingSchema.parse(
+            takeSqliteWorkerOperationAdmissionAttachment(),
+          );
+          if (
+            admitted.runId !== binding.runId ||
+            admitted.transactionId !== binding.transactionId ||
+            admitted.installKey !== binding.installKey
+          ) {
+            throw new Error("Plugin cohort bookkeeping lost its admitted operation");
+          }
         }
       }
       const record = mutateRunInTransaction(
@@ -127,8 +163,13 @@ export function recordUpdateRunMutationInWorker(
         },
         codecOptions,
       );
+      // The host owner dispatches a claimed outcome only after this commit.
+      const updateResult =
+        command.type === "updateRuns.finish"
+          ? claimUpdateResultInTransaction(db, record)
+          : undefined;
       assertCurrent("commit");
-      return { kind: "recorded", record };
+      return { kind: "recorded", record, ...(updateResult ? { updateResult } : {}) };
     }, options);
   } catch (cause) {
     if (entered || !isSqliteLockError(cause)) {

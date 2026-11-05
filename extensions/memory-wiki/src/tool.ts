@@ -15,7 +15,8 @@ import {
 } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import { renderWikiMutationSummary, renderWikiSearchResults } from "./presentation.js";
-import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
+import { WIKI_SEARCH_MODES } from "./query-scoring.js";
+import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
 
@@ -168,7 +169,13 @@ export function createWikiSearchTool(
       try {
         return await racePromiseWithAbortSignal(
           async () => {
-            await syncMemoryWikiImportedSources({ config, appConfig, signal });
+            // Import and publication share the service lifetime. A search deadline
+            // must not leave committed imports without their compiled snapshot.
+            await syncMemoryWikiImportedSources({
+              config,
+              appConfig,
+              signal: memoryContext.signal ?? signal,
+            });
             signal.throwIfAborted();
             const results = await searchMemoryWiki({
               config,

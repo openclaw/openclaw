@@ -83,6 +83,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
   vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
   }));
+  // mock-isolation: Synthetic context engines keep live registry state outside runner fixtures.
   vi.doMock("../../context-engine/registry.js", () => ({
     hasSameContextEngineInstance: vi.fn(
       (left: ContextEngine, right: ContextEngine) => left === right,
@@ -101,7 +102,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
           return { messages, estimatedTokens: 0 };
         },
         async compact() {
-          return { ok: true, compacted: false };
+          return { ok: true, compacted: false, reason: "nothing to compact" };
         },
         async dispose() {},
       };
@@ -114,6 +115,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       () => options?.pluginRegistry ?? createEmptyPluginRegistry(),
     ),
   }));
+  // mock-isolation: Runner orchestration uses synthetic snapshots without booting plugin catalogs or runtime owners.
   vi.doMock("../prepared-model-runtime.js", () => {
     const acquire = async (input: PreparedModelRuntimeInput) => {
       if (!input.readOnly) {
@@ -126,6 +128,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       }
       return {
         snapshot: createEmptyPreparedModelRuntimeSnapshot(input, options?.pluginRegistry),
+        run: <T>(run: () => T): T => run(),
         [Symbol.asyncDispose]: vi.fn(async () => {}),
       };
     };

@@ -1,30 +1,107 @@
-// Load the Gateway's deferred runtime during collection, outside the recovery deadline.
-import "../agents/prepared-model-runtime.js";
-import "./server-start.js";
-import childProcess, { type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import nodeProcess from "node:process";
+import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
+import * as gatewayFixture from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-} from "../config/runtime-snapshot.js";
-import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
+import { model as createModel } from "../agents/model-catalog-fixtures.test-support.js";
 import { captureEnv } from "../test-utils/env.js";
-import { buildCodexHarnessAppServerArgs } from "./gateway-codex-harness.live-helpers.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+
+// Native plugins share the actual host graph, outside Vitest's transformed graph.
+// Prepare deferred runtime during collection, outside the recovery deadline.
+const requireHost = createRequire(import.meta.url);
+requireHost("../agents/prepared-model-runtime.ts");
+requireHost("./server-start.ts");
+const { createPluginStateKeyedStore } = requireHost(
+  "../plugin-state/plugin-state-store.ts",
+) as typeof import("../plugin-state/plugin-state-store.js");
+const { buildCodexHarnessAppServerArgs } = requireHost(
+  "./gateway-codex-harness.live-helpers.ts",
+) as typeof import("./gateway-codex-harness.live-helpers.js");
+const { connectGatewayClient, disconnectGatewayClient } = requireHost(
+  "./test-helpers.e2e.ts",
+) as typeof import("./test-helpers.e2e.js");
+
+const { startGatewayServer } = requireHost("./server.ts") as typeof import("./server.js");
+const { startClaimedGateway } = requireHost(
+  "./test-helpers.listener.ts",
+) as typeof import("./test-helpers.listener.js");
+const { acquireTestPortBlock } = requireHost(
+  "../test-utils/port-claims.ts",
+) as typeof import("../test-utils/port-claims.js");
+const { clearConfigCache, clearRuntimeConfigSnapshot } = requireHost(
+  "../config/config.ts",
+) as typeof import("../config/config.js");
+const { clearSessionStoreCacheForTest } = requireHost(
+  "../config/sessions/store-writer-state.ts",
+) as typeof import("../config/sessions/store-writer-state.js");
+const { GATEWAY_STARTUP_MUTATED_ENV_KEYS } = requireHost(
+  "./test-helpers.env.ts",
+) as typeof import("./test-helpers.env.js");
+
+// Native ESM exports cannot be spied on for retained-listener adoption.
+// Use the real listener with the same port-claim and client owners instead.
+async function startNativeGatewayWithClient(
+  params: Pick<
+    Parameters<typeof import("./test-helpers.e2e.js").startGatewayWithClient>[0],
+    "cfg" | "configPath" | "token" | "onEvent"
+  >,
+) {
+  const startupEnv = captureEnv([...GATEWAY_STARTUP_MUTATED_ENV_KEYS, "OPENCLAW_CONFIG_PATH"]);
+  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  const close = async () => {
+    await server?.close();
+    startupEnv.restore();
+  };
+  try {
+    await fs.writeFile(params.configPath, `${JSON.stringify(params.cfg, null, 2)}\n`);
+    process.env.OPENCLAW_CONFIG_PATH = params.configPath;
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+    clearSessionStoreCacheForTest();
+    const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    server = await startClaimedGateway(claim, () =>
+      startGatewayServer(claim.port, {
+        bind: "loopback",
+        auth: { mode: "token", token: params.token },
+        controlUiEnabled: false,
+      }),
+    );
+    const client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${claim.port}`,
+      token: params.token,
+      onEvent: params.onEvent,
+    });
+    return { client, server: { close } };
+  } catch (error) {
+    await close();
+    throw error;
+  }
+}
 
 type ProviderRequest = { body: string; threadId: string | string[] | undefined };
 type ReadyThread = { threadId: string; clientId: string; action: string };
+type NativeProcess = EventEmitter &
+  Pick<ChildProcess, "stdin" | "stdout" | "pid" | "exitCode" | "signalCode" | "kill">;
 
+// Capture an own function before spying; forwarding calls supply their live receiver.
+function originalMethod<T, K extends keyof T>(owner: T, key: K): T[K] {
+  const prop: TypedPropertyDescriptor<T[K]> = Object.getOwnPropertyDescriptor(owner, key) ?? {};
+  assert(typeof prop.value === "function");
+  return prop.value;
+}
+
+// Mirrors the Codex plugin's private CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS.
+const CODEX_UNLOAD_CONFIRMATION_MS = 10_000;
 const RECOVERY_FAILURE_TEXT =
   "⚠️ OpenClaw couldn't finish this reply. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
 const SHUTDOWN_FAILURE_DETAIL =
@@ -63,12 +140,6 @@ it.each(cases)(
     const state = path.join(root, "state");
     const plugin = path.join(root, "instruction-plugin");
     await Promise.all([workspace, state, plugin].map((dir) => fs.mkdir(dir, { recursive: true })));
-    // Native plugins and their SDK must share the built worker graph.
-    const sdkHost = path.join(root, "sdk-host");
-    await fs.mkdir(path.join(sdkHost, "src"), { recursive: true });
-    await fs.mkdir(path.join(sdkHost, "extensions"));
-    await fs.copyFile(path.join(process.cwd(), "package.json"), path.join(sdkHost, "package.json"));
-    await fs.symlink(path.join(process.cwd(), "dist"), path.join(sdkHost, "dist"), "junction");
     const instruction = path.join(root, "instructions.txt");
     await fs.writeFile(instruction, "INITIAL_POLICY");
     await fs.writeFile(
@@ -92,30 +163,47 @@ module.exports = {
 };`,
     );
 
-    const nativeProcesses = new Map<ChildProcess, { output: string }>();
+    const nativeProcesses = new Map<NativeProcess, { output: string }>();
     if (shutdown) {
-      const spawn = childProcess.spawn;
-      const spawnSpy = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
-        // Keep native retention only in replacement controls, so no unload receipt arrives.
-        if (Array.isArray(args[1])) {
-          args[1] = args[1].map((arg) =>
-            arg === "thread_unload_delay_secs=0" ? "thread_unload_delay_secs=1800" : arg,
-          );
-        }
-        const child = spawn(...args);
-        if (Array.isArray(args[1]) && args[1].includes("app-server")) {
+      const workerInputs = new Set<Worker["stdin"]>();
+      const onWorker = (worker: Worker) => workerInputs.add(worker.stdin);
+      nodeProcess.on("worker", onWorker);
+      const emit = originalMethod(EventEmitter.prototype, "emit");
+      const observe = vi.spyOn(EventEmitter.prototype, "emit").mockImplementation(function (
+        this: EventEmitter,
+        event,
+        ...args
+      ) {
+        // The transport facade shares the real Worker's input, but owns native
+        // pid/exit facts. Holding the Worker itself would prove the wrong exit.
+        const child = this as NativeProcess;
+        if (event === "spawn" && child.stdin && workerInputs.has(child.stdin)) {
           const captured = { output: "" };
           nativeProcesses.set(child, captured);
           child.stdout?.on("data", (chunk: Buffer) => {
             captured.output += chunk.toString();
           });
         }
-        return child;
+        return emit.call(this, event, ...args);
       });
-      syncBuiltinESMExports();
+      const postMessage = originalMethod(Worker.prototype, "postMessage");
+      const launch = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+        this: Worker,
+        message,
+        transferList,
+      ) {
+        if (isRecord(message) && message.type === "launch" && Array.isArray(message.args)) {
+          // Keep native retention only in replacement controls, so no unload receipt arrives.
+          message.args = message.args.map((arg: unknown) =>
+            arg === "thread_unload_delay_secs=0" ? "thread_unload_delay_secs=1800" : arg,
+          );
+        }
+        postMessage.call(this, message, transferList);
+      });
       onTestFinished(() => {
-        spawnSpy.mockRestore();
-        syncBuiltinESMExports();
+        nodeProcess.off("worker", onWorker);
+        observe.mockRestore();
+        launch.mockRestore();
       });
     }
     const requests: ProviderRequest[] = [];
@@ -129,12 +217,7 @@ module.exports = {
         res.writeHead(req.method === "GET" && req.url === "/v1/responses" ? 426 : 404).end();
         return;
       }
-      let body = "";
-      req.setEncoding("utf8");
-      req.on("data", (chunk: string) => {
-        body += chunk;
-      });
-      req.on("end", () => {
+      void gatewayFixture.readRequestText(req).then((body) => {
         const request = { body, threadId: req.headers["thread-id"] };
         const reply = (text: string, id: string) =>
           writeOpenAiResponsesText(res, { text, messageId: id, responseId: `${id}-response` });
@@ -170,17 +253,9 @@ module.exports = {
     });
     onTestFinished(async () => {
       releaseSibling.resolve();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await gatewayFixture.closeHttpServer(server);
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    assert(address && typeof address !== "string", "controlled provider must bind a local port");
-    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    const baseUrl = `${await gatewayFixture.listenLoopback(server)}/v1`;
     const values = {
       HOME: root,
       USERPROFILE: root,
@@ -198,7 +273,8 @@ module.exports = {
       OPENCLAW_SKIP_PROVIDERS: "0",
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "dist/extensions"),
-      OPENCLAW_DEV_SOURCE_ROOT: sdkHost,
+      // Keep the SDK on the running source host; the plugin artifact remains compiled.
+      OPENCLAW_DEV_SOURCE_ROOT: process.cwd(),
       OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
       HTTP_PROXY: "http://127.0.0.1:9",
       HTTPS_PROXY: "http://127.0.0.1:9",
@@ -220,7 +296,6 @@ module.exports = {
           workspace,
           skipBootstrap: true,
           utilityModel: "",
-          heartbeat: { every: "0m" },
           model: { primary: `openai/${model}` },
           models: { [`openai/${model}`]: { agentRuntime: { id: "codex" } } },
           maxConcurrent: 2,
@@ -234,17 +309,7 @@ module.exports = {
             baseUrl: "https://api.openai.com/v1",
             apiKey: "synthetic-local-only",
             api: "openai-responses",
-            models: [
-              {
-                id: model,
-                name: "Synthetic model",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128000,
-                maxTokens: 1024,
-              },
-            ],
+            models: [createModel(model, "Synthetic model", { contextWindow: 128000 })],
           },
         },
       },
@@ -271,7 +336,7 @@ module.exports = {
           openai: { enabled: true },
           "recovery-instructions": {
             enabled: true,
-            hooks: { allowPromptInjection: true, allowConversationAccess: true },
+            hooks: { allowPromptModification: true, allowConversationAccess: true },
           },
         },
       },
@@ -279,7 +344,7 @@ module.exports = {
     const readyThreads = new Map<string, ReadyThread>();
     const lifecycleErrors = new Map<string, string[]>();
     const abortedRuns = new Set<string>();
-    const gateway = await startGatewayWithClient({
+    const gateway = await startNativeGatewayWithClient({
       cfg,
       configPath: values.OPENCLAW_CONFIG_PATH,
       token: values.OPENCLAW_GATEWAY_TOKEN,
@@ -310,24 +375,11 @@ module.exports = {
         }
       },
     });
-    let nativeConfig: typeof import("../plugin-sdk/runtime-config-snapshot.js") | undefined =
-      undefined;
     onTestFinished(async () => {
       releaseSibling.resolve();
       await disconnectGatewayClient(gateway.client);
       await gateway.server.close();
-      nativeConfig?.clearRuntimeConfigSnapshot();
     });
-    const runtimeConfig = getRuntimeConfigSnapshot();
-    assert(runtimeConfig, "Gateway must publish its prepared runtime config before a turn");
-    // Load the built SDK directly; Bun's tsconfig aliases would select the source SDK.
-    nativeConfig = createRequire(path.join(sdkHost, "package.json"))(
-      path.join(sdkHost, "dist/plugin-sdk/runtime-config-snapshot.js"),
-    ) as typeof import("../plugin-sdk/runtime-config-snapshot.js");
-    nativeConfig.setRuntimeConfigSnapshot(
-      runtimeConfig,
-      getRuntimeConfigSourceSnapshot() ?? runtimeConfig,
-    );
     const runPrefix = randomUUID();
     const sessionKey = `agent:main:recovery-proof-${runPrefix}`;
     let siblingSessionKey = `agent:main:recovery-sibling-${runPrefix}`;
@@ -441,17 +493,23 @@ module.exports = {
     }
     const beforeRecoveryProcesses = nativeProcesses.size;
     const continued = await start("Continue with changed instructions.", "second");
+    let abortRequest: ReturnType<typeof gateway.client.request> | undefined;
     if (exitGate) {
-      await withTestTimeout(exitGate.waiting, 10_000, "startup did not wait for physical exit");
+      // The retained thread never confirms its unload, so closure starts only after Codex's
+      // 10s unload confirmation window (thread-lifecycle-adoption.ts) expires.
+      await withTestTimeout(
+        exitGate.waiting,
+        CODEX_UNLOAD_CONFIRMATION_MS + 10_000,
+        "startup did not wait for physical exit",
+      );
       expect(exitGate.child).toMatchObject({ exitCode: null, signalCode: null });
       expect(nativeProcesses.size).toBe(beforeRecoveryProcesses);
       expect(primaryRequests).toHaveLength(1);
       await assertOriginalBinding();
       if (shutdown === "cancelled") {
-        await expect(
-          gateway.client.request("chat.abort", { sessionKey, runId: continued.runId }),
-        ).resolves.toEqual({ ok: true, aborted: true, runIds: [continued.runId] });
-        expect(abortedRuns.has(continued.runId)).toBe(true);
+        abortRequest = gateway.client.request("chat.abort", { sessionKey, runId: continued.runId });
+        void abortRequest.catch(() => {});
+        await vi.waitFor(() => expect(abortedRuns.has(continued.runId)).toBe(true));
         expect(exitGate.child).toMatchObject({ exitCode: null, signalCode: null });
         expect(nodeProcess.kill(exitGate.pid, 0)).toBe(true);
       } else if (shutdown === "unconfirmed") {
@@ -465,6 +523,13 @@ module.exports = {
       }
       exitGate.release();
       await withTestTimeout(exitGate.exited, 10_000, "old native process did not exit");
+      if (abortRequest) {
+        expect(await abortRequest).toEqual({
+          ok: true,
+          aborted: true,
+          runIds: [continued.runId],
+        });
+      }
       if (shutdown !== "delayed") {
         await wait(continued.runId);
         expect(nativeProcesses.size).toBe(beforeRecoveryProcesses);
@@ -504,7 +569,7 @@ module.exports = {
 
 /** Hold only the observed native child's exit; protocol, writer lock and run cancellation stay real. */
 function holdNativeExit(
-  processes: Map<ChildProcess, { output: string }>,
+  processes: Map<NativeProcess, { output: string }>,
   threadId: string,
   withholdExitConfirmation: boolean,
 ) {
@@ -512,8 +577,7 @@ function holdNativeExit(
   expect(matches).toHaveLength(1);
   const child = matches[0]?.[0];
   assert(child?.stdin && child.pid, "the native thread must belong to a captured process");
-  const stdin = child.stdin;
-  const pid = child.pid;
+  const { stdin, pid } = child;
   const waiting = createDeferred();
   const exited = createDeferred();
   let closing = false;
@@ -599,11 +663,8 @@ function holdNativeExit(
       vi.useRealTimers();
       child.off("newListener", onListener);
       restoreExitConfirmation();
-      end.mockRestore();
-      destroy.mockRestore();
-      signal.mockRestore();
+      [end, destroy, signal, childKill].forEach((mock) => mock.mockRestore());
       syncBuiltinESMExports();
-      childKill.mockRestore();
       stdin.end();
       killChild("SIGCONT");
     },

@@ -5,7 +5,12 @@ import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/s
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+} from "../sessions/session-controller.rpc-sources.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import { resolveSessionMethodScope } from "../shared/session-method-scopes-base.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
 import type { operatorSessionCap } from "./operator-role-policy.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
@@ -140,7 +145,7 @@ export function resolveProtectedSessionTargets(params: {
     !params.adminBypass &&
     directTargets.length > 0 &&
     Boolean(gatewayClientSessionCreator(params.client)) &&
-    params.sessionCap() === "none";
+    ["none", "invited"].includes(params.sessionCap() ?? "");
   const protectedTargets = hidesForeignSessions
     ? directTargets
     : (params.talkTargets?.filter((target) => isIncognitoSessionKey(target.sessionKey)) ??
@@ -221,7 +226,11 @@ export function resolveTalkSessionTargetInput(
   | { kind: "request"; sessionKey?: string }
   | ({ kind: "relay" } & NonNullable<ReturnType<typeof resolveUnifiedTalkSessionTarget>>)
   | undefined {
-  if (method === "talk.session.steer") {
+  if (
+    method === "talk.session.steer" ||
+    method === "talk.session.appendAudio" ||
+    method === "talk.session.close"
+  ) {
     const sessionId = readSessionSharingStringParam(params, "sessionId");
     const retained = sessionId ? resolveUnifiedTalkSessionTarget(sessionId, connId) : undefined;
     return retained ? { kind: "relay", ...retained } : undefined;
@@ -232,7 +241,8 @@ export function resolveTalkSessionTargetInput(
     method !== "talk.session.create" &&
     method !== "talk.client.transcript" &&
     method !== "talk.client.close" &&
-    method !== "talk.client.steer"
+    method !== "talk.client.steer" &&
+    method !== "talk.client.say"
   ) {
     return undefined;
   }
@@ -311,7 +321,12 @@ export function resolveSessionMutationTargets(params: {
   if (directTargets.length) {
     return directTargets;
   }
-  if (params.method === "board.event" || params.method === "board.action") {
+  if (
+    params.method === "board.event" ||
+    params.method === "board.action" ||
+    (params.method === "board.data.read" &&
+      resolveSessionMethodScope(params.method, params.requestParams) === "operator.sessions.read")
+  ) {
     const ticket = readSessionSharingStringParam(params.requestParams, "ticket");
     const claims = ticket
       ? resolveAuthorizedBoardViewTicketClaims(ticket, { gatewayContext: params.context })
@@ -329,9 +344,18 @@ export function resolveSessionMutationTargets(params: {
   if (params.method !== "sessions.abort") {
     return undefined;
   }
-  const runId = readSessionSharingStringParam(params.requestParams, "runId");
-  const run = runId ? params.context.chatAbortControllers.get(runId) : undefined;
-  return run
-    ? [{ sessionKey: run.sessionKey, ...(run.agentId ? { agentId: run.agentId } : {}) }]
+  const runId = asOptionalRecord(params.requestParams)?.runId;
+  const run =
+    typeof runId === "string"
+      ? getRpcSourceForGateway(runId, params.context.resolveGatewayContext)
+      : undefined;
+  const identity = run ? getRpcSourceIdentity(run) : undefined;
+  return identity
+    ? [
+        {
+          sessionKey: identity.sessionKey,
+          ...(identity.agentId ? { agentId: identity.agentId } : {}),
+        },
+      ]
     : undefined;
 }

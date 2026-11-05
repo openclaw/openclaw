@@ -5,6 +5,7 @@ import { zstdCompress, zstdDecompress } from "node:zlib";
 import type { CodexAppServerClient } from "./client.js";
 import type { createCodexInferenceContext } from "./inference-context.js";
 import { readCodexInferenceMetadata, type CodexInferenceMetadata } from "./inference-metadata.js";
+import { CODEX_INFERENCE_TRANSPORT_FAILURE as FAILURE } from "./inference-transport.js";
 import { createUploadBody, createRetryableUploadBody, MAX_BODY_BYTES } from "./inference-upload.js";
 import type {
   NativeModelSourceCapture,
@@ -12,9 +13,6 @@ import type {
 } from "./native-subagent-monitor-types.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 
-export const CODEX_INFERENCE_TRANSPORT_FAILURE =
-  "Codex parent-local inference transport failed; retry on a fresh connection.";
-const FAILURE = CODEX_INFERENCE_TRANSPORT_FAILURE;
 const compress = promisify(zstdCompress);
 const decompress = promisify(zstdDecompress);
 
@@ -220,14 +218,27 @@ export function createCodexInferenceModelBinding(params: {
         }
         try {
           const mapping = captured.modelMapping;
-          model = bind(
+          const accessPrograms = body.access_programs;
+          if (accessPrograms !== undefined && !isJsonObject(accessPrograms)) {
+            throw new CodexInferenceAuthorizationError("model");
+          }
+          const cyber = isJsonObject(accessPrograms) ? accessPrograms.cyber : undefined;
+          if (
+            cyber !== undefined &&
+            cyber !== "standard" &&
+            cyber !== "daybreak_blue" &&
+            cyber !== "daybreak_red"
+          ) {
+            throw new CodexInferenceAuthorizationError("model");
+          }
+          const selection =
             params.modelPolicyEnforced === false
               ? undefined
               : mapping?.nativeModel.provider === provider &&
                   mapping.nativeModel.model === body.model
                 ? mapping.authorizedModel
-                : { provider, model: body.model },
-          );
+                : { provider, model: body.model };
+          model = bind(selection && { ...selection, cyberAccessProgram: cyber ?? "standard" });
         } catch {
           cancelNativeTurn();
           throw new CodexInferenceAuthorizationError("model");
@@ -433,9 +444,17 @@ export async function readProxyBody(
   return Buffer.concat(chunks);
 }
 
+const TERMINAL_RESPONSE_CANDIDATE = /response\.(?:completed|failed|incomplete)|\\u/u;
+
 export function isTerminalResponse(bytes: Buffer): boolean {
+  const text = bytes.toString("utf8");
+  // Ordinary deltas cannot settle a response. Escaped names and all possible
+  // terminal matches still use JSON parsing, including duplicate/malformed keys.
+  if (!TERMINAL_RESPONSE_CANDIDATE.test(text)) {
+    return false;
+  }
   try {
-    const event: unknown = JSON.parse(bytes.toString("utf8"));
+    const event: unknown = JSON.parse(text);
     return (
       isJsonObject(event) &&
       (event.type === "response.failed" ||

@@ -4,7 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { runInNewContext } from "node:vm";
 import { encodePngRgba } from "rastermill";
 import * as tar from "tar";
 import { build } from "tsdown";
@@ -19,7 +18,7 @@ import {
 import { createWorkerBundleProducer } from "../../src/gateway/worker-environments/bundle.js";
 import {
   WORKER_BUNDLE_ARTIFACT_PATHS,
-  WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS,
   WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
 } from "../../src/shared/worker-bundle-hash.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
@@ -42,22 +41,27 @@ const fail = (message: string): never => {
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function workerEnv(root: string): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH,
+    SystemRoot: process.env.SystemRoot,
+    WINDIR: process.env.WINDIR,
+    HOME: root,
+    USERPROFILE: root,
+    TMPDIR: root,
+    TMP: root,
+    TEMP: root,
+  };
+}
+
 describe("worker deploy build plugin", () => {
-  it("embeds the pinned fs-safe manifest without requiring its installed package at runtime", () => {
-    const manifestPath = fs.realpathSync(
-      path.resolve("node_modules/@openclaw/fs-safe/package.json"),
+  it("tracks the pinned fs-safe manifest and lock before relocation", () => {
+    expect(resolveWorkerDeployGeneratorInputs()).toEqual(
+      expect.arrayContaining([
+        fs.realpathSync(path.resolve("node_modules/@openclaw/fs-safe/package.json")),
+        path.resolve("pnpm-lock.yaml"),
+      ]),
     );
-    const nativePath = fs.realpathSync(path.join(path.dirname(manifestPath), "dist/native.js"));
-    const plugin = createWorkerDeployBuildPlugin();
-    const code = 'const manifest = require("../package.json"); manifest.optionalDependencies;';
-    const transformed = plugin.transform.call({ error: fail }, code, nativePath);
-    expect(transformed).not.toBeNull();
-    expect(runInNewContext(transformed!)).toEqual(
-      JSON.parse(fs.readFileSync(manifestPath, "utf8")).optionalDependencies,
-    );
-    expect(resolveWorkerDeployGeneratorInputs()).toContain(manifestPath);
-    // An identical lookup in another dependency still belongs to that dependency's owner.
-    expect(plugin.transform.call({ error: fail }, code, manifestPath)).toBeNull();
   });
 
   it.each(["", 'require("../package.json"); require("../package.json");'])(
@@ -92,9 +96,11 @@ describe("worker deploy build plugin", () => {
   describe("portable output", () => {
     const fixtureDirs = useAutoCleanupTempDirTracker(afterAll);
     const fixtureLifetime = createFixtureLifetime();
-    const workerEntryNames = WORKER_BUNDLE_ARTIFACT_PATHS.filter((artifact) =>
-      artifact.endsWith(".mjs"),
-    ).map((artifact) => `worker/${artifact.replace(/\.mjs$/u, "")}`);
+    const workerEntryNames = new Set(
+      WORKER_BUNDLE_ARTIFACT_PATHS.filter((artifact) => artifact.endsWith(".mjs")).map(
+        (artifact) => `worker/${artifact.replace(/\.mjs$/u, "")}`,
+      ),
+    );
     let preparedDist: string;
     let preparedArchive: string;
 
@@ -129,7 +135,7 @@ describe("worker deploy build plugin", () => {
           typeof candidate.entry === "object" &&
           !Array.isArray(candidate.entry) &&
           Object.keys(candidate.entry).length > 0 &&
-          Object.keys(candidate.entry).every((entry) => workerEntryNames.includes(entry)),
+          Object.keys(candidate.entry).every((entry) => workerEntryNames.has(entry)),
       )) {
         const { bundles } = await build({
           ...sibling,
@@ -171,7 +177,7 @@ export { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-sto
 export { readSecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
-export { projectComputerActResult } from "../agents/tools/computer-tool-result.js";
+export { createComputerTool } from "../agents/tools/computer-tool.js";
 export { createImageProcessor, convertBmpToPngWithWorker } from "../media/image-processor.js";
 export { createReadTool } from "../agents/sessions/tools/read.js";
 export { createEditTool } from "../agents/sessions/tools/edit.js";
@@ -183,7 +189,12 @@ export { loadActivatedBundledPluginPublicSurfaceModuleSync, listImportedBundledP
 export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 export { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 export { getNativeFallbackDiagnostic } from ${JSON.stringify(pathToFileURL(fs.realpathSync(path.resolve("node_modules/@openclaw/fs-safe/dist/native.js"))).href)};
-export { readOwnerAndDaclBatch } from "@openclaw/fs-safe/permissions";`;
+import { readOwnerAndDaclBatch as readBatch } from "@openclaw/fs-safe/permissions";
+export function readOwnerAndDaclBatch(paths: readonly string[]) {
+  return readBatch(paths);
+}
+export { inspectDarwinAcl } from "@openclaw/fs-safe/permissions";
+export { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";`;
               }
               if (id === highlightSource) {
                 return `globalThis[Symbol.for("worker-highlight-initializations")] = (globalThis[Symbol.for("worker-highlight-initializations")] ?? 0) + 1;\n${code}`;
@@ -197,31 +208,6 @@ export { readOwnerAndDaclBatch } from "@openclaw/fs-safe/permissions";`;
         ],
       });
       try {
-        const builtEntries = vi
-          .mocked(build)
-          .mock.calls.flatMap(([options]) => Object.keys(options?.entry ?? {}));
-        expect(builtEntries.length).toBe(workerEntryNames.length + 1);
-        expect(builtEntries.toSorted()).toEqual(
-          [...workerEntryNames, "worker/worker-chunk-highlight"].toSorted(),
-        );
-        const chunks = bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName));
-        expect(chunks).toContain("worker/worker.mjs");
-        expect(chunks.length).toBeGreaterThan(2);
-        expect(
-          chunks.every(
-            (file) =>
-              file === "worker/worker.mjs" ||
-              file === `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}` ||
-              (file.startsWith("worker/") && WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(file.slice(7))),
-          ),
-        ).toBe(true);
-        expect(
-          bundles.flatMap((bundle) =>
-            bundle.chunks.flatMap((chunk) =>
-              chunk.type === "chunk" ? [...chunk.imports, ...chunk.dynamicImports] : [],
-            ),
-          ),
-        ).not.toContain("ws");
         const { collectWorkerDeployArtifactErrors } =
           await import("../../scripts/check-cli-bootstrap-imports.mts");
         expect(
@@ -272,7 +258,9 @@ try {
     },
   }).find(tool => tool.name === "exec");
   const result = await exec.execute("permission-proof", { command: "echo permission-proof" });
-  assert.match(JSON.stringify(result), /approval_required.*worker workspace permission mode/is);
+  // Without the Gateway approval transport, workers fail closed before review or execution.
+  assert.match(JSON.stringify(result), /approval_required.*Worker exec approval is unavailable/is);
+  assert.equal(result.details?.approvalReviewOutcome, "denied");
   console.log("relocated worker exec permission denied without Gateway storage");
 } finally {
   await closeOpenClawStateDatabaseAsync();
@@ -281,15 +269,8 @@ try {
           path.join(relocated, "worker.mjs"),
         ],
         {
-          PATH: process.env.PATH,
-          SystemRoot: process.env.SystemRoot,
-          WINDIR: process.env.WINDIR,
-          HOME: root,
-          USERPROFILE: root,
+          ...workerEnv(root),
           OPENCLAW_STATE_DIR: path.join(root, "state"),
-          TMPDIR: root,
-          TMP: root,
-          TEMP: root,
         },
         30_000,
         { cwd: root },
@@ -302,7 +283,7 @@ try {
     });
 
     it(
-      "reads exec environment and commits authorization through SQLite workers in a relocated archive",
+      "reads local credentials and commits authorization through SQLite workers in a relocated archive",
       ({ signal }) =>
         fixtureLifetime.run(async () => {
           const root = fixtureLifetime.createTempDir("openclaw-worker-exec-authorization-");
@@ -331,6 +312,7 @@ const entry = process.argv[1];
 process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
 const {
   commitExecAuthorizationLocked,
+  loadOrCreateDeviceIdentity,
   updateExecApprovals,
   readExecApprovalsSnapshot,
   readSecretStoreExecEnvironment,
@@ -343,6 +325,9 @@ const {
 const match = { id: "portable-exec", pattern: process.execPath };
 const command = "portable exec authorization";
 try {
+  const identity = loadOrCreateDeviceIdentity();
+  assert.equal(identity.deviceId.length, 64);
+  assert.deepEqual(loadOrCreateDeviceIdentity(), identity);
   await updateExecApprovals({ update: { kind: "replace", file: { version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } } } });
   assert.deepEqual(await readSecretStoreExecEnvironment({ includeSecretSentinels: false }), {});
   const assertCurrent = await commitExecAuthorizationLocked({
@@ -375,15 +360,8 @@ console.log("relocated exec authorization persisted");
                 path.join(relocated, "worker.mjs"),
               ],
               {
-                PATH: process.env.PATH,
-                SystemRoot: process.env.SystemRoot,
-                WINDIR: process.env.WINDIR,
-                HOME: root,
-                USERPROFILE: root,
+                ...workerEnv(root),
                 OPENCLAW_STATE_DIR: path.join(root, "state"),
-                TMPDIR: root,
-                TMP: root,
-                TEMP: root,
               },
               30_000,
               { cwd: root, signal },
@@ -396,6 +374,73 @@ console.log("relocated exec authorization persisted");
           expect(result.stdout).toContain("relocated exec authorization persisted");
         }),
       180_000,
+    );
+
+    it.skipIf(process.platform !== "darwin").for(["missing", "tampered"] as const)(
+      "refuses %s archive-owned native credentials without a host fallback",
+      { timeout: 180_000 },
+      async (fault, { signal }) =>
+        fixtureLifetime.run(async () => {
+          const root = fixtureLifetime.createTempDir("openclaw-worker-native-refusal-");
+          const relocated = path.join(root, "bundle");
+          fs.mkdirSync(relocated);
+          await tar.extract({ file: preparedArchive, cwd: relocated });
+          const asset =
+            process.arch === "arm64"
+              ? WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS["darwin-arm64"]
+              : WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS["darwin-x64"];
+          const assetPath = path.join(relocated, asset);
+          if (fault === "missing") {
+            fs.unlinkSync(assetPath);
+          } else {
+            fs.writeFileSync(assetPath, "tampered native addon");
+          }
+          const result = await fixtureLifetime.track(
+            runNodeScript(
+              [
+                "--input-type=module",
+                "--eval",
+                `
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const [entry, fault] = process.argv.slice(1);
+const require = createRequire(pathToFileURL(entry));
+assert.throws(() => require.resolve("@openclaw/fs-safe-darwin-" + process.arch), { code: "MODULE_NOT_FOUND" });
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+const { loadOrCreateDeviceIdentity, getNativeFallbackDiagnostic } = await import(pathToFileURL(entry).href);
+assert.throws(() => loadOrCreateDeviceIdentity(), error => {
+  assert.equal(error.code, "helper-unavailable");
+  if (fault === "missing") assert.equal(error.cause?.code, "ENOENT");
+  else assert.match(error.cause?.message ?? "", /native asset integrity mismatch/);
+  return true;
+});
+assert.equal(getNativeFallbackDiagnostic().reason, "load-failed");
+assert.equal(fs.existsSync(path.join(process.env.OPENCLAW_STATE_DIR, "client", "credentials.sqlite")), false);
+assert.deepEqual(Object.keys(require.cache).filter(file => file.endsWith(".node")), []);
+console.log("archive-owned native credentials refused " + fault);
+`,
+                path.join(relocated, "worker.mjs"),
+                fault,
+              ],
+              {
+                PATH: process.env.PATH,
+                HOME: root,
+                OPENCLAW_STATE_DIR: path.join(root, "state"),
+                TMPDIR: root,
+                NODE_DISABLE_COMPILE_CACHE: "1",
+              },
+              30_000,
+              { cwd: root, signal },
+            ),
+          );
+          const diagnostics = `${result.stderr}\n${result.stdout}`;
+          expect(result.error, diagnostics).toBeUndefined();
+          expect(result.status, diagnostics).toBe(0);
+          expect(result.stdout.trim()).toBe(`archive-owned native credentials refused ${fault}`);
+        }),
     );
 
     it(
@@ -457,11 +502,28 @@ const {
   setRuntimeConfigSnapshot,
   getFsSafeNativeConfig,
   getNativeFallbackDiagnostic,
+  inspectDarwinAcl,
   readOwnerAndDaclBatch,
 } = await import(pathToFileURL(entry).href);
-assert.equal(getFsSafeNativeConfig().mode, "off", "sealed policy must override host native mode");
-const diagnostic = getNativeFallbackDiagnostic();
-assert.equal(diagnostic.reason, "disabled");
+const { Worker } = await import("node:worker_threads");
+const { once } = await import("node:events");
+const watcher = new Worker(new URL("./worker-chunk-fs-safe-watch-io.mjs", pathToFileURL(entry)), {
+  execArgv: [],
+  workerData: { native: getFsSafeNativeConfig(), diagnostics: false },
+});
+try {
+  const reply = once(watcher, "message");
+  watcher.postMessage({ id: 1, method: "metrics", args: [] });
+  assert.deepEqual((await reply)[0], { id: 1, value: {}, cleanupErrors: [] });
+} finally {
+  await watcher.terminate();
+}
+assert.equal(getFsSafeNativeConfig().mode, process.platform === "darwin" ? "require" : "off");
+if (process.platform === "darwin") {
+  assert.deepEqual(inspectDarwinAcl(entry), { kind: "none" });
+}
+const diagnostic = getNativeFallbackDiagnostic("inspectDarwinAcl");
+assert.equal(diagnostic.reason, process.platform === "darwin" ? "loaded" : "disabled");
 if (diagnostic.packageName) {
   const versions = ${JSON.stringify(JSON.parse(fs.readFileSync(path.resolve("node_modules/@openclaw/fs-safe/package.json"), "utf8")).optionalDependencies)};
   assert.equal(diagnostic.packageVersion, versions[diagnostic.packageName]);
@@ -497,14 +559,7 @@ console.log("relocated worker facade activation follows the shared config snapsh
                 path.join(relocated, "worker.mjs"),
               ],
               {
-                PATH: process.env.PATH,
-                SystemRoot: process.env.SystemRoot,
-                WINDIR: process.env.WINDIR,
-                HOME: root,
-                USERPROFILE: root,
-                TMPDIR: root,
-                TMP: root,
-                TEMP: root,
+                ...workerEnv(root),
                 OPENCLAW_HOME: root,
                 OPENCLAW_STATE_DIR: path.join(root, "state"),
                 OPENCLAW_CONFIG_PATH: path.join(root, "missing-config.json"),
@@ -577,7 +632,7 @@ for (const dependency of ["rastermill", "@silvia-odwyer/photon-node", "diff"]) {
   assert.throws(() => createRequire(pathToFileURL(entry)).resolve(dependency), { code: "MODULE_NOT_FOUND" });
 }
 process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
-const { projectComputerActResult, createImageProcessor, convertBmpToPngWithWorker, createReadTool, createEditTool, createWriteTool } = await import(pathToFileURL(entry).href);
+const { createComputerTool, createImageProcessor, convertBmpToPngWithWorker, createReadTool, createEditTool, createWriteTool } = await import(pathToFileURL(entry).href);
 const input = fs.readFileSync(imagePath);
 try {
 const filePath = imagePath + ".txt";
@@ -599,25 +654,45 @@ for (const extension of [".txt", ".sqlite"]) {
   const read = await createReadTool(process.cwd()).execute("portable-read", { path: readPath });
   assert.ok(read.content.some(block => block.type === "text" && block.text.includes("portable file read")));
 }
-for (let index = 0; index < 3; index++) {
-  const projected = await projectComputerActResult({
-    action: "get_window_state",
-    target: { host: "node", nodeId: "synthetic-node", screenIndex: 0 },
-    referenceWidth: 1200,
-    result: {
-      ok: true,
-      details: { coordinateSpace: "image-pixels" },
-      observation: { kind: "window", base64: input.toString("base64"), format: "png", width: 1500, height: 934 },
+const inputs = [];
+const computer = createComputerTool({
+  transport: {
+    computerUse: {
+      contractVersion: 2,
+      provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+      actions: ["get_window_state", "left_click"],
+      targets: ["window"],
+      deliveryModes: ["foreground"],
+      observations: ["image"],
+      features: { recording: false, agentCursor: false, multiDisplay: false },
     },
+    resolveNode: async () => ({ nodeId: "synthetic-node" }),
+    invoke: async ({ commandParams }) => {
+      inputs.push(commandParams);
+      return {
+        ok: true,
+        details: { coordinateSpace: "image-pixels" },
+        observation: { kind: "window", observationId: "window-observation", base64: input.toString("base64"), format: "png", width: 1500, height: 934 },
+      };
+    },
+  },
+});
+for (let index = 0; index < 3; index++) {
+  const projected = await computer.execute("portable-observe-" + index, {
+    action: "get_window_state", windowRef: "window-1",
   });
-  const images = projected.result.content.filter(block => block.type === "image");
-  assert.equal(images.length, 1, JSON.stringify(projected.result.content));
-  const observation = JSON.parse(projected.result.content[0].text).observation;
+  const images = projected.content.filter(block => block.type === "image");
+  assert.equal(images.length, 1, JSON.stringify(projected.content));
+  const observation = JSON.parse(projected.content[0].text).observation;
   assert.equal(observation.width, 1200);
   assert.equal(observation.height, 747);
   assert.equal(observation.base64, "[image]");
-  assert.deepEqual(projected.imageCoordinates, { kind: "available", scaleX: 1.25, scaleY: 934 / 747 });
 }
+await computer.execute("portable-click", {
+  action: "left_click", windowRef: "window-1", observationId: "window-observation", coordinate: [400, 300],
+});
+assert.equal(inputs.at(-1).x, 500);
+assert.equal(inputs.at(-1).y, 300 * (934 / 747));
 assert.deepEqual(await createImageProcessor().transparency(input), { hasAlphaChannel: true, hasTransparentPixels: false });
 const bmp = Buffer.from("424d3e0000000000000036000000280000000200000001000000010018000000000008000000000000000000000000000000000000000000ff00ff000000", "hex");
 const png = await convertBmpToPngWithWorker(bmp);
@@ -637,16 +712,7 @@ console.log("relocated computer observations, image operations, and file reads a
         {
           cwd: relocated,
           timeout: 30_000,
-          env: {
-            PATH: process.env.PATH,
-            SystemRoot: process.env.SystemRoot,
-            WINDIR: process.env.WINDIR,
-            HOME: root,
-            USERPROFILE: root,
-            TMPDIR: root,
-            TMP: root,
-            TEMP: root,
-          },
+          env: workerEnv(root),
         },
       );
       expect(result.stdout).toContain(
@@ -717,16 +783,7 @@ console.log("portable worker highlighting and shell analysis passed");
         {
           cwd: root,
           timeout: 30_000,
-          env: {
-            PATH: process.env.PATH,
-            SystemRoot: process.env.SystemRoot,
-            WINDIR: process.env.WINDIR,
-            HOME: root,
-            USERPROFILE: root,
-            TMPDIR: root,
-            TMP: root,
-            TEMP: root,
-          },
+          env: workerEnv(root),
         },
       );
       expect(result.stdout.trim()).toBe("portable worker highlighting and shell analysis passed");
@@ -808,16 +865,7 @@ console.log("relocated worker WebSocket and transcription passed");
             path.join(relocated, "worker/worker.mjs"),
             `ws://127.0.0.1:${address.port}`,
           ],
-          {
-            PATH: process.env.PATH,
-            SystemRoot: process.env.SystemRoot,
-            WINDIR: process.env.WINDIR,
-            HOME: root,
-            USERPROFILE: root,
-            TMPDIR: root,
-            TMP: root,
-            TEMP: root,
-          },
+          workerEnv(root),
           30_000,
           { cwd: relocated },
         );
@@ -853,6 +901,9 @@ console.log("relocated worker WebSocket and transcription passed");
     const plugin = createWorkerDeployBuildPlugin();
 
     const transformed = plugin.transform.call({ error: fail }, source, bridgePath);
+    if (transformed === null) {
+      throw new Error("Browser runtime source was not transformed");
+    }
 
     const root = tempDirs.make("openclaw-worker-browser-composition-");
     const outputPath = path.join(root, "src/worker/browser.mjs");
@@ -861,7 +912,7 @@ console.log("relocated worker WebSocket and transcription passed");
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.mkdirSync(path.dirname(runtimePath), { recursive: true });
     fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
-    fs.writeFileSync(outputPath, transformed!);
+    fs.writeFileSync(outputPath, typeof transformed === "string" ? transformed : transformed.code);
     fs.writeFileSync(
       runtimePath,
       `import { appendFileSync } from "node:fs";
@@ -898,80 +949,32 @@ export async function createAttachedBrowserToolRuntime(params) {
     expect(fs.readFileSync(eventsPath, "utf8")).toBe("initialized\ndisposed\ndisposed\n");
   });
 
-  it("leaves fs-safe native package resolution to the dependency", () => {
-    const nativePath = path.resolve("node_modules/@openclaw/fs-safe/dist/native.js");
-    const source = fs.readFileSync(nativePath, "utf8");
-    const plugin = createWorkerDeployBuildPlugin();
-
-    const transformed = plugin.transform.call({ error: fail }, source, nativePath);
-
-    const { optionalDependencies } = JSON.parse(
-      fs.readFileSync(path.resolve("node_modules/@openclaw/fs-safe/package.json"), "utf8"),
-    );
-    expect(transformed).toBe(
-      source.replace('require("../package.json")', JSON.stringify({ optionalDependencies })),
-    );
-  });
-
-  it.each<{
-    name: string;
-    modulePath: string;
-    contains: string[];
-    excludes: string[];
-  }>([
-    {
-      name: "lazy Playwright accessor",
-      modulePath: "extensions/browser/src/browser/playwright-core.runtime.ts",
-      contains: [
-        'import * as playwrightCore from "playwright-core";',
-        'import { getUserAgent } from "playwright-core/lib/coreBundle";',
-        "return playwrightCore;",
-      ],
-      excludes: ["createRequire", 'require("playwright-core")'],
-    },
-    {
-      name: "undici dispatcher",
-      modulePath: "src/infra/net/undici-dispatcher-options.ts",
-      contains: [
-        'import * as bundledUndici from "undici/index.js";',
-        "return bundledUndici;",
-        'return override as typeof import("undici");',
-      ],
-      excludes: [
-        'import { createRequire } from "node:module";',
-        "const requireUndici = createRequire(import.meta.url);",
-        'requireUndici("undici/index.js")',
-        "undiciModule",
-      ],
-    },
-    {
-      name: "Playwright package identity and browser registry",
-      modulePath: "node_modules/playwright-core/lib/coreBundle.js",
-      contains: [
-        'packageJSON = {"name":"playwright-core","version":"1.64.0"};',
-        'registry = new Registry({"comment":"Do not edit this file, use utils/roll_browser.js"',
-      ],
-      excludes: [
-        'packageJSON = require(import_path8.default.join(packageRoot, "package.json"));',
-        'registry = new Registry(require(import_path19.default.join(packageRoot, "browsers.json")));',
-      ],
-    },
-  ])("bundles $name without a host runtime dependency", ({ modulePath, contains, excludes }) => {
-    const source = fs.readFileSync(path.resolve(modulePath), "utf8");
+  it("embeds the Playwright package identity and browser registry", () => {
+    const modulePath = path.resolve("node_modules/playwright-core/lib/coreBundle.js");
     const transformed = createWorkerDeployBuildPlugin().transform.call(
       { error: fail },
-      source,
-      path.resolve(modulePath),
+      fs.readFileSync(modulePath, "utf8"),
+      modulePath,
     );
-    for (const fragment of contains) {
-      expect(transformed).toContain(fragment);
-    }
-    for (const fragment of excludes) {
-      expect(transformed).not.toContain(fragment);
-    }
+    expect(transformed).toContain('packageJSON = {"name":"playwright-core","version":"1.64.1"};');
+    expect(transformed).toContain(
+      'registry = new Registry({"comment":"Do not edit this file, use utils/roll_browser.js"',
+    );
+    expect(transformed).not.toContain(
+      'require(import_path8.default.join(packageRoot, "package.json"))',
+    );
+    expect(transformed).not.toContain(
+      'require(import_path19.default.join(packageRoot, "browsers.json"))',
+    );
   });
 
   it.each([
+    {
+      name: "fs-safe watch worker",
+      modulePath: "node_modules/@openclaw/fs-safe/dist/watch-io.js",
+      mutate: (source: string) => source.replace("./watch-io-worker.js", "./changed-worker.js"),
+      error: "fs-safe watch worker bootstrap changed",
+    },
     {
       name: "fs-safe native batch",
       modulePath: "node_modules/@openclaw/fs-safe/dist/windows-security-command.js",

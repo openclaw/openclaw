@@ -87,6 +87,13 @@ export const ChatPendingInputsPageSchema = closedObject({
       acceptedAt: Type.Number(),
       state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
       queued: Type.Optional(Type.Literal(true)),
+      cancelledByUser: Type.Optional(Type.Literal(true)),
+      steerNow: Type.Optional(
+        closedObject({
+          status: Type.Enum(["available", "blocked"]),
+          tools: Type.Array(NonEmptyString),
+        }),
+      ),
     }),
     { maxItems: 20 },
   ),
@@ -125,7 +132,18 @@ export const ChatInputConsumptionsSchema = Type.Array(
 );
 export type ChatInputConsumptions = Static<typeof ChatInputConsumptionsSchema>;
 
+/** Legacy persisted activity receipts; retained so existing history still validates. */
+export const AgentActivityDelegationSchema = closedObject({
+  runId: Type.String({ minLength: 1, maxLength: 256 }),
+  childSessionKey: Type.String({ minLength: 1, maxLength: 1024 }),
+  label: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  groupId: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  runtimeMs: Type.Optional(Type.Number({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+  status: stringLiteralUnion(["accepted", "done", "failed", "killed", "timeout"]),
+});
+export type AgentActivityDelegation = Static<typeof AgentActivityDelegationSchema>;
 export const AgentActivityItemSchema = closedObject({
+  delegation: Type.Optional(Type.Array(AgentActivityDelegationSchema, { maxItems: 32 })),
   itemId: NonEmptyString,
   phase: stringLiteralUnion(["start", "update", "end"]),
   kind: Type.String(),
@@ -234,7 +252,41 @@ export const ChatPredictResultSchema = closedObject({
   text: Type.Union([Type.String({ maxLength: 500 }), Type.Null()]),
 });
 
+/** Dismiss displayed pending inputs that ended interrupted or cancelled. */
+export const ChatPendingInputsDismissParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sessionId: NonEmptyString,
+  inputIds: Type.Array(NonEmptyString, { minItems: 1, maxItems: 100, uniqueItems: true }),
+});
+
+export const ChatPendingInputsDismissResultSchema = closedObject({
+  dismissedIds: Type.Array(NonEmptyString, { maxItems: 100 }),
+  runIds: Type.Array(Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }), {
+    maxItems: 100,
+  }),
+  missingIds: Type.Array(NonEmptyString, { maxItems: 100 }),
+});
+
 export type ChatPredictParams = Static<typeof ChatPredictParamsSchema>;
+
+/** Interrupt only the tools delaying one already accepted steering input. */
+export const ChatSteerNowParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sessionId: NonEmptyString,
+  runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
+});
+
+export const ChatSteerNowResultSchema = closedObject({
+  status: Type.Enum(["interrupted", "idle", "blocked", "settled", "unavailable"]),
+  tools: Type.Array(NonEmptyString),
+});
+
+export type ChatSteerNowParams = Static<typeof ChatSteerNowParamsSchema>;
+export type ChatSteerNowResult = Static<typeof ChatSteerNowResultSchema>;
+export type ChatPendingInputsDismissParams = Static<typeof ChatPendingInputsDismissParamsSchema>;
+export type ChatPendingInputsDismissResult = Static<typeof ChatPendingInputsDismissResultSchema>;
 export type ChatPredictResult = Static<typeof ChatPredictResultSchema>;
 
 /** Batched purpose-title request for tool calls rendered in the Control UI. */
@@ -392,9 +444,13 @@ export const ChatSendParamsSchema = closedObject({
 export const ChatAbortParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  // Optional physical-session fence; an exact runId is required when supplied.
+  sessionId: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   preserveSideRuns: Type.Optional(Type.Boolean()),
   discardPendingInput: Type.Optional(Type.Boolean()),
+  /** Explicit Stop action; presentation only, never cancellation authority. */
+  userInitiated: Type.Optional(Type.Boolean()),
 });
 
 /** Inserts an operator-visible synthetic message into an existing chat transcript. */
@@ -429,6 +485,7 @@ export const ChatRunStartupPhaseSchema = stringLiteralUnion([
   "waiting_for_state",
   "preparing_workspace",
   "naming_worktree",
+  "preparing_worktree_base",
   "creating_worktree",
   "running_setup",
   "provisioning_environment",
@@ -500,6 +557,7 @@ const ChatErrorDetailSchema = closedObject({
   model: ChatErrorDetailTextSchema,
   failoverReason: ChatErrorDetailTextSchema,
   providerRuntimeFailureKind: ChatErrorDetailTextSchema,
+  providerErrorCode: ChatErrorDetailTextSchema,
   providerErrorType: ChatErrorDetailTextSchema,
   httpStatus: Type.Optional(Type.Integer({ minimum: 100, maximum: 599 })),
   providerErrorMessagePreview: ChatErrorDetailTextSchema,
@@ -525,6 +583,7 @@ export function projectChatErrorDetail(observation: unknown): ChatErrorDetail | 
     model: readText(source.model),
     failoverReason: readText(source.failoverReason),
     providerRuntimeFailureKind: readText(source.providerRuntimeFailureKind),
+    providerErrorCode: readText(source.providerErrorCode),
     providerErrorType: readText(source.providerErrorType),
     httpStatus:
       httpStatus !== undefined &&

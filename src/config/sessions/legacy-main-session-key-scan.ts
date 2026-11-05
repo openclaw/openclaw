@@ -5,11 +5,16 @@ import { hasErrnoCode } from "../../infra/errno.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
+  listAgentDatabaseAdmissionRefusals,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
+import {
   withOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly.js";
 import { readClaim } from "./legacy-main-session-migration-claims.js";
 import type {
+  LegacyMainSessionMigrationResult,
   PhysicalStore,
   SessionClaim,
   SessionComparisonClaim,
@@ -205,9 +210,6 @@ export function prepareComparisonClaimsFromStores(params: {
       }
       try {
         const result = await reader.read({ operation: "keys" });
-        if (result.operation !== "keys") {
-          throw new Error("Legacy key scan returned another retirement operation");
-        }
         const keys = result.keys.map((key) => {
           const canonicalKey = canonicalKeyFor(key, params.legacyAgentId, params.ownerAgentId);
           if (canonicalKey) {
@@ -228,10 +230,9 @@ export function prepareComparisonClaimsFromStores(params: {
       }
       try {
         const result = await reader.read({ operation: "comparison-claims", store, keys: targeted });
-        if (result.operation !== "comparison-claims") {
-          throw new Error("Legacy claim scan returned another retirement operation");
+        for (const claim of result.claims) {
+          claims.push({ store, claim });
         }
-        claims.push(...result.claims.map((claim) => ({ store, claim })));
       } catch (error) {
         unreadable(store, error);
       }
@@ -277,9 +278,6 @@ export async function storesHaveLegacyAgentSessionKey(params: {
   return withSessionRetirementReaders(readers, async () => {
     for (const reader of readers) {
       const result = await reader.read({ operation: "keys" });
-      if (result.operation !== "keys") {
-        throw new Error("Legacy key scan returned another retirement operation");
-      }
       if (result.keys.some((key) => legacyAgentKeyPrefix(key, params.legacyAgentId) !== null)) {
         return true;
       }
@@ -289,4 +287,39 @@ export async function storesHaveLegacyAgentSessionKey(params: {
     }
     return false;
   });
+}
+
+/** Advisory fleet detection must not reserve healthy writes behind a pending inspection. */
+export function readDeferredLegacyMainSessionInspection(params: {
+  env: NodeJS.ProcessEnv;
+  legacyAgentId: string;
+  mainKey: string;
+  ownerAgentId?: string;
+}): LegacyMainSessionMigrationResult | undefined {
+  const pending = listAgentDatabaseAdmissionRefusals({ env: params.env }).filter(
+    (refusal) =>
+      refusal.code === "agent-database-inspection-pending" &&
+      readAgentDatabaseAdmissionRefusal(refusal.agentId, { env: params.env }),
+  );
+  if (pending.length === 0) {
+    return undefined;
+  }
+  // A later detection/Doctor pass must inspect the full inventory before it can be complete.
+  return {
+    legacyAgentId: params.legacyAgentId,
+    mainKey: params.mainKey,
+    ownerAgentId: params.ownerAgentId,
+    armed: params.ownerAgentId !== undefined,
+    changes: [],
+    complete: false,
+    ledgerComplete: false,
+    outcomes: pending.map((refusal) => ({
+      kind: "store-unreadable",
+      detail: "Background agent database inspection is pending",
+      paths: refusal.paths,
+    })),
+    warnings: [
+      "session: legacy-main detection deferred while background agent database preparation is pending",
+    ],
+  };
 }

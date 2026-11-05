@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listDatabaseEngineStores } from "../infra/database-engine/registry.js";
-import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
+import { ignoreMissingPath } from "../infra/errno.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { isManifestPluginAvailableForControlPlane } from "./manifest-contract-eligibility.js";
@@ -33,10 +34,8 @@ function listPluginInstallRoots(env: NodeJS.ProcessEnv | undefined): string[] {
       .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
       .map((entry) => path.join(extensionsDir, entry.name));
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return [];
-    }
-    throw error;
+    ignoreMissingPath(error);
+    return [];
   }
 }
 
@@ -127,7 +126,7 @@ export function resolveActivatedPluginBackupInventory(params: {
         if (!activated && !postgresFamilies.has(resource.databaseFamily ?? plugin.id)) {
           continue;
         }
-        const key = `${plugin.id}\0${resource.scope}\0${resource.relativePath}\0${resource.disposition}\0${resource.databaseFamily ?? ""}`;
+        const key = `${plugin.id}\0${resource.scope}\0${resource.relativePath}\0${resource.disposition}\0${resource.databaseFamily ?? ""}\0${resource.profile ?? ""}`;
         if (!resources.has(key)) {
           resources.set(key, { pluginId: plugin.id, ...resource });
         }

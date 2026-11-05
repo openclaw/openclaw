@@ -1,5 +1,8 @@
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
+import { captureWorktreeRegistryReadGuard } from "../agents/worktrees/registry-read.js";
+import { captureWorktreeRunEndContext } from "../agents/worktrees/run-end-lifecycle.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
 import {
@@ -9,12 +12,16 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   readProjectCheckoutRemoteHead,
   ProjectCloneError,
 } from "../projects/project-clone-runtime.js";
 import { materializeProjectClone } from "../projects/project-clone.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
 import {
   assertSafeGitPublicationWorkspace,
@@ -26,18 +33,87 @@ import { prepareRepositoryPublicationRestore } from "./github-repository-publica
 import { retainGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import type { GatewaySessionEntryRead } from "./session-utils-store.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
+import type { PlacementRecoveryDeps } from "./worker-environments/placement-recovery-contract.js";
+import type {
+  WorkerSessionPlacementStore,
+  WorkerSessionTurnClaim,
+} from "./worker-environments/placement-store.js";
 import { prepareRepositoryGitHubIdentity } from "./worker-environments/repository-github-identity.js";
-import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
+import { captureRepositoryDiskCheckpoint } from "./worker-environments/repository-workspace-snapshot.js";
+import {
+  readSessionRepositoryArtifacts,
+  withSessionRepositoryCheckpoint,
+} from "./worker-environments/session-repository-checkpoints.js";
 import { applyStagedWorkerWorkspace } from "./worker-environments/workspace-reconcile-apply.js";
+import { restoreWorkerWorkspaceHistory } from "./worker-environments/workspace-result-history.js";
+import { workerWorkspaceResultRef } from "./worker-environments/workspace-result-staging.js";
+
+/** The existing Move owner supplies quiescence and result custody; publication shares its exclusion. */
+export function createRepositoryGatewayMovePreparation(options: {
+  placements: WorkerSessionPlacementStore;
+  environments: Parameters<typeof captureRepositoryDiskCheckpoint>[0]["environments"];
+  getConfig: () => OpenClawConfig;
+}): NonNullable<PlacementRecoveryDeps["prepareGatewayMove"]> {
+  return (identity) =>
+    options.placements.withWorkspaceExclusion(identity.sessionId, async (assertOwned) =>
+      materializeSessionRepositoryWorkspaceOnGateway({
+        cfg: options.getConfig(),
+        ...identity,
+        ...(identity.diskResult
+          ? { diskMove: { claim: identity.diskResult, placements: options.placements } }
+          : {}),
+        assertCurrent: () => {
+          assertOwned();
+          identity.assertCurrent();
+        },
+        exportDisk: identity.quiescence
+          ? (repository, assertCurrent, use) =>
+              captureRepositoryDiskCheckpoint(
+                {
+                  identity,
+                  repository,
+                  checkpointRef: workerWorkspaceResultRef("gateway-export-" + randomUUID()),
+                  purpose: "gateway-move",
+                  placements: options.placements,
+                  environments: options.environments,
+                  quiescence: identity.quiescence,
+                  assertCurrent,
+                },
+                async (snapshot, verifyCurrent) => {
+                  if (identity.diskResult) {
+                    assertCurrent();
+                    await options.placements.recordStagedWorkspaceResult(
+                      identity.diskResult,
+                      snapshot.checkpointRef,
+                      repository.workspaceId,
+                      assertCurrent,
+                    );
+                  }
+                  await use(snapshot, verifyCurrent);
+                },
+              )
+          : undefined,
+      }),
+    );
+}
 
 /** Explicit Gateway moves and failed-placement recovery restore only accepted source results. */
-export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
+async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   cfg: OpenClawConfig;
   sessionId: string;
   sessionKey: string;
   agentId: string;
   assertCurrent: SessionSourceAssertion;
   signal?: AbortSignal;
+  diskMove?: { claim: WorkerSessionTurnClaim; placements: WorkerSessionPlacementStore };
+  exportDisk?: (
+    repository: SessionRepositoryWorkspaceRecord,
+    assertCurrent: () => void,
+    use: (
+      snapshot: { checkpointRef: string; manifestHash: string },
+      verifyCurrent: () => Promise<void>,
+    ) => Promise<void>,
+  ) => Promise<void>;
 }): Promise<void> {
   const initial = await retainGatewaySessionEntryReadOnly(
     params.sessionKey,
@@ -46,7 +122,7 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     params.cfg,
   );
   try {
-    return await materializeCapturedRepositoryWorkspace(params, initial, () => {
+    await materializeCapturedRepositoryWorkspace(params, initial, () => {
       if (!initial.isCurrentAtResponse()) {
         throw new Error("Repository workspace changed during Gateway materialization; retry move");
       }
@@ -54,12 +130,117 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   } finally {
     initial.release();
   }
+  if (params.diskMove) {
+    await retireMaterializedRepositoryDisk(params, params.diskMove);
+  }
+}
+
+async function retireMaterializedRepositoryDisk(
+  params: Parameters<typeof materializeSessionRepositoryWorkspaceOnGateway>[0],
+  diskMove: NonNullable<
+    Parameters<typeof materializeSessionRepositoryWorkspaceOnGateway>[0]["diskMove"]
+  >,
+) {
+  const pending = diskMove.placements.preparedWorkspaceResult(diskMove.claim);
+  if (
+    !pending?.repositoryWorkspaceId ||
+    !pending.repositoryDiskAuthority ||
+    !pending.stagedResultRef
+  ) {
+    throw new Error("Repository disk handoff has no retained export result");
+  }
+  const store = getSessionRepositoryWorkspaceStore();
+  const repository = await store.get(pending.repositoryWorkspaceId);
+  params.assertCurrent();
+  if (
+    !repository ||
+    repository.agentId !== params.agentId ||
+    repository.sessionKey !== params.sessionKey
+  ) {
+    throw new Error("Repository disk handoff lost its source owner");
+  }
+  const local = await retainGatewaySessionEntryReadOnly(
+    params.sessionKey,
+    params.agentId,
+    (before, after) =>
+      before.sessionId === after.sessionId &&
+      before.lifecycleRevision === after.lifecycleRevision &&
+      before.activeWriterRunId === after.activeWriterRunId &&
+      before.repositoryWorkspaceId === after.repositoryWorkspaceId &&
+      before.worktree?.id === after.worktree?.id &&
+      before.spawnedCwd === after.spawnedCwd,
+    params.cfg,
+  );
+  try {
+    const entry = local.entry;
+    const accept = captureWorktreeRegistryReadGuard(
+      captureWorktreeRunEndContext(process.env),
+      "source-owner",
+      entry?.worktree
+        ? { id: entry.worktree.id, ownerKind: "session", ownerId: local.canonicalKey }
+        : undefined,
+    );
+    const { managedWorktrees } = await import("../agents/worktrees/service.js");
+    const worktree = await managedWorktrees.findLiveByOwner("session", local.canonicalKey);
+    const assertWorktree = accept(worktree);
+    const assertCurrent = () => {
+      params.assertCurrent();
+      if (
+        !local.isCurrentAtResponse() ||
+        !diskMove.placements.validateWorkspaceResultClaim(diskMove.claim)
+      ) {
+        throw new Error("Repository disk handoff lost its local session owner");
+      }
+      assertWorktree();
+    };
+    assertCurrent();
+    // Move's draining placement excludes reset/switch/turns. The unique repository-named
+    // managed worktree binding is the durable completion receipt of the verified import.
+    // Recovery never reapplies the artifact after that binding, preserving local edits.
+    if (
+      entry?.sessionId !== params.sessionId ||
+      entry.repositoryWorkspaceId ||
+      !worktree ||
+      worktree.name !== repository.workspaceId ||
+      worktree.id !== entry.worktree?.id ||
+      worktree.branch !== repository.branch ||
+      worktree.path !== entry.spawnedCwd
+    ) {
+      throw new Error("Repository disk export has not been handed to its managed Gateway worktree");
+    }
+    if (!repository.diskAuthority) {
+      if (repository.checkpointRef !== pending.stagedResultRef) {
+        throw new Error("Repository disk handoff export changed");
+      }
+      return;
+    }
+    const snapshot = await readSessionRepositoryArtifacts({
+      workspaceId: repository.workspaceId,
+      checkpointRef: pending.stagedResultRef,
+      assertCurrent,
+    });
+    assertCurrent();
+    await store.retireDisk({
+      workspaceId: repository.workspaceId,
+      expectedRevision: repository.revision,
+      checkpointRef: pending.stagedResultRef,
+      manifestHash: snapshot.currentManifestRef,
+      claim: diskMove.claim,
+      assertCurrent,
+    });
+  } finally {
+    local.release();
+  }
 }
 
 async function materializeCapturedRepositoryWorkspace(
   params: Parameters<typeof materializeSessionRepositoryWorkspaceOnGateway>[0],
   initial: GatewaySessionEntryRead,
   assertEntryCurrent: () => void,
+  diskExport?: {
+    snapshot: { checkpointRef: string; manifestHash: string };
+    verifyCurrent: () => Promise<void>;
+  },
 ): Promise<void> {
   if (initial.entry?.sessionId !== params.sessionId) {
     throw new Error("Session changed before repository materialization");
@@ -78,6 +259,12 @@ async function materializeCapturedRepositoryWorkspace(
     !repository.baseCommit
   ) {
     throw new Error("Repository workspace has no pinned source; retry its cloud preparation");
+  }
+  const exportDisk = params.exportDisk;
+  if (repository.diskAuthority && !diskExport && !exportDisk) {
+    throw new Error(
+      "Moving this repository to the Gateway requires a fresh disk export; preserve the original runner and retry after export support is available.",
+    );
   }
   const githubHost = resolveConfiguredGitHubHost(params.cfg);
   const remote = parseGitHubRemoteUrl(repository.url, githubHost);
@@ -134,6 +321,22 @@ async function materializeCapturedRepositoryWorkspace(
       assertOtherOwners();
     },
   );
+  assertCurrent();
+  if (repository.diskAuthority && !diskExport && exportDisk) {
+    return await exportDisk(
+      repository,
+      assertCurrent,
+      async (snapshot, verifyCurrent) =>
+        await materializeCapturedRepositoryWorkspace(params, initial, assertEntryCurrent, {
+          snapshot,
+          verifyCurrent,
+        }),
+    );
+  }
+  const snapshot = diskExport?.snapshot ?? {
+    checkpointRef: repository.checkpointRef,
+    manifestHash: repository.manifestHash,
+  };
   assertCurrent();
   const github = await prepareRepositoryGitHubIdentity(params.agentId, assertCurrent);
   assertCurrent();
@@ -253,19 +456,33 @@ async function materializeCapturedRepositoryWorkspace(
     const currentBranch = await git(["symbolic-ref", "--quiet", "HEAD"]);
     if (
       currentBranch !== `refs/heads/${repository.branch}` ||
-      (currentHead !== repository.baseCommit && currentHead !== published?.pushed_head_commit)
+      (!diskExport &&
+        currentHead !== repository.baseCommit &&
+        currentHead !== published?.pushed_head_commit)
     ) {
       throw new Error(
         "Gateway worktree changed before repository restoration; review its local commits before retrying move",
       );
     }
-    if (repository.checkpointRef) {
+    if (snapshot.checkpointRef) {
       await withSessionRepositoryCheckpoint(
-        { workspaceId, includePublication: true },
-        async (snapshot) => {
+        { workspaceId, checkpointRef: snapshot.checkpointRef },
+        async (payload) => {
           assertCurrent();
+          // A crash can leave this unbound preparation after its HEAD import but
+          // before session binding. Resume only the exact freshly exported HEAD;
+          // unknown local commits still refuse rather than being reset or discarded.
+          if (
+            currentHead !== repository.baseCommit &&
+            currentHead !== published?.pushed_head_commit &&
+            currentHead !== payload.gitHistory?.headCommit
+          ) {
+            throw new Error(
+              "Gateway worktree changed before repository restoration; review its local commits before retrying move",
+            );
+          }
           const applied = await applyStagedWorkerWorkspace({
-            ...snapshot,
+            ...payload,
             acceptance: { kind: "reconcile" },
             root,
             // The checkout is unbound until verification. Failed preparation rolls it
@@ -277,20 +494,40 @@ async function materializeCapturedRepositoryWorkspace(
               abort: async () => {},
             },
           });
-          if (applied.conflictPaths.length || applied.manifestRef !== repository.manifestHash) {
+          if (applied.conflictPaths.length || applied.manifestRef !== snapshot.manifestHash) {
             throw new Error(
               "Repository changes could not be fully restored; retry the Gateway move",
             );
           }
           await applied.verifyLocalStable();
           await alignPublication();
+          const historyNote = await restoreWorkerWorkspaceHistory({
+            ...payload,
+            root,
+            assertCurrent,
+          });
+          if (historyNote && repository.diskAuthority) {
+            throw new Error(
+              "Repository disk history could not be restored exactly; the original disk is preserved",
+            );
+          }
+          if (historyNote) {
+            createSubsystemLogger("gateway/worker-workspace").info(historyNote);
+          }
           for (const restore of await prepareRepositoryPublicationRestore({
-            ...snapshot,
-            ...(published?.pushed_head_commit
-              ? { indexBase: { root, commit: published.pushed_head_commit, assertCurrent } }
-              : {}),
+            ...payload,
+            indexBase: { root, commit: await git(["rev-parse", "HEAD"]), assertCurrent },
           })) {
-            await command(restore.argv, { cwd: root, input: restore.input });
+            await command(
+              [
+                process.execPath,
+                ...resolveRuntimeWorkerArgv(
+                  resolveRuntimeProcessEntrypointUrl("repositoryPublicationRestore"),
+                ),
+                restore.action,
+              ],
+              { cwd: root, input: restore.input },
+            );
           }
           await applied.verifyLocalStable();
           assertCurrent();
@@ -299,7 +536,9 @@ async function materializeCapturedRepositoryWorkspace(
     } else {
       await alignPublication();
     }
-    const bind = async (assertSourceCurrent: SessionSourceAssertion) =>
+    await diskExport?.verifyCurrent();
+    assertCurrent();
+    const bind = async (assertSourceCurrent: SessionSourceAssertion, sourceSignal?: AbortSignal) =>
       await patchSessionEntryCore(
         { agentId: params.agentId, sessionKey: initial.canonicalKey, storePath: initial.storePath },
         (current) => {
@@ -317,6 +556,10 @@ async function materializeCapturedRepositoryWorkspace(
         },
         {
           replaceEntry: true,
+          signal:
+            params.signal && sourceSignal
+              ? AbortSignal.any([params.signal, sourceSignal])
+              : (params.signal ?? sourceSignal),
           ...sessionEntryCommitGuardOptions(
             composeSessionSourceAssertion([assertCurrent, assertSourceCurrent]),
           ),

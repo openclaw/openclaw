@@ -8,7 +8,6 @@ import {
   settleChatPage,
   stubMatchMedia,
 } from "../pages/chat/chat-page.test-support.ts";
-import type { ChatPage } from "../pages/chat/chat-page.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
@@ -62,7 +61,7 @@ it("mounts one pane for the native chat route and retains it through revalidatio
     const outlet =
       view.container.querySelector<ControlUiReadinessOutlet>("openclaw-router-outlet")!;
     await settleRouterOutlet(outlet);
-    const page = outlet.querySelector<ChatPage>("openclaw-chat-page")!;
+    const page = outlet.querySelector("openclaw-chat-page")!;
     expect(page).not.toBeNull();
     await settleChatPage(page);
     const pane = page.querySelector<HTMLElement & { sessionKey: string }>("openclaw-chat-pane")!;

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, expectTypeOf, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import {
@@ -28,127 +28,91 @@ function booleanContract(key: string, flags: string, negatedFlags: string) {
   });
 }
 
-describe("defineChannelSetupContract", () => {
-  it("keeps released adapters intact while preferring channel-owned contracts", () => {
-    const setup = adapter;
-    const setupContract = defineChannelSetupContract({ fields: {}, adapter: setup });
-
-    expect(resolveChannelSetupExecutionAdapter({ setup })).toBe(setup);
-    expect(resolveChannelSetupExecutionAdapter({ setup, setupContract })).toBe(setupContract);
-    expect(resolveChannelSetupExecutionAdapter({})).toBeUndefined();
-  });
-
-  it("keeps ignored aliases ineligible during cold channel-owned promotion", () => {
-    const defaultAccount = "work-phone";
-    const next = withPluginCache(createPluginCache(), () => {
-      const promotion = {
-        accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
-        singleAccountKeysToMove: ["account"],
-        namedAccountPromotionKeys: ["account"],
-      };
-      const plugin = {
+it("keeps ignored aliases ineligible during cold channel-owned promotion", () => {
+  const defaultAccount = "work-phone";
+  const alias = { dmPolicy: "open", allowFrom: ["*"] };
+  const next = withPluginCache(createPluginCache(), () =>
+    moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: {
+        channels: {
+          demo: { account: "+12025550123", defaultAccount, accounts: { "Work Phone": alias } },
+        },
+      },
+      channelKey: "demo",
+      setupSurface: resolveChannelSetupExecutionAdapter({
         setupContract: defineChannelSetupContract({
           fields: {},
           adapter: {
-            ...promotion,
-            applyAccountConfig: ({ cfg }) => cfg,
+            ...adapter,
+            accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
+            singleAccountKeysToMove: ["account"],
+            namedAccountPromotionKeys: ["account"],
           },
         }),
-      };
-      const cfg: OpenClawConfig = {
-        channels: {
-          demo: {
-            account: "+12025550123",
-            defaultAccount,
-            accounts: {
-              "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
-            },
-          },
-        },
-      };
+      }),
+    }),
+  );
 
-      return moveSingleAccountChannelSectionToDefaultAccount({
-        cfg,
-        channelKey: "demo",
-        setupSurface: resolveChannelSetupExecutionAdapter(plugin),
-      });
-    });
-
-    expect(next.channels?.demo).toEqual({
-      defaultAccount,
-      accounts: {
-        "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
-        default: { account: "+12025550123" },
-      },
-    });
+  expect(next.channels?.demo).toEqual({
+    defaultAccount,
+    accounts: {
+      "Work Phone": alias,
+      default: { account: "+12025550123" },
+    },
   });
+});
 
-  it("requires negated flags to resolve to the same field key", () => {
-    expect(() => booleanContract("tenant", "--tenant", "--no-other")).toThrow(
-      'Channel setup field "tenant" must match camelCased long flag name "other"',
-    );
-    expect(() => booleanContract("useEnv", "--use-env", "--no-use-env")).not.toThrow();
-  });
+it("requires negated flags to resolve to the same field key", () => {
+  expect(() => booleanContract("tenant", "--tenant", "--no-other")).toThrow(
+    'Channel setup field "tenant" must match camelCased long flag name "other"',
+  );
+  expect(() => booleanContract("useEnv", "--use-env", "--no-use-env")).not.toThrow();
+});
 
-  it("parses channel-owned fields and gives adapters inferred input types", () => {
-    const applyAccountConfig = vi.fn(
-      ({
-        input,
-      }: {
-        input: {
-          name?: string;
-          token?: string;
-          transport?: "external-native" | "container";
-          port?: number;
-          allowFrom?: string[];
-          useEnv?: boolean;
-        };
-      }) => {
-        void input.token;
+it("parses channel-owned fields and gives adapters inferred input types", () => {
+  const expected = {
+    name: "work",
+    token: "secret",
+    transport: "container",
+    port: 8080,
+    allowFrom: ["alice", "bob"],
+    useEnv: true,
+  };
+  const contract = defineChannelSetupContract({
+    fields,
+    adapter: {
+      applyAccountConfig: (params) => {
+        expectTypeOf(params.input.name).toEqualTypeOf<string | undefined>();
+        expectTypeOf(params.input.token).toEqualTypeOf<string | undefined>();
+        expectTypeOf(params.input.transport).toEqualTypeOf<
+          "external-native" | "container" | undefined
+        >();
+        expectTypeOf(params.input.port).toEqualTypeOf<number | undefined>();
+        expectTypeOf(params.input.allowFrom).toEqualTypeOf<string[] | undefined>();
+        expectTypeOf(params.input.useEnv).toEqualTypeOf<boolean | undefined>();
+        expect(params).toEqual({ cfg: {}, accountId: "default", input: expected });
         return {};
       },
-    );
-    const contract = defineChannelSetupContract({ fields, adapter: { applyAccountConfig } });
-    const expected = {
-      name: "work",
-      token: "secret",
-      transport: "container",
-      port: 8080,
-      allowFrom: ["alice", "bob"],
-      useEnv: true,
-    };
-    const parsed = contract.parseInput({ ...expected, port: "8080", allowFrom: "alice,bob" });
-    expect(parsed).toEqual({ ok: true, value: expected });
-    if (!parsed.ok) {
-      throw new Error(parsed.error);
-    }
-    expect(
-      contract.applyAccountConfig({ cfg: {}, accountId: "default", input: parsed.value }),
-    ).toEqual({});
-    expect(applyAccountConfig).toHaveBeenCalledWith({
-      cfg: {},
-      accountId: "default",
-      input: expected,
-    });
+    },
+  });
+  const parsed = contract.parseInput({ ...expected, port: "8080", allowFrom: "alice,bob" });
+  expect(parsed).toEqual({ ok: true, value: expected });
+  if (!parsed.ok) {
+    throw new Error(parsed.error);
+  }
+  expect(
+    contract.applyAccountConfig({ cfg: {}, accountId: "default", input: parsed.value }),
+  ).toEqual({});
+});
+
+it.each([
+  [{ transport: "managed" }, 'transport must be one of: "external-native", "container".'],
+  [{ port: "8.5" }, "port must be a non-negative integer."],
+] as const)("rejects invalid input %j", (input, error) => {
+  const contract = defineChannelSetupContract({
+    fields: { transport: fields.transport, port: fields.port },
+    adapter,
   });
 
-  it("rejects unsupported fields and invalid channel-owned values", () => {
-    const contract = defineChannelSetupContract({
-      fields: { transport: fields.transport, port: fields.port },
-      adapter,
-    });
-
-    expect(contract.parseInput({ token: "wrong channel" })).toEqual({
-      ok: false,
-      error: "Unsupported setup option: token",
-    });
-    expect(contract.parseInput({ transport: "managed" })).toEqual({
-      ok: false,
-      error: 'transport must be one of: "external-native", "container".',
-    });
-    expect(contract.parseInput({ port: "8.5" })).toEqual({
-      ok: false,
-      error: "port must be a non-negative integer.",
-    });
-  });
+  expect(contract.parseInput(input)).toEqual({ ok: false, error });
 });

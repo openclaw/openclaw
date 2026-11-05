@@ -1,20 +1,17 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import {
-  copyFileSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parse } from "yaml";
 import { parseArgs, resolveBaselines } from "../../scripts/resolve-upgrade-survivor-baselines.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readWorkflow, readWorkflowOutputs as readOutputs } from "./ci-workflow.test-support.js";
+import {
+  readJsonLines,
+  writeExecutable,
+  writeJson,
+} from "./upgrade-survivor-shard.test-support.js";
 
 type Steps = Array<{ id?: string; run?: string }>;
 type Workflow = {
@@ -28,30 +25,21 @@ type Workflow = {
   };
   jobs: { resolve_package: { steps: Steps } };
 };
-const workflow = () =>
-  parse(readFileSync(".github/workflows/package-acceptance.yml", "utf8")) as Workflow;
-const readOutputs = (file: string) =>
-  Object.fromEntries(
-    readFileSync(file, "utf8")
-      .trimEnd()
-      .split("\n")
-      .map((line) => {
-        const separator = line.indexOf("=");
-        return [line.slice(0, separator), line.slice(separator + 1)];
-      }),
-  );
+const workflow = () => readWorkflow(".github/workflows/package-acceptance.yml") as Workflow;
 
 let root: string;
 let bin: string;
 let output: string;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "openclaw-upgrade-baselines-"));
+  root = tempDirs.make("openclaw-upgrade-baselines-");
+  // Exercise PATH tools in ESM scope even outside workspace-local temp roots.
+  writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
   bin = path.join(root, "bin");
   output = path.join(root, "output");
   mkdirSync(bin);
   writeFileSync(output, "");
 });
-afterEach(() => rmSync(root, { force: true, recursive: true }));
 
 function shell(script: string, env: NodeJS.ProcessEnv, cwd?: string) {
   return execFileSync("bash", ["-c", script], {
@@ -118,7 +106,7 @@ function resolveFixture({ args = {}, releases, versions, tags }: BaselineFixture
       continue;
     }
     const metadata = path.join(root, `${key}.json`);
-    writeFileSync(metadata, JSON.stringify(value));
+    writeJson(metadata, value);
     params.set(key, metadata);
   }
   return resolveBaselines(params);
@@ -146,7 +134,7 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
         .filter((release) => !release.isPrerelease && release.tagName !== "v2026.6.3")
         .map((release) => release.tagName.slice(1));
       const file = path.join(root, "releases.json");
-      writeFileSync(file, JSON.stringify(releases));
+      writeJson(file, releases);
       mkdirSync(path.join(root, ".artifacts/package-candidate-input"), { recursive: true });
       mkdirSync(path.join(root, "scripts"));
       copyFileSync(
@@ -160,21 +148,21 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
         path.join(root, "node_modules/tsx"),
         "junction",
       );
-      writeFileSync(
+      writeExecutable(
         path.join(bin, "npm"),
         `#!/bin/sh\nprintf '%s' '${JSON.stringify(versions)}'\n`,
-        { mode: 0o755 },
       );
-      writeFileSync(
+      writeExecutable(
         path.join(bin, "gh"),
         `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
+import assert from "node:assert/strict";
 const releases = JSON.parse(fs.readFileSync(process.env.RELEASE_FIXTURE, "utf8"));
 const args = process.argv.slice(2);
 if (args[0] === "release") {
   console.log(JSON.stringify(releases.slice(0, Number(args[args.indexOf("--limit") + 1]))));
 } else {
-  require("node:assert/strict").deepEqual(args, ["api", "--paginate", "--slurp", "repos/openclaw/openclaw/releases?per_page=100"]);
+  assert.deepEqual(args, ["api", "--paginate", "--slurp", "repos/openclaw/openclaw/releases?per_page=100"]);
   const pages = [releases.slice(0, 100), releases.slice(100)].map(page => page.map(release => ({
     tag_name: release.tagName, published_at: release.publishedAt, prerelease: release.isPrerelease,
   })));
@@ -182,7 +170,6 @@ if (args[0] === "release") {
 }
 if (process.env.FAIL_API === "true") process.exit(75);
 `,
-        { mode: 0o755 },
       );
       const invoke = () =>
         shell(
@@ -233,13 +220,11 @@ if (process.env.FAIL_API === "true") process.exit(75);
     "minimum",
   ])("pins the %s workflow baseline once before Docker fanout", (entrypoint) => {
     const packageWorkflow = workflow();
-    const migration = parse(readFileSync(".github/workflows/update-migration.yml", "utf8")) as {
+    const migration = readWorkflow(".github/workflows/update-migration.yml") as {
       on: { workflow_dispatch: { inputs: { baselines: { default: string } } } };
     };
     const inputs = packageWorkflow.on.workflow_call.inputs;
-    const release = parse(
-      readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"),
-    ) as {
+    const release = readWorkflow(".github/workflows/openclaw-release-checks.yml") as {
       jobs: {
         package_acceptance_release_checks: {
           with: { published_upgrade_survivor_baselines: string };
@@ -270,19 +255,18 @@ if (process.env.FAIL_API === "true") process.exit(75);
             : inputs.published_upgrade_survivor_baselines.default);
 
     const calls = path.join(root, "npm-calls");
-    writeFileSync(
+    writeExecutable(
       path.join(bin, "npm"),
       `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const file = process.env.FIXTURE_NPM_CALLS;
 fs.appendFileSync(file, JSON.stringify(process.argv.slice(2)) + "\\n");
 console.log(JSON.stringify(process.argv[4] === "dist-tags"
   ? [{ latest: "2026.9.2", "extended-stable": "2026.8.35" }]
   : ["2026.6.34", "2026.7.1-2", "2026.8.1", "2026.8.33", "2026.8.35", "2026.9.1", "2026.9.2"]));
 `,
-      { mode: 0o755 },
     );
-    writeFileSync(path.join(bin, "gh"), "#!/bin/sh\nexit 75\n", { mode: 0o755 });
+    writeExecutable(path.join(bin, "gh"), "#!/bin/sh\nexit 75\n");
     if (entrypoint === "release-checks") {
       expect(
         release.jobs.package_acceptance_release_checks.with.published_upgrade_survivor_baselines,
@@ -359,12 +343,7 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
         ["openclaw@2026.7.1-2", "plugin-deps-cleanup"],
       ]);
     }
-    expect(
-      readFileSync(calls, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual([
+    expect(readJsonLines(calls)).toEqual([
       ["view", "openclaw", "versions", "--json", "--silent", "--prefer-online"],
       ...(expanded
         ? [["view", "openclaw", "dist-tags", "--json", "--silent", "--prefer-online"]]

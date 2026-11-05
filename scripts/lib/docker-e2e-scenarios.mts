@@ -2,6 +2,7 @@
 // Keep lane names, commands, image kind, timeout, resources, and release chunks
 // here. Planning and execution live in separate modules.
 import { fileURLToPath } from "node:url";
+import { retirementCuts } from "../e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
 import {
   UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
   listRecordedFirstHopSourceVersions,
@@ -70,9 +71,14 @@ const updateRestartAuthCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-3420s}"',
 );
+// Hosted 4-vCPU legacy-operator-state passed in 1195-1841s (run 41105259079; 10.8 runs a
+// second published update for the native plugin UI opt-out specimen), and the
+// 2026-10-30 matrix died at the old 1200s default in 4/4 cells => 2700s inner + 300s
+// margin. The shipped 9.36 updater finished its recorded steps in 718s but its command
+// outlived the 900s default (canary-copy cleanup runs outside them), so use 1500s.
 const updateMigrationCommand = upgradeSurvivorScriptCommand(
-  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
-  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"',
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2700s}"',
 );
 const dreamingCronDoctorCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.9.6 OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE=current OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=dreaming-cron-doctor OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=manual OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=0 OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS= OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=0",
@@ -395,6 +401,7 @@ export const mainLanes: DockerE2eLane[] = [
   lane("agent-bundle-mcp-tools", {
     stateScenario: "empty",
   }),
+  serviceLane("mcp-docker-custody", { stateScenario: "empty" }),
   lane("system-agent-rescue", {
     stateScenario: "empty",
   }),
@@ -413,7 +420,29 @@ export const mainLanes: DockerE2eLane[] = [
     timeoutMs: 10 * 60 * 1000,
   }),
   upgradeSurvivorLane("upgrade-survivor", upgradeSurvivorCommand, 20 * 60 * 1000),
+  ...retirementCuts.map((cut) =>
+    npmLane(`package-installed-recovery-${cut}`, {
+      // Shared release jobs also export historical survivor settings. This cell
+      // owns an isolated current writer, so its mode must not inherit those values.
+      command: upgradeSurvivorScriptCommand(
+        `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=package-installed-recovery OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT=${cut} OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=0 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC= OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=manual OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=0 OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS= OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=0`,
+      ),
+      needsPackage: true,
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 3,
+    }),
+  ),
   upgradeSurvivorLane("published-upgrade-survivor", publishedUpgradeSurvivorCommand, 2580 * 1000),
+  npmLane("package-installed-recovery-older-runtime", {
+    command: upgradeSurvivorScriptCommand(
+      "OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=package-installed-recovery OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT=older-runtime OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=0 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC= OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=manual OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=0 OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS= OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=0",
+    ),
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 25 * 60 * 1000,
+    weight: 3,
+  }),
   // Explicit Docker/release regression; the per-PR cell still runs only one real update.
   lane("published-driver-lifecycle", {
     command: "pnpm test:docker:published-driver-lifecycle",
@@ -444,7 +473,7 @@ export const mainLanes: DockerE2eLane[] = [
   upgradeSurvivorLane(
     "update-migration",
     updateMigrationCommand,
-    30 * 60 * 1000,
+    3000 * 1000,
     "plugin-deps-cleanup",
   ),
   lane("plugins", {

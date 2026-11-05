@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isInternalSessionEffectsKey } from "../../../config/sessions/internal-session-key.js";
@@ -22,6 +21,7 @@ import {
 import { assertAgentSessionWriteAdmission } from "../../../sessions/session-agent-work-admission.js";
 import { onSessionIdentityMutation } from "../../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
+import { AsyncContext } from "../../../shared/async-context.js";
 import {
   resolveExplicitIncognitoAgentSqliteTarget,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -30,6 +30,7 @@ import {
 type PersistedSessionCapabilityEntry = Pick<
   SessionEntry,
   | "sessionId"
+  | "lifecycleRevision"
   | "createdVia"
   | "spawnDepth"
   | "subagentRole"
@@ -44,7 +45,7 @@ type PersistedSessionCapabilityEntry = Pick<
 >;
 export type SessionCapabilityEntry = {
   [Key in keyof PersistedSessionCapabilityEntry]?: unknown;
-};
+} & { clientCapabilities?: string[] };
 
 /** A complete store view; reads are memoized only for the current synchronous resolution. */
 export type SessionCapabilityLookup = {
@@ -167,19 +168,70 @@ export type SessionCapabilityRead = { storePath: string; agentId: string } & (
   | { sessionId: string; sessionKey?: never }
 );
 
+/** Data-only inputs consumed by a prepared requester policy, including absent rows. */
+export type SessionCapabilitySnapshot = {
+  query: SessionCapabilityRead;
+  facts: Array<{ field: keyof PersistedSessionCapabilityEntry; value: unknown }> | undefined;
+};
+
+const capabilityFields = [
+  "sessionId",
+  "lifecycleRevision",
+  "createdVia",
+  "spawnDepth",
+  "subagentRole",
+  "subagentControlScope",
+  "spawnedBy",
+  "completionOwnerSessionKey",
+  "inheritedToolPolicyVersion",
+  "inheritedToolPolicySource",
+  "inheritedToolAllow",
+  "inheritedToolDeny",
+  "delegatedToolPolicy",
+] as const;
+
+function recordCapabilityRead(
+  query: SessionCapabilityRead,
+  entry: SessionCapabilityEntry | undefined,
+) {
+  preparedReads.getStore()?.onRead?.({
+    query,
+    facts:
+      entry && capabilityFields.map((field) => ({ field, value: structuredClone(entry[field]) })),
+  });
+  return entry;
+}
+
 class SessionCapabilityReadRequired extends Error {
   constructor(readonly query: SessionCapabilityRead) {
     super("Session capability metadata requires worker preparation");
   }
 }
 
-const preparedReads = new AsyncLocalStorage<{
+class SessionCapabilityRefreshRequired extends SessionCapabilityReadRequired {
+  constructor(query: SessionCapabilityRead, cause: Error) {
+    super(query);
+    this.name = "SessionCapabilityMetadataChangedError";
+    this.message = "Session capability metadata changed";
+    this.cause = cause;
+  }
+}
+
+class SessionCapabilityMetadataChangedError extends Error {
+  constructor(message: string, cause: Error) {
+    super(message, { cause });
+    this.name = "SessionCapabilityMetadataChangedError";
+  }
+}
+
+const preparedReads = new AsyncContext<{
   entries: Map<string, () => SessionCapabilityEntry | undefined>;
   retain: boolean;
-}>();
-const legacyReader = new AsyncLocalStorage<
+  onRead?: (snapshot: SessionCapabilitySnapshot) => void;
+}>(Symbol("preparedSessionCapabilityReads"));
+const legacyReader = new AsyncContext<
   (query: SessionCapabilityRead) => SessionCapabilityEntry | undefined
->();
+>(Symbol("legacySessionCapabilityReader"));
 const readKey = (query: SessionCapabilityRead) => JSON.stringify(query);
 
 /** Only deprecated synchronous SDK adapters may install their compatibility reader. */
@@ -193,9 +245,9 @@ export function withLegacySessionCapabilityReader<T>(
 /** Prepare only the metadata a synchronous capability policy actually consumes. */
 export async function withPreparedSessionCapabilityRead<T>(
   read: () => T,
-  options?: { retain?: boolean },
+  options?: { retain?: boolean; onRead?: (snapshot: SessionCapabilitySnapshot) => void },
 ): Promise<T> {
-  const prepared = await prepareCapabilityReads(read, options?.retain === true);
+  const prepared = await prepareCapabilityReads(read, options?.retain === true, options?.onRead);
   try {
     return await prepared.value;
   } finally {
@@ -209,11 +261,16 @@ export async function prepareSessionCapabilityRead<T>(read: () => T) {
   return { read: prepared.read, release: prepared.release };
 }
 
-async function prepareCapabilityReads<T>(read: () => T, retain: boolean) {
+async function prepareCapabilityReads<T>(
+  read: () => T,
+  retain: boolean,
+  onRead?: (snapshot: SessionCapabilitySnapshot) => void,
+) {
   const inherited = preparedReads.getStore();
   const entries = new Map(!retain || inherited?.retain ? inherited?.entries : undefined);
-  const scope = { entries, retain };
+  const scope = { entries, retain, onRead: onRead ?? inherited?.onRead };
   const releases: Array<() => void> = [];
+  const refreshed = new Set<string>();
   let active = true;
   const release = () => {
     active = false;
@@ -229,7 +286,10 @@ async function prepareCapabilityReads<T>(read: () => T, retain: boolean) {
       return preparedReads.run(scope, read);
     } catch (error) {
       if (error instanceof SessionCapabilityReadRequired) {
-        throw new Error("Session capability metadata changed; prepare it again", { cause: error });
+        throw new SessionCapabilityMetadataChangedError(
+          "Session capability metadata changed; prepare it again",
+          error,
+        );
       }
       throw error;
     }
@@ -245,6 +305,15 @@ async function prepareCapabilityReads<T>(read: () => T, retain: boolean) {
         const { withSessionEntriesFromStoreInWorker } =
           await import("../../../config/sessions/session-entry-read-runtime.js");
         const query = error.query;
+        if (error instanceof SessionCapabilityRefreshRequired) {
+          const key = readKey(query);
+          if (refreshed.has(key)) {
+            throw error;
+          }
+          // Only async preparation can replace inherited facts. Synchronous
+          // retained replays remain fenced, and a busy writer gets one refresh.
+          refreshed.add(key);
+        }
         let missingCurrent = true;
         if (retain) {
           releases.push(
@@ -286,7 +355,7 @@ async function prepareCapabilityReads<T>(read: () => T, retain: boolean) {
               return () => {
                 assertAgentSessionWriteAdmission(database, query.agentId);
                 if (!missingCurrent) {
-                  throw new Error("Session capability metadata changed", { cause: error });
+                  throw new SessionCapabilityRefreshRequired(query, error);
                 }
                 return undefined;
               };
@@ -319,7 +388,7 @@ async function prepareCapabilityReads<T>(read: () => T, retain: boolean) {
             return () => {
               assertAgentSessionWriteAdmission(database, query.agentId);
               if (!predicate.isCurrent() || !idCurrent) {
-                throw new Error("Session capability metadata changed", { cause: error });
+                throw new SessionCapabilityRefreshRequired(query, error);
               }
               return entry;
             };
@@ -385,17 +454,23 @@ export function createSubagentSessionStore(
       type: "session.entry.read" as const,
       input: { sessionKey, projection: "list" as const },
     };
-    return captured?.owner
+    const entry = captured?.owner
       ? captured.owner.readStorage(sessionKey, query, captured.authority)
       : captured?.binding?.agentId === captured?.agentId
         ? captured?.binding?.actor.storage?.readCurrent(query, captured.authority)
         : undefined;
+    return captured
+      ? recordCapabilityRead(
+          { storePath: captured.path, agentId: captured.agentId, sessionKey },
+          entry,
+        )
+      : entry;
   };
   const readActorEntryById = (sessionId: string) => {
     const captured = memoryOwner(
       isIncognitoSessionKey(sessionId) ? resolveAgentIdFromSessionKey(sessionId) : agentId,
     );
-    return captured?.owner
+    const matched = captured?.owner
       ? captured.owner.readSessionById(sessionId, captured.authority, { currentOnly: true })
       : captured?.binding?.agentId === captured?.agentId
         ? captured?.binding?.actor.storage?.readCurrent(
@@ -406,6 +481,13 @@ export function createSubagentSessionStore(
             captured.authority,
           )
         : undefined;
+    if (captured) {
+      recordCapabilityRead(
+        { storePath: captured.path, agentId: captured.agentId, sessionId },
+        matched?.entry,
+      );
+    }
+    return matched;
   };
   const entries = new Map<string, SessionCapabilityEntry | undefined>();
   if (prepared && !isInternalSessionEffectsKey(prepared.sessionKey)) {
@@ -427,15 +509,15 @@ export function createSubagentSessionStore(
           })
         : undefined;
     if (current) {
-      return current.entry;
+      return recordCapabilityRead(query, current.entry);
     }
     const preparedRead = preparedScope?.entries.get(readKey(query));
     if (preparedRead) {
-      return preparedRead();
+      return recordCapabilityRead(query, preparedRead());
     }
     const legacy = legacyReader.getStore();
     if (legacy) {
-      return legacy(query);
+      return recordCapabilityRead(query, legacy(query));
     }
     throw new SessionCapabilityReadRequired(query);
   };
@@ -449,7 +531,7 @@ export function createSubagentSessionStore(
         return undefined;
       }
       return entries.has(sessionKey)
-        ? entries.get(sessionKey)
+        ? recordCapabilityRead({ ...readScope, sessionKey }, entries.get(sessionKey))
         : readDurable({ ...readScope, sessionKey });
     },
     getById: (requestedSessionId) => {

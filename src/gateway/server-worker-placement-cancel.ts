@@ -1,5 +1,3 @@
-import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../sessions/session-lifecycle-admission.js";
-import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
 import { createChatAbortOps } from "./chat-abort-ops.js";
 import { abortChatRunsForSessionKeyWithPartials } from "./server-methods/chat-abort-runtime.js";
 import type { ChatAbortSessionSnapshot } from "./server-methods/chat-aborted-partial.js";
@@ -19,7 +17,6 @@ export async function cancelGatewayWorkerSessionWork(
   request: Parameters<WorkerPlacementSessionWorkCancellation>[0],
 ): Promise<void> {
   request.assertCurrent();
-  let controllerDrain = Promise.resolve(true);
   const aborted = await abortChatRunsForSessionKeyWithPartials({
     context,
     ops: createChatAbortOps(context),
@@ -34,16 +31,11 @@ export async function cancelGatewayWorkerSessionWork(
     includeProtectedRuns: true,
     abortOrigin: "rpc",
     stopReason: "rpc",
+    stopSource: "operator-revocation",
+    assertCurrent: request.assertCurrent,
     onCancellationStarted: request.onCancellationStarted,
-    onControllerTargets: (targets) => {
-      controllerDrain = waitForChatAbortControllerRemoval({
-        entries: context.chatAbortControllers,
-        targets,
-        timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-      });
-    },
   });
-  if (aborted.unauthorized || !(await controllerDrain)) {
+  if (aborted.unauthorized) {
     throw new Error("Session cancellation did not persist before cloud worker stop");
   }
 }

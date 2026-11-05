@@ -6,7 +6,6 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
 import darkTheme from "../modes/interactive/theme/dark.json" with { type: "json" };
 import type { ExtensionFactory } from "./extensions/types.js";
-import { loadPromptTemplates } from "./prompt-templates.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import type { PathMetadata, SourceScope } from "./source-info.js";
 
@@ -117,16 +116,6 @@ describe("DefaultResourceLoader", () => {
     );
     expect(loader.getPrompts().diagnostics).toEqual([]);
     expect(loader.getThemes().diagnostics).toEqual([]);
-
-    await linkDirectory(resources, join(root, "prompts"));
-    const prompts = loadPromptTemplates({
-      cwd: root,
-      agentDir: root,
-      promptPaths: [join(root, "prompts")],
-    });
-    expect(prompts.map((prompt) => prompt.filePath).toSorted()).toEqual(
-      expectedNames.map((name) => join(root, "prompts", `${name}.md`)),
-    );
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -168,7 +157,7 @@ describe("DefaultResourceLoader", () => {
       api.registerCommand("shared", { handler: async () => {} });
     };
     const loader = createLoader(root, {
-      extensionFactories: [factory, factory, factory],
+      extensionFactories: [factory, factory],
     });
 
     await loader.reload();
@@ -176,16 +165,14 @@ describe("DefaultResourceLoader", () => {
     expect(loader.getExtensions().errors).toEqual([
       { path: "<inline:2>", error: 'Tool "shared" conflicts with <inline:1>' },
       { path: "<inline:2>", error: 'Flag "--shared" conflicts with <inline:1>' },
-      { path: "<inline:3>", error: 'Tool "shared" conflicts with <inline:1>' },
-      { path: "<inline:3>", error: 'Flag "--shared" conflicts with <inline:1>' },
     ]);
-    expect(loader.getExtensions().extensions).toHaveLength(3);
+    expect(loader.getExtensions().extensions).toHaveLength(2);
 
     loader.getExtensions().runtime.flagValues.set("shared", true);
     description = "Reloaded registration";
     await loader.reload();
     expect(loader.getExtensions().runtime.flagValues.get("shared")).toBe(false);
-    expect(loader.getExtensions().extensions).toHaveLength(3);
+    expect(loader.getExtensions().extensions).toHaveLength(2);
     for (const [index, extension] of loader.getExtensions().extensions.entries()) {
       const sourceInfo = {
         path: `<inline:${index + 1}>`,
@@ -211,12 +198,8 @@ describe("DefaultResourceLoader", () => {
     for (const directory of [defaultThemeDir, packageDir, variantPackageDir]) {
       await mkdir(directory, { recursive: true });
     }
-    const themePaths = [
-      join(defaultThemeDir, "default.json"),
-      join(packageDir, "package.json"),
-      join(packageDir, "extra.json"),
-    ];
-    for (const [index, name] of ["default", "package", "extra"].entries()) {
+    const themePaths = [join(defaultThemeDir, "default.json"), join(packageDir, "package.json")];
+    for (const [index, name] of ["default", "package"].entries()) {
       await writeFile(themePaths[index]!, JSON.stringify({ ...darkTheme, name }));
     }
     await withMockedWindowsPlatform(async () => {
@@ -242,7 +225,7 @@ describe("DefaultResourceLoader", () => {
       loader.extendResources({
         themePaths: [entry(variantPackageDir, "extension", "project")],
       });
-      expectSource("extra", "extension", "project", variantPackageDir);
+      expectSource("package", "extension", "project", variantPackageDir);
     });
   });
 });

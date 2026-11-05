@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
@@ -111,7 +111,7 @@ export function rowToRecord(row: WorktreeRecordRow): ManagedWorktreeRecord {
   return record;
 }
 
-/** Registry mutations invalidate a retained decision without rewriting its derived column. */
+/** Checkout/owner mutations invalidate deferrals; recording the failed outcome must not. */
 export function worktreeGcRevision(record: ManagedWorktreeRecord): string {
   return JSON.stringify([
     record.path,
@@ -125,7 +125,6 @@ export function worktreeGcRevision(record: ManagedWorktreeRecord): string {
     record.lastActiveAt,
     record.removedAt,
     record.snapshotRef,
-    record.runEndCleanup,
   ]);
 }
 
@@ -301,7 +300,7 @@ export const worktreeReadOperations = {
     db,
   ) => ({
     type: "worktrees.sessionBinding" as const,
-    value: runSqliteDeferredTransactionSync(db, () => {
+    value: runSqliteReadSnapshotSync(db, () => {
       const bound = boundId ? getRegistryWorktreeInDatabase(db, boundId) : undefined;
       return bound && bound.removedAt === undefined
         ? bound

@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -13,29 +12,41 @@ import type {
 } from "./openclaw-state-read.types.js";
 
 vi.hoisted(() => vi.resetModules());
-const mock = vi.hoisted(() => ({
-  pool: vi.fn(),
-  borrow: vi.fn(),
-  prepareNative: vi.fn(),
-  prepareFresh: vi.fn(),
-  prepareInherited: vi.fn(),
-}));
+const prepareFresh = vi.hoisted(() => vi.fn());
+let taskCount = 0;
+beforeEach(() => {
+  taskCount = 0;
+  prepareFresh.mockReset();
+});
 vi.mock("../infra/worker-task-pool.js", async (original) => ({
   ...(await original<typeof import("../infra/worker-task-pool.js")>()),
-  createOwnedWorkerTaskPool: mock.pool,
+  createOwnedWorkerTaskPool: () =>
+    createOwnedWorkerTaskPoolMock<OpenClawStateReadRequest, OpenClawStateReadReply>({
+      runTask(input: WorkerTaskInput<OpenClawStateReadRequest>) {
+        taskCount++;
+        return {
+          result: (async (): Promise<OpenClawStateReadReply> => {
+            const request = typeof input === "function" ? await input() : input;
+            expect(request.command.type).toBe("admit");
+            return { ok: true, type: "admit" };
+          })(),
+          close: async () => {},
+        };
+      },
+    }),
 }));
 vi.mock("./openclaw-state-db-cache.js", async (original) => ({
   ...(await original<typeof import("./openclaw-state-db-cache.js")>()),
-  borrowOpenClawStateDatabaseForAsyncRead: mock.borrow,
+  borrowOpenClawStateDatabaseForAsyncRead: vi.fn(),
 }));
 vi.mock("../infra/sqlite-readonly-location.js", async (original) => ({
   ...(await original<typeof import("../infra/sqlite-readonly-location.js")>()),
-  prepareSqliteReadOnlyLocationFromOwnedDatabase: mock.prepareNative,
+  prepareSqliteReadOnlyLocationFromOwnedDatabase: vi.fn(),
 }));
 vi.mock("../infra/sqlite-snapshot-source.js", async (original) => ({
   ...(await original<typeof import("../infra/sqlite-snapshot-source.js")>()),
-  startSqliteReadOnlyLocationAsync: mock.prepareFresh,
-  prepareSqliteReadOnlyLocation: mock.prepareInherited,
+  startSqliteReadOnlyLocationAsync: prepareFresh,
+  prepareSqliteReadOnlyLocation: vi.fn(),
 }));
 
 import { createOpenClawDatabaseMaintenanceScope as createMaintenance } from "./openclaw-state-db-async-lifecycle.js";
@@ -50,13 +61,8 @@ import {
 } from "./openclaw-state-db.js";
 import * as readWorker from "./openclaw-state-read-worker.js";
 
-let taskCount = 0;
-const releaseFixtures: Array<() => void> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    for (const release of releaseFixtures.splice(0)) {
-      release();
-    }
     await closeState();
     resetState();
     vi.restoreAllMocks();
@@ -64,55 +70,13 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-beforeEach(() => {
-  taskCount = 0;
-  mock.borrow.mockReset();
-  mock.prepareNative.mockReset();
-  mock.prepareFresh.mockReset();
-  mock.prepareInherited.mockReset();
-  mock.pool.mockReset().mockImplementation(() =>
-    createOwnedWorkerTaskPoolMock<OpenClawStateReadRequest, OpenClawStateReadReply>({
-      startTask(input: WorkerTaskInput<OpenClawStateReadRequest>) {
-        const inContext = AsyncLocalStorage.snapshot();
-        const completion = createRetainedOperation<OpenClawStateReadReply>(() => {
-          if (completion.operation.read().status !== "pending") {
-            return;
-          }
-          const request = typeof input === "function" ? input() : input;
-          if (request instanceof Promise) {
-            throw new Error("This worker fixture requires synchronous admission");
-          }
-          expect(request.command.type).toBe("admit");
-          completion.resolve({ ok: true, type: "admit" });
-        });
-        const cleanup = createRetainedOperation<void>(() => {
-          completion.operation.service();
-          if (completion.operation.read().status === "pending") {
-            return;
-          }
-          cleanup.resolve(undefined);
-        });
-        const task = { ...completion.operation, release: () => cleanup.operation };
-        taskCount++;
-        releaseFixtures.push(() =>
-          inContext(() => {
-            task.service();
-            task.release().service();
-          }),
-        );
-        return task;
-      },
-    }),
-  );
-});
-
 function observeReaderRelease() {
   const captureSource = readWorker.captureOpenClawStateReadSource;
   const released = vi.fn();
   vi.spyOn(readWorker, "captureOpenClawStateReadSource").mockImplementation(() => {
     const capturedSource = captureSource();
     return {
-      ...capturedSource,
+      createTransport: (...args) => capturedSource.createTransport(...args),
       own(close) {
         const unregister = capturedSource.own(close);
         return () => {
@@ -147,7 +111,7 @@ it("retains failed preparation custody through a pending close and canonical ret
       retryStarted.resolve();
       return retryClose.operation;
     });
-  mock.prepareFresh.mockReturnValueOnce({ ...preparation.operation, startClose });
+  prepareFresh.mockReturnValueOnce({ ...preparation.operation, startClose });
   const maintenance = createMaintenance();
   const handleClosed = vi.fn();
   maintenance.own({}, "shared-handles", handleClosed);
@@ -181,7 +145,7 @@ it("retains failed preparation custody through a pending close and canonical ret
     canonicalClose = closePath(options.path);
     await retryStarted.promise;
     expect(startClose).toHaveBeenCalledTimes(2);
-    expect(mock.prepareFresh).toHaveBeenCalledOnce();
+    expect(prepareFresh).toHaveBeenCalledOnce();
     expectCalls(0, released, handleClosed);
 
     retryClose.resolve(undefined);

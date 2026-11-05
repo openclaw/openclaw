@@ -1,5 +1,7 @@
 import type { ChildProcess } from "node:child_process";
+import childProcess from "node:child_process";
 import { EventEmitter, once } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -12,6 +14,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { executeGitCommand, executeGitCommandBuffered } from "../infra/git-exec.js";
+import { createMainThreadStallMonitor } from "../infra/main-thread-stall.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { spawnCommand } from "./exec-spawn.js";
 import { prepareOomScoreAdjustedSpawn } from "./linux-oom-score.js";
@@ -27,6 +30,40 @@ import {
 import { spawnProcess, spawnAndWait } from "./spawn-utils.js";
 
 describe("spawnAndWait", () => {
+  it("attributes native launch stalls without profiling or counting child lifetime", async () => {
+    let now = 0;
+    const monitor = createMainThreadStallMonitor(() => now);
+    const nativeSpawn = childProcess.spawn;
+    const delayedSpawn = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+      now += 1_500;
+      return nativeSpawn(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      const child = spawnProcess(process.execPath, ["-e", ""], { stdio: "ignore" }, (launch) => {
+        now += 5_000;
+        const result = launch();
+        now += 5_000;
+        return result;
+      });
+      now += 5_000;
+      expect((await once(child, "close"))[0]).toBe(0);
+      expect(monitor.drain().stalls).toEqual([
+        {
+          task: "process:spawn:native",
+          startedAt: 5_000,
+          endedAt: 6_500,
+          elapsedMs: 1_500,
+          taskMs: 1_500,
+        },
+      ]);
+    } finally {
+      delayedSpawn.mockRestore();
+      syncBuiltinESMExports();
+      monitor.stop();
+    }
+  });
+
   it("rejects ENOENT from a real missing executable", async () => {
     await withTempDir("openclaw-spawn-missing-", async (dir) => {
       await expect(

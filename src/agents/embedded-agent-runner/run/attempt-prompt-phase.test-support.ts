@@ -1,6 +1,9 @@
 import { vi } from "vitest";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import type { SubsystemLogger } from "../../../logging/subsystem.js";
+import { createHookRunner } from "../../../plugins/hooks.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import type { AgentMessage } from "../../runtime/index.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import type { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
 import type {
@@ -22,7 +25,6 @@ const mocks = vi.hoisted(() => ({
   preparePromptContext: vi.fn(),
   preparePromptExecution: vi.fn(),
   preparePromptPreflight: vi.fn(),
-  releasePendingSteering: vi.fn(),
   removeTrailingPrecheckError: vi.fn(),
   resolveApiKey: vi.fn(),
   submitPrompt: vi.fn(),
@@ -31,10 +33,6 @@ const mocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
-vi.mock("../../subagents/registry/subagent-registry.js", () => ({
-  releasePendingAgentSteeringItems: mocks.releasePendingSteering,
-  ackPendingAgentSteeringItems: vi.fn(),
-}));
 vi.mock("../google-prompt-cache.js", () => ({
   prepareGooglePromptCacheStreamFn: mocks.prepareGooglePromptCache,
 }));
@@ -45,9 +43,6 @@ vi.mock("../stream-resolution.js", () => ({
   resolveEmbeddedAgentApiKey() {
     return mocks.resolveApiKey();
   },
-}));
-vi.mock("./attempt-before-agent-run.js", () => ({
-  runEmbeddedAttemptBeforeAgentRun: mocks.beforeAgentRun,
 }));
 vi.mock("./attempt-prompt-build.js", () => ({
   prepareEmbeddedAttemptPromptAssembly: mocks.preparePromptAssembly,
@@ -92,6 +87,7 @@ export function createPromptAssemblyResult(
       activeProjectKeys: [...(input.attempt.preparedModelRuntime?.activeProjectKeys ?? [])],
       modelProviderId: input.attempt.model.provider,
       modelId: input.attempt.model.id,
+      contextTokenBudget: input.attempt.contextTokenBudget ?? input.attempt.model.contextWindow,
       inputProvenance: input.attempt.inputProvenance,
     },
     effectivePrompt: input.attempt.prompt,
@@ -99,10 +95,7 @@ export function createPromptAssemblyResult(
     promptBuildPrependContext: undefined,
     promptBuildAppendContext: undefined,
     originContext: undefined,
-    heartbeatSummary: undefined,
-    leasedSteering: undefined,
     transcriptLeafId: null,
-    decisionPrefilter: { shouldPruneTools: false, status: "skipped", reason: "fixture-baseline" },
   };
 }
 
@@ -124,11 +117,14 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     yieldDetected: false,
     yieldMessage: null as string | null,
   };
+  const messages: AgentMessage[] = [];
   const activeSession = {
     isCompacting: false,
-    messages: [],
+    get messages(): AgentMessage[] {
+      return this.agent.state.messages;
+    },
     agent: {
-      state: { messages: [] },
+      state: { messages },
       streamFn: vi.fn(),
     },
   };
@@ -145,14 +141,11 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
 
   mocks.preparePromptAssembly.mockImplementation(async (input: AssemblyCall) => {
     order.push("assembly");
-    const lease = { leaseId: "lease-1", runIds: ["run-1"], isCurrent: () => true };
     input.applyPromptBuildToolsAllow(undefined);
-    input.setLeasedSteering(lease);
     return {
       ...createPromptAssemblyResult(input),
       effectivePrompt: pendingPrompt,
       effectiveTranscriptPrompt: pendingPrompt,
-      leasedSteering: lease,
       transcriptLeafId: "leaf-1",
     };
   });
@@ -177,7 +170,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
   });
   mocks.beforeAgentRun.mockImplementation(async () => {
     order.push("before-agent-run");
-    return undefined;
+    return { outcome: "pass" as const };
   });
   mocks.resolveApiKey.mockResolvedValue("test-key");
   mocks.prepareGooglePromptCache.mockImplementation(async () => {
@@ -199,9 +192,9 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
       skippedCount: 0,
     };
   });
-  mocks.observePrompt.mockImplementation(() => {
+  mocks.observePrompt.mockImplementation((input: { skipPromptSubmission: boolean }) => {
     order.push("observe");
-    return { skipPromptSubmission: false };
+    return { skipPromptSubmission: input.skipPromptSubmission };
   });
   mocks.preparePromptPreflight.mockImplementation(async (preflightInput: PromptPreflightCall) => {
     order.push("preflight");
@@ -210,7 +203,6 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
   mocks.submitPrompt.mockImplementation(async (submissionInput: PromptSubmissionCall) => {
     order.push("submit");
     submissionInput.onFinalPromptText("hello");
-    submissionInput.onSteeringAcknowledged();
   });
   mocks.handlePromptError.mockResolvedValue({});
   const input = {
@@ -239,7 +231,18 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
       sessionRuntime: {
         agentSession: {
           activeSession,
-          hookRunner: null,
+          hookRunner: createHookRunner({
+            hooks: [],
+            typedHooks: [
+              {
+                pluginId: "policy",
+                hookName: "before_agent_run",
+                handler: mocks.beforeAgentRun,
+                source: "test",
+              },
+            ],
+            plugins: [],
+          }),
           setActiveSessionSystemPrompt: vi.fn(),
           settingsManager: {
             getCompactionEnabled: () => true,
@@ -256,9 +259,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
           takePendingMidTurnPrecheckRequest: () => undefined,
         },
         preparedUserTurnMessage: {
-          role: "user",
-          content: "hello",
-          timestamp: 100,
+          ...makeUserMessage("hello", 100),
           __openclaw: { senderName: "Alice" },
         },
         sessionManager,

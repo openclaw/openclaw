@@ -4,6 +4,7 @@ import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-
 import {
   bindAcceptedGitHubPublicationClaimSnapshotAsync,
   listGitHubPublicationsForClaimAsync,
+  listSharedGitHubPublicationsAsync,
 } from "./github-publication-store-async.js";
 import type {
   WorkerSessionPlacementStore,
@@ -13,11 +14,12 @@ import type {
 export function sameWorktree(
   row: PublicationRow,
   worktree: Awaited<ReturnType<typeof readGitHubPublicationWorktreeOwner>>["worktree"],
+  publicationBranch = worktree.branch,
 ): boolean {
   return (
     row.worktree_id === worktree.id &&
     row.repository_fingerprint === worktree.repoFingerprint &&
-    row.branch === worktree.branch
+    row.branch === publicationBranch
   );
 }
 
@@ -26,13 +28,23 @@ export async function prepareGitHubPublicationClaimWorkspace(
   claim: WorkerSessionTurnClaim,
 ): Promise<void> {
   await params.placements.closeWorkerTurnToolAdmission(claim);
-  const rows = await listGitHubPublicationsForClaimAsync(claim, { pendingOnly: true });
+  const rows = [
+    ...(await listGitHubPublicationsForClaimAsync(claim, { pendingOnly: true })),
+    ...(
+      await listSharedGitHubPublicationsAsync({
+        sessionId: claim.sessionId,
+        claimNull: true,
+        status: "requested",
+      })
+    ).filter((row) => !row.workspace_tree),
+  ];
   if (rows.length === 0) {
     return;
   }
   await params.placements.prepareWorkspaceResultClaim(claim);
   const first = rows[0]!;
   using worktreeOwner = await readGitHubPublicationWorktreeOwner({
+    allowExistingPullRequest: true,
     sessionId: first.session_id,
     sessionKey: first.session_key,
     agentId: first.agent_id,
@@ -48,7 +60,7 @@ export async function prepareGitHubPublicationClaimWorkspace(
     throw new Error("GitHub publication lost its workspace result claim before snapshot.");
   }
   for (const row of rows) {
-    if (!sameWorktree(row, worktree)) {
+    if (!sameWorktree(row, worktree, worktreeOwner.publicationBranch)) {
       throw new Error("GitHub publication worktree changed before accepted snapshot.");
     }
   }
@@ -72,18 +84,25 @@ export async function prepareGitHubPublicationClaimWorkspace(
       return;
     }
   }
-  const snapshot = await captureGitHubPublicationWorkspaceSnapshot({
-    cwd: worktree.path,
-    assertCurrent: () => {
-      worktreeOwner.assertCurrent();
-      if (!params.placements.validateWorkspaceResultClaim(claim)) {
-        throw new Error("GitHub publication lost its workspace result claim during snapshot.");
+  const snapshot = bound
+    ? {
+        sourceHeadCommit: bound.source_head_commit!,
+        sourceIndexTree: bound.source_index_tree!,
+        workspaceTree: bound.workspace_tree!,
       }
-    },
-  });
+    : await captureGitHubPublicationWorkspaceSnapshot({
+        cwd: worktree.path,
+        assertCurrent: () => {
+          worktreeOwner.assertCurrent();
+          if (!params.placements.validateWorkspaceResultClaim(claim)) {
+            throw new Error("GitHub publication lost its workspace result claim during snapshot.");
+          }
+        },
+      });
   for (const row of rows) {
     await bindAcceptedGitHubPublicationClaimSnapshotAsync({ row, claim, ...snapshot }, () => {
       params.assertCurrent();
+      worktreeOwner.assertCurrent();
       if (!params.placements.validateWorkspaceResultClaim(claim)) {
         throw new Error("GitHub publication lost its workspace result claim.");
       }

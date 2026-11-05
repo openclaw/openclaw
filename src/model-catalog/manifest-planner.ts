@@ -3,6 +3,7 @@ import {
   buildModelCatalogMergeKey,
   normalizeModelCatalogProviderId,
 } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { ownsThinkingProfile } from "@openclaw/model-catalog-core/model-catalog-types";
 import type {
   ModelCatalog,
   ModelCatalogDiscovery,
@@ -29,19 +30,14 @@ type ManifestModelCatalogRegistry = {
 };
 
 type ManifestModelCatalogPlanEntry = {
-  pluginId: string;
   provider: string;
   discovery?: ModelCatalogDiscovery;
   rows: readonly NormalizedModelCatalogRow[];
 };
 
 type ManifestModelCatalogConflict = {
-  mergeKey: string;
-  ref: string;
   provider: string;
   modelId: string;
-  firstPluginId: string;
-  secondPluginId: string;
 };
 
 type ManifestModelCatalogPlan = {
@@ -49,8 +45,6 @@ type ManifestModelCatalogPlan = {
   entries: readonly ManifestModelCatalogPlanEntry[];
   conflicts: readonly ManifestModelCatalogConflict[];
 };
-
-export type ManifestModelCatalogRowSelection = "static" | "supplemental";
 
 export type ManifestModelCatalogSuppressionEntry = {
   pluginId: string;
@@ -85,10 +79,22 @@ function mergeRemoteModelWithTrustedTransport(
 ): ModelCatalogModel {
   // Spread keeps an untrusted own `__proto__` key as data instead of invoking
   // Object.prototype's setter while trusted transport fields win explicitly.
+  // The hosted schema carries no family; the bundled row keeps the exact id's family.
+  // A hosted row published before a manifest gained a fact does not erase it: bundled
+  // `thinkingLevelMap` and compat keys fill only what the hosted row omits. A bundled row that
+  // owns its thinking profile keeps its map over a hosted row published before that ownership,
+  // so the profile and its levels stay one unit.
+  const bundledOwnsThinking =
+    ownsThinkingProfile(trustedModel?.compat) && !ownsThinkingProfile(remoteModel.compat);
   const merged = {
     ...remoteModel,
     ...(trustedModel?.baseUrl ? { baseUrl: trustedModel.baseUrl } : {}),
     ...(trustedModel?.headers ? { headers: trustedModel.headers } : {}),
+    ...(trustedModel?.family ? { family: trustedModel.family } : {}),
+    ...(trustedModel?.thinkingLevelMap && (bundledOwnsThinking || !remoteModel.thinkingLevelMap)
+      ? { thinkingLevelMap: trustedModel.thinkingLevelMap }
+      : {}),
+    ...(trustedModel?.compat ? { compat: { ...trustedModel.compat, ...remoteModel.compat } } : {}),
   };
   const target = {
     api: merged.api ?? effectiveProvider.api,
@@ -99,7 +105,11 @@ function mergeRemoteModelWithTrustedTransport(
         {
           inference: remoteModel.inference,
           api: remoteModel.api ?? remoteProvider.api ?? trustedProvider.api,
-          baseUrl: remoteModel.baseUrl ?? remoteProvider.baseUrl ?? trustedProvider.baseUrl,
+          baseUrl:
+            remoteModel.baseUrl ??
+            remoteProvider.baseUrl ??
+            trustedModel?.baseUrl ??
+            trustedProvider.baseUrl,
         },
         target,
       )
@@ -120,10 +130,9 @@ export function planManifestModelCatalogRows(params: {
   providerFilter?: string;
   providerFilters?: readonly string[];
   mergeKeyFilter?: ReadonlySet<string>;
-  remoteOverlay?: Readonly<Record<string, ModelCatalogProvider>>;
   resolveRemoteProvider?: (provider: string) => ModelCatalogProvider | undefined;
   includeProvider?: (provider: string, plugin: ManifestModelCatalogPlugin) => boolean;
-  selection?: ManifestModelCatalogRowSelection;
+  selection?: "static";
 }): ManifestModelCatalogPlan {
   const hasProviderFilter = Boolean(params.providerFilter) || params.providerFilters !== undefined;
   const providerFilters = hasProviderFilter
@@ -159,9 +168,7 @@ export function planManifestModelCatalogRows(params: {
       if (plannedProviders.length === 0) {
         continue;
       }
-      const remoteProvider = params.resolveRemoteProvider
-        ? params.resolveRemoteProvider(normalizedProvider)
-        : params.remoteOverlay?.[normalizedProvider];
+      const remoteProvider = params.resolveRemoteProvider?.(normalizedProvider);
       for (const plannedProvider of plannedProviders) {
         if (params.includeProvider?.(plannedProvider, plugin) === false) {
           continue;
@@ -239,7 +246,6 @@ export function planManifestModelCatalogRows(params: {
         }
         const alias = plugin.modelCatalog?.aliases?.[plannedProvider];
         entries.push({
-          pluginId: plugin.id,
           provider: plannedProvider,
           discovery: plugin.modelCatalog?.discovery?.[normalizedProvider],
           rows: alias
@@ -261,7 +267,6 @@ export function planManifestModelCatalogRows(params: {
   const seenRows = new Map<
     string,
     {
-      pluginId: string;
       row: NormalizedModelCatalogRow;
       discovery: ModelCatalogDiscovery | undefined;
     }
@@ -275,18 +280,13 @@ export function planManifestModelCatalogRows(params: {
         // plugin silently wins another plugin's model ref in the merged catalog.
         if (!conflicts.has(row.mergeKey)) {
           conflicts.set(row.mergeKey, {
-            mergeKey: row.mergeKey,
-            ref: seen.row.ref,
             provider: seen.row.provider,
             modelId: seen.row.id,
-            firstPluginId: seen.pluginId,
-            secondPluginId: entry.pluginId,
           });
         }
         continue;
       }
       seenRows.set(row.mergeKey, {
-        pluginId: entry.pluginId,
         row,
         discovery: entry.discovery,
       });
@@ -295,14 +295,7 @@ export function planManifestModelCatalogRows(params: {
 
   const rows: NormalizedModelCatalogRow[] = [];
   for (const { row, discovery } of seenRows.values()) {
-    if (
-      conflicts.has(row.mergeKey) ||
-      (params.selection === "static"
-        ? discovery !== "static"
-        : params.selection === "supplemental" &&
-          discovery === "runtime" &&
-          row.source !== "runtime-refresh")
-    ) {
+    if (conflicts.has(row.mergeKey) || (params.selection === "static" && discovery !== "static")) {
       continue;
     }
     rows.push(row);

@@ -29,7 +29,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
+  NODE_VERSION: "24.22.1"
 
 jobs:
   authorize_actor:
@@ -46,7 +46,7 @@ jobs:
           )
         )
       }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       authorized: ${{ steps.permission.outputs.authorized }}
     steps:
@@ -88,7 +88,6 @@ jobs:
       request-pattern: 'web-ui-chat|web ui chat|(?=[\s\S]*web ui)(?=[\s\S]*chat)|(?=[\s\S]*control ui)(?=[\s\S]*chat)'
       skip-notice: Comment mentioned Mantis but did not request web UI chat proof.
       dispatch-params: ${{ github.event_name == 'workflow_dispatch' && toJSON(inputs) || '{}' }}
-      runner: blacksmith-8vcpu-ubuntu-2404
     secrets:
       MANTIS_GITHUB_APP_ID: ${{ secrets.MANTIS_GITHUB_APP_ID }}
       MANTIS_GITHUB_APP_PRIVATE_KEY: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
@@ -97,7 +96,7 @@ jobs:
     name: Validate selected candidate
     needs: resolve_request
     if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       candidate_revision: ${{ steps.validate.outputs.candidate-revision }}
     steps:
@@ -266,7 +265,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Verify protected main-ancestry workflow pin
@@ -395,7 +394,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Comment PR with inline QA evidence

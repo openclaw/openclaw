@@ -1,3 +1,4 @@
+import { readRemoteModelCatalogReceipt } from "../state/config-machine-state-row.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
@@ -20,12 +21,22 @@ export type RemoteModelCatalogWriteResult =
   | { status: "written" }
   | { status: "retained-newer"; row: RemoteModelCatalogStoreRow };
 
-// V3 must never replace the slot read by released v2 clients, even for the same mirror.
+// Slot name predates the v2 wire; renaming it would discard cached catalogs.
+// It stores whichever wire the configured URL serves, v3 included. No release reads
+// it, and it must never replace the slot read by released v2 clients.
 export const REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote.v3";
 export const PREVIOUS_REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote.v2";
 // Released v1/v2 snapshots remain readable until this client stores its own.
 // Activation still checks source and age; downgrades keep their original slot.
 export const LEGACY_REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote";
+
+const snapshots = new WeakMap<
+  object,
+  Map<
+    OpenClawStateWorkerContext["databaseEngineSelection"],
+    { row: RemoteModelCatalogStoreRow | undefined }
+  >
+>();
 
 /** Synchronous boot snapshot capture and offline inspection only; refreshes use the worker. */
 export function readRemoteModelCatalog(
@@ -49,21 +60,36 @@ export async function readRemoteModelCatalogAsync(
   context: OpenClawStateWorkerContext,
 ): Promise<RemoteModelCatalogStoreRow | undefined> {
   const artifactPreservingReadOnly = isArtifactPreservingStateRead();
+  const receipt =
+    !artifactPreservingReadOnly &&
+    !context.artifactPreservingReads &&
+    !context.maintenanceScope &&
+    !context.existingSchemaPath
+      ? readRemoteModelCatalogReceipt(context.admission.databasePath)
+      : undefined;
+  const cached = receipt && snapshots.get(receipt)?.get(context.databaseEngineSelection);
+  if (cached) {
+    context.admission.assertCurrent();
+    return cached.row && { ...cached.row };
+  }
   const { runOpenClawStateWorkerOperation } =
     await import("../state/openclaw-state-worker-store.js");
-  context.admission.assertCurrent();
-  return runOpenClawStateWorkerOperation(
+  const row = await runOpenClawStateWorkerOperation(
     context,
-    async (scope) => {
-      const row = await scope.execute({
+    (scope) =>
+      scope.execute({
         type: "modelCatalog.remote.read",
         input: { artifactPreservingReadOnly },
-      });
-      context.admission.assertCurrent();
-      return row;
-    },
+      }),
     { existingOnly: true },
   );
+  if (receipt) {
+    // An overtaking write retires this captured receipt; the next read reloads.
+    const selected = snapshots.get(receipt) ?? new Map();
+    selected.set(context.databaseEngineSelection, { row: row && { ...row } });
+    snapshots.set(receipt, selected);
+  }
+  return row;
 }
 
 export type RemoteModelCatalogCheck = {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -124,7 +125,7 @@ function loadHookFromDir(
       metadata: resolveHookManifestMetadata(frontmatter),
     };
   } catch (err) {
-    const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    const message = err instanceof Error ? formatErrorStackWithMessage(err) : String(err);
     warn?.(`Failed to load hook from ${params.hookDir}: ${message}`);
     return null;
   }

@@ -27,13 +27,16 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   chat: [SESSION_READ_SCOPE],
   // This keyless, redacted invalidation tells session readers to refresh their own projection.
   "chat.metadata.changed": [SESSION_READ_SCOPE],
-  "board.changed": [READ_SCOPE],
-  "board.command": [READ_SCOPE],
+  "board.changed": [SESSION_READ_SCOPE],
+  "board.command": [SESSION_READ_SCOPE],
   "progressCard.changed": [SESSION_READ_SCOPE],
   "ui.command": [READ_SCOPE],
   "chat.send_timing": [READ_SCOPE],
   "chat.side_result": [SESSION_READ_SCOPE],
   cron: [READ_SCOPE],
+  "cron.inventory.changed": [READ_SCOPE],
+  "worktrees.branches.changed": [WRITE_SCOPE],
+  "projects.checkoutOptions.changed": [SESSION_READ_SCOPE],
   health: [],
   "exec.approval.requested": [APPROVALS_SCOPE],
   "exec.approval.resolved": [APPROVALS_SCOPE],
@@ -45,11 +48,11 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "openclaw.approval.requested": [APPROVALS_SCOPE],
   "openclaw.approval.resolved": [APPROVALS_SCOPE],
   // The frame cadence itself exposes person activity; match system-presence access.
-  presence: [READ_SCOPE],
+  presence: [SESSION_READ_SCOPE],
   shutdown: [],
   "gateway.suspension": [],
   tick: [],
-  "talk.event": [READ_SCOPE],
+  "talk.event": [READ_SCOPE, SESSION_READ_SCOPE],
   "talk.mode": [TALK_SCOPE],
   "talk.voice.change": [TALK_SCOPE],
   task: [READ_SCOPE],
@@ -61,7 +64,8 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "config.changed": [READ_SCOPE],
   "agent.identity.changed": [READ_SCOPE],
   "users.prefs.changed": [SESSION_READ_SCOPE],
-  "mentions.changed": [READ_SCOPE],
+  "mentions.changed": [SESSION_READ_SCOPE],
+  "mentions.failed": [SESSION_READ_SCOPE],
   "skills.changed": [READ_SCOPE],
   "plugins.changed": [READ_SCOPE],
   "plugins.install.progress": [ADMIN_SCOPE],
@@ -79,7 +83,8 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   [GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED]: [READ_SCOPE],
   "sessions.catalog.host": [READ_SCOPE],
   "sessions.changed": [SESSION_READ_SCOPE],
-  "controlUi.sessionPullRequests.changed": [READ_SCOPE],
+  "sessions.processes.changed": [SESSION_READ_SCOPE],
+  "controlUi.sessionPullRequests.changed": [SESSION_READ_SCOPE],
   "plugins.controlUi.changed": [READ_SCOPE],
   "mcp.app.resourceUpdated": [READ_SCOPE],
   "mcp.app.hostContextChanged": [READ_SCOPE],
@@ -113,6 +118,15 @@ export function isPlainEventPayload(payload: unknown): payload is Record<string,
   return (prototype === null || prototype === Object.prototype) && !("toJSON" in payload);
 }
 
+/** Realtime Talk stays operator-only; session readers receive only targeted dictation. */
+export function isTargetedTranscriptionEvent(payload: unknown, targeted: boolean): boolean {
+  return (
+    targeted &&
+    isPlainEventPayload(payload) &&
+    typeof Object.getOwnPropertyDescriptor(payload, "transcriptionSessionId")?.value === "string"
+  );
+}
+
 export function isSessionReadInvalidation(
   event: string,
   payload: unknown,
@@ -122,6 +136,32 @@ export function isSessionReadInvalidation(
     return false;
   }
   const fields = Object.entries(Object.getOwnPropertyDescriptors(payload));
+  if (event === "mentions.changed") {
+    // Inbox producers target only the recipient's connections; this signal carries no message data.
+    return (
+      targeted &&
+      Object.hasOwn(payload, "gatewayInstanceId") &&
+      Object.hasOwn(payload, "revision") &&
+      fields.every(
+        ([key, field]) =>
+          "value" in field &&
+          ((key === "gatewayInstanceId" && typeof field.value === "string") ||
+            (key === "revision" && Number.isSafeInteger(field.value) && field.value >= 0)),
+      )
+    );
+  }
+  if (event === "projects.checkoutOptions.changed") {
+    return (
+      targeted &&
+      Object.hasOwn(payload, "projectId") &&
+      fields.every(
+        ([key, field]) =>
+          "value" in field &&
+          ((key === "projectId" && typeof field.value === "string") ||
+            (key === "agentId" && (field.value === undefined || typeof field.value === "string"))),
+      )
+    );
+  }
   // Hidden/deleted rows send subscribed readers only a signal to repeat an authorized read.
   return (
     event === "sessions.changed" &&
@@ -174,7 +214,7 @@ export function hasEventScope(
     return false;
   }
   const role = client.connect.role ?? "operator";
-  const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
+  const scopes = client.connect.scopes ?? [];
   const required = EVENT_SCOPE_GUARDS[event];
   const pluginScope =
     explicitPluginScope || (!required && event.startsWith("plugin.") ? WRITE_SCOPE : undefined);
@@ -191,6 +231,8 @@ export function hasEventScope(
         (scope) =>
           operatorScopeSatisfied(scope, scopes) &&
           (scope !== SESSION_READ_SCOPE ||
+            // Presence carries no session content; its recipient projection filters rows.
+            event === "presence" ||
             operatorScopeSatisfied(READ_SCOPE, scopes) ||
             hasSessionReadContext?.() === true),
       ) ||

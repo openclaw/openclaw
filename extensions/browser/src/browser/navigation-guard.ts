@@ -51,6 +51,8 @@ export function parseBrowserNavigationUrl(url: string): URL {
 export type BrowserNavigationPolicyOptions = {
   ssrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationProxyMode;
+  /** Live authority for an invocation-scoped navigation exception. */
+  assertNavigationCurrent?: () => void;
 };
 
 /** Describes whether the browser itself is routing page traffic through a proxy. */
@@ -65,10 +67,13 @@ type BrowserNavigationRequestLike = {
 /** Build a navigation-policy object while omitting default direct proxy mode. */
 export function withBrowserNavigationPolicy(
   ssrfPolicy?: SsrFPolicy,
-  opts?: { browserProxyMode?: BrowserNavigationProxyMode },
+  opts?: Pick<BrowserNavigationPolicyOptions, "browserProxyMode" | "assertNavigationCurrent">,
 ): BrowserNavigationPolicyOptions {
   return {
     ...(ssrfPolicy ? { ssrfPolicy } : {}),
+    ...(opts?.assertNavigationCurrent
+      ? { assertNavigationCurrent: opts.assertNavigationCurrent }
+      : {}),
     ...(opts?.browserProxyMode && opts.browserProxyMode !== "direct"
       ? { browserProxyMode: opts.browserProxyMode }
       : {}),
@@ -105,6 +110,7 @@ export async function assertBrowserNavigationAllowed(
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
   opts.signal?.throwIfAborted();
+  opts.assertNavigationCurrent?.();
   const parsed = parseBrowserNavigationUrl(opts.url);
 
   if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {
@@ -149,6 +155,23 @@ export async function assertBrowserNavigationAllowed(
     policy: opts.ssrfPolicy,
     signal: opts.signal,
   });
+  opts.assertNavigationCurrent?.();
+}
+
+/**
+ * Preflight a Chrome MCP navigation. Chrome MCP dispatches through opaque
+ * `navigate_page`/`new_page` tool calls, so strict policy cannot fence redirect
+ * hops before Chrome sends them and refuses network navigation instead.
+ */
+export async function assertChromeMcpNavigationAllowed(
+  opts: { url: string } & BrowserNavigationPolicyOptions,
+): Promise<void> {
+  await assertBrowserNavigationAllowed(opts);
+  if (requiresInspectableBrowserNavigationRedirectsForUrl(opts.url, opts.ssrfPolicy)) {
+    throw new InvalidBrowserNavigationUrlError(
+      'Navigation blocked: strict browser SSRF policy requires redirect-hop inspection, which existing-session (Chrome MCP) profiles cannot provide; use a profile with driver "openclaw" for strict navigation',
+    );
+  }
 }
 
 /**
@@ -202,6 +225,7 @@ export async function assertBrowserNavigationRedirectChainAllowed(
       lookupFn: opts.lookupFn,
       ssrfPolicy: opts.ssrfPolicy,
       browserProxyMode: opts.browserProxyMode,
+      assertNavigationCurrent: opts.assertNavigationCurrent,
       signal: opts.signal,
     });
   }

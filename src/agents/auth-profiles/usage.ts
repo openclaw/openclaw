@@ -11,6 +11,7 @@ import {
   resolveExpiresAtMsFromEpochSeconds,
 } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
+import { omitNullRequestHeaders } from "../../../packages/llm-core/src/utils/request-headers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
@@ -26,10 +27,7 @@ import { resolveAuthProfileOrder } from "./order.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { preparePersonalAuthProfileUsage } from "./personal-usage.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
-import {
-  logAuthProfileFailureStateChange,
-  logDroppedAuthProfileBookkeeping,
-} from "./state-observation.js";
+import { logDroppedAuthProfileBookkeeping } from "./state-observation.js";
 import {
   loadAuthProfileStoreWithoutExternalProfilesAsync,
   resolvePersistedAuthProfileOwnerAgentDirAsync,
@@ -51,7 +49,6 @@ import {
   reconcileWhamBlock,
   resolveActiveWindowUntil,
   type WhamCooldownProbeResult,
-  type PersonalAuthProfileUsageResult,
 } from "./usage-reduction.js";
 import {
   isActiveUnusableWindow,
@@ -228,7 +225,7 @@ async function probeWhamForCooldown(
 
     const res = await fetch(WHAM_USAGE_URL, {
       method: "GET",
-      headers,
+      headers: omitNullRequestHeaders(headers),
       signal: AbortSignal.timeout(WHAM_TIMEOUT_MS),
     });
 
@@ -560,8 +557,9 @@ export async function markAuthProfileFailure(params: {
   agentDir?: string;
   runId?: string;
   modelId?: string;
+  retryAfterMs?: number;
 }): Promise<void> {
-  const { store, profileId, reason, agentDir, runId, modelId } = params;
+  const { store, profileId, reason, agentDir, modelId } = params;
   const profile = store.profiles[profileId];
   if (
     !profile ||
@@ -585,14 +583,17 @@ export async function markAuthProfileFailure(params: {
     const record = async (
       persist: (
         reduction: import("./usage-reduction.js").PersonalAuthProfileUsageReduction,
-      ) => Promise<PersonalAuthProfileUsageResult | null | undefined>,
+      ) => Promise<ProfileUsageStats | null | undefined>,
     ) => {
+      const observedAt = Date.now();
       const whamResult = shouldProbeWham ? await probeWhamForCooldown(profile, profileId) : null;
       return persist({
         kind: "failure",
         expectedProfile: profile,
+        observedAt,
         reason,
         modelId,
+        retryAfterMs: params.retryAfterMs,
         whamResult,
         probeEligible: shouldProbeWham,
       });
@@ -607,15 +608,7 @@ export async function markAuthProfileFailure(params: {
       }),
     );
   });
-  if (result) {
-    logAuthProfileFailureStateChange({
-      runId,
-      profileId,
-      provider: profile.provider,
-      reason,
-      ...result,
-    });
-  } else if (result === null) {
+  if (result === null) {
     logDroppedAuthProfileBookkeeping("failure", profileId);
   }
 }
@@ -630,13 +623,12 @@ export async function markAuthProfileBlockedUntil(params: {
   runId?: string;
   modelId?: string;
 }): Promise<void> {
-  const { store, profileId, blockedUntil, agentDir, runId, modelId, source } = params;
+  const { store, profileId, blockedUntil, agentDir, modelId, source } = params;
   const profile = store.profiles[profileId];
   if (!profile || !isFutureDateTimestampMs(blockedUntil)) {
     return;
   }
 
-  let result: PersonalAuthProfileUsageResult | undefined;
   const updated = await updateOwnedAuthProfileUsage(store, profileId, {
     agentDir,
     updater: (freshStore) => {
@@ -671,26 +663,14 @@ export async function markAuthProfileBlockedUntil(params: {
         cooldownClassification: undefined,
         cooldownModel: undefined,
         lastFailureAt: now,
-        failureCounts: {
-          ...previousStats?.failureCounts,
-          rate_limit: (previousStats?.failureCounts?.rate_limit ?? 0) + 1,
-        },
+        lastRateLimitAt: now,
       };
       freshStore.usageStats ??= {};
       freshStore.usageStats[profileId] = nextStats;
-      result = { previous: previousStats, next: nextStats, now };
       return true;
     },
   });
-  if (updated && result) {
-    logAuthProfileFailureStateChange({
-      runId,
-      profileId,
-      provider: profile.provider,
-      reason: "rate_limit",
-      ...result,
-    });
-  } else if (updated === null) {
+  if (updated === null) {
     logDroppedAuthProfileBookkeeping("blocked_until", profileId);
   }
 }
@@ -704,7 +684,7 @@ export async function markInlineProviderApiKeyFailure(params: {
   runId?: string;
   modelId?: string;
 }): Promise<void> {
-  const { store, provider, reason, agentDir, runId, modelId } = params;
+  const { store, provider, reason, agentDir, modelId } = params;
   if (reason !== "auth" && reason !== "auth_permanent" && reason !== "billing") {
     return;
   }
@@ -714,15 +694,6 @@ export async function markInlineProviderApiKeyFailure(params: {
   const receipt = await persistInlineAuthFailure(agentDir, { provider, reason, modelId });
   if (receipt) {
     store.usageStats = applyScopedAuthReadThrough(receipt.store).usageStats;
-    logAuthProfileFailureStateChange({
-      runId,
-      profileId: usageId,
-      provider,
-      reason,
-      previous: receipt.previousStats,
-      next: receipt.nextStats,
-      now: receipt.now,
-    });
     return;
   }
   logDroppedAuthProfileBookkeeping("inline_api_key_failure", usageId);

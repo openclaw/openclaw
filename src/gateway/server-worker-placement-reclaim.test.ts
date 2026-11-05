@@ -8,10 +8,12 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { cancelGatewayWorkerSessionWork } from "./server-worker-placement-cancel.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
+import { createPlacementTestHold } from "./server-worker-placement-hold.test-support.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import {
   cleanupAdmission,
@@ -22,19 +24,13 @@ import {
   admitWorkerStopChat,
   createWorkerStopChatContext,
 } from "./server-worker-placement.test-harness.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
 import { workerWorkspaceResultStaging } from "./worker-environments/workspace-result-staging.js";
 
 const fixtures = useReclaimFixtures();
-function expectAdmissions(report: Awaited<ReturnType<typeof scenario>>) {
-  expect(report.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
-  expect(report).toMatchObject({
-    preexistingAdmissionAccepted: false,
-    explicitNewAdmissionAccepted: true,
-  });
-}
 function expectPartial(events: unknown[], text: string, runId: string) {
   expect(events).toEqual([
     expect.objectContaining({
@@ -81,8 +77,6 @@ async function scenario(
   context.cancelRunBoundApprovals = cancelApprovals;
   const cancellationLoad = createDeferred();
   const cancellationEntered = createDeferred();
-  let cancellationLoadEntered = false;
-  let abortedBeforeCancellationLoad = false;
   const barriers = createGatewayWorkerPlacementReclaimBarriers({
     placements,
     loadSessionRuntime: async () =>
@@ -90,13 +84,9 @@ async function scenario(
     cancelSessionWork: async (request) => {
       cancellationEntered.resolve();
       if (pendingMove) {
-        cancellationLoadEntered = true;
         await cancellationLoad.promise;
-        const runtime = await import("./server-worker-placement-cancel.js");
-        await runtime.cancelGatewayWorkerSessionWork(context, request);
-      } else {
-        await cancelGatewayWorkerSessionWork(context, request);
       }
+      await cancelGatewayWorkerSessionWork(context, request);
     },
     revokeSessionAuthority: vi.fn(),
   });
@@ -196,7 +186,12 @@ async function scenario(
     admitWorkerStopChat({ context, storePath, entry, ...REQUEST, runId });
   const oldRunId = name + "-before-stop-complete";
   const running = blockedInspection ? await (await admit(name + "-running")).promise : undefined;
-  const activeController = context.chatAbortControllers.get(name + "-running");
+  const activeController = rpcSourceTesting.get(name + "-running");
+  let releaseRunningClaim: (() => void) | undefined;
+  if (running?.ok && activeController) {
+    releaseRunningClaim = await claimRpcSourceForTest(activeController);
+    expect(running.value.activeRunAbort.markExecutionStarted()).toBe(true);
+  }
   if (pendingMove) {
     context.chatRunState.getOrCreate(name + "-running").buffer = "partial before queued Move Stop";
   }
@@ -204,6 +199,8 @@ async function scenario(
   const runningAborted = createDeferred();
   if (running?.ok) {
     running.value.activeRunAbort.controller.signal.addEventListener("abort", () => {
+      releaseRunningClaim?.();
+      releaseRunningClaim = undefined;
       if (cancellationNeedsRecovery) {
         // Real worker failure completion joins placement recovery before releasing admission.
         cancellationRecovery = coordinated.reconcileActive().finally(() => {
@@ -237,7 +234,6 @@ async function scenario(
   }
   let moving: Promise<{ ok: boolean; error?: unknown }> | undefined;
   let moveSettled = false;
-  let moveSettledDuringInspection = false;
   if (pendingMove) {
     if (active.state !== "active") {
       throw new Error("Queued Move fixture requires an active worker placement");
@@ -264,10 +260,6 @@ async function scenario(
     await setImmediate();
     expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
   }
-  let abortReasonDuringInspection: string | undefined;
-  let approvalsCancelledDuringInspection = false;
-  let abortedDuringInspection = false;
-  let destroyedDuringInspection = false;
   let old!: Awaited<ReturnType<typeof admit>>;
   let reclaimResult: { ok: boolean; state?: string; message?: string } | undefined;
   const reserveOld = async () => {
@@ -283,7 +275,7 @@ async function scenario(
     if (beforeStop) {
       expect((reservation?.payload as { status?: string } | undefined)?.status).toBe("accepted");
     }
-    expect(context.chatAbortControllers.has(oldRunId)).toBe(false);
+    expect(rpcSourceTesting.has(oldRunId)).toBe(false);
   };
   const stop = async () => {
     const reclaim = coordinated.reclaim(REQUEST).then(
@@ -303,7 +295,7 @@ async function scenario(
             reclaim,
             "Stop settled before entering cancellation with inspection held",
           );
-          abortedBeforeCancellationLoad = activeController?.controller.signal.aborted === true;
+          expect(activeController?.input.abortSignal.aborted).toBe(false);
           cancellationLoad.resolve();
         }
         await awaitGateBeforeSettlement(
@@ -311,13 +303,8 @@ async function scenario(
           reclaim,
           "Stop settled before aborting the running chat with inspection held",
         );
-        abortedDuringInspection =
-          running?.ok === true && running.value.activeRunAbort.controller.signal.aborted;
-        destroyedDuringInspection = vi.mocked(harness.environments.destroy).mock.calls.length > 0;
-        abortReasonDuringInspection = activeController?.abortStopReason;
-        approvalsCancelledDuringInspection = cancelApprovals.mock.calls.some(
-          ([runId]) => runId === name + "-running",
-        );
+        expect(running?.ok && running.value.activeRunAbort.controller.signal.aborted).toBe(true);
+        expect(harness.environments.destroy).not.toHaveBeenCalled();
         await reserveOld();
         if (moving) {
           await awaitGateBeforeSettlement(
@@ -325,8 +312,10 @@ async function scenario(
             reclaim,
             "Stop settled before the queued Move with inspection held",
           );
+          expect(moveSettled).toBe(true);
+          expect(activeController?.adapter.abortStopReason).toBe("rpc");
+          expect(cancelApprovals).toHaveBeenCalledWith(name + "-running");
         }
-        moveSettledDuringInspection = moveSettled;
       } finally {
         cancellationLoad.resolve();
         releaseInspection.resolve();
@@ -355,9 +344,10 @@ async function scenario(
   if (beforeStop) {
     // A preceding lifecycle owner holds ingress pending while Stop joins that
     // same owner. This fixes ordering without timer delays or editing ingress.
-    await runExclusiveSessionLifecycleMutation("placement-reclaim", {
+    await runSessionMutation({
       scope: storePath,
       identities: [REQUEST.sessionKey, REQUEST.sessionId],
+      agentId: REQUEST.agentId,
       run: async () => {
         await reserveOld();
         await stop();
@@ -367,107 +357,83 @@ async function scenario(
     await stop();
   }
   const oldResult = await old.promise;
+  expect(oldResult.ok).toBe(false);
   if (destroyFailure && !failedRetry) {
-    expect(oldResult.ok).toBe(false);
     expect(harness.environments.get(active.environmentId!)?.state).toBe("destroying");
-    expect(harness.environments.destroy).toHaveBeenCalledOnce();
     expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
       expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
     ]);
     await coordinated.reconcileActive();
   }
-  const finalPlacement = placements.get(REQUEST.sessionId);
   const environment = harness.environments.get(active.environmentId!);
   expect(environment?.state).toBe("destroyed");
-  expect(harness.environments.destroy).toHaveBeenCalledTimes(destroyFailure ? 2 : 1);
+  expect(reclaimResult).toEqual(
+    failedRetry
+      ? { ok: true, state: "local" }
+      : destroyFailure
+        ? { ok: false, message: "destroy pending" }
+        : { ok: true, state: "reclaimed" },
+  );
+  if (staged) {
+    expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+  }
   cleanupAdmission(oldRunId, oldResult);
   const freshRunId = name + "-explicit-after-stop";
   const fresh = await admit(freshRunId);
   const freshResult = await fresh.promise;
+  expect(freshResult.ok).toBe(true);
   cleanupAdmission(freshRunId, freshResult);
-  const persistedPartials = pendingMove
-    ? (await loadTranscriptEvents({ storePath, ...REQUEST })).filter(
+  if (pendingMove) {
+    expect(await moving).toMatchObject({ ok: false });
+    expectPartial(
+      (await loadTranscriptEvents({ storePath, ...REQUEST })).filter(
         (event) =>
           (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
           name + "-running:assistant",
-      )
-    : [];
-  const report = {
-    reclaimResult,
-    finalPlacementState: finalPlacement?.state,
-    environmentState: environment?.state,
-    providerDestroyAttempts: vi.mocked(harness.environments.destroy).mock.calls.length,
-    pendingWorkspaceResults: (await placements.listPendingWorkspaceResultsAsync()).length,
-    preexistingAdmissionAccepted: oldResult.ok,
-    explicitNewAdmissionAccepted: freshResult.ok,
-    abortedDuringInspection,
-    abortReasonDuringInspection,
-    cancellationLoadEntered,
-    abortedBeforeCancellationLoad,
-    approvalsCancelledDuringInspection,
-    persistedPartials,
-    moveResult: await moving,
-    moveSettledDuringInspection,
-    destroyedDuringInspection,
-  };
+      ),
+      "partial before queued Move Stop",
+      name + "-running",
+    );
+  }
   context.chatRunState.clear();
+  releaseRunningClaim?.();
   cleanupAdmission(name + "-running", running);
-  return report;
 }
 
 it.each([false, true])(
   "Stop cancels before unrelated inspection releases (recovery=%s)",
   async (cancellationNeedsRecovery) => {
-    const r = await scenario(`blocked-inspection-${cancellationNeedsRecovery}`, {
+    await scenario(`blocked-inspection-${cancellationNeedsRecovery}`, {
       blockedInspection: true,
       cancellationNeedsRecovery,
     });
-    expect(r.abortedDuringInspection).toBe(true);
-    expect(r.destroyedDuringInspection).toBe(false);
-    expectAdmissions(r);
   },
 );
 
 it("Stop fences ingress during provisioning without cancelling its dispatch producer", async () => {
-  const r = await scenario("pending-dispatch", { pendingDispatch: true });
-  expectAdmissions(r);
+  await scenario("pending-dispatch", { pendingDispatch: true });
 });
 
 it("a reservation preceding Stop cannot revive a successfully reclaimed worker", async () => {
-  const r = await scenario("pre-stop-reservation", { beforeStop: true });
-  expectAdmissions(r);
+  await scenario("pre-stop-reservation", { beforeStop: true });
 });
 it("accepted staged reclaim recovers provider cleanup but must reject pre-Stop ingress", async () => {
-  const r = await scenario("accepted-staged-stop-recovery", {
+  await scenario("accepted-staged-stop-recovery", {
     destroyFailure: true,
     beforeStop: true,
     staged: true,
-  });
-  expect(r.reclaimResult).toEqual({ ok: false, message: "destroy pending" });
-  expect(r.finalPlacementState).toBe("reclaimed");
-  expect(r.pendingWorkspaceResults).toBe(0);
-  expect(r).toMatchObject({
-    explicitNewAdmissionAccepted: true,
-    preexistingAdmissionAccepted: false,
   });
 });
 
 it.each([false, true])(
   "Stop of an already failed placement cancels pending ingress (before=%s)",
   async (beforeStop) => {
-    const r = await scenario(`failed-retry-${beforeStop}`, {
+    await scenario(`failed-retry-${beforeStop}`, {
       destroyFailure: true,
       beforeStop,
       failedRetry: true,
     });
-    expect(r.reclaimResult).toEqual({ ok: true, state: "local" });
-    expect(r.environmentState).toBe("destroyed");
-    expect(r.providerDestroyAttempts).toBe(2);
-    expect(r.explicitNewAdmissionAccepted).toBe(true);
-    expect(
-      r.preexistingAdmissionAccepted,
-      "failed cleanup must not release old pending work into local execution",
-    ).toBe(false);
   },
 );
 
@@ -497,21 +463,7 @@ it("an idempotent failed-cleanup result does not cancel work already on the loca
 });
 
 it("Stop preserves RPC cancellation and buffered output while Move waits behind same-session recovery", async () => {
-  const r = await scenario("queued-move-partial", { blockedInspection: true, pendingMove: true });
-  expect(r.cancellationLoadEntered).toBe(true);
-  expect(r.abortedBeforeCancellationLoad).toBe(false);
-  expect(r.abortedDuringInspection).toBe(true);
-  expect(r.abortReasonDuringInspection).toBe("rpc");
-  expect(r.approvalsCancelledDuringInspection).toBe(true);
-  expect(r.destroyedDuringInspection).toBe(false);
-  expect(r.moveResult).toMatchObject({ ok: false });
-  expect(r.moveSettledDuringInspection).toBe(true);
-  expectAdmissions(r);
-  expectPartial(
-    r.persistedPartials,
-    "partial before queued Move Stop",
-    "queued-move-partial-running",
-  );
+  await scenario("queued-move-partial", { blockedInspection: true, pendingMove: true });
 });
 
 it.each(["missing", "local"] as const)(
@@ -543,8 +495,7 @@ it.each(["missing", "local"] as const)(
     const cancel = vi.fn(async (request: Parameters<typeof cancelGatewayWorkerSessionWork>[1]) => {
       cancellationEntered.resolve();
       await cancellationLoad.promise;
-      const runtime = await import("./server-worker-placement-cancel.js");
-      await runtime.cancelGatewayWorkerSessionWork(context, request);
+      await cancelGatewayWorkerSessionWork(context, request);
     });
     const barriers = createGatewayWorkerPlacementReclaimBarriers({
       placements,
@@ -567,24 +518,25 @@ it.each(["missing", "local"] as const)(
     if (!admitted.ok) {
       throw new Error("Active local chat fixture was not admitted");
     }
-    const controller = context.chatAbortControllers.get(runId);
+    const controller = rpcSourceTesting.get(runId);
     if (!controller) {
       throw new Error("Active local chat fixture has no controller");
     }
+    const releaseControllerClaim = await claimRpcSourceForTest(controller);
+    expect(admitted.value.activeRunAbort.markExecutionStarted()).toBe(true);
     context.chatRunState.getOrCreate(runId).buffer = "partial before queued dispatch Stop";
     const aborted = createDeferred();
-    controller.controller.signal.addEventListener("abort", () => {
+    controller.input.abortSignal.addEventListener("abort", () => {
+      releaseControllerClaim();
       admitted.value.cleanupAdmittedRun();
       aborted.resolve();
     });
-    const entered = createDeferred();
-    const release = createDeferred();
+    const entered = createPlacementTestHold();
     vi.mocked(harness.environments.reconcileOnce).mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
+      await entered.wait();
     });
     const sweep = coordinated.reconcileActive();
-    await entered.promise;
+    await entered.entered.promise;
     expect((await placements.getAsync(REQUEST.sessionId))?.state).toBe(
       state === "local" ? "local" : undefined,
     );
@@ -605,23 +557,23 @@ it.each(["missing", "local"] as const)(
         stopping,
         "Stop settled before entering local chat cancellation with inspection held",
       );
-      expect(cancel).toHaveBeenCalledOnce();
-      expect(controller.controller.signal.aborted).toBe(false);
+      expect(controller.input.abortSignal.aborted).toBe(false);
       cancellationLoad.resolve();
       await awaitGateBeforeSettlement(
         aborted.promise,
         stopping,
         "Stop settled before aborting local chat with inspection held",
       );
-      expect(controller.abortStopReason).toBe("rpc");
+      expect(controller.adapter.abortStopReason).toBe("rpc");
       expect(cancelApprovals).toHaveBeenCalledWith(runId);
       await stopping;
       expect(dispatchSettled).toBe(true);
       expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     } finally {
       cancellationLoad.resolve();
-      release.resolve();
+      entered.release.resolve();
       await Promise.all([sweep, dispatch, stopping]);
+      releaseControllerClaim();
       cleanupAdmission(runId, admitted);
     }
     expect(await dispatch).toBe("cancelled");

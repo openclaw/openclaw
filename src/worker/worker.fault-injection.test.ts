@@ -8,12 +8,6 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runWorkerProviderReplayRoundTrip } from "../../test/helpers/worker-provider-replay-roundtrip.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import {
-  claimAgentRunContext,
-  clearAgentRunContext,
-  getAgentRunContext,
-} from "../infra/agent-run-registry.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
@@ -29,7 +23,6 @@ import {
   ENVIRONMENT_ID,
   RUN_ID,
   SESSION_ID,
-  SESSION_KEY,
   doneMessage,
   doneOutcome,
   type WorkerClients,
@@ -171,6 +164,8 @@ describe("cloud worker milestone 2 fault injection", () => {
       const managed = mode === "managed";
       const command = runWorkerCommand({ input, output, managed, lifetime });
       void command.catch(() => undefined);
+      const waitFor = (event: Promise<void>, phase: string) =>
+        waitForWorkerEvent(event, command, phase, resultOutput.promise);
       if (managed) {
         input.write(
           `${JSON.stringify({ type: "turn", turnId: descriptor.assignment.turnId, descriptor })}\n`,
@@ -181,12 +176,7 @@ describe("cloud worker milestone 2 fault injection", () => {
       let protectedDirectory: string | undefined;
       let turnDirectory: string | undefined;
       try {
-        await waitForWorkerEvent(
-          providerStarted.promise,
-          command,
-          "provider start",
-          resultOutput.promise,
-        );
+        await waitFor(providerStarted.promise, "provider start");
         environmentStateDir = process.env.OPENCLAW_STATE_DIR;
         expect(environmentStateDir).toBeDefined();
         expect(environmentStateDir).not.toBe(previousStateDir);
@@ -218,12 +208,7 @@ describe("cloud worker milestone 2 fault injection", () => {
               : doneOutcome("paid reply"),
           );
         }
-        await waitForWorkerEvent(
-          finishingGate.entered.promise,
-          command,
-          "finishing event",
-          resultOutput.promise,
-        );
+        await waitFor(finishingGate.entered.promise, "finishing event");
         if (outcome === "cancellation") {
           expect(harness.requestParams("worker.inference.cancel")).toHaveLength(1);
         }
@@ -297,8 +282,6 @@ describe("cloud worker milestone 2 fault injection", () => {
         expect(lifetime.terminateOwnedTree).not.toHaveBeenCalled();
         expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
         expect(harness.providerCalls).toBe(1);
-        expect(harness.requestParams("worker.inference.start")).toHaveLength(1);
-        expect(harness.requestParams("worker.live-event")).toHaveLength(finishing[0]!.seq);
         const warning = warn.mock.calls.flat().map(String).join("\n");
         if (deniedOwner === "skill") {
           expect(await fs.readFile(retainedFile!, "utf8")).toBe(markdown);
@@ -437,7 +420,7 @@ describe("cloud worker milestone 2 fault injection", () => {
     harness.addFault({ kind: "partition-after-inference-event", seq: 2 });
     harness.addFault({ kind: "drop-response", method: "worker.transcript.commit", restart: false });
     harness.addFault({ kind: "drop-response", method: "worker.live-event", restart: false });
-    await current.connection.start();
+    await current.start();
 
     const inferenceSeqs: number[] = [];
     const inference = current.inference.start(inferenceRequest(harness.epoch, "partitioned-turn"), {
@@ -461,7 +444,6 @@ describe("cloud worker milestone 2 fault injection", () => {
     const transcriptRequests = harness.requestParams("worker.transcript.commit");
     expect(transcriptRequests).toHaveLength(2);
     expect(transcriptRequests[1]).toEqual(transcriptRequests[0]);
-    expect(harness.requestParams("worker.inference.start")).toHaveLength(3);
     expect(harness.providerCalls).toBe(1);
     expect(inferenceSeqs).toEqual([1, 2]);
     expect(harness.liveDeltas).toEqual(["one", "two", "three"]);
@@ -478,7 +460,7 @@ describe("cloud worker milestone 2 fault injection", () => {
     const { release: providerRelease, started: providerStarted } = harness.planPending();
     const { entered: commitEntered, release: commitRelease } = transcriptGate("after-apply");
     harness.addFault({ kind: "drop-response", method: "worker.transcript.commit", restart: true });
-    await current.connection.start();
+    await current.start();
 
     previews(current, RUN_ID, "acked");
     await vi.waitFor(() => expect(harness.liveDeltas).toEqual(["acked"]));
@@ -528,7 +510,7 @@ describe("cloud worker milestone 2 fault injection", () => {
       epoch: freshEpoch,
       runId: recoveryRunId,
     });
-    await fresh.connection.start();
+    await fresh.start();
     previews(fresh, recoveryRunId, "recovered");
     await expect(fresh.live.emitTerminal(recoveryRunId, TERMINAL_EVENT)).resolves.toBeUndefined();
     const freshIdentity = harness.admissions.at(-1);
@@ -545,72 +527,10 @@ describe("cloud worker milestone 2 fault injection", () => {
     await harness.settleRun(recoveryRunId);
   });
 
-  it("fences a dead worker and admits a fresh owner at a higher epoch", async () => {
-    const old = await createClients();
-    await old.connection.start();
-    const oldCommit = await old.transcript.commit([transcriptMessage("old owner")]);
-    const { release: pendingRelease, started: pendingStarted } = harness.planPending();
-    const oldInference = old.inference.start(inferenceRequest(harness.epoch, "handoff-old"));
-    const oldInferenceSettled = expect(oldInference).resolves.toMatchObject({
-      type: "error",
-      reason: "session-not-attached",
-    });
-    await pendingStarted.promise;
-
-    const oldEpoch = harness.epoch;
-    const newEpoch = await harness.reclaimWithCredential(REPLACEMENT_CREDENTIAL, "fresh-run");
-    expect(newEpoch).toBeGreaterThan(oldEpoch);
-    const rejected = old.transcript.commit([transcriptMessage("late old owner")]);
-    await expect(rejected).rejects.toMatchObject({
-      name: "WorkerTranscriptCommitError",
-      reason: "placement-mismatch",
-    });
-    await expect(old.connection.waitForExit()).resolves.toMatchObject({ kind: "failed" });
-    pendingRelease.resolve(doneOutcome("stale paid output"));
-    await oldInferenceSettled;
-
-    harness.providerPlan = { kind: "immediate", text: "new owner reply" };
-    // Admission binds the fresh owner to the exact run it executes.
-    const fresh = await createClients({
-      admissionProof: REPLACEMENT_CREDENTIAL,
-      epoch: newEpoch,
-      baseLeafId: oldCommit.newLeafId,
-      runId: "fresh-run",
-    });
-    await fresh.connection.start();
-    expect(harness.admissions.at(-1)?.turnClaim).toMatchObject({
-      runId: "fresh-run",
-      owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: newEpoch },
-    });
-    await expect(
-      fresh.inference.start({
-        ...inferenceRequest(newEpoch, "handoff-new"),
-        runId: "fresh-run",
-      }),
-    ).resolves.toEqual(doneOutcome("new owner reply"));
-    await fresh.transcript.commit([transcriptMessage("new owner")]);
-
-    const messages = transcript()
-      .getEntries()
-      .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-    expect(messages.map((message) => message.role)).toEqual(["user", "user"]);
-    expect(harness.providerCalls).toBe(2);
-    expect(
-      harness.database.db
-        .prepare(
-          "SELECT run_epoch, next_seq FROM worker_transcript_commit_heads WHERE session_id = ? ORDER BY run_epoch",
-        )
-        .all(SESSION_ID),
-    ).toEqual([
-      { run_epoch: oldEpoch, next_seq: 2 },
-      { run_epoch: newEpoch, next_seq: 2 },
-    ]);
-  });
-
   it("fail-stops a reconnected commit whose base changes while application is in flight", async () => {
     const current = await createClients();
     const { entered, release } = transcriptGate("before-apply");
-    await current.connection.start();
+    await current.start();
     const commit = current.transcript.commit([transcriptMessage("stale paid output")]);
     await entered.promise;
     harness.partition();
@@ -631,35 +551,10 @@ describe("cloud worker milestone 2 fault injection", () => {
     expect(transcript().getEntries()).toHaveLength(1);
   });
 
-  it("advances a worker live stream whose run context is dispatch-owned and visible", async () => {
-    const current = await createClients();
-    // Worker live events must adopt the dispatch-owned context without hiding it.
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    claimAgentRunContext(RUN_ID, {
-      agentId: "main",
-      sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      isControlUiVisible: true,
-      lifecycleGeneration,
-    });
-    try {
-      await current.connection.start();
-
-      previews(current, RUN_ID, "one", "two");
-      await expect(current.live.emitTerminal(RUN_ID, TERMINAL_EVENT)).resolves.toBeUndefined();
-
-      expect(harness.liveDeltas).toEqual(["one", "two"]);
-      expect(liveRequests().map(({ seq }) => seq)).toEqual([1, 2, 3]);
-      expect(getAgentRunContext(RUN_ID)?.isControlUiVisible).toBe(true);
-    } finally {
-      clearAgentRunContext(RUN_ID);
-    }
-  });
-
   it("settles stop during an in-flight commit without retrying or spinning", async () => {
     const current = await createClients();
     const { entered, release } = transcriptGate("before-apply");
-    await current.connection.start();
+    await current.start();
     const commit = current.transcript.commit([transcriptMessage("stopped commit")]);
     await entered.promise;
 

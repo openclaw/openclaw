@@ -243,7 +243,6 @@ export async function resolveMatrixStoragePaths(params: {
   return {
     rootDir,
     storagePath: path.join(rootDir, "bot-storage.json"),
-    cryptoPath: path.join(rootDir, "crypto"),
     recoveryKeyPath: path.join(rootDir, MATRIX_RECOVERY_KEY_FILENAME),
     idbSnapshotPath: path.join(rootDir, MATRIX_IDB_SNAPSHOT_FILENAME),
     accountKey: canonical.accountKey,
@@ -281,12 +280,22 @@ export async function maybeMigrateLegacyStorage({
     return;
   }
   const syncCache = await import("./sync-cache-state.js");
-  const persisted = await syncCache.readLegacyMatrixSyncCacheState(rootDir);
+  const { Utf8InputError } = await import("openclaw/plugin-sdk/runtime-doctor-migrations");
+  const logger = getMatrixRuntime().logging.getChildLogger({ module: "matrix-storage" });
+  let persisted;
+  try {
+    persisted = await syncCache.readLegacyMatrixSyncCacheState(rootDir);
+  } catch (error) {
+    if (!(error instanceof Utf8InputError)) {
+      throw error;
+    }
+    logger.warn?.(`${error.message} Legacy Matrix sync cache left in place: ${storagePath}`);
+    return;
+  }
   if (!persisted) {
     return;
   }
 
-  const logger = getMatrixRuntime().logging.getChildLogger({ module: "matrix-storage" });
   let migrated = false;
   try {
     const store = getMatrixRuntime().state.openKeyedStoreV2<
@@ -380,7 +389,6 @@ export async function writeStorageMeta(params: {
   userId: string;
   accountId?: string | null;
   deviceId?: string | null;
-  currentTokenStateClaimed?: boolean;
 }): Promise<boolean> {
   return mutateStorageMeta(params.storagePaths.rootDir, {
     kind: "initialize",
@@ -390,7 +398,6 @@ export async function writeStorageMeta(params: {
       accountId: params.accountId ?? DEFAULT_ACCOUNT_KEY,
       accessTokenHash: params.storagePaths.tokenHash,
       deviceId: params.deviceId ?? null,
-      currentTokenStateClaimed: params.currentTokenStateClaimed,
     },
   });
 }
@@ -418,16 +425,14 @@ export async function repairCurrentTokenStorageMetaDeviceId(params: {
   accountId?: string | null;
   deviceId: string;
   env?: NodeJS.ProcessEnv;
-  stateDir?: string;
 }): Promise<boolean> {
-  const { homeserver, userId, accessToken, accountId, deviceId, env, stateDir } = params;
+  const { homeserver, userId, accessToken, accountId, deviceId, env } = params;
   const storagePaths = await resolveMatrixStoragePaths({
     homeserver,
     userId,
     accessToken,
     accountId,
     env,
-    stateDir,
   });
   return writeStorageMeta({
     storagePaths,

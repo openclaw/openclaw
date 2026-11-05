@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
   PluginStateCompareIntent,
@@ -17,7 +18,6 @@ import {
 import type { ShortTermLockEntry } from "./short-term-promotion-types.js";
 
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
-const inProcessMemoryWorkspaceLocks = new KeyedAsyncQueue();
 
 type MemoryWorkspaceLease = { key: string; active: boolean };
 type MemoryWorkspaceLockScope = {
@@ -26,7 +26,12 @@ type MemoryWorkspaceLockScope = {
   childTail: Promise<void>;
   parent: MemoryWorkspaceLockScope | undefined;
 };
-const memoryWorkspaceLockScopes = new AsyncLocalStorage<MemoryWorkspaceLockScope>();
+// Installed replacement modules must share both exclusion and reentrant scope identity.
+const { queue: inProcessMemoryWorkspaceLocks, scopes: memoryWorkspaceLockScopes } =
+  resolveGlobalSingleton(Symbol.for("openclaw.memoryCore.workspaceLocks"), () => ({
+    queue: new KeyedAsyncQueue(),
+    scopes: new AsyncLocalStorage<MemoryWorkspaceLockScope>(),
+  }));
 
 function findActiveWorkspaceLockScope(key: string): MemoryWorkspaceLockScope | undefined {
   let scope = memoryWorkspaceLockScopes.getStore();

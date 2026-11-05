@@ -4,7 +4,6 @@ export const CRON_STORE_PATH_COMPAT_RECORD = {
   code: "cron-store-sync-path",
   status: "deprecated",
   owner: "sdk",
-  introduced: "2026-10-11",
   deprecated: "2026-10-11",
   warningStarts: "2026-10-11",
   removeAfter: "2026-12-31",
@@ -13,7 +12,4 @@ export const CRON_STORE_PATH_COMPAT_RECORD = {
   docsPath: "/plugins/sdk-migration/compatibility-policy#cron-store-path-resolution",
   surfaces: ["openclaw/plugin-sdk/cron-store-runtime resolveCronStorePath"],
   diagnostics: ["Bounded DEP_PLUGIN_SDK warning for synchronous cron path resolution"],
-  tests: ["src/plugin-sdk/cron-store-compat.test.ts", "src/cron/store/config-state.test.ts"],
-  releaseNote:
-    "Runtime cron path selection uses the shared-state worker. Plugins can await resolveCronStorePathAsync; synchronous path resolution remains supported with a deprecation warning. Stored cron data and update behavior are unchanged.",
 } as const satisfies PluginCompatRecord;

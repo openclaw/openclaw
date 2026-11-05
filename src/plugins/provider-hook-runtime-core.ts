@@ -8,6 +8,7 @@ import {
   resolveModelCatalogScope,
   resolveProviderConfigApiOwnerHint,
 } from "./provider-config-owner.js";
+import { projectRegisteredProvider } from "./provider-registration-projection.js";
 import { findProviderRuntimeRegistrationInRegistry } from "./provider-registry-selection.js";
 import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import type { createProviderRegistryResolver } from "./providers.runtime-core.js";
@@ -72,7 +73,6 @@ export function createProviderHookRuntime(
     return { ...preparedModel, [MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]: runtimeHandle };
   }
 
-  /** Reads the provider plugin handle attached to a prepared attempt model. */
   function getModelProviderRuntimePluginHandle(
     model: object | undefined,
   ): ProviderRuntimePluginHandle | undefined {
@@ -138,14 +138,11 @@ export function createProviderHookRuntime(
         isOwnerEligible: (id) => selection.isProviderOwnerEligible(id, provider),
       });
     return registration
-      ? Object.assign({}, registration.provider, { pluginId: registration.pluginId })
+      ? projectRegisteredProvider(registration.provider, registration.pluginId)
       : undefined;
   }
 
-  function resolveProviderRuntimePluginLookup(
-    params: ProviderRuntimePluginLookupParams,
-    registryScope?: "loaded",
-  ): ProviderRuntimePluginHandle {
+  function prepareProviderRuntimePluginLookup(params: ProviderRuntimePluginLookupParams) {
     const apiOwnerHint = resolveProviderConfigApiOwnerHint(params);
     const ownerRefs = [
       ...new Set(
@@ -153,20 +150,29 @@ export function createProviderHookRuntime(
       ),
     ];
     const modelId = resolveProviderRuntimeLookupModelId(params);
-    const selection = resolvePluginProviderRegistryCore({
-      ...params,
-      providerRefs: [params.provider, ...ownerRefs],
-      modelRefs: modelId
-        ? resolveModelCatalogScope({
-            cfg: params.config,
-            provider: params.provider,
-            model: modelId,
-          }).modelRefs
-        : undefined,
-      registryScope,
-      activate: false,
-      skipIfLoadInFlight: true,
-    });
+    return {
+      ownerRefs,
+      options: {
+        ...params,
+        providerRefs: [params.provider, ...ownerRefs],
+        modelRefs: modelId
+          ? resolveModelCatalogScope({
+              cfg: params.config,
+              provider: params.provider,
+              model: modelId,
+            })
+          : undefined,
+        activate: false,
+        skipIfLoadInFlight: true,
+      },
+    };
+  }
+
+  function captureProviderRuntimePluginHandle(
+    params: ProviderRuntimePluginLookupParams,
+    selection: ReturnType<typeof resolvePluginProviderRegistryCore>,
+    ownerRefs: readonly string[],
+  ): ProviderRuntimePluginHandle {
     const plugin = resolveSelectedProvider(selection, params.provider, ownerRefs);
     if (plugin && (plugin.authScope ?? "agent") !== resolveProviderAuthScope(params)) {
       throw pluginProviderAuthUnavailable(
@@ -179,6 +185,28 @@ export function createProviderHookRuntime(
       ...(selection ? { workspaceDir: selection.workspaceDir } : {}),
       plugin,
     };
+  }
+
+  function resolveProviderRuntimePluginLookup(
+    params: ProviderRuntimePluginLookupParams,
+    registryScope?: "loaded",
+  ): ProviderRuntimePluginHandle {
+    const { options, ownerRefs } = prepareProviderRuntimePluginLookup(params);
+    const selection = resolvePluginProviderRegistryCore({ ...options, registryScope });
+    return captureProviderRuntimePluginHandle(params, selection, ownerRefs);
+  }
+
+  /** Doctor callbacks own a fresh provider inspection until their asynchronous work settles. */
+  async function withProviderRuntimePlugin<T>(
+    params: ProviderRuntimePluginLookupParams,
+    run: (plugin: ProviderPlugin | undefined) => Promise<T>,
+  ): Promise<T> {
+    const { options, ownerRefs } = prepareProviderRuntimePluginLookup(params);
+    return providers.withPluginProviderRegistry(
+      { ...options, mode: "runtime" },
+      async (selection) =>
+        run(captureProviderRuntimePluginHandle(params, selection, ownerRefs).plugin),
+    );
   }
 
   function resolveProviderRuntimePlugin(
@@ -273,6 +301,7 @@ export function createProviderHookRuntime(
     resolveLoadedProviderPluginsForHooks,
     resolveProviderPluginsForHooks,
     resolveProviderRuntimePlugin,
+    withProviderRuntimePlugin,
     resolveLoadedProviderRuntimePlugin,
     resolveProviderHookPlugin,
     resolveProviderRuntimePluginHandle: resolveProviderRuntimePluginLookup,

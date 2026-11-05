@@ -45,7 +45,6 @@ const DEFAULT_MAX_TOKENS = 4096;
  *          https://platform.claude.com/docs/en/about-claude/models
  */
 const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
-  // Anthropic Claude
   "anthropic.claude-3-7-sonnet-20250219-v1:0": 200_000,
   "anthropic.claude-opus-4-7": 1_000_000,
   "anthropic.claude-opus-4-6-v1": 1_000_000,
@@ -57,20 +56,16 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "anthropic.claude-haiku-4-5-20251001-v1:0": 200_000,
   "anthropic.claude-3-5-haiku-20241022-v1:0": 200_000,
   "anthropic.claude-3-haiku-20240307-v1:0": 200_000,
-  // Amazon Nova
   "amazon.nova-premier-v1:0": 1_000_000,
   "amazon.nova-pro-v1:0": 300_000,
   "amazon.nova-lite-v1:0": 300_000,
   "amazon.nova-micro-v1:0": 128_000,
   "amazon.nova-2-lite-v1:0": 300_000,
-  // MiniMax
   "minimax.minimax-m2.5": 1_000_000,
   "minimax.minimax-m2.1": 1_000_000,
   "minimax.minimax-m2": 1_000_000,
-  // Meta Llama 4
   "meta.llama4-maverick-17b-instruct-v1:0": 1_000_000,
   "meta.llama4-scout-17b-instruct-v1:0": 512_000,
-  // Meta Llama 3
   "meta.llama3-3-70b-instruct-v1:0": 128_000,
   "meta.llama3-2-90b-instruct-v1:0": 128_000,
   "meta.llama3-2-11b-instruct-v1:0": 128_000,
@@ -79,43 +74,33 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "meta.llama3-1-405b-instruct-v1:0": 128_000,
   "meta.llama3-1-70b-instruct-v1:0": 128_000,
   "meta.llama3-1-8b-instruct-v1:0": 128_000,
-  // NVIDIA Nemotron
   "nvidia.nemotron-super-3-120b": 256_000,
   "nvidia.nemotron-nano-3-30b": 128_000,
   "nvidia.nemotron-nano-12b-v2": 128_000,
   "nvidia.nemotron-nano-9b-v2": 128_000,
-  // Mistral
   "mistral.mistral-large-3-675b-instruct": 128_000,
   "mistral.mistral-large-2407-v1:0": 128_000,
   "mistral.mistral-small-2402-v1:0": 32_000,
-  // DeepSeek
   "deepseek.r1-v1:0": 128_000,
   "deepseek.v3.2": 128_000,
-  // Cohere
   "cohere.command-r-plus-v1:0": 128_000,
   "cohere.command-r-v1:0": 128_000,
-  // AI21
   "ai21.jamba-1-5-large-v1:0": 256_000,
   "ai21.jamba-1-5-mini-v1:0": 256_000,
-  // Google Gemma
   "google.gemma-3-27b-it": 128_000,
   "google.gemma-3-12b-it": 128_000,
   "google.gemma-3-4b-it": 128_000,
-  // GLM
   "zai.glm-5": 128_000,
   "zai.glm-4.7": 128_000,
   "zai.glm-4.7-flash": 128_000,
-  // Qwen
   "qwen.qwen3-coder-next": 256_000,
   "qwen.qwen3-coder-30b-a3b-v1:0": 256_000,
   "qwen.qwen3-32b-v1:0": 128_000,
   "qwen.qwen3-vl-235b-a22b": 128_000,
+  // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-6.html
+  "xai.grok-4.6": 500_000,
 };
 
-/**
- * Resolve the real context window for a Bedrock model ID.
- * Strips inference profile prefixes (us., eu., ap., global.) before lookup.
- */
 function resolveKnownContextWindow(modelId: string): number | undefined {
   const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
   const candidates = [modelId, stripped];
@@ -166,7 +151,16 @@ type BedrockDiscoveryCacheEntry = {
 const discoveryCache = new Map<string, BedrockDiscoveryCacheEntry>();
 
 /**
- * Fetch raw inference profile summaries from the Bedrock control plane.
+ * Bare foundation-model IDs only work through Converse when Bedrock reports
+ * ON_DEMAND. Profile-only and provisioned-only IDs fail at request time, so
+ * discovery lists their inference profiles instead. Missing metadata stays
+ * selectable because unknown does not mean non-invocable.
+ */
+function supportsOnDemandInference(inferenceTypes: readonly string[] | undefined): boolean {
+  return !inferenceTypes?.length || inferenceTypes.includes("ON_DEMAND");
+}
+
+/**
  * All pages must succeed before discovery can cache a complete catalog.
  */
 async function fetchInferenceProfileSummaries(
@@ -293,10 +287,15 @@ export async function discoverBedrockModels(params: {
           maxTokens: isClaude5BedrockModel({ id }) ? 128_000 : defaultMaxTokens,
           ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
         };
-        discovered.push(def);
         const normalizedId = normalizeLowercaseStringOrEmpty(def.id);
-        seenIds.add(normalizedId);
+        // Profiles inherit capabilities from every backing model, including
+        // ones that only Bedrock profiles or provisioned throughput can invoke.
         foundationModels.set(normalizedId, def);
+        if (!supportsOnDemandInference(summary.inferenceTypesSupported)) {
+          continue;
+        }
+        discovered.push(def);
+        seenIds.add(normalizedId);
       }
 
       for (const profile of profileSummaries) {

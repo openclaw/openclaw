@@ -20,7 +20,7 @@ export function resolveLineGroupConfigEntry<T extends object>(
   // `*` is the defaults node, not a rival entry: a room's own entry overrides it
   // field by field. Returning the matched entry alone would drop every setting the
   // operator only wrote on `*`, and would disagree with the scope-tree resolution
-  // this channel already reports through `resolveLineGroupRequireMention`.
+  // the channel already reports through its `groups.resolveRequireMention` callback.
   const defaults = groups["*"];
   for (const candidate of [
     ...resolveLineGroupLookupIds(params.groupId),

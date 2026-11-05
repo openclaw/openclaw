@@ -45,12 +45,24 @@
           - "extensions/typesafe/**"
           - "docs/plugins/typesafe.md"
           - "docs/plugins/reference/typesafe.md"
+"plugin: subq":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/subq/**"
+          - "docs/plugins/subq.md"
+          - "docs/plugins/reference/subq.md"
 "plugin: onnx":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/onnx/**"
           - "docs/plugins/onnx.md"
           - "docs/plugins/reference/onnx.md"
+"plugin: levanto":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/levanto/**"
+          - "docs/providers/levanto.md"
+          - "docs/plugins/reference/levanto.md"
 "channel: a2a":
   - changed-files:
       - any-glob-to-any-file:
@@ -89,6 +101,19 @@
           - "extensions/logbook/**"
           - "docs/plugins/logbook.md"
           - "docs/plugins/reference/logbook.md"
+"plugin: knowledge":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/knowledge/**"
+          - "docs/plugins/knowledge.md"
+          - "docs/plugins/knowledge/**"
+          - "docs/plugins/reference/knowledge.md"
+"plugin: skill-workshop":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/skill-workshop/**"
+          - "docs/plugins/reference/skill-workshop.md"
+          - "docs/tools/skill-workshop.md"
 "plugin: imap":
   - changed-files:
       - any-glob-to-any-file:
@@ -543,6 +568,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/acpx/**"
+"extensions: abliteration":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/abliteration/**"
+          - "docs/providers/abliteration.md"
 "extensions: arcee":
   - changed-files:
       - any-glob-to-any-file:
@@ -669,6 +699,16 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: liquid-ai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/liquid-ai/**"
+          - "docs/providers/liquid-ai.md"
+"extensions: bifrost":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/bifrost/**"
+          - "docs/providers/bifrost.md"
 "extensions: agentsapi":
   - changed-files:
       - any-glob-to-any-file:
@@ -748,6 +788,12 @@
           - "extensions/radius/**"
           - "docs/providers/radius.md"
           - "docs/plugins/reference/radius.md"
+"extensions: requesty":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/requesty/**"
+          - "docs/providers/requesty.md"
+          - "docs/plugins/reference/requesty.md"
 "extensions: runway":
   - changed-files:
       - any-glob-to-any-file:
@@ -948,6 +994,12 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/parallel/**"
+"extensions: particle":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/particle/**"
+          - "docs/providers/particle.md"
+          - "docs/plugins/reference/particle.md"
 "extensions: perplexity":
   - changed-files:
       - any-glob-to-any-file:

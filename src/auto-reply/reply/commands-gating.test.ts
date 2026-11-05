@@ -42,7 +42,7 @@ vi.mock("../../agents/bash-tools.js", () => ({
 }));
 
 // mock-isolation: Exercise command authorization without sandbox backends or session storage.
-vi.mock("../../agents/sandbox.js", () => ({
+vi.mock("../../agents/sandbox/runtime-status.js", () => ({
   resolveSandboxRuntimeStatusAsync: vi.fn(async () => ({ sandboxed: false })),
 }));
 
@@ -135,7 +135,8 @@ vi.mock("../../config/runtime-schema.js", async () => {
   };
 });
 
-vi.mock("../../utils/message-channel.js", () => ({
+vi.mock("../../utils/message-channel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/message-channel.js")>()),
   isInternalMessageChannel: isInternalMessageChannelMock,
 }));
 

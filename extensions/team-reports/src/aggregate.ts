@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { GITHUB_ITEM_KINDS } from "./github-item-kinds.js";
 import { MAX_REPORT_BYTES } from "./limits.js";
 import { periodDayKeys } from "./periods.js";
 import { isBotLogin, primaryLogin } from "./roster.js";
@@ -8,7 +9,6 @@ import type {
   DiscordSourceConfig,
   GithubCounts,
   GithubItem,
-  GithubItemKind,
   OtherActor,
   PeriodDescriptor,
   Person,
@@ -20,27 +20,8 @@ import type {
 
 const COUNT_FIELDS = [
   "total",
-  "commits",
-  "prsOpened",
-  "prsMerged",
-  "prsClosed",
-  "issuesOpened",
-  "issuesClosed",
-  "issueComments",
-  "reviewComments",
-  "securityAdvisories",
+  ...Object.values(GITHUB_ITEM_KINDS).map(({ field }) => field),
 ] as const;
-const KIND_COUNTS: Record<GithubItemKind, Exclude<(typeof COUNT_FIELDS)[number], "total">> = {
-  commit: "commits",
-  pr_opened: "prsOpened",
-  pr_merged: "prsMerged",
-  pr_closed: "prsClosed",
-  issue_opened: "issuesOpened",
-  issue_closed: "issuesClosed",
-  issue_comment: "issueComments",
-  review_comment: "reviewComments",
-  security_advisory: "securityAdvisories",
-};
 
 function emptyGithub(): GithubCounts {
   return {
@@ -83,7 +64,7 @@ function sumGithub(target: GithubCounts, source: GithubCounts): void {
 
 function countItem(counts: GithubCounts, item: GithubItem): void {
   counts.total++;
-  counts[KIND_COUNTS[item.kind]]++;
+  counts[GITHUB_ITEM_KINDS[item.kind].field]++;
   increment(counts.repos, item.repo);
 }
 
@@ -503,7 +484,7 @@ export function boundReportDocument(input: ReportDocument): ReportDocument {
       size -= Buffer.byteLength(JSON.stringify(removed)) + (entry.list.length ? 1 : 0);
     }
   }
-  if (Buffer.byteLength(JSON.stringify(report)) > MAX_REPORT_BYTES) {
+  if (size > MAX_REPORT_BYTES) {
     throw new Error(
       "Team report metadata exceeds the 2 MiB limit after removing all item evidence; reduce the configured roster or organization scope",
     );

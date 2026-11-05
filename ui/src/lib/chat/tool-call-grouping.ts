@@ -1,13 +1,11 @@
-/**
- * Aggregate summaries for a run of consecutive tool calls, e.g.
- * "Ran 13 commands, read 6 files, edited 9 files, created a file".
- */
-
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { summarizeAgentActivity } from "../../../../src/agents/agent-activity-presentation.js";
 import { t } from "../../i18n/index.ts";
+import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
 import { isAgentActivityItem } from "../protocol-validators.generated/activity.js";
+
+registerChatToolLabelsEnglish();
 
 export function readPreparedActivity(message: unknown): AgentActivityItem[] {
   const activity = asOptionalRecord(message)?.activity;
@@ -50,19 +48,20 @@ export function describeToolGroup(
   return { total: summary.total, label, outcomes };
 }
 
+/**
+ * Failed and skipped steps stay on their own rows: agents recover from routine
+ * failures, and a run that ends in one reports it through its own error message.
+ */
 export function summarizeToolGroup(
   items: readonly AgentActivityItem[],
-  options: ToolGroupOptions & { includeInlineOutcomes?: boolean } = {},
+  options: ToolGroupOptions = {},
 ): string {
   const summary = describeToolGroup(items, options);
   return (
     [
       summary.label,
       ...summary.outcomes
-        .filter(
-          ({ kind }) =>
-            options.includeInlineOutcomes !== false || (kind !== "failed" && kind !== "skipped"),
-        )
+        .filter(({ kind }) => kind !== "failed" && kind !== "skipped")
         .map(({ label }) => label),
     ]
       .filter(Boolean)

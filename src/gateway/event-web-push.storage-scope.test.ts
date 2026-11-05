@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { PairedDevice } from "../infra/device-pairing.types.js";
 import { normalizeWebPushDevicePreferences } from "../infra/push-web-preferences.js";
@@ -18,6 +18,7 @@ import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-con
 import type { prepareWebPushNotificationSender } from "../infra/push-web.js";
 import { SQLITE_WORKER_MAX_REQUESTS_PER_WORKER } from "../infra/sqlite-worker-broker.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   closeOpenClawStateDatabaseByPathAsync,
@@ -108,6 +109,7 @@ vi.mock("./session-sharing-preparation.js", () => ({
 }));
 
 beforeEach(() => vi.clearAllMocks());
+afterEach(() => expect(mocks.nativeDatabaseOpen).not.toHaveBeenCalled());
 
 function mockCapturedContext() {
   const stateDir = "/synthetic/webpush-storage-scope";
@@ -201,7 +203,6 @@ it("orders binding and pairing reads before rebinding without retaining provider
   const selected = createDeferred();
   const releaseReply = createDeferred();
   const providerResult = createDeferred<Awaited<ReturnType<PreparedSender>>>();
-  const mutationSettled = vi.fn();
   const providerSettled = vi.fn();
   const order: string[] = [];
   const store = mockStore(
@@ -226,35 +227,26 @@ it("orders binding and pairing reads before rebinding without retaining provider
   // Publish the initial binding before exposing the held worker reply.
   await upsertBinding(stateDir, "profile-a", 1);
   order.length = 0;
-  const warn = vi.fn();
-  const delivery = createEventWebPushDelivery({
-    getRuntimeConfig: () => ({}),
-    stateDir,
-    log: { warn },
-  });
+  const warnings = createWarnLogCapture("web-push-storage-scope");
+  onTestFinished(() => warnings.cleanup());
+  const delivery = createEventWebPushDelivery(() => ({}));
   delivery.handleEvent("chat", { state: "final", runId: "scope-run" });
   await selected.promise;
-  const mutation = upsertBinding(stateDir, "profile-b", 2).then(mutationSettled);
+  const mutation = upsertBinding(stateDir, "profile-b", 2);
   try {
     await nextTurn();
-    expect(mutationSettled).not.toHaveBeenCalled();
-    expect(store.current()?.userProfileId).toBe("profile-a");
-    expect(mocks.preparedSend).not.toHaveBeenCalled();
+    expect(order).toEqual([]);
 
     releaseReply.resolve();
     await pairingSelected.promise;
     await nextTurn();
-    expect(mutationSettled).not.toHaveBeenCalled();
-    expect(mocks.preparedSend).not.toHaveBeenCalled();
+    expect(order).toEqual([]);
     pairingReply.resolve(pairedDevices);
     await nextTurn();
-    expect(mocks.preparedSend).toHaveBeenCalledOnce();
     expect(mocks.preparedSend.mock.calls[0]?.[0].subscriptions).toMatchObject([
       { userProfileId: "profile-a" },
     ]);
-    expect(mutationSettled).toHaveBeenCalledOnce();
     expect(providerSettled).not.toHaveBeenCalled();
-    expect(store.current()?.userProfileId).toBe("profile-b");
     expect(order).toEqual(["send:profile-a", "mutation:profile-b"]);
   } finally {
     releaseReply.resolve();
@@ -263,8 +255,7 @@ it("orders binding and pairing reads before rebinding without retaining provider
     await mutation;
     await nextTurn();
   }
-  expect(mocks.nativeDatabaseOpen).not.toHaveBeenCalled();
-  expect(warn).not.toHaveBeenCalled();
+  expect(await warnings.findText("event Web Push")).toBeUndefined();
 });
 
 function prepareQueuedRead(readError?: Error) {
@@ -374,7 +365,6 @@ it.each([
       subscriptionId: "scope-subscription",
     });
     expect(mocks.workerUpsert).toHaveBeenCalledTimes(count + 2);
-    expect(mocks.nativeDatabaseOpen).not.toHaveBeenCalled();
   },
 );
 
@@ -403,7 +393,6 @@ it.each(["read rejection", "preparation exception"] as const)(
       releaseReply.resolve();
       await Promise.allSettled([read, mutation]);
     }
-    expect(mocks.nativeDatabaseOpen).not.toHaveBeenCalled();
   },
 );
 
@@ -449,5 +438,4 @@ it("canonical close seals retained and new admissions and joins the held binding
     releaseReply.resolve();
     await Promise.allSettled([read, queuedMutation, postSealMutation, closing]);
   }
-  expect(mocks.nativeDatabaseOpen).not.toHaveBeenCalled();
 });

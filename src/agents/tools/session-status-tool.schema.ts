@@ -2,7 +2,7 @@ import { Type, type Static } from "typebox";
 import { requesterProfileSchema } from "../schema/typebox.js";
 
 export const SessionStatusToolSchema = Type.Object({
-  user: requesterProfileSchema(),
+  user: requesterProfileSchema({ defaultToTurnOwner: true }),
   sessionKey: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
   changesSince: Type.Optional(Type.Integer({ minimum: 0 })),

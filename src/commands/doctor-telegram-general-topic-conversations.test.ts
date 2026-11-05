@@ -47,6 +47,34 @@ describe("doctor Telegram General-topic conversation repair", () => {
     normalizeSessionDeliveryState({
       context: { channel: "telegram", accountId: "default", to, threadId: "1" },
     });
+  function session(group: string, sessionId: string) {
+    const scope = {
+      agentId: "main",
+      env,
+      sessionKey: `agent:main:telegram:group:${group}:topic:1`,
+      storePath,
+    };
+    return {
+      scope,
+      write: (to: string, updatedAt = 100) =>
+        upsertSessionEntryCore(scope, {
+          sessionId,
+          updatedAt,
+          chatType: "group",
+          delivery: delivery(to),
+        }),
+      expectCanonical: async (extra: { conversationRef?: string } = {}) =>
+        expect(await listConversations(scope, { channel: "telegram" })).toEqual([
+          expect.objectContaining({
+            target: `telegram:${group}`,
+            threadId: "1",
+            role: "primary",
+            sessionId,
+            ...extra,
+          }),
+        ]),
+    };
+  }
 
   beforeEach(() => {
     const root = tempDirs.make("openclaw-doctor-telegram-topic-");
@@ -60,20 +88,9 @@ describe("doctor Telegram General-topic conversation repair", () => {
   });
 
   it("merges an upgraded General-topic related binding exactly once", async () => {
-    const sessionKey = "agent:main:telegram:group:-1001234567890:topic:1";
-    const scope = { agentId: "main", env, sessionKey, storePath };
-    await upsertSessionEntryCore(scope, {
-      sessionId: "topic-1-session",
-      updatedAt: 100,
-      chatType: "group",
-      delivery: delivery("telegram:-1001234567890:topic:1"),
-    });
-    await upsertSessionEntryCore(scope, {
-      sessionId: "topic-1-session",
-      updatedAt: 200,
-      chatType: "group",
-      delivery: delivery("telegram:-1001234567890"),
-    });
+    const { scope, write, expectCanonical } = session("-1001234567890", "topic-1-session");
+    await write("telegram:-1001234567890:topic:1");
+    await write("telegram:-1001234567890", 200);
 
     const before = await listConversations(scope, { channel: "telegram" });
     expect(
@@ -95,26 +112,18 @@ describe("doctor Telegram General-topic conversation repair", () => {
       (operation_id, operation_kind, conversation_id, source_session_key, message_hash,
        status, platform_message_id, reply_thread_id, created_at, updated_at)
       VALUES ('legacy-delivery', 'send', ?, ?, 'hash', 'sent', 'message-1', '1', 100, 100)`)
-      .run(legacy!.conversationRef, sessionKey);
+      .run(legacy!.conversationRef, scope.sessionKey);
     expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
 
     const repaired = await repair();
-    expect(repaired.remainingFindings).toEqual([]);
-    expect(repaired.changes).toEqual([
-      "Merged 1 stale Telegram General-topic conversation identity row(s).",
-    ]);
+    expect(repaired).toMatchObject({
+      remainingFindings: [],
+      changes: ["Merged 1 stale Telegram General-topic conversation identity row(s)."],
+    });
 
-    expect(await listConversations(scope, { channel: "telegram" })).toEqual([
-      expect.objectContaining({
-        conversationRef: canonical!.conversationRef,
-        target: "telegram:-1001234567890",
-        threadId: "1",
-        role: "primary",
-        sessionId: "topic-1-session",
-      }),
-    ]);
+    await expectCanonical({ conversationRef: canonical!.conversationRef });
     expect(
       database.db
         .prepare("SELECT conversation_id FROM conversation_deliveries WHERE operation_id = ?")
@@ -125,39 +134,19 @@ describe("doctor Telegram General-topic conversation repair", () => {
     });
 
     const repeated = await repair();
-    expect(repeated.findings).toEqual([]);
-    expect(repeated.changes).toEqual([]);
+    expect(repeated).toMatchObject({ findings: [], changes: [] });
     expect(await listConversations(scope, { channel: "telegram" })).toHaveLength(1);
   });
 
   it("canonicalizes a legacy-only current entry before later session writes", async () => {
-    const sessionKey = "agent:main:telegram:group:-1002223334444:topic:1";
-    const scope = { agentId: "main", env, sessionKey, storePath };
-    await upsertSessionEntryCore(scope, {
-      sessionId: "legacy-only-session",
-      updatedAt: 100,
-      chatType: "group",
-      delivery: delivery("telegram:-1002223334444:topic:1"),
-    });
+    const { scope, write, expectCanonical } = session("-1002223334444", "legacy-only-session");
+    await write("telegram:-1002223334444:topic:1");
 
     const repaired = await repair();
     expect(repaired.remainingFindings).toEqual([]);
-    expect(await listConversations(scope, { channel: "telegram" })).toEqual([
-      expect.objectContaining({
-        target: "telegram:-1002223334444",
-        threadId: "1",
-        role: "primary",
-        sessionId: "legacy-only-session",
-      }),
-    ]);
+    await expectCanonical();
 
     await patchSessionEntryCore(scope, () => ({ displayName: "harmless later write" }));
-    expect(await listConversations(scope, { channel: "telegram" })).toEqual([
-      expect.objectContaining({
-        target: "telegram:-1002223334444",
-        role: "primary",
-        sessionId: "legacy-only-session",
-      }),
-    ]);
+    await expectCanonical();
   });
 });

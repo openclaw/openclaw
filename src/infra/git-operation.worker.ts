@@ -1,23 +1,20 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import type { DiffReadTiming } from "./diff-read-timing.js";
 import { serializeGitWorkerFailure, withGitWorkerContext } from "./git-worker-context.js";
 import type { GitWorkerCommand, GitWorkerReply, GitWorkerResult } from "./git-worker-contract.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
-serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
-  async (input, channel, control) => {
+serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
+  async (command, channel, control) => {
     try {
-      if (
-        !channel ||
-        !isRecord(input) ||
-        typeof input.type !== "string" ||
-        !isRecord(input.input)
-      ) {
+      if (!channel) {
         throw new Error("Git worker requires a typed operation and host channel");
       }
-      // SAFETY: This private entry consumes only commands created by its typed host broker.
-      const command = input as GitWorkerCommand;
       channel.consumeInput();
+      const diffTiming: DiffReadTiming | undefined =
+        command.type === "checkout.revision" && command.input.scope === "diff"
+          ? { durations: {} }
+          : undefined;
       const value = await withGitWorkerContext<GitWorkerResult>(
         channel,
         () => {
@@ -30,14 +27,20 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
                 ({ executeWorkspaceInventoryComputation }) =>
                   executeWorkspaceInventoryComputation(command),
               );
+            case "workspace.manifest.local":
             case "workspace.manifest.capture":
+            case "workspace.manifest.base-refresh":
+            case "workspace.manifest.equal":
             case "workspace.manifest.snapshot":
+            case "workspace.manifest.document":
+            case "workspace.manifest.reference":
             case "workspace.manifest.parse":
+            case "workspace.manifest.paths":
             case "workspace.manifest.serialize":
             case "workspace.manifest.overlay":
             case "workspace.manifest.pair":
             case "workspace.manifest.staged":
-            case "workspace.manifest.entries":
+            case "workspace.manifest.result":
             case "workspace.manifest.file":
             case "workspace.manifest.nodes":
             case "workspace.reconcile.preflight":
@@ -92,12 +95,12 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
               );
             case "repository.branches":
               return import("../agents/worktrees/branches.runtime.js").then(
-                ({ readRepositoryBranches }) =>
-                  readRepositoryBranches(command.input.repoRoot, command.input),
+                ({ readRepositoryBranchSnapshot }) =>
+                  readRepositoryBranchSnapshot(command.input.repoRoot, command.input),
               );
             case "checkout.revision":
               return import("../gateway/control-ui-session-prs-git.runtime.js").then(
-                ({ readCheckoutGitRevision }) => readCheckoutGitRevision(command.input),
+                ({ readCheckoutGitRevision }) => readCheckoutGitRevision(command.input, diffTiming),
               );
             case "checkout.context":
               return import("../gateway/control-ui-session-prs-git.runtime.js").then(
@@ -126,9 +129,12 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
         },
         command.filesystemRefs,
       );
-      return { ok: true, value };
+      return { ok: true, value, revisionUnavailableReason: diffTiming?.revisionUnavailableReason };
     } catch (error) {
       return { ok: false, error: serializeGitWorkerFailure(error) };
+    } finally {
+      // V8 retains the last successful regex input, including task-owned checkout paths.
+      /(?:)/.test("");
     }
   },
   {

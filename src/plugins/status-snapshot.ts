@@ -17,6 +17,7 @@ import {
 import { createBlockedPluginDiagnosticLookup } from "./discovery-availability.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import { resolveRetainedManagedNpmInstallPackageInfo } from "./managed-npm-retention.js";
+import { createManifestProviderIdLists } from "./manifest-provider-ids.js";
 import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
 import { pluginCacheStatSync } from "./plugin-cache-files.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "./plugin-cache.js";
@@ -273,20 +274,7 @@ function buildPluginRecordFromInstalledIndex(
     channelIds: [...(manifest?.channels ?? [])],
     cliBackendIds: [...(manifest?.cliBackends ?? []), ...(manifest?.setup?.cliBackends ?? [])],
     providerIds: [...(manifest?.providers ?? [])],
-    embeddingProviderIds: [...(manifest?.contracts?.embeddingProviders ?? [])],
-    speechProviderIds: [...(manifest?.contracts?.speechProviders ?? [])],
-    realtimeTranscriptionProviderIds: [
-      ...(manifest?.contracts?.realtimeTranscriptionProviders ?? []),
-    ],
-    realtimeVoiceProviderIds: [...(manifest?.contracts?.realtimeVoiceProviders ?? [])],
-    mediaUnderstandingProviderIds: [...(manifest?.contracts?.mediaUnderstandingProviders ?? [])],
-    transcriptSourceProviderIds: [...(manifest?.contracts?.transcriptSourceProviders ?? [])],
-    imageGenerationProviderIds: [...(manifest?.contracts?.imageGenerationProviders ?? [])],
-    videoGenerationProviderIds: [...(manifest?.contracts?.videoGenerationProviders ?? [])],
-    musicGenerationProviderIds: [...(manifest?.contracts?.musicGenerationProviders ?? [])],
-    webFetchProviderIds: [...(manifest?.contracts?.webFetchProviders ?? [])],
-    webSearchProviderIds: [...(manifest?.contracts?.webSearchProviders ?? [])],
-    migrationProviderIds: [...(manifest?.contracts?.migrationProviders ?? [])],
+    ...createManifestProviderIdLists(manifest?.contracts),
     agentHarnessIds: [],
     cliCommands: [],
     services: [],

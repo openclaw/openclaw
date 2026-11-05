@@ -61,6 +61,11 @@
       "class": "plugin-runtime",
       "risk": ["mdns", "network"]
     },
+    "@modelcontextprotocol/client": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["protocol-client", "network"]
+    },
     "@modelcontextprotocol/core": {
       "owner": "core:mcp",
       "class": "core-runtime",
@@ -174,6 +179,11 @@
       "class": "default-runtime-initially",
       "risk": ["http-server", "large-transitive-cone"]
     },
+    "fast-uri": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["schema-validation"]
+    },
     "file-type": {
       "owner": "core:media-admission",
       "class": "core-runtime",
@@ -183,11 +193,6 @@
       "owner": "plugin:telegram",
       "class": "plugin-runtime",
       "risk": ["telegram-bot-api", "network"]
-    },
-    "highlight.js": {
-      "owner": "core:syntax-highlighting",
-      "class": "core-runtime",
-      "risk": ["syntax-highlighting"]
     },
     "hosted-git-info": {
       "owner": "core:git-utils",
@@ -279,6 +284,11 @@
       "owner": "core:browser",
       "class": "core-runtime",
       "risk": ["browser-automation", "cdp"]
+    },
+    "proxy-from-env": {
+      "owner": "provider:openai",
+      "class": "default-runtime-initially",
+      "risk": ["network", "proxy"]
     },
     "quickjs-wasi": {
       "owner": "plugin:code-mode-quickjs",

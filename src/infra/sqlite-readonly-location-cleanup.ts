@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { copyRootFileSync } from "@openclaw/fs-safe/advanced";
+import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   createRetainedOperation,
   mapRetainedOperation,
@@ -11,9 +12,17 @@ import { getChildLogger } from "../logging/logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { hasErrnoCode } from "./errno.js";
-import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
+import { isPathInside } from "./path-guards.js";
+import { registerProcessExitCleanup } from "./process-exit-cleanup.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  retireSqliteDatabaseAdmissionForPath,
+} from "./sqlite-database-admission.js";
 import { recordSqliteSnapshotFailure } from "./sqlite-error-diagnostics.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import {
+  createSqliteLifecycleAggregateError,
+  SqliteSnapshotCleanupError,
+} from "./sqlite-lifecycle-errors.js";
 import type {
   PreparedSqliteReadOnlyLocation,
   RetainedPreparedSqliteReadOnlyLocation,
@@ -25,8 +34,6 @@ import {
 } from "./sqlite-snapshot-file.js";
 import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import { SQLITE_STAGING_TOKEN_FILES, type SqliteStagingToken } from "./sqlite-staging-token.js";
-
-export class SqliteSnapshotCleanupError extends Error {}
 
 /**
  * Runtimes without qualified native close (stock Bun, every Windows Bun) can
@@ -163,10 +170,12 @@ export function retainSnapshotWork<T>(work: Promise<T>, stop: () => void = () =>
   return work;
 }
 
-/** Keep signal cleanup behind the consumer, including private transforms and publication. */
+/** Keep signal cleanup behind the consumer, including private transforms and publication.
+ * Strict by default; best-effort callers log a failed removal and keep their result. */
 export async function withPreparedSqliteSnapshot<T>(
   snapshot: PreparedSqliteReadOnlyLocation,
   read: (location: string) => T | Promise<T>,
+  options: { bestEffortCleanup?: boolean } = {},
 ): Promise<T> {
   let outcome: { value: T } | { cause: unknown };
   try {
@@ -176,7 +185,22 @@ export async function withPreparedSqliteSnapshot<T>(
   } catch (cause) {
     outcome = { cause };
   }
-  if (!(await snapshot.cleanupAsync().catch(() => false))) {
+  let cleanupError: unknown;
+  const removed = await snapshot.cleanupAsync().catch((error: unknown) => {
+    cleanupError = error;
+    return false;
+  });
+  if (!removed && options.bestEffortCleanup) {
+    // Leave the copy for the exit retry and the Gateway sweep; the read still stands.
+    // A refused removal was already reported by its owner; only a throw is new here.
+    if (cleanupError !== undefined) {
+      emitSnapshotCleanupFailure({
+        cleanupRoot: snapshot.cleanupRoot ?? path.dirname(snapshot.location),
+        operation: "rm",
+        code: extractErrorCode(cleanupError),
+      });
+    }
+  } else if (!removed) {
     // An exit retry is best-effort, not proof that this private copy was removed.
     const readFailure =
       "cause" in outcome
@@ -205,11 +229,11 @@ export function registerSnapshotTempDirectory(
 function registerSnapshotCleanup(): void {
   if (!cleanupState.exitHandlerInstalled) {
     cleanupState.exitHandlerInstalled = true;
-    process.once("exit", () => {
+    registerProcessExitCleanup(() => {
       for (const stop of activeSnapshotWork.values()) {
         stop();
       }
-      // A surviving child retains its kernel token; the next owner reclaims it.
+      // Synchronous exit cannot join native work; graceful owners drain it first.
       if (activeSnapshotWork.size === 0) {
         for (const pendingDir of snapshotDirectories.keys()) {
           removeTempDirectory(pendingDir);
@@ -312,12 +336,50 @@ function prepareSnapshotRetirement(directory: string, owner: SnapshotDirectory |
   return beginSqliteSnapshotRetirement(directory, { token: owner?.release });
 }
 
-/** Delete in the token process: owner death must stop unlinking when its locks disappear. */
-export function retireSqliteSnapshotPayload(
+// Reflink unlink/last-close can free hundreds of thousands of extent refs at once.
+// Bound syscall work; this does not bound delayed filesystem transaction work.
+function* shrinkSnapshotPayload(location: string): Generator<{ fd: number; size: number }> {
+  const stat = fs.lstatSync(location, { throwIfNoEntry: false });
+  if (stat?.isDirectory()) {
+    for (const entry of fs.readdirSync(location)) {
+      yield* shrinkSnapshotPayload(path.join(location, entry));
+    }
+  } else if (stat?.isFile() && stat.nlink > 1) {
+    // Never truncate an outside alias; later owned links see their reduced link count.
+    fs.unlinkSync(location);
+  } else if (stat?.isFile() && stat.nlink === 1 && stat.size > 64 * 1024 ** 2) {
+    const fd = fs.openSync(location, fs.constants.O_RDWR | fs.constants.O_NOFOLLOW);
+    try {
+      for (let size = stat.size; size > 64 * 1024 ** 2;) {
+        size -= 64 * 1024 ** 2;
+        yield { fd, size };
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+}
+
+async function shrinkSnapshotPayloadAsync(location: string): Promise<void> {
+  for (const { fd, size } of shrinkSnapshotPayload(location)) {
+    await retainSnapshotWork(
+      new Promise<void>((resolve, reject) => {
+        fs.ftruncate(fd, size, (error) => (error ? reject(error) : resolve()));
+      }),
+    );
+  }
+}
+
+/** Keep token custody across every yield; owner death stops further retirement. */
+export function* retireSqliteSnapshotPayload(
   retirement: ReturnType<typeof beginSqliteSnapshotRetirement>,
-): void {
+): Generator<void> {
   for (const file of retirement.payload) {
     retireSqliteDatabaseAdmissionForPath(file);
+    for (const { fd, size } of shrinkSnapshotPayload(file)) {
+      fs.ftruncateSync(fd, size);
+      yield;
+    }
     fs.rmSync(file, tempDirectoryRemovalOptions);
   }
   // Free copied bytes before SQLite allocates its retirement page/journal.
@@ -334,10 +396,17 @@ export function removeTempDirectory(
     const retirement = prepareSnapshotRetirement(tempDir, owner);
     try {
       if (retirement) {
-        retireSqliteSnapshotPayload(retirement);
+        for (const _ of retireSqliteSnapshotPayload(retirement)) {
+          // Synchronous offline/exit cleanup still releases extents in bounded syscalls.
+        }
         owner = snapshotDirectory(tempDir);
         owner.release = undefined;
         owner.retired = true;
+      } else if (!owner?.retired) {
+        for (const { fd, size } of shrinkSnapshotPayload(tempDir)) {
+          fs.ftruncateSync(fd, size);
+          // Older workers can return a private family without a staging token.
+        }
       }
       fs.rmSync(tempDir, tempDirectoryRemovalOptions);
     } finally {
@@ -368,6 +437,7 @@ export async function removeTempDirectoryAsync(
     try {
       for (const file of retirement?.payload ?? []) {
         retireSqliteDatabaseAdmissionForPath(file);
+        await shrinkSnapshotPayloadAsync(file);
         await retainSnapshotWork(fs.promises.rm(file, tempDirectoryRemovalOptions));
       }
       if (retirement) {
@@ -375,6 +445,8 @@ export async function removeTempDirectoryAsync(
         owner = snapshotDirectory(tempDir);
         owner.release = undefined;
         owner.retired = true;
+      } else if (!owner?.retired) {
+        await shrinkSnapshotPayloadAsync(tempDir);
       }
       await retainSnapshotWork(fs.promises.rm(tempDir, tempDirectoryRemovalOptions));
     } finally {
@@ -452,8 +524,68 @@ export function sealRetainedSnapshotTempDirectory(
       "SQLite snapshot is still owned; cleanup has not been requested",
     );
   }
-  assertSnapshotReadersRetired(owner);
-  owner.retirementStarted = true;
+  const ownedDirectories = [...snapshotDirectories].filter(([candidate]) =>
+    isPathInside(directory, candidate),
+  );
+  for (const [, current] of ownedDirectories) {
+    assertSnapshotReadersRetired(current);
+  }
+  for (const [, current] of ownedDirectories) {
+    current.retirementStarted = true;
+  }
+  // Native deletion cannot release the host's cached facts after their pathname is gone.
+  for (const admission of captureSqliteDatabaseAdmissions()) {
+    if (isPathInside(directory, admission.location)) {
+      retireSqliteDatabaseAdmissionForPath(admission.location);
+    }
+  }
+}
+
+export function preparationCleanupError(errors: unknown[], operation: string): AggregateError {
+  return createSqliteLifecycleAggregateError(
+    errors,
+    `${operation} and cleanup failed: ${coerceErrorMessage(errors[0])}`,
+    errors[0],
+  );
+}
+
+/** Failed copy attempts discard their files without retiring the caller's directory token. */
+export function discardPreparedCopyPayload(directory: string, error: unknown): void {
+  try {
+    for (const name of ["database.sqlite", "database.sqlite.partial"]) {
+      for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+        const location = path.join(directory, `${name}${suffix}`);
+        retireSqliteDatabaseAdmissionForPath(location);
+        for (const { fd, size } of shrinkSnapshotPayload(location)) {
+          fs.ftruncateSync(fd, size);
+          // A failed preparation still owns this unpublished payload.
+        }
+        fs.rmSync(location, { force: true });
+      }
+    }
+  } catch (cleanupError) {
+    throw preparationCleanupError([error, cleanupError], "SQLite snapshot preparation");
+  }
+}
+
+export async function cleanupFailedSnapshotPreparation(
+  directory: string,
+  error: unknown,
+  operation: string,
+  callerOwnsDirectory: boolean,
+): Promise<never> {
+  if (callerOwnsDirectory) {
+    discardPreparedCopyPayload(directory, error);
+  } else {
+    const errors: unknown[] = [error];
+    const removed = await removeTempDirectoryAsync(directory, (cleanupError) =>
+      errors.push(cleanupError),
+    );
+    if (!removed) {
+      throw preparationCleanupError(errors, operation);
+    }
+  }
+  throw error;
 }
 
 export function publishPreparedCopy(
@@ -464,7 +596,26 @@ export function publishPreparedCopy(
   for (const suffix of ["-wal", "-shm", "-journal", ""]) {
     const staged = `${location}.partial${suffix}`;
     if (fs.existsSync(staged)) {
-      fs.renameSync(staged, `${location}${suffix}`);
+      const published = `${location}${suffix}`;
+      try {
+        fs.renameSync(staged, published);
+      } catch (error) {
+        if (!hasErrnoCode(error, "EXDEV")) {
+          throw error;
+        }
+        // EFS can reject same-directory renames. Readers see this private family only after return.
+        using target = copyRootFileSync({
+          source: { rootPath: directory, absolutePath: staged },
+          destination: { rootPath: directory, absolutePath: published },
+          mode: 0o600,
+        });
+        fs.fsyncSync(target.fd);
+        for (const { fd, size } of shrinkSnapshotPayload(staged)) {
+          fs.ftruncateSync(fd, size);
+          // The published copy owns the bytes before the staging alias is removed.
+        }
+        fs.rmSync(staged, { force: true });
+      }
     }
   }
   let journalFreeContent: PreparedSqliteReadOnlyLocation["journalFreeContent"];

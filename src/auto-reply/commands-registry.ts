@@ -3,10 +3,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import {
-  buildConfiguredModelCatalog,
-  resolveConfiguredModelRef,
-} from "../agents/model-selection.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { buildThinkingCatalog } from "../agents/model-thinking-default-core.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
@@ -231,45 +229,6 @@ export function isActiveRunSafeCommandTurn(params: {
   );
 }
 
-function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): CommandArgValues {
-  const values: CommandArgValues = {};
-  const tokens = raw.split(/\s+/);
-  for (const [index, definition] of definitions.entries()) {
-    if (index >= tokens.length) {
-      break;
-    }
-    if (definition.captureRemaining) {
-      // CaptureRemaining keeps freeform prompts intact after the fixed leading args.
-      values[definition.name] = tokens.slice(index).join(" ");
-      break;
-    }
-    values[definition.name] = expectDefined(tokens[index], "command argument token");
-  }
-  return values;
-}
-
-function formatPositionalArgs(
-  definitions: CommandArgDefinition[],
-  values: CommandArgValues,
-): string | undefined {
-  const parts: string[] = [];
-  for (const definition of definitions) {
-    const value = values[definition.name];
-    if (value == null) {
-      continue;
-    }
-    const rendered = typeof value === "string" ? value.trim() : String(value);
-    if (!rendered) {
-      continue;
-    }
-    parts.push(rendered);
-    if (definition.captureRemaining) {
-      break;
-    }
-  }
-  return parts.length > 0 ? parts.join(" ") : undefined;
-}
-
 /** Parses raw command arguments according to the command definition. */
 export function parseCommandArgs(
   command: ChatCommandDefinition,
@@ -282,10 +241,20 @@ export function parseCommandArgs(
   if (!command.args || command.argsParsing === "none") {
     return { raw: trimmed };
   }
-  return {
-    raw: trimmed,
-    values: parsePositionalArgs(command.args, trimmed),
-  };
+  const values: CommandArgValues = {};
+  const tokens = trimmed.split(/\s+/);
+  for (const [index, definition] of command.args.entries()) {
+    if (index >= tokens.length) {
+      break;
+    }
+    if (definition.captureRemaining) {
+      // CaptureRemaining keeps freeform prompts intact after the fixed leading args.
+      values[definition.name] = tokens.slice(index).join(" ");
+      break;
+    }
+    values[definition.name] = expectDefined(tokens[index], "command argument token");
+  }
+  return { raw: trimmed, values };
 }
 
 /** Serializes parsed command arguments back into a raw argument string. */
@@ -306,7 +275,23 @@ export function serializeCommandArgs(
   if (command.formatArgs) {
     return command.formatArgs(args.values);
   }
-  return formatPositionalArgs(command.args, args.values);
+  const values = args.values;
+  const parts: string[] = [];
+  for (const definition of command.args) {
+    const value = values[definition.name];
+    if (value == null) {
+      continue;
+    }
+    const rendered = typeof value === "string" ? value.trim() : String(value);
+    if (!rendered) {
+      continue;
+    }
+    parts.push(rendered);
+    if (definition.captureRemaining) {
+      break;
+    }
+  }
+  return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
 /** Builds slash-command text from a command definition and parsed args. */
@@ -336,14 +321,16 @@ export function resolveCommandArgChoices(
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
+    const provider = params.provider ?? defaults.provider ?? DEFAULT_PROVIDER;
+    const model = params.model ?? defaults.model ?? DEFAULT_MODEL;
     choices = choices({
       cfg,
       command: params.command,
       arg,
-      provider: params.provider ?? defaults.provider ?? DEFAULT_PROVIDER,
-      model: params.model ?? defaults.model ?? DEFAULT_MODEL,
+      provider,
+      model,
       agentRuntime: params.agentRuntime,
-      catalog: params.catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined),
+      catalog: params.catalog ?? (cfg ? buildThinkingCatalog({ cfg, provider, model }) : undefined),
     });
   }
   return choices.map((choice) =>
@@ -397,11 +384,7 @@ export function resolveCommandArgMenu(params: CommandArgMenuParams): ResolvedCom
       storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
       sessionKey,
     });
-    setVerboseMenuTitle(
-      menu,
-      params.command,
-      entry?.verboseLevel ?? resolveAgentConfig(params.cfg, agentId)?.verboseDefault ?? "off",
-    );
+    setVerboseMenuTitle(menu, params.command, params.cfg, agentId, entry?.verboseLevel);
   }
   return menu;
 }
@@ -418,11 +401,7 @@ export async function resolveCommandArgMenuAsync(
       storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
       sessionKey,
     });
-    setVerboseMenuTitle(
-      menu,
-      params.command,
-      entry?.verboseLevel ?? resolveAgentConfig(params.cfg, agentId)?.verboseDefault ?? "off",
-    );
+    setVerboseMenuTitle(menu, params.command, params.cfg, agentId, entry?.verboseLevel);
   }
   return menu;
 }
@@ -430,9 +409,12 @@ export async function resolveCommandArgMenuAsync(
 function setVerboseMenuTitle(
   menu: ResolvedCommandArgMenu,
   command: ChatCommandDefinition,
-  level: string,
+  cfg: OpenClawConfig,
+  agentId: string,
+  level: string | undefined,
 ): void {
-  menu.title = `Current verbose level: ${level}.\n${formatCommandArgMenuTitle({ command, menu })}`;
+  const effectiveLevel = level ?? resolveAgentConfig(cfg, agentId)?.verboseDefault ?? "off";
+  menu.title = `Current verbose level: ${effectiveLevel}.\n${formatCommandArgMenuTitle({ command, menu })}`;
 }
 
 function resolveCommandArgMenuChoices(params: CommandArgMenuParams): ResolvedCommandArgMenu | null {
@@ -440,7 +422,11 @@ function resolveCommandArgMenuChoices(params: CommandArgMenuParams): ResolvedCom
     return null;
   }
   const { command, args, cfg, provider, model, agentRuntime, catalog } = params;
-  const resolvedCatalog = catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined);
+  // Without an explicit model, resolveCommandArgChoices resolves the default first and builds
+  // the catalog for it.
+  const resolvedCatalog =
+    catalog ??
+    (cfg && provider && model ? buildThinkingCatalog({ cfg, provider, model }) : undefined);
   const resolveChoices = (arg: CommandArgDefinition) =>
     resolveCommandArgChoices({
       command,

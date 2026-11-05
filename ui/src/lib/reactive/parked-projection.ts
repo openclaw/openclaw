@@ -10,9 +10,11 @@ export function createParkedProjection<T>(
     const preparation = prepare?.();
     if (!presented()) {
       // A hidden first mount still needs content, but must not acquire live sources.
-      return previous && Object.is(previous.preparation, preparation)
-        ? previous
-        : { value: untrack(read), preparation };
+      if (previous && Object.is(previous.preparation, preparation)) {
+        return previous;
+      }
+      const initialHiddenValue = untrack(read);
+      return { value: initialHiddenValue, preparation };
     }
     return { value: read(), preparation };
   });
