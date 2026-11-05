@@ -13,7 +13,10 @@ import type {
   SessionSharingEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
-import { captureSessionStoreReadCandidate, type SessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
+import {
+  captureSessionStoreReadCandidate,
+  type SessionStoreReadCandidate,
+} from "../config/sessions/session-store-read-candidates.js";
 import {
   createSessionStoreRegistryMutationFilter,
   prepareSessionStoreTargetInventory,
@@ -76,7 +79,12 @@ export async function prepareSessionMutationFacts(
 ): Promise<SessionFactsRead<PreparedSessionSourceFacts>> {
   const assertRoutingCurrent = captureSessionMutationRouting(params.cfg, undefined, [params]);
   const preparedSource = params.preparedSource && { ...params.preparedSource };
-  if (preparedSource && (preparedSource.agentId !== params.agentId || preparedSource.canonicalKey !== params.sessionKey.trim() || isIncognitoSessionKey(preparedSource.canonicalKey))) {
+  if (
+    preparedSource &&
+    (preparedSource.agentId !== params.agentId ||
+      preparedSource.canonicalKey !== params.sessionKey.trim() ||
+      isIncognitoSessionKey(preparedSource.canonicalKey))
+  ) {
     throw new SessionMutationFactsUnavailableError();
   }
   const { canonicalKey, agentId } = preparedSource
@@ -287,21 +295,27 @@ export async function prepareSessionMutationFacts(
   try {
     const parsedAgent = parseAgentSessionKey(params.sessionKey)?.agentId;
     const agentIds = [agentId, ...(parsedAgent ? [parsedAgent] : [])];
-    const discoveryInventory = preparedSource ? undefined : inspection
-      ? {
-          ...(
-            await prepareSessionStoreCandidatesInWorker({
-              config: params.cfg,
-              agentIds,
-              env: { ...process.env },
-            })
-          ).inventory!,
-          ...(isArtifactPreservingStateRead("agent")
-            ? { preserveSourceArtifacts: true as const }
-            : {}),
-        }
-      : prepareSessionStoreTargetInventory(params.cfg, agentIds);
-    const candidateIdentities = (preparedSource ? [captureSessionStoreReadCandidate(preparedSource.path)] : discoveryInventory!.candidates)
+    const discoveryInventory = preparedSource
+      ? undefined
+      : inspection
+        ? {
+            ...(
+              await prepareSessionStoreCandidatesInWorker({
+                config: params.cfg,
+                agentIds,
+                env: { ...process.env },
+              })
+            ).inventory!,
+            ...(isArtifactPreservingStateRead("agent")
+              ? { preserveSourceArtifacts: true as const }
+              : {}),
+          }
+        : prepareSessionStoreTargetInventory(params.cfg, agentIds);
+    const candidateIdentities = (
+      preparedSource
+        ? [captureSessionStoreReadCandidate(preparedSource.path)]
+        : discoveryInventory!.candidates
+    )
       .filter((candidate) => !inspection || !candidate.scope)
       .map((candidate) => ({
         candidate,
@@ -541,12 +555,11 @@ export async function prepareSessionMutationFacts(
         return target;
       });
       assertActive();
-      const storageTarget: SessionFactsRead<PreparedSessionMutationFacts>["storageTarget"] =
-        Object.freeze({
-          agentId: selected.agentId,
-          canonicalKey: selected.canonicalKey,
-          storePath: selected.storePath,
-        });
+      storageTarget = Object.freeze({
+        agentId: selected.agentId,
+        canonicalKey: selected.canonicalKey,
+        storePath: selected.storePath,
+      });
       const match = findCanonicalStoreMatch(selected.store, selected.storeKeys);
       const selectedSharing = members.get(selected.storePath);
       const sharing = selectedSharing?.facts;
@@ -580,7 +593,8 @@ export async function prepareSessionMutationFacts(
           sourceAgentId: sharing?.source.agentId,
           readSource,
         };
-        const retained = sharing && retainedReads.get(`${sharing.databaseIdentity}\0${canonicalKey}`);
+        const retained =
+          sharing && retainedReads.get(`${sharing.databaseIdentity}\0${canonicalKey}`);
         expectedPlaceholder = retained?.readCurrent(readScope)?.placeholder;
         adoptCreatedEntry = (entry) => {
           retained?.adoptCreatedEntry(entry);

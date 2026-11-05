@@ -157,6 +157,11 @@ it("discovers sharing facts after an already-opening writer publishes registrati
     const facts = harness.prepare();
     release.resolve();
     using prepared = releasing(await facts);
+    expect(prepared.storageTarget).toEqual({
+      agentId: "main",
+      canonicalKey: harness.sessionKey,
+      storePath,
+    });
     expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("opening-writer");
   } finally {
     release.resolve();
