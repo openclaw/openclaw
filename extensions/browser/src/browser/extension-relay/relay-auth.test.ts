@@ -106,17 +106,58 @@ describe("extension relay host-local secret", () => {
   });
 
   it.each([
-    { name: "empty", content: "" },
-    { name: "malformed", content: "not-a-relay-token\n" },
-  ])("rejects a persistent $name secret without replacing it", async ({ content }) => {
+    ["empty", "", "is empty"],
+    ["malformed", "not-a-relay-token\n", "does not contain a 64-character lowercase hex token"],
+    ["uppercase", `${"A".repeat(64)}\n`, "does not contain a 64-character lowercase hex token"],
+  ])("rejects a persistent %s secret without replacing it", async (_name, content, problem) => {
     fs.mkdirSync(path.dirname(secretPath), { mode: 0o700 });
     fs.writeFileSync(secretPath, content, { flag: "wx", mode: 0o600 });
-    const before = fs.statSync(secretPath);
-    await expect(ensureExtensionRelayToken(env)).rejects.toMatchObject({
-      cause: expect.any(Error),
-    });
+    const { dev, ino } = fs.statSync(secretPath);
+    await expect(ensureExtensionRelayToken(env)).rejects.toThrow(
+      `Browser extension relay secret ${secretPath} ${problem}. Move it aside, then run`,
+    );
     expect(fs.readFileSync(secretPath, "utf8")).toBe(content);
-    expect(fs.statSync(secretPath)).toMatchObject({ dev: before.dev, ino: before.ino });
+    expect(fs.statSync(secretPath)).toMatchObject({ dev, ino });
+  });
+
+  describe.runIf(process.platform !== "win32")("rejected secret files", () => {
+    it.each([
+      [
+        "a symlink",
+        "is a symlink",
+        () => {
+          const target = path.join(stateDir, "elsewhere.secret");
+          fs.writeFileSync(target, `${"a".repeat(64)}\n`, { mode: 0o600 });
+          fs.symlinkSync(target, secretPath);
+        },
+      ],
+      ["a directory", "is not a regular file", () => fs.mkdirSync(secretPath)],
+      [
+        "hard-linked",
+        "has 2 hard links",
+        () => {
+          fs.writeFileSync(secretPath, `${"a".repeat(64)}\n`, { mode: 0o600 });
+          fs.linkSync(secretPath, path.join(stateDir, "backup.secret"));
+        },
+      ],
+    ])(
+      "fails without waiting or replacing when the secret is %s",
+      async (_name, problem, setup) => {
+        fs.mkdirSync(path.dirname(secretPath), { mode: 0o700 });
+        setup();
+        const before = fs.lstatSync(secretPath);
+        // A retry loop would stall on fake timers; persistent states must fail on the first read.
+        vi.useFakeTimers();
+        try {
+          const error = await ensureExtensionRelayToken(env).catch((err: unknown) => err);
+          expect(String(error)).toContain(`${secretPath} ${problem}.`);
+          expect(String(error)).toContain("browser extension pair");
+        } finally {
+          vi.useRealTimers();
+        }
+        expect(fs.lstatSync(secretPath)).toMatchObject({ dev: before.dev, ino: before.ino });
+      },
+    );
   });
 
   it.runIf(process.platform !== "win32").each([0o644])(
@@ -136,7 +177,7 @@ describe("extension relay host-local secret", () => {
       const owner = fs.statSync(secretPath).uid;
       vi.spyOn(process, "getuid").mockReturnValue(owner + 1);
       expect(readExtensionRelayToken(env)).toBeNull();
-      await expect(ensureExtensionRelayToken(env)).rejects.toThrow("unreadable/malformed");
+      await expect(ensureExtensionRelayToken(env)).rejects.toThrow("is owned by another user");
       expect(fs.readFileSync(secretPath, "utf8").trim()).toBe(token);
     },
   );
