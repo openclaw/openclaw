@@ -7,10 +7,10 @@ import { createKnowledgeService } from "./service.js";
 import { KnowledgeStorage } from "./storage.js";
 import {
   accessFor,
+  defaultOrder,
   storeFixture,
   toolContext,
   useTestTempDirs,
-  defaultOrder,
 } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
