@@ -351,8 +351,11 @@ async function run() {
   const { readUpdateRunDriver }: typeof import("../../src/infra/update-run-driver.js") = await load(
     "src/infra/update-run-driver.ts",
   );
-  const { createUpdateDatabaseBackup }: typeof import("../../src/infra/update-database-backup.js") =
-    await load("src/infra/update-database-backup.ts");
+  const {
+    captureUpdateDatabases,
+  }: typeof import("../../src/cli/update-cli/update-command-database-backup.js") = await load(
+    "src/cli/update-cli/update-command-database-backup.ts",
+  );
   const {
     createUpdateCommandExecutionGuards,
   }: typeof import("../../src/cli/update-cli/update-command-execution-guards.js") = await load(
@@ -388,17 +391,6 @@ async function run() {
       timeoutMs: 30 * 60_000,
     });
     result.captureWarnings = captured.warnings.map(({ kind, pluginId }) => ({ kind, pluginId }));
-    const config: OpenClawConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    const databaseBackup = await createUpdateDatabaseBackup({
-      backupRoot: path.join(fixture, "backups", runId),
-      stateDir: state,
-      config,
-      env: process.env,
-      stopped: true,
-      nodeRunner: process.execPath,
-      timeoutMs: 30 * 60_000,
-    });
-    assert.deepEqual(databaseBackup.warnings, [], "Stopped database capture must succeed");
     const updateRun = {
       runId,
       env: { ...process.env },
@@ -408,6 +400,52 @@ async function run() {
     const guards = createUpdateCommandExecutionGuards(
       { yes: true, json: true, restart: true, run: updateRun },
       runtimeRoot,
+    );
+    const capturedDatabases = await captureUpdateDatabases({
+      transaction: {
+        backupRoot: path.join(fixture, "backups", runId),
+        rollback: async () => {
+          throw new Error("Unexpected workload rollback");
+        },
+        complete: async () => {
+          throw new Error("Unexpected workload completion");
+        },
+      },
+      execution: {
+        root: runtimeRoot,
+        installKind: "git",
+        updateInstallKind: "git",
+        switchToGit: false,
+        timeoutMs: undefined,
+        updateStepTimeoutMs: 30 * 60_000,
+        startedAt: Date.now(),
+        progress: {},
+        executionGuards: guards,
+        stop: () => {},
+        channel: "dev",
+        tag: "dev",
+        opts: { yes: true, json: true, restart: true, run: updateRun },
+        shouldRestart: true,
+        packageInstallSpec: null,
+        packageUpdateNodeRunner: process.execPath,
+        managedServiceRootRedirect: null,
+        recoveryState: { triageTarget: { root: runtimeRoot, env: process.env } },
+        prepareMutableUpdate: async () => {
+          throw new Error("Unexpected workload activation");
+        },
+      },
+      context: undefined,
+      assertCurrent: () => executorFence.assertCurrent(),
+    });
+    const databaseBackup = capturedDatabases.backup;
+    assert.ok(databaseBackup, "Production capture must retain automatic restoration");
+    assert.deepEqual(databaseBackup.warnings, [], "Database capture must succeed");
+    assert.ok(databaseBackup.databases.length > 0, "Capture must contain existing databases");
+    assert.ok(
+      databaseBackup.databases.every(
+        (entry) => typeof databaseBackup.sourceGenerations[entry.path] === "string",
+      ),
+      "Every captured database must have a generation baseline",
     );
     const snapshot = await readUpdateConfigSnapshot(configPath);
     const started = performance.now();
@@ -441,6 +479,7 @@ async function run() {
     assert.ok(!databaseBackup.restoreRefusal, "Doctor must retain restoration attribution");
     result.capture = {
       databases: databaseBackup.databases.length,
+      generations: Object.keys(databaseBackup.sourceGenerations).length,
       snapshotBytes: databaseBackup.databases.reduce(
         (bytes, database) => bytes + database.sizeBytes,
         0,

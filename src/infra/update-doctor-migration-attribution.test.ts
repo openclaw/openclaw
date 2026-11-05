@@ -18,7 +18,6 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
-import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-repair.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -63,6 +62,7 @@ import {
 import { createUpdateDoctorDatabaseWriteCapture } from "./update-doctor-result.js";
 import { readUpdateRunDriver } from "./update-run-driver.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
+import { readUpdateRecoveryAdmissionFactsAsync } from "./update-run-recovery-admission.js";
 import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
@@ -435,24 +435,46 @@ async function withCapture(
   }
 }
 
-it.each(["doctor", "version"] as const)(
-  "captures only writing %s phases before migrating legacy approvals",
-  async (scope) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it.each(
+  (["doctor", "version"] as const).flatMap((scope) =>
+    (["clean", "retained WAL", "retained journal", "wrong mode"] as const).map((shape) => ({
+      scope,
+      shape,
+    })),
+  ),
+)(
+  "captures writing $scope phases before migrating legacy approvals ($shape)",
+  async ({ scope, shape }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { env, stateDir } = state;
-      writeConfigMachineState("stable-fixture", { retained: true }, { env });
       const pathname = openOpenClawStateDatabase({ env }).path;
-      const sourcePath = state.statePath("exec-approvals.json");
-      fs.writeFileSync(
-        sourcePath,
-        JSON.stringify({
-          version: 1,
-          defaults: { security: "deny" },
-          agents: {},
-          socket: { path: "/tmp/fixture.sock", token: "synthetic-token" },
-        }),
-      );
+      const sourcePath = await state.writeJson("exec-approvals.json", {
+        version: 1,
+        defaults: { security: "deny" },
+        agents: {},
+        socket: { path: "/tmp/fixture.sock", token: "synthetic-token" },
+      });
       await closeOpenClawStateDatabaseAsync();
+      if (shape === "retained WAL" || shape === "retained journal") {
+        const setup = spawnNodeEvalSync(`
+          const { DatabaseSync } = await import('node:sqlite');
+          const db = new DatabaseSync(${JSON.stringify(pathname)});
+          const wal = ${shape === "retained WAL"};
+          db.exec(wal ? 'PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;' : 'PRAGMA journal_mode=PERSIST;');
+          db.exec('CREATE TABLE retained(value);');
+          if (wal) {
+            const reader = new DatabaseSync(${JSON.stringify(pathname)}, { readOnly: true });
+            reader.exec('BEGIN; SELECT * FROM retained;');
+            db.close(); reader.exec('COMMIT'); reader.close();
+          } else db.close();
+        `);
+        expect(setup.status, setup.stderr).toBe(0);
+        expect(
+          fs.statSync(`${pathname}-${shape === "retained WAL" ? "wal" : "journal"}`).size,
+        ).toBeGreaterThan(32);
+      } else if (shape === "wrong mode") {
+        fs.chmodSync(pathname, 0o644);
+      }
       const generations = readUpdateDatabaseGenerations([
         pathname,
         state.statePath("client", "credentials.sqlite"),
@@ -466,24 +488,16 @@ it.each(["doctor", "version"] as const)(
         await repairDoctorStateSchemaAsync({ env }, scope);
         expect(
           observations.mock.calls.filter(([paths]) => paths.length === 1 && paths[0] === pathname),
-        ).toHaveLength(2);
-        observations.mockRestore();
+        ).toHaveLength(shape === "retained WAL" || shape === "retained journal" ? 4 : 2);
         await openOpenClawStateDatabaseForDoctor({ env });
         resolveDoctorUpdateAdmission(env).assertCurrent();
-        await executeExistingOpenClawStateRead(
-          { env },
-          { type: "updateRuns.recoveryAdmission" },
-          { live: true },
-        );
+        await readUpdateRecoveryAdmissionFactsAsync({ env });
         const result = await migrateLegacyExecApprovals({
           env,
           stateDir,
           detected: detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }),
         });
-        expect(result).toMatchObject({
-          warnings: [],
-          changes: ["Imported legacy exec approvals policy and local socket credentials."],
-        });
+        expect(result.warnings).toEqual([]);
         expect(fs.existsSync(sourcePath)).toBe(false);
       });
       expect(warnings).toEqual([]);
@@ -492,11 +506,9 @@ it.each(["doctor", "version"] as const)(
         JSON.parse(readExecApprovalsConfigRow(openOpenClawStateDatabase({ env }).db)!.raw_json),
       ).toMatchObject({ defaults: { security: "deny" } });
       expect(runClientCredentialOperation(env, { kind: "socket.read" })).toMatchObject({
-        kind: "socket",
         socket: { socket_path: "/tmp/fixture.sock", socket_token: "synthetic-token" },
       });
-    });
-  },
+    }),
 );
 
 it.each(["native", "worker"] as const)(

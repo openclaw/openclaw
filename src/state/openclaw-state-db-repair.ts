@@ -220,8 +220,9 @@ export async function repairStateSchemaAsync(
       },
     );
   try {
-    // Doctor/version first yield before writing; only their later phases need capture.
-    let step = scope === "doctor" || scope === "version" ? operation.next() : await resume();
+    // Native reads can recover a journal or rebuild retained WAL evidence before yielding.
+    const capture = (scope !== "doctor" && scope !== "version") || existsSync(`${pathname}-wal`);
+    let step = capture || existsSync(`${pathname}-journal`) ? await resume() : operation.next();
     while (!step.done) {
       let failure: { error: unknown } | undefined;
       let prepared: void | (() => void) = undefined;

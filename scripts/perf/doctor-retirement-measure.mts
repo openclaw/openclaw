@@ -2,6 +2,7 @@
 // Count mode also requires --observer-root <frozen SQL harness>; --mode profile captures each thread.
 // Native source update + Gateway diagnostic. The caller owns the timing lock/quiet-host gate.
 // Synthetic fixtures only; no QA test watchdog is changed and no live state is read.
+// --retained-wal leaves committed WAL at CLI entry.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -9,6 +10,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { UpdateRunResult } from "../../src/infra/update-runner-types.js";
@@ -25,6 +27,7 @@ const { values } = parseArgs({
     mode: { type: "string", default: "count" },
     "cold-only": { type: "boolean", default: false },
     "observer-root": { type: "string" },
+    "retained-wal": { type: "boolean", default: false },
   },
 });
 assert.ok(values.output, "--output is required (use a fresh directory per invocation)");
@@ -133,6 +136,13 @@ process.env.NODE_OPTIONS = instrumentOptions({ env: process.env }).env.NODE_OPTI
 const originalSpawn = cp.spawn;
 cp.spawn = function(command, args, options) {
   const env = options && options.env || process.env;
+  if (env.DOCTOR_BENCH_RETAINED_WAL === '1' &&
+      (args.includes('--doctor') || (args.includes('doctor') && args.includes('--repair')))) {
+    const filename = path.join(env.OPENCLAW_STATE_DIR, 'state', 'openclaw.sqlite');
+    record({ type: 'doctor-wal-input',
+      walBytes: fs.existsSync(filename + '-wal') ? fs.statSync(filename + '-wal').size : 0,
+      shmExists: fs.existsSync(filename + '-shm') });
+  }
   if (env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE === '1' &&
       (args.includes('--doctor') || (args.includes('doctor') && args.includes('--repair')))) {
     // Retain the first Doctor's receipt before the second replaces it with completion.
@@ -238,6 +248,11 @@ const summary: Record<string, unknown> = {
     "Inspector intervals are sampled elapsed attribution, not exact OS CPU.",
     "Hard-killed child/worker profiles and exits may be missing; analyzers expose coverage.",
     "Profile mode samples OS process/thread CPU every 100 ms; count/timing mode has no periodic CPU sampling.",
+    ...(values["retained-wal"]
+      ? [
+          "Committed nonempty WAL is asserted at native CLI entry. The updater closes shared state before Doctor; doctor-wal-input events record whether WAL remains at that later boundary.",
+        ]
+      : []),
   ],
 };
 const childResults: Array<Record<string, unknown>> = [];
@@ -399,6 +414,7 @@ try {
       DOCTOR_BENCH_OUTPUT: output,
       DOCTOR_BENCH_MODE: mode,
       DOCTOR_BENCH_OBSERVER: observer,
+      DOCTOR_BENCH_RETAINED_WAL: values["retained-wal"] ? "1" : "0",
       SQLMEASURE_OUT: output,
     },
     "mock-openai",
@@ -563,6 +579,34 @@ try {
     "Auth bootstrap mutated canonical config",
   );
   await closeQaRuntimeStores(scratch);
+  function retainCommittedWal() {
+    const filename = path.join(stateDir, "state", "openclaw.sqlite");
+    assert.ok(fs.existsSync(filename), "Retained WAL requires the initialized shared database");
+    const saved = fs.mkdtempSync(path.join(scratch, "retained-wal-"));
+    const database = new DatabaseSync(filename);
+    try {
+      database.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA wal_checkpoint(TRUNCATE)",
+      );
+      database
+        .prepare(
+          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?) ON CONFLICT (state_key) DO UPDATE SET updated_at_ms = config_machine_state.updated_at_ms + 1",
+        )
+        .run("qa:doctorgen:retained-wal", "true", 1);
+      fs.copyFileSync(filename, path.join(saved, "main"));
+      fs.copyFileSync(`${filename}-wal`, path.join(saved, "wal"));
+    } finally {
+      database.close();
+    }
+    // Restore the committed family after close checkpoints it, omitting the rebuildable index.
+    fs.copyFileSync(path.join(saved, "main"), filename);
+    fs.copyFileSync(path.join(saved, "wal"), `${filename}-wal`);
+    fs.rmSync(`${filename}-shm`, { force: true });
+    fs.rmSync(saved, { recursive: true });
+    const walBytes = fs.statSync(`${filename}-wal`).size;
+    assert.ok(walBytes > 32, "Native update input must contain committed WAL frames");
+    return { mainBytes: fs.statSync(filename).size, walBytes, shmExists: false };
+  }
   const updateArgs = ["update", "--channel", "dev", "--yes", "--no-restart", "--json"];
   summary.updateArgs = updateArgs;
   async function update(label: string, runtimeRoot: string) {
@@ -636,6 +680,18 @@ try {
       assert.ok(result.runId, "Native update must retain its genuine run");
       const run = getUpdateRun(result.runId, { env });
       assert.equal(run?.status, "succeeded", "Native update must settle its run");
+      if (values["retained-wal"]) {
+        const receipts = result.steps.filter((step) => step.name === "database migration writes");
+        assert.ok(receipts.length > 0, "Native update must report database write attribution");
+        assert.ok(
+          receipts.every((step) => !step.warnings?.length),
+          "Database write attribution must remain complete",
+        );
+        assert.doesNotMatch(
+          JSON.stringify([result, run]),
+          /Automatic database restoration (?:unavailable|cannot)|writer is unknown/u,
+        );
+      }
       const deferredRetirement = JSON.parse(
         fs.readFileSync(path.join(output, `retirement-deferred-${result.runId}.json`), "utf8"),
       );
@@ -660,6 +716,9 @@ try {
       fs.unlinkSync(path.join(installLock, "pid"));
       fs.rmdirSync(installLock);
     }
+  }
+  if (values["retained-wal"]) {
+    summary.coldRetainedWalInput = retainCommittedWal();
   }
   phase("cold-update");
   const coldUpdateStarted = performance.now();
@@ -698,6 +757,10 @@ try {
     await stopOwned(gateway);
     await closeQaRuntimeStores(scratch);
     assert.ok(warmDriverRoot);
+    if (values["retained-wal"]) {
+      phase("warm-fixture");
+      summary.warmRetainedWalInput = retainCommittedWal();
+    }
     phase("warm-update");
     const warmStarted = performance.now();
     summary.warmUpdate = await update("warm-update", warmDriverRoot);
