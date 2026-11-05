@@ -190,6 +190,12 @@ The policy is: **squashed/merged first, then by age including unsaved data**. Cl
 
 Creation reserves a persisted slot before preparing files. Name and owner checks happen at that reservation; materialization, ignored-file provisioning, and setup then run independently of other creates. Publication atomically replaces the pending slot with a live record. Concurrent requests for the same owner wait and reuse its completed checkout. Capacity admission waits for an in-progress creation when its slot prevents admission; pending checkouts are never eviction candidates.
 
+Sandbox projection preparation uses its existing worktree's mutation lease, so a cold
+dependency build does not hold global creation capacity. Preparations of the same
+template still share one build. Disk reservations account for concurrent writes;
+a preparation waiting for disk capacity releases its worktree and projection leases
+before retrying.
+
 Full Git checkout materialization can continue beyond five minutes while Git
 reports progress. Five minutes without output stops the checkout with a retryable
 error; cancellation still stops it immediately. A single large file or a silent
@@ -200,6 +206,12 @@ The `managed worktree preparation` log reports `errorClass` and `errorPhase`
 when preparation throws, including the innermost failed timed phase. Failures
 outside a timed phase use `unattributed`. The receipt omits error messages and
 command output.
+
+Lease acquisition appears separately as `allocationWait` for global slot admission,
+`mutationWait` for checkout custody, and `capacityWait` for disk reservations.
+These durations also appear in slow-chat diagnostics under `worktree.<kind>`.
+`reservation` measures the protected allocation work after acquisition. Phases
+can overlap, so their sum is not the total preparation duration.
 
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 
@@ -881,6 +893,9 @@ session storage or ownership, and sandbox mode, cancel the current job before it
 next mutation. Start a new job to use the updated settings.
 
 Without a running local Gateway, `openclaw worktrees gc` runs cleanup to completion under exclusive local state ownership and returns the completed summary. Offline mode cannot poll Gateway jobs with `--job`. The CLI includes partial results and recovery locations in its output and exits nonzero for partial cleanup.
+
+An empty or offline `--job` selector and an unreadable exact-state request report
+their specific input error and exit with code 1 before cleanup or removal.
 
 ## Gateway methods
 
