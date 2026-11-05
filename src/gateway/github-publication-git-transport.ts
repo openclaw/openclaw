@@ -29,6 +29,7 @@ type GitCommandOptions = {
   input?: string | Buffer | (() => string | Buffer);
   maxOutputBytes?: number;
   beforeRun?: () => void;
+  signal?: AbortSignal;
   operation?: GitProcessOperation;
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
@@ -55,10 +56,11 @@ export function githubPublicationApiArgs(
 }
 
 export async function runPublicationCommand(argv: string[], options: GitCommandOptions = {}) {
+  const { beforeRun, signal } = options;
   return await withGitProcessOperation(options.operation ?? "publication", () =>
     withGitNetworkRetry(
       argv[0] === "git" ? retryableGitNetworkOperation(argv.slice(1)) : undefined,
-      { timeoutMs: options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS, beforeRun: options.beforeRun },
+      { timeoutMs: options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS, beforeRun, signal },
       (timeoutMs) =>
         runCommandBuffered(argv, {
           ...(options.cwd ? { cwd: options.cwd } : {}),
@@ -75,6 +77,7 @@ export async function runPublicationCommand(argv: string[], options: GitCommandO
             ? { input: typeof options.input === "function" ? options.input() : options.input }
             : {}),
           timeoutMs,
+          signal,
           noOutputTimeoutMs: options.noOutputTimeoutMs,
           discardOutput: options.discardOutput,
           maxOutputBytes: options.maxOutputBytes ?? 256 * 1024,
@@ -103,6 +106,7 @@ export async function requirePublicationCommand(
 export function createGitHubPublicationCommandRunner(
   assertCurrent?: () => void,
   gitOperation: GitProcessOperation = "publication",
+  signal?: AbortSignal,
 ) {
   const step = async <T>(operation: () => Promise<T>): Promise<T> => {
     assertCurrent?.();
@@ -117,6 +121,7 @@ export function createGitHubPublicationCommandRunner(
         ...options,
         operation: gitOperation,
         beforeRun: assertCurrent,
+        ...(signal ? { signal } : {}),
       });
       assertCurrent?.();
       return result;

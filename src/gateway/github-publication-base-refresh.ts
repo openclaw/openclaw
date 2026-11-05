@@ -102,7 +102,7 @@ export async function integrateManagedWorkspaceSource(
         ? ["", ...attribution.attribution.trailers]
         : []),
     ].join("\n");
-  const { run } = createGitHubPublicationCommandRunner(assertCurrent);
+  const { run } = createGitHubPublicationCommandRunner(assertCurrent, "publication", params.signal);
   await assertSafeGitPublicationWorkspace(owner.worktree.path, run);
   const target = integrationSource
     ? {

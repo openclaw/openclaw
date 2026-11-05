@@ -31,6 +31,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
 import {
   createPublicationRepositories,
@@ -363,6 +364,41 @@ export async function fixture(
     }
     return result.details;
   };
+  const invokeTool = async (args: Record<string, unknown>, signal?: AbortSignal) => {
+    const context = Object.assign(createRequestContext(), f.guestSource.context, {
+      githubPublicationService: f.coordinator,
+      workerSessionPlacementService: f.placements,
+    });
+    const executions: Promise<unknown>[] = [];
+    const track = context.trackExecution;
+    context.trackExecution = (run) => {
+      const execution = track(run);
+      executions.push(execution);
+      return execution;
+    };
+    const operator = await captureGatewayOperatorRunAuthority({
+      client: f.guestSource.client,
+      context,
+    });
+    try {
+      return await withPluginRuntimeGatewayRequestScope(
+        { context, client: f.guestSource.client, isWebchatConnect: () => false },
+        () =>
+          withGatewayToolCallerIdentity(
+            {
+              ...scope,
+              operatorAuthority: operator?.authority,
+              gatewayContextResolver: () => context,
+            },
+            () => createGitHubPublishTool({ sandbox }).execute("prepare", args, signal),
+          ),
+      ).then((result) => result.details);
+    } finally {
+      // A cancelled response can precede handler settlement; keep the fixture alive until both finish.
+      await Promise.allSettled(executions);
+      operator?.release();
+    }
+  };
   const advanceHead = async (files: Record<string, string>) => {
     await upstreamGit("checkout", "topic/existing");
     pr.head.sha = await commitUpstream("Advance existing PR", files);
@@ -385,6 +421,7 @@ export async function fixture(
     commonAncestor,
     readSession,
     invoke,
+    invokeTool,
     advanceHead,
     writes,
   };

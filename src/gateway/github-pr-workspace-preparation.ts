@@ -329,7 +329,7 @@ export async function performSessionGitHubPreparation(
           previous.base.commit !== pullRequest.base.commit))
     ) {
       // PR details can lag the live ref, including after a completed base refresh.
-      const { run } = createGitHubPublicationCommandRunner(assertCurrent);
+      const { run } = createGitHubPublicationCommandRunner(assertCurrent, "publication", signal);
       pullRequest.base = {
         ...pullRequest.base,
         commit: await readGitHubPublicationBaseSha(
